@@ -26,6 +26,17 @@ layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
 layout(std430, binding = 14) readonly buffer Types { uvec2 items[]; } types;
 layout(std430, binding = 15) readonly buffer Visuals { uvec4 items[]; } visuals;
 
+// The clipboard's held clip, for drawing its ghosts. Same buffer resolve binds; the tracer
+// gives it a number of its own.
+layout(std430, binding = 16) readonly buffer ClipCells { uint items[]; } clip;
+
+vec3 unpack_rgb(uint packed) {
+    return vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
+                float((packed >> 16u) & 0xFFu)) / 255.0;
+}
+
+#include "preview.glsl"
+
 layout(push_constant) uniform Trace {
     vec4 sun;          // xyz direction *towards* the sun, w cosine of its angular radius
     vec4 sun_colour;   // rgb radiance
@@ -181,6 +192,7 @@ void main() {
     vec3 radiance = vec3(0.0);
     vec3 throughput = vec3(1.0);
     uint bounces = max(trace.control.y, 1u);
+    float primary_t = push.lens.y;   // kept for the preview's depth test
 
     for (uint bounce = 0u; bounce < bounces; ++bounce) {
         // Only the first bounce reports what it could not find. Streaming should follow what
@@ -190,6 +202,8 @@ void main() {
             radiance += throughput * sky_radiance(dir);
             break;
         }
+
+        if (bounce == 0u) primary_t = hit.t;
 
         vec3 normal = vec3(hit.normal);
         vec3 point = origin + dir * hit.t;
@@ -271,6 +285,22 @@ void main() {
 
     // Reinhard with a shoulder, and gamma. Deliberately plain: the point is to see what the
     // material does, not what a grading curve does to it. The physical post stack is Stage 9.
-    vec3 mapped = mean / (mean + vec3(1.0));
-    imageStore(out_colour, pixel, vec4(pow(clamp(mapped, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0));
+    vec3 mapped = pow(clamp(mean / (mean + vec3(1.0)), 0.0, 1.0), vec3(1.0 / 2.2));
+
+    // The tools, over the top, exactly as the real-time pipeline draws them. Drawn *after*
+    // tone mapping and outside the accumulation, because a preview is interface rather than
+    // light: it must not be averaged in, must not converge, and must not be dimmed by an
+    // exposure curve. It is also the whole reason this mode is usable — a tracer you cannot
+    // edit inside is a screenshot generator, not a way to judge a material in place.
+    //
+    // The primary ray's own distance is the depth test, so a box behind a wall reads as buried
+    // and one in the open reads as in the open.
+    vec3 dir_unjittered = normalize(push.forward.xyz +
+                                    push.right.xyz * ((vec2(pixel) + 0.5) / vec2(push.resolution) *
+                                                          2.0 - 1.0).x * push.lens.x * aspect -
+                                    push.up.xyz * ((vec2(pixel) + 0.5) / vec2(push.resolution) *
+                                                       2.0 - 1.0).y * push.lens.x);
+    mapped = draw_preview(mapped, push.origin.xyz, dir_unjittered, primary_t);
+
+    imageStore(out_colour, pixel, vec4(mapped, 1.0));
 }

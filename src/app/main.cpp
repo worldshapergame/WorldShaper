@@ -1815,8 +1815,8 @@ int Application::run(const Options& options) {
     // includes the same traversal, so the binding numbers come with it — then the parameter
     // block at 13 and the type tables at 14 and 15.
     {
-        VkDescriptorSetLayoutBinding trace_bindings[16]{};
-        for (u32 i = 0; i < 16; ++i) {
+        VkDescriptorSetLayoutBinding trace_bindings[17]{};
+        for (u32 i = 0; i < 17; ++i) {
             trace_bindings[i].binding = i;
             trace_bindings[i].descriptorType =
                 (i < 2)     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -1827,7 +1827,7 @@ int Application::run(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo trace_layout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        trace_layout.bindingCount = 16;
+        trace_layout.bindingCount = 17;
         trace_layout.pBindings = trace_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &trace_layout, nullptr,
                                           &pathtrace_layout_));
@@ -1929,12 +1929,12 @@ int Application::run(const Options& options) {
     // because it includes the same traversal and the binding numbers come with it, plus the
     // type tables at 14 and 15 so a hit becomes a material.
     {
-        constexpr u32 kTraceBuffers = kBufferBindings + 2;
+        constexpr u32 kTraceBuffers = kBufferBindings + 3;   // world, types, visuals, clip
         const VkBuffer trace_buffers[kTraceBuffers]{
             marcher_buffers[0], marcher_buffers[1], marcher_buffers[2],  marcher_buffers[3],
             marcher_buffers[4], marcher_buffers[5], marcher_buffers[6],  marcher_buffers[7],
             marcher_buffers[8], marcher_buffers[9], marcher_buffers[10], world_buffers_.types(),
-            world_buffers_.visuals(),
+            world_buffers_.visuals(), clip_buffer_.buffer,
         };
         VkDescriptorBufferInfo trace_infos[kTraceBuffers]{};
         VkWriteDescriptorSet trace_writes[kTraceBuffers + 1]{};

@@ -8,7 +8,7 @@
 // and its own local_size and main().
 
 //
-// documentation/04-rendering.md Â§1 and documentation/11-reality-check.md Â§1.
+// documentation/04-rendering.md Ã‚Â§1 and documentation/11-reality-check.md Ã‚Â§1.
 //
 // The ray marches at whatever granularity the *pixel* needs, and coarsens as it gets
 // further away. A pixel covers an angle; at distance t it covers t*angle voxels; so the
@@ -28,7 +28,7 @@
 //
 // The level is a *continuous* number, and the fractional part picks between the two
 // neighbouring levels with an ordered dither. So there is no discrete transition anywhere
-// in the maths â€” not one small enough to hide, but none at all (answer N2).
+// in the maths Ã¢â‚¬â€ not one small enough to hide, but none at all (answer N2).
 
 
 
@@ -81,18 +81,7 @@ layout(std430, binding = 12) buffer Feedback {
 
 // std140. See gpu/render_params.hpp for why this is not push constants.
 layout(std140, binding = 13) uniform Params {
-    vec4 origin;
-    vec4 forward;
-    vec4 right;
-    vec4 up;
-    ivec4 camera_chunk;
-    uvec4 grid_dims;
-    ivec4 bounds_min;
-    ivec4 bounds_max;
-    uvec4 resolution;     // xy pixels, z debug mode, w feedback capacity
-    vec4 lens;            // x tan(fov/2), y max distance, z detail bias
-    ivec4 thumb_dims;     // xyz wrapped summary grid size, in blocks; w how many levels
-    ivec4 thumb_tiers[8]; // per level: x first grid cell, y first slot, z chunks per block
+#include "params.glsl"
 } push;
 
 const uint kNoRecord = 0xFFFFFFFFu;
@@ -137,7 +126,7 @@ uint find_record(ivec3 chunk_coord) {
 // in one fetch is what lets a ray cross empty sky in 32 m or 128 m jumps rather than 8 m
 // at a time.
 // Thumbnail lookup. Wrapped grid, then the slot's own record has to agree that it holds the
-// chunk being asked about â€” a cell that has been claimed by some far-off chunk reads as "no
+// chunk being asked about Ã¢â‚¬â€ a cell that has been claimed by some far-off chunk reads as "no
 // thumbnail", which costs a coarser picture and never a wrong one.
 const int kThumbAxis = 8;
 const int kThumbRecordWords = 4;
@@ -269,7 +258,7 @@ uint voxel_type(uint slot, ivec3 local) {
 }
 
 // Ordered dither. Deterministic per pixel, so the level a pixel picks does not flicker
-// between frames â€” which is what lets this work without temporal accumulation.
+// between frames Ã¢â‚¬â€ which is what lets this work without temporal accumulation.
 float bayer(ivec2 pixel) {
     const int table[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
     return float(table[(pixel.y & 3) * 4 + (pixel.x & 3)]) / 16.0;
@@ -290,7 +279,7 @@ struct Hit {
 //
 // "That the world actually has" is what level 0 of the occupancy grid is for. Without it
 // the first miss is almost always empty sky the world has no chunk for, the CPU discards
-// it, and the same useless report repeats every frame â€” measured at 22,600 reports a
+// it, and the same useless report repeats every frame Ã¢â‚¬â€ measured at 22,600 reports a
 // frame with none of them real.
 //
 // First rather than deepest, now that reports are real: a ray reports the nearest thing
@@ -369,7 +358,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
 
         if (march_level != outer_level) {
             // Re-seed the DDA at the new granularity. This happens a handful of times per
-            // ray â€” once per level boundary crossed â€” not per step.
+            // ray Ã¢â‚¬â€ once per level boundary crossed Ã¢â‚¬â€ not per step.
             outer_level = march_level;
             int size = 1 << outer_level;
             vec3 p = origin + dir * t;
@@ -397,7 +386,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
 
         if (record == kNoRecord) {
             // No full-detail chunk here. Before writing this off as empty space, see whether
-            // there is a thumbnail â€” this is the branch that used to draw sky where the world
+            // there is a thumbnail Ã¢â‚¬â€ this is the branch that used to draw sky where the world
             // is, because full detail is bounded by memory and past that bound there was
             // nothing else to draw with.
             ivec3 thumb_chunk = push.camera_chunk.xyz + chunk_offset;
@@ -405,27 +394,27 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
             // Report it missing *before* drawing the thumbnail, not after.
             //
             // A thumbnail hit returns from this function, and the report was assembled
-            // further down â€” so the moment a chunk had a thumbnail it stopped being reported
+            // further down Ã¢â‚¬â€ so the moment a chunk had a thumbnail it stopped being reported
             // as missing, streaming never fetched it, and it drew as one-metre blocks
             // forever. The tier meant to stand in for detail was suppressing it.
             if (coarse_occupied(0, thumb_chunk)) {
                 note_missing(has_pending, pending, thumb_chunk, outer_level);
             }
 
-            // Exactly the level whose cells this pixel can resolve â€” never a coarser one as a
+            // Exactly the level whose cells this pixel can resolve Ã¢â‚¬â€ never a coarser one as a
             // fallback, and never a finer one.
             //
             // A level's cells are 32 * 2^level voxels, so this picks the one about a pixel
             // across. Falling back to a coarser level when this one has nothing is the obvious
             // thing and is badly wrong: a near sky chunk has no summary, the ray drops a level,
-            // and a two-kilometre block holding ground a mile away reads as occupied â€” drawing
+            // and a two-kilometre block holding ground a mile away reads as occupied Ã¢â‚¬â€ drawing
             // a 256 m blob a few metres from the camera. Testing every level at every step
             // instead measured 57 ms a frame. A level whose cells are bigger than the pixel is
             // not a worse picture of the same thing, it is a different piece of world.
             // Rounded, not floored. Flooring picks the level below the one the pixel needs,
             // which looks the same and costs coverage: each level is held for a fixed radius
             // *in blocks*, so using a level finer than intended halves how far it reaches.
-            // At 3 km that put the ground 94 blocks away against a 96-block radius â€” right on
+            // At 3 km that put the ground 94 blocks away against a 96-block radius Ã¢â‚¬â€ right on
             // the edge, so rays straight down found a summary and rays at any angle did not,
             // and the screen was empty but for a smudge at the centre.
             int level = clamp(int(floor(log2(max(footprint, 32.0) / 32.0) + 0.5)), 0,
@@ -438,7 +427,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
             if (cells != kNoThumb) {
                 // Walk the block's 8x8x8 cells. Same DDA as everywhere else, just coarser: a
                 // cell is `span` metres, below a pixel from about span*515 m, and each level
-                // reaches twice as far as the one below â€” so where one starts to look blocky
+                // reaches twice as far as the one below Ã¢â‚¬â€ so where one starts to look blocky
                 // the next has already taken over.
                 int kCellVoxels = span * (kChunkEdge / kThumbAxis);
                 ivec3 chunk_min = (block * span - push.camera_chunk.xyz) * kChunkEdge;
@@ -478,7 +467,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
                         result.hit = true;
                         result.t = max(t_in, 0.0);
                         result.normal = c_normal;
-                        // Alpha is coverage, not opacity â€” a cubic metre with a railing in it
+                        // Alpha is coverage, not opacity Ã¢â‚¬â€ a cubic metre with a railing in it
                         // is barely covered and completely opaque when you look at it. The
                         // renderer wants a colour, so the coverage is dropped here rather than
                         // used to fade the cell into the sky, which is the mistake that made
@@ -558,7 +547,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
             // at all. A 32-bit float's own step at t = 96,000 voxels is 0.0156, so `t + 1e-3`
             // rounds straight back to t: the ray stops advancing and spins on the same
             // boundary until its step budget runs out. Looking down from 3 km that was every
-            // pixel on the screen â€” the step-count view came back saturated, and raising the
+            // pixel on the screen Ã¢â‚¬â€ the step-count view came back saturated, and raising the
             // budget eightfold changed nothing, because the ray was not stepping slowly, it
             // was not stepping.
             //
@@ -573,7 +562,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
             // thumbnails existed it was the thing stopping them being seen.
             //
             // Each pass through here advances t to at least the next block boundary, so a ray
-            // cannot fail to progress and does not need a separate guard â€” kMaxSteps already
+            // cannot fail to progress and does not need a separate guard Ã¢â‚¬â€ kMaxSteps already
             // bounds the loop. What the run *did* bound was distance: twenty-four consecutive
             // single-chunk steps is 192 m, and near geometry the coarse levels have nothing
             // large to skip, so steps are single chunks. Looking down at a world from 700 m,
@@ -608,7 +597,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
                 return result;
             }
 
-            // Inside the brick, always at single voxels â€” and deliberately so, even when the
+            // Inside the brick, always at single voxels Ã¢â‚¬â€ and deliberately so, even when the
             // pixel is too small to resolve one.
             //
             // The level still decides the *colour*: a pixel spanning several voxels gets the
@@ -619,7 +608,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
             // therefore stands half a cell proud of it, so a grazing ray clips the cell's
             // side and the pixel is shaded as a wall instead of a floor.
             //
-            // The geometric error is a voxel â€” 3 cm, and by construction below what the pixel
+            // The geometric error is a voxel Ã¢â‚¬â€ 3 cm, and by construction below what the pixel
             // can resolve. The shading error is lit-top against dark-side, which is not
             // subtle at all: on flat ground it measured 680 wrong pixels in 63,000 at level 1
             // against 2 in 270,000 at level 0, and it read on screen as faint dotted lines
