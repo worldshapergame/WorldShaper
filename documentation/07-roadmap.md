@@ -302,6 +302,19 @@ Getting there took three changes, each found by measuring rather than guessing: 
 
 # PHASE III — Materials and light
 
+## Stage 6A — Reference path tracer · M — **INSERTED**
+
+Brought forward, ahead of materials, because you cannot judge a material you cannot see lit. Sandstone and rusted iron under flat unlit shading are two shades of grey-brown; under real light they are obviously right or obviously wrong.
+
+**Deliberately not the shipping renderer.** A separate mode, its own pipeline, never in the frame path. It accumulates samples while the camera is still and has no frame budget at all — seconds per image is the expected cost and is fine for what it is for. The real-time pipeline (Stages 7–9) is unchanged, and its whole reason for existing stands: per-pixel path tracing cannot meet a 9.5 ms budget on a Steam Deck, which is why the face cache exists.
+
+Sun, analytic sky, emissive voxels; cosine-weighted diffuse and GGX specular from the material record already in `VisualRecord`; Beer-Lambert absorption through translucent voxels; Russian-roulette termination; progressive accumulation reset on any camera or world change. No denoiser — noise is honest here, and hiding it would defeat the purpose.
+
+**What you can do:** point the camera at something, hold still, and watch it converge to what the material actually looks like.
+**Perf gate:** none, by design. The only hard requirement is that it cannot affect the real-time path: with the mode off, frame time is unchanged to within noise.
+
+**Why this is not a detour.** It becomes the yardstick the rest of Phase III is measured against — Stage 7's direct light, Stage 8's bounces and Stage 9's caustics are all approximations, and an approximation with no ground truth to compare against is a guess. It also needs nothing built first: the material model is already in the voxel type table and already on the GPU.
+
 ## Stage 6 — Materials and pattern generators ▶ **PLAYABLE #4** · L
 
 Material definitions (hot-reloadable data files), tags, properties, GPU-packed hot subset; **pattern generators** — noise, fractal, strata, voronoi, layered — emitting real tagged voxels (answer C9). Sandstone, granite, oak, rusted iron, marble, brick shipped as examples, procedurally authored by me (answer L2). In-game material browser, eyedropper, authoring panel (answer H7). Provenance tags so digging sandstone yields "sandstone" (answer C10).
