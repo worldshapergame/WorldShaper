@@ -87,6 +87,7 @@ add_library(ws_world STATIC
     src/world/residency.cpp
     src/world/thumbnail.cpp
     src/world/thumb_cache.cpp
+    src/world/summary_tree.cpp
     src/world/test_scene.cpp)
 target_include_directories(ws_world PUBLIC src)
 target_link_libraries(ws_world PUBLIC ws_core)
@@ -235,6 +236,7 @@ add_executable(ws_tests
     tests/test_serialize.cpp
     tests/test_residency.cpp
     tests/test_thumbnail.cpp
-    tests/test_thumb_cache.cpp)
+    tests/test_thumb_cache.cpp
+    tests/test_summary_tree.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_doctest)
 add_test(NAME unit COMMAND ws_tests)
