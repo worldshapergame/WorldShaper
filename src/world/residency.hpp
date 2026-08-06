@@ -27,6 +27,7 @@
 // touches Vulkan.
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "core/block_pool.hpp"
@@ -199,6 +200,20 @@ public:
     // Called by the renderer's feedback pass: "I wanted this chunk this frame."
     void request(const ChunkCoord& coord);
 
+    // Called by whatever edited the world: "the copy you are holding is out of date."
+    //
+    // Feedback cannot discover this on its own. The renderer reports chunks it wanted and
+    // *could not find* — that is the entire mechanism. A chunk that is resident but stale
+    // is found, so it is never reported, so it is never refreshed. The only thing that
+    // knows is the code that changed it.
+    //
+    // Unlike request(), this is remembered across frames. Per-frame requests may be dropped
+    // when the upload budget runs out, and that is safe precisely because the renderer asks
+    // again next frame. For a stale chunk it never will, so dropping one strands it: it
+    // draws pre-edit contents until something unrelated evicts it. A big edit touches far
+    // more chunks than one frame's budget can serve, so most of them were being stranded.
+    void invalidate(const ChunkCoord& coord);
+
     // Resolves the frame's requests: uploads what is missing or stale, evicts the least
     // recently used chunks to make room, and returns what the GPU layer must copy.
     const UploadBatch& update(const World& world, u64 frame);
@@ -294,6 +309,11 @@ public:
     // start appearing and disappearing during play.
     void rebuild_coarse(const World& world);
 
+    // Ask for the occupancy grid to be sent again. Called when an upload could not fit it,
+    // because a grid the GPU never received is worse than one that is merely late: the
+    // marcher reads it as "nothing here" and stops asking for what is there.
+    void mark_coarse_dirty() { coarse_dirty_ = true; }
+
 private:
     // Begins encoding a chunk. Returns Complete if it fitted in the budget, Partial if it
     // will continue next frame, Failed if there was no room even after evicting.
@@ -329,6 +349,7 @@ private:
     std::unordered_map<ChunkCoord, ResidentChunk, ChunkCoordHash> chunks_;
     PendingUpload pending_;
     std::vector<ChunkCoord> requested_;
+    std::unordered_set<ChunkCoord, ChunkCoordHash> dirty_;   // stale, and nobody else knows
     UploadBatch batch_;
 
     std::vector<u8> scratch_payload_;

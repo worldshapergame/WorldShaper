@@ -214,6 +214,7 @@ add_executable(ws_tests
     tests/test_fixed.cpp
     tests/test_hash.cpp
     tests/test_arena.cpp
+    tests/test_block_pool.cpp
     tests/test_ring.cpp
     tests/test_jobs.cpp
     tests/test_tags.cpp

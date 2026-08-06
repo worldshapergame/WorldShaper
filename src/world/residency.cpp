@@ -15,8 +15,13 @@ constexpr u32 kAxis = static_cast<u32>(kChunkBricks);
 // Slot runs are measured in entries, not bytes, and a chunk can hold anywhere from one
 // brick to 32,768 — so the class table spans the whole range.
 const std::vector<u32>& slot_run_classes() {
-    static const std::vector<u32> classes{64,   128,  256,  512,   1024,
-                                          2048, 4096, 8192, 16384, 32768};
+    // Powers of two alone waste up to half a run: a chunk with 5,090 bricks took an
+    // 8,192-slot class and left 3,102 slots stranded. The halfway classes cut the worst case
+    // from 2x to 1.5x, which on a dense world is the difference between holding six hundred
+    // chunks and four hundred.
+    static const std::vector<u32> classes{64,   128,  192,   256,   384,   512,   768,
+                                          1024, 1536, 2048,  3072,  4096,  6144,  8192,
+                                          12288, 16384, 24576, 32768};
     return classes;
 }
 
@@ -69,6 +74,7 @@ void ResidencyManager::create(const ResidencyBudget& budget, const VoxelTypeTabl
     record_cursor_ = 0;
     chunks_.clear();
     requested_.clear();
+    dirty_.clear();
     scratch_payload_.reserve(2048);
 }
 
@@ -160,6 +166,8 @@ u32 ResidencyManager::grid_index(i64 chunk_x, i64 chunk_y, i64 chunk_z) const {
 }
 
 void ResidencyManager::request(const ChunkCoord& coord) { requested_.push_back(coord); }
+
+void ResidencyManager::invalidate(const ChunkCoord& coord) { dirty_.insert(coord); }
 
 u32 ResidencyManager::allocate_record() {
     if (!free_records_.empty()) {
@@ -487,6 +495,22 @@ const UploadBatch& ResidencyManager::update(const World& world, u64 frame) {
         coarse_dirty_ = false;
     }
 
+    // Carry over everything known to be stale. These are re-offered every frame until they
+    // are actually served, because nothing else will ever ask for them (see invalidate()).
+    //
+    // A chunk that is not resident is dropped from the set rather than uploaded: it will be
+    // fetched, correct and complete, the moment a ray wants it. Uploading it here instead
+    // would spend the frame's budget on chunks nobody is looking at, and starve the ones
+    // that are.
+    for (auto it = dirty_.begin(); it != dirty_.end();) {
+        if (chunks_.find(*it) == chunks_.end()) {
+            it = dirty_.erase(it);
+        } else {
+            requested_.push_back(*it);
+            ++it;
+        }
+    }
+
     // Deduplicate this frame's requests. The feedback buffer reports per pixel, so the
     // same chunk arrives thousands of times.
     std::sort(requested_.begin(), requested_.end(),
@@ -529,6 +553,7 @@ const UploadBatch& ResidencyManager::update(const World& world, u64 frame) {
             // frame against a 0.8 ms budget, because it walks every voxel of every brick.
             if (chunk != nullptr && chunk->revision() == found->second.revision) {
                 ++hits_;
+                dirty_.erase(coord);   // what the GPU holds is what the world holds
                 continue;
             }
         }

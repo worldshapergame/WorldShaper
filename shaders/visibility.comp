@@ -440,9 +440,28 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
                 return result;
             }
 
-            // Inside the brick, at 1, 2 or 4 voxel cells depending on the level.
-            int inner_size = 1 << level;
-            int inner_axis = 8 >> level;
+            // Inside the brick, always at single voxels — and deliberately so, even when the
+            // pixel is too small to resolve one.
+            //
+            // The level still decides the *colour*: a pixel spanning several voxels gets the
+            // brick's filtered average rather than whichever voxel happened to be under the
+            // ray, which is the whole point of the scheme. What it must not decide is the
+            // shape, and it used to: at level 1 the walk stepped in 2-voxel cells, and a cell
+            // counts as solid when *any* of its eight voxels is. A cell straddling a surface
+            // therefore stands half a cell proud of it, so a grazing ray clips the cell's
+            // side and the pixel is shaded as a wall instead of a floor.
+            //
+            // The geometric error is a voxel — 3 cm, and by construction below what the pixel
+            // can resolve. The shading error is lit-top against dark-side, which is not
+            // subtle at all: on flat ground it measured 680 wrong pixels in 63,000 at level 1
+            // against 2 in 270,000 at level 0, and it read on screen as faint dotted lines
+            // scattered over the surface (the ordered dither is what scatters them, by giving
+            // neighbouring pixels different levels).
+            //
+            // Marching a brick at voxel resolution costs at most 24 inner steps instead of
+            // 12, inside data already fetched. That is a cheap price for a correct face.
+            const int inner_size = 1;
+            const int inner_axis = 8;
             float t_inner = max(t, 0.0);
             vec3 p = origin + dir * (t_inner + 1e-4);
             ivec3 inner = ivec3(floor(p / float(inner_size))) - cell * inner_axis;

@@ -67,6 +67,7 @@ struct Options {
     // A development build should not go looking for a release older than what is sitting in
     // front of you, and a scripted screenshot should not depend on the network.
     bool no_update_check = (WS_DEBUG != 0);
+    bool stream_log = false;   // per-second residency report, for diagnosing streaming
 
     // Render a fixed number of frames, save the last one, and exit. This is how a
     // rendering change gets checked without a person having to look at the screen.
@@ -149,6 +150,8 @@ Options parse_options(int argc, char** argv) {
             options.vsync = false;
         } else if (arg == "--validation") {
             options.validation = true;
+        } else if (arg == "--stream-log") {
+            options.stream_log = true;
         } else if (arg == "--no-update-check") {
             options.no_update_check = true;
         } else if (arg == "--version") {
@@ -452,6 +455,7 @@ private:
     void stream(f64 seconds);
     void update_tools(const InputState& input, bool chisel_has_wheel, bool clipboard_has_wheel,
                       f64 dt);
+    void invalidate_edited_chunks(const std::vector<Op>& ops);
 
     Options options_;
     Window window_;
@@ -761,7 +765,39 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
     // An edit can create chunks where the world had none, or empty the last brick out of
     // one. The coarse occupancy grids describe what the world contains, so they are what
     // tells the marcher there is now something to look for here.
-    if (result.voxels_changed > 0) residency_.rebuild_coarse(world_);
+    if (result.voxels_changed > 0) {
+        residency_.rebuild_coarse(world_);
+        invalidate_edited_chunks(ops);
+    }
+}
+
+// Tells streaming which chunks an edit changed.
+//
+// This has to be pushed, because it cannot be pulled. The renderer's feedback reports chunks
+// it wanted and *could not find* — that is the whole mechanism. A chunk that is resident but
+// out of date is found, so it is never reported, so it is never refreshed, and it goes on
+// showing what it used to hold. Carve a room inside a hill you have already looked at and
+// the hill stays solid until something unrelated evicts that chunk.
+//
+// The edit knows exactly which chunks it touched, so it says so.
+void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
+    for (const Op& raw : ops) {
+        Op op = raw;
+        op.normalise();
+        for (i64 cz = chunk_of(op.z0); cz <= chunk_of(op.z1); ++cz) {
+            for (i64 cy = chunk_of(op.y0); cy <= chunk_of(op.y1); ++cy) {
+                for (i64 cx = chunk_of(op.x0); cx <= chunk_of(op.x1); ++cx) {
+                    const ChunkCoord coord{cx, cy, cz};
+                    // invalidate(), not request(): a request lives for one frame and is
+                    // dropped when that frame's upload budget runs out. A large edit touches
+                    // hundreds of chunks and the budget serves four, so all but the first
+                    // four were being forgotten — and nothing ever asked again, because a
+                    // stale chunk is one the renderer can still find.
+                    if (world_.has_chunk(coord)) residency_.invalidate(coord);
+                }
+            }
+        }
+    }
 }
 
 // Stands in for the renderer's feedback buffer until Stage 3: request every chunk within
@@ -828,6 +864,9 @@ void Application::record_frame(f32 time_seconds) {
     residency_ms_ = ns_to_ms(now_ns() - residency_start);
     if (residency_ms_ > worst_residency_ms_) worst_residency_ms_ = residency_ms_;
     world_buffers_.upload(cmd, residency_, batch, swapchain_.frame_index());
+    // If the occupancy grid did not fit in this frame's staging, ask for it again. Clearing
+    // the dirty flag over an upload that never happened is what left holes in the world.
+    if (world_buffers_.stats().coarse_incomplete) residency_.mark_coarse_dirty();
     world_buffers_.upload_tables(cmd, types_);
     profiler_.add_bytes(world_buffers_.stats().staged_bytes);
     profiler_.end_pass(cmd);
@@ -854,6 +893,15 @@ void Application::record_frame(f32 time_seconds) {
         report.feedback_reports = last_feedback_;
         report.feedback_dropped = last_feedback_truncated_;
         hud_.set_streaming(report);
+        if (options_.stream_log && (frame_counter_ % 60 == 0)) {
+            WS_LOG_INFO("diag",
+                        "f{} resident {}/{} added {} refreshed {} evicted {} deferred {} "
+                        "bricks {} oom {} feedback {} accepted {}",
+                        frame_counter_, report.resident_chunks, report.world_chunks,
+                        batch.chunks_added, batch.chunks_refreshed, batch.chunks_evicted,
+                        batch.chunks_deferred, report.resident_bricks,
+                        batch.out_of_memory ? 1 : 0, last_feedback_, last_feedback_accepted_);
+        }
 
         const ChiselPreview& preview = chisel_.preview();
         const ClipboardPreview& ghost = clipboard_.preview();
@@ -1288,10 +1336,29 @@ int Application::run(const Options& options) {
     // Sized from detected VRAM, and never resized afterwards
     // (documentation/03-voxel-data-model.md Â§8).
     const u64 vram = device_.caps().device_local_bytes;
-    residency_budget_.payload_bytes = (vram >= (8ull << 30))    ? (1ull << 30)
-                                      : (vram >= (4ull << 30))  ? (384ull << 20)
-                                                                : (192ull << 20);
-    residency_budget_.max_bricks = static_cast<u32>(residency_budget_.payload_bytes / 1024);
+    const u64 vram_budget = (vram >= (8ull << 30))   ? (1ull << 30)
+                            : (vram >= (4ull << 30)) ? (384ull << 20)
+                                                     : (192ull << 20);
+
+    // A brick costs two separate things, and they have to be budgeted separately.
+    //
+    //   its **payload** — the packed voxel indices and palette, anywhere from 8 bytes for a
+    //   uniform brick to 2 KB for one where every voxel differs
+    //   its **slot** — a header and a 64-byte occupancy mask, the same for every brick
+    //
+    // The slot count used to be derived from the payload budget as `payload / 1024`, on the
+    // assumption that a brick averages about a kilobyte. That assumption fails in exactly the
+    // case that matters: a large flat build is almost entirely *uniform* bricks, which cost
+    // eight bytes of payload each and a full slot each. Filling a 3 km square with one
+    // material used 8 MB of a 1 GB payload budget and ran clean out of slots at 128 chunks —
+    // whereupon residency evicted a chunk for every chunk it added, and the world blinked in
+    // and out as you moved. The payload gauge said 1% and everything looked fine.
+    //
+    // So: split the budget, and size the slots by what a slot actually costs.
+    constexpr u64 kSlotBytes = sizeof(GpuBrickHeader) + kBrickWords * sizeof(u64);
+    residency_budget_.payload_bytes = vram_budget * 55 / 100;
+    residency_budget_.max_bricks =
+        static_cast<u32>((vram_budget * 45 / 100) / kSlotBytes);
     residency_budget_.max_chunk_uploads_per_frame = 8;
     residency_budget_.max_bricks_per_frame = 8192;
     residency_.create(residency_budget_, types_);

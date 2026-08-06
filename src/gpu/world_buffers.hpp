@@ -24,7 +24,10 @@ struct WorldBufferStats {
     u64 staged_bytes = 0;       // this frame
     u32 copy_regions = 0;       // after coalescing
     u32 raw_regions = 0;        // before coalescing
-    u64 deferred_bytes = 0;     // did not fit this frame; retried next
+    u64 deferred_bytes = 0;
+    // True when the world occupancy grid did not fit this frame. Residency has to be told,
+    // or it clears its dirty flag over an update that never arrived.
+    bool coarse_incomplete = false;     // did not fit this frame; retried next
     u64 total_uploaded = 0;
 };
 

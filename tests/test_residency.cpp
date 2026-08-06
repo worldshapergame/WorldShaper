@@ -271,6 +271,80 @@ TEST_CASE("requesting a chunk uploads it, and the mirror matches the world exact
     }
 }
 
+TEST_CASE("an edited chunk is refreshed even when the frame it was edited on was full") {
+    // The trap this guards is that streaming is *pull*-based. The renderer reports chunks it
+    // wanted and could not find; a chunk that is resident but out of date is found, so it is
+    // never reported. Nothing but the edit itself knows it went stale.
+    //
+    // So a one-frame request is not enough. An edit spanning many chunks cannot be served in
+    // one frame's upload budget, and whatever is left over has no second chance — it draws
+    // pre-edit contents until something unrelated evicts it. That is a hole or a ghost slab
+    // sitting in mid-air, and it lasts until you happen to edit inside it again.
+    World world;
+    MatterLedger ledger;
+    apply_op(world, Op::fill_box(0, 0, -400, 0, -400, 400, 0, 400, 1, MatterReason::Generation),
+             ledger);
+    const std::vector<ChunkCoord> coords = world.sorted_chunk_coords();
+    REQUIRE(coords.size() > 8);
+
+    ResidencyBudget budget;
+    budget.payload_bytes = 64ull << 20;
+    budget.max_bricks = 262144;
+    ResidencyManager residency;
+    residency.create(budget, types);
+
+    for (u64 frame = 1; frame <= 400; ++frame) {
+        for (const ChunkCoord& coord : coords) residency.request(coord);
+        const UploadBatch& batch = residency.update(world, frame);
+        if (batch.chunks_deferred == 0 && batch.chunks_added == 0) break;
+    }
+    REQUIRE(residency.resident_chunk_count() == coords.size());
+
+    // Now change every one of them, in a single edit, and say so once — exactly as the
+    // application does. Deliberately more chunks than one frame can upload.
+    apply_op(world, Op::fill_box(1, 0, -400, 0, -400, 400, 0, 400, 2, MatterReason::PlayerPlace),
+             ledger);
+    for (const ChunkCoord& coord : coords) residency.invalidate(coord);
+
+    // From here on nothing asks again. The renderer has no reason to: it can find all of
+    // them. Only the carried-over invalidation gets them refreshed.
+    u32 refreshed = 0;
+    for (u64 frame = 401; frame <= 800; ++frame) {
+        const UploadBatch& batch = residency.update(world, frame);
+        refreshed += batch.chunks_refreshed;
+        REQUIRE_FALSE(batch.out_of_memory);
+        if (batch.chunks_deferred == 0 && batch.chunks_refreshed == 0) break;
+    }
+
+    CHECK(refreshed == coords.size());
+    for (const ChunkCoord& coord : coords) {
+        REQUIRE(residency.mirror_hash(coord) == world.chunk_hash(coord));
+    }
+}
+
+TEST_CASE("invalidating a chunk that is not resident costs nothing") {
+    // The set must not become a work queue for chunks nobody is looking at. Those are
+    // fetched on demand, complete and correct, the moment a ray wants one — uploading them
+    // here would spend the frame budget on the wrong chunks.
+    World world;
+    MatterLedger ledger;
+    apply_op(world, Op::fill_box(0, 0, -300, 0, -300, 300, 0, 300, 1, MatterReason::Generation),
+             ledger);
+
+    ResidencyBudget budget;
+    budget.payload_bytes = 16ull << 20;
+    budget.max_bricks = 65536;
+    ResidencyManager residency;
+    residency.create(budget, types);
+
+    for (const ChunkCoord& coord : world.sorted_chunk_coords()) residency.invalidate(coord);
+    const UploadBatch& batch = residency.update(world, 1);
+    CHECK(batch.chunks_added == 0);
+    CHECK(batch.chunks_refreshed == 0);
+    CHECK(batch.chunks_deferred == 0);
+    CHECK(residency.validate());
+}
+
 TEST_CASE("individual voxels read back out of the mirror") {
     World world;
     world.set(5, 6, 7, 42);

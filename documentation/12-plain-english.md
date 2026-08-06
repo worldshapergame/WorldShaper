@@ -341,6 +341,38 @@ And the step is the whole step, not just the distance. If the ghost is simply mo
 
 Turn the ghost a quarter turn and put four copies past it and they close a square, coming back to where they started. Turn it a little and you get a long shallow arc. That's the "incrementally bent" you asked for.
 
+## The three bugs behind "chunks flicker" and "dotted lines"
+
+You reported two things. They turned out to be three separate faults, and all three come down to the same kind of mistake: something the code could only have known by being *told*, and nobody told it.
+
+**One: the memory budget was counting the wrong thing.**
+
+The game keeps two separate pools of graphics memory. One holds each block's *contents*; the other holds a fixed-size *slot* per block, whatever's in it. The budget was worked out by assuming an average block costs about a kilobyte of contents — which is true for a detailed, mixed-up world.
+
+A huge flat build is the opposite. Nearly every block is entirely one material, and a block like that stores almost nothing — eight bytes — but still needs a whole slot. So the contents pool sat at 8 MB of its 1 GB while the slots ran out completely.
+
+The numbers landed exactly: 651,465 blocks across 128 chunks came to 1,048,576 slots, which was the cap to the byte. Once the cap is hit, the game throws away a chunk to make room, and the chunk it throws away is the wrong kind, so it does it again, and again, forever. That's the flickering — chunks endlessly evicting each other.
+
+**Two: after a big edit, most of the changed chunks were never told they'd changed.**
+
+The graphics card asks for chunks it *can't find*. That's the whole system, and it works beautifully for exploring: look somewhere new, the chunks you're missing get reported, they arrive.
+
+It's blind to one case. If a chunk is already loaded but the world underneath it has changed, the graphics card *can* find it — so it never asks. Only the edit knows. The edit did say so, but a request only lives for one frame, and a frame can serve four chunks. A big build touches hundreds. The other few hundred were quietly dropped and never mentioned again, so they went on drawing what used to be there until something unrelated knocked them out.
+
+Now the edit's notice is remembered until it's actually acted on. That's the patch you saw sitting there that vanished when you got close.
+
+**Three: the dotted lines on the wood.**
+
+Far away, a single pixel covers several voxels, so the game doesn't check every voxel — it checks them in little 2×2×2 groups. A group counts as solid if *any* voxel in it is.
+
+Which means a group sitting half-in, half-out of your floor sticks up a bit above the real floor. A ray coming in at a shallow angle clips the **edge** of that bump instead of landing on the top. The position is off by one voxel — three centimetres, less than the pixel can show, genuinely invisible. But the *lighting* flips from "floor, facing the sun" to "wall, in shadow", and that's not invisible at all. One dark pixel.
+
+The reason it looked like scattered dots rather than a band at one distance: neighbouring pixels are deliberately given slightly different detail levels, to stop the world visibly changing quality in rings around you. That scatters the faulty ones across the whole surface.
+
+The fix: the detail level still decides the **colour** — a distant pixel gets a blended average, which is the entire point and stops the far-off world sparkling. It no longer decides the **shape**. Shape is always checked one voxel at a time.
+
+I was worried that would cost speed. It doesn't — the data's already been fetched, so it's a few more steps through memory the game is holding anyway. Before: 1,722 wrong pixels, 1.929 ms a frame. After: 11 wrong pixels, 1.886 ms. Slightly faster, if anything, and that difference is just noise.
+
 ## How we'll work
 
 - I write all the code. You never open a code file.

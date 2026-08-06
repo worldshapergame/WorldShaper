@@ -168,6 +168,8 @@ void WorldBuffers::upload(VkCommandBuffer cmd, const ResidencyManager& residency
     stats_.deferred_bytes = 0;
     stats_.raw_regions = static_cast<u32>(batch.slots.size() * 2 + batch.payload.size());
 
+    stats_.coarse_incomplete = false;
+
     header_regions_.clear();
     occupancy_regions_.clear();
     payload_regions_.clear();
@@ -176,6 +178,34 @@ void WorldBuffers::upload(VkCommandBuffer cmd, const ResidencyManager& residency
     prefix_regions_.clear();
     grid_regions_.clear();
     coarse_regions_.clear();
+
+    // The world occupancy grid goes first, before any brick data.
+    //
+    // It used to go last, and that was a bug with a very confusing face. Staging silently
+    // gives up when the frame's staging buffer is full, so after a large edit the brick data
+    // filled it and the occupancy update was dropped — while the flag saying it needed
+    // sending had already been cleared. The grid on the GPU then said "no chunk here" for
+    // regions that had just been filled, so the marcher never asked for them, so they never
+    // streamed, so there was a hole. Editing inside the hole marked the grid dirty again on
+    // a quieter frame and the region appeared, which made it look like a rendering glitch
+    // rather than a dropped upload.
+    //
+    // Order fixes the common case: the grid is small and everything else depends on it being
+    // right, whereas a brick that misses this frame merely arrives in the next one. The
+    // reporting below fixes the rest — if even this does not fit, residency is told to try
+    // again rather than assuming it was sent.
+    const std::vector<u32>& coarse = residency.coarse();
+    std::vector<u32> sorted_coarse = batch.coarse_cells;
+    std::sort(sorted_coarse.begin(), sorted_coarse.end());
+    sorted_coarse.erase(std::unique(sorted_coarse.begin(), sorted_coarse.end()),
+                        sorted_coarse.end());
+    for (u32 cell : sorted_coarse) {
+        if (!stage(&coarse[static_cast<usize>(cell) * 4], sizeof(u32) * 4,
+                   static_cast<u64>(cell) * sizeof(u32) * 4, coarse_regions_)) {
+            stats_.coarse_incomplete = true;
+            break;
+        }
+    }
 
     // Ascending slot order is what makes coalescing work at all.
     sorted_slots_ = batch.slots;
@@ -238,16 +268,6 @@ void WorldBuffers::upload(VkCommandBuffer cmd, const ResidencyManager& residency
                        sorted_cells.end());
     for (u32 cell : sorted_cells) {
         stage(&grid[cell], sizeof(u32), static_cast<u64>(cell) * sizeof(u32), grid_regions_);
-    }
-
-    const std::vector<u32>& coarse = residency.coarse();
-    std::vector<u32> sorted_coarse = batch.coarse_cells;
-    std::sort(sorted_coarse.begin(), sorted_coarse.end());
-    sorted_coarse.erase(std::unique(sorted_coarse.begin(), sorted_coarse.end()),
-                        sorted_coarse.end());
-    for (u32 cell : sorted_coarse) {
-        stage(&coarse[static_cast<usize>(cell) * 4], sizeof(u32) * 4,
-              static_cast<u64>(cell) * sizeof(u32) * 4, coarse_regions_);
     }
 
     flush(cmd, headers_.buffer, header_regions_);

@@ -13,6 +13,7 @@
 // The pool hands out *offsets*, not pointers. It never touches the memory it describes,
 // which is what lets the same code manage a GPU buffer it cannot dereference.
 
+#include <unordered_map>
 #include <vector>
 
 #include "core/types.hpp"
@@ -26,6 +27,7 @@ struct BlockPoolStats {
     u64 capacity = 0;
     u64 in_use = 0;        // bytes handed out, counting class rounding
     u64 requested = 0;     // bytes actually asked for
+    u64 upgrades = 0;      // times a bigger class was used because the exact one was empty
     u64 high_water = 0;
     u64 free_listed = 0;   // bytes sitting on free lists, available for reuse
     u32 live_allocations = 0;
@@ -68,6 +70,11 @@ private:
 
     std::vector<u32> classes_;
     std::vector<std::vector<u32>> free_lists_;
+    // Blocks handed out from a larger class than their size asked for, so release can put
+    // them back where they came from. Only populated once the pool is carved out and a
+    // class runs dry, so the common path never touches it.
+    std::unordered_map<u32, u32> upgraded_;
+    u64 upgrades_ = 0;
     u64 capacity_ = 0;
     u64 cursor_ = 0;          // bump pointer for never-before-used space
     u64 in_use_ = 0;

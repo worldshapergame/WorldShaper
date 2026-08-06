@@ -27,6 +27,8 @@ void BlockPool::create(u64 capacity_bytes, const std::vector<u32>& classes) {
 
     classes_ = classes;
     free_lists_.assign(classes_.size(), {});
+    upgraded_.clear();
+    upgrades_ = 0;
     capacity_ = (capacity_bytes / kBlockGranularity) * kBlockGranularity;
     cursor_ = 0;
     in_use_ = 0;
@@ -40,6 +42,7 @@ void BlockPool::create(u64 capacity_bytes, const std::vector<u32>& classes) {
 
 void BlockPool::reset() {
     for (std::vector<u32>& list : free_lists_) list.clear();
+    upgraded_.clear();
     cursor_ = 0;
     in_use_ = 0;
     requested_ = 0;
@@ -74,19 +77,47 @@ u32 BlockPool::allocate(u32 size_bytes) {
     const u32 block = classes_[index];
     u32 offset;
 
+    u32 used_index = index;
+
     if (!free_lists_[index].empty()) {
         offset = free_lists_[index].back();
         free_lists_[index].pop_back();
-    } else {
-        if (cursor_ + block > capacity_) {
-            ++failures_;
-            return kNoOffset;   // full: the caller evicts and retries
-        }
+    } else if (cursor_ + block <= capacity_) {
         offset = static_cast<u32>(cursor_);
         cursor_ += block;
+    } else {
+        // The exact class is empty and the pool is carved out. Take a bigger free block
+        // rather than failing.
+        //
+        // Without this the pool reports "full" while holding a great deal of free space in
+        // the wrong classes, and the caller — which evicts and retries — churns forever:
+        // evicting a chunk with a small brick run does nothing for a chunk that needs a
+        // large one. On screen that is chunks blinking in and out as you move, and it is
+        // what a large edit provokes, because it makes chunks dense enough to jump several
+        // classes at once.
+        //
+        // The waste is the difference between the two classes and is given back on release.
+        // Wasting some of a block beats refusing to draw the world.
+        used_index = 0xFFFFFFFFu;
+        for (u32 bigger = index + 1; bigger < classes_.size(); ++bigger) {
+            if (!free_lists_[bigger].empty()) {
+                used_index = bigger;
+                break;
+            }
+        }
+        if (used_index == 0xFFFFFFFFu) {
+            ++failures_;
+            return kNoOffset;   // genuinely full: the caller evicts and retries
+        }
+        offset = free_lists_[used_index].back();
+        free_lists_[used_index].pop_back();
+        // Remembered so release puts it back on the list it actually came from. Returning a
+        // large block to a small class's list would hand out overlapping allocations.
+        upgraded_[offset] = used_index;
+        ++upgrades_;
     }
 
-    in_use_ += block;
+    in_use_ += classes_[used_index];
     requested_ += size_bytes;
     ++live_;
     ++allocations_;
@@ -97,9 +128,18 @@ u32 BlockPool::allocate(u32 size_bytes) {
 void BlockPool::release(u32 offset, u32 size_bytes) {
     if (offset == kNoOffset || size_bytes == 0) return;
 
-    const u32 index = class_index_for(size_bytes);
+    u32 index = class_index_for(size_bytes);
     WS_ASSERT(index != 0xFFFFFFFFu, "releasing a size that was never allocatable");
     if (index == 0xFFFFFFFFu) return;
+
+    // A block that was upgraded to a larger class goes back on that larger class's list.
+    // Putting it on the list its *requested* size implies would leave the rest of it
+    // unaccounted for, and the next allocation from the neighbouring class would overlap it.
+    const auto upgraded = upgraded_.find(offset);
+    if (upgraded != upgraded_.end()) {
+        index = upgraded->second;
+        upgraded_.erase(upgraded);
+    }
 
     const u32 block = classes_[index];
     WS_ASSERT(in_use_ >= block, "block pool accounting underflow");
@@ -115,6 +155,7 @@ BlockPoolStats BlockPool::stats() const {
     out.capacity = capacity_;
     out.in_use = in_use_;
     out.requested = requested_;
+    out.upgrades = upgrades_;
     out.high_water = high_water_;
     out.live_allocations = live_;
     out.allocations = allocations_;
