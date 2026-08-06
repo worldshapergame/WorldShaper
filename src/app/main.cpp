@@ -191,6 +191,26 @@ void print_help() {
         "          Z undo   X redo   R clear points   C cancel   Q/E material");
 }
 
+// Where the compiled shaders are.
+//
+// Beside the running executable first, which is what makes an unzipped release work wherever
+// it is put. Only if they are not there does it fall back to the directory this build was
+// configured with — useful for a developer running the exe from somewhere odd, and useless to
+// anyone else, since that path exists on exactly one machine.
+//
+// Using the build-time path alone is how v0.6.0 shipped broken: it resolved perfectly here
+// and to nothing at all on every other computer, so the window opened black and closed with
+// the reason scrolling past in a console nobody could read.
+static std::filesystem::path compiled_shader_dir() {
+    const std::string base = Window::base_path();
+    if (!base.empty()) {
+        const std::filesystem::path beside = std::filesystem::path(base) / "shaders";
+        std::error_code ec;
+        if (std::filesystem::exists(beside / "visibility.comp.spv", ec)) return beside;
+    }
+    return std::filesystem::path(WS_EXE_SHADER_DIR);
+}
+
 // Headless is a first-class mode from Stage 0 (documentation/02, "Headless mode").
 // Conservation-of-matter audits, determinism checks and multiplayer desync tests all run
 // through this path in CI, so it must never be allowed to rot.
@@ -1639,11 +1659,11 @@ int Application::run(const Options& options) {
 
     create_render_target(swapchain_.extent().width, swapchain_.extent().height);
 
-    // Compiled shaders sit beside the executable so a copied build folder is
-    // self-contained. The source tree location comes from the build, so hot reload works
-    // no matter what the working directory is.
-    const std::filesystem::path spirv =
-        std::filesystem::path(WS_EXE_SHADER_DIR) / "visibility.comp.spv";
+    // Compiled shaders sit beside the executable, and *beside* means beside the one that is
+    // running — asked at run time, not baked in at build time. The source tree location
+    // still comes from the build, because hot reload only ever runs where the source is.
+    const std::filesystem::path shaders = compiled_shader_dir();
+    const std::filesystem::path spirv = shaders / "visibility.comp.spv";
     const std::filesystem::path source =
         std::filesystem::path(WS_SHADER_SOURCE_DIR) / "visibility.comp";
 
@@ -1653,8 +1673,7 @@ int Application::run(const Options& options) {
         return 1;
     }
 
-    const std::filesystem::path resolve_spirv =
-        std::filesystem::path(WS_EXE_SHADER_DIR) / "resolve.comp.spv";
+    const std::filesystem::path resolve_spirv = shaders / "resolve.comp.spv";
     const std::filesystem::path resolve_source =
         std::filesystem::path(WS_SHADER_SOURCE_DIR) / "resolve.comp";
     if (!resolve_.create(device_, resolve_source, resolve_spirv, resolve_layout_,

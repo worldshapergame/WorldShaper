@@ -88,6 +88,15 @@ public:
     // Instance extensions SDL requires for surface creation. Valid until shutdown.
     static const char* const* required_vulkan_extensions(u32& count);
 
+    // The directory the running executable is in, with a trailing separator. Empty when the
+    // platform will not say.
+    //
+    // This is how a release finds its shaders, and it has to be asked at *run* time. Using
+    // the path the build was configured with is an absolute path on the machine that
+    // compiled it — which exists there and nowhere else, so every test passed for the
+    // developer and every download opened a black window and closed.
+    static std::string base_path();
+
     // Creates the presentation surface. Handles are passed as void* so that this header
     // — the only place SDL is visible — never pulls in Vulkan either.
     bool create_vulkan_surface(void* instance, void** out_surface) const;

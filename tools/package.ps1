@@ -49,6 +49,33 @@ Copy-Item (Join-Path $root "LICENSE"), (Join-Path $root "README.md") $staging
 
 $zip = Join-Path $package "$name.zip"
 Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zip -Force
+
+# Unpack the zip somewhere else entirely and start it there.
+#
+# Every check above this line runs the executable inside the build tree, where every path the
+# build baked in happens to resolve. v0.6.0 shipped with the shader directory hard-coded to an
+# absolute path on the build machine: it passed the unit tests, both audits and the version
+# check, and then opened a black window and closed on every computer that was not this one.
+#
+# So the last gate is the only one that reproduces a player: a different directory, nothing of
+# the source tree in reach, and the game has to draw a frame.
+$smoke = Join-Path ([System.IO.Path]::GetTempPath()) "ws-smoke-$version"
+Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
+Expand-Archive -Path $zip -DestinationPath $smoke -Force
+
+$shot = Join-Path $smoke "smoke.png"
+Push-Location $smoke
+try {
+    & (Join-Path $smoke "WorldShaper.exe") --screenshot $shot --screenshot-frame 3 `
+        --no-update-check --no-vsync --width 640 --height 360
+    if ($LASTEXITCODE -ne 0) { throw "the unpacked build failed to run (exit $LASTEXITCODE)" }
+} finally {
+    Pop-Location
+}
+if (-not (Test-Path $shot)) { throw "the unpacked build started but drew no frame" }
+Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "smoke test: the unpacked build ran from $smoke and drew a frame"
+
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
 $hash | Out-File "$zip.sha256" -Encoding ascii
 

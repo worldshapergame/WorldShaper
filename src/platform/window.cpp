@@ -242,6 +242,12 @@ bool Window::create_vulkan_surface(void* instance, void** out_surface) const {
     return true;
 }
 
+std::string Window::base_path() {
+    // Owned by SDL for the life of the process; there is nothing to free.
+    const char* path = SDL_GetBasePath();
+    return (path != nullptr) ? std::string(path) : std::string();
+}
+
 const char* const* Window::required_vulkan_extensions(u32& count) {
     Uint32 n = 0;
     const char* const* names = SDL_Vulkan_GetInstanceExtensions(&n);
