@@ -504,6 +504,8 @@ private:
     MatterLedger ledger_;
     Updater updater_;
     ResidencyManager residency_;
+    ThumbnailCache thumb_cache_;
+    ThumbnailBudget thumb_budget_;
     WorldBuffers world_buffers_;
     ResidencyBudget residency_budget_;
     FeedbackBuffer feedback_;
@@ -529,6 +531,8 @@ private:
     u32 last_feedback_truncated_ = 0;
     u32 last_feedback_accepted_ = 0;
     u32 last_feedback_rejected_ = 0;   // reported, but the world has no chunk there
+    u32 last_thumbs_wanted_ = 0;
+    u32 last_thumbs_built_ = 0;
     f64 residency_ms_ = 0.0;
     f64 worst_residency_ms_ = 0.0;
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
@@ -795,7 +799,11 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // hundreds of chunks and the budget serves four, so all but the first
                     // four were being forgotten — and nothing ever asked again, because a
                     // stale chunk is one the renderer can still find.
-                    if (world_.has_chunk(coord)) residency_.invalidate(coord);
+                    if (!world_.has_chunk(coord)) continue;
+                    residency_.invalidate(coord);
+                    // The thumbnail is a summary of contents, so changing the contents makes
+                    // it wrong too — and it is what the same chunk draws as from a distance.
+                    thumb_cache_.invalidate(coord);
                 }
             }
         }
@@ -814,6 +822,9 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
 void Application::rebuild_coarse_grids() {
     residency_.rebuild_coarse(
         world_, ChunkCoord{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()});
+    // Every path that changes which chunks exist already comes through here, which makes it
+    // the one place the thumbnail cache needs telling that its work list is stale.
+    thumb_cache_.mark_world_changed();
 }
 
 void Application::stream(f64 seconds) {
@@ -905,6 +916,19 @@ void Application::record_frame(f32 time_seconds) {
     // If the occupancy grid did not fit in this frame's staging, ask for it again. Clearing
     // the dirty flag over an upload that never happened is what left holes in the world.
     if (world_buffers_.stats().coarse_incomplete) residency_.mark_coarse_dirty();
+
+    // The other tier. Pushed from the camera rather than pulled from the view, so it never
+    // waits on a round trip and cannot deadlock on what a ray did or did not reach.
+    {
+        const ChunkCoord centre{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
+        const ThumbnailBatch& thumbs = thumb_cache_.update(world_, centre, frame_counter_);
+        if (!world_buffers_.upload_thumbnails(cmd, thumb_cache_, thumbs)) {
+            thumb_cache_.defer_last_batch();
+        }
+        last_thumbs_wanted_ = thumbs.wanted;
+        last_thumbs_built_ = thumbs.built;
+    }
+
     world_buffers_.upload_tables(cmd, types_);
     profiler_.add_bytes(world_buffers_.stats().staged_bytes);
     profiler_.end_pass(cmd);
@@ -934,12 +958,13 @@ void Application::record_frame(f32 time_seconds) {
         if (options_.stream_log && (frame_counter_ % 60 == 0)) {
             WS_LOG_INFO("diag",
                         "f{} resident {}/{} added {} refreshed {} evicted {} deferred {} "
-                        "bricks {} oom {} feedback {} accepted {} phantom {}",
+                        "bricks {} oom {} feedback {} accepted {} phantom {} thumbs {} want {}",
                         frame_counter_, report.resident_chunks, report.world_chunks,
                         batch.chunks_added, batch.chunks_refreshed, batch.chunks_evicted,
                         batch.chunks_deferred, report.resident_bricks,
                         batch.out_of_memory ? 1 : 0, last_feedback_, last_feedback_accepted_,
-                        last_feedback_rejected_);
+                        last_feedback_rejected_, thumb_cache_.resident_count(),
+                        last_thumbs_wanted_);
         }
 
         const ChiselPreview& preview = chisel_.preview();
@@ -1146,6 +1171,10 @@ void Application::record_frame(f32 time_seconds) {
     // so this is set past anything a world will contain rather than being a quality knob.
     params.lens[1] = 4000000.0f;   // voxels: 125 km
     params.lens[2] = detail_bias_;
+    params.thumb_dims[0] = static_cast<i32>(thumb_budget_.grid_width);
+    params.thumb_dims[1] = static_cast<i32>(thumb_budget_.grid_height);
+    params.thumb_dims[2] = static_cast<i32>(thumb_budget_.grid_depth);
+    params.thumb_dims[3] = 0;
 
     // The chisel's preview, moved into the camera-relative space the shader works in. The
     // camera chunk corner is the origin of that space, so the same subtraction that the
@@ -1394,17 +1423,32 @@ int Application::run(const Options& options) {
     // and out as you moved. The payload gauge said 1% and everything looked fine.
     //
     // So: split the budget, and size the slots by what a slot actually costs.
+    //
+    // Thumbnails take a slice off the top, because they buy something the other two cannot
+    // buy at any price. Full detail is bounded by memory however it is split: a chunk has to
+    // be entirely resident to draw at all, so past that bound the world is not drawn coarsely,
+    // it is simply not drawn. A thumbnail is two kilobytes, so the same memory that holds a
+    // few hundred chunks at full detail holds tens of thousands of them at a metre — which is
+    // the difference between a view that ends and one that does not.
     constexpr u64 kSlotBytes = sizeof(GpuBrickHeader) + kBrickWords * sizeof(u64);
-    residency_budget_.payload_bytes = vram_budget * 55 / 100;
+    const u64 thumb_bytes = vram_budget * 15 / 100;
+    residency_budget_.payload_bytes = vram_budget * 45 / 100;
     residency_budget_.max_bricks =
-        static_cast<u32>((vram_budget * 45 / 100) / kSlotBytes);
+        static_cast<u32>((vram_budget * 40 / 100) / kSlotBytes);
     residency_budget_.max_chunk_uploads_per_frame = 8;
     residency_budget_.max_bricks_per_frame = 8192;
     residency_.create(residency_budget_, types_);
+
+    constexpr u64 kThumbBytes = kThumbSlotWords * sizeof(u32);
+    thumb_budget_.max_thumbs = static_cast<u32>(thumb_bytes / kThumbBytes);
+    thumb_cache_.create(thumb_budget_, types_);
+    WS_LOG_INFO("app", "thumbnails: {} slots, {} MB, radius {} chunks ({} m)",
+                thumb_budget_.max_thumbs, (thumb_budget_.max_thumbs * kThumbBytes) >> 20,
+                thumb_budget_.radius_chunks, thumb_budget_.radius_chunks * 8);
     // Coarse occupancy comes from the world, so the marcher can tell "nothing here" from
     // "something here that you have not streamed yet". Without it, feedback never fires.
     rebuild_coarse_grids();
-    if (!world_buffers_.create(device_, residency_budget_, 32ull << 20)) return 1;
+    if (!world_buffers_.create(device_, residency_budget_, thumb_budget_, 32ull << 20)) return 1;
     if (!feedback_.create(device_)) return 1;
 
     // One slot per frame in flight, aligned to whatever the device demands, so writing
@@ -1423,7 +1467,7 @@ int Application::run(const Options& options) {
     // Visibility set: bindings 0-1 are the output images; 2-8 are the world, in the order
     // the marcher walks them. See shaders/visibility.comp.
     constexpr u32 kImageBindings = 2;
-    constexpr u32 kBufferBindings = 9;   // 8 world buffers plus the feedback buffer
+    constexpr u32 kBufferBindings = 11;   // 10 world buffers plus the feedback buffer
     VkDescriptorSetLayoutBinding bindings[kImageBindings + kBufferBindings + 1]{};
     for (u32 i = 0; i < kImageBindings + kBufferBindings + 1; ++i) {
         bindings[i].binding = i;
@@ -1517,9 +1561,10 @@ int Application::run(const Options& options) {
     const VkBuffer marcher_buffers[]{
         world_buffers_.grid(),     world_buffers_.records(),   world_buffers_.masks(),
         world_buffers_.prefixes(), world_buffers_.headers(),   world_buffers_.occupancy(),
-        world_buffers_.payload(), world_buffers_.coarse(), feedback_.buffer(),
+        world_buffers_.payload(), world_buffers_.coarse(), world_buffers_.thumb_grid(),
+        world_buffers_.thumbs(), feedback_.buffer(),
     };
-    static_assert(kBufferBindings == 9, "marcher buffer list must match the binding count");
+    static_assert(kBufferBindings == 11, "marcher buffer list must match the binding count");
     const VkBuffer resolve_buffers[]{world_buffers_.types(), world_buffers_.visuals(),
                                      clip_buffer_.buffer};
 

@@ -48,12 +48,18 @@ struct ThumbnailBudget {
     // Building one visits every brick of a chunk, so this is a real per-frame cost and is
     // capped like every other streaming budget. Thumbnails are held until the chunk changes,
     // so this is a fill rate, not a per-frame load.
-    u32 max_builds_per_frame = 6;
+    u32 max_builds_per_frame = 32;
 
     // How far the camera may drift before the work list is rebuilt. The list is in distance
     // order, and the order only matters to within a few chunks.
     i64 rescan_margin = 8;
 };
+
+// How a slot is laid out on the GPU: four u32 of record, then the cells. Both halves live in
+// one buffer so a lookup needs one binding, and so the record a lookup must check sits beside
+// the cells it guards.
+inline constexpr u32 kThumbRecordWords = 4;
+inline constexpr u32 kThumbSlotWords = kThumbRecordWords + kThumbCells;
 
 // Per slot, so a wrapped grid cell can be checked against the chunk it was asked about.
 struct GpuThumbRecord {
@@ -83,6 +89,20 @@ public:
     // Drops a chunk's thumbnail so it is rebuilt. Edits go through here; a thumbnail is a
     // summary of contents, so contents changing makes it wrong.
     void invalidate(const ChunkCoord& coord);
+
+    // "That batch did not reach the GPU." Offered again next frame, unchanged. Without this
+    // the copy is simply lost: the cache believes the thumbnail is up there, nothing ever
+    // asks again, and the chunk draws stale contents or none at all until it is edited.
+    void defer_last_batch();
+
+    // "The world gained or lost chunks." The work list is which chunks are near enough to be
+    // worth a thumbnail, and it was only rebuilt when the *camera* moved — so a region built
+    // after the list was made was never in it, and never got a thumbnail however long you
+    // stood there. Build a platform and fly over it and none of it exists at a distance.
+    //
+    // Rate-limited rather than immediate, because holding the mouse down edits every frame
+    // and the rescan walks the world.
+    void mark_world_changed() { world_dirty_ = true; }
 
     bool resident(const ChunkCoord& coord) const;
     u32 resident_count() const { return static_cast<u32>(slot_of_.size()); }
@@ -126,6 +146,12 @@ private:
     std::vector<std::pair<i64, ChunkCoord>> wanted_;
     ChunkCoord scanned_at_{};
     bool scanned_ = false;
+    bool world_dirty_ = false;
+    u64 last_scan_frame_ = 0;
+    static constexpr u64 kRescanInterval = 30;   // frames, when only the world changed
+
+    std::vector<u32> pending_slots_;
+    std::vector<u32> pending_grid_;
 
     ThumbnailBatch batch_;
 };

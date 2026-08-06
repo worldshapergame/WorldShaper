@@ -5,7 +5,8 @@
 
 namespace ws {
 
-bool WorldBuffers::create(Device& device, const ResidencyBudget& budget, u64 staging_bytes) {
+bool WorldBuffers::create(Device& device, const ResidencyBudget& budget,
+                          const ThumbnailBudget& thumbs, u64 staging_bytes) {
     device_ = &device;
 
     const u64 header_bytes = static_cast<u64>(budget.max_bricks) * sizeof(GpuBrickHeader);
@@ -32,6 +33,12 @@ bool WorldBuffers::create(Device& device, const ResidencyBudget& budget, u64 sta
     const u64 coarse_bytes =
         static_cast<u64>(kCoarseLevels) * kCoarseCellsPerLevel * 4 * sizeof(u32);
     coarse_ = create_device_buffer(device, coarse_bytes, storage, "world occupancy");
+
+    const u64 thumb_grid_bytes = static_cast<u64>(thumbs.grid_width) * thumbs.grid_height *
+                                 thumbs.grid_depth * sizeof(u32);
+    const u64 thumb_bytes = static_cast<u64>(thumbs.max_thumbs) * kThumbSlotWords * sizeof(u32);
+    thumb_grid_ = create_device_buffer(device, thumb_grid_bytes, storage, "thumbnail grid");
+    thumbs_ = create_device_buffer(device, thumb_bytes, storage, "thumbnails");
     types_ = create_device_buffer(device, static_cast<u64>(kMaxTables) * 8, storage,
                                   "voxel types");
     visuals_ = create_device_buffer(device, static_cast<u64>(kMaxTables) * 16, storage,
@@ -95,6 +102,8 @@ void WorldBuffers::destroy() {
     destroy_buffer(*device_, staging_);
     destroy_buffer(*device_, visuals_);
     destroy_buffer(*device_, types_);
+    destroy_buffer(*device_, thumbs_);
+    destroy_buffer(*device_, thumb_grid_);
     destroy_buffer(*device_, coarse_);
     destroy_buffer(*device_, grid_);
     destroy_buffer(*device_, prefixes_);
@@ -108,7 +117,8 @@ void WorldBuffers::destroy() {
 
 u64 WorldBuffers::device_bytes() const {
     return headers_.size + occupancy_.size + payload_.size + records_.size + masks_.size +
-           prefixes_.size + grid_.size + coarse_.size + types_.size + visuals_.size;
+           prefixes_.size + grid_.size + coarse_.size + thumb_grid_.size + thumbs_.size +
+           types_.size + visuals_.size;
 }
 
 bool WorldBuffers::stage(const void* source, u64 size, u64 destination,
@@ -156,6 +166,68 @@ void WorldBuffers::flush(VkCommandBuffer cmd, VkBuffer destination,
     stats_.copy_regions += static_cast<u32>(copies_.size());
     vkCmdCopyBuffer(cmd, staging_.buffer, destination, static_cast<u32>(copies_.size()),
                     copies_.data());
+}
+
+bool WorldBuffers::upload_thumbnails(VkCommandBuffer cmd, const ThumbnailCache& cache,
+                                     const ThumbnailBatch& batch) {
+    if (batch.slots.empty() && batch.grid_cells.empty()) return true;
+
+    thumb_grid_regions_.clear();
+    thumb_regions_.clear();
+
+    // Contents before the grid, and it matters which way round.
+    //
+    // The grid is what makes a slot findable. Send a grid entry whose slot contents did not
+    // fit this frame and the marcher draws whatever that slot held before — some other
+    // chunk, somewhere else. Send the contents and lose the grid entry and it draws nothing
+    // for a frame. Only one of those is a wrong picture.
+    const std::vector<GpuThumbRecord>& records = cache.records();
+    const std::vector<u32>& cells = cache.cells();
+
+    bool complete = true;
+    for (u32 slot : batch.slots) {
+        const u64 base = static_cast<u64>(slot) * kThumbSlotWords * sizeof(u32);
+        if (!stage(&records[slot], sizeof(GpuThumbRecord), base, thumb_regions_) ||
+            !stage(&cells[static_cast<usize>(slot) * kThumbCells], kThumbCells * sizeof(u32),
+                   base + kThumbRecordWords * sizeof(u32), thumb_regions_)) {
+            complete = false;
+            break;
+        }
+    }
+
+    // If any contents were left behind, the grid waits too — pointing at half of them is
+    // exactly the wrong picture described above. The caller re-offers the whole batch.
+    if (complete) {
+        const std::vector<u32>& grid = cache.grid();
+        for (u32 cell : batch.grid_cells) {
+            if (!stage(&grid[cell], sizeof(u32), static_cast<u64>(cell) * sizeof(u32),
+                       thumb_grid_regions_)) {
+                complete = false;
+                break;
+            }
+        }
+    }
+
+    flush(cmd, thumbs_.buffer, thumb_regions_);
+    flush(cmd, thumb_grid_.buffer, thumb_grid_regions_);
+
+    // Its own barrier, and it needs one. upload() issues a barrier at the end of its own
+    // copies — and skips it entirely when it staged nothing, which is exactly the case here:
+    // a camera outside the full-detail window has no chunks to stream and everything on
+    // screen is a thumbnail. Copies recorded after that barrier are unsynchronised with the
+    // dispatch that reads them, so the marcher reads whatever was in the buffer before.
+    if (thumb_regions_.empty() && thumb_grid_regions_.empty()) return complete;
+
+    VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.memoryBarrierCount = 1;
+    dependency.pMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(cmd, &dependency);
+    return complete;
 }
 
 void WorldBuffers::upload(VkCommandBuffer cmd, const ResidencyManager& residency,

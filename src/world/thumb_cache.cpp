@@ -68,6 +68,12 @@ void ThumbnailCache::invalidate(const ChunkCoord& coord) {
     if (found != slot_of_.end()) found->second.revision = 0;
 }
 
+void ThumbnailCache::defer_last_batch() {
+    pending_slots_.insert(pending_slots_.end(), batch_.slots.begin(), batch_.slots.end());
+    pending_grid_.insert(pending_grid_.end(), batch_.grid_cells.begin(),
+                         batch_.grid_cells.end());
+}
+
 void ThumbnailCache::release(const ChunkCoord& coord) {
     const auto found = slot_of_.find(coord);
     if (found == slot_of_.end()) return;
@@ -144,14 +150,23 @@ void ThumbnailCache::rescan(const World& world, const ChunkCoord& centre) {
 
 const ThumbnailBatch& ThumbnailCache::update(const World& world, const ChunkCoord& centre,
                                              u64 frame) {
-    (void)frame;
     batch_.clear();
     if (types_ == nullptr) return batch_;
 
-    if (!scanned_ || std::abs(centre.x - scanned_at_.x) > budget_.rescan_margin ||
-        std::abs(centre.y - scanned_at_.y) > budget_.rescan_margin ||
-        std::abs(centre.z - scanned_at_.z) > budget_.rescan_margin) {
+    // Anything a previous frame could not fit goes out again first.
+    batch_.slots.swap(pending_slots_);
+    batch_.grid_cells.swap(pending_grid_);
+    pending_slots_.clear();
+    pending_grid_.clear();
+
+    const bool moved = std::abs(centre.x - scanned_at_.x) > budget_.rescan_margin ||
+                       std::abs(centre.y - scanned_at_.y) > budget_.rescan_margin ||
+                       std::abs(centre.z - scanned_at_.z) > budget_.rescan_margin;
+    const bool world_settled = world_dirty_ && frame >= last_scan_frame_ + kRescanInterval;
+    if (!scanned_ || moved || world_settled) {
         rescan(world, centre);
+        last_scan_frame_ = frame;
+        world_dirty_ = false;
     }
 
     for (const auto& [distance, coord] : wanted_) {

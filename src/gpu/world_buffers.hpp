@@ -16,6 +16,7 @@
 #include "gpu/buffer.hpp"
 #include "gpu/swapchain.hpp"
 #include "world/residency.hpp"
+#include "world/thumb_cache.hpp"
 
 namespace ws {
 
@@ -33,8 +34,19 @@ struct WorldBufferStats {
 
 class WorldBuffers {
 public:
-    bool create(Device& device, const ResidencyBudget& budget, u64 staging_bytes);
+    bool create(Device& device, const ResidencyBudget& budget, const ThumbnailBudget& thumbs,
+                u64 staging_bytes);
     void destroy();
+
+    // Copies whatever the thumbnail cache says changed. Separate from upload() because the
+    // two tiers are filled by different mechanisms — one follows the view, the other follows
+    // the camera — but it shares the same staging ring, so it must be called after upload()
+    // within a frame and takes whatever room is left.
+    // Returns false when it did not all fit, in which case the caller must offer the same
+    // batch again — a copy that is dropped and forgotten is how a chunk ends up drawing
+    // something that is not there.
+    bool upload_thumbnails(VkCommandBuffer cmd, const ThumbnailCache& cache,
+                           const ThumbnailBatch& batch);
 
     // Records the copies for everything the batch says changed. Must be called inside a
     // command buffer, before anything reads the buffers.
@@ -58,6 +70,8 @@ public:
     VkBuffer prefixes() const { return prefixes_.buffer; }
     VkBuffer grid() const { return grid_.buffer; }
     VkBuffer coarse() const { return coarse_.buffer; }
+    VkBuffer thumb_grid() const { return thumb_grid_.buffer; }
+    VkBuffer thumbs() const { return thumbs_.buffer; }
     VkBuffer types() const { return types_.buffer; }
     VkBuffer visuals() const { return visuals_.buffer; }
 
@@ -85,6 +99,11 @@ private:
     GpuBuffer prefixes_;
     GpuBuffer grid_;
     GpuBuffer coarse_;
+    // One buffer for both halves of a thumbnail, interleaved: per slot, four u32 of record
+    // (the chunk it holds) then 512 cells. One binding instead of two, and the record a
+    // lookup needs to check sits in the same cache line as the cells it guards.
+    GpuBuffer thumb_grid_;
+    GpuBuffer thumbs_;
     GpuBuffer types_;
     GpuBuffer visuals_;
     GpuBuffer staging_;
@@ -105,6 +124,8 @@ private:
     std::vector<Region> prefix_regions_;
     std::vector<Region> grid_regions_;
     std::vector<Region> coarse_regions_;
+    std::vector<Region> thumb_grid_regions_;
+    std::vector<Region> thumb_regions_;
     std::vector<VkBufferCopy> copies_;
     std::vector<u32> sorted_slots_;
 
