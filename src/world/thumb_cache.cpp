@@ -32,9 +32,9 @@ void ThumbnailBatch::clear() {
     wanted = 0;
 }
 
-void ThumbnailCache::create(const ThumbnailBudget& budget, const VoxelTypeTable& types) {
+void ThumbnailCache::create(const ThumbnailBudget& budget, SummaryTree& tree) {
     budget_ = budget;
-    types_ = &types;
+    tree_ = &tree;
 
     const usize cells = static_cast<usize>(budget_.grid_width) * budget_.grid_height *
                         budget_.grid_depth;
@@ -60,12 +60,16 @@ bool ThumbnailCache::resident(const ChunkCoord& coord) const {
 }
 
 void ThumbnailCache::invalidate(const ChunkCoord& coord) {
-    const auto found = slot_of_.find(coord);
-    // Zeroing the revision rather than dropping the slot: the thumbnail stays on screen,
+    const auto found = slot_of_.find(block_of(coord));
+    // Marking rather than dropping the slot: the thumbnail stays on screen,
     // one edit out of date, until the new one is built. Dropping it would blink the chunk
     // out of the distance for a frame or two, which is more noticeable than being slightly
     // stale — and a big edit invalidates hundreds at once.
-    if (found != slot_of_.end()) found->second.revision = 0;
+    if (found != slot_of_.end()) found->second.dirty = true;
+}
+
+ChunkCoord ThumbnailCache::block_of(const ChunkCoord& coord) const {
+    return SummaryTree::block_of(coord, budget_.level);
 }
 
 void ThumbnailCache::defer_last_batch() {
@@ -125,14 +129,20 @@ u32 ThumbnailCache::acquire_slot(i64 distance, const ChunkCoord& centre) {
 
 void ThumbnailCache::rescan(const World& world, const ChunkCoord& centre) {
     wanted_.clear();
+    seen_blocks_.clear();
     const i64 radius = budget_.radius_chunks;
     const i64 radius_sq = radius * radius;
+    const ChunkCoord centre_block = block_of(centre);
 
+    // Distances are in *blocks*, so the same radius reaches 2^level times further at each
+    // level up — which is the whole point of having levels.
     world.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
         if (chunk.empty()) return;
-        const i64 d = distance_sq(coord, centre);
+        const ChunkCoord block = block_of(coord);
+        const i64 d = distance_sq(block, centre_block);
         if (d > radius_sq) return;
-        wanted_.emplace_back(d, coord);
+        if (!seen_blocks_.insert(block).second) return;   // many chunks, one block
+        wanted_.emplace_back(d, block);
     });
 
     // Nearest first. What you are standing next to matters more than what is on the horizon,
@@ -151,7 +161,7 @@ void ThumbnailCache::rescan(const World& world, const ChunkCoord& centre) {
 const ThumbnailBatch& ThumbnailCache::update(const World& world, const ChunkCoord& centre,
                                              u64 frame) {
     batch_.clear();
-    if (types_ == nullptr) return batch_;
+    if (tree_ == nullptr) return batch_;
 
     // Anything a previous frame could not fit goes out again first.
     batch_.slots.swap(pending_slots_);
@@ -169,33 +179,43 @@ const ThumbnailBatch& ThumbnailCache::update(const World& world, const ChunkCoor
         world_dirty_ = false;
     }
 
+    const ChunkCoord centre_block = block_of(centre);
     for (const auto& [distance, coord] : wanted_) {
-        const Chunk* chunk = world.chunk(coord);
-        if (chunk == nullptr) continue;
-
+        // `coord` is a block at this cache's level; at level 0 a block is a chunk.
         const auto held = slot_of_.find(coord);
-        if (held != slot_of_.end() && held->second.revision == chunk->revision()) continue;
+        if (held != slot_of_.end() && !held->second.dirty) continue;
 
         ++batch_.wanted;
         if (batch_.built >= budget_.max_builds_per_frame) continue;
+
+        const Thumbnail* summary = tree_->get(world, budget_.level, coord);
+        if (summary == nullptr) {
+            // Nothing here any more. If a slot is still holding this block, it has to be
+            // given up — skipping instead leaves the block drawing what used to be there,
+            // for good. Carve a room out of a hill and the hill stays in the distance.
+            if (held != slot_of_.end()) {
+                release(coord);
+                ++batch_.built;
+            }
+            continue;
+        }
 
         u32 slot = kNoThumb;
         if (held != slot_of_.end()) {
             slot = held->second.slot;   // rebuilding in place, so it never blinks out
         } else {
-            slot = acquire_slot(distance, centre);
-            if (slot == kNoThumb) break;   // full of nearer chunks; nothing further will fit
+            slot = acquire_slot(distance, centre_block);
+            if (slot == kNoThumb) break;   // full of nearer blocks; nothing further will fit
         }
 
-        const Thumbnail thumb = build_thumbnail(*chunk, *types_);
-        std::copy(std::begin(thumb.cells), std::end(thumb.cells),
+        std::copy(std::begin(summary->cells), std::end(summary->cells),
                   cells_.begin() + static_cast<usize>(slot) * kThumbCells);
 
         records_[slot].x = static_cast<i32>(coord.x);
         records_[slot].y = static_cast<i32>(coord.y);
         records_[slot].z = static_cast<i32>(coord.z);
         records_[slot].used = 1;
-        slot_of_[coord] = Held{slot, chunk->revision()};
+        slot_of_[coord] = Held{slot, false};
 
         const u32 cell = grid_index(coord.x, coord.y, coord.z);
         if (grid_[cell] != slot) {

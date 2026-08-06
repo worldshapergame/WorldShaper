@@ -21,9 +21,11 @@
 // does here is decline to draw something, never ask for something that is not there.
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "core/types.hpp"
+#include "world/summary_tree.hpp"
 #include "world/thumbnail.hpp"
 #include "world/world.hpp"
 
@@ -33,7 +35,22 @@ class VoxelTypeTable;
 
 inline constexpr u32 kNoThumb = 0xFFFFFFFFu;
 
+// One cache per level of the summary octree. Level 0 holds a summary per chunk; level k holds
+// one per block of 2^k chunks, with cells 2^k metres across.
+//
+// Each level costs an eighth of the one below it per unit of world and has cells twice as
+// large — which is exactly what twice the distance can resolve. That is what turns a render
+// distance bounded by memory into one bounded by nothing much: the area a level must cover
+// grows as the square of its reach while its cost per unit of area falls faster.
+inline constexpr u32 kSummaryTiers = 8;   // level 7 blocks are 128 chunks, about a kilometre
+
 struct ThumbnailBudget {
+    u32 level = 0;               // of the summary octree; 0 is one summary per chunk
+
+    // Where this level lives in the shared GPU buffers, so all of them are one binding.
+    u32 slot_base = 0;
+    u32 grid_offset = 0;
+
     u32 max_thumbs = 32768;      // 2 KB each, so 64 MB
 
     // Wrapped grid of slot indices. 256 x 64 x 256 chunks reaches ±1 km horizontally and
@@ -81,9 +98,11 @@ struct ThumbnailBatch {
 
 class ThumbnailCache {
 public:
-    void create(const ThumbnailBudget& budget, const VoxelTypeTable& types);
+    // The tree is shared by every level and outlives the caches: level k's summaries are
+    // folded from level k-1's, so they must all read the same one.
+    void create(const ThumbnailBudget& budget, SummaryTree& tree);
 
-    // Tops up thumbnails around `centre`, nearest first, and reports what to copy.
+    // Tops up summaries around `centre`, nearest first, and reports what to copy.
     const ThumbnailBatch& update(const World& world, const ChunkCoord& centre, u64 frame);
 
     // Drops a chunk's thumbnail so it is rebuilt. Edits go through here; a thumbnail is a
@@ -124,15 +143,16 @@ public:
 private:
     struct Held {
         u32 slot = kNoThumb;
-        u64 revision = 0;
+        bool dirty = false;
     };
 
+    ChunkCoord block_of(const ChunkCoord& coord) const;
     void rescan(const World& world, const ChunkCoord& centre);
     u32 acquire_slot(i64 distance_sq, const ChunkCoord& centre);
     void release(const ChunkCoord& coord);
 
     ThumbnailBudget budget_;
-    const VoxelTypeTable* types_ = nullptr;
+    SummaryTree* tree_ = nullptr;
 
     std::vector<u32> grid_;
     std::vector<GpuThumbRecord> records_;
@@ -144,6 +164,7 @@ private:
 
     // The work list: chunks in radius, nearest first. Rebuilt when the camera drifts.
     std::vector<std::pair<i64, ChunkCoord>> wanted_;
+    std::unordered_set<ChunkCoord, ChunkCoordHash> seen_blocks_;
     ChunkCoord scanned_at_{};
     bool scanned_ = false;
     bool world_dirty_ = false;

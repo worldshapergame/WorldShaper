@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "world/op.hpp"
+#include "world/summary_tree.hpp"
 #include "world/thumb_cache.hpp"
 #include "world/world.hpp"
 
@@ -48,8 +49,10 @@ TEST_CASE("thumbnails fill in around the camera and then stop") {
     ThumbnailBudget budget;
     budget.max_thumbs = 4096;
     budget.radius_chunks = 8;
+    SummaryTree tree;
+    tree.create(types);
     ThumbnailCache cache;
-    cache.create(budget, types);
+    cache.create(budget, tree);
 
     pump(cache, world, ChunkCoord{0, 0, 0}, 200);
 
@@ -67,8 +70,10 @@ TEST_CASE("a thumbnail reads back through the wrapped grid the way the shader re
     ThumbnailBudget budget;
     budget.max_thumbs = 4096;
     budget.radius_chunks = 4;
+    SummaryTree tree;
+    tree.create(types);
     ThumbnailCache cache;
-    cache.create(budget, types);
+    cache.create(budget, tree);
     pump(cache, world, ChunkCoord{0, 0, 0}, 200);
 
     // The slab's top surface is at y = 0, so chunk (0,-1,0) holds matter in its top cells.
@@ -97,8 +102,10 @@ TEST_CASE("a full cache keeps the near chunks and drops the far ones") {
     budget.max_thumbs = 24;
     budget.radius_chunks = 40;
     budget.max_builds_per_frame = 8;
+    SummaryTree tree;
+    tree.create(types);
     ThumbnailCache cache;
-    cache.create(budget, types);
+    cache.create(budget, tree);
 
     pump(cache, world, ChunkCoord{0, 0, 0}, 400);
     CHECK(cache.resident_count() == 24);
@@ -119,8 +126,10 @@ TEST_CASE("editing a chunk rebuilds its thumbnail, in place") {
     ThumbnailBudget budget;
     budget.max_thumbs = 1024;
     budget.radius_chunks = 3;
+    SummaryTree tree;
+    tree.create(types);
     ThumbnailCache cache;
-    cache.create(budget, types);
+    cache.create(budget, tree);
     pump(cache, world, ChunkCoord{0, 0, 0}, 100);
 
     const ChunkCoord target{0, -1, 0};
@@ -131,11 +140,15 @@ TEST_CASE("editing a chunk rebuilds its thumbnail, in place") {
     MatterLedger ledger;
     apply_op(world, Op::fill_box(1, 0, 0, -32, 0, 255, -1, 255, kAir, MatterReason::PlayerBreak),
              ledger);
+    tree.invalidate(target);
     cache.invalidate(target);
 
     pump(cache, world, ChunkCoord{0, 0, 0}, 20);
+    // That carve removed everything this chunk had, so it must stop being drawn at all —
+    // not go on showing the slab that used to be there. Skipping the "nothing here now"
+    // case left the block drawing its old contents permanently.
     CHECK(cache.sample(target, 4, kThumbAxis - 1, 4) == 0);
-    CHECK(cache.resident(target));   // rebuilt in place, never blinked out
+    CHECK_FALSE(cache.resident(target));
     CHECK(cache.validate());
 }
 
@@ -147,8 +160,10 @@ TEST_CASE("moving the camera brings the new side in") {
     budget.max_thumbs = 512;
     budget.radius_chunks = 6;
     budget.max_builds_per_frame = 8;
+    SummaryTree tree;
+    tree.create(types);
     ThumbnailCache cache;
-    cache.create(budget, types);
+    cache.create(budget, tree);
 
     pump(cache, world, ChunkCoord{0, 0, 0}, 200);
     REQUIRE(cache.resident(ChunkCoord{0, -1, -1}));

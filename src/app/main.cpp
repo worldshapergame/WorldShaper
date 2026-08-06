@@ -504,6 +504,7 @@ private:
     MatterLedger ledger_;
     Updater updater_;
     ResidencyManager residency_;
+    SummaryTree summary_tree_;
     ThumbnailCache thumb_cache_;
     ThumbnailBudget thumb_budget_;
     ChunkCoord world_min_{};
@@ -657,7 +658,14 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
                     result.voxels_changed, result.voxels_visited, ns_to_ms(now_ns() - started),
                     history_.last_apply_ms(), history_.last_capture_ms(),
                     history_.last_inverse_ops());
-        if (result.voxels_changed > 0) rebuild_coarse_grids();
+        if (result.voxels_changed > 0) {
+            rebuild_coarse_grids();
+            // The same invalidation the interactive path does. Without it the summary tree
+            // never hears that these chunks exist, so nothing past the streaming range is
+            // ever drawn — which made a scripted edit behave differently from the identical
+            // edit made by hand, and hid the difference behind "it works when I play it".
+            invalidate_edited_chunks({op});
+        }
     }
 
     if (!options_.clip.empty() && frame_counter_ == kScriptedEditFrame) {
@@ -804,8 +812,11 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // stale chunk is one the renderer can still find.
                     if (!world_.has_chunk(coord)) continue;
                     residency_.invalidate(coord);
-                    // The thumbnail is a summary of contents, so changing the contents makes
-                    // it wrong too — and it is what the same chunk draws as from a distance.
+                    // A summary is a summary of contents, so changing the contents makes it
+                    // wrong too — and it is what this chunk draws as from a distance. The
+                    // tree first: it holds the node that every level above this chunk was
+                    // folded from, and the cache only reads its answers.
+                    summary_tree_.invalidate(coord);
                     thumb_cache_.invalidate(coord);
                 }
             }
@@ -1486,7 +1497,8 @@ int Application::run(const Options& options) {
 
     constexpr u64 kThumbBytes = kThumbSlotWords * sizeof(u32);
     thumb_budget_.max_thumbs = static_cast<u32>(thumb_bytes / kThumbBytes);
-    thumb_cache_.create(thumb_budget_, types_);
+    summary_tree_.create(types_);
+    thumb_cache_.create(thumb_budget_, summary_tree_);
     WS_LOG_INFO("app", "thumbnails: {} slots, {} MB, radius {} chunks ({} m)",
                 thumb_budget_.max_thumbs, (thumb_budget_.max_thumbs * kThumbBytes) >> 20,
                 thumb_budget_.radius_chunks, thumb_budget_.radius_chunks * 8);

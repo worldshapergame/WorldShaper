@@ -43,7 +43,13 @@ ChunkCoord SummaryTree::block_of(const ChunkCoord& chunk, u32 level) {
 
 void SummaryTree::invalidate(const ChunkCoord& chunk) {
     for (u32 level = 0; level < kMaxSummaryLevels; ++level) {
-        nodes_.erase(SummaryKey{level, block_of(chunk, level)});
+        const SummaryKey key{level, block_of(chunk, level)};
+        nodes_.erase(key);
+        // Also mark the path occupied, because this may be a chunk that did not exist when
+        // the index was built — and an unindexed block is answered "empty" without looking,
+        // so a newly built region would never appear. Marking a block that has since been
+        // emptied is harmless: it costs one descent that finds nothing.
+        occupied_.insert(key);
     }
 }
 
