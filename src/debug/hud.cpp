@@ -132,6 +132,28 @@ void Hud::draw(const FrameStats& stats, const GpuProfiler& profiler,
         ImGui::End();
     }
 
+    // The update notice. Top centre, out of the way, and it never acts on its own — the
+    // download starts only when the player presses the key. A game that replaced itself
+    // while you were trying to play would not be doing you a favour.
+    if (update_.show) {
+        const ImVec2 screen = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowPos(ImVec2(screen.x * 0.5f, 12.0f), ImGuiCond_Always,
+                                ImVec2(0.5f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.40f);
+        ImGui::Begin("##update", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoInputs);
+        ImGui::TextUnformatted(update_.headline.c_str());
+        if (update_.offering) {
+            ImGui::TextDisabled("F8 to download and install it");
+        } else if (update_.downloading) {
+            ImGui::ProgressBar(update_.progress, ImVec2(260.0f, 0.0f));
+        }
+        ImGui::End();
+    }
+
     // The chisel's own readout: the size of the cut and how many voxels it is. Shown while
     // a drag is in progress and while the working distance is being set, and at no other
     // time — an always-on counter is furniture (documentation/14 §1).

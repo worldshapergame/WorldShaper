@@ -17,7 +17,9 @@
 #include "core/hash.hpp"
 #include "core/jobs.hpp"
 #include "core/log.hpp"
+#include "app/updater.hpp"
 #include "core/time.hpp"
+#include "core/version.hpp"
 #include "debug/hud.hpp"
 #include "game/camera.hpp"
 #include "game/chisel.hpp"
@@ -62,6 +64,9 @@ struct Options {
     bool vsync = true;
     bool validation = (WS_DEBUG != 0);
     bool help = false;
+    // A development build should not go looking for a release older than what is sitting in
+    // front of you, and a scripted screenshot should not depend on the network.
+    bool no_update_check = (WS_DEBUG != 0);
 
     // Render a fixed number of frames, save the last one, and exit. This is how a
     // rendering change gets checked without a person having to look at the screen.
@@ -144,6 +149,11 @@ Options parse_options(int argc, char** argv) {
             options.vsync = false;
         } else if (arg == "--validation") {
             options.validation = true;
+        } else if (arg == "--no-update-check") {
+            options.no_update_check = true;
+        } else if (arg == "--version") {
+            std::printf("WorldShaper %s\n", kVersion);
+            options.help = true;
         } else if (arg == "--no-validation") {
             options.validation = false;
         } else if (arg == "--help" || arg == "-h") {
@@ -487,6 +497,7 @@ private:
     VoxelTypeTable types_;
     World world_;
     MatterLedger ledger_;
+    Updater updater_;
     ResidencyManager residency_;
     WorldBuffers world_buffers_;
     ResidencyBudget residency_budget_;
@@ -912,6 +923,28 @@ void Application::record_frame(f32 time_seconds) {
         tool.last_edit_ms = last_edit_ms_;
         tool.ops_logged = op_log_.size();
         hud_.set_tool(tool);
+
+        UpdateReport update;
+        switch (updater_.state()) {
+            case UpdateState::Available:
+                update.show = true;
+                update.offering = true;
+                update.headline = "WorldShaper " + updater_.info().tag + " is available";
+                break;
+            case UpdateState::Downloading:
+                update.show = true;
+                update.downloading = true;
+                update.progress = updater_.progress();
+                update.headline = "downloading " + updater_.info().tag;
+                break;
+            case UpdateState::Installed:
+                update.show = true;
+                update.headline = updater_.message();
+                break;
+            default:
+                break;
+        }
+        hud_.set_update(update);
     }
     ++frame_counter_;
 
@@ -1242,7 +1275,8 @@ void Application::record_frame(f32 time_seconds) {
 int Application::run(const Options& options) {
     options_ = options;
 
-    if (!window_.create("WorldShaper", options_.width, options_.height,
+    const std::string title = std::string("WorldShaper v") + kVersion;
+    if (!window_.create(title, options_.width, options_.height,
                         options_.size_explicit)) {
         return 1;
     }
@@ -1444,7 +1478,13 @@ int Application::run(const Options& options) {
     // The compile time, every run. A stale binary is otherwise invisible: the build tool
     // once reported "no work to do" over a source file that had changed, and a measurement
     // was taken against code that no longer existed. One line makes that impossible to miss.
-    WS_LOG_INFO("app", "build compiled {} {}", __DATE__, __TIME__);
+    WS_LOG_INFO("app", "WorldShaper {}, compiled {} {}", kVersionTag, __DATE__, __TIME__);
+
+    // Sweep up the previous executable an earlier update left behind, then ask GitHub
+    // whether there is a newer release. The check is on its own thread and never blocks
+    // starting; nothing is downloaded unless the player says so.
+    Updater::clean_up_previous();
+    if (!options_.no_update_check) updater_.begin_check();
     WS_LOG_INFO("app", "ready. F1 developer panel, F2 overlay, F5 reload shaders, Esc quit");
 
     const u64 start_ns = now_ns();
@@ -1469,6 +1509,11 @@ int Application::run(const Options& options) {
         if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 5;
         if (input.was_pressed(Key::F5)) { visibility_.force_reload(); resolve_.force_reload(); }
         if (input.was_pressed(Key::F11)) swapchain_.set_vsync(!swapchain_.vsync());
+        // The only thing that starts a download. Nothing else does, and nothing does it
+        // automatically.
+        if (input.was_pressed(Key::F8) && updater_.state() == UpdateState::Available) {
+            updater_.begin_download();
+        }
 
         // Clicking the world captures the mouse; from then on the buttons belong to the
         // chisel. That first click is swallowed, or capturing the mouse would also start a

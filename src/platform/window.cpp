@@ -61,6 +61,7 @@ Key key_from_scancode(SDL_Scancode code) {
         case SDL_SCANCODE_F3:  return Key::F3;
         case SDL_SCANCODE_F4:  return Key::F4;
         case SDL_SCANCODE_F5:  return Key::F5;
+        case SDL_SCANCODE_F8:  return Key::F8;
         case SDL_SCANCODE_F9:  return Key::F9;
         case SDL_SCANCODE_F10: return Key::F10;
         case SDL_SCANCODE_F11: return Key::F11;

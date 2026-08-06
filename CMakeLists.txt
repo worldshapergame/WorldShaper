@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
-project(WorldShaper LANGUAGES C CXX)
+
+# The one place the version number lives.
+#
+# Everything else reads it from here: the window title, the developer panel, the release
+# workflow's tag, the name of the zip, and the check the game makes against the latest
+# release to decide whether it is out of date. Bump it here, tag `v<the same number>`, and
+# the release that comes out matches the build that announces itself.
+project(WorldShaper VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,6 +16,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(WS_SANITIZE "Enable address/UB sanitizers in debug builds" OFF)
+
+# The version, and the Windows resources that carry it, generated from one source.
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/core/version.hpp.in"
+               "${CMAKE_BINARY_DIR}/generated/core/version.hpp" @ONLY)
+add_library(ws_version INTERFACE)
+target_include_directories(ws_version INTERFACE "${CMAKE_BINARY_DIR}/generated")
 
 include(cmake/Dependencies.cmake)
 
@@ -48,7 +61,7 @@ add_library(ws_core STATIC
     src/core/time.cpp
     src/core/block_pool.cpp)
 target_include_directories(ws_core PUBLIC src)
-target_link_libraries(ws_core PUBLIC ws_options)
+target_link_libraries(ws_core PUBLIC ws_options ws_version)
 
 # --------------------------------------------------------------------------------------
 # ws_world - the voxel data model: bricks, chunks, voxel types, tags, properties, ops,
@@ -121,10 +134,37 @@ endif()
 # --------------------------------------------------------------------------------------
 # WorldShaper - the game executable.
 # --------------------------------------------------------------------------------------
-add_executable(WorldShaper
+set(WS_APP_SOURCES
     src/app/main.cpp
+    src/app/updater.cpp
     src/debug/hud.cpp)
-target_link_libraries(WorldShaper PRIVATE ws_core ws_world ws_game ws_platform ws_gpu ws_imgui)
+
+# The icon and the version block. Windows only — on other platforms the icon is the .png in
+# assets/ and the desktop environment picks it up from a .desktop file instead.
+if(WIN32)
+    set(WS_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.ico")
+    if(EXISTS "${WS_ICON_PATH}")
+        # Backslashes, because the resource compiler reads the path as a C string and a
+        # forward slash in a Windows path is an escape waiting to happen.
+        file(TO_NATIVE_PATH "${WS_ICON_PATH}" WS_ICON_PATH)
+        string(REPLACE "\\" "\\\\" WS_ICON_PATH "${WS_ICON_PATH}")
+        configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/app/WorldShaper.rc.in"
+                       "${CMAKE_BINARY_DIR}/generated/WorldShaper.rc" @ONLY)
+        list(APPEND WS_APP_SOURCES "${CMAKE_BINARY_DIR}/generated/WorldShaper.rc")
+    else()
+        message(WARNING "assets/icon.ico is missing; the executable will have no icon. "
+                        "Run tools/make-icon.ps1 to build it from assets/icon.png.")
+    endif()
+endif()
+
+add_executable(WorldShaper ${WS_APP_SOURCES})
+target_link_libraries(WorldShaper PRIVATE
+    ws_core ws_world ws_game ws_platform ws_gpu ws_imgui ws_version)
+if(WIN32)
+    # The update check speaks HTTPS through the system's own stack, so there is no HTTP
+    # library to depend on, to license, or to keep patched.
+    target_link_libraries(WorldShaper PRIVATE winhttp)
+endif()
 
 # Where the shader *sources* live, so hot reload works regardless of the working
 # directory. Shipped builds fall back to the .spv files next to the executable.

@@ -1,0 +1,162 @@
+# Builds a release when a version tag is pushed.
+#
+# The tag has to match the version in CMakeLists.txt — the workflow checks, and fails if it
+# does not. That is what keeps the promise the updater relies on: the release called v0.6.0
+# contains a build that says it is 0.6.0, so a game can compare the two and be right.
+#
+# What comes out: a zip with the executable, its shaders and the licence, and a build
+# provenance attestation. See documentation/15-releases.md for what the attestation is for
+# and what it does not replace.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to build, e.g. v0.5.0"
+        required: true
+
+permissions:
+  contents: write      # to create the release
+  id-token: write      # to sign the provenance attestation
+  attestations: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version, and check the tag agrees with it
+        id: version
+        shell: pwsh
+        run: |
+          $tag = if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $env:GITHUB_REF -replace '^refs/tags/', ''
+          } else {
+            '${{ inputs.tag }}'
+          }
+          $cmake = Get-Content CMakeLists.txt -Raw
+          if ($cmake -notmatch 'project\(WorldShaper VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
+            throw "could not find the version in CMakeLists.txt"
+          }
+          $version = $Matches[1]
+          if ($tag -ne "v$version") {
+            throw "the tag is $tag but CMakeLists.txt says $version - bump one of them"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "building $tag"
+
+      # The SDK is a build tool: it provides the headers, the loader stub and glslc. None of
+      # it is redistributed with the game, which loads Vulkan through volk at runtime.
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: |
+          $url = 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe'
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\vulkan-sdk.exe"
+          $args = @('--root', 'C:\VulkanSDK', '--accept-licenses',
+                    '--default-answer', '--confirm-command', 'install')
+          Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList $args -Wait
+          "VULKAN_SDK=C:\VulkanSDK" >> $env:GITHUB_ENV
+          "C:\VulkanSDK\Bin" >> $env:GITHUB_PATH
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure and build
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build
+
+      # The same tests that guard a local change guard a release. A build that fails them
+      # never becomes a download.
+      - name: Test
+        shell: pwsh
+        run: |
+          .\build\bin\ws_tests.exe
+          .\build\bin\WorldShaper.exe --ticks 20000
+          .\build\bin\WorldShaper.exe --stream-frames 120
+
+      - name: Check the built game agrees about its version
+        shell: pwsh
+        run: |
+          $reported = (Get-Item .\build\bin\WorldShaper.exe).VersionInfo.FileVersion
+          if ($reported -ne '${{ steps.version.outputs.version }}') {
+            throw "the executable says $reported, the tag says ${{ steps.version.outputs.version }}"
+          }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "WorldShaper-${{ steps.version.outputs.tag }}-windows-x64"
+          New-Item -ItemType Directory -Path "package\$name" | Out-Null
+          Copy-Item build\bin\WorldShaper.exe "package\$name\"
+          Copy-Item build\bin\SDL3.dll "package\$name\"
+          Copy-Item build\bin\shaders "package\$name\shaders" -Recurse
+          Copy-Item LICENSE, README.md "package\$name\"
+          Compress-Archive -Path "package\$name\*" -DestinationPath "package\$name.zip"
+          "package=package/$name.zip" >> $env:GITHUB_ENV
+          # Published beside the download so anyone can check what they got is what was built.
+          (Get-FileHash "package\$name.zip" -Algorithm SHA256).Hash |
+            Out-File "package\$name.zip.sha256" -Encoding ascii
+
+      # Signs a statement, in GitHub's name, that this exact file came out of this exact
+      # commit through this exact workflow. Free, and verifiable with `gh attestation verify`.
+      # It is not a code-signing certificate and does not stop SmartScreen — see
+      # documentation/15-releases.md.
+      - name: Attest what was built
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: ${{ env.package }}
+
+      # Only runs when the certificate secrets exist, so the workflow works without them and
+      # starts signing the moment they are added. See documentation/15-releases.md.
+      - name: Sign the executable
+        if: ${{ env.WS_SIGNING_CERT != '' }}
+        env:
+          WS_SIGNING_CERT: ${{ secrets.WS_SIGNING_CERT }}
+          WS_SIGNING_PASSWORD: ${{ secrets.WS_SIGNING_PASSWORD }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx",
+                                   [Convert]::FromBase64String($env:WS_SIGNING_CERT))
+          & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p $env:WS_SIGNING_PASSWORD `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+            build\bin\WorldShaper.exe
+          Remove-Item "$env:RUNNER_TEMP\cert.pfx" -Force
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: WorldShaper ${{ steps.version.outputs.tag }}
+          files: |
+            package/*.zip
+            package/*.sha256
+          body: |
+            ## WorldShaper ${{ steps.version.outputs.tag }}
+
+            Unzip anywhere and run `WorldShaper.exe`. Needs Windows 10 or later and a
+            graphics card with Vulkan 1.3 drivers.
+
+            The game checks for newer releases when it starts and offers them; it never
+            downloads anything without being asked.
+
+            ### Is this safe to run?
+
+            It is not signed with a code-signing certificate, so Windows SmartScreen will
+            warn about it. That warning means "nobody has paid a certificate authority to
+            vouch for this", not "this is malware" — and you should not simply take my word
+            for it either. What you can check instead:
+
+            - **Where it came from.** Every release carries a build provenance attestation
+              signed by GitHub, tying this exact file to the commit and workflow that
+              produced it. Verify it yourself:
+              `gh attestation verify WorldShaper-${{ steps.version.outputs.tag }}-windows-x64.zip --repo ${{ github.repository }}`
+            - **That it has not been altered.** Compare the SHA-256 beside the download.
+            - **What it does.** The whole source is here, and the build that made this file
+              is the workflow in `.github/workflows/release.yml`.

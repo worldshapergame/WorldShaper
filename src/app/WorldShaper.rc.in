@@ -1,0 +1,51 @@
+// Windows resources for the executable. Generated from this template by CMake so the
+// version here can never drift from the one in CMakeLists.txt.
+//
+// Two things live here, and both are about the same problem: a bare unsigned .exe from the
+// internet looks like malware, and Windows says so.
+//
+//  - The **icon**, so it is not the blank default in Explorer, on the taskbar and in the
+//    Alt-Tab list. A file with no icon reads as something thrown together.
+//  - The **version block**, which is what fills in the Details tab of the file's properties
+//    and what SmartScreen and antivirus heuristics read. A file that says who made it, what
+//    it is and what version it is looks like software; one with all of that blank looks like
+//    something that did not want to say.
+//
+// Neither of those is a signature and neither pretends to be. Signing needs a certificate
+// bought from a certificate authority — see documentation/15-releases.md.
+
+#include <winver.h>
+
+#define WS_ICON_ID 1
+
+WS_ICON_ID ICON "@WS_ICON_PATH@"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION    @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+FILEFLAGS      0
+FILEOS         VOS_NT_WINDOWS32
+FILETYPE       VFT_APP
+FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"   // US English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "WorldShaper"
+            VALUE "FileDescription",  "WorldShaper - a voxel creation game"
+            VALUE "FileVersion",      "@PROJECT_VERSION@"
+            VALUE "InternalName",     "WorldShaper"
+            VALUE "LegalCopyright",   "MIT-0. Do anything you like with it."
+            VALUE "OriginalFilename", "WorldShaper.exe"
+            VALUE "ProductName",      "WorldShaper"
+            VALUE "ProductVersion",   "@PROJECT_VERSION@"
+            VALUE "Comments",         "https://github.com/worldshapergame/WorldShaper"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

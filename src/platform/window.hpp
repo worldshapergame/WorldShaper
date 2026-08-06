@@ -23,7 +23,7 @@ enum class Key : u16 {
     Left, Right, Up, Down,
     Comma, Period, Slash,
     Shift, Ctrl, Alt,
-    F1, F2, F3, F4, F5, F9, F10, F11, F12,
+    F1, F2, F3, F4, F5, F8, F9, F10, F11, F12,
     Count
 };
 

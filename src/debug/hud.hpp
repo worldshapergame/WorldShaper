@@ -6,12 +6,24 @@
 // because a performance problem that only reproduces on someone else's machine is
 // exactly when you need them.
 
+#include <string>
+
 #include "core/time.hpp"
 #include "gpu/profiler.hpp"
 #include "gpu/swapchain.hpp"
 #include "platform/window.hpp"
 
 namespace ws {
+
+// What the update check has to say. Plain strings, for the same reason StreamingReport uses
+// plain numbers: the HUD should not have to know what an Updater is.
+struct UpdateReport {
+    bool show = false;
+    bool offering = false;    // waiting on the player to say yes
+    bool downloading = false;
+    f32 progress = 0.0f;
+    std::string headline;
+};
 
 // What the streaming system wants shown. Kept as plain numbers so the HUD does not pull
 // the whole world module into every translation unit that includes it.
@@ -91,6 +103,7 @@ public:
     bool wants_mouse() const;
 
     void set_tool(const ToolReport& report) { tool_ = report; }
+    void set_update(const UpdateReport& report) { update_ = report; }
 
     void toggle_developer_panel() { show_developer_ = !show_developer_; }
     void toggle_overlay() { show_overlay_ = !show_overlay_; }
@@ -100,6 +113,7 @@ private:
     Device* device_ = nullptr;
     StreamingReport streaming_;
     ToolReport tool_;
+    UpdateReport update_;
     bool initialised_ = false;
     bool reported_scale_ = false;
     bool show_developer_ = false;

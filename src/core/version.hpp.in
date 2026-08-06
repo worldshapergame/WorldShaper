@@ -1,0 +1,34 @@
+#pragma once
+// Generated from src/core/version.hpp.in by CMake. Do not edit the generated copy.
+//
+// The version comes from the project() line in CMakeLists.txt and nowhere else. The window
+// title, the developer panel, the update check and the release workflow's tag all read it
+// from here, so a build can never claim to be a version it is not.
+
+#include "core/types.hpp"
+
+namespace ws {
+
+inline constexpr const char* kVersion = "@PROJECT_VERSION@";
+inline constexpr u32 kVersionMajor = @PROJECT_VERSION_MAJOR@;
+inline constexpr u32 kVersionMinor = @PROJECT_VERSION_MINOR@;
+inline constexpr u32 kVersionPatch = @PROJECT_VERSION_PATCH@;
+
+// The release this build came from, as GitHub names it. Tags are `v` plus the version, and
+// the updater compares the latest release's tag against this.
+inline constexpr const char* kVersionTag = "v@PROJECT_VERSION@";
+
+// Where the updater looks. Owner and repository separately, because the check builds an API
+// path out of them and a download URL out of them too.
+inline constexpr const char* kRepositoryOwner = "worldshapergame";
+inline constexpr const char* kRepositoryName = "WorldShaper";
+
+// Sortable, so "is that release newer than this build" is one comparison rather than three.
+constexpr u64 version_ordinal(u32 major, u32 minor, u32 patch) {
+    return (static_cast<u64>(major) << 40) | (static_cast<u64>(minor) << 20) |
+           static_cast<u64>(patch);
+}
+inline constexpr u64 kVersionOrdinal =
+    version_ordinal(kVersionMajor, kVersionMinor, kVersionPatch);
+
+}  // namespace ws
