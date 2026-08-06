@@ -456,6 +456,7 @@ private:
     void update_tools(const InputState& input, bool chisel_has_wheel, bool clipboard_has_wheel,
                       f64 dt);
     void invalidate_edited_chunks(const std::vector<Op>& ops);
+    void rebuild_coarse_grids();
 
     Options options_;
     Window window_;
@@ -527,6 +528,7 @@ private:
     u32 last_feedback_ = 0;
     u32 last_feedback_truncated_ = 0;
     u32 last_feedback_accepted_ = 0;
+    u32 last_feedback_rejected_ = 0;   // reported, but the world has no chunk there
     f64 residency_ms_ = 0.0;
     f64 worst_residency_ms_ = 0.0;
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
@@ -648,7 +650,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
                     result.voxels_changed, result.voxels_visited, ns_to_ms(now_ns() - started),
                     history_.last_apply_ms(), history_.last_capture_ms(),
                     history_.last_inverse_ops());
-        if (result.voxels_changed > 0) residency_.rebuild_coarse(world_);
+        if (result.voxels_changed > 0) rebuild_coarse_grids();
     }
 
     if (!options_.clip.empty() && frame_counter_ == kScriptedEditFrame) {
@@ -696,12 +698,12 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
 
     if (input.was_pressed(Key::Z)) {
         if (history_.undo(world_, ledger_, op_log_, tick_++, kLocalPlayer)) {
-            residency_.rebuild_coarse(world_);
+            rebuild_coarse_grids();
         }
     }
     if (input.was_pressed(Key::X)) {
         if (history_.redo(world_, ledger_, op_log_, tick_++, kLocalPlayer)) {
-            residency_.rebuild_coarse(world_);
+            rebuild_coarse_grids();
         }
     }
 
@@ -766,7 +768,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
     // one. The coarse occupancy grids describe what the world contains, so they are what
     // tells the marcher there is now something to look for here.
     if (result.voxels_changed > 0) {
-        residency_.rebuild_coarse(world_);
+        rebuild_coarse_grids();
         invalidate_edited_chunks(ops);
     }
 }
@@ -803,8 +805,32 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
 // Stands in for the renderer's feedback buffer until Stage 3: request every chunk within
 // a radius of a moving focus point. The residency manager cannot tell the difference, and
 // neither can the eviction path, which is the point of exercising it now.
+// Rebuilds the world-occupancy grids around wherever the camera is now.
+//
+// Level 0 of those grids — the one that answers "the world has a chunk here and you do not
+// have it" — is only recorded within a window around this point, because that is what stops
+// two distant regions colliding in the wrapped grid and inventing chunks that do not exist.
+// So the grids have to follow the camera, not only world edits.
+void Application::rebuild_coarse_grids() {
+    residency_.rebuild_coarse(
+        world_, ChunkCoord{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()});
+}
+
 void Application::stream(f64 seconds) {
     (void)seconds;
+
+    // Keep level 0 centred on the camera. Rebuilt on a margin rather than on every chunk
+    // boundary, so walking to and fro across one does not rebuild twice a second. The
+    // margin is well inside the window, so the grid is never consulted past what it
+    // describes.
+    const ChunkCoord centre{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
+    const ChunkCoord& built = residency_.coarse_centre();
+    constexpr i64 kCoarseFollowMargin = 8;   // chunks, 64 m
+    if (std::abs(centre.x - built.x) > kCoarseFollowMargin ||
+        std::abs(centre.y - built.y) > kCoarseFollowMargin ||
+        std::abs(centre.z - built.z) > kCoarseFollowMargin) {
+        rebuild_coarse_grids();
+    }
 
     // What the renderer asked for, two frames ago. This is the rule that makes residency
     // follow the *view* rather than the camera position — a chunk 300 m away that covers
@@ -813,9 +839,21 @@ void Application::stream(f64 seconds) {
     last_feedback_ = feedback_.last_reported();
     last_feedback_truncated_ = feedback_.last_truncated();
     u32 accepted = 0;
+    u32 rejected = 0;
     for (const FeedbackEntry& entry : wanted) {
         const ChunkCoord coord{entry.x, entry.y, entry.z};
-        if (!world_.has_chunk(coord)) continue;   // the ray wanted empty space
+        if (!world_.has_chunk(coord)) {
+            // Reported, but the world has nothing there. A few of these are normal — the
+            // grid answers at block granularity, so a ray inside an occupied block still
+            // asks about individual chunks that turn out to be empty.
+            //
+            // A *large* number is a stall, and it used to be a silent one. A ray reports
+            // only its nearest miss, so a phantom hides the real chunk behind it forever:
+            // streaming asks for the same nothing every frame while the world stays
+            // unloaded. It is counted so it can be seen rather than deduced.
+            ++rejected;
+            continue;
+        }
         residency_.request(coord);
         ++accepted;
 
@@ -834,11 +872,11 @@ void Application::stream(f64 seconds) {
         }
     }
     last_feedback_accepted_ = accepted;
+    last_feedback_rejected_ = rejected;
 
     // A small radius around the camera on top, so the ground under your feet is resident
     // before it has been looked at. Feedback cannot report what has never been on screen.
     const i64 radius_chunks = 2;
-    const ChunkCoord centre{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
     for (i64 z = -radius_chunks; z <= radius_chunks; ++z) {
         for (i64 y = -1; y <= 1; ++y) {
             for (i64 x = -radius_chunks; x <= radius_chunks; ++x) {
@@ -896,11 +934,12 @@ void Application::record_frame(f32 time_seconds) {
         if (options_.stream_log && (frame_counter_ % 60 == 0)) {
             WS_LOG_INFO("diag",
                         "f{} resident {}/{} added {} refreshed {} evicted {} deferred {} "
-                        "bricks {} oom {} feedback {} accepted {}",
+                        "bricks {} oom {} feedback {} accepted {} phantom {}",
                         frame_counter_, report.resident_chunks, report.world_chunks,
                         batch.chunks_added, batch.chunks_refreshed, batch.chunks_evicted,
                         batch.chunks_deferred, report.resident_bricks,
-                        batch.out_of_memory ? 1 : 0, last_feedback_, last_feedback_accepted_);
+                        batch.out_of_memory ? 1 : 0, last_feedback_, last_feedback_accepted_,
+                        last_feedback_rejected_);
         }
 
         const ChiselPreview& preview = chisel_.preview();
@@ -1364,7 +1403,7 @@ int Application::run(const Options& options) {
     residency_.create(residency_budget_, types_);
     // Coarse occupancy comes from the world, so the marcher can tell "nothing here" from
     // "something here that you have not streamed yet". Without it, feedback never fires.
-    residency_.rebuild_coarse(world_);
+    rebuild_coarse_grids();
     if (!world_buffers_.create(device_, residency_budget_, 32ull << 20)) return 1;
     if (!feedback_.create(device_)) return 1;
 

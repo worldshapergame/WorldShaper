@@ -98,8 +98,27 @@ u32 ResidencyManager::coarse_index(u32 level, i64 chunk_x, i64 chunk_y, i64 chun
            static_cast<u32>((gz * kCoarseDimY + gy) * kCoarseDimX + gx);
 }
 
-void ResidencyManager::coarse_add(const ChunkCoord& coord, i32 delta) {
-    for (u32 level = 0; level < kCoarseLevels; ++level) {
+void ResidencyManager::coarse_add(const ChunkCoord& coord, i32 delta, const ChunkCoord& centre) {
+    // Level 0 only describes chunks inside the window around the camera; the levels above
+    // it describe the whole world.
+    //
+    // The two are used for different questions and only one of them can afford to be wrong.
+    // Levels 1 and up are used to *skip* empty space, so a collision there costs a skip that
+    // did not happen — slower, never incorrect. Level 0 is used to decide "the world has a
+    // chunk here and you do not have it", which is what the renderer reports and what
+    // streaming acts on. A collision there invents a chunk that does not exist; the report
+    // is rejected on the CPU, and because a ray reports only its *nearest* miss, that
+    // phantom permanently hides the real chunk behind it. Streaming then stops dead, and
+    // the world past the collision never loads at all.
+    //
+    // Restricting level 0 to the window makes collisions impossible rather than unlikely.
+    // Outside it the answer is "empty", which costs nothing: those chunks are past the
+    // full-detail streaming range and are drawn from the summary octree instead.
+    const bool in_window = std::abs(coord.x - centre.x) <= kCoarseWindowX &&
+                           std::abs(coord.y - centre.y) <= kCoarseWindowY &&
+                           std::abs(coord.z - centre.z) <= kCoarseWindowZ;
+
+    for (u32 level = in_window ? 0 : 1; level < kCoarseLevels; ++level) {
         const i64 factor = kCoarseFactor[level];
         const i32 bx = static_cast<i32>((coord.x >= 0) ? coord.x / factor
                                                        : -((-coord.x + factor - 1) / factor));
@@ -142,14 +161,34 @@ void ResidencyManager::coarse_add(const ChunkCoord& coord, i32 delta) {
     }
 }
 
-void ResidencyManager::rebuild_coarse(const World& world) {
+void ResidencyManager::rebuild_coarse(const World& world, const ChunkCoord& centre) {
+    // What the GPU is holding right now, so the rebuild can work out what actually changed.
+    // This has to follow the camera, not just world edits, and re-sending all 1.3 million
+    // cells every time it moves is 21 MB of traffic for a window that shifted by a few
+    // chunks. Almost every cell is identical across a rebuild; only the shell that entered
+    // or left the window differs.
+    coarse_previous_ = coarse_flags_;
+
     std::fill(coarse_counts_.begin(), coarse_counts_.end(), 0);
     std::fill(coarse_flags_.begin(), coarse_flags_.end(), 0);
+    coarse_centre_ = centre;
 
-    world.for_each_chunk([this](const ChunkCoord& coord, const Chunk& chunk) {
+    world.for_each_chunk([this, &centre](const ChunkCoord& coord, const Chunk& chunk) {
         if (chunk.empty()) return;
-        coarse_add(coord, +1);
+        coarse_add(coord, +1, centre);
     });
+
+    coarse_changed_.clear();
+    const u32 cells = static_cast<u32>(coarse_counts_.size());
+    for (u32 cell = 0; cell < cells; ++cell) {
+        const u32 base = cell * 4;
+        if (coarse_flags_[base + 0] != coarse_previous_[base + 0] ||
+            coarse_flags_[base + 1] != coarse_previous_[base + 1] ||
+            coarse_flags_[base + 2] != coarse_previous_[base + 2] ||
+            coarse_flags_[base + 3] != coarse_previous_[base + 3]) {
+            coarse_changed_.push_back(cell);
+        }
+    }
 
     // Flag it rather than filling the batch here: update() clears the batch at the top of
     // every frame, so anything written outside update() is discarded before it is ever
@@ -488,11 +527,22 @@ void ResidencyManager::finish_pending(u64 frame) {
 const UploadBatch& ResidencyManager::update(const World& world, u64 frame) {
     batch_.clear();
 
-    if (coarse_dirty_) {
+    if (coarse_all_dirty_) {
+        // A previous frame could not fit the grid into its staging buffer, so the GPU copy
+        // is of unknown age and the whole thing goes again. Correctness over traffic: a
+        // grid the GPU never received reads as "nothing here", and the marcher then stops
+        // asking for what is there.
         for (u32 cell = 0; cell < static_cast<u32>(coarse_counts_.size()); ++cell) {
             batch_.coarse_cells.push_back(cell);
         }
+        coarse_all_dirty_ = false;
         coarse_dirty_ = false;
+        coarse_changed_.clear();
+    } else if (coarse_dirty_) {
+        batch_.coarse_cells.insert(batch_.coarse_cells.end(), coarse_changed_.begin(),
+                                   coarse_changed_.end());
+        coarse_dirty_ = false;
+        coarse_changed_.clear();
     }
 
     // Carry over everything known to be stale. These are re-offered every frame until they

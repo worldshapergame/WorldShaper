@@ -97,8 +97,8 @@ const uint kMipOffset[5] = uint[5](0u, 512u, 576u, 584u, 585u);
 // bigger jumps. Must match kCoarseFactor and the grid dimensions in world/residency.hpp.
 const int kCoarseLevels = 5;
 const int kCoarseFactor[5] = int[5](1, 4, 16, 64, 256);
-const ivec3 kCoarseDims = ivec3(64, 16, 64);
-const uint kCoarseCellsPerLevel = 64u * 16u * 64u;
+const ivec3 kCoarseDims = ivec3(64, 64, 64);
+const uint kCoarseCellsPerLevel = 64u * 64u * 64u;
 
 int floor_div(int value, int divisor) {
     return (value >= 0) ? (value / divisor) : -(((-value) + divisor - 1) / divisor);

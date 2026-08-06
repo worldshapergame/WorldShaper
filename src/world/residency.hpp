@@ -79,9 +79,20 @@ constexpr u32 chunk_mip_axis(u32 level) { return 32u >> level; }
 // non-existent, and the same useless report is made every frame forever.
 inline constexpr u32 kCoarseLevels = 5;
 inline constexpr u32 kCoarseFactor[kCoarseLevels] = {1, 4, 16, 64, 256};
+// The vertical dimension was 16, which reached ±64 m. Fly higher than that and the ground
+// fell outside level 0's window, so it was never reported and never streamed — the world
+// vanished from underneath you. It is now square with the horizontal axes.
 inline constexpr u32 kCoarseDimX = 64;
-inline constexpr u32 kCoarseDimY = 16;
+inline constexpr u32 kCoarseDimY = 64;
 inline constexpr u32 kCoarseDimZ = 64;
+
+// How far level 0 is trusted, in chunks either side of the camera. One less than half the
+// grid, so every chunk in the window lands on a cell of its own and two of them can never
+// collide. That is not a tuning choice — it is what makes the "does the world have a chunk
+// here" answer trustworthy, and everything downstream depends on it being trustworthy.
+inline constexpr i64 kCoarseWindowX = kCoarseDimX / 2 - 1;
+inline constexpr i64 kCoarseWindowY = kCoarseDimY / 2 - 1;
+inline constexpr i64 kCoarseWindowZ = kCoarseDimZ / 2 - 1;
 inline constexpr u32 kCoarseCellsPerLevel = kCoarseDimX * kCoarseDimY * kCoarseDimZ;
 
 // Each coarse cell stores the block coordinate it holds plus a state, four u32 in all.
@@ -294,7 +305,7 @@ private:
     void abandon_pending();
     void finish_pending(u64 frame);
 
-    void coarse_add(const ChunkCoord& coord, i32 delta);
+    void coarse_add(const ChunkCoord& coord, i32 delta, const ChunkCoord& centre);
 
 public:
     // Rebuilds the coarse occupancy grids from the *world*, not from what is resident.
@@ -307,12 +318,20 @@ public:
     //
     // Rebuilt wholesale for now. Incremental maintenance arrives with terrain, when chunks
     // start appearing and disappearing during play.
-    void rebuild_coarse(const World& world);
+    //
+    // `centre` is the camera's chunk. Level 0 is only recorded for chunks within
+    // kCoarseWindow of it, so it has to be rebuilt when the camera crosses a chunk boundary
+    // as well as when the world changes — see coarse_add for why that window exists.
+    void rebuild_coarse(const World& world, const ChunkCoord& centre);
+
+    // The centre level 0 was last built around. The caller rebuilds when the camera leaves
+    // the window this describes.
+    const ChunkCoord& coarse_centre() const { return coarse_centre_; }
 
     // Ask for the occupancy grid to be sent again. Called when an upload could not fit it,
     // because a grid the GPU never received is worse than one that is merely late: the
     // marcher reads it as "nothing here" and stops asking for what is there.
-    void mark_coarse_dirty() { coarse_dirty_ = true; }
+    void mark_coarse_dirty() { coarse_all_dirty_ = true; }
 
 private:
     // Begins encoding a chunk. Returns Complete if it fitted in the budget, Partial if it
@@ -342,7 +361,11 @@ private:
     std::vector<u32> coarse_counts_;   // resident chunks per coarse cell, both levels
     std::vector<u32> coarse_flags_;    // 1 where the count is non-zero; this is the GPU copy
 
-    bool coarse_dirty_ = false;
+    bool coarse_dirty_ = false;       // coarse_changed_ is waiting to be sent
+    bool coarse_all_dirty_ = false;   // the GPU copy is of unknown age; send everything
+    ChunkCoord coarse_centre_{};
+    std::vector<u32> coarse_previous_;   // the GPU's copy, to diff a rebuild against
+    std::vector<u32> coarse_changed_;    // cells that differ, as flat indices
     std::vector<u32> free_records_;
     u32 record_cursor_ = 0;
 
