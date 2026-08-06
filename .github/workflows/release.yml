@@ -27,6 +27,11 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      # Lifted to the job so the signing step's `if` can see it. A step cannot read the env
+      # it declares itself, so testing the secret there would skip the step forever.
+      WS_SIGNING_CERT: ${{ secrets.WS_SIGNING_CERT }}
+      WS_SIGNING_PASSWORD: ${{ secrets.WS_SIGNING_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +71,11 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
 
+      # Ninja is not on the runner's PATH by default, and vcvars does not add it.
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja -y --no-progress
+
       - name: Configure and build
         shell: pwsh
         run: |
@@ -88,6 +98,22 @@ jobs:
           if ($reported -ne '${{ steps.version.outputs.version }}') {
             throw "the executable says $reported, the tag says ${{ steps.version.outputs.version }}"
           }
+
+      # Before packaging, or the zip would carry the unsigned executable and the signature
+      # would be on a file nobody downloads.
+      #
+      # Only runs when the certificate secrets exist, so the workflow works without them and
+      # starts signing the moment they are added. See documentation/15-releases.md.
+      - name: Sign the executable
+        if: ${{ env.WS_SIGNING_CERT != '' }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx",
+                                   [Convert]::FromBase64String($env:WS_SIGNING_CERT))
+          & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p $env:WS_SIGNING_PASSWORD `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+            build\bin\WorldShaper.exe
+          Remove-Item "$env:RUNNER_TEMP\cert.pfx" -Force
 
       - name: Package
         shell: pwsh
@@ -112,22 +138,6 @@ jobs:
         uses: actions/attest-build-provenance@v1
         with:
           subject-path: ${{ env.package }}
-
-      # Only runs when the certificate secrets exist, so the workflow works without them and
-      # starts signing the moment they are added. See documentation/15-releases.md.
-      - name: Sign the executable
-        if: ${{ env.WS_SIGNING_CERT != '' }}
-        env:
-          WS_SIGNING_CERT: ${{ secrets.WS_SIGNING_CERT }}
-          WS_SIGNING_PASSWORD: ${{ secrets.WS_SIGNING_PASSWORD }}
-        shell: pwsh
-        run: |
-          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx",
-                                   [Convert]::FromBase64String($env:WS_SIGNING_CERT))
-          & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p $env:WS_SIGNING_PASSWORD `
-            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
-            build\bin\WorldShaper.exe
-          Remove-Item "$env:RUNNER_TEMP\cert.pfx" -Force
 
       - name: Publish the release
         uses: softprops/action-gh-release@v2
