@@ -93,6 +93,29 @@ actually check:
 - **An icon.** Not security, but a blank default icon reads as "thrown together".
 - **The source is public**, and the workflow that built the file is in it.
 
+### What a store changes, and what it does not
+
+The warning is not really about the file. It is triggered by the **Mark of the Web** — a tag
+Windows attaches to anything a *browser* downloads. SmartScreen sees the tag, then asks
+whether the publisher is known. No tag, no dialog.
+
+That is why "put it on a store" is a half-answer:
+
+| Route | Cost | Warning gone? |
+|---|---|---|
+| A zip downloaded from GitHub or an itch.io page, in a browser | free | **no** — the browser sets the tag |
+| Installed through the **itch.io desktop app** | free | yes, but only for players who use the app |
+| Installed through **Steam** | $100 one-off per title, recoupable after $1,000 of revenue | yes, for everyone |
+| An **EV code-signing certificate** | a few hundred a year | yes, everywhere, immediately, no store needed |
+
+The client is what matters. Steam and the itch app fetch and install the files themselves and
+do not set the tag; a browser does. Neither store makes the *file* trusted — hand someone the
+same zip from either site through a browser and the warning comes back.
+
+Steam does not require the executable to be signed. It is a one-off cost rather than a
+recurring one, which for a project that has to stay free to publish is a different shape of
+expense from a certificate that lapses.
+
 ### What does not help, and is not done
 
 Uploading to VirusTotal and linking the result. Fresh unsigned executables routinely get a
