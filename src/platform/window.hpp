@@ -1,0 +1,107 @@
+#pragma once
+// Window, input and event pump, on SDL3 (zlib licence).
+//
+// This is the only file in the engine that knows SDL exists. Everything above it sees a
+// plain Window with a size, an input snapshot, and a Vulkan surface.
+
+#include <string>
+
+#include "core/types.hpp"
+
+struct SDL_Window;
+union SDL_Event;
+
+namespace ws {
+
+enum class Key : u16 {
+    Unknown = 0,
+    Escape, Space, Tab, Enter, Backspace,
+    W, A, S, D, Q, E, R, F, G, H, C, V, X, Z, O, P, T, U,
+    // Tool slots. Contiguous and in order, so slot n is Digit1 + n — anything that relies
+    // on that says so at the point of use.
+    Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    Left, Right, Up, Down,
+    Comma, Period, Slash,
+    Shift, Ctrl, Alt,
+    F1, F2, F3, F4, F5, F9, F10, F11, F12,
+    Count
+};
+
+// Held keys that should repeat while down, for things a player spams: rotation steps, copy
+// counts. The window reports the raw press; repeat is a policy decision and lives with the
+// code that wants it (game/repeat.hpp).
+inline constexpr u32 kDigitSlots = 9;
+
+struct InputState {
+    bool down[static_cast<usize>(Key::Count)]{};
+    bool pressed[static_cast<usize>(Key::Count)]{};   // went down this frame
+    bool released[static_cast<usize>(Key::Count)]{};
+
+    f32 mouse_x = 0.0f;
+    f32 mouse_y = 0.0f;
+    f32 mouse_dx = 0.0f;
+    f32 mouse_dy = 0.0f;
+    f32 wheel = 0.0f;
+    bool mouse_left = false;
+    bool mouse_right = false;
+    bool mouse_middle = false;
+
+    bool is_down(Key k) const { return down[static_cast<usize>(k)]; }
+    bool was_pressed(Key k) const { return pressed[static_cast<usize>(k)]; }
+    bool was_released(Key k) const { return released[static_cast<usize>(k)]; }
+};
+
+class Window {
+public:
+    Window() = default;
+    ~Window();
+
+    Window(const Window&) = delete;
+    Window& operator=(const Window&) = delete;
+
+    // `allow_oversize` skips the fit-to-desktop clamp. Off by default so a window can never
+    // open bigger than the screen it is on; on when a size was asked for explicitly, because
+    // a scripted measurement at 1440p has to be 1440p on a 1366x768 desktop too.
+    bool create(const std::string& title, u32 width, u32 height, bool allow_oversize = false);
+    void destroy();
+
+    // Pumps the OS event queue. Returns false when the user has asked to quit.
+    bool pump();
+
+    // Optional hook so the developer HUD can see events before we consume them.
+    using EventHook = void (*)(const SDL_Event&);
+    void set_event_hook(EventHook hook) { event_hook_ = hook; }
+
+    void set_relative_mouse(bool enabled);
+    bool relative_mouse() const { return relative_mouse_; }
+
+    void set_title(const std::string& title);
+
+    u32 width() const { return width_; }
+    u32 height() const { return height_; }
+    bool minimised() const { return minimised_; }
+    bool resized_this_frame() const { return resized_; }
+
+    SDL_Window* handle() const { return window_; }
+    const InputState& input() const { return input_; }
+
+    // Instance extensions SDL requires for surface creation. Valid until shutdown.
+    static const char* const* required_vulkan_extensions(u32& count);
+
+    // Creates the presentation surface. Handles are passed as void* so that this header
+    // — the only place SDL is visible — never pulls in Vulkan either.
+    bool create_vulkan_surface(void* instance, void** out_surface) const;
+
+private:
+    SDL_Window* window_ = nullptr;
+    u32 width_ = 0;
+    u32 height_ = 0;
+    bool minimised_ = false;
+    bool resized_ = false;
+    bool relative_mouse_ = false;
+    bool should_close_ = false;
+    InputState input_;
+    EventHook event_hook_ = nullptr;
+};
+
+}  // namespace ws

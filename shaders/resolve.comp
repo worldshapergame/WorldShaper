@@ -1,0 +1,474 @@
+#version 450
+// Resolve: turn the visibility buffer into pixels.
+//
+// The split matters more than it looks. Visibility answers "which face is here"; resolve
+// answers "what colour is that face". Stage 7 replaces the body of this shader with a
+// lookup into the face radiance cache — the same visibility buffer, shaded properly —
+// without touching the marcher at all. Deferring the shading is also what keeps the
+// marcher's inner loop free of material fetches, which on a bandwidth-bound GPU is worth
+// more than the extra pass costs.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, rgba32ui) uniform readonly uimage2D in_visibility;
+layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
+
+layout(std430, binding = 2) readonly buffer Types { uvec2 items[]; } types;
+layout(std430, binding = 3) readonly buffer Visuals { uvec4 items[]; } visuals;
+
+// The same block the marcher uses; see gpu/render_params.hpp.
+layout(std140, binding = 4) uniform Params {
+    vec4 origin;
+    vec4 forward;
+    vec4 right;
+    vec4 up;
+    ivec4 camera_chunk;
+    uvec4 grid_dims;
+    ivec4 bounds_min;
+    ivec4 bounds_max;
+    uvec4 resolution;     // xy pixels, z debug mode, w feedback capacity
+    vec4 lens;            // x tan(fov/2), y max distance, z detail bias
+    vec4 tint_visible;    // xyz colour, w = 1 to use it, 0 to invert the backdrop instead
+    vec4 tint_occluded;
+    ivec4 box_min[16];    // xyz voxels relative to the camera chunk; w: 0 unused 1 carve 2 place 3 refused 4 idle
+    ivec4 box_max[16];
+    ivec4 marks[8];       // constraint points, w = 1 when used
+    uvec4 clip_slot[16];    // per ghost box: x first cell, yzw size. Size 0 means unused
+    uvec4 clip_coarse[16];  // its occupancy mask: x first entry, yzw size in 8-blocks
+} push;
+
+// The clipboard's held clip: one cell per voxel, holding the type id plus one so that zero
+// can mean "outside the clip". See gpu/render_params.hpp.
+layout(std430, binding = 5) readonly buffer ClipCells { uint items[]; } clip;
+
+vec3 sky_colour(vec3 dir) {
+    float up = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 horizon = vec3(0.62, 0.68, 0.78);
+    vec3 zenith = vec3(0.18, 0.32, 0.62);
+    vec3 ground = vec3(0.16, 0.15, 0.14);
+    return (dir.y < 0.0) ? mix(ground, horizon, up * 2.0) : mix(horizon, zenith, up * 2.0 - 1.0);
+}
+
+vec3 unpack_rgb(uint packed) {
+    return vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
+                float((packed >> 16u) & 0xFFu)) / 255.0;
+}
+
+// ---------------------------------------------------------------------------------------
+// The chisel preview.
+//
+// Drawn here rather than as geometry because it is not geometry: it is a description of an
+// edit that has not happened. Intersecting the box analytically against the ray this pixel
+// already has costs a handful of instructions and needs no vertex buffer, no depth pass and
+// no second pipeline.
+//
+// Colour follows documentation/14-ui-style.md. The interface has no palette: the outline is
+// the inverse of whatever is behind it, so it reads against sky, stone or snow without
+// choosing a colour. The single exception is the one the style document already grants —
+// a destructive decision is red — which is what tells carving apart from placing without
+// adding a second hue to the game.
+
+struct Slab { float near_t; float far_t; int near_axis; int far_axis; };
+
+Slab ray_box(vec3 origin, vec3 dir, vec3 lo, vec3 hi) {
+    Slab s;
+    s.near_t = -1e30;
+    s.far_t = 1e30;
+    s.near_axis = 0;
+    s.far_axis = 0;
+    for (int a = 0; a < 3; ++a) {
+        if (abs(dir[a]) < 1e-9) {
+            if (origin[a] < lo[a] || origin[a] > hi[a]) { s.near_t = 1.0; s.far_t = -1.0; }
+            continue;
+        }
+        float inv = 1.0 / dir[a];
+        float t0 = (lo[a] - origin[a]) * inv;
+        float t1 = (hi[a] - origin[a]) * inv;
+        if (t0 > t1) { float tmp = t0; t0 = t1; t1 = tmp; }
+        if (t0 > s.near_t) { s.near_t = t0; s.near_axis = a; }
+        if (t1 < s.far_t) { s.far_t = t1; s.far_axis = a; }
+    }
+    return s;
+}
+
+// How close to a box edge this point on a face is, measured in world units along the two
+// axes that are not the face normal.
+float edge_distance(vec3 point, vec3 lo, vec3 hi, int axis) {
+    float best = 1e30;
+    for (int a = 0; a < 3; ++a) {
+        if (a == axis) continue;
+        best = min(best, min(point[a] - lo[a], hi[a] - point[a]));
+    }
+    return max(best, 0.0);
+}
+
+vec3 ink_over(vec3 backdrop) {
+    // The ink rule in miniature: invert, then push away from the backdrop's brightness so a
+    // mid-grey behind it does not leave the line invisible. The full formula belongs to the
+    // UI pass in Stage 15; an outline needs only that it never vanishes.
+    vec3 inverted = vec3(1.0) - backdrop;
+    float here = dot(backdrop, vec3(0.2126, 0.7152, 0.0722));
+    float away = (here < 0.5) ? 1.0 : 0.0;
+    return mix(inverted, vec3(away), 0.45);
+}
+
+vec3 draw_one_box(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, vec3 hi, int state,
+                  float wash) {
+    // A constant line width in pixels: the world width a pixel covers grows with distance.
+    float per_pixel = 2.0 * push.lens.x / float(push.resolution.y);
+
+    // Refusal keeps the one colour the style document grants outright (documentation/14
+    // §"The five permitted colours"): a decision that will not go through is red. The other
+    // states take their colour from the material, or from the backdrop.
+    vec3 tint = (push.tint_visible.w > 0.5) ? push.tint_visible.xyz : ink_over(colour);
+    vec3 tint_hidden = (push.tint_occluded.w > 0.5) ? push.tint_occluded.xyz : ink_over(colour);
+    if (state == 3) {
+        tint = vec3(0.85, 0.16, 0.16);
+        tint_hidden = tint;
+    }
+
+    // All six faces, not just the two the ray enters and leaves through. Those two give
+    // eight of the twelve edges, and the four they miss are exactly the ones running along
+    // the view direction — which, looking down into a box from above, is its entire
+    // silhouette. The box then reads as a solid pale slab with a rectangle drawn on top of
+    // it rather than as a wireframe.
+    for (int a = 0; a < 3; ++a) {
+        if (abs(dir[a]) < 1e-9) continue;
+        float inv = 1.0 / dir[a];
+        for (int side = 0; side < 2; ++side) {
+            float t = ((side == 0 ? lo[a] : hi[a]) - origin[a]) * inv;
+            if (t < 0.0) continue;
+            vec3 point = origin + dir * t;
+            bool on_face = true;
+            for (int b = 0; b < 3; ++b) {
+                if (b == a) continue;
+                on_face = on_face && point[b] >= lo[b] && point[b] <= hi[b];
+            }
+            if (!on_face) continue;
+            float width = max(per_pixel * t * 1.2, 0.06);
+            // Drawn through geometry, dimmed where something is in front of it. Carving
+            // happens *inside* rock, so an outline that respected depth would be invisible
+            // in exactly the case the tool exists for; and a shape you cannot see the far
+            // side of is one you have to guess the size of.
+            if (edge_distance(point, lo, hi, a) < width) {
+                bool hidden = t > depth;
+                colour = mix(colour, hidden ? tint_hidden : tint, hidden ? 0.55 : 0.9);
+            }
+        }
+    }
+
+    // A wash over the volume, so a box drawn in open air is visible as a volume and not
+    // only as its outline. Deliberately slight: it sits over whatever the player is trying
+    // to line the edit up against.
+    Slab box = ray_box(origin, dir, lo, hi);
+    if (box.far_t >= max(box.near_t, 0.0) && max(box.near_t, 0.0) < depth) {
+        colour = mix(colour, tint, (state == 3) ? 0.20 : wash);
+    }
+    return colour;
+}
+
+// ---------------------------------------------------------------------------------------
+// The clipboard's ghost.
+//
+// A paste preview has to show the voxels that are about to land, not the box they will land
+// in — a box tells you nothing about whether the arch lines up with the wall. So the ghost
+// is marched: the ray steps through the held clip and takes the first cell with matter in
+// it, then that voxel is shaded exactly like a world voxel and blended at partial opacity.
+//
+// It is marched here rather than in the visibility pass because a ghost is not part of the
+// world. Nothing in the world should see it, nothing should stream because of it, and when
+// it is put down it becomes ordinary voxels that the marcher finds the ordinary way.
+
+// Step budgets for the ghost march.
+//
+// Per ghost, *not* shared across them: a single shared budget was a bug, and a visible one.
+// The first ghost the loop reached would spend the lot walking through its own empty space,
+// and every ghost behind it drew nothing — so copies vanished exactly when they lined up
+// with each other, which is when a row of them is most worth looking at.
+//
+// The total is still capped so one pathological view cannot run away. When it runs out the
+// far copies stop being drawn, which is the right thing to lose first.
+//
+// Measured with sixteen copies overlapping and filling the frame: 0.24 ms at 1280x800
+// against this pass's 0.80 ms budget, 0.82 ms at 2560x1440 — which is 3.6 times the pixels
+// the budget was written for, so it is the first number that answers the budget.
+const int kGhostStepsEach = 64;
+const int kGhostStepsTotal = 320;
+
+struct GhostHit { bool hit; float t; uint type; int face; };
+
+// Debug mode 4 reads these: red where a ghost box was tested, green where the march found
+// matter, blue where the clip buffer says it holds nothing to march.
+int g_ghost_boxes = 0;
+int g_ghost_entered = 0;
+bool g_ghost_hit = false;
+
+// Marches one instance of the held clip. `lo` is where its (0,0,0) cell sits; `slot` says
+// where in the cell buffer that copy's shape lives and how big it is, and `coarse` says the
+// same about its occupancy mask.
+//
+// A selection is mostly air. Without the mask, a ray entering a clip walks every empty
+// voxel between the surface it entered through and the first thing worth drawing — so a
+// ghost costs what its bounding box costs rather than what its surface costs, and the step
+// budget runs out before reaching anything. With it, empty 8-blocks are jumped over whole,
+// exactly the way the world marcher skips empty bricks.
+GhostHit march_ghost(vec3 origin, vec3 dir, vec3 lo, uvec4 slot, uvec4 coarse, float limit,
+                     inout int total) {
+    GhostHit result;
+    result.hit = false;
+    result.t = limit;
+    result.type = 0u;
+    result.face = 0;
+
+    ivec3 dims = ivec3(slot.yzw);
+    ivec3 blocks = ivec3(coarse.yzw);
+    vec3 hi = lo + vec3(dims);
+    Slab box = ray_box(origin, dir, lo, hi);
+    float enter = max(box.near_t, 0.0);
+    float leave = min(box.far_t, limit);
+    if (leave < enter) return result;
+    ++g_ghost_entered;
+
+    vec3 inv;
+    ivec3 step_dir;
+    vec3 delta;
+    for (int a = 0; a < 3; ++a) {
+        inv[a] = (abs(dir[a]) < 1e-9) ? 0.0 : (1.0 / dir[a]);
+        step_dir[a] = (abs(dir[a]) < 1e-9) ? 0 : ((dir[a] > 0.0) ? 1 : -1);
+        delta[a] = (step_dir[a] == 0) ? 1e30 : abs(inv[a]);
+    }
+
+    float t = enter;
+    int face = box.near_axis * 2 + ((step_dir[box.near_axis] > 0) ? 0 : 1);
+    int budget = kGhostStepsEach;
+
+    // Seeded fresh after every skip, which is why the DDA state is built here rather than
+    // carried: jumping to the far side of an empty block invalidates it.
+    ivec3 cell = ivec3(0);
+    vec3 next = vec3(1e30);
+    bool seeded = false;
+
+    while (budget > 0 && total > 0 && t <= leave) {
+        --budget;
+        --total;
+
+        if (!seeded) {
+            vec3 at = origin + dir * (t + 1e-4) - lo;
+            cell = clamp(ivec3(floor(at)), ivec3(0), dims - ivec3(1));
+            for (int a = 0; a < 3; ++a) {
+                if (step_dir[a] == 0) {
+                    next[a] = 1e30;
+                } else {
+                    float boundary = float(cell[a] + ((step_dir[a] > 0) ? 1 : 0));
+                    next[a] = t + 1e-4 + (boundary - at[a]) * inv[a];
+                }
+            }
+            seeded = true;
+        }
+
+        uint value = clip.items[slot.x + uint(cell.x) + uint(cell.y) * slot.y +
+                                uint(cell.z) * slot.y * slot.z];
+        // 0 is outside the clip, 1 is air inside it; both are see-through.
+        if (value > 1u) {
+            result.hit = true;
+            result.t = t;
+            result.type = value - 1u;
+            result.face = face;
+            return result;
+        }
+
+        // Nothing here. If the whole 8-block is empty, leave by its far face in one go.
+        ivec3 block = cell >> 3;
+        uint occupied = clip.items[coarse.x + uint(block.x) + uint(block.y) * coarse.y +
+                                   uint(block.z) * coarse.y * coarse.z];
+        if (occupied == 0u) {
+            vec3 block_lo = lo + vec3(block << 3);
+            float exit_t = 1e30;
+            int exit_axis = 0;
+            for (int a = 0; a < 3; ++a) {
+                if (step_dir[a] == 0) continue;
+                float plane = block_lo[a] + ((step_dir[a] > 0) ? 8.0 : 0.0);
+                float candidate = (plane - origin[a]) * inv[a];
+                if (candidate < exit_t) {
+                    exit_t = candidate;
+                    exit_axis = a;
+                }
+            }
+            if (exit_t <= t) exit_t = t + 1e-3;   // never stall
+            t = exit_t;
+            face = exit_axis * 2 + ((step_dir[exit_axis] > 0) ? 0 : 1);
+            seeded = false;
+            continue;
+        }
+
+        int axis = 0;
+        if (next[1] < next[axis]) axis = 1;
+        if (next[2] < next[axis]) axis = 2;
+        if (next[axis] > leave) break;
+        t = next[axis];
+        cell[axis] += step_dir[axis];
+        if (cell[axis] < 0 || cell[axis] >= dims[axis]) break;
+        next[axis] += delta[axis];
+        face = axis * 2 + ((step_dir[axis] > 0) ? 0 : 1);
+    }
+    return result;
+}
+
+vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
+    int drawn = 0;
+    int budget = kGhostStepsTotal;
+    GhostHit best;
+    best.hit = false;
+    best.t = depth;
+    best.type = 0u;
+    best.face = 0;
+
+    for (int b = 0; b < 16; ++b) {
+        int state = push.box_min[b].w;
+        if (state == 0) continue;
+        // Voxel coordinates name the corner, so a box from min to max covers max+1
+        // exclusive.
+        vec3 lo = vec3(push.box_min[b].xyz);
+        vec3 hi = vec3(push.box_max[b].xyz) + vec3(1.0);
+
+        if (state == 5 && push.clip_slot[b].y != 0u) {
+            ++g_ghost_boxes;
+            // The nearest ghost wins, and one already closer stops the rest being marched.
+            GhostHit found = march_ghost(origin, dir, lo, push.clip_slot[b],
+                                         push.clip_coarse[b], best.t, budget);
+            if (found.hit) best = found;
+            // Only the copy being steered is outlined; the rest are their own voxels. See
+            // the note where these boxes are filled in — six plane tests a pixel, sixteen
+            // times over, was most of what put this pass over its budget.
+            if (push.box_max[b].w != 0) {
+                colour = draw_one_box(colour, origin, dir, depth, lo, hi, 2, 0.02);
+            }
+            ++drawn;
+            continue;
+        }
+
+        // Sixteen ghosts each washing the frame at full strength would fog the world out,
+        // so the wash thins as the row gets longer while the outlines stay crisp.
+        float wash = 0.07 / (1.0 + 0.35 * float(drawn));
+        colour = draw_one_box(colour, origin, dir, depth, lo, hi, state, wash);
+        ++drawn;
+    }
+
+    g_ghost_hit = best.hit;
+    if (best.hit) {
+        uint visual_id = types.items[best.type].x;
+        vec3 ghost = unpack_rgb(visuals.items[visual_id].x);
+        vec3 normal = vec3(0.0);
+        if (best.face == 0) normal = vec3(-1, 0, 0);
+        else if (best.face == 1) normal = vec3(1, 0, 0);
+        else if (best.face == 2) normal = vec3(0, -1, 0);
+        else if (best.face == 3) normal = vec3(0, 1, 0);
+        else if (best.face == 4) normal = vec3(0, 0, -1);
+        else normal = vec3(0, 0, 1);
+        ghost *= 0.55 + 0.45 * clamp(dot(normal, normalize(vec3(0.4, 0.85, 0.3))), 0.0, 1.0);
+        // Partial opacity is what makes it read as a proposal rather than as the world.
+        // Stage 9's path tracer shades it the same way it shades everything else; only this
+        // last blend stays.
+        colour = mix(colour, ghost, 0.62);
+    }
+
+    for (int m = 0; m < 8; ++m) {
+        if (push.marks[m].w == 0) continue;
+        vec3 mlo = vec3(push.marks[m].xyz);
+        Slab mark = ray_box(origin, dir, mlo, mlo + vec3(1.0));
+        float t = max(mark.near_t, 0.0);
+        if (mark.far_t < t || t > depth) continue;
+        colour = mix(colour, ink_over(colour), 0.75);
+    }
+    return colour;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(push.resolution.x) || pixel.y >= int(push.resolution.y)) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(push.resolution) * 2.0 - 1.0;
+    float aspect = float(push.resolution.x) / float(push.resolution.y);
+    vec3 dir = normalize(push.forward.xyz +
+                         push.right.xyz * uv.x * push.lens.x * aspect -
+                         push.up.xyz * uv.y * push.lens.x);
+
+    uvec4 packed = imageLoad(in_visibility, pixel);
+    bool hit = packed.x != 0xFFFFFFFFu;
+    float t = uintBitsToFloat(packed.w);
+    uint face = packed.x & 0xFFu;
+    uint level = (packed.x >> 8u) & 0xFFu;
+    uint steps = hit ? ((packed.x >> 16u) & 0xFFu) : packed.z;
+
+    vec3 colour;
+    if (hit) {
+        if (level == 0u) {
+            uint visual_id = types.items[packed.y].x;
+            colour = unpack_rgb(visuals.items[visual_id].x);
+        } else {
+            colour = unpack_rgb(packed.z);
+        }
+
+        // Flat shading by face direction. No lighting yet — Stage 7 replaces this with
+        // the face radiance cache. It exists so geometry is legible.
+        vec3 normal = vec3(0.0);
+        if (face == 0u) normal = vec3(1, 0, 0);
+        else if (face == 1u) normal = vec3(-1, 0, 0);
+        else if (face == 2u) normal = vec3(0, 1, 0);
+        else if (face == 3u) normal = vec3(0, -1, 0);
+        else if (face == 4u) normal = vec3(0, 0, 1);
+        else normal = vec3(0, 0, -1);
+
+        colour *= 0.55 + 0.45 * clamp(dot(normal, normalize(vec3(0.4, 0.85, 0.3))), 0.0, 1.0);
+
+        float fade = clamp(t / 4000.0, 0.0, 1.0);
+        colour = mix(colour, sky_colour(dir), fade * fade * 0.5);
+
+        // The visibility buffer carries the node's coverage — what fraction of it is
+        // matter — and it is deliberately NOT used as an alpha here.
+        //
+        // That was tried and it is wrong. Coverage is a *volumetric fill fraction*, not a
+        // screen-space one. A brick on the surface of the ground is about an eighth full
+        // and completely opaque when you look at it; blending by fill made distant crates
+        // and window frames dither into the sky. The two quantities only coincide for a
+        // node seen edge-on.
+        //
+        // Correct edge anti-aliasing needs either an opacity per face direction, or the
+        // ray to continue past a partial hit and composite what is behind. The second
+        // falls out naturally once shading is deferred to the face cache in Stage 7, so
+        // the data stays in the buffer waiting for it.
+    } else {
+        colour = sky_colour(dir);
+    }
+
+    if (push.resolution.z == 1u) {
+        float load = float(steps) / 128.0;
+        colour = vec3(clamp(load, 0.0, 1.0), clamp(1.0 - load, 0.0, 1.0), 0.0);
+    } else if (push.resolution.z == 2u) {
+        colour = hit ? (vec3(face == 0u ? 1.0 : (face == 1u ? 0.5 : 0.0),
+                             face == 2u ? 1.0 : (face == 3u ? 0.5 : 0.0),
+                             face == 4u ? 1.0 : (face == 5u ? 0.5 : 0.0)))
+                     : vec3(0.0);
+    } else if (push.resolution.z == 3u) {
+        // Detail level: which granularity this pixel was resolved at. Green is full voxel
+        // detail, shading toward red as cells get coarser.
+        float l = hit ? float(level) / 7.0 : 0.0;
+        colour = hit ? mix(vec3(0.1, 0.9, 0.2), vec3(0.9, 0.2, 0.1), l) : vec3(0.0);
+    }
+
+    // After the debug views, so the preview stays visible in all of them — the tool is what
+    // you are looking at when you use one.
+    colour = draw_preview(colour, push.origin.xyz, dir, hit ? t : push.lens.y);
+
+    if (push.resolution.z == 4u) {
+        // Ghost diagnosis: is a clip loaded at all, is the ray reaching a ghost box, is it
+        // getting inside one, and is the march finding anything in it.
+        colour = vec3(0.0);
+        if (push.clip_slot[0].y != 0u) colour.b = 0.35;
+        if (g_ghost_boxes > 0) colour.r = 0.6;
+        if (g_ghost_entered > 0) colour.b = 1.0;
+        if (g_ghost_hit) colour = vec3(0.0, 1.0, 0.0);
+    }
+
+    imageStore(out_colour, pixel, vec4(colour, 1.0));
+}

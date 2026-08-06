@@ -1,0 +1,350 @@
+# 12 — Plain English
+
+*How WorldShaper works, with no code words. Updated every stage. If anything here stops making sense, that's my fault, not yours — say so and I'll rewrite it.*
+
+---
+
+## The world is made of tiny cubes
+
+Every single thing in the game is built from cubes about 3 centimetres across. Thirty-two of them stacked up make one metre. You are two metres tall, so you are sixty-four cubes tall.
+
+There is nothing else. No invisible shapes, no painted-on textures pretending to be brick walls. If a wall looks like brick, it's because thousands of real cubes are sitting there in a brick pattern, and you can chip out any one of them.
+
+## Why "sandstone" isn't really a thing
+
+When you pick "sandstone" and start building, the game isn't placing sandstone blocks. It's placing thousands of individual stone cubes, each given a slightly different sandy colour, in a pattern that looks like sandstone.
+
+The game doesn't know what sandstone is. It only knows "these cubes are stone, and they're these colours." That's why you can carve into a sandstone wall and the inside looks right — because there is no inside and outside, it's stone all the way through.
+
+Materials are recipes for arranging cubes, not objects.
+
+## How the game holds billions of cubes without exploding
+
+Two tricks.
+
+**First: identical things share one copy.** Imagine a wall of a million cubes, all the same shade of grey. The game doesn't store a million descriptions of "grey stone." It stores *one*, and the million cubes all point at it. If you paint one of them red, that single cube gets its own description and nobody else is affected.
+
+This is why you can give every cube its own colour, its own list of labels, its own properties — and it costs nothing until you actually make one different from its neighbours.
+
+**Second: empty space is free.** The game stores the world as a nest of boxes, and a box containing nothing at all takes up no space. Solid rock underground is stored as "this whole box is rock" instead of listing every cube in it. Only the interesting bits — surfaces, things you've built — cost anything.
+
+## How you can see forever
+
+Your screen has about a million dots on it. There's no point in the game working out ten billion cubes when only a million dots can show anything.
+
+So the game stores the world at every scale at once: individual cubes, then groups of eight, then groups of those, all the way up to "this whole mountain is roughly this colour." When it draws a frame, each dot on your screen asks: "what's in front of me?" and the game zooms in only as far as that particular dot needs.
+
+A mountain ten kilometres away only needs a handful of lookups. The rock at your feet gets the full detail. Neither costs more than the other.
+
+**The important part:** this isn't the usual trick of swapping between a few pre-made "detail levels" and hoping you don't notice the switch. There is no switch. The game blends smoothly and continuously between detail levels, so there's nothing to catch your eye — no popping, no shimmer, no moment where distant things suddenly get better as you walk toward them.
+
+And the promise that comes out of it: **anything big enough to take up even one dot on your screen is drawn in full detail.** Not "full detail up to 200 metres." Full detail, always, at any distance. Below one dot there's literally nothing left to show.
+
+## How the lighting works, and why it's fast
+
+Normally, a game that traces real light rays does it once for every dot on your screen — a million calculations a frame, and the result is noisy and slow.
+
+WorldShaper does it differently, and this was your idea: **it works out the lighting on the surfaces of the cubes themselves, not on the dots of your screen.**
+
+Picture a wall. On screen it might cover ten thousand dots — but it's one flat cube face. So the game works out "how bright is this face" once, and all ten thousand dots just read that answer.
+
+Three things fall out of this:
+
+1. **It's dramatically cheaper.** One calculation instead of ten thousand.
+2. **The answers pile up.** The face keeps its brightness from last frame and refines it. After half a second it has effectively taken hundreds of light samples, so the picture is clean instead of grainy.
+3. **Playing at a higher resolution barely costs more lighting.** The wall is still one face whether you're at 720p or 4K.
+
+Light bouncing around corners comes for free from this. When the game traces a ray from a face and it lands on another face, it just reads *that* face's stored brightness — which already includes everything that bounced onto it. So one bounce of work gives you endless bounces of result.
+
+**The one exception:** mirrors, glass and prisms look different depending on where your head is, so those can't be stored on a surface — there's no single answer to store. Those get calculated properly per dot, but only for the small part of the screen that actually contains glass or mirrors. That's the "hybrid" you agreed to.
+
+## Rainbows and light patterns in water
+
+Glass bends light. Different colours bend by slightly different amounts, which is why a prism makes a rainbow. Water focuses light into those wobbling bright patterns on the bottom of a pool.
+
+The game does both for real. For the bright pool patterns, it fires light particles from the sun, lets them bounce and bend through the water, and **paints where they land directly onto the cube faces** — the same place all the other lighting lives. So those patterns cost nothing to display once they exist, and they show up correctly in reflections too.
+
+They take about a fifth of a second to appear properly, which is why they look soft and shimmery, which is also how they look in reality.
+
+## Nothing is ever lost
+
+Pour a bucket of water into a hole. Freeze it. Melt it. Splash it around. Walk away for an hour and come back.
+
+Every single drop is still there. The game never quietly deletes water to save effort, and never quietly makes extra.
+
+The way it manages that: water never gets *copied* from one place to another, it gets *moved*. Every cube that wants to move somewhere puts in a request; each destination picks exactly one winner; the winner's water moves and the loser's stays put. Two things can never end up in the same place, and nothing can move out to nowhere.
+
+On top of that, the game keeps a running tally of how much of everything exists. If the total ever changes without a good reason, that's treated as a serious bug and the automated tests refuse to let it through.
+
+The same applies to smoke. Smoke never vanishes — it just spreads out until it's too thin to see. (Behind the scenes, once it gets thin enough the game stops tracking it cube by cube and just remembers "this area has this much smoke in it," which keeps it cheap without cheating.)
+
+## Things that fall over
+
+Cut a building in half and the loose half becomes a real object with real weight — worked out from what it's made of, so a stone half is heavy and a wooden half isn't. It falls, hits things, tumbles, and eventually settles.
+
+Once it's been still for a moment, the game quietly turns it back into ordinary world cubes. That's important: without it, blowing up a city would leave thousands of objects wobbling forever and the game would crawl. This way, rubble becomes terrain and stops costing anything.
+
+Undermine a wall and it collapses on its own, because every cube keeps track of how well supported it is, passed up from the ground.
+
+## Explosions
+
+Not a magic sphere that deletes everything within X metres. A pressure wave that actually travels: it rushes through open doorways, gets stopped by thick walls, blows out the windows down a corridor, shoves objects and splashes water.
+
+Build a bunker properly and it protects you, for real reasons rather than scripted ones.
+
+## Characters that walk without anyone animating them
+
+You sculpt a creature out of cubes. Anything — a person, a dog, a bird, a blob with six legs.
+
+The game then looks at the shape, finds its skeleton (roughly the way you'd find the "spine" of a shape by shrinking it inward), works out where the joints should go and which limbs are legs, and generates a walk cycle that suits that body — leg count, leg length, weight and all.
+
+You don't animate anything. You sculpt it and it walks.
+
+When it gets hurt or knocked over, it doesn't flip into "ragdoll mode." Its muscles just get weaker. It staggers, tries to catch itself, reaches out toward the ground, braces — and only goes fully limp when there's nothing left. Being knocked down is a gradual thing, not a switch.
+
+## Playing with friends, with no server and no setup
+
+Here's the thing that makes this possible: **the world is never sent over the internet.**
+
+The landscape comes from a number — a seed. Everyone's computer builds the identical landscape from that same number. And the physics — every drop of water, every falling rock — is worked out identically on everyone's machine, because it's all done with whole-number arithmetic that produces the exact same answer on every computer in the world.
+
+So the only thing that actually crosses the internet is **what people did**: "Alex carved a box from here to here." About thirty bytes. Everything else, both computers work out for themselves and land on the same answer.
+
+That's why 32 people can share a world with billions of cubes on a home internet connection.
+
+**Getting connected** without a server: you make a world, the game gives you a code, you send that code to a friend however you like, they paste it. Behind the scenes their computer and yours punch through your home routers by both reaching out at the same moment. For the small number of people whose internet setup blocks that, someone else already in the game passes their messages along.
+
+**Nobody is in charge.** The world is divided into areas and whoever's nearest looks after each one. If you leave, other people take over the areas you were looking after — and you keep the whole world on your own computer, so you can keep playing it by yourself later. There's no "host" whose departure ends the game.
+
+## Mods
+
+Mods are written in a small, friendly language called Lua, and they can touch everything: new materials, new reactions, new tools, new rules, entire game modes.
+
+The safety catch is that mods don't change the world directly — they *ask* for changes, and the game applies them the same way it applies your mouse clicks. Two useful results: a mod can never break the shared-world maths that multiplayer depends on, and a badly written mod can never freeze your game, because it gets a time limit and gets paused if it goes over.
+
+## What runs on what
+
+The minimum machine is a **Steam Deck**, at 1280×800, holding a steady 30 frames per second. Your own PC (the RTX 5060 Ti) is the main development target and should manage 1440p at 60–90.
+
+On weaker machines the game doesn't cut your view distance or make things blocky. Instead, lights take slightly longer to settle after a change — a fraction of a second you're unlikely to notice — and the picture may be rendered a little smaller and scaled up when things get busy. **Detail and view distance are never what gets sacrificed**, because you said those are the things that would make the project a failure.
+
+## What exists right now — Stage 0
+
+Double-click `run.bat` in the project folder. It builds the game if needed and starts it.
+
+You get a window with a moving gradient and a faint grid. That's a placeholder — the grid squares are one metre across, so it's showing you the scale everything else will be built at.
+
+What's actually behind it, and why the boring stuff came first:
+
+- **It builds with one click.** No setup, no configuring anything. `build.bat` builds, `run.bat` plays, `test.bat` checks everything still works.
+- **It talks to your graphics card properly.** It found your RTX 5060 Ti, checked it has everything the renderer will need, and refuses to start with a clear message rather than a crash if a machine doesn't.
+- **It measures itself.** Press **F1** for the developer panel: how long each part of the frame took on the GPU, how much memory traffic it used, and whether it's over the budget written down for it. Press **F2** for the small corner overlay (the one that ships with the game). Numbers in red mean something is over budget, which is treated as a bug.
+- **Graphics code reloads while it's running.** Edit a shader file, save it, and the picture changes without restarting. Once the renderer exists, this is the difference between tuning it in seconds and tuning it in minutes, thousands of times over.
+- **It can run with no window at all** (`--ticks 100000`). That's how the automated tests will later count every drop of water in a world and prove none went missing.
+- **41 automated tests, 413,407 checks, all passing.** Mostly on the maths that everything else stands on — including the whole-number arithmetic that makes multiplayer possible, tested to prove it gives identical answers regardless of the order things happen in.
+
+Controls: **F1** developer panel, **F2** overlay, **F5** force-reload shaders, **F11** toggle vsync, **Esc** quit.
+
+Nothing here is a game yet. It is the floor everything else stands on, and it is measured, tested and reloadable — which is exactly what you agreed to when you said the foundations could take as long as they need.
+
+## Stage 1 — the world now exists (you just can't see it yet)
+
+There is now a real world underneath. You can't look at it — that's Stage 3 — but it works, and a machine can prove it does.
+
+**Cubes know what they are.** Every cube points at a description: its colour, what it's made of, what it does, whether it burns. Identical cubes share one description automatically, so a million-cube wall of the same grey costs one description in total. Paint one cube a different colour and *that one cube* gets its own — nobody else is affected. This is what makes "every cube can be different" affordable instead of impossible.
+
+**Storage picks its own format.** A region of solid rock is stored as the words "this whole box is rock" — eight bytes for 512 cubes. A region with three materials in it stores a short list and two bits per cube. A region a player has hand-painted with 400 different colours stores them outright. It switches between these on its own as you build, and switches back when you carve things away.
+
+**Digging through open air costs nothing.** Holding the carve tool while flying doesn't quietly allocate a slab of memory per step — empty space stays genuinely empty.
+
+**Every change goes through one door.** Placing, carving, later every drop of falling water: all of it is a small record saying what happened and when. Nothing writes cubes any other way. That sounds like bureaucracy and it's the reason multiplayer will work: friends will send each other those little records — about thirty bytes each — rather than the world.
+
+**Nothing is created or destroyed by accident.** There's a running tally of how much of everything exists. After a million random edits the tally is compared against counting the entire world cube by cube, and they match exactly. If they ever didn't, the build would fail rather than shipping a world that quietly leaks water.
+
+**Saving is honest.** Save a world, load it, save it again — the two files are byte-for-byte identical. Without that check, every save-and-load cycle would drift a little and nobody would notice until a world wouldn't open.
+
+You can run all of this yourself:
+
+```bash
+test.bat
+```
+
+It builds, runs 128 automated tests (17.6 million individual checks), then throws a million random edits at a real world and verifies every rule above. On your machine it manages about 8 million cube-writes a second and stores the world at about 0.44 bytes per cube — right on the budget the whole memory plan was written against.
+
+## Stage 2 — the world can now get to the graphics card
+
+A graphics card can't reach into the computer's main memory and rummage around. Everything it draws has to be copied into its own memory first. And its memory is small — a Steam Deck has about six gigabytes for everything — while the world is infinite.
+
+So the rule is: **only what you can see is on the graphics card.** Memory is decided by your screen, not by how big the world is. That's the trick that makes an endless world fit on a handheld.
+
+How it works: as you look around, the renderer says "I want this area." If it's already loaded, nothing happens. If it isn't, it gets packed and sent. When space runs out, whatever hasn't been looked at for longest is thrown away — but never anything you're looking at right now.
+
+**It's allowed to fall behind, on purpose.** Spin around fast and hundreds of areas suddenly become visible at once. Sending them all in one frame would stutter — exactly when you're moving the camera, which is the worst possible moment. So there's a strict work limit per frame: it sends what fits, and the rest arrives over the next few frames. You may briefly see something at lower detail. You will not see a hitch.
+
+There's also a scripted test world now — rooms, towers, tunnels, an archway, a lattice, a stepped pit. Deliberately awkward shapes, because those are what break renderers and physics: thin metal bars, overhangs with nothing under them, enclosed rooms, and surfaces you see from the inside. It's built the same way every time, so a speed measurement taken today can be compared with one taken in two years.
+
+And there's a check that runs every frame in testing: decode what the graphics card holds and compare it against the real world, area by area. They matched on all 24,273 comparisons. Without that check, every later stage would be debugging a mirage.
+
+**Three real performance bugs got caught here**, and this is what the measuring is for:
+
+- Repacking every cube of every area on upload: 22 milliseconds on one frame, against a budget of 0.8. Fixed by storing cubes on the graphics card in exactly the layout they already have in memory, so sending them is a straight copy.
+- Checking whether an area had changed by re-reading every cube in it: 116 milliseconds a frame. Areas now keep a counter that ticks up when they change, so the check is instant.
+- No work limit per frame, so one fast camera turn tried to send everything at once.
+
+Final numbers on your machine: **0.059 ms per frame on average**, against the 0.8 ms it's allowed. You can run it yourself:
+
+```bash
+test.bat
+```
+
+## Stages 3 and 4 — you can see it now
+
+Run `run.bat` and fly around with WASD. Right-click grabs the mouse, scroll changes speed.
+
+**How a frame gets drawn.** For every dot on your screen, the game fires a ray into the world and asks what it hits. The clever part is *how carefully* it looks. A dot far away covers a lot of world, so checking individual 3 cm cubes out there would be work you could never see the result of. So the ray checks big chunks when it's far and small ones when it's close — smoothly, with no switch-over point anywhere.
+
+That's why there's no view distance setting. A mountain 40 km away costs about the same as a rock at your feet covering the same dots on screen. Looking at the whole test world from 900 m away is *fourteen times cheaper* than standing in the middle of it, because from there almost nothing needs fine detail.
+
+**How the world gets loaded.** The graphics card can only hold what's on screen. The old rule was "load everything within 30 m of the player", which sounds sensible and is wrong: something 300 m away can fill half your screen, and something 10 m away can be behind a wall.
+
+So the renderer now says what it wants. As rays travel, any time one reaches a place the world has something and the graphics card doesn't, it writes that down. The list comes back to the main program, which loads those places. Then it goes quiet — once everything visible is loaded, there's nothing left to ask for.
+
+That took five attempts to get right, and each wrong version looked reasonable:
+
+- The "is there anything here" table described *what was loaded* rather than *what exists*. So anywhere not yet loaded looked like empty air, got skipped, and was therefore never requested. Nothing past the starting area ever loaded.
+- Rays were cut off at the edge of what was loaded — so they could never reach anything new to report. Deadlock. They now get a margin to explore into.
+- The list was assembled and then wiped before being sent. Correct on one side, all zeroes on the other.
+- Rays reported the *first* thing they couldn't find, which was almost always empty sky. 22,600 useless reports a frame.
+- Then they reported the *last* thing, which overshot: once the far side of something loaded, the near side was never asked for.
+
+The fix for the last two was to give the shader a table of what the world actually has, per place. Then "the first thing I'm missing" is a real answer, and loading fills in from near to far — the order you'd notice.
+
+**One bug worth mentioning** because of where it would have shown up: a block of settings passed to the graphics card had grown to 148 bytes. Every graphics card must support at least 128, and AMD gives exactly 128 — which is what a Steam Deck has. It worked on the development machine and would have failed on the target. Moved somewhere without that limit.
+
+## Stage 5 — the chisel
+
+**Building and digging.** Hold the left button to dig, the right button to build. Where you press sets one corner, where you let go sets the other, and the box between them is what happens. Both corners sit at a distance out in front of you — hold **G** and scroll to change that distance, and wind it all the way down to zero and it stops being a distance and just grabs whatever you're pointing at. That one tool therefore does both careful work on a surface and building in mid-air, without switching modes.
+
+**Middle click drops a pin.** The shape has to reach every pin you've dropped, so it stretches out to touch them. That's how you make a cut line up with something instead of squinting at it. **R** clears the pins, **C** abandons the drag, **Q** and **E** change material, **Z** and **X** are undo and redo.
+
+**Undo never runs out.** You asked for unlimited, and the way it's stored is what makes that affordable. The obvious approach is to photograph the voxels before changing them, which costs four bytes each — dig a five-metre cube and you've spent 16 MB, and you'd pay that again on every edit until memory ran out. Instead the game writes down a *description*: "this box was rock". Digging a tunnel through solid rock costs one line to undo however long the tunnel is. Painting every voxel of a wall a different colour costs a line per voxel — which is fair, because that's how much you actually destroyed.
+
+That also means undo isn't a special case anywhere. It's the same kind of instruction as any other edit, so it saves, replays and will travel over the network exactly like the rest. There's a test that performs two hundred overlapping edits, undoes all two hundred, and checks the world is identical to before — and then does it forwards again.
+
+**Seeing what you're about to do.** The outline is drawn straight into the picture rather than being real geometry, since it describes something that hasn't happened yet. Digging draws the outline as the exact opposite of whatever's behind it, so it shows up against sky, stone or snow without the game inventing a colour. Building draws it in the colour of the material you're about to place. Where the outline is buried behind something, digging switches to the colour of the stuff that's about to disappear and building switches to the opposite of its material — so you can always see the whole shape, and the two never look alike.
+
+Drawing it *through* solid rock is deliberate. Digging happens inside rock. An outline that politely hid behind the surface would be invisible in precisely the situation the tool exists for.
+
+**One limit worth knowing.** A single edit is capped at about a 6-metre cube. An edit happens all at once and can't be interrupted, and the measurements say that size takes about a twentieth of a second — a visible stutter and nothing worse. The cap started four times larger, which would have been a multi-second freeze. Bigger edits need the work spread over several frames, which multiplayer will require anyway.
+
+**What it cost.** A 52-voxel cube — 140,608 voxels — applies in 0.28 ms in open air and 1.39 ms through the most detailed part of the test scene, both including working out how to undo it. A frame is 16.6 ms, so neither drops one. Getting there meant three separate fixes: a brick the box swallows whole is now overwritten in one go rather than voxel by voxel, a brick it only clips works out its encoding once for the whole patch instead of once per voxel, and undo reads a brick in a single pass. That took the worst case from 3.46 ms to 1.39 ms.
+
+## Stage 5 — the clipboard
+
+**Picking tools.** Numbers 1 to 9 are tool slots. Tap one to switch to it. Hold one and scroll to cycle through everything on that slot — so a single key can carry a whole family of tools instead of the belt growing a row of icons. Everything starts on slot 1 for now.
+
+The wheel only changes tools while a number is held, and that is on purpose. The wheel is the busiest control in the game: the chisel wants it (with G) for how far out it is working, the clipboard wants it to slide a copy around, the camera wants it for speed. Making a bare scroll mean "change tool" would take it away from the tool you are using at that moment.
+
+**Copying.** Select a box exactly the way the chisel does, and instead of changing anything you get a ghost of it — the actual voxels, see-through. Scroll to slide the ghost in whatever direction you are facing; hold shift and each click moves it a whole clip length, so pieces meet edge to edge. "." and "," add and remove copies, spread evenly between where the clip came from and where the ghost is. Arrow keys turn it. Left click puts it down, as many times as you like.
+
+**P** picks what a paste does to what is already there: replace everything (the clip's empty parts clear what they cover), only its solid parts (its empty parts leave things alone), or only into empty space (nothing that exists is disturbed — for trim and moulding).
+
+**O** turns on grid snap: copies round to whole clip lengths so a repeated piece tiles exactly, and the turn step changes from 7.5° to 11.25°. Both divide a quarter turn evenly — twelve steps and eight steps — so a right angle is always exactly reachable.
+
+**Turning a clip does not lose voxels, and that took a specific method.** The obvious way to rotate is: for every destination voxel, rotate backwards, round off, and copy whatever is there. That reads some source voxels twice and skips others, so a wall of a thousand bricks comes out as 987 or 1,013. In a game whose central promise is that matter is conserved, a tool that quietly manufactures stone is not acceptable.
+
+So a rotation is done as three *shears* instead — slide each row sideways, then each column up or down, then each row sideways again. Sliding a row is just moving it, so nothing is lost and nothing is duplicated, and three of them compose into a rotation. The voxel count is preserved by construction rather than by luck, and there is a test that turns a clip through every angle on all three axes and demands the count come out identical every time.
+
+Two details matter: whole quarter turns are done separately by swapping axes (the shear maths misbehaves near a half turn), and every rotation is computed from the *original* clip rather than from the last rotated one, so turning something forty times does not chew it up.
+
+**The ghost shows the real voxels**, not a box. A box tells you nothing about whether the arch lines up with the wall. It is drawn by the renderer stepping through a copy of the clip, shading each voxel exactly as it shades the world, and blending it half-transparent. When path tracing arrives it will be lit like everything else, and only that last blend stays.
+
+It is drawn *after* the world rather than as part of it, deliberately: nothing should collide with a ghost, nothing should load because of one, and when you put it down it becomes ordinary voxels the renderer finds the ordinary way.
+
+**Two things you reported, fixed.** The tool readout was off the bottom of your screen: it was being positioned in *pixels* while the interface works in the window's own units, and on a display with scaling those are different numbers. It now uses the interface's own size, and the game reports the mismatch at startup if there is one. And the ghost preview initially did not draw at all — the debug view that found it (F3 to mode 4) showed the renderer was doing everything right and my test clip was grey stone in front of grey ground.
+
+## Stage 5 — the second pass
+
+**The window was bigger than your screen, and that was the whole problem.** When the game asks for a 1600×900 window, that number is in *screen coordinates*, not pixels — and on a display with scaling those are different. Your desktop had less room than the game asked for, so the window opened with its edges hanging off the screen, taking the overlay and the tool strip with them. The window now shrinks to fit whatever room the desktop actually has, keeping its shape. Found on the development machine too, which turned out to be 1366×768.
+
+**Right click** now drops whatever the clipboard is holding, and abandons a selection you're part way through. **Middle click** sends the ghost to whatever you're looking at, resting against the face you aimed at — much faster than scrolling it across a room.
+
+**Scrolling speeds up the longer you keep going the same way**, and drops back to one voxel a click the moment you reverse, turn to face a different direction, or stop. The first click of any run is always exactly one voxel, deliberately: acceleration you can't escape makes lining something up impossible, and a big flat step makes crossing a room impossible.
+
+**Copies now share the transform.** Turn the ghost a quarter turn with four copies and you get 22.5°, 45°, 67.5°, 90° — the shape ramps along the row and arrives at the full amount on the last one. Same for resizing. That turns a spiral staircase or a tapering spire into one gesture. Each copy is its own separately computed clip, so when there's no transform at all the game notices they're identical and computes one.
+
+**Resizing.** "/" changes what "," and "." do — copies, roll, or resize — and the arrow keys always turn.
+
+You asked for resizing not to lose or add voxels the way rotation doesn't, and I have to be straight with you: that one isn't possible. Rotation can promise it because turning something is just moving each voxel somewhere else. Making a thousand-brick wall twice as big means eight thousand bricks, and there's nowhere for those to come from except creating them.
+
+What *is* possible, and what it does, is preserve the **shape** exactly. Sizes go in whole-number ratios only — 2×, 3×, a half, a third. Growing replaces each voxel with a solid block of itself, so nothing is missing and nothing appears in the wrong place. Shrinking replaces each block with whatever it held most of, so you lose detail but never end up with a wall full of holes. Fractional sizes like 1.5× are deliberately not offered, because they have to round, and rounding is exactly what puts stripes of doubled and missing voxels through a wall.
+
+**The overlapping-copies bug** was real. The renderer had one budget of work shared between all the ghosts, and the first one it reached spent the lot walking through its own empty space — so every ghost behind it drew nothing. Copies vanished exactly when they lined up with each other, which is when a row of them is most worth looking at. Each copy now gets its own share.
+
+**And one about the build itself.** The build tool told me a file was up to date when it wasn't, and left an old program behind — so a measurement I took was against code that no longer existed. The game now prints the moment it was compiled every time it starts, so that can't happen quietly again, and `build.bat clean` throws everything away and starts over.
+
+## Stage 5 — the third pass
+
+**Ctrl no longer sinks you.** Down is **C** now, because Ctrl is half of every shortcut anyone already knows and reaching for Ctrl+Z shouldn't drop you through the floor. Cancel is Backspace.
+
+Chisel on slot **1**, clipboard on slot **2**. Switching tools drops whatever the clipboard was holding. With nothing selected, the wheel goes back to flight speed — which is what you want while flying somewhere to make a selection.
+
+**Roll is gone**, since the arrows already turn the clip. "/" now just switches "," and "." between *copies* and *size*.
+
+**Resizing is any size now, per axis.** 4.5×, 9.843×, a third — whatever, in small steps, and an axis can be squashed all the way down to one voxel thick. In size mode the **up and down arrows stretch along whichever direction you're facing**: look at the long side of a wall and hold up to make it longer.
+
+I have to restate the promise, because it changed. At whole-number sizes it's still exact — each voxel becomes a solid block of itself. At an awkward ratio it can't be, and what it guarantees instead is that **the result is never torn**. Every voxel in the new shape asks "what part of the old shape lands on me", so a solid block stays solid at 0.37× or at 9.843×. The way that goes wrong — which this deliberately avoids — is pushing old voxels forward into the new grid and rounding, which leaves stripes of holes.
+
+**O now does something you can see.** Both 11.25° and 7.5° were arbitrary angles, so neither looked "snapped" and the setting appeared to do nothing. Snapped now means **quarter turns**, which is the only rotation a voxel grid holds without any resampling at all — the clip stays square to the world and its sides swap exactly.
+
+**Scroll acceleration actually works now.** You were right about why: I was treating "still scrolling" as "the wheel reported something this frame", and a wheel doesn't work like that — it sends separate notches with idle frames between them. Every gap wiped the speed. It now keeps the run alive through a quarter second of quiet, so a burst of scrolling builds up properly and stopping still puts it back to one voxel a click.
+
+**The overlapping-copies fix, and the mask.** Clips now carry a coarse map of themselves — one flag per 8×8×8 block saying whether there's anything in it. A selection is mostly air, and without that map a ray entering a ghost has to walk every empty voxel before reaching anything worth drawing; on a large clip it ran out of allowance first and drew nothing at all. With it, empty blocks are jumped over whole. A 120-voxel cube of mostly air now ghosts in 0.09 ms and shows its contents.
+
+It costs about 15% in the opposite case — lots of small dense copies stacked on each other — because the extra check happens whether it saves anything or not. That trade is worth it: the case it fixes was broken, the case it costs was already fast.
+
+## Stage 5 — "can an object have its own grid?"
+
+You asked this directly, so here is the direct answer: **not as world voxels, and not because I built it wrong.**
+
+A voxel world has exactly one grid. That is not a limitation I chose in some corner of the code — it is what makes a voxel world a voxel world, and everything is built on it: the bricks, the tree that finds them, the mask that skips empty ones, the ray marcher, the streaming, the instruction log, the replay that keeps two players in sync. A voxel exists at a whole-number position the way a pixel exists at a whole-number position on a screen. Something sitting between the squares isn't a voxel that's off-grid; it's a thing that has to be redrawn onto the squares to become voxels at all.
+
+**But the thing you actually want does exist in the plan, and I did build toward it.** Decision D56, made back in the questions round, says: *a clip carries a flag for whether stamping it produces world voxels or a free-standing physics object.* A free-standing object keeps its own grid, at its own angle, at its own offset, and is drawn with its own transform — a boulder, a door, a ship. It is never merged into the world grid, so it never has to be square to it. That arrives with rigid bodies in Stage 12, and nothing in what I've written blocks it.
+
+So: two different operations, and the game will have both. *Stamp* turns a clip into world voxels, on the world grid. *Place as an object* keeps it as itself. Right now only the first exists.
+
+Meanwhile **O has gone back to being about position**, since you're right that it was never about rotation: on, the clip moves in whole clip lengths so copies tile and it carries its own spacing; off, it moves a voxel at a time. Turning is always 7.5° a press — twelve presses is a quarter turn exactly, so a right angle needs no special mode.
+
+## Stage 5 — four bugs you found
+
+**Thin slopes vanished when shrunk.** Correct, and the cause is arithmetic. Each voxel of the smaller version looked at the block of the original it covers and took whichever material there was most of. Shrink a one-voxel-thick diagonal by half and every block it passes through is seven-eighths air — so air won, and the slope disappeared. The same sum shaved the corner off a right angle (a corner is one voxel out of eight) and thinned a one-voxel wall to nothing.
+
+**Air no longer gets a vote.** If any matter falls in the region, the answer is matter, and only then does it ask which kind. Slopes, corners and thin walls survive. The price is that a shape can come out slightly chunkier rather than losing pieces — which is the right way round to be wrong: a slope that survives a bit thick is still your slope; a slope that vanished isn't.
+
+**Growing past a point reverted to the original size, and lagged.** Both the same bug. It built the oversized clip, timed how long that took, discovered it didn't fit, threw it away, and fell back to the *unscaled* original. So you saw a lag and then an original-sized copy in the middle of a row of resized ones. The limit is now worked out before anything is built, so the ghost just stops growing. A second bug alongside it: the limit was applied one axis at a time, so it spent the whole allowance on the first axis — "twice as big" came out as thirty times along one side.
+
+**Rotation collapsed past a point.** Two separate causes, both real. The maths that turns a big angle into "some quarter turns plus a small remainder" did the wrap in the wrong order, so anything past 315° was handed to the shears whole — a near-half-turn, which is exactly where that method blows up. And the accumulated angle was wrapped at 360°, which snapped every copy back to the start at once. Neither wraps now: a row can wind past a full turn and keep going, which is how you get a spiral of more than one revolution.
+
+**And the stretch direction was wrong**, which turned out to be the same root cause as the speed problem: resizing was applied *before* rotating, so it stretched the clip's own axes, and after a quarter turn "the way I'm looking" pointed somewhere else. Turning first and resizing second fixes the direction and, as a bonus, stops three shear passes running over the enlarged copy — growing three times was costing twenty-seven times the work for the same result.
+
+## Stage 5 — copies that carry on past the ghost
+
+**O is 11.25° again** — my mistake, corrected. Free turning is 7.5°, snapped is 11.25°, and both divide a quarter turn evenly (twelve steps and eight), so a right angle is exactly reachable either way. O still also makes the clip move in whole clip lengths so copies tile.
+
+**The copy count now goes negative, and it means something different when it does.**
+
+Positive is what it was: the copies fill the gap *between* the original and the ghost, evenly, with the last one landing exactly on the ghost. You aim the ghost, you aim the row.
+
+Negative flips it round: the ghost becomes the *first* step, and the copies carry on *past* it, taking that same step again and again. Wind the count down past one and it goes straight into the negatives — zero is skipped, since no copies at all is what dropping the clip is for.
+
+And the step is the whole step, not just the distance. If the ghost is simply moved, the row runs straight. If the ghost is also **turned**, then every step is turned by however much the clip has turned by the time it's taken — so the row bends round instead of running off in a straight line. Nothing is being swung around a pivot; each copy is just one more step from where the last one ended, and each step points slightly further round than the one before.
+
+Turn the ghost a quarter turn and put four copies past it and they close a square, coming back to where they started. Turn it a little and you get a long shallow arc. That's the "incrementally bent" you asked for.
+
+## How we'll work
+
+- I write all the code. You never open a code file.
+- Each stage ends with something you double-click and play.
+- Because there's no second programmer checking my work, the game tests itself constantly — thousands of automated checks that run every time anything changes, including one that literally counts every drop of water in the world to prove none went missing.
+- Your job: play the builds, make the design calls, tell me what feels wrong. That genuinely is the harder half.
+- This is a big project. It'll be playable and fun long before it's finished — that's what the nineteen playable checkpoints are for.
