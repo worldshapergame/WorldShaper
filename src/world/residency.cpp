@@ -69,6 +69,9 @@ void ResidencyManager::create(const ResidencyBudget& budget, const VoxelTypeTabl
     const u32 coarse_total = coarse_offset(kCoarseLevels);
     coarse_counts_.assign(coarse_total, 0);
     coarse_flags_.assign(static_cast<usize>(coarse_total) * 4, 0);
+    // Starts equal to the flags, which are zero — and so is the GPU's copy: nothing has been
+    // sent, and nothing is there.
+    coarse_uploaded_.assign(static_cast<usize>(coarse_total) * 4, 0);
 
     free_records_.clear();
     record_cursor_ = 0;
@@ -162,13 +165,6 @@ void ResidencyManager::coarse_add(const ChunkCoord& coord, i32 delta, const Chun
 }
 
 void ResidencyManager::rebuild_coarse(const World& world, const ChunkCoord& centre) {
-    // What the GPU is holding right now, so the rebuild can work out what actually changed.
-    // This has to follow the camera, not just world edits, and re-sending all 1.3 million
-    // cells every time it moves is 21 MB of traffic for a window that shifted by a few
-    // chunks. Almost every cell is identical across a rebuild; only the shell that entered
-    // or left the window differs.
-    coarse_previous_ = coarse_flags_;
-
     std::fill(coarse_counts_.begin(), coarse_counts_.end(), 0);
     std::fill(coarse_flags_.begin(), coarse_flags_.end(), 0);
     coarse_centre_ = centre;
@@ -178,14 +174,28 @@ void ResidencyManager::rebuild_coarse(const World& world, const ChunkCoord& cent
         coarse_add(coord, +1, centre);
     });
 
+    // What needs sending: the difference against what the GPU *has been given*, not against
+    // what the CPU held a moment ago. The grid has to follow the camera as well as world
+    // edits, and re-sending all 1.3 million cells on every move is 21 MB for a window that
+    // shifted a few chunks — hence a diff. It just has to be the right diff.
+    //
+    // Diffing against the previous CPU state looks equivalent and is not. Two rebuilds can
+    // happen before a single upload — the camera moves and the world changes — and the second
+    // then compares the new state against the first one's state, finds them identical, and
+    // sends nothing. The first rebuild's changes are lost permanently.
+    //
+    // That is exactly what happened at startup: built once for the initial camera, again on
+    // the first frame after the camera was placed, and the GPU received an empty grid. The
+    // marcher read the entire world as open sky, no ray ever reported a miss, and residency
+    // sat at zero chunks with feedback at zero reports — every counter calm, nothing drawn.
     coarse_changed_.clear();
     const u32 cells = static_cast<u32>(coarse_counts_.size());
     for (u32 cell = 0; cell < cells; ++cell) {
         const u32 base = cell * 4;
-        if (coarse_flags_[base + 0] != coarse_previous_[base + 0] ||
-            coarse_flags_[base + 1] != coarse_previous_[base + 1] ||
-            coarse_flags_[base + 2] != coarse_previous_[base + 2] ||
-            coarse_flags_[base + 3] != coarse_previous_[base + 3]) {
+        if (coarse_flags_[base + 0] != coarse_uploaded_[base + 0] ||
+            coarse_flags_[base + 1] != coarse_uploaded_[base + 1] ||
+            coarse_flags_[base + 2] != coarse_uploaded_[base + 2] ||
+            coarse_flags_[base + 3] != coarse_uploaded_[base + 3]) {
             coarse_changed_.push_back(cell);
         }
     }
@@ -535,12 +545,16 @@ const UploadBatch& ResidencyManager::update(const World& world, u64 frame) {
         for (u32 cell = 0; cell < static_cast<u32>(coarse_counts_.size()); ++cell) {
             batch_.coarse_cells.push_back(cell);
         }
+        coarse_uploaded_ = coarse_flags_;
         coarse_all_dirty_ = false;
         coarse_dirty_ = false;
         coarse_changed_.clear();
     } else if (coarse_dirty_) {
-        batch_.coarse_cells.insert(batch_.coarse_cells.end(), coarse_changed_.begin(),
-                                   coarse_changed_.end());
+        for (u32 cell : coarse_changed_) {
+            const u32 base = cell * 4;
+            for (u32 i = 0; i < 4; ++i) coarse_uploaded_[base + i] = coarse_flags_[base + i];
+            batch_.coarse_cells.push_back(cell);
+        }
         coarse_dirty_ = false;
         coarse_changed_.clear();
     }

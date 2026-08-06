@@ -506,6 +506,9 @@ private:
     ResidencyManager residency_;
     ThumbnailCache thumb_cache_;
     ThumbnailBudget thumb_budget_;
+    ChunkCoord world_min_{};
+    ChunkCoord world_max_{};
+    bool world_bounds_valid_ = false;
     WorldBuffers world_buffers_;
     ResidencyBudget residency_budget_;
     FeedbackBuffer feedback_;
@@ -825,6 +828,25 @@ void Application::rebuild_coarse_grids() {
     // Every path that changes which chunks exist already comes through here, which makes it
     // the one place the thumbnail cache needs telling that its work list is stale.
     thumb_cache_.mark_world_changed();
+
+    // And the one place to note how far the world reaches, which is how far a ray can
+    // usefully travel now that thumbnails draw well past what is resident.
+    world_bounds_valid_ = false;
+    world_.for_each_chunk([this](const ChunkCoord& coord, const Chunk& chunk) {
+        if (chunk.empty()) return;
+        if (!world_bounds_valid_) {
+            world_min_ = coord;
+            world_max_ = coord;
+            world_bounds_valid_ = true;
+            return;
+        }
+        world_min_.x = std::min(world_min_.x, coord.x);
+        world_min_.y = std::min(world_min_.y, coord.y);
+        world_min_.z = std::min(world_min_.z, coord.z);
+        world_max_.x = std::max(world_max_.x, coord.x);
+        world_max_.y = std::max(world_max_.y, coord.y);
+        world_max_.z = std::max(world_max_.z, coord.z);
+    });
 }
 
 void Application::stream(f64 seconds) {
@@ -1162,6 +1184,29 @@ void Application::record_frame(f32 time_seconds) {
             params.bounds_max[axis] = 256;
         }
     }
+
+    // Then widen it to the world's own extent, because thumbnails draw well past what is
+    // resident. The box was written when a chunk had to be fully resident to appear at all,
+    // so clipping to the resident set plus a margin lost nothing; it does now. A thumbnail a
+    // kilometre away is real geometry, and a ray has to be allowed to reach it.
+    //
+    // The world's extent, and not simply a large number: a large number measured 23.7 ms
+    // against 0.78 on the test scene. The clip is not slack — it is what stops a ray that
+    // will never hit anything from stepping until its budget runs out. Bounded by the world,
+    // a ray leaving it stops at the edge, which is both exact and free.
+    if (world_bounds_valid_) {
+        const i64 lo[3] = {world_min_.x - camera_.chunk_x(), world_min_.y - camera_.chunk_y(),
+                           world_min_.z - camera_.chunk_z()};
+        const i64 hi[3] = {world_max_.x - camera_.chunk_x(), world_max_.y - camera_.chunk_y(),
+                           world_max_.z - camera_.chunk_z()};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            params.bounds_min[axis] =
+                std::min<i32>(params.bounds_min[axis], static_cast<i32>(lo[axis]));
+            params.bounds_max[axis] =
+                std::max<i32>(params.bounds_max[axis], static_cast<i32>(hi[axis]));
+        }
+    }
+
     params.resolution[0] = extent.width;
     params.resolution[1] = extent.height;
     params.resolution[2] = debug_mode_;

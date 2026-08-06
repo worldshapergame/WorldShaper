@@ -364,7 +364,7 @@ private:
     bool coarse_dirty_ = false;       // coarse_changed_ is waiting to be sent
     bool coarse_all_dirty_ = false;   // the GPU copy is of unknown age; send everything
     ChunkCoord coarse_centre_{};
-    std::vector<u32> coarse_previous_;   // the GPU's copy, to diff a rebuild against
+    std::vector<u32> coarse_uploaded_;   // what the GPU has been *sent*, to diff a rebuild against
     std::vector<u32> coarse_changed_;    // cells that differ, as flat indices
     std::vector<u32> free_records_;
     u32 record_cursor_ = 0;

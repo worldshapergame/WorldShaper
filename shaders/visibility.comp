@@ -393,6 +393,17 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
             // is, because full detail is bounded by memory and past that bound there was
             // nothing else to draw with.
             ivec3 thumb_chunk = push.camera_chunk.xyz + chunk_offset;
+
+            // Report it missing *before* drawing the thumbnail, not after.
+            //
+            // A thumbnail hit returns from this function, and the report was assembled
+            // further down — so the moment a chunk had a thumbnail it stopped being reported
+            // as missing, streaming never fetched it, and it drew as one-metre blocks
+            // forever. The tier meant to stand in for detail was suppressing it.
+            if (coarse_occupied(0, thumb_chunk)) {
+                note_missing(has_pending, pending, thumb_chunk, outer_level);
+            }
+
             uint cells = find_thumb(thumb_chunk);
             if (cells != kNoThumb) {
                 // Walk the chunk's 8x8x8 metre cells. Same DDA as everywhere else, one level
@@ -475,9 +486,7 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
             // Level 0 is per chunk: does the world have anything here at all?
             int chosen = -1;
             if (coarse_occupied(0, absolute)) {
-                // It exists and we do not have it. That is precisely the thing worth
-                // telling the streamer about.
-                note_missing(has_pending, pending, absolute, outer_level);
+                // Already reported above, before the thumbnail had a chance to return.
             } else {
                 // Genuinely empty. Find the coarsest block that is also empty and jump
                 // over the lot.
