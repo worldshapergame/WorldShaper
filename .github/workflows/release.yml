@@ -126,9 +126,13 @@ jobs:
           Copy-Item LICENSE, README.md "package\$name\"
           Compress-Archive -Path "package\$name\*" -DestinationPath "package\$name.zip"
           "package=package/$name.zip" >> $env:GITHUB_ENV
-          # Published beside the download so anyone can check what they got is what was built.
-          (Get-FileHash "package\$name.zip" -Algorithm SHA256).Hash |
-            Out-File "package\$name.zip.sha256" -Encoding ascii
+          "zipname=$name.zip" >> $env:GITHUB_ENV
+          # The checksum goes in the release text as well as in a file. Two downloads where
+          # only one is the game is a question every player asks once, and the answer should
+          # be on the page rather than in a file they have to open to find out.
+          $hash = (Get-FileHash "package\$name.zip" -Algorithm SHA256).Hash
+          $hash | Out-File "package\$name.zip.sha256" -Encoding ascii
+          "sha256=$hash" >> $env:GITHUB_ENV
 
       # Signs a statement, in GitHub's name, that this exact file came out of this exact
       # commit through this exact workflow. Free, and verifiable with `gh attestation verify`.
@@ -150,8 +154,12 @@ jobs:
           body: |
             ## WorldShaper ${{ steps.version.outputs.tag }}
 
-            Unzip anywhere and run `WorldShaper.exe`. Needs Windows 10 or later and a
-            graphics card with Vulkan 1.3 drivers.
+            **Download `${{ env.zipname }}`.** That is the game — unzip it anywhere and run
+            `WorldShaper.exe`. Needs Windows 10 or later and a graphics card with Vulkan 1.3
+            drivers.
+
+            The `.sha256` file next to it is not something to run. It holds one line — the
+            checksum below — for anyone who wants to confirm their copy arrived intact.
 
             The game checks for newer releases when it starts and offers them; it never
             downloads anything without being asked.
@@ -163,10 +171,16 @@ jobs:
             vouch for this", not "this is malware" — and you should not simply take my word
             for it either. What you can check instead:
 
-            - **Where it came from.** Every release carries a build provenance attestation
+            - **Where it came from.** This release carries a build provenance attestation
               signed by GitHub, tying this exact file to the commit and workflow that
               produced it. Verify it yourself:
-              `gh attestation verify WorldShaper-${{ steps.version.outputs.tag }}-windows-x64.zip --repo ${{ github.repository }}`
-            - **That it has not been altered.** Compare the SHA-256 beside the download.
+              `gh attestation verify ${{ env.zipname }} --repo ${{ github.repository }}`
+            - **That it has not been altered.** Its SHA-256 is
+
+              ```
+              ${{ env.sha256 }}
+              ```
+
+              which you can check with `Get-FileHash <the zip>` in PowerShell.
             - **What it does.** The whole source is here, and the build that made this file
               is the workflow in `.github/workflows/release.yml`.
