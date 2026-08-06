@@ -68,6 +68,7 @@ struct Options {
     // front of you, and a scripted screenshot should not depend on the network.
     bool no_update_check = (WS_DEBUG != 0);
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
+    bool path_trace = false;   // start in the reference path tracer
 
     // Render a fixed number of frames, save the last one, and exit. This is how a
     // rendering change gets checked without a person having to look at the screen.
@@ -152,6 +153,8 @@ Options parse_options(int argc, char** argv) {
             options.validation = true;
         } else if (arg == "--stream-log") {
             options.stream_log = true;
+        } else if (arg == "--pathtrace") {
+            options.path_trace = true;
         } else if (arg == "--no-update-check") {
             options.no_update_check = true;
         } else if (arg == "--version") {
@@ -181,15 +184,26 @@ void print_help() {
         "  --cam x,y,z,yaw,pitch scripted camera (metres, degrees)\n"
         "  --screenshot FILE     save frame --screenshot-frame N and exit\n"
         "  --debug-mode N        0 shaded, 1 step count, 2 normals, 3 detail, 4 clip ghost\n"
+        "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
         "  --clip x0,..,z1,dx,dy,dz,copies,turn   scripted clipboard ghost\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "\n"
-        "In game:  F1 developer panel   F2 overlay   F5 reload shaders\n"
+        "In game:  F1 developer panel   F2 overlay   F4 path trace   F5 reload shaders\n"
         "          F11 toggle vsync     Esc quit\n"
         "  chisel: hold LMB carve   RMB place   G+wheel distance   MMB constraint\n"
         "          Z undo   X redo   R clear points   C cancel   Q/E material");
 }
+
+// Per-dispatch parameters for the path tracer. Push constants rather than another field on
+// the shared block: the tracer is the only thing that reads them, and the shared block is read
+// by two other shaders that would have to be kept in step for no reason.
+struct TracePush {
+    f32 sun[4]{};          // xyz towards the sun, w cos of its angular radius
+    f32 sun_colour[4]{};
+    u32 control[4]{};      // x sample index, y bounce limit
+};
+static_assert(sizeof(TracePush) == 48, "TracePush must match the shader's push block");
 
 // Where the compiled shaders are.
 //
@@ -486,6 +500,22 @@ private:
     Hud hud_;
     ComputePipeline visibility_;
     ComputePipeline resolve_;
+
+    // The reference path tracer. A separate pipeline that shares only the world, so with the
+    // mode off it costs exactly nothing — no branch in the marcher, no extra binding.
+    ComputePipeline pathtrace_;
+    VkDescriptorSetLayout pathtrace_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSet pathtrace_set_ = VK_NULL_HANDLE;
+    GpuImage accum_image_;
+    bool path_trace_ = false;
+    u32 trace_samples_ = 0;      // samples accumulated since the last reset
+    // Not a quality setting so much as a safety net: Russian roulette decides when a path
+    // stops, weighted by how much light it can still carry, so paths end when they stop
+    // mattering rather than at a fixed depth. This only bounds the pathological case.
+    u32 trace_bounces_ = 64;
+    f32 trace_camera_[6]{};
+    f32 trace_forward_[3]{};
+    bool accum_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
     GpuImage visibility_image_;
     GpuImage render_target_;
     GpuImage depth_target_;
@@ -575,6 +605,13 @@ bool Application::create_render_target(u32 width, u32 height) {
                                           "render_target");
     depth_target_ = create_storage_image(device_, width, height, VK_FORMAT_R32_SFLOAT,
                                          "depth_target");
+    // Full float, and not an economy. At a few thousand samples the differences between two
+    // materials are smaller than an 8-bit step, so an 8-bit accumulator would quantise away
+    // exactly what this mode exists to show.
+    accum_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                                        "path trace accumulation");
+    trace_samples_ = 0;
+    accum_ready_ = false;   // a new image, so it needs its one transition out of UNDEFINED
 
     // Images are the only bindings that change on resize; the world buffers are created
     // once and never move.
@@ -588,7 +625,11 @@ bool Application::create_render_target(u32 width, u32 height) {
     colour_info.imageView = render_target_.view;
     colour_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[4]{};
+    VkDescriptorImageInfo accum_info{};
+    accum_info.imageView = accum_image_.view;
+    accum_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[6]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -606,7 +647,13 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[3].dstSet = resolve_set_;
     writes[3].dstBinding = 1;
     writes[3].pImageInfo = &colour_info;
-    vkUpdateDescriptorSets(device_.handle(), 4, writes, 0, nullptr);
+    writes[4].dstSet = pathtrace_set_;
+    writes[4].dstBinding = 0;
+    writes[4].pImageInfo = &accum_info;
+    writes[5].dstSet = pathtrace_set_;
+    writes[5].dstBinding = 1;
+    writes[5].pImageInfo = &colour_info;
+    vkUpdateDescriptorSets(device_.handle(), 6, writes, 0, nullptr);
     return true;
 }
 
@@ -614,6 +661,7 @@ void Application::destroy_render_target() {
     if (visibility_image_.valid()) destroy_image(device_, visibility_image_);
     if (render_target_.valid()) destroy_image(device_, render_target_);
     if (depth_target_.valid()) destroy_image(device_, depth_target_);
+    if (accum_image_.valid()) destroy_image(device_, accum_image_);
 }
 
 void Application::handle_resize() {
@@ -840,6 +888,7 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // tree first: it holds the node that every level above this chunk was
                     // folded from, and the cache only reads its answers.
                     summary_tree_.invalidate(coord);
+                    trace_samples_ = 0;   // the accumulated image is of a world that changed
                     for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
                 }
             }
@@ -1190,9 +1239,61 @@ void Application::record_frame(f32 time_seconds) {
                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
     }
 
+    // The accumulation image is the one that must *not* be transitioned from UNDEFINED every
+    // frame. That transition is free precisely because it permits the driver to throw the
+    // contents away, which is exactly right for an image rewritten from scratch and exactly
+    // wrong for one whose entire purpose is to remember. It happens to survive on this driver,
+    // which is luck rather than a guarantee.
+    //
+    // So: once from UNDEFINED after it is created, and never again. It stays in GENERAL and
+    // the read-after-write between frames is covered by an ordinary memory barrier.
+    if (!accum_ready_) {
+        image_barrier(cmd, accum_image_.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        accum_ready_ = true;
+    } else if (path_trace_) {
+        VkMemoryBarrier2 accum_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        accum_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        accum_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        accum_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        accum_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        VkDependencyInfo accum_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        accum_dependency.memoryBarrierCount = 1;
+        accum_dependency.pMemoryBarriers = &accum_barrier;
+        vkCmdPipelineBarrier2(cmd, &accum_dependency);
+    }
+
     // ---- frame parameters -----------------------------------------------------------
     (void)time_seconds;
     RenderParams params{};
+
+    // Anything that changes what the image *should* be invalidates every sample taken so far,
+    // so the average has to start again. Averaging the old view into the new one does not
+    // produce a slightly stale picture, it produces a smear that never clears — the samples
+    // have equal weight however wrong they are.
+    //
+    // Compared against the camera as it will be used this frame, not against a "did the player
+    // press a key" flag: the camera also moves from momentum and from being placed by script.
+    {
+        const f32 here[6] = {camera_.local_x(),           camera_.local_y(),
+                             camera_.local_z(),           static_cast<f32>(camera_.chunk_x()),
+                             static_cast<f32>(camera_.chunk_y()),
+                             static_cast<f32>(camera_.chunk_z())};
+        f32 forward[3];
+        camera_.forward_vector(forward);
+        bool moved = false;
+        for (u32 i = 0; i < 6; ++i) {
+            if (here[i] != trace_camera_[i]) moved = true;
+            trace_camera_[i] = here[i];
+        }
+        for (u32 i = 0; i < 3; ++i) {
+            if (forward[i] != trace_forward_[i]) moved = true;
+            trace_forward_[i] = forward[i];
+        }
+        if (moved) trace_samples_ = 0;
+    }
+
     params.origin[0] = camera_.local_x();
     params.origin[1] = camera_.local_y();
     params.origin[2] = camera_.local_z();
@@ -1389,7 +1490,57 @@ void Application::record_frame(f32 time_seconds) {
                     static_cast<usize>(swapchain_.frame_index()) * params_stride_,
                 &params, sizeof(RenderParams));
 
+    // ---- reference path tracer ------------------------------------------------------
+    //
+    // Replaces both passes below while it is on, and shares nothing with them but the world.
+    // It has no budget: it accumulates while you hold still and is expected to take seconds.
+    if (path_trace_) {
+        profiler_.begin_pass(cmd, "pathtrace", 1000.0);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.pipeline());
+        const u32 trace_offset =
+            static_cast<u32>(swapchain_.frame_index()) * static_cast<u32>(params_stride_);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.layout(), 0, 1,
+                                &pathtrace_set_, 1, &trace_offset);
+
+        TracePush trace{};
+        // Up and to one side, matching the light the real-time shading already assumes, so
+        // the two are comparable rather than merely both plausible.
+        const f32 sun[3] = {0.4f, 0.85f, 0.3f};
+        const f32 length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+        trace.sun[0] = sun[0] / length;
+        trace.sun[1] = sun[1] / length;
+        trace.sun[2] = sun[2] / length;
+        // The real sun is about half a degree across. A point light casts a shadow with no
+        // penumbra at all, which is the single most obvious way a render looks synthetic.
+        trace.sun[3] = std::cos(0.5f * 3.14159265f / 180.0f);
+        // Chosen so a 0.5-albedo surface facing the sun lands near mid-grey. At 12 every
+        // material blew to white, which hides exactly the differences this mode exists to
+        // show. Real exposure control is Stage 9's job.
+        trace.sun_colour[0] = 3.2f;
+        trace.sun_colour[1] = 3.05f;
+        trace.sun_colour[2] = 2.75f;
+        trace.control[0] = trace_samples_;
+        trace.control[1] = trace_bounces_;
+        vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(TracePush), &trace);
+
+        vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+        profiler_.end_pass(cmd);
+        ++trace_samples_;
+
+        VkMemoryBarrier2 trace_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        trace_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        trace_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        trace_barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        trace_barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT;
+        VkDependencyInfo trace_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        trace_dependency.memoryBarrierCount = 1;
+        trace_dependency.pMemoryBarriers = &trace_barrier;
+        vkCmdPipelineBarrier2(cmd, &trace_dependency);
+    }
+
     // ---- primary visibility ---------------------------------------------------------
+    if (!path_trace_) {
     profiler_.begin_pass(cmd, "visibility", 9.5);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.pipeline());
     const u32 params_offset =
@@ -1419,6 +1570,7 @@ void Application::record_frame(f32 time_seconds) {
     vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
     profiler_.add_bytes(static_cast<u64>(extent.width) * extent.height * 20);
     profiler_.end_pass(cmd);
+    }   // !path_trace_
 
     // Hand this frame's "what I could not find" list back to the CPU. Without this the
     // shader's report is written and then thrown away, and streaming never learns
@@ -1657,6 +1809,36 @@ int Application::run(const Options& options) {
     resolve_alloc.pSetLayouts = &resolve_layout_;
     WS_VK(vkAllocateDescriptorSets(device_.handle(), &resolve_alloc, &resolve_set_));
 
+    // The path tracer's own set, allocated here with the others because create_render_target
+    // writes image descriptors into all three and cannot write into a set that does not exist
+    // yet. Its two images are 0 and 1, then the same world bindings the marcher uses — it
+    // includes the same traversal, so the binding numbers come with it — then the parameter
+    // block at 13 and the type tables at 14 and 15.
+    {
+        VkDescriptorSetLayoutBinding trace_bindings[16]{};
+        for (u32 i = 0; i < 16; ++i) {
+            trace_bindings[i].binding = i;
+            trace_bindings[i].descriptorType =
+                (i < 2)     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                : (i == 13) ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                            : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            trace_bindings[i].descriptorCount = 1;
+            trace_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo trace_layout{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        trace_layout.bindingCount = 16;
+        trace_layout.pBindings = trace_bindings;
+        WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &trace_layout, nullptr,
+                                          &pathtrace_layout_));
+
+        VkDescriptorSetAllocateInfo trace_alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        trace_alloc.descriptorPool = descriptor_pool_;
+        trace_alloc.descriptorSetCount = 1;
+        trace_alloc.pSetLayouts = &pathtrace_layout_;
+        WS_VK(vkAllocateDescriptorSets(device_.handle(), &trace_alloc, &pathtrace_set_));
+    }
+
     create_render_target(swapchain_.extent().width, swapchain_.extent().height);
 
     // Compiled shaders sit beside the executable, and *beside* means beside the one that is
@@ -1681,6 +1863,18 @@ int Application::run(const Options& options) {
         WS_LOG_FATAL("app", "could not create the resolve pipeline: {}",
                      resolve_.last_error());
         return 1;
+    }
+
+    {
+        const std::filesystem::path trace_spirv = shaders / "pathtrace.comp.spv";
+        const std::filesystem::path trace_source =
+            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "pathtrace.comp";
+        if (!pathtrace_.create(device_, trace_source, trace_spirv, pathtrace_layout_,
+                               sizeof(TracePush))) {
+            WS_LOG_FATAL("app", "could not create the path tracing pipeline: {}",
+                         pathtrace_.last_error());
+            return 1;
+        }
     }
 
     // The world buffers never move, so they are bound once.
@@ -1731,6 +1925,40 @@ int Application::run(const Options& options) {
     vkUpdateDescriptorSets(device_.handle(), kBufferBindings + kResolveBuffers, buffer_writes, 0,
                            nullptr);
 
+    // The path tracer's world bindings. The same buffers at the same numbers as the marcher,
+    // because it includes the same traversal and the binding numbers come with it, plus the
+    // type tables at 14 and 15 so a hit becomes a material.
+    {
+        constexpr u32 kTraceBuffers = kBufferBindings + 2;
+        const VkBuffer trace_buffers[kTraceBuffers]{
+            marcher_buffers[0], marcher_buffers[1], marcher_buffers[2],  marcher_buffers[3],
+            marcher_buffers[4], marcher_buffers[5], marcher_buffers[6],  marcher_buffers[7],
+            marcher_buffers[8], marcher_buffers[9], marcher_buffers[10], world_buffers_.types(),
+            world_buffers_.visuals(),
+        };
+        VkDescriptorBufferInfo trace_infos[kTraceBuffers]{};
+        VkWriteDescriptorSet trace_writes[kTraceBuffers + 1]{};
+        for (u32 i = 0; i < kTraceBuffers; ++i) {
+            trace_infos[i].buffer = trace_buffers[i];
+            trace_infos[i].offset = 0;
+            trace_infos[i].range = VK_WHOLE_SIZE;
+            trace_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            trace_writes[i].dstSet = pathtrace_set_;
+            // 2..12 are the world, 13 is the parameter block, then 14 and 15.
+            trace_writes[i].dstBinding = (i < kBufferBindings) ? (2 + i) : (2 + i + 1);
+            trace_writes[i].descriptorCount = 1;
+            trace_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            trace_writes[i].pBufferInfo = &trace_infos[i];
+        }
+        trace_writes[kTraceBuffers].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        trace_writes[kTraceBuffers].dstSet = pathtrace_set_;
+        trace_writes[kTraceBuffers].dstBinding = 13;
+        trace_writes[kTraceBuffers].descriptorCount = 1;
+        trace_writes[kTraceBuffers].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        trace_writes[kTraceBuffers].pBufferInfo = &params_info;
+        vkUpdateDescriptorSets(device_.handle(), kTraceBuffers + 1, trace_writes, 0, nullptr);
+    }
+
     // The test scene spans about 64 m. Start at one corner of it, above the ground slab,
     // looking back toward the origin so the towers, arch and lattice are all in frame.
     camera_.set_position_metres(-22.0, 5.0, -22.0);
@@ -1758,6 +1986,7 @@ int Application::run(const Options& options) {
     // whether there is a newer release. The check is on its own thread and never blocks
     // starting; nothing is downloaded unless the player says so.
     Updater::clean_up_previous();
+    path_trace_ = options_.path_trace;
     if (!options_.no_update_check) updater_.begin_check();
     WS_LOG_INFO("app", "ready. F1 developer panel, F2 overlay, F5 reload shaders, Esc quit");
 
@@ -1781,7 +2010,17 @@ int Application::run(const Options& options) {
         if (input.was_pressed(Key::F1)) hud_.toggle_developer_panel();
         if (input.was_pressed(Key::F2)) hud_.toggle_overlay();
         if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 5;
-        if (input.was_pressed(Key::F5)) { visibility_.force_reload(); resolve_.force_reload(); }
+        if (input.was_pressed(Key::F4)) {
+            path_trace_ = !path_trace_;
+            trace_samples_ = 0;
+            WS_LOG_INFO("app", "path tracing {}", path_trace_ ? "on" : "off");
+        }
+        if (input.was_pressed(Key::F5)) {
+            visibility_.force_reload();
+            resolve_.force_reload();
+            pathtrace_.force_reload();
+            trace_samples_ = 0;
+        }
         if (input.was_pressed(Key::F11)) swapchain_.set_vsync(!swapchain_.vsync());
         // The only thing that starts a download. Nothing else does, and nothing does it
         // automatically.
@@ -1890,6 +2129,7 @@ int Application::run(const Options& options) {
     destroy_buffer(device_, clip_staging_);
     visibility_.destroy();
     resolve_.destroy();
+    pathtrace_.destroy();
     destroy_render_target();
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device_.handle(), descriptor_pool_, nullptr);
@@ -1899,6 +2139,9 @@ int Application::run(const Options& options) {
     }
     if (resolve_layout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device_.handle(), resolve_layout_, nullptr);
+    }
+    if (pathtrace_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_.handle(), pathtrace_layout_, nullptr);
     }
     profiler_.destroy();
     swapchain_.destroy();

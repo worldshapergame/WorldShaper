@@ -1,0 +1,276 @@
+#version 450
+// Reference path tracer.
+//
+// Not the shipping renderer and not trying to be: it has no frame budget, no denoiser, and
+// converges over seconds while the camera is still. It exists so a material can be judged
+// under real light before it is authored, and so the approximations in the real-time pipeline
+// have something to be checked against. An approximation with no ground truth is a guess.
+//
+// It asks the world exactly the same question primary visibility does, through the same
+// traversal in world.glsl, at full voxel detail on every bounce — no coarse levels, because a
+// filtered colour is a lie about what a surface is and lies compound over bounces.
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Radiance summed over every sample so far, and the count in .w. Kept in full float: at a few
+// thousand samples an 8-bit buffer would have quantised away the very differences between
+// materials this exists to show.
+layout(binding = 0, rgba32f) uniform image2D accum;
+layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
+
+#include "world.glsl"
+
+// The voxel type table, so a hit becomes a material. Same records the real-time pipeline
+// shades from, so what is seen here is what those materials actually are.
+layout(std430, binding = 14) readonly buffer Types { uvec2 items[]; } types;
+layout(std430, binding = 15) readonly buffer Visuals { uvec4 items[]; } visuals;
+
+layout(push_constant) uniform Trace {
+    vec4 sun;          // xyz direction *towards* the sun, w cosine of its angular radius
+    vec4 sun_colour;   // rgb radiance
+    uvec4 control;     // x sample index, y bounce limit, z unused, w unused
+} trace;
+
+const float kPi = 3.14159265359;
+
+// ---------------------------------------------------------------------------------------
+// Sampling
+//
+// One stream per pixel per sample, hashed rather than stored. A stored state would need a
+// buffer the size of the screen and would serialise nothing useful.
+uint pcg(inout uint state) {
+    state = state * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float rand(inout uint state) { return float(pcg(state)) * (1.0 / 4294967296.0); }
+
+// Cosine-weighted hemisphere around n. Cosine-weighted because the diffuse BRDF is divided by
+// exactly that cosine, so the two cancel and the estimator is just the albedo — the lowest
+// variance a diffuse bounce can have without knowing where the light is.
+vec3 cosine_hemisphere(vec3 n, inout uint state) {
+    float u1 = rand(state);
+    float u2 = rand(state);
+    float r = sqrt(u1);
+    float phi = 2.0 * kPi * u2;
+
+    vec3 up = (abs(n.z) < 0.999) ? vec3(0, 0, 1) : vec3(1, 0, 0);
+    vec3 tangent = normalize(cross(up, n));
+    vec3 bitangent = cross(n, tangent);
+    return normalize(tangent * (r * cos(phi)) + bitangent * (r * sin(phi)) +
+                     n * sqrt(max(0.0, 1.0 - u1)));
+}
+
+// GGX half-vector sample, for the specular lobe.
+vec3 ggx_half(vec3 n, float roughness, inout uint state) {
+    float a = max(roughness * roughness, 1e-3);
+    float u1 = rand(state);
+    float u2 = rand(state);
+    float cos_theta = sqrt((1.0 - u1) / (1.0 + (a * a - 1.0) * u1));
+    float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
+    float phi = 2.0 * kPi * u2;
+
+    vec3 up = (abs(n.z) < 0.999) ? vec3(0, 0, 1) : vec3(1, 0, 0);
+    vec3 tangent = normalize(cross(up, n));
+    vec3 bitangent = cross(n, tangent);
+    return normalize(tangent * (sin_theta * cos(phi)) + bitangent * (sin_theta * sin(phi)) +
+                     n * cos_theta);
+}
+
+float ggx_smith(float n_dot_v, float n_dot_l, float roughness) {
+    float a = max(roughness * roughness, 1e-3);
+    float k = a * 0.5;
+    float gv = n_dot_v / (n_dot_v * (1.0 - k) + k);
+    float gl = n_dot_l / (n_dot_l * (1.0 - k) + k);
+    return gv * gl;
+}
+
+// ---------------------------------------------------------------------------------------
+// Light and materials
+
+vec3 sky_radiance(vec3 dir) {
+    float up = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 horizon = vec3(0.62, 0.68, 0.78);
+    vec3 zenith = vec3(0.18, 0.32, 0.62);
+    vec3 ground = vec3(0.16, 0.15, 0.14);
+    // Scaled well below the sun. Those colours were written to be looked at directly, and
+    // used unchanged as *radiance* they light the whole hemisphere at nearly the brightness of
+    // the sun itself — every surface gets the same flat fill from every direction, shadows
+    // stop reading, and the result is the grey wash a first attempt at this always produces.
+    // Real daylight has the sun an order of magnitude above the sky it shares the frame with.
+    vec3 base = ((dir.y < 0.0) ? mix(ground, horizon, up * 2.0)
+                               : mix(horizon, zenith, up * 2.0 - 1.0)) * 0.25;
+    // The sun's own disc, so a mirror reflects something rather than a flat gradient.
+    if (dot(dir, trace.sun.xyz) > trace.sun.w) return base + trace.sun_colour.rgb;
+    return base;
+}
+
+struct Material {
+    vec3 albedo;
+    float roughness;
+    float metallic;
+    vec3 emission;
+};
+
+Material material_of(uint type_id) {
+    Material m;
+    m.albedo = vec3(0.5);
+    m.roughness = 0.5;
+    m.metallic = 0.0;
+    m.emission = vec3(0.0);
+
+    uint visual_id = types.items[type_id].x;
+    uvec4 v = visuals.items[visual_id];
+
+    // Byte layout of VisualRecord (world/voxel_type.hpp): rgb + opacity, then roughness,
+    // metallic, ior, emissive, then absorption and translucency, then the emissive tint.
+    m.albedo = vec3(float(v.x & 0xFFu), float((v.x >> 8u) & 0xFFu),
+                    float((v.x >> 16u) & 0xFFu)) / 255.0;
+    m.roughness = float(v.y & 0xFFu) / 255.0;
+    m.metallic = float((v.y >> 8u) & 0xFFu) / 255.0;
+
+    float emissive = float((v.y >> 24u) & 0xFFu) / 255.0;
+    if (emissive > 0.0) {
+        uint tint = v.w & 0xFFFFu;   // RGB565
+        vec3 colour = vec3(float((tint >> 11u) & 0x1Fu) / 31.0,
+                           float((tint >> 5u) & 0x3Fu) / 63.0, float(tint & 0x1Fu) / 31.0);
+        // Squared so the byte spans a useful range: a torch and a furnace are not one step
+        // apart on a linear scale.
+        m.emission = colour * (emissive * emissive * 64.0);
+    }
+    return m;
+}
+
+// Albedo is all a coarse hit gives, so treat it as a rough dielectric. Only reachable when a
+// ray leaves the streamed region entirely; primary and bounce rays both run at level 0.
+Material material_from_colour(uint packed) {
+    Material m;
+    m.albedo = vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
+                    float((packed >> 16u) & 0xFFu)) / 255.0;
+    m.roughness = 0.8;
+    m.metallic = 0.0;
+    m.emission = vec3(0.0);
+    return m;
+}
+
+bool occluded(vec3 origin, vec3 dir) {
+    // Full detail, and no feedback: a shadow ray must not drag streaming towards wherever it
+    // happened to point.
+    Hit hit = march(origin, dir, 0.0, 0.0, false);
+    return hit.hit;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(push.resolution.x) || pixel.y >= int(push.resolution.y)) return;
+
+    uint sample_index = trace.control.x;
+    uint state = (uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + sample_index * 26699u) | 1u;
+
+    // Jitter inside the pixel, which is the whole of the anti-aliasing: with enough samples
+    // the average over the pixel's area is the correct answer, and no edge filter is needed.
+    vec2 jitter = vec2(rand(state), rand(state));
+    vec2 uv = (vec2(pixel) + jitter) / vec2(push.resolution) * 2.0 - 1.0;
+    float aspect = float(push.resolution.x) / float(push.resolution.y);
+    vec3 dir = normalize(push.forward.xyz + push.right.xyz * uv.x * push.lens.x * aspect -
+                         push.up.xyz * uv.y * push.lens.x);
+    vec3 origin = push.origin.xyz;
+
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    uint bounces = max(trace.control.y, 1u);
+
+    for (uint bounce = 0u; bounce < bounces; ++bounce) {
+        // Only the first bounce reports what it could not find. Streaming should follow what
+        // you are looking at, not where light happened to scatter.
+        Hit hit = march(origin, dir, 0.0, 0.0, bounce == 0u);
+        if (!hit.hit) {
+            radiance += throughput * sky_radiance(dir);
+            break;
+        }
+
+        vec3 normal = vec3(hit.normal);
+        vec3 point = origin + dir * hit.t;
+        Material m = (hit.level == 0) ? material_of(hit.type_id)
+                                      : material_from_colour(hit.colour);
+
+        radiance += throughput * m.emission;
+
+        // Offset along the face, in voxels. Large enough that the next ray does not start
+        // inside the surface it just left, small enough to be invisible.
+        vec3 from = point + normal * 0.01;
+
+        // Direct light, sampled rather than waited for. Without this the sun is found only
+        // when a diffuse bounce happens to land inside its disc, which for a small bright
+        // source is almost never — that is the difference between converging in seconds and
+        // in an hour.
+        float n_dot_l = dot(normal, trace.sun.xyz);
+        if (n_dot_l > 0.0 && !occluded(from, trace.sun.xyz)) {
+            vec3 diffuse = m.albedo * (1.0 - m.metallic) / kPi;
+
+            vec3 h = normalize(trace.sun.xyz - dir);
+            float n_dot_v = max(dot(normal, -dir), 1e-4);
+            float n_dot_h = max(dot(normal, h), 0.0);
+            float v_dot_h = max(dot(-dir, h), 1e-4);
+            float a = max(m.roughness * m.roughness, 1e-3);
+            float d = a * a / max(kPi * pow(n_dot_h * n_dot_h * (a * a - 1.0) + 1.0, 2.0), 1e-6);
+            float g = ggx_smith(n_dot_v, n_dot_l, m.roughness);
+            vec3 f0 = mix(vec3(0.04), m.albedo, m.metallic);
+            vec3 f = f0 + (vec3(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
+            vec3 specular = d * g * f / max(4.0 * n_dot_v * n_dot_l, 1e-4);
+
+            radiance += throughput * (diffuse + specular) * trace.sun_colour.rgb * n_dot_l;
+        }
+
+        // Then scatter. Which lobe is chosen by how metallic and how smooth the surface is;
+        // dividing by that same probability keeps the estimator unbiased however it is split.
+        vec3 f0 = mix(vec3(0.04), m.albedo, m.metallic);
+        float specular_chance = clamp(max(f0.r, max(f0.g, f0.b)) * (1.0 - m.roughness * 0.5),
+                                      0.05, 0.95);
+
+        if (rand(state) < specular_chance) {
+            vec3 h = ggx_half(normal, m.roughness, state);
+            vec3 next = reflect(dir, h);
+            if (dot(next, normal) <= 0.0) break;   // scattered into the surface
+            float n_dot_v = max(dot(normal, -dir), 1e-4);
+            float n_dot_l2 = max(dot(normal, next), 1e-4);
+            float g = ggx_smith(n_dot_v, n_dot_l2, m.roughness);
+            float v_dot_h = max(dot(-dir, h), 1e-4);
+            float n_dot_h = max(dot(normal, h), 1e-4);
+            vec3 f = f0 + (vec3(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
+            // The GGX weight with the sampling density divided out.
+            throughput *= f * g * v_dot_h / max(n_dot_v * n_dot_h, 1e-4) / specular_chance;
+            dir = next;
+        } else {
+            throughput *= m.albedo * (1.0 - m.metallic) / (1.0 - specular_chance);
+            dir = cosine_hemisphere(normal, state);
+        }
+        origin = from;
+
+        // Russian roulette, after enough bounces that killing a path cannot bias the parts of
+        // the image that carry most of the light.
+        if (bounce >= 2u) {
+            float survive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 1.0);
+            if (rand(state) > survive) break;
+            throughput /= survive;
+        }
+    }
+
+    // Anything not finite would poison the average for every sample after it, and one bad
+    // pixel would never wash out.
+    if (any(isnan(radiance)) || any(isinf(radiance))) radiance = vec3(0.0);
+
+    vec4 total = (sample_index == 0u) ? vec4(0.0) : imageLoad(accum, pixel);
+    total.rgb += radiance;
+    total.w += 1.0;
+    imageStore(accum, pixel, total);
+
+    vec3 mean = total.rgb / max(total.w, 1.0);
+
+    // Reinhard with a shoulder, and gamma. Deliberately plain: the point is to see what the
+    // material does, not what a grading curve does to it. The physical post stack is Stage 9.
+    vec3 mapped = mean / (mean + vec3(1.0));
+    imageStore(out_colour, pixel, vec4(pow(clamp(mapped, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0));
+}
