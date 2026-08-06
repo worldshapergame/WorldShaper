@@ -125,7 +125,12 @@ u32 filtered_colour(const Brick& brick, const VoxelTypeTable& table) {
         if (sampled == 0) return 0;
     }
 
-    const u32 coverage = (solid * 255) / kVoxels;
+    // Never round matter away to nothing. A brick holding one solid voxel computes
+    // (1 * 255) / 512 = 0, and a zero return is how "entirely air" is spelled — so a single
+    // black voxel in a brick would be indistinguishable from an empty brick. That is the
+    // same mistake as letting air win a majority vote when a clip is shrunk: thin things
+    // disappear at exactly the distance where you stop being able to check.
+    const u32 coverage = std::max(1u, (solid * 255) / kVoxels);
     return (red / sampled) | ((green / sampled) << 8) | ((blue / sampled) << 16) |
            (coverage << 24);
 }
