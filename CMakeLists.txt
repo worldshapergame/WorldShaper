@@ -189,6 +189,11 @@ set(WS_SHADER_OUT "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders")
 file(GLOB WS_SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.comp"
                      "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.vert"
                      "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.frag")
+# Shared GLSL, included rather than compiled on its own. Every .comp depends on all of it:
+# editing world.glsl has to rebuild the shaders that include it, or the next run is quietly
+# the old traversal.
+file(GLOB WS_SHADER_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.glsl")
+
 set(WS_SPV_FILES "")
 foreach(shader ${WS_SHADERS})
     get_filename_component(name "${shader}" NAME)
@@ -196,8 +201,9 @@ foreach(shader ${WS_SHADERS})
     add_custom_command(
         OUTPUT  "${spv}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${WS_SHADER_OUT}"
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -g -O "${shader}" -o "${spv}"
-        DEPENDS "${shader}"
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} --target-env=vulkan1.3 -g -O
+                -I "${CMAKE_CURRENT_SOURCE_DIR}/shaders" "${shader}" -o "${spv}"
+        DEPENDS "${shader}" ${WS_SHADER_INCLUDES}
         COMMENT "glslc ${name}"
         VERBATIM)
     list(APPEND WS_SPV_FILES "${spv}")
