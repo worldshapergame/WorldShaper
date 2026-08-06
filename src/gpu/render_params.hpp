@@ -23,6 +23,11 @@ inline constexpr u32 kMaxPreviewMarks = 8;
 // there is more than one; beyond this they still stamp, they just stop being drawn.
 inline constexpr u32 kMaxPreviewBoxes = 16;
 
+// Levels of the summary octree the marcher can read. Declared here rather than included from
+// the world layer, which this header deliberately does not depend on; world_buffers.cpp sees
+// both and asserts they agree.
+inline constexpr u32 kRenderSummaryTiers = 8;
+
 struct RenderParams {
     f32 origin[4];         // xyz: voxel units relative to the camera chunk corner
     f32 forward[4];
@@ -34,7 +39,10 @@ struct RenderParams {
     i32 bounds_max[4];
     u32 resolution[4];     // xy: pixels, z: debug mode, w: feedback capacity
     f32 lens[4];           // x: tan(fov/2), y: max distance, z: detail bias
-    i32 thumb_dims[4];     // xyz: wrapped thumbnail grid size, in chunks
+    i32 thumb_dims[4];     // xyz: wrapped summary grid size, in blocks; w: how many levels
+    // Per level: x first grid cell, y first slot, z chunks per block. Every level shares one
+    // grid buffer and one slot buffer, so the marcher needs one binding rather than sixteen.
+    i32 thumb_tiers[kRenderSummaryTiers][4];
 
     // The chisel's preview box, in voxels relative to the camera chunk corner — the same
     // space as `origin`, so the resolve pass can intersect it with the ray it already has
@@ -83,7 +91,7 @@ struct RenderParams {
     // walking them a voxel at a time.
     u32 clip_coarse[kMaxPreviewBoxes][4];
 };
-static_assert(sizeof(RenderParams) == 1360, "RenderParams must match the GLSL block");
+static_assert(sizeof(RenderParams) == 1488, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

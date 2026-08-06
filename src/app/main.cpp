@@ -505,8 +505,10 @@ private:
     Updater updater_;
     ResidencyManager residency_;
     SummaryTree summary_tree_;
-    ThumbnailCache thumb_cache_;
-    ThumbnailBudget thumb_budget_;
+    ThumbnailCache thumb_tiers_[kSummaryTiers];
+    ThumbnailBudget thumb_budgets_[kSummaryTiers];
+    u32 thumb_total_slots_ = 0;
+    u32 thumb_total_grid_ = 0;
     ChunkCoord world_min_{};
     ChunkCoord world_max_{};
     bool world_bounds_valid_ = false;
@@ -535,6 +537,7 @@ private:
     u32 last_feedback_truncated_ = 0;
     u32 last_feedback_accepted_ = 0;
     u32 last_feedback_rejected_ = 0;   // reported, but the world has no chunk there
+    u32 last_thumbs_resident_ = 0;
     u32 last_thumbs_wanted_ = 0;
     u32 last_thumbs_built_ = 0;
     f64 residency_ms_ = 0.0;
@@ -817,7 +820,7 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // tree first: it holds the node that every level above this chunk was
                     // folded from, and the cache only reads its answers.
                     summary_tree_.invalidate(coord);
-                    thumb_cache_.invalidate(coord);
+                    for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
                 }
             }
         }
@@ -838,7 +841,7 @@ void Application::rebuild_coarse_grids() {
         world_, ChunkCoord{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()});
     // Every path that changes which chunks exist already comes through here, which makes it
     // the one place the thumbnail cache needs telling that its work list is stale.
-    thumb_cache_.mark_world_changed();
+    for (ThumbnailCache& tier : thumb_tiers_) tier.mark_world_changed();
 
     // And the one place to note how far the world reaches, which is how far a ray can
     // usefully travel now that thumbnails draw well past what is resident.
@@ -954,12 +957,23 @@ void Application::record_frame(f32 time_seconds) {
     // waits on a round trip and cannot deadlock on what a ray did or did not reach.
     {
         const ChunkCoord centre{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
-        const ThumbnailBatch& thumbs = thumb_cache_.update(world_, centre, frame_counter_);
-        if (!world_buffers_.upload_thumbnails(cmd, thumb_cache_, thumbs)) {
-            thumb_cache_.defer_last_batch();
+        last_thumbs_resident_ = 0;
+        last_thumbs_wanted_ = 0;
+        last_thumbs_built_ = 0;
+        for (u32 level = 0; level < kSummaryTiers; ++level) {
+            const ThumbnailBatch& thumbs =
+                thumb_tiers_[level].update(world_, centre, frame_counter_);
+            if (!world_buffers_.upload_thumbnails(cmd, thumb_tiers_[level], thumbs)) {
+                thumb_tiers_[level].defer_last_batch();
+            }
+            last_thumbs_resident_ += thumb_tiers_[level].resident_count();
+            if (options_.stream_log && frame_counter_ % 300 == 0) {
+                WS_LOG_INFO("diag", "  level {} holds {} blocks", level,
+                            thumb_tiers_[level].resident_count());
+            }
+            last_thumbs_wanted_ += thumbs.wanted;
+            last_thumbs_built_ += thumbs.built;
         }
-        last_thumbs_wanted_ = thumbs.wanted;
-        last_thumbs_built_ = thumbs.built;
     }
 
     world_buffers_.upload_tables(cmd, types_);
@@ -996,7 +1010,7 @@ void Application::record_frame(f32 time_seconds) {
                         batch.chunks_added, batch.chunks_refreshed, batch.chunks_evicted,
                         batch.chunks_deferred, report.resident_bricks,
                         batch.out_of_memory ? 1 : 0, last_feedback_, last_feedback_accepted_,
-                        last_feedback_rejected_, thumb_cache_.resident_count(),
+                        last_feedback_rejected_, last_thumbs_resident_,
                         last_thumbs_wanted_);
         }
 
@@ -1227,10 +1241,16 @@ void Application::record_frame(f32 time_seconds) {
     // so this is set past anything a world will contain rather than being a quality knob.
     params.lens[1] = 4000000.0f;   // voxels: 125 km
     params.lens[2] = detail_bias_;
-    params.thumb_dims[0] = static_cast<i32>(thumb_budget_.grid_width);
-    params.thumb_dims[1] = static_cast<i32>(thumb_budget_.grid_height);
-    params.thumb_dims[2] = static_cast<i32>(thumb_budget_.grid_depth);
-    params.thumb_dims[3] = 0;
+    params.thumb_dims[0] = static_cast<i32>(thumb_budgets_[0].grid_width);
+    params.thumb_dims[1] = static_cast<i32>(thumb_budgets_[0].grid_height);
+    params.thumb_dims[2] = static_cast<i32>(thumb_budgets_[0].grid_depth);
+    params.thumb_dims[3] = static_cast<i32>(kSummaryTiers);
+    for (u32 level = 0; level < kSummaryTiers; ++level) {
+        params.thumb_tiers[level][0] = static_cast<i32>(thumb_budgets_[level].grid_offset);
+        params.thumb_tiers[level][1] = static_cast<i32>(thumb_budgets_[level].slot_base);
+        params.thumb_tiers[level][2] = static_cast<i32>(summary_span(level));
+        params.thumb_tiers[level][3] = 0;
+    }
 
     // The chisel's preview, moved into the camera-relative space the shader works in. The
     // camera chunk corner is the origin of that space, so the same subtraction that the
@@ -1495,17 +1515,47 @@ int Application::run(const Options& options) {
     residency_budget_.max_bricks_per_frame = 8192;
     residency_.create(residency_budget_, types_);
 
+    // One cache per level of the summary octree, all sharing one pair of GPU buffers at
+    // their own base offsets. Half the memory goes to level 0 and each level above halves
+    // again — the area a level covers grows as the square of its reach, and its cost per
+    // unit of area falls by eight, so the far levels reach enormously further for very
+    // little. The reach printed below is what that works out to.
     constexpr u64 kThumbBytes = kThumbSlotWords * sizeof(u32);
-    thumb_budget_.max_thumbs = static_cast<u32>(thumb_bytes / kThumbBytes);
     summary_tree_.create(types_);
-    thumb_cache_.create(thumb_budget_, summary_tree_);
-    WS_LOG_INFO("app", "thumbnails: {} slots, {} MB, radius {} chunks ({} m)",
-                thumb_budget_.max_thumbs, (thumb_budget_.max_thumbs * kThumbBytes) >> 20,
-                thumb_budget_.radius_chunks, thumb_budget_.radius_chunks * 8);
+
+    u32 slot_base = 0;
+    u32 grid_offset = 0;
+    u64 share = thumb_bytes / 2;
+    for (u32 level = 0; level < kSummaryTiers; ++level) {
+        ThumbnailBudget budget;
+        budget.level = level;
+        budget.slot_base = slot_base;
+        budget.grid_offset = grid_offset;
+        budget.max_thumbs = static_cast<u32>(std::max<u64>(2048, share / kThumbBytes));
+        budget.radius_chunks = 96;   // in blocks, so 2^level times further each level up
+        budget.max_builds_per_frame = (level == 0) ? 32u : 8u;
+        thumb_budgets_[level] = budget;
+        thumb_tiers_[level].create(budget, summary_tree_);
+
+        slot_base += budget.max_thumbs;
+        grid_offset += budget.grid_width * budget.grid_height * budget.grid_depth;
+        if (level + 1 < kSummaryTiers) share /= 2;
+
+        WS_LOG_INFO("app", "summary level {}: {} chunks/block, {} slots, {} MB, reach {:.1f} km",
+                    level, summary_span(level), budget.max_thumbs,
+                    (static_cast<u64>(budget.max_thumbs) * kThumbBytes) >> 20,
+                    static_cast<f64>(budget.radius_chunks * summary_span(level) * 8) / 1000.0);
+    }
+    thumb_total_slots_ = slot_base;
+    thumb_total_grid_ = grid_offset;
+
     // Coarse occupancy comes from the world, so the marcher can tell "nothing here" from
     // "something here that you have not streamed yet". Without it, feedback never fires.
     rebuild_coarse_grids();
-    if (!world_buffers_.create(device_, residency_budget_, thumb_budget_, 32ull << 20)) return 1;
+    if (!world_buffers_.create(device_, residency_budget_, thumb_total_slots_, thumb_total_grid_,
+                               32ull << 20)) {
+        return 1;
+    }
     if (!feedback_.create(device_)) return 1;
 
     // One slot per frame in flight, aligned to whatever the device demands, so writing

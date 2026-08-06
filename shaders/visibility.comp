@@ -87,7 +87,8 @@ layout(std140, binding = 13) uniform Params {
     ivec4 bounds_max;
     uvec4 resolution;     // xy pixels, z debug mode, w feedback capacity
     vec4 lens;            // x tan(fov/2), y max distance, z detail bias
-    ivec4 thumb_dims;     // xyz wrapped thumbnail grid size, in chunks
+    ivec4 thumb_dims;     // xyz wrapped summary grid size, in blocks; w how many levels
+    ivec4 thumb_tiers[8]; // per level: x first grid cell, y first slot, z chunks per block
 } push;
 
 const uint kNoRecord = 0xFFFFFFFFu;
@@ -139,19 +140,22 @@ const int kThumbRecordWords = 4;
 const int kThumbSlotWords = kThumbRecordWords + kThumbAxis * kThumbAxis * kThumbAxis;
 const uint kNoThumb = 0xFFFFFFFFu;
 
-uint find_thumb(ivec3 chunk_coord) {
-    ivec3 g = ivec3(floor_mod(chunk_coord.x, push.thumb_dims.x),
-                    floor_mod(chunk_coord.y, push.thumb_dims.y),
-                    floor_mod(chunk_coord.z, push.thumb_dims.z));
-    uint cell = uint((g.z * push.thumb_dims.y + g.y) * push.thumb_dims.x + g.x);
+// `block` is the block at `level` containing the chunk. Every level shares one grid buffer and
+// one slot buffer at its own base offset, so this is one binding however many levels there are.
+uint find_summary(ivec3 block, int level) {
+    ivec3 g = ivec3(floor_mod(block.x, push.thumb_dims.x),
+                    floor_mod(block.y, push.thumb_dims.y),
+                    floor_mod(block.z, push.thumb_dims.z));
+    uint cell = uint(push.thumb_tiers[level].x) +
+                uint((g.z * push.thumb_dims.y + g.y) * push.thumb_dims.x + g.x);
     uint slot = thumb_grid.slots[cell];
     if (slot == kNoThumb) return kNoThumb;
 
-    uint base = slot * uint(kThumbSlotWords);
-    if (thumbs.words[base + 3u] == 0u) return kNoThumb;                 // slot holds nothing
-    if (int(thumbs.words[base + 0u]) != chunk_coord.x) return kNoThumb;
-    if (int(thumbs.words[base + 1u]) != chunk_coord.y) return kNoThumb;
-    if (int(thumbs.words[base + 2u]) != chunk_coord.z) return kNoThumb;
+    uint base = (uint(push.thumb_tiers[level].y) + slot) * uint(kThumbSlotWords);
+    if (thumbs.words[base + 3u] == 0u) return kNoThumb;           // slot holds nothing
+    if (int(thumbs.words[base + 0u]) != block.x) return kNoThumb;
+    if (int(thumbs.words[base + 1u]) != block.y) return kNoThumb;
+    if (int(thumbs.words[base + 2u]) != block.z) return kNoThumb;
     return base + uint(kThumbRecordWords);
 }
 
@@ -404,14 +408,36 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
                 note_missing(has_pending, pending, thumb_chunk, outer_level);
             }
 
-            uint cells = find_thumb(thumb_chunk);
+            // Exactly the level whose cells this pixel can resolve — never a coarser one as a
+            // fallback, and never a finer one.
+            //
+            // A level's cells are 32 * 2^level voxels, so this picks the one about a pixel
+            // across. Falling back to a coarser level when this one has nothing is the obvious
+            // thing and is badly wrong: a near sky chunk has no summary, the ray drops a level,
+            // and a two-kilometre block holding ground a mile away reads as occupied — drawing
+            // a 256 m blob a few metres from the camera. Testing every level at every step
+            // instead measured 57 ms a frame. A level whose cells are bigger than the pixel is
+            // not a worse picture of the same thing, it is a different piece of world.
+            // Rounded, not floored. Flooring picks the level below the one the pixel needs,
+            // which looks the same and costs coverage: each level is held for a fixed radius
+            // *in blocks*, so using a level finer than intended halves how far it reaches.
+            // At 3 km that put the ground 94 blocks away against a 96-block radius — right on
+            // the edge, so rays straight down found a summary and rays at any angle did not,
+            // and the screen was empty but for a smudge at the centre.
+            int level = clamp(int(floor(log2(max(footprint, 32.0) / 32.0) + 0.5)), 0,
+                              push.thumb_dims.w - 1);
+            int span = push.thumb_tiers[level].z;
+            ivec3 block = ivec3(floor_div(thumb_chunk.x, span), floor_div(thumb_chunk.y, span),
+                                floor_div(thumb_chunk.z, span));
+
+            uint cells = find_summary(block, level);
             if (cells != kNoThumb) {
-                // Walk the chunk's 8x8x8 metre cells. Same DDA as everywhere else, one level
-                // coarser: a cell is 32 voxels, which is below a pixel from about 515 m, and
-                // full detail reaches 256 m — so the two overlap rather than leaving a band
-                // where neither is good enough.
-                const int kCellVoxels = kChunkEdge / kThumbAxis;
-                ivec3 chunk_min = chunk_offset * kChunkEdge;
+                // Walk the block's 8x8x8 cells. Same DDA as everywhere else, just coarser: a
+                // cell is `span` metres, below a pixel from about span*515 m, and each level
+                // reaches twice as far as the one below — so where one starts to look blocky
+                // the next has already taken over.
+                int kCellVoxels = span * (kChunkEdge / kThumbAxis);
+                ivec3 chunk_min = (block * span - push.camera_chunk.xyz) * kChunkEdge;
 
                 float t_in = max(t, 0.0);
                 vec3 p = origin + dir * (t_in + 1e-4);
@@ -524,7 +550,18 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
             last_normal = ivec3(0);
             last_normal[exit_axis] = -step_dir[exit_axis];
 
-            t = max(exit_t, t) + 1e-3;
+            // The nudge past the boundary has to grow with distance, or it stops being a nudge
+            // at all. A 32-bit float's own step at t = 96,000 voxels is 0.0156, so `t + 1e-3`
+            // rounds straight back to t: the ray stops advancing and spins on the same
+            // boundary until its step budget runs out. Looking down from 3 km that was every
+            // pixel on the screen — the step-count view came back saturated, and raising the
+            // budget eightfold changed nothing, because the ray was not stepping slowly, it
+            // was not stepping.
+            //
+            // Scaled, it stays about a hundred-thousandth of the distance travelled:
+            // comfortably above the float's resolution and far below a voxel, so it cannot
+            // skip anything.
+            t = max(exit_t, t) + max(1e-3, t * 1e-5);
             outer_level = -1;   // force a DDA re-seed at the new position
 
             // There used to be a `if (++empty_run > 24) break;` here, described as a guard

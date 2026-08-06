@@ -34,8 +34,10 @@ struct WorldBufferStats {
 
 class WorldBuffers {
 public:
-    bool create(Device& device, const ResidencyBudget& budget, const ThumbnailBudget& thumbs,
-                u64 staging_bytes);
+    // $thumb_slots and $thumb_grid_cells are totals across every summary level: they all
+    // share one slot buffer and one grid buffer, each level at its own base offset.
+    bool create(Device& device, const ResidencyBudget& budget, u32 thumb_slots,
+                u32 thumb_grid_cells, u64 staging_bytes);
     void destroy();
 
     // Copies whatever the thumbnail cache says changed. Separate from upload() because the

@@ -28,7 +28,10 @@ layout(std140, binding = 4) uniform Params {
     ivec4 bounds_max;
     uvec4 resolution;     // xy pixels, z debug mode, w feedback capacity
     vec4 lens;            // x tan(fov/2), y max distance, z detail bias
-    ivec4 thumb_dims;     // unused here, but the block is shared and layout is by position
+    // Unused here, but the block is shared and std140 lays out by position: leave these out
+    // and every field below shifts, which draws a broken screen and blames nothing.
+    ivec4 thumb_dims;
+    ivec4 thumb_tiers[8];
     vec4 tint_visible;    // xyz colour, w = 1 to use it, 0 to invert the backdrop instead
     vec4 tint_occluded;
     ivec4 box_min[16];    // xyz voxels relative to the camera chunk; w: 0 unused 1 carve 2 place 3 refused 4 idle

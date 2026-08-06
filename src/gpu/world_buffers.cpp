@@ -3,10 +3,15 @@
 #include <algorithm>
 #include <cstring>
 
+#include "gpu/render_params.hpp"
+
 namespace ws {
 
-bool WorldBuffers::create(Device& device, const ResidencyBudget& budget,
-                          const ThumbnailBudget& thumbs, u64 staging_bytes) {
+static_assert(kRenderSummaryTiers == kSummaryTiers,
+              "the parameter block and the summary levels must agree");
+
+bool WorldBuffers::create(Device& device, const ResidencyBudget& budget, u32 thumb_slots,
+                          u32 thumb_grid_cells, u64 staging_bytes) {
     device_ = &device;
 
     const u64 header_bytes = static_cast<u64>(budget.max_bricks) * sizeof(GpuBrickHeader);
@@ -34,9 +39,8 @@ bool WorldBuffers::create(Device& device, const ResidencyBudget& budget,
         static_cast<u64>(kCoarseLevels) * kCoarseCellsPerLevel * 4 * sizeof(u32);
     coarse_ = create_device_buffer(device, coarse_bytes, storage, "world occupancy");
 
-    const u64 thumb_grid_bytes = static_cast<u64>(thumbs.grid_width) * thumbs.grid_height *
-                                 thumbs.grid_depth * sizeof(u32);
-    const u64 thumb_bytes = static_cast<u64>(thumbs.max_thumbs) * kThumbSlotWords * sizeof(u32);
+    const u64 thumb_grid_bytes = static_cast<u64>(thumb_grid_cells) * sizeof(u32);
+    const u64 thumb_bytes = static_cast<u64>(thumb_slots) * kThumbSlotWords * sizeof(u32);
     thumb_grid_ = create_device_buffer(device, thumb_grid_bytes, storage, "thumbnail grid");
     thumbs_ = create_device_buffer(device, thumb_bytes, storage, "thumbnails");
     types_ = create_device_buffer(device, static_cast<u64>(kMaxTables) * 8, storage,
@@ -184,9 +188,14 @@ bool WorldBuffers::upload_thumbnails(VkCommandBuffer cmd, const ThumbnailCache& 
     const std::vector<GpuThumbRecord>& records = cache.records();
     const std::vector<u32>& cells = cache.cells();
 
+    // Every level writes into the same two buffers at its own base, so a slot index is local
+    // to its level and a grid cell is local to its level's grid.
+    const u64 slot_base = cache.budget().slot_base;
+    const u64 grid_base = cache.budget().grid_offset;
+
     bool complete = true;
     for (u32 slot : batch.slots) {
-        const u64 base = static_cast<u64>(slot) * kThumbSlotWords * sizeof(u32);
+        const u64 base = (slot_base + slot) * kThumbSlotWords * sizeof(u32);
         if (!stage(&records[slot], sizeof(GpuThumbRecord), base, thumb_regions_) ||
             !stage(&cells[static_cast<usize>(slot) * kThumbCells], kThumbCells * sizeof(u32),
                    base + kThumbRecordWords * sizeof(u32), thumb_regions_)) {
@@ -200,7 +209,7 @@ bool WorldBuffers::upload_thumbnails(VkCommandBuffer cmd, const ThumbnailCache& 
     if (complete) {
         const std::vector<u32>& grid = cache.grid();
         for (u32 cell : batch.grid_cells) {
-            if (!stage(&grid[cell], sizeof(u32), static_cast<u64>(cell) * sizeof(u32),
+            if (!stage(&grid[cell], sizeof(u32), (grid_base + cell) * sizeof(u32),
                        thumb_grid_regions_)) {
                 complete = false;
                 break;
