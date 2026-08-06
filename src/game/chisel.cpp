@@ -133,14 +133,12 @@ bool Chisel::update(const World& world, const ChiselInput& input, const f64 orig
         preview_.max[a] = hi[a];
     }
     preview_.volume = box_volume(lo, hi);
-    preview_.too_large = preview_.volume > kMaxEditVoxels;
 
     if (!released) return false;
 
     dragging_ = false;
     const ChiselMode finished = mode_;
     mode_ = ChiselMode::None;
-    if (preview_.too_large) return false;
 
     const bool carving = finished == ChiselMode::Carve;
     // Carving always clears the box; the overwrite toggle is about what placing does to

@@ -903,7 +903,6 @@ void Application::record_frame(f32 time_seconds) {
         } else {
             tool.active = preview.active;
             tool.dragging = preview.dragging;
-            tool.too_large = preview.too_large;
             tool.carving = preview.mode == ChiselMode::Carve;
             tool.overwrite = chisel_.overwrites();
             tool.against_face = chisel_.places_against_face();
@@ -1127,11 +1126,9 @@ void Application::record_frame(f32 time_seconds) {
                 // Idle — just the voxel under the crosshair — is not a decision yet, so it
                 // gets its own state and stays neutral.
                 add_box(preview.min, preview.max,
-                        preview.too_large
-                            ? 3
-                            : ((preview.mode == ChiselMode::Carve)
-                                   ? 1
-                                   : ((preview.mode == ChiselMode::Place) ? 2 : 4)));
+                        (preview.mode == ChiselMode::Carve)
+                            ? 1
+                            : ((preview.mode == ChiselMode::Place) ? 2 : 4));
 
                 if (preview.mode == ChiselMode::Place) {
                     // The material's own colour in the open, its inverse where it is buried.

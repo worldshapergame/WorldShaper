@@ -42,7 +42,6 @@ struct ChiselInput {
 struct ChiselPreview {
     bool active = false;
     bool dragging = false;
-    bool too_large = false;
     ChiselMode mode = ChiselMode::None;
     i64 min[3]{};
     i64 max[3]{};
@@ -54,15 +53,18 @@ struct ChiselPreview {
     VoxelTypeId removing = kAir;
 };
 
-// A single edit is capped, because it happens in one frame and there is no way to take it
-// back once it has started. The number comes from measurement rather than taste: an edit
-// costs roughly six nanoseconds a voxel through geometry that is not uniform, so eight
-// million is about fifty milliseconds — a visible hitch on release, and nothing worse.
-// A 200-voxel cube, six and a quarter metres on a side.
+// There is no cap on how large an edit may be, and that is deliberate. There was one, and
+// it also capped what the clipboard could select — selecting *is* the chisel — so a limit
+// meant for a carve was quietly refusing to copy a large building.
 //
-// Raising it means slicing the work across frames first. That has to happen anyway before
-// Stage 16, since an edit this size is also more than a network tick can carry.
-inline constexpr u64 kMaxEditVoxels = 8ull * 1024ull * 1024ull;
+// What it costs is reported rather than prevented. An edit happens in one frame, at roughly
+// six nanoseconds a voxel through geometry that is not uniform, so a very large one is a
+// pause of that length on the frame the button comes up. The developer panel shows how long
+// the last one took; undo and the matter ledger cope with any size.
+//
+// Slicing an edit across frames is what would make a huge one smooth, and that has to happen
+// before Stage 16 regardless — an edit this size is more than a network tick can carry. It
+// is a better answer than a number that says no.
 
 class Chisel {
 public:

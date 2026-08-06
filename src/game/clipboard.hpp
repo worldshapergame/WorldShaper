@@ -142,13 +142,13 @@ public:
     // How many copies, and which side of the ghost they fall on.
     //
     //  positive — the copies fill the gap *between* the original and the ghost, evenly, with
-    //             the last one landing exactly on the ghost. Aiming the ghost aims the row.
-    //  negative — the ghost is the first step and the copies carry on *past* it, repeating
-    //             that step. Where the ghost is a straight move from the original the row
-    //             runs straight; where the ghost is also turned, each step turns the move
-    //             as well, so the row bends round rather than continuing straight. The
-    //             copies are not being rotated about some pivot — each one is placed by
-    //             taking the same step again from where the last one ended.
+    //             the last one landing exactly on the ghost. You have set the two ends and
+    //             they share out the space between.
+    //  negative — the transform is one **step**, and each copy takes that step again from
+    //             where the last one ended. You have set the stride, not the ends, so adding
+    //             a copy reaches further rather than packing another one into the same span.
+    //             Where the step also turns, the row bends round with it. The last copy — the
+    //             far end — is the one drawn with an outline, because it is the end you watch.
     i32 copies() const { return copies_; }
     u32 instance_count() const;
     const f64* scale() const { return scale_; }

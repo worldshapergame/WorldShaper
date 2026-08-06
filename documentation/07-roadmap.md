@@ -252,7 +252,14 @@ Transforms apply **turn first, then resize**, so a stretch follows the world axi
 
 **O** makes the clip move in whole clip lengths, so copies tile and it carries its own spacing, and changes the turn step from 7.5° to 11.25°. Both divide a quarter turn evenly, so a right angle is exactly reachable either way.
 
-**The copy count is signed.** Positive fills the gap between the original and the ghost, last copy landing on the ghost. Negative continues *past* the ghost, repeating the step — straight when the move is straight, bending round when the ghost is turned as well as moved, because each step is turned by however much the clip has turned by the time it is taken. Winding the count down past one carries straight on into the negatives; zero is skipped.
+**The copy count is signed, and the two directions mean different things.**
+
+- **Positive** — you have set the two *ends*. The copies share out the space between the original and the ghost, and the last one lands exactly on the ghost.
+- **Negative** — you have set the *stride*. The whole transform is one step, and each copy takes that step again from where the last one ended, so adding a copy makes the row reach further rather than packing another one into the same span. Where the step also turns, the row bends round with it. The copy at the far end is the one drawn with an outline, because it is the end you watch.
+
+Winding the count down past one carries straight on into the negatives; zero is skipped.
+
+**No caps.** Not on selection size, edit size, resize, or copy count. What used to stop a large edit also stopped the clipboard selecting a large building, because selecting *is* the chisel. What it costs is reported instead — the developer panel shows how long the last edit and the last bake took — and a clip that will not fit in memory fails its allocation, which is caught rather than fatal.
 
 A stamped clip is always on the world lattice. A clip that keeps its own lattice at its own angle is a **free-standing object** — decision D56, arriving with rigid bodies in Stage 12.
 

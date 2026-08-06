@@ -161,7 +161,10 @@ TEST_CASE("winding the copy count down past one carries on the other side of the
     CHECK(board.copies() == 1);
 }
 
-TEST_CASE("a chain of copies ends on the ghost and is evenly spaced when the move is straight") {
+TEST_CASE("copies past the ghost repeat the whole step, and reach further as you add them") {
+    // The offset is a *stride*, not a destination. Each copy takes it again from where the
+    // last one ended, so adding one extends the row rather than packing another into the
+    // same span.
     World world = filled_world();
     Clipboard board;
     select_box(board, world, 8.0);
@@ -173,23 +176,29 @@ TEST_CASE("a chain of copies ends on the ghost and is evenly spaced when the mov
     REQUIRE(board.offset()[0] == 40);
 
     ClipboardInput fewer;
-    fewer.decrease = 4;   // 1 -> -4: a chain of five
+    fewer.decrease = 4;   // 1 -> -4: five in the row
     step(board, world, fewer, out);
     REQUIRE(board.instance_count() == 5);
 
     i64 at[5][3];
     for (u32 n = 0; n < 5; ++n) board.instance_origin(n, at[n]);
-
-    // The last one is the ghost — that is what you are steering — and the rest fill back
-    // toward the original, one even step apart.
-    for (u32 a = 0; a < 3; ++a) {
-        CHECK(at[4][a] == board.anchor()[a] + board.offset()[a]);
-    }
     for (u32 n = 0; n < 5; ++n) {
-        CHECK(at[n][0] - board.anchor()[0] == static_cast<i64>(n + 1) * 8);
+        CHECK(at[n][0] - board.anchor()[0] == static_cast<i64>(n + 1) * 40);
         CHECK(at[n][1] == board.anchor()[1]);
         CHECK(at[n][2] == board.anchor()[2]);
     }
+
+    // One more copy: the row gets longer, and nothing already in it moves.
+    const i64 was_the_end = at[4][0];
+    ClipboardInput one_more;
+    one_more.decrease = 1;
+    step(board, world, one_more, out);
+    REQUIRE(board.instance_count() == 6);
+
+    i64 now[6][3];
+    for (u32 n = 0; n < 6; ++n) board.instance_origin(n, now[n]);
+    for (u32 n = 0; n < 5; ++n) CHECK(now[n][0] == at[n][0]);
+    CHECK(now[5][0] == was_the_end + 40);
 }
 
 TEST_CASE("extra copies bend round when the ghost is turned as well as moved") {
@@ -217,19 +226,18 @@ TEST_CASE("extra copies bend round when the ghost is turned as well as moved") {
     i64 at[5][3];
     for (u32 n = 0; n < 5; ++n) board.instance_origin(n, at[n]);
 
-    // Still ends exactly on the ghost — the step is solved for, not assumed.
-    for (u32 a = 0; a < 3; ++a) {
-        CHECK(at[4][a] == board.anchor()[a] + board.offset()[a]);
+    // Each leg is the same stride, turned by one more quarter than the last: +x, -z, -x, +z.
+    // Four of them close a square, which is the bend at its most obvious.
+    const i64 legs[4][3] = {{0, 0, -20}, {-20, 0, 0}, {0, 0, 20}, {20, 0, 0}};
+    for (u32 n = 1; n < 5; ++n) {
+        for (u32 a = 0; a < 3; ++a) CHECK(at[n][a] - at[n - 1][a] == legs[n - 1][a]);
     }
-    // But it got there round a bend rather than along the straight line: every copy in
-    // between is off the axis the ghost sits on.
-    for (u32 n = 0; n < 4; ++n) {
-        CHECK(at[n][2] != board.anchor()[2]);
-    }
-    // And the bend is one-sided, not a wobble: it leaves the line and comes back once.
-    for (u32 n = 1; n < 4; ++n) {
-        CHECK(((at[n][2] - board.anchor()[2]) > 0) == ((at[0][2] - board.anchor()[2]) > 0));
-    }
+    // The fourth step brings it back to where the original sits, and the fifth sets off
+    // round again — the row is a loop, not a line, because the step turns.
+    CHECK(at[3][0] == board.anchor()[0]);
+    CHECK(at[3][2] == board.anchor()[2]);
+    CHECK(at[4][0] == at[0][0]);
+    CHECK(at[4][2] == at[0][2]);
 }
 
 TEST_CASE("turning the clip keeps every voxel") {
@@ -740,7 +748,7 @@ TEST_CASE("there is no cap on how far a clip can be resized") {
     CHECK_FALSE(board.baking_truncated());
 }
 
-TEST_CASE("with copies past the ghost, the ghost is the last one in the line") {
+TEST_CASE("the copy at the far end is the outlined one, and it is the last") {
     World world = filled_world();
     Clipboard board;
     select_box(board, world, 8.0);
@@ -749,19 +757,22 @@ TEST_CASE("with copies past the ghost, the ghost is the last one in the line") {
     ClipboardInput move;
     move.wheel = 40.0f;
     step(board, world, move, out);
-    const i64 target = board.offset()[0];
+    const i64 stride = board.offset()[0];
 
     ClipboardInput fewer;
-    fewer.decrease = 4;   // 1 -> -4: five in the chain
+    fewer.decrease = 4;   // 1 -> -4: five in the row
     step(board, world, fewer, out);
     REQUIRE(board.instance_count() == 5);
 
-    // The far end sits exactly on the ghost — that is the one being steered — and the rest
-    // fill back toward the original.
+    // The row runs outward, and the last one is furthest — that is the end drawn with an
+    // outline, and the end that moves most when the stride changes.
     i64 at[5][3];
     for (u32 n = 0; n < 5; ++n) board.instance_origin(n, at[n]);
-    CHECK(at[4][0] == board.anchor()[0] + target);
     for (u32 n = 1; n < 5; ++n) CHECK(at[n][0] > at[n - 1][0]);
+    CHECK(at[4][0] == board.anchor()[0] + stride * 5);
+    // And the preview draws them in the same order, so the last slot is the last copy.
+    const u32 slot = board.preview().instances - 1;
+    for (u32 a = 0; a < 3; ++a) CHECK(board.preview().min[slot][a] == at[4][a]);
 }
 
 TEST_CASE("an axis cannot be squashed out of existence") {

@@ -220,7 +220,10 @@ TEST_CASE("cancelling a drag makes no edit") {
     CHECK_FALSE(step(chisel, world, input, op));
 }
 
-TEST_CASE("an edit past the per-edit limit is refused rather than attempted") {
+TEST_CASE("a huge edit is carried out rather than refused") {
+    // There is no size limit. There was one, and it also capped what the clipboard could
+    // select, because selecting is this same drag — so a limit meant for a carve was
+    // quietly refusing to copy a large building.
     World world;
     Chisel chisel;
 
@@ -238,8 +241,8 @@ TEST_CASE("an edit past the per-edit limit is refused rather than attempted") {
     // Away on two more axes, so the box spans thousands of voxels on all three.
     const f64 other[3] = {0.0, 1.0, 1.0};
     input.left = false;
-    CHECK_FALSE(step(chisel, world, input, op, kEye, other));
-    CHECK(chisel.preview().too_large);
+    REQUIRE(step(chisel, world, input, op, kEye, other));
+    CHECK(op.volume() > 1000000000ull);
 }
 
 TEST_CASE("holding both buttons does not start two drags") {

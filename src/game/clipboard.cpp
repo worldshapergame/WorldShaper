@@ -289,86 +289,30 @@ void Clipboard::instance_origin(u32 n, i64 out[3]) const {
         return;
     }
 
-    // The bent chain. Each copy is one step on from the last, and every step is turned by
-    // however much the clip has turned by the time it is taken — so a move with no turn in
-    // it repeats in a straight line, and a move that also turns walks the row round a curve.
-    // Nothing is rotated about a pivot; each copy is one more step from where the last ended.
+    // Going the other way, the whole transform is **one step**, and each copy is that step
+    // taken again from where the last one ended. Adding a copy does not squeeze another one
+    // into the same span - it puts a new one on the far end, so the row reaches further every
+    // time you add to it. That is the difference between the two directions: positive fills a
+    // gap you have set the ends of, negative extends a pattern you have set the stride of.
     //
-    // The step is solved for rather than assumed, so that the *last* copy lands exactly on
-    // the ghost. That is what you are steering: dragging the far end of a curved row around
-    // and having the row follow is the useful gesture, where dragging the first link and
-    // watching the far end fly off at a multiple of your input is not.
-    f64 step[3];
-    solve_step(step);
-
+    // Every step is turned by however much the clip has turned by the time it is taken, so a
+    // move with no rotation in it repeats in a straight line, and a move that also turns walks
+    // the row round a curve. Nothing is rotated about a pivot; each copy is one more step on.
+    //
+    // The **last** copy is the one drawn with an outline. It is the far end of the row, the
+    // one that moves most as the step changes, and therefore the one you watch.
+    const f64 step[3] = {static_cast<f64>(offset_[0]), static_cast<f64>(offset_[1]),
+                         static_cast<f64>(offset_[2])};
     f64 at[3] = {0.0, 0.0, 0.0};
-    const f64 per_step[3] = {angles_[0] / static_cast<f64>(count),
-                             angles_[1] / static_cast<f64>(count),
-                             angles_[2] / static_cast<f64>(count)};
     for (u32 i = 0; i <= n; ++i) {
-        const f64 turned[3] = {per_step[0] * static_cast<f64>(i), per_step[1] * static_cast<f64>(i),
-                               per_step[2] * static_cast<f64>(i)};
+        const f64 turned[3] = {angles_[0] * static_cast<f64>(i), angles_[1] * static_cast<f64>(i),
+                               angles_[2] * static_cast<f64>(i)};
         f64 leg[3];
         rotate_vector(turned, step, leg);
         for (u32 a = 0; a < 3; ++a) at[a] += leg[a];
     }
     for (u32 a = 0; a < 3; ++a) {
         out[a] = anchor_[a] + static_cast<i64>(std::llround(at[a]));
-    }
-}
-
-void Clipboard::solve_step(f64 out[3]) const {
-    // The chain of `count` steps has to end on the ghost:
-    //
-    //     ( Σ R(i·θ) ) · step = offset,   i = 0 … count-1
-    //
-    // so the step is that summed matrix inverted onto the offset. With no rotation the sum
-    // is `count` times the identity and this is just offset/count — the straight case falls
-    // out of the same expression rather than being special-cased.
-    const u32 count = instance_count();
-    const f64 target[3] = {static_cast<f64>(offset_[0]), static_cast<f64>(offset_[1]),
-                           static_cast<f64>(offset_[2])};
-
-    f64 sum[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
-    for (u32 i = 0; i < count; ++i) {
-        const f64 turned[3] = {angles_[0] * static_cast<f64>(i) / static_cast<f64>(count),
-                               angles_[1] * static_cast<f64>(i) / static_cast<f64>(count),
-                               angles_[2] * static_cast<f64>(i) / static_cast<f64>(count)};
-        for (u32 c = 0; c < 3; ++c) {
-            f64 basis[3] = {0.0, 0.0, 0.0};
-            basis[c] = 1.0;
-            f64 column[3];
-            rotate_vector(turned, basis, column);
-            for (u32 r = 0; r < 3; ++r) sum[r][c] += column[r];
-        }
-    }
-
-    const f64 det = sum[0][0] * (sum[1][1] * sum[2][2] - sum[1][2] * sum[2][1]) -
-                    sum[0][1] * (sum[1][0] * sum[2][2] - sum[1][2] * sum[2][0]) +
-                    sum[0][2] * (sum[1][0] * sum[2][1] - sum[1][1] * sum[2][0]);
-
-    // A closed loop — the steps coming back round to where they started — has no step that
-    // reaches anywhere, and the matrix says so by being singular. Spread the offset evenly
-    // instead, which is the sane thing to draw.
-    if (std::abs(det) < 1e-9) {
-        for (u32 a = 0; a < 3; ++a) out[a] = target[a] / static_cast<f64>(count);
-        return;
-    }
-
-    const f64 inv_det = 1.0 / det;
-    f64 inverse[3][3];
-    inverse[0][0] = (sum[1][1] * sum[2][2] - sum[1][2] * sum[2][1]) * inv_det;
-    inverse[0][1] = (sum[0][2] * sum[2][1] - sum[0][1] * sum[2][2]) * inv_det;
-    inverse[0][2] = (sum[0][1] * sum[1][2] - sum[0][2] * sum[1][1]) * inv_det;
-    inverse[1][0] = (sum[1][2] * sum[2][0] - sum[1][0] * sum[2][2]) * inv_det;
-    inverse[1][1] = (sum[0][0] * sum[2][2] - sum[0][2] * sum[2][0]) * inv_det;
-    inverse[1][2] = (sum[0][2] * sum[1][0] - sum[0][0] * sum[1][2]) * inv_det;
-    inverse[2][0] = (sum[1][0] * sum[2][1] - sum[1][1] * sum[2][0]) * inv_det;
-    inverse[2][1] = (sum[0][1] * sum[2][0] - sum[0][0] * sum[2][1]) * inv_det;
-    inverse[2][2] = (sum[0][0] * sum[1][1] - sum[0][1] * sum[1][0]) * inv_det;
-
-    for (u32 r = 0; r < 3; ++r) {
-        out[r] = inverse[r][0] * target[0] + inverse[r][1] * target[1] + inverse[r][2] * target[2];
     }
 }
 
