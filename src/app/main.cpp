@@ -565,11 +565,7 @@ private:
     ComputePipeline pathtrace_;
     VkDescriptorSetLayout pathtrace_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet pathtrace_set_ = VK_NULL_HANDLE;
-    // Two of each, alternating by frame. The reprojection reads last frame's average and guide
-    // while this frame's are being written, and one image cannot be both.
-    GpuImage accum_image_[2];
-    GpuImage guide_image_[2];
-    ComputePipeline denoise_;
+    GpuImage accum_image_;
     // One entry per voxel face the camera has looked at, 32 bytes each. Light is computed
     // once per face and shared by every pixel that sees it, and because the key is a place in
     // the world rather than on the screen, turning the camera does not throw the work away.
@@ -616,15 +612,8 @@ private:
     // chisel and the clipboard, because it is a property of how you are building rather than
     // of which tool is in your hand.
     u32 hollow_ = 0;
-    // Last frame's camera, kept so a pixel can be told where its surface sat on the screen then
-    // and carry its average across rather than starting again. Chunks are held as 64-bit so the
-    // shift into this frame's space is exact however far from the origin the camera has walked.
-    f32 prev_origin_[3]{};
-    i64 prev_chunk_[3]{};
-    f32 prev_forward_[3]{0.0f, 0.0f, 1.0f};
-    f32 prev_right_[3]{1.0f, 0.0f, 0.0f};
-    f32 prev_up_[3]{0.0f, 1.0f, 0.0f};
-    bool prev_camera_valid_ = false;
+    f32 trace_camera_[6]{};
+    f32 trace_forward_[3]{};
     bool accum_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
     GpuImage visibility_image_;
     GpuImage render_target_;
@@ -727,19 +716,9 @@ bool Application::create_render_target(u32 width, u32 height) {
     // Full float, and not an economy. At a few thousand samples the differences between two
     // materials are smaller than an 8-bit step, so an 8-bit accumulator would quantise away
     // exactly what this mode exists to show.
-    accum_image_[0] = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                                           "path trace accumulation 0");
-    accum_image_[1] = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                                           "path trace accumulation 1");
-    // Normal, depth and albedo per pixel, so the denoiser knows which neighbours are the same
-    // surface and which only look like it, and so the reprojection can tell whether the pixel
-    // it landed on last frame was even the same piece of world.
-    guide_image_[0] = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_UINT,
-                                           "denoise guide 0");
-    guide_image_[1] = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_UINT,
-                                           "denoise guide 1");
+    accum_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                                        "path trace accumulation");
     trace_samples_ = 0;
-    prev_camera_valid_ = false;   // a new size, so last frame's picture is not this one
     accum_ready_ = false;   // a new image, so it needs its one transition out of UNDEFINED
 
     // Images are the only bindings that change on resize; the world buffers are created
@@ -754,18 +733,11 @@ bool Application::create_render_target(u32 width, u32 height) {
     colour_info.imageView = render_target_.view;
     colour_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    // Both halves of each pair, written as one descriptor of two elements. The shader indexes
-    // them by the frame's parity, which is uniform across the dispatch.
-    VkDescriptorImageInfo accum_info[2]{};
-    VkDescriptorImageInfo guide_info[2]{};
-    for (u32 i = 0; i < 2; ++i) {
-        accum_info[i].imageView = accum_image_[i].view;
-        accum_info[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        guide_info[i].imageView = guide_image_[i].view;
-        guide_info[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    }
+    VkDescriptorImageInfo accum_info{};
+    accum_info.imageView = accum_image_.view;
+    accum_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[7]{};
+    VkWriteDescriptorSet writes[6]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -785,16 +757,11 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[3].pImageInfo = &colour_info;
     writes[4].dstSet = pathtrace_set_;
     writes[4].dstBinding = 0;
-    writes[4].descriptorCount = 2;
-    writes[4].pImageInfo = accum_info;
+    writes[4].pImageInfo = &accum_info;
     writes[5].dstSet = pathtrace_set_;
     writes[5].dstBinding = 1;
     writes[5].pImageInfo = &colour_info;
-    writes[6].dstSet = pathtrace_set_;
-    writes[6].dstBinding = 19;
-    writes[6].descriptorCount = 2;
-    writes[6].pImageInfo = guide_info;
-    vkUpdateDescriptorSets(device_.handle(), 7, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device_.handle(), 6, writes, 0, nullptr);
     return true;
 }
 
@@ -802,10 +769,7 @@ void Application::destroy_render_target() {
     if (visibility_image_.valid()) destroy_image(device_, visibility_image_);
     if (render_target_.valid()) destroy_image(device_, render_target_);
     if (depth_target_.valid()) destroy_image(device_, depth_target_);
-    for (u32 i = 0; i < 2; ++i) {
-        if (accum_image_[i].valid()) destroy_image(device_, accum_image_[i]);
-        if (guide_image_[i].valid()) destroy_image(device_, guide_image_[i]);
-    }
+    if (accum_image_.valid()) destroy_image(device_, accum_image_);
 }
 
 void Application::handle_resize() {
@@ -1619,21 +1583,10 @@ void Application::record_frame(f32 time_seconds) {
     //
     // So: once from UNDEFINED after it is created, and never again. It stays in GENERAL and
     // the read-after-write between frames is covered by an ordinary memory barrier.
-    // The guide goes with it, and it had been going nowhere. It was created and then read and
-    // written by two shaders without ever leaving VK_IMAGE_LAYOUT_UNDEFINED, which is not a
-    // layout an image can be used in: a driver is free to leave the compression metadata of an
-    // undefined image uninitialised, and reads through it then resolve to addresses that were
-    // never mapped. That is the whole shape of the fault this build kept dying of — a page
-    // fault on a read, inside the pathtrace pass, at no particular moment.
     if (!accum_ready_) {
-        for (u32 i = 0; i < 2; ++i) {
-            image_barrier(cmd, accum_image_[i].image, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            image_barrier(cmd, guide_image_[i].image, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-        }
+        image_barrier(cmd, accum_image_.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
         accum_ready_ = true;
     } else if (path_trace_) {
         VkMemoryBarrier2 accum_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
@@ -1651,18 +1604,31 @@ void Application::record_frame(f32 time_seconds) {
     (void)time_seconds;
     RenderParams params{};
 
-    // The camera moving used to throw every sample away, and that was the right thing to do
-    // while there was nothing else to be done with them: averaging the old view into the new one
-    // does not give a slightly stale picture, it gives a smear that never clears, because every
-    // sample carries equal weight however wrong it is.
+    // Anything that changes what the image *should* be invalidates every sample taken so far,
+    // so the average has to start again. Averaging the old view into the new one does not
+    // produce a slightly stale picture, it produces a smear that never clears — the samples
+    // have equal weight however wrong they are.
     //
-    // It is no longer the only option. A pixel's samples are of a *place*, and where that place
-    // sat on the screen last frame can be worked out rather than guessed, so they are carried
-    // there instead of dropped. The wrongness the reset existed to prevent is caught per pixel
-    // in the shader, where it can be judged, rather than per frame here, where it cannot.
-    //
-    // What still resets everything is the world changing under the camera — see the streaming
-    // and edit paths, which zero trace_samples_ outright.
+    // Compared against the camera as it will be used this frame, not against a "did the player
+    // press a key" flag: the camera also moves from momentum and from being placed by script.
+    {
+        const f32 here[6] = {camera_.local_x(),           camera_.local_y(),
+                             camera_.local_z(),           static_cast<f32>(camera_.chunk_x()),
+                             static_cast<f32>(camera_.chunk_y()),
+                             static_cast<f32>(camera_.chunk_z())};
+        f32 forward[3];
+        camera_.forward_vector(forward);
+        bool moved = false;
+        for (u32 i = 0; i < 6; ++i) {
+            if (here[i] != trace_camera_[i]) moved = true;
+            trace_camera_[i] = here[i];
+        }
+        for (u32 i = 0; i < 3; ++i) {
+            if (forward[i] != trace_forward_[i]) moved = true;
+            trace_forward_[i] = forward[i];
+        }
+        if (moved) trace_samples_ = 0;
+    }
 
     params.origin[0] = camera_.local_x();
     params.origin[1] = camera_.local_y();
@@ -1673,32 +1639,6 @@ void Application::record_frame(f32 time_seconds) {
     params.camera_chunk[0] = static_cast<i32>(camera_.chunk_x());
     params.camera_chunk[1] = static_cast<i32>(camera_.chunk_y());
     params.camera_chunk[2] = static_cast<i32>(camera_.chunk_z());
-
-    // Last frame's camera, moved into this frame's space.
-    //
-    // The space the shader works in is anchored to the chunk the camera stands in, so crossing
-    // a boundary shifts every coordinate by a chunk's worth of voxels at once. That shift is
-    // folded in here, where the chunk numbers are 64-bit and exact, rather than being carried
-    // to the shader as a second coordinate system for it to reconcile.
-    const i64 here_chunk[3] = {camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
-    if (prev_camera_valid_) {
-        for (u32 i = 0; i < 3; ++i) {
-            const i64 shift = (prev_chunk_[i] - here_chunk[i]) * kChunkEdge;
-            params.prev_origin[i] = prev_origin_[i] + static_cast<f32>(shift);
-            params.prev_forward[i] = prev_forward_[i];
-            params.prev_right[i] = prev_right_[i];
-            params.prev_up[i] = prev_up_[i];
-        }
-        params.prev_origin[3] = 1.0f;
-    }
-    prev_origin_[0] = camera_.local_x();
-    prev_origin_[1] = camera_.local_y();
-    prev_origin_[2] = camera_.local_z();
-    for (u32 i = 0; i < 3; ++i) prev_chunk_[i] = here_chunk[i];
-    camera_.forward_vector(prev_forward_);
-    camera_.right_vector(prev_right_);
-    camera_.up_vector(prev_up_);
-    prev_camera_valid_ = true;
     params.grid_dims[0] = residency_budget_.grid_width;
     params.grid_dims[1] = residency_budget_.grid_height;
     params.grid_dims[2] = residency_budget_.grid_depth;
@@ -1960,27 +1900,6 @@ void Application::record_frame(f32 time_seconds) {
         trace_dependency.memoryBarrierCount = 1;
         trace_dependency.pMemoryBarriers = &trace_barrier;
         vkCmdPipelineBarrier2(cmd, &trace_dependency);
-
-        // ---- denoise ---------------------------------------------------------------
-        //
-        // A separate pass because a filter has to read its neighbours, and a neighbour being
-        // written by another thread of the same dispatch is not a value anybody can read.
-        //
-        // Skipped in the debug views. Those write their marks straight to the colour image and
-        // return, and a filter run over them would blend answers that are categories rather
-        // than colours — a view that says "this face has no entry" would come out as a shade
-        // between "no entry" and "lit".
-        if (debug_mode_ == 0) {
-            profiler_.begin_pass(cmd, "denoise", 1.0);
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, denoise_.pipeline());
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, denoise_.layout(), 0, 1,
-                                    &pathtrace_set_, 1, &trace_offset);
-            vkCmdPushConstants(cmd, denoise_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(TracePush), &trace);
-            vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
-            profiler_.end_pass(cmd);
-            vkCmdPipelineBarrier2(cmd, &trace_dependency);
-        }
     }
 
     // ---- primary visibility ---------------------------------------------------------
@@ -2277,7 +2196,7 @@ int Application::run(const Options& options) {
                                       &resolve_layout_));
 
     const VkDescriptorPoolSize pool_sizes[]{
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8},
         // The three sets between them bind the world twice, the type tables, the clip, the
         // face cache and the light list. Counted generously: running out of pool is a failure
         // at start-up with a message nobody connects to the binding they just added.
@@ -2310,23 +2229,19 @@ int Application::run(const Options& options) {
     {
         // Nineteen: the two images, the world, the parameter block, the type tables, the
         // clip, the face cache, and now the light list at 18.
-        // Twenty: the two images, the world, the parameter block, the type tables, the clip,
-        // the face cache, the light list at 18, and the denoiser's guide at 19.
-        VkDescriptorSetLayoutBinding trace_bindings[20]{};
-        for (u32 i = 0; i < 20; ++i) {
+        VkDescriptorSetLayoutBinding trace_bindings[19]{};
+        for (u32 i = 0; i < 19; ++i) {
             trace_bindings[i].binding = i;
             trace_bindings[i].descriptorType =
-                (i < 2 || i == 19) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                : (i == 13)        ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                                   : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            // The accumulation and the guide are pairs the frame alternates between, so the
-            // reprojection can read last frame's while this frame's is written.
-            trace_bindings[i].descriptorCount = (i == 0 || i == 19) ? 2 : 1;
+                (i < 2)     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                : (i == 13) ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                            : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            trace_bindings[i].descriptorCount = 1;
             trace_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
         VkDescriptorSetLayoutCreateInfo trace_layout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        trace_layout.bindingCount = 20;
+        trace_layout.bindingCount = 19;
         trace_layout.pBindings = trace_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &trace_layout, nullptr,
                                           &pathtrace_layout_));
@@ -2372,20 +2287,6 @@ int Application::run(const Options& options) {
                                sizeof(TracePush))) {
             WS_LOG_FATAL("app", "could not create the path tracing pipeline: {}",
                          pathtrace_.last_error());
-            return 1;
-        }
-
-        // The denoiser shares the tracer's set and push block outright. It reads the same
-        // accumulation image and the same guide the tracer just wrote, and it draws the tool
-        // previews, which need the clip buffer and the parameter block — all already there. A
-        // second layout would be the same layout with a different name.
-        const std::filesystem::path denoise_spirv = shaders / "denoise.comp.spv";
-        const std::filesystem::path denoise_source =
-            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "denoise.comp";
-        if (!denoise_.create(device_, denoise_source, denoise_spirv, pathtrace_layout_,
-                             sizeof(TracePush))) {
-            WS_LOG_FATAL("app", "could not create the denoise pipeline: {}",
-                         denoise_.last_error());
             return 1;
         }
     }
@@ -2775,10 +2676,6 @@ int Application::run(const Options& options) {
     visibility_.destroy();
     resolve_.destroy();
     pathtrace_.destroy();
-    // Missed once, and the cost was three crash reports: a pipeline still alive when the
-    // device it belongs to is destroyed takes the process with it on the way out, after the
-    // screenshot was already written and everything looked fine.
-    denoise_.destroy();
     destroy_render_target();
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device_.handle(), descriptor_pool_, nullptr);

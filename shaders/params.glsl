@@ -27,9 +27,3 @@
     ivec4 marks[8];       // constraint points, w = 1 when used
     uvec4 clip_slot[16];    // per ghost box: x first cell, yzw size. Size 0 means unused
     uvec4 clip_coarse[16];  // its occupancy mask: x first entry, yzw size in 8-blocks
-    // Last frame's camera, in this frame's coordinates. w of prev_origin is 1 when there is a
-    // history worth reprojecting from and 0 when there is not.
-    vec4 prev_origin;
-    vec4 prev_forward;
-    vec4 prev_right;
-    vec4 prev_up;

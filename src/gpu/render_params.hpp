@@ -90,23 +90,8 @@ struct RenderParams {
     // x: first entry, yzw: size in blocks. The march steps over empty blocks instead of
     // walking them a voxel at a time.
     u32 clip_coarse[kMaxPreviewBoxes][4];
-
-    // Where the camera stood last frame, so a pixel can find where its surface was on the
-    // screen then and carry its average forward instead of starting again.
-    //
-    // Expressed in *this* frame's space. The space is anchored to the chunk the camera is in,
-    // so crossing a chunk boundary shifts every coordinate by 256 voxels; folding that in on
-    // the CPU, where the chunk numbers are 64-bit anyway, leaves the shader with one
-    // subtraction rather than a pair of coordinate systems to reconcile.
-    //
-    // prev_origin.w is 1 when there is a previous frame worth reprojecting from and 0 on the
-    // first frame, after a resize, and any other time the history is not the same picture.
-    f32 prev_origin[4];
-    f32 prev_forward[4];
-    f32 prev_right[4];
-    f32 prev_up[4];
 };
-static_assert(sizeof(RenderParams) == 1552, "RenderParams must match the GLSL block");
+static_assert(sizeof(RenderParams) == 1488, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.
