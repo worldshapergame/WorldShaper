@@ -619,6 +619,28 @@ void main() {
 
         radiance = m.emission;
 
+        // A summary hit is a stand-in for geometry that has not been streamed, and it gets
+        // shaded rather than traced.
+        //
+        // Tracing it is both wrong and ruinously expensive. Wrong, because the shadow and
+        // bounce rays are cast against a world that is only there in outline — they mostly hit
+        // the same coarse block they started on and report everything occluded, which is the
+        // distant chunks coming out black. Expensive, because these are exactly the pixels
+        // with nothing resident, so every one of them pays for four full-length marches: at
+        // 400x225 that was enough to trip the driver's watchdog and lose the device outright.
+        //
+        // The sun without a shadow test and the sky as ambient. Both are honest at this range:
+        // the block is kilometres away and a fraction of a pixel, and a shadow it cannot
+        // resolve is not a shadow anyone can see.
+        if (hit.level >= 5) {
+            float n_dot_l = max(dot(normal, trace.sun.xyz), 0.0);
+            radiance += m.albedo * (trace.sun_colour.rgb * n_dot_l / kPi +
+                                    sky_radiance(normal) * 0.5);
+            radiance = clamp_finite(radiance);
+            write_pixel(pixel, sample_index, radiance, primary_t, aspect);
+            return;
+        }
+
         ivec3 voxel = ivec3(floor(point - normal * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
         uint level = cache_level(hit.t);
         uint lo, hi;
@@ -705,6 +727,30 @@ void main() {
         // cheaper to be able to look at it.
         if (push.resolution.z == 5u) {
             vec3 mark = (slot == 0xFFFFFFFFu) ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.7, 0.0);
+            imageStore(out_colour, pixel, vec4(mark, 1.0));
+            return;
+        }
+
+        // Debug view 6: why a pixel came out dark, rather than another guess at it.
+        //
+        //   red     the material's own albedo is black, so no light could show on it
+        //   blue    no cache entry, so no indirect light at all
+        //   yellow  an entry, holding nothing
+        //   cyan    the sun is not visible and indirect is all there is
+        //   grey    lit normally
+        //
+        // Distant chunks have come out black twice now, for two different reasons, and both
+        // times the cause had to be inferred from a photograph. This makes the render say it.
+        if (push.resolution.z == 6u) {
+            FaceLight probe = read_face_seeded(voxel, hit.normal, level, trace.control.z);
+            float albedo_max = max(m.albedo.r, max(m.albedo.g, m.albedo.b));
+            float light_max = max(probe.indirect.r, max(probe.indirect.g, probe.indirect.b));
+            vec3 mark;
+            if (albedo_max < 0.01) mark = vec3(1.0, 0.0, 0.0);
+            else if (!probe.known) mark = vec3(0.0, 0.0, 1.0);
+            else if (light_max < 0.001 && probe.visibility < 0.001) mark = vec3(1.0, 1.0, 0.0);
+            else if (probe.visibility < 0.001) mark = vec3(0.0, 1.0, 1.0);
+            else mark = vec3(0.35);
             imageStore(out_colour, pixel, vec4(mark, 1.0));
             return;
         }
