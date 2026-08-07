@@ -62,6 +62,16 @@ bool has_layer(const std::vector<VkLayerProperties>& list, const char* name) {
 
 }  // namespace
 
+// The one device, so that WS_VK can ask it what happened without every call site holding a
+// pointer to it. There is exactly one for the life of the process.
+namespace {
+const Device* g_device_for_lost_report = nullptr;
+}
+
+void report_device_lost() {
+    if (g_device_for_lost_report != nullptr) g_device_for_lost_report->log_device_lost();
+}
+
 Device::~Device() { destroy(); }
 
 bool Device::create(Window* window, bool enable_validation) {
@@ -322,6 +332,33 @@ bool Device::create_logical_device() {
     // enabling a promoted extension is free on any device that reports 1.3.
     device_extensions.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
 
+    // Diagnostics for a lost device. Both are optional and cost nothing when the GPU is
+    // healthy: checkpoints are a marker write per pass, and the fault extension is only ever
+    // read after the device has already died.
+    //
+    // Worth having enabled always rather than behind a flag. A lost device is exactly the
+    // failure a player cannot reproduce on demand, so the one time it happens has to be the
+    // time it is recorded.
+    u32 available_count = 0;
+    vkEnumerateDeviceExtensionProperties(physical_, nullptr, &available_count, nullptr);
+    std::vector<VkExtensionProperties> available(available_count);
+    vkEnumerateDeviceExtensionProperties(physical_, nullptr, &available_count, available.data());
+
+    checkpoints_ = has_extension(available, VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+    if (checkpoints_) {
+        device_extensions.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+    }
+
+    VkPhysicalDeviceFaultFeaturesEXT fault_features{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
+    device_fault_ = has_extension(available, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    if (device_fault_) {
+        device_extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+        fault_features.deviceFault = VK_TRUE;
+        fault_features.pNext = features2.pNext;
+        features2.pNext = &fault_features;
+    }
+
     VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     info.pNext = &features2;
     info.queueCreateInfoCount = static_cast<u32>(queue_infos.size());
@@ -346,7 +383,71 @@ bool Device::create_logical_device() {
         transfer_queue_ = graphics_queue_;
         transfer_family_ = graphics_family_;
     }
+
+    g_device_for_lost_report = this;
+    WS_LOG_INFO("gpu", "device-lost diagnostics: checkpoints {}, fault info {}",
+                checkpoints_ ? "yes" : "no", device_fault_ ? "yes" : "no");
     return true;
+}
+
+void Device::log_device_lost() const {
+    WS_LOG_ERROR("gpu", "device lost. Asking the driver what it was doing.");
+
+    // Which passes the GPU had actually reached. Markers are recorded at the top and tail of
+    // every pass, so the last TOP_OF_PIPE marker without its matching BOTTOM_OF_PIPE is the
+    // pass that was still running — which is the pass that killed it.
+    if (checkpoints_ && graphics_queue_ != VK_NULL_HANDLE) {
+        u32 count = 0;
+        vkGetQueueCheckpointData2NV(graphics_queue_, &count, nullptr);
+        if (count == 0) {
+            WS_LOG_ERROR("gpu", "  no checkpoints reported");
+        } else {
+            std::vector<VkCheckpointData2NV> data(
+                count, VkCheckpointData2NV{VK_STRUCTURE_TYPE_CHECKPOINT_DATA_2_NV});
+            vkGetQueueCheckpointData2NV(graphics_queue_, &count, data.data());
+            for (const VkCheckpointData2NV& point : data) {
+                const char* marker = static_cast<const char*>(point.pCheckpointMarker);
+                WS_LOG_ERROR("gpu", "  checkpoint stage 0x{:016X}: {}",
+                             static_cast<u64>(point.stage), marker ? marker : "(null)");
+            }
+        }
+    } else {
+        WS_LOG_ERROR("gpu", "  no checkpoint support on this driver");
+    }
+
+    // Page faults and their addresses, where the driver will say. This distinguishes the two
+    // things a lost device usually is: a shader reading out of bounds, or a dispatch that ran
+    // long enough for the operating system to reset the GPU underneath it.
+    if (device_fault_ && device_ != VK_NULL_HANDLE) {
+        VkDeviceFaultCountsEXT counts{VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
+        if (vkGetDeviceFaultInfoEXT(device_, &counts, nullptr) == VK_SUCCESS) {
+            std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
+            std::vector<VkDeviceFaultVendorInfoEXT> vendors(counts.vendorInfoCount);
+            std::vector<u8> binary(static_cast<usize>(counts.vendorBinarySize));
+
+            VkDeviceFaultInfoEXT fault{VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT};
+            fault.pAddressInfos = addresses.empty() ? nullptr : addresses.data();
+            fault.pVendorInfos = vendors.empty() ? nullptr : vendors.data();
+            fault.pVendorBinaryData = binary.empty() ? nullptr : binary.data();
+            if (vkGetDeviceFaultInfoEXT(device_, &counts, &fault) == VK_SUCCESS) {
+                WS_LOG_ERROR("gpu", "  driver says: {}", fault.description);
+                for (u32 i = 0; i < counts.addressInfoCount; ++i) {
+                    WS_LOG_ERROR("gpu", "  fault type {} at 0x{:016X} (precision {} bytes)",
+                                 static_cast<u32>(addresses[i].addressType),
+                                 static_cast<u64>(addresses[i].reportedAddress),
+                                 static_cast<u64>(addresses[i].addressPrecision));
+                }
+                for (u32 i = 0; i < counts.vendorInfoCount; ++i) {
+                    WS_LOG_ERROR("gpu", "  vendor: {} (code {}, data {})",
+                                 vendors[i].description,
+                                 static_cast<u64>(vendors[i].vendorFaultCode),
+                                 static_cast<u64>(vendors[i].vendorFaultData));
+                }
+            }
+        }
+    } else {
+        WS_LOG_ERROR("gpu", "  no fault-info support on this driver");
+    }
 }
 
 bool Device::create_allocator() {

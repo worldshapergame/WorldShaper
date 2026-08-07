@@ -214,7 +214,30 @@ u32 ResidencyManager::grid_index(i64 chunk_x, i64 chunk_y, i64 chunk_z) const {
     return static_cast<u32>((gz * budget_.grid_height + gy) * budget_.grid_width + gx);
 }
 
-void ResidencyManager::request(const ChunkCoord& coord) { requested_.push_back(coord); }
+void ResidencyManager::set_view_centre(const ChunkCoord& centre) {
+    view_centre_ = centre;
+    view_centre_set_ = true;
+}
+
+bool ResidencyManager::within_window(const ChunkCoord& coord) const {
+    // Before the first camera update everything is in, so start-up ordering cannot silently
+    // drop the chunks under your feet.
+    if (!view_centre_set_) return true;
+    const i64 half_x = static_cast<i64>(budget_.grid_width) / 2 - 1;
+    const i64 half_y = static_cast<i64>(budget_.grid_height) / 2 - 1;
+    const i64 half_z = static_cast<i64>(budget_.grid_depth) / 2 - 1;
+    return std::abs(coord.x - view_centre_.x) <= half_x &&
+           std::abs(coord.y - view_centre_.y) <= half_y &&
+           std::abs(coord.z - view_centre_.z) <= half_z;
+}
+
+void ResidencyManager::request(const ChunkCoord& coord) {
+    // Dropped rather than queued. A chunk outside the window has no cell of its own: making
+    // it resident would take the cell belonging to one inside, and that chunk would then
+    // draw from its summary until something else took the cell back.
+    if (!within_window(coord)) return;
+    requested_.push_back(coord);
+}
 
 void ResidencyManager::invalidate(const ChunkCoord& coord) { dirty_.insert(coord); }
 
@@ -557,6 +580,25 @@ const UploadBatch& ResidencyManager::update(const World& world, u64 frame) {
         }
         coarse_dirty_ = false;
         coarse_changed_.clear();
+    }
+
+    // Anything the camera has walked away from far enough that the grid can no longer hold
+    // it without colliding with something nearer.
+    //
+    // Evicted, not merely stopped-being-refreshed. A chunk left resident outside the window
+    // keeps its cell, and that cell belongs to a chunk inside the window; the one inside then
+    // reads as absent and draws from its summary. Walking towards a distant build used to
+    // make chunks flip between full detail and a coarse stand-in for exactly this reason.
+    if (view_centre_set_) {
+        outside_window_.clear();
+        for (const auto& entry : chunks_) {
+            if (!within_window(entry.first)) outside_window_.push_back(entry.first);
+        }
+        for (const ChunkCoord& coord : outside_window_) {
+            evict_chunk(coord);
+            dirty_.erase(coord);
+            ++batch_.chunks_evicted;
+        }
     }
 
     // Carry over everything known to be stale. These are re-offered every frame until they

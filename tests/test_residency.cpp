@@ -271,6 +271,105 @@ TEST_CASE("requesting a chunk uploads it, and the mirror matches the world exact
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// The residency window
+//
+// The record grid is wrapped, so two chunks a grid period apart land on the same cell. Only
+// one can own it, and the loser reads as "not resident" and is drawn from its summary — so a
+// build spanning more than the grid reaches makes chunks flip between full detail and a
+// coarse stand-in as the ownership changes. These pin the invariant that prevents it.
+// ---------------------------------------------------------------------------------------
+
+namespace {
+
+// Two solid blocks, one at the origin and one exactly a grid period away along x.
+void build_two_far_apart(World& world, i64 period_chunks) {
+    MatterLedger ledger;
+    const i64 far_x = period_chunks * kChunkEdge;
+    apply_op(world, Op::fill_box(0, 0, 0, 0, 0, 200, 200, 200, 1, MatterReason::Generation),
+             ledger);
+    apply_op(world,
+             Op::fill_box(1, 0, far_x, 0, 0, far_x + 200, 200, 200, 1,
+                          MatterReason::Generation),
+             ledger);
+}
+
+u64 pump(ResidencyManager& residency, World& world, const ChunkCoord& centre, u64 start) {
+    u64 frame = start;
+    for (; frame < start + 300; ++frame) {
+        residency.set_view_centre(centre);
+        for (const ChunkCoord& coord : world.sorted_chunk_coords()) residency.request(coord);
+        const UploadBatch& batch = residency.update(world, frame);
+        REQUIRE(residency.validate());
+        if (batch.chunks_deferred == 0 && batch.chunks_added == 0 && batch.chunks_evicted == 0) {
+            break;
+        }
+    }
+    return frame;
+}
+
+}  // namespace
+
+TEST_CASE("no two resident chunks ever share a grid cell") {
+    World world;
+    ResidencyBudget budget;
+    build_two_far_apart(world, budget.grid_width);
+
+    ResidencyManager residency;
+    residency.create(budget, types);
+    pump(residency, world, ChunkCoord{0, 0, 0}, 1);
+
+    // The invariant, stated directly. If this fails, some chunk somewhere is being drawn
+    // from its summary while a perfectly good copy of it sits in memory.
+    std::unordered_map<u32, ChunkCoord> owner;
+    for (const ChunkCoord& coord : world.sorted_chunk_coords()) {
+        if (!residency.resident(coord)) continue;
+        const u32 cell = residency.grid_index(coord.x, coord.y, coord.z);
+        const auto clash = owner.find(cell);
+        REQUIRE_MESSAGE(clash == owner.end(), "two resident chunks on one grid cell");
+        owner.emplace(cell, coord);
+    }
+    CHECK(owner.size() > 0);
+}
+
+TEST_CASE("a chunk a grid period away is refused rather than stealing a cell") {
+    World world;
+    ResidencyBudget budget;
+    build_two_far_apart(world, budget.grid_width);
+
+    ResidencyManager residency;
+    residency.create(budget, types);
+    pump(residency, world, ChunkCoord{0, 0, 0}, 1);
+
+    CHECK(residency.resident(ChunkCoord{0, 0, 0}));
+    CHECK_FALSE(residency.within_window(ChunkCoord{budget.grid_width, 0, 0}));
+    CHECK_FALSE(residency.resident(ChunkCoord{budget.grid_width, 0, 0}));
+}
+
+TEST_CASE("the window follows the camera, evicting behind and admitting ahead") {
+    World world;
+    ResidencyBudget budget;
+    build_two_far_apart(world, budget.grid_width);
+
+    ResidencyManager residency;
+    residency.create(budget, types);
+    pump(residency, world, ChunkCoord{0, 0, 0}, 1);
+    REQUIRE(residency.resident(ChunkCoord{0, 0, 0}));
+
+    // Walk the camera onto the far block. The near one must leave, or it keeps the cell the
+    // far one needs — which is the flicker, just spread over a longer walk.
+    const ChunkCoord far_centre{budget.grid_width, 0, 0};
+    pump(residency, world, far_centre, 400);
+
+    CHECK(residency.resident(far_centre));
+    CHECK_FALSE(residency.resident(ChunkCoord{0, 0, 0}));
+
+    // And back again, so eviction is not one-way.
+    pump(residency, world, ChunkCoord{0, 0, 0}, 800);
+    CHECK(residency.resident(ChunkCoord{0, 0, 0}));
+    CHECK_FALSE(residency.resident(far_centre));
+}
+
 TEST_CASE("an edited chunk is refreshed even when the frame it was edited on was full") {
     // The trap this guards is that streaming is *pull*-based. The renderer reports chunks it
     // wanted and could not find; a chunk that is resident but out of date is found, so it is

@@ -1010,6 +1010,11 @@ void Application::stream(f64 seconds) {
     // margin is well inside the window, so the grid is never consulted past what it
     // describes.
     const ChunkCoord centre{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
+
+    // The wrapped record grid can only describe one period at a time, so residency follows
+    // the camera. Set before any request is made this frame, because request() uses it.
+    residency_.set_view_centre(centre);
+
     const ChunkCoord& built = residency_.coarse_centre();
     constexpr i64 kCoarseFollowMargin = 8;   // chunks, 64 m
     if (std::abs(centre.x - built.x) > kCoarseFollowMargin ||
@@ -1062,6 +1067,8 @@ void Application::stream(f64 seconds) {
 
     // A small radius around the camera on top, so the ground under your feet is resident
     // before it has been looked at. Feedback cannot report what has never been on screen.
+    // (The window itself is set before the loop above, so requests outside it are already
+    // being dropped rather than queued and then discarded.)
     const i64 radius_chunks = 2;
     for (i64 z = -radius_chunks; z <= radius_chunks; ++z) {
         for (i64 y = -1; y <= 1; ++y) {

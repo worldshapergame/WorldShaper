@@ -131,11 +131,26 @@ struct ResidencyBudget {
     u32 max_bricks = 262144;   // brick slots: headers and occupancy
     u32 max_chunks = 4096;     // chunk records, and their masks and prefixes
 
-    // The wrapped chunk grid. 64 x 16 x 64 covers ±256 m horizontally and ±64 m
-    // vertically before a cell can alias, which is far beyond any streaming radius.
-    u32 grid_width = 64;
-    u32 grid_height = 16;
-    u32 grid_depth = 64;
+    // The wrapped chunk grid.
+    //
+    // Square, and paired with a window that keeps residency inside one period of it — see
+    // ResidencyManager::within_window. Two resident chunks a grid-period apart land on the
+    // same cell, only one of them can own it, and the loser reads as "not resident" and gets
+    // drawn from its summary instead. That is the alternating between full detail and a
+    // coarse stand-in that shows up once a build spans more than the grid reaches.
+    //
+    // The height was 16, reaching ±64 m, on the same reasoning that has already been
+    // corrected once for the coarse grid above: a streaming radius will never be that large.
+    // Build a tower and it is.
+    //
+    // 128 cubed, so the window reaches ±63 chunks — about half a kilometre in every
+    // direction. A cell is four bytes, so the whole grid is 8 MB and the window is bounded by
+    // the record pool rather than by the grid. At 64 the window was ±248 m, and a camera
+    // standing back from a large build put half of it outside: refused, so reported as
+    // missing by every ray that touched it, every frame, for ever.
+    u32 grid_width = 128;
+    u32 grid_height = 128;
+    u32 grid_depth = 128;
 
     // Per-frame work caps. Streaming is allowed to fall behind — a chunk that does not
     // arrive this frame arrives next, and the renderer draws it at a coarser level in the
@@ -210,6 +225,21 @@ public:
 
     // Called by the renderer's feedback pass: "I wanted this chunk this frame."
     void request(const ChunkCoord& coord);
+
+    // Where the camera is, in chunks. The wrapped grid can only represent one period at a
+    // time, so residency is confined to a window around this point: requests outside it are
+    // dropped and residents that fall outside it are evicted.
+    //
+    // Without this two chunks a period apart collide in one cell, and which of them the cell
+    // names depends on upload order — so a chunk flips between full detail and its summary
+    // as you move. Confining residency is what makes "is this chunk resident" a question
+    // with one answer.
+    void set_view_centre(const ChunkCoord& centre);
+
+    // Whether a chunk can be represented at all, given where the camera is standing. One
+    // less than half the grid on each axis, so every chunk in the window owns a distinct
+    // cell — the same rule the coarse grid states above, for the same reason.
+    bool within_window(const ChunkCoord& coord) const;
 
     // Called by whatever edited the world: "the copy you are holding is out of date."
     //
@@ -364,6 +394,8 @@ private:
     bool coarse_dirty_ = false;       // coarse_changed_ is waiting to be sent
     bool coarse_all_dirty_ = false;   // the GPU copy is of unknown age; send everything
     ChunkCoord coarse_centre_{};
+    ChunkCoord view_centre_{};        // the camera's chunk; the residency window centres here
+    bool view_centre_set_ = false;
     std::vector<u32> coarse_uploaded_;   // what the GPU has been *sent*, to diff a rebuild against
     std::vector<u32> coarse_changed_;    // cells that differ, as flat indices
     std::vector<u32> free_records_;
@@ -372,6 +404,7 @@ private:
     std::unordered_map<ChunkCoord, ResidentChunk, ChunkCoordHash> chunks_;
     PendingUpload pending_;
     std::vector<ChunkCoord> requested_;
+    std::vector<ChunkCoord> outside_window_;   // scratch: residents the window has left behind
     std::unordered_set<ChunkCoord, ChunkCoordHash> dirty_;   // stale, and nobody else knows
     UploadBatch batch_;
 

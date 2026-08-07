@@ -60,6 +60,14 @@ public:
     // RenderDoc name the thing that actually went wrong.
     void set_name(u64 object, VkObjectType type, const char* name) const;
 
+    // Whether the driver will tell us which pass was running when it died. Present on
+    // NVIDIA; absent elsewhere, in which case the markers are simply not recorded.
+    bool has_checkpoints() const { return checkpoints_; }
+
+    // Everything the driver is willing to say about a lost device, written to the log so it
+    // lands in the crash report. Safe to call on a dead device: that is its entire purpose.
+    void log_device_lost() const;
+
 private:
     bool create_instance(bool enable_validation);
     bool pick_physical_device();
@@ -82,6 +90,8 @@ private:
     Window* window_ = nullptr;
     bool validation_ = false;
     bool debug_utils_ = false;
+    bool checkpoints_ = false;    // VK_NV_device_diagnostic_checkpoints
+    bool device_fault_ = false;   // VK_EXT_device_fault
     DeviceCapabilities caps_;
 };
 

@@ -561,10 +561,64 @@ uint cache_level(float t) {
 // How many samples a face needs before the pixels standing on it stop tracing for it.
 const uint kFaceTarget = 192u;
 
+// What fraction of the screen may trace past the primary ray in any one frame: one pixel in
+// this many, rotating so every pixel gets its turn.
+//
+// Standing still this changes nothing — the faces are already converged and nobody is
+// tracing. It bounds the transient. Arrive somewhere new and every face in front of you is
+// cold at once, so without this every pixel traces a shadow ray and a bounce in the same
+// dispatch, and each of those can march the width of the world. That spike is what a
+// driver's watchdog kills, and a killed dispatch is a lost device, which is the crash.
+//
+// The same reasoning as the streaming budget: work that must happen is spread over frames
+// rather than allowed to arrive all at once. Four frames is a sixteenth of a second.
+const uint kRefineStride = 4u;
+
 // Anything not finite would poison the average for every sample after it, and one bad pixel
 // would never wash out.
 vec3 clamp_finite(vec3 v) {
     return (any(isnan(v)) || any(isinf(v))) ? vec3(0.0) : v;
+}
+
+// What a summary block radiates: the sun with no shadow test, and the sky as ambient.
+//
+// Used by the primary ray and by a bounce that lands on one, and it has to be both. A
+// summary block is geometry that was never streamed, so it has no faces and never will —
+// nothing contributes to them, so a lookup there returns "unknown" for ever.
+//
+// A bounce landing on one used to read that entry, find nothing, and return zero. Zero is
+// not "no answer yet", it is *black*, and it was then contributed to the face the bounce
+// started from and counted like any other sample. So the near face converged to black on the
+// strength of light that was never measured — and because a cache does not wash out, it
+// stayed. That is distant chunks going black: not the distant geometry being drawn wrong,
+// but the near surfaces that bounce off it being told the world is unlit.
+vec3 summary_radiance(vec3 normal, Material m) {
+    float n_dot_l = max(dot(normal, trace.sun.xyz), 0.0);
+    return m.emission + m.albedo * (trace.sun_colour.rgb * n_dot_l / kPi +
+                                    sky_radiance(normal) * 0.5);
+}
+
+// Debug view 6: why a pixel came out the colour it did, judged on the value that actually
+// shaded it.
+//
+//   red     the material's own albedo is black, so no light could show on it
+//   blue    nothing known about this face, so the pixel is running on its own samples
+//   yellow  a face that is known and holds nothing — the one that renders black
+//   cyan    no sun here; indirect is all the light there is
+//   grey    lit normally
+//
+// It has to be called at the point of shading, and once per path. Placed anywhere earlier it
+// probes the table before this frame has contributed to it, so every face reads empty and the
+// view says "unknown" everywhere — which is what it said, and it was the diagnostic that was
+// wrong rather than the renderer.
+vec3 why_dark(Material m, FaceLight light) {
+    float albedo_max = max(m.albedo.r, max(m.albedo.g, m.albedo.b));
+    float light_max = max(light.indirect.r, max(light.indirect.g, light.indirect.b));
+    if (albedo_max < 0.01) return vec3(1.0, 0.0, 0.0);
+    if (!light.known) return vec3(0.0, 0.0, 1.0);
+    if (light_max < 0.001 && light.visibility < 0.001) return vec3(1.0, 1.0, 0.0);
+    if (light.visibility < 0.001) return vec3(0.0, 1.0, 1.0);
+    return vec3(0.35);
 }
 
 void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance, float primary_t, float aspect) {
@@ -632,6 +686,24 @@ void main() {
 
         radiance = m.emission;
 
+        // Debug view 7: what the primary ray actually hit, and how coarse it was.
+        //
+        //   green    a real voxel (level 0)
+        //   blue     a summary block, brightening with the tier it came from
+        //   red      hit something whose albedo is black, whatever its level
+        //
+        // Every previous account of "distant chunks are black" has had to guess whether the
+        // geometry was summary or real, and twice the guess was wrong. This answers it.
+        if (push.resolution.z == 7u) {
+            vec3 mark;
+            float albedo_max = max(m.albedo.r, max(m.albedo.g, m.albedo.b));
+            if (albedo_max < 0.02) mark = vec3(1.0, 0.0, 0.0);
+            else if (hit.level >= 5) mark = vec3(0.0, 0.15, 0.35 + 0.1 * float(hit.level - 5));
+            else mark = vec3(0.0, 0.8, 0.0);
+            imageStore(out_colour, pixel, vec4(mark, 1.0));
+            return;
+        }
+
         // A summary hit is a stand-in for geometry that has not been streamed, and it gets
         // shaded rather than traced.
         //
@@ -646,10 +718,7 @@ void main() {
         // the block is kilometres away and a fraction of a pixel, and a shadow it cannot
         // resolve is not a shadow anyone can see.
         if (hit.level >= 5) {
-            float n_dot_l = max(dot(normal, trace.sun.xyz), 0.0);
-            radiance += m.albedo * (trace.sun_colour.rgb * n_dot_l / kPi +
-                                    sky_radiance(normal) * 0.5);
-            radiance = clamp_finite(radiance);
+            radiance = clamp_finite(summary_radiance(normal, m));
             write_pixel(pixel, sample_index, radiance, primary_t, aspect);
             return;
         }
@@ -671,7 +740,17 @@ void main() {
         // A small fraction keep going regardless, so a face is never frozen: light that moves,
         // or a neighbour that changed, still works its way in.
         uint have = (slot != 0xFFFFFFFFu) ? faces.items[slot].count : 0u;
-        bool refine = (have < kFaceTarget) || (rand(state) < 0.02);
+        bool turn = ((uint(pixel.x) * 3u + uint(pixel.y) * 5u + trace.control.z) %
+                     kRefineStride) == 0u;
+        bool refine = ((have < kFaceTarget) || (rand(state) < 0.02)) && turn;
+
+        // Debug view 5: whether the table could hold this face at all. Red is a pixel the
+        // table refused a slot; green is a face it holds.
+        if (push.resolution.z == 5u) {
+            vec3 mark = (slot == 0xFFFFFFFFu) ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.7, 0.0);
+            imageStore(out_colour, pixel, vec4(mark, 1.0));
+            return;
+        }
 
         float visibility = 0.0;
         vec3 incoming = vec3(0.0);
@@ -679,6 +758,18 @@ void main() {
         if (!refine) {
             FaceLight known = read_face_blended(voxel, hit.normal, cache_level_exact(hit.t),
                                                 trace.control.z);
+            if (push.resolution.z == 6u) {
+                imageStore(out_colour, pixel, vec4(why_dark(m, known), 1.0));
+                return;
+            }
+            if (!known.known) {
+                // Not this pixel's turn to trace, and nothing known here yet. The sky floor
+                // again rather than zero — for the frame or two before its turn comes round,
+                // a surface should read as dim, not as unlit.
+                radiance += m.albedo * sky_radiance(normal) * 0.5;
+                write_pixel(pixel, sample_index, clamp_finite(radiance), primary_t, aspect);
+                return;
+            }
             radiance += sun_light(normal, dir, m, known.visibility) +
                         m.albedo * (1.0 - m.metallic) * known.indirect;
             radiance = clamp_finite(radiance);
@@ -701,19 +792,38 @@ void main() {
             Material m2 = (second.level == 0) ? material_of(second.type_id)
                                               : material_from_colour(second.colour);
 
-            // The far end reads its own face rather than tracing on. This is what makes the
-            // bounce count unbounded for nothing: what is read there already contains its own
-            // sun and its own indirect from earlier frames, so light gains a bounce per frame
-            // and keeps it. If that face is not in the table yet its light is simply missing
-            // this frame and arrives once it is.
-            ivec3 voxel2 = ivec3(floor(p2 - n2 * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
-            uint lo2, hi2;
-            face_key(voxel2, second.normal, cache_level(hit.t + second.t), lo2, hi2);
-            FaceLight far = read_face_seeded(voxel2, second.normal,
-                                             cache_level(hit.t + second.t), trace.control.z);
+            if (second.level >= 5) {
+                // Shaded, not looked up. A summary block has no faces and never will, so the
+                // lookup below would return zero every time and that zero would be averaged
+                // into the face this bounce came from as though it were a measurement.
+                incoming = summary_radiance(n2, m2);
+            } else {
+                // The far end reads its own face rather than tracing on. This is what makes
+                // the bounce count unbounded for nothing: what is read there already contains
+                // its own sun and its own indirect from earlier frames, so light gains a
+                // bounce per frame and keeps it. If that face is not in the table yet its
+                // light is simply missing this frame and arrives once it is.
+                ivec3 voxel2 = ivec3(floor(p2 - n2 * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
+                FaceLight far = read_face_seeded(voxel2, second.normal,
+                                                 cache_level(hit.t + second.t),
+                                                 trace.control.z);
 
-            incoming = m2.emission + sun_light(n2, bounce_dir, m2, far.visibility) +
-                       m2.albedo * (1.0 - m2.metallic) * far.indirect;
+                if (far.known) {
+                    incoming = m2.emission + sun_light(n2, bounce_dir, m2, far.visibility) +
+                               m2.albedo * (1.0 - m2.metallic) * far.indirect;
+                } else {
+                    // Nothing known there yet. Returning zero is the tempting thing and it is
+                    // how a wall goes black and stays black: zero is not "no answer", it is
+                    // "no light", and it gets averaged into this face and counted like a
+                    // measurement. Two surfaces facing each other in shadow then each teach
+                    // the other that the world is dark, and a cache does not wash out.
+                    //
+                    // The sky is a floor everything outdoors actually stands under, and it is
+                    // the one term available without another ray. Biased low rather than
+                    // absent, and it gives way as real samples arrive.
+                    incoming = m2.emission + m2.albedo * sky_radiance(n2) * 0.5;
+                }
+            }
         }
 
         // Contribute. Clamped, because a single path that finds the sun through a gap carries
@@ -733,41 +843,6 @@ void main() {
         // frame. A face the table could not hold falls back to this pixel's own samples: noisy,
         // and *correct*, where before it fell back to nothing at all â€” which in shadow, where
         // indirect is the only light there is, drew pure black.
-        // Debug view 5: where the cache is actually working. Red is a pixel that had to fall
-        // back to its own samples because no slot could be found; green is a face the table
-        // holds. This class of fault has now been reported twice — once as black voxels, once
-        // as patches of noise — and both times it had to be deduced from a photograph. It is
-        // cheaper to be able to look at it.
-        if (push.resolution.z == 5u) {
-            vec3 mark = (slot == 0xFFFFFFFFu) ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.7, 0.0);
-            imageStore(out_colour, pixel, vec4(mark, 1.0));
-            return;
-        }
-
-        // Debug view 6: why a pixel came out dark, rather than another guess at it.
-        //
-        //   red     the material's own albedo is black, so no light could show on it
-        //   blue    no cache entry, so no indirect light at all
-        //   yellow  an entry, holding nothing
-        //   cyan    the sun is not visible and indirect is all there is
-        //   grey    lit normally
-        //
-        // Distant chunks have come out black twice now, for two different reasons, and both
-        // times the cause had to be inferred from a photograph. This makes the render say it.
-        if (push.resolution.z == 6u) {
-            FaceLight probe = read_face_seeded(voxel, hit.normal, level, trace.control.z);
-            float albedo_max = max(m.albedo.r, max(m.albedo.g, m.albedo.b));
-            float light_max = max(probe.indirect.r, max(probe.indirect.g, probe.indirect.b));
-            vec3 mark;
-            if (albedo_max < 0.01) mark = vec3(1.0, 0.0, 0.0);
-            else if (!probe.known) mark = vec3(0.0, 0.0, 1.0);
-            else if (light_max < 0.001 && probe.visibility < 0.001) mark = vec3(1.0, 1.0, 0.0);
-            else if (probe.visibility < 0.001) mark = vec3(0.0, 1.0, 1.0);
-            else mark = vec3(0.35);
-            imageStore(out_colour, pixel, vec4(mark, 1.0));
-            return;
-        }
-
         FaceLight here = read_face_seeded(voxel, hit.normal, level, trace.control.z);
         if (here.known && here.count >= kSeedSamples) {
             here = read_face_blended(voxel, hit.normal, cache_level_exact(hit.t), trace.control.z);
@@ -775,6 +850,10 @@ void main() {
         if (!here.known) {
             here.visibility = visibility;
             here.indirect = incoming;
+        }
+        if (push.resolution.z == 6u) {
+            imageStore(out_colour, pixel, vec4(why_dark(m, here), 1.0));
+            return;
         }
         radiance += sun_light(normal, dir, m, here.visibility) +
                     m.albedo * (1.0 - m.metallic) * here.indirect;

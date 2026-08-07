@@ -39,6 +39,17 @@ void GpuProfiler::begin_frame(VkCommandBuffer cmd, u32 frame_index) {
     open_pass_ = -1;
 }
 
+// The marker a finished pass leaves behind. A driver reports every checkpoint the queue
+// reached, so a begin marker with no matching finish after it is the pass that was still
+// running when the device died — which is the pass that killed it.
+//
+// The begin marker is the pass name pointer itself. Every call site passes a string literal,
+// which outlives the queue; a pointer into a temporary would be read back after the fault,
+// long after it stopped being valid.
+namespace {
+const char* const kPassFinished = "-- finished";
+}
+
 void GpuProfiler::begin_pass(VkCommandBuffer cmd, const char* name, f64 budget_ms) {
     FrameQueries& frame = frames_[current_];
     if (frame.count >= kMaxPasses) return;
@@ -47,6 +58,9 @@ void GpuProfiler::begin_pass(VkCommandBuffer cmd, const char* name, f64 budget_m
     frame.budgets[frame.count] = budget_ms;
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, frame.pool,
                          frame.count * 2);
+    if (device_->has_checkpoints()) {
+        vkCmdSetCheckpointNV(cmd, const_cast<char*>(name));
+    }
 }
 
 void GpuProfiler::end_pass(VkCommandBuffer cmd) {
@@ -54,6 +68,9 @@ void GpuProfiler::end_pass(VkCommandBuffer cmd) {
     if (open_pass_ < 0) return;
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, frame.pool,
                          static_cast<u32>(open_pass_) * 2 + 1);
+    if (device_->has_checkpoints()) {
+        vkCmdSetCheckpointNV(cmd, const_cast<char*>(kPassFinished));
+    }
     ++frame.count;
     open_pass_ = -1;
 }
