@@ -356,17 +356,54 @@ float rand(inout uint state) { return float(pcg(state)) * (1.0 / 4294967296.0); 
 // Cosine-weighted hemisphere around n. Cosine-weighted because the diffuse BRDF is divided by
 // exactly that cosine, so the two cancel and the estimator is just the albedo ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â the lowest
 // variance a diffuse bounce can have without knowing where the light is.
-vec3 cosine_hemisphere(vec3 n, inout uint state) {
-    float u1 = rand(state);
-    float u2 = rand(state);
-    float r = sqrt(u1);
-    float phi = 2.0 * kPi * u2;
+// ---- stratification across the pixels of a face ---------------------------------------
+//
+// A face's answer is the pooled work of every pixel standing on it — often hundreds of them,
+// each sending one ray per frame. Drawn independently those rays land where chance puts them:
+// three in one part of the hemisphere, none in the next. The face is paying for a hundred
+// samples and getting the coverage of far fewer.
+//
+// Handing each pixel a different cell of the hemisphere fixes that, and costs nothing. The cell
+// comes from the pixel's own position, so neighbouring pixels take neighbouring cells and the
+// pixels covering a face between them sweep the whole set. This is the ordinary variance
+// reduction of stratified sampling, except that the strata are shared out across *pixels*
+// rather than across one pixel's samples over time — which is the arrangement that suits a
+// cache keyed to faces, because the pooling is what does the averaging.
+//
+// The assignment walks with the frame, so a single pixel still sees every cell in turn. That
+// matters for the small faces: one covered by four pixels gets four cells this frame and four
+// others next, rather than the same four for ever.
+const uint kStrata = 4u;
+
+vec2 stratified_pair(ivec2 pixel, uint frame, uint salt, inout uint state) {
+    uint shift = hash_u32(frame * 0x9E3779B9u + salt);
+    // Halved coordinates, because not every pixel traces every frame. The pixels that do are
+    // chosen by (3x + 5y + frame) modulo the refine stride, which at stride two is a parity
+    // condition on x + y — and a cell index taken straight from x and y is a function of that
+    // same parity, so half the cells were unreachable in any given frame. Shifting down by one
+    // breaks the correlation: among the pixels that do trace, both halved coordinates still run
+    // through every value.
+    uint i = ((uint(pixel.x) >> 1) + shift) % kStrata;
+    uint j = ((uint(pixel.y) >> 1) + (shift >> 8)) % kStrata;
+    // Jittered inside the cell, so it stays an unbiased draw from the whole square rather than
+    // a fixed lattice with its own pattern.
+    return vec2((float(i) + rand(state)) / float(kStrata),
+                (float(j) + rand(state)) / float(kStrata));
+}
+
+vec3 cosine_hemisphere_at(vec3 n, vec2 u) {
+    float r = sqrt(u.x);
+    float phi = 2.0 * kPi * u.y;
 
     vec3 up = (abs(n.z) < 0.999) ? vec3(0, 0, 1) : vec3(1, 0, 0);
     vec3 tangent = normalize(cross(up, n));
     vec3 bitangent = cross(n, tangent);
     return normalize(tangent * (r * cos(phi)) + bitangent * (r * sin(phi)) +
-                     n * sqrt(max(0.0, 1.0 - u1)));
+                     n * sqrt(max(0.0, 1.0 - u.x)));
+}
+
+vec3 cosine_hemisphere(vec3 n, inout uint state) {
+    return cosine_hemisphere_at(n, vec2(rand(state), rand(state)));
 }
 
 // GGX half-vector sample, for the specular lobe.
@@ -485,13 +522,15 @@ bool occluded(vec3 origin, vec3 dir) {
 // across a whole face would smear them.
 // A direction inside the sun's disc, so its shadows have a penumbra. A point light casts an
 // edge with none at all, which is the single most obvious way a render looks synthetic.
-vec3 sun_sample(inout uint state) {
+// Stratified across the pixels of the face as well, and for the same reason. A face's shadow is
+// the fraction of its pixels' rays that got through, so what matters is that they sample the
+// sun's disc evenly between them rather than each drawing at random — the difference between a
+// penumbra that resolves and one that stays grainy.
+vec3 sun_sample_at(vec2 u) {
     float cos_max = trace.sun.w;
-    float u1 = rand(state);
-    float u2 = rand(state);
-    float cos_theta = mix(cos_max, 1.0, u1);
+    float cos_theta = mix(cos_max, 1.0, u.x);
     float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
-    float phi = 2.0 * kPi * u2;
+    float phi = 2.0 * kPi * u.y;
 
     vec3 n = trace.sun.xyz;
     vec3 up = (abs(n.z) < 0.999) ? vec3(0, 0, 1) : vec3(1, 0, 0);
@@ -499,6 +538,10 @@ vec3 sun_sample(inout uint state) {
     vec3 bitangent = cross(n, tangent);
     return normalize(tangent * (sin_theta * cos(phi)) + bitangent * (sin_theta * sin(phi)) +
                      n * cos_theta);
+}
+
+vec3 sun_sample(inout uint state) {
+    return sun_sample_at(vec2(rand(state), rand(state)));
 }
 
 // Sun light given how much of the sun this face can see. Splitting visibility out is what
@@ -1488,7 +1531,10 @@ void main() {
             uint parent_slot = face_slot(parent_lo, parent_hi, true, trace.control.z);
 
             if (trace_shadow) {
-                float measured = occluded(from, sun_sample(state)) ? 0.0 : 1.0;
+                float measured =
+                    occluded(from, sun_sample_at(stratified_pair(pixel, trace.control.z, 1u, state)))
+                        ? 0.0
+                        : 1.0;
                 contribute_shadow(shadow_slot, measured);
                 contribute_shadow(parent_slot, measured);
             }
@@ -1596,8 +1642,11 @@ void main() {
             : 0.0;
         bool spec_bounce = rand(state) < spec_chance;
 
-        vec3 bounce_dir = spec_bounce ? reflect(dir, ggx_half(normal, m.roughness, state))
-                                      : cosine_hemisphere(normal, state);
+        vec3 bounce_dir =
+            spec_bounce
+                ? reflect(dir, ggx_half(normal, m.roughness, state))
+                : cosine_hemisphere_at(normal,
+                                       stratified_pair(pixel, trace.control.z, 2u, state));
         // A GGX sample can point into the surface; that carries no light and there is no
         // second ray to spend, so it becomes a diffuse sample rather than a wasted one.
         if (spec_bounce && dot(bounce_dir, normal) <= 0.0) {
