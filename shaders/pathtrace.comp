@@ -688,15 +688,59 @@ const uint kSeedSamples = 48u;
 // itself. Geometry cannot leak across it, because a neighbour that is not there is simply not
 // read, and a wall's edge is where its faces stop.
 //
-// Weighted by what each one knows, which makes it a pooled mean rather than a blur: a face with
-// three samples takes almost all of its answer from better-sampled neighbours, and one that has
-// converged keeps its own. Past kFaceSettled it is skipped outright, so a still scene pays
-// nothing for this and a settled surface is never softened.
+// It is an a-trous wavelet filter, which is the standard answer for a path tracer and is
+// usually run over the screen. Over the face lattice it is strictly better, because the two
+// things that make the screen-space version awkward both disappear:
+//
+//   the edge test    a screen filter has to guess from depth and normal whether two pixels are
+//                    the same surface, and guesses wrong at silhouettes. Here it is not a guess.
+//                    The key holds the normal axis at full resolution, so a neighbour key is by
+//                    construction a face on the same plane, facing the same way, one step along.
+//                    Two surfaces cannot be confused because they do not share keys, and a
+//                    wall's edge needs no test: past it, the neighbour simply is not there.
+//
+//   the radius       in pixels the right radius is unknowable, because a face is a hundred
+//                    pixels across close to and a fraction of one across a field. In faces it is
+//                    exactly one face, at every distance, forever.
+//
+// And what is filtered is *light*, never colour. The cache holds irradiance -- what arrives at
+// the face -- and the voxel's own colour is multiplied in afterwards, at shading. So a wall's
+// checkerboard cannot be smoothed by this no matter how wide it reaches: the filter never sees
+// it. That is what buys smooth gradients without turning stone to porridge, and it is a property
+// of where the filter sits rather than a threshold anyone has to tune.
+//
+// Three rings, at one, two and four faces, with the radius shrinking as a face gains samples: a
+// face that knows nothing reaches furthest, a settled one is not touched at all. So a still
+// scene pays nothing and converges sharp, which is the behaviour a filter over an accumulating
+// estimate should have.
 const uint kFaceSettled = 192u;
+const int kFaceRings = 3;
 
-// Neighbours count for half of what they hold. They are a measurement of the patch next door,
-// not of this one, and the difference between the two is the detail worth keeping.
-const float kNeighbourWeight = 0.5;
+// How many standard errors apart two faces have to be before they count as genuinely different
+// light rather than the same light measured twice.
+//
+// This is the whole of the edge stopping, and it is a statistical test rather than a threshold
+// on brightness. A face's mean has a standard error that shrinks as its samples grow, so two
+// noisy neighbours are indistinguishable and blend freely, while two well-measured ones a long
+// way apart stay apart. A shadow edge therefore sharpens on its own as it is measured, instead
+// of being either permanently soft or permanently stepped.
+const float kEdgeSigmas = 4.0;
+
+// A floor under the error estimate, so that a face reading pure black still has a tolerance and
+// does not refuse every neighbour by dividing by nothing.
+const float kEdgeFloor = 0.02;
+
+float face_luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+// How far to reach, given how much a face already knows.
+int face_rings(uint count) {
+    if (count >= kFaceSettled) return 0;
+    if (count >= 64u) return 1;
+    if (count >= 16u) return 2;
+    return kFaceRings;
+}
 
 // The two axes across a face, which are the two the normal is not.
 void face_tangents(ivec3 normal, out ivec3 a, out ivec3 b) {
@@ -705,9 +749,10 @@ void face_tangents(ivec3 normal, out ivec3 a, out ivec3 b) {
     else                    { a = ivec3(1, 0, 0); b = ivec3(0, 1, 0); }
 }
 
-// A step of one node at this level, which is what moves the key to the next face along.
-ivec3 face_step(ivec3 a, ivec3 b, int which, uint level) {
-    int size = 1 << level;
+// One tap of the a-trous kernel: `ring` faces out along one of the two axes across the surface.
+// The node size doubles with the level, so a step is one face at whatever level is being read.
+ivec3 face_step(ivec3 a, ivec3 b, int which, uint level, int ring) {
+    int size = (1 << level) << ring;
     ivec3 axis = ((which & 1) == 0) ? a : b;
     return axis * (((which & 2) == 0) ? size : -size);
 }
@@ -734,68 +779,113 @@ float surface_offset(int level) {
 // distance boundary. Walking towards a wall made its brightness step, and because each entry
 // keeps its own long average the step did not settle, it smeared. Blending is the same
 // continuous-detail rule the marcher already uses for geometry, applied to light.
-// The centre pooled with the four faces beside it on the same surface. Samples add, so this is
-// the mean of everything the neighbourhood has measured rather than a blend of its opinions —
-// which is why a face with almost nothing of its own can be given a usable answer without the
-// answer being invented.
+// Irradiance, filtered across the surface it belongs to.
+//
+// Samples add rather than opinions being mixed, so this is the mean of everything the
+// neighbourhood has measured: a face with almost nothing of its own is given a usable answer
+// without the answer being invented, and one with plenty barely moves.
 FaceLight gather_face(ivec3 voxel, ivec3 normal, uint level, uint frame, FaceLight self) {
-    if (self.known && self.count >= kFaceSettled) return self;
+    int rings = face_rings(self.known ? self.count : 0u);
+    if (rings == 0) return self;
 
     ivec3 ta, tb;
     face_tangents(normal, ta, tb);
 
+    float lum_self = self.known ? face_luminance(self.indirect) : 0.0;
+    // The standard error of a mean: how far this face's answer is expected to be wrong by, which
+    // falls as the square root of its samples. A face with nothing gets a wide tolerance and
+    // takes whatever its neighbours say; a face with hundreds gets a narrow one and keeps its
+    // own. Nothing here is a brightness threshold — it is all in units of its own uncertainty.
+    float error_self = self.known
+                           ? (lum_self + kEdgeFloor) * inversesqrt(float(max(self.count, 1u)))
+                           : 1e3;
+
     vec3 sum = self.known ? self.indirect * float(self.count) : vec3(0.0);
     float weight = self.known ? float(self.count) : 0.0;
 
-    for (int i = 0; i < 4; ++i) {
-        uint lo, hi;
-        face_key(voxel + face_step(ta, tb, i, level), normal, level, kFaceIndirect, lo, hi);
-        FaceLight side = read_face(face_slot(lo, hi, false, frame));
-        if (!side.known) continue;
-        float w = float(side.count) * kNeighbourWeight;
-        sum += side.indirect * w;
-        weight += w;
+    for (int ring = 0; ring < rings; ++ring) {
+        // Halving with distance, which is the a-trous kernel: the far taps cover ground the near
+        // ones cannot and are trusted less for it.
+        float falloff = 1.0 / float(1 << ring);
+        for (int i = 0; i < 4; ++i) {
+            uint lo, hi;
+            face_key(voxel + face_step(ta, tb, i, level, ring), normal, level, kFaceIndirect,
+                     lo, hi);
+            FaceLight side = read_face(face_slot(lo, hi, false, frame));
+            if (!side.known) continue;
+
+            float lum_side = face_luminance(side.indirect);
+            float error_side = (lum_side + kEdgeFloor) * inversesqrt(float(side.count));
+            float tolerance = kEdgeSigmas * (error_self + error_side);
+            // Two faces that differ by less than their own uncertainty are the same light
+            // measured twice, and averaging them is free accuracy. Two that differ by far more
+            // are a real boundary — the edge of a shadow, the turn into a doorway — and this
+            // falls away fast enough to leave it alone.
+            float agreement = exp(-abs(lum_side - lum_self) / max(tolerance, 1e-4));
+
+            float w = float(side.count) * falloff * agreement;
+            sum += side.indirect * w;
+            weight += w;
+        }
     }
     if (weight <= 0.0) return self;
 
     FaceLight pooled;
     pooled.indirect = sum / weight;
     pooled.visibility = self.visibility;
-    // How many samples stand behind the answer, which is the whole neighbourhood's worth. A
-    // face backed by its neighbours genuinely does know enough to stop leaning on its parent.
+    // What the answer now stands on, which is the neighbourhood's worth rather than this face's.
+    // A face backed by well-measured neighbours genuinely does know enough to stop leaning on a
+    // coarse ancestor, and saying so is what keeps the blocky fallback off the screen.
     pooled.count = uint(weight);
     pooled.known = true;
     return pooled;
 }
 
-// The same pooling for the sun's yes-or-no, and gated far tighter.
+// The sun's visibility, filtered the same way and with the right statistics for it.
 //
-// A shadow entry is a hard edge by nature, and pooling it with its neighbours softens that edge
-// by a voxel. Three centimetres of penumbra is not a lie — the sun is half a degree wide and
-// real shadow edges are soft — but it is not this filter's business to invent it, so as soon as
-// a face has a couple of dozen samples of its own it is left alone entirely and the edge is
-// exactly as sharp as the rays measured it.
-const uint kShadowSettled = 24u;
+// Visibility is a fraction of rays that got through, so its uncertainty is binomial rather than
+// proportional: sqrt(v(1-v)/n). That matters, because it is exactly zero when a face is fully
+// lit or fully shadowed however few samples it has. A face in open sun and its neighbour in open
+// sun agree perfectly and blend at no cost; a face on the edge, where v is near a half and the
+// error is largest, blends most — which is where a penumbra belongs. So the softness appears
+// where the answer is genuinely uncertain and nowhere else, and it tightens by itself as the
+// rays accumulate rather than being a fixed blur anyone chose.
+const uint kShadowSettled = 256u;
 
 float gather_shadow(ivec3 voxel, ivec3 normal, uint frame, uint own_count, float own) {
-    if (own_count >= kShadowSettled) return own;
+    int rings = face_rings(own_count >= kShadowSettled ? kFaceSettled : own_count);
+    if (rings == 0) return own;
 
     ivec3 ta, tb;
     face_tangents(normal, ta, tb);
 
+    float error_self = (own_count > 0u)
+                           ? sqrt(max(own * (1.0 - own), 0.0) / float(own_count)) + kEdgeFloor
+                           : 1e3;
+
     float sum = own * float(own_count);
     float weight = float(own_count);
-    for (int i = 0; i < 4; ++i) {
-        uint lo, hi;
-        face_key(voxel + face_step(ta, tb, i, kShadowLevel), normal, kShadowLevel, kFaceShadow,
-                 lo, hi);
-        uint slot = face_slot(lo, hi, false, frame);
-        if (slot == 0xFFFFFFFFu) continue;
-        uint count = faces.items[slot].count;
-        if (count == 0u) continue;
-        float w = float(count) * kNeighbourWeight;
-        sum += read_shadow(slot) * w;
-        weight += w;
+
+    for (int ring = 0; ring < rings; ++ring) {
+        float falloff = 1.0 / float(1 << ring);
+        for (int i = 0; i < 4; ++i) {
+            uint lo, hi;
+            face_key(voxel + face_step(ta, tb, i, kShadowLevel, ring), normal, kShadowLevel,
+                     kFaceShadow, lo, hi);
+            uint slot = face_slot(lo, hi, false, frame);
+            if (slot == 0xFFFFFFFFu) continue;
+            uint count = faces.items[slot].count;
+            if (count == 0u) continue;
+
+            float side = read_shadow(slot);
+            float error_side = sqrt(max(side * (1.0 - side), 0.0) / float(count)) + kEdgeFloor;
+            float tolerance = kEdgeSigmas * (error_self + error_side);
+            float agreement = exp(-abs(side - own) / max(tolerance, 1e-4));
+
+            float w = float(count) * falloff * agreement;
+            sum += side * w;
+            weight += w;
+        }
     }
     return (weight > 0.0) ? sum / weight : own;
 }
