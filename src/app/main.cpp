@@ -75,6 +75,7 @@ struct Options {
     // front of you, and a scripted screenshot should not depend on the network.
     bool no_update_check = (WS_DEBUG != 0);
     bool no_clip_cache = false;   // always rebuild the clip, never read or write the cache
+    std::string clip_part;        // build only this let name, for looking at one piece
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
     bool path_trace = false;   // start in the reference path tracer
     u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
@@ -192,6 +193,8 @@ Options parse_options(int argc, char** argv) {
             options.clip_metre = static_cast<i32>(next_number(0));
         } else if (arg == "--no-clip-cache") {
             options.no_clip_cache = true;
+        } else if (arg == "--clip-part") {
+            if (i + 1 < argc) options.clip_part = argv[++i];
         } else if (arg == "--clip-at") {
             if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
         } else if (arg == "--material") {
@@ -893,25 +896,43 @@ void Application::build_world() {
         const std::string path =
             options_.clip_file.empty() ? default_clip_path() : options_.clip_file;
 
-        // The clip is read once, here, and the text is what everything downstream works from —
-        // the cache key as well as the parser. Reading it twice would let the two disagree.
-        std::string source;
-        {
-            std::ifstream file(path, std::ios::binary);
-            if (file) {
-                std::ostringstream buffer;
-                buffer << file.rdbuf();
-                source = buffer.str();
-            }
-        }
+        // The clip is read once, here, with everything it includes spliced in, and that spliced
+        // text is what everything downstream works from — the cache key as well as the parser.
+        // Keying the cache on the whole assembly and not just the manifest is what makes editing
+        // one fragment of a twenty-fragment building rebuild the building.
+        std::vector<forge::SourceLine> origin;
+        std::vector<forge::ScriptError> trouble;
+        const std::string source = forge::expand_includes(path, origin, trouble);
 
         JobSystem jobs;
 
         forge::Script script = forge::parse_clip_script(source, types_, tags_);
-        for (const forge::ScriptError& error : script.errors) {
-            WS_LOG_ERROR("clip", "line {}: {}", error.line, error.message);
+        script.errors.insert(script.errors.begin(), trouble.begin(), trouble.end());
+        for (forge::ScriptError& error : script.errors) {
+            if (error.line > 0 && error.line <= origin.size()) {
+                const forge::SourceLine& from = origin[error.line - 1];
+                WS_LOG_ERROR("clip", "{}:{}: {}", from.file, from.line, error.message);
+            } else {
+                WS_LOG_ERROR("clip", "line {}: {}", error.line, error.message);
+            }
         }
         if (options_.clip_metre > 0) script.settings.voxels_per_metre = options_.clip_metre;
+
+        // Building one named part on its own, so a fragment can be looked at without the rest of
+        // the building standing around it.
+        if (!options_.clip_part.empty()) {
+            u32 piece = 0;
+            if (script.part(options_.clip_part, piece)) {
+                // The paint is left alone. Rules keyed on other parts simply do not match here,
+                // and the part comes out wearing the materials it will wear in the building —
+                // which is the point of looking at it.
+                script.solid = piece;
+                script.has_solid = true;
+            } else {
+                WS_LOG_ERROR("clip", "no part called '{}' — check the `let` name",
+                             options_.clip_part);
+            }
+        }
         const u64 parsed_at = now_ns();
 
         // A world already built from exactly this text, at exactly this resolution, is worth more
@@ -923,7 +944,8 @@ void Application::build_world() {
         // world sampled at the wrong size.
         const std::string cache_path = path + ".world";
         const u64 key =
-            world_cache_key(source, script.settings.voxels_per_metre, build_stamp());
+            world_cache_key(source + "|part=" + options_.clip_part,
+                            script.settings.voxels_per_metre, build_stamp());
         if (!source.empty() && !options_.no_clip_cache) {
             WorldCache cache;
             cache.tags = &tags_;
@@ -2990,6 +3012,22 @@ int run_clip_tool(const Options& options) {
     if (!script.ok()) return 1;
 
     if (options.clip_metre > 0) script.settings.voxels_per_metre = options.clip_metre;
+
+    // Measuring one named piece rather than the whole building. What a camera should be looking
+    // at is almost never the whole clip — it is a portico, or a room — and framing needs that
+    // piece's extent, not the extent of the site it stands on.
+    if (!options.clip_part.empty()) {
+        u32 piece = 0;
+        if (!script.part(options.clip_part, piece)) {
+            WS_LOG_ERROR("clip", "no part called '{}'", options.clip_part);
+            std::printf("parts        ");
+            for (const auto& entry : script.parts) std::printf(" %s", entry.first.c_str());
+            std::printf("\n");
+            return 1;
+        }
+        script.solid = piece;
+    }
+
     JobSystem jobs;
     const u64 parsed = now_ns();
     const forge::SampleResult built =
@@ -3016,6 +3054,24 @@ int run_clip_tool(const Options& options) {
                 static_cast<long long>(built.origin_voxel[0]),
                 static_cast<long long>(built.origin_voxel[1]),
                 static_cast<long long>(built.origin_voxel[2]));
+
+    // Where the matter actually is, in metres, in the world. Not the sampled box — the matter.
+    // This is the line a camera is aimed from: everything else describes how much there is, and
+    // a camera needs to know where it is and how big.
+    if (m.extent.any) {
+        const f64 per = static_cast<f64>(script.settings.voxels_per_metre);
+        const f64 low[3] = {static_cast<f64>(built.origin_voxel[0] + m.extent.low[0]) / per,
+                            static_cast<f64>(built.origin_voxel[1] + m.extent.low[1]) / per,
+                            static_cast<f64>(built.origin_voxel[2] + m.extent.low[2]) / per};
+        const f64 high[3] = {static_cast<f64>(built.origin_voxel[0] + m.extent.high[0] + 1) / per,
+                             static_cast<f64>(built.origin_voxel[1] + m.extent.high[1] + 1) / per,
+                             static_cast<f64>(built.origin_voxel[2] + m.extent.high[2] + 1) / per};
+        std::printf("worldbox      %.4f %.4f %.4f  %.4f %.4f %.4f  m\n", low[0], low[1], low[2],
+                    high[0], high[1], high[2]);
+    }
+    std::printf("parts        ");
+    for (const auto& entry : script.parts) std::printf(" %s", entry.first.c_str());
+    std::printf("\n");
     std::printf("field         %zu nodes, %zu parameters\n", script.field.size(),
                 script.field.parameter_count());
     for (usize i = 0; i < script.field.parameter_count(); ++i) {

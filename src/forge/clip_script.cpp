@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <sstream>
 
@@ -916,16 +918,97 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
     return script;
 }
 
+std::string expand_includes(const std::string& path, std::vector<SourceLine>& origin,
+                            std::vector<ScriptError>& errors) {
+    std::vector<std::string> open;   // the include stack, for cycle detection
+    std::string out;
+
+    // Recursive, and deliberately textual: an include splices one file's lines into another's
+    // before a single token is read, so `include` costs the parser nothing and a fragment is
+    // exactly the text it appears to be.
+    const std::function<void(const std::string&, u32)> pull = [&](const std::string& file,
+                                                                  u32 depth) {
+        if (depth > 16) {
+            errors.push_back(ScriptError{0, "includes nested more than sixteen deep in '" +
+                                                file + "'"});
+            return;
+        }
+        for (const std::string& already : open) {
+            if (already == file) {
+                errors.push_back(ScriptError{0, "'" + file + "' includes itself"});
+                return;
+            }
+        }
+        std::ifstream in(file, std::ios::binary);
+        if (!in) {
+            errors.push_back(ScriptError{0, "could not open '" + file + "'"});
+            return;
+        }
+        open.push_back(file);
+
+        const std::filesystem::path here = std::filesystem::path(file).parent_path();
+        std::string line;
+        u32 number = 0;
+        while (std::getline(in, line)) {
+            ++number;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+
+            // `include "some/other.clip"`, resolved relative to the file doing the including, so
+            // a fragment can be moved with its neighbours and still find them.
+            usize at = line.find_first_not_of(" \t");
+            if (at != std::string::npos && line.compare(at, 7, "include") == 0) {
+                usize rest = at + 7;
+                const usize quote = line.find('"', rest);
+                const usize close = (quote == std::string::npos)
+                                        ? std::string::npos
+                                        : line.find('"', quote + 1);
+                if (quote == std::string::npos || close == std::string::npos) {
+                    errors.push_back(ScriptError{number,
+                                                 "include needs a quoted file name, in '" + file +
+                                                     "'"});
+                    continue;
+                }
+                const std::string named = line.substr(quote + 1, close - quote - 1);
+                std::filesystem::path target = std::filesystem::path(named);
+                if (target.is_relative()) target = here / target;
+                pull(target.lexically_normal().string(), depth + 1);
+                continue;
+            }
+
+            out += line;
+            out += '\n';
+            origin.push_back(SourceLine{file, number});
+        }
+        open.pop_back();
+    };
+
+    pull(std::filesystem::path(path).lexically_normal().string(), 0);
+    return out;
+}
+
 Script load_clip_script(const std::string& path, VoxelTypeTable& types, const TagRegistry& tags) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
+    std::vector<SourceLine> origin;
+    std::vector<ScriptError> trouble;
+    const std::string text = expand_includes(path, origin, trouble);
+    if (!trouble.empty() && text.empty()) {
         Script script;
-        script.errors.push_back(ScriptError{0, "could not open '" + path + "'"});
+        script.errors = trouble;
         return script;
     }
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    return parse_clip_script(buffer.str(), types, tags);
+
+    Script script = parse_clip_script(text, types, tags);
+    script.errors.insert(script.errors.begin(), trouble.begin(), trouble.end());
+
+    // Errors come back numbered against the spliced text, which is a file nobody wrote. Put them
+    // back where they came from — a line number that means nothing is worse than none.
+    for (ScriptError& error : script.errors) {
+        if (error.line == 0 || error.line > origin.size()) continue;
+        const SourceLine& from = origin[error.line - 1];
+        error.line = from.line;
+        error.message = from.file + ": " + error.message;
+    }
+    script.sources = std::move(origin);
+    return script;
 }
 
 }  // namespace forge

@@ -65,6 +65,14 @@ struct ScriptError {
     std::string message;
 };
 
+// Where a line of the spliced text came from. A clip assembled out of fragments is one file to
+// the parser and many files to the person who wrote it, and an error has to be reported to the
+// second of those.
+struct SourceLine {
+    std::string file;
+    u32 line = 0;
+};
+
 // How worn a clip is, and in what way.
 //
 // Weathering is not a texture laid over a surface. It is a consequence of the surface's own
@@ -115,7 +123,21 @@ struct Script {
     std::vector<VoxelTypeId> material_types;
 
     std::vector<ScriptError> errors;
+    std::vector<SourceLine> sources;   // one per line of the spliced text, when it was assembled
     bool ok() const { return errors.empty() && has_solid; }
+
+    // The node a named part refers to, or false when nothing of that name was bound. Used to
+    // build one piece of a clip on its own, which is how a fragment gets looked at without its
+    // nineteen neighbours being built around it.
+    bool part(const std::string& name, u32& out) const {
+        for (const auto& entry : parts) {
+            if (entry.first == name) {
+                out = entry.second;
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 // Parses a clip file. Materials are interned into `types` as they are declared.
@@ -125,7 +147,17 @@ struct Script {
 Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const TagRegistry& tags);
 
 // Reads the file and parses it. A missing file is an error like any other.
+//
+// A file may contain `include "other.clip"`, resolved relative to the file that says it. That is
+// what lets one clip be written by many hands at once: each part lives in its own file, the
+// manifest names them in order, and nobody is editing the same lines as anybody else. Errors are
+// reported against the file and line the author actually wrote.
 Script load_clip_script(const std::string& path, VoxelTypeTable& types, const TagRegistry& tags);
+
+// Splices a file and everything it includes into one text, recording where each line came from.
+// Exposed for tests; load_clip_script is what callers want.
+std::string expand_includes(const std::string& path, std::vector<SourceLine>& origin,
+                            std::vector<ScriptError>& errors);
 
 }  // namespace forge
 }  // namespace ws

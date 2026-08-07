@@ -147,7 +147,7 @@ private:
     f64 pitch_ = 0.0;
     f64 speed_metres_ = 12.0;
     f64 look_sensitivity_ = 0.0025;
-    f32 fov_degrees_ = 75.0f;
+    f32 fov_degrees_ = 90.0f;
 };
 
 }  // namespace ws
