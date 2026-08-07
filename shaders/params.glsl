@@ -27,3 +27,7 @@
     ivec4 marks[8];       // constraint points, w = 1 when used
     uvec4 clip_slot[16];    // per ghost box: x first cell, yzw size. Size 0 means unused
     uvec4 clip_coarse[16];  // its occupancy mask: x first entry, yzw size in 8-blocks
+    // What was just edited and how far its shadow reaches, in voxels relative to the camera
+    // chunk. edit_min.w is 1 while it is live.
+    ivec4 edit_min;
+    ivec4 edit_max;

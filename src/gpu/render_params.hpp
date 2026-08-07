@@ -90,8 +90,17 @@ struct RenderParams {
     // x: first entry, yzw: size in blocks. The march steps over empty blocks instead of
     // walking them a voxel at a time.
     u32 clip_coarse[kMaxPreviewBoxes][4];
+
+    // What was just built or carved, and how far its shadow can fall, in voxels relative to the
+    // camera chunk — the same space as `origin`. Faces inside it are made to look again at
+    // once instead of trickling; everything outside is left alone, which is the difference
+    // between a new shadow appearing and the whole scene shifting under you.
+    //
+    // edit_min[3] is 1 while the region is live and 0 when it is not.
+    i32 edit_min[4];
+    i32 edit_max[4];
 };
-static_assert(sizeof(RenderParams) == 1488, "RenderParams must match the GLSL block");
+static_assert(sizeof(RenderParams) == 1520, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

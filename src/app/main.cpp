@@ -582,6 +582,15 @@ private:
     u32 shadow_refresh_frames_ = 0;
     static constexpr u32 kShadowRefreshFrames = 120;
 
+    // Where the last edit was, in absolute world voxels, grown by how far its shadow can fall.
+    // Faces inside are made to re-measure at once; faces outside carry on as they were.
+    i64 edit_lo_[3]{};
+    i64 edit_hi_[3]{};
+    // How far past the edit a shadow it casts can land. Sixteen metres, which covers anything
+    // built by hand at any sun angle worth looking at, and is cheap because the cost is only
+    // that those faces trace for the couple of seconds the region is live.
+    static constexpr i64 kEditShadowReach = 512;
+
     // The emitters the tracer aims at, and the buffer they live in on the GPU. Rebuilt when
     // the world changes, which is the only time they move.
     GpuBuffer light_buffer_;
@@ -1027,6 +1036,27 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
     // This keeps every measured value and simply re-measures faster for a moment.
     shadow_refresh_frames_ = kShadowRefreshFrames;
     lights_dirty_ = true;   // a placed lamp is a light nothing can aim at until this is rebuilt
+
+    // And it says it to the region rather than to the world. Everything the edit could have
+    // changed the light of is inside its own bounds grown by the reach of a shadow; nothing
+    // outside that can have changed at all, so nothing outside is disturbed.
+    bool first = true;
+    for (const Op& raw : ops) {
+        Op op = raw;
+        op.normalise();
+        const i64 lo[3] = {op.x0, op.y0, op.z0};
+        const i64 hi[3] = {op.x1, op.y1, op.z1};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            edit_lo_[axis] = first ? lo[axis] : std::min(edit_lo_[axis], lo[axis]);
+            edit_hi_[axis] = first ? hi[axis] : std::max(edit_hi_[axis], hi[axis]);
+        }
+        first = false;
+    }
+    for (u32 axis = 0; axis < 3; ++axis) {
+        edit_lo_[axis] -= kEditShadowReach;
+        edit_hi_[axis] += kEditShadowReach;
+    }
+
     for (const Op& raw : ops) {
         Op op = raw;
         op.normalise();
@@ -1639,6 +1669,21 @@ void Application::record_frame(f32 time_seconds) {
     params.camera_chunk[0] = static_cast<i32>(camera_.chunk_x());
     params.camera_chunk[1] = static_cast<i32>(camera_.chunk_y());
     params.camera_chunk[2] = static_cast<i32>(camera_.chunk_z());
+
+    // The edited region, moved into the camera's own space. Done here in 64-bit and handed over
+    // as a small offset, so the shader never has to know how far from the origin the world has
+    // wandered.
+    if (shadow_refresh_frames_ > 0) {
+        const i64 chunk[3] = {camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            const i64 base = chunk[axis] * kChunkEdge;
+            params.edit_min[axis] = static_cast<i32>(
+                std::clamp(edit_lo_[axis] - base, i64{-1} << 30, i64{1} << 30));
+            params.edit_max[axis] = static_cast<i32>(
+                std::clamp(edit_hi_[axis] - base, i64{-1} << 30, i64{1} << 30));
+        }
+        params.edit_min[3] = 1;
+    }
     params.grid_dims[0] = residency_budget_.grid_width;
     params.grid_dims[1] = residency_budget_.grid_height;
     params.grid_dims[2] = residency_budget_.grid_depth;

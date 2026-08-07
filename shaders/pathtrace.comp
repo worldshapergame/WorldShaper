@@ -614,7 +614,7 @@ float face_luminance(vec3 c) {
 // the better fallback regardless; the seam is still there and still unexplained.
 const uint kParentLevels = 7u;
 
-void contribute(uint slot, vec3 value) {
+void contribute(uint slot, vec3 value, uint window) {
     if (slot == 0xFFFFFFFFu) return;
 
     // A sliding window, not a total. Once an entry holds a window's worth of samples it is
@@ -640,7 +640,7 @@ void contribute(uint slot, vec3 value) {
     // then subtracts half of a sum it read *after* winning, and sums only ever grow in
     // between, so the subtraction can never take one below zero.
     uint count = faces.items[slot].count;
-    if (count >= kFaceWindow) {
+    if (count >= window) {
         if (atomicCompSwap(faces.items[slot].count, count, count - count / 2u) == count) {
             uvec4 sum = faces.items[slot].sum;
             atomicAdd(faces.items[slot].sum.x, uint(-int(sum.x / 2u)));
@@ -686,11 +686,24 @@ void contribute(uint slot, vec3 value) {
 // dozen samples instead of the last five hundred, and the truth wins immediately at any
 // distance. Then it lengthens again, because a long window is what keeps a settled scene
 // quiet.
-const uint kEditWindow = 24u;
+const uint kEditWindow = 4u;
 
-void contribute_shadow(uint slot, float visibility) {
+// Is this face somewhere the last edit could have changed the light of?
+//
+// Its own bounds grown by how far a shadow it casts can fall, which the CPU worked out in
+// 64-bit and handed over relative to the camera chunk. Outside it nothing can have changed, so
+// nothing outside is touched — that is the whole difference between a new shadow appearing and
+// the entire scene shifting at once, which is what a global "look again" did and what the
+// smearing while building actually was.
+bool in_edited_region(ivec3 voxel) {
+    if (push.edit_min.w == 0) return false;
+    ivec3 local = voxel - push.camera_chunk.xyz * kChunkEdge;
+    return all(greaterThanEqual(local, push.edit_min.xyz)) &&
+           all(lessThanEqual(local, push.edit_max.xyz));
+}
+
+void contribute_shadow(uint slot, float visibility, uint window) {
     if (slot == 0xFFFFFFFFu) return;
-    uint window = (trace.quality.z != 0u) ? kEditWindow : kFaceWindow;
     uint count = faces.items[slot].count;
     if (count >= window) {
         if (atomicCompSwap(faces.items[slot].count, count, count - count / 2u) == count) {
@@ -856,19 +869,33 @@ ivec3 face_step(ivec3 a, ivec3 b, int which, uint level, int ring) {
     return axis * (((which & 2) == 0) ? size : -size);
 }
 
-// How far a ray has to leave a surface by, in voxels, before it is clear of it.
+// How far a ray has to leave a surface by before it is clear of it, in voxels.
 //
-// A voxel wants a hundredth of a voxel and nothing more. A *summary* cell is a metre or more
-// across, and leaving one by a hundredth of a voxel lands the ray straight back inside the
-// block it just left Ã¢â‚¬â€ so every shadow ray reported occluded and every bounce found the same
-// surface again. Distant chunks, which are exactly the ones drawn from summaries, came out
-// uniformly black.
+// Two things set it, and only one of them is geometry.
 //
-// Levels 5 and up are summary hits and carry their tier, so the cell size is known: a tier's
-// block is 2^tier chunks and its cells are 2^tier metres, which is 32 << tier voxels.
-float surface_offset(int level) {
-    if (level < 5) return 0.01;
-    return float(32u << uint(level - 5)) * 0.75;
+// A summary cell is a metre or more across, and leaving one by a hundredth of a voxel lands the
+// ray straight back inside the block it just left -- so every shadow ray reported occluded and
+// every bounce found the same surface again, and distant chunks came out uniformly black. Levels
+// 5 and up carry their tier, so the cell size is known: a tier's cells are 2^tier metres, which
+// is 32 << tier voxels.
+//
+// The other is arithmetic. The point is rebuilt as origin + dir * t, and t is a single-precision
+// number accumulated over a long walk, so its error grows with distance. Past a hundred metres
+// or so that error is larger than a hundredth of a voxel and the rebuilt point lands *below* the
+// surface it came from. The shadow ray starts inside the ground, reports occluded, and the face
+// records that it cannot see the sun -- so open ground with nothing above it goes pitch black,
+// at distance only, while the same ground is lit close to. Measured on the test platform at a
+// hundred and twenty metres: four shadow rays in five said occluded, and the entries holding
+// that answer were present and full, which is why it looked like a caching problem and was not.
+//
+// So the offset is relative to how far the ray has come, with the old constant as its floor. It
+// stays well under a voxel at any distance the marcher resolves, so it cannot step through thin
+// geometry.
+const float kSurfaceRelative = 1.0e-4;
+
+float surface_offset(int level, float t) {
+    float base = (level < 5) ? 0.01 : float(32u << uint(level - 5)) * 0.75;
+    return max(base, t * kSurfaceRelative);
 }
 
 // Reads a node at a *fractional* level, blending the two it falls between.
@@ -1464,7 +1491,7 @@ void main() {
         primary_t = hit.t;
         vec3 normal = vec3(hit.normal);
         vec3 point = origin + dir * hit.t;
-        vec3 from = point + normal * surface_offset(hit.level);
+        vec3 from = point + normal * surface_offset(hit.level, hit.t);
         Material m = (hit.level == 0) ? material_of(hit.type_id)
                                       : material_from_colour(hit.colour);
 
@@ -1536,6 +1563,13 @@ void main() {
         // The entry now knows how far its own mean is likely to be out, so that is the question
         // asked. Below the target it is left alone entirely, which hands its share of the ray
         // budget to the faces that still need it.
+        // Anything the last edit could have changed the light of re-measures at once: it stops
+        // being allowed to call itself settled, and its entries average over the last handful of
+        // samples rather than the last five hundred, so the truth wins in a few frames instead
+        // of having to outvote a history of a world that no longer exists.
+        bool edited = in_edited_region(voxel);
+        uint edit_window = edited ? kEditWindow : kFaceWindow;
+
         FaceLight own = read_face(slot);
         uint have = own.count;
         bool turn = ((uint(pixel.x) * 3u + uint(pixel.y) * 5u + trace.control.z) %
@@ -1543,7 +1577,7 @@ void main() {
         // Not before a minimum, because the spread of a handful of samples is itself mostly
         // noise, and a face that got three similar ones by chance would declare itself finished.
         bool settled = own.known && own.count >= kErrorMinSamples && own.error < kErrorTarget;
-        bool refine = (!settled || (rand(state) < 0.02)) && turn;
+        bool refine = (!settled || edited || (rand(state) < 0.02)) && turn;
 
         // The shadow entry: its own key, at a fixed level, decided on its own terms.
         //
@@ -1572,7 +1606,16 @@ void main() {
         // Debug view 5: whether the table could hold this face at all. Red is a pixel the
         // table refused a slot; green is a face it holds.
         if (push.resolution.z == 5u) {
-            vec3 mark = (slot == 0xFFFFFFFFu) ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 0.7, 0.0);
+            // Red: the table refused this face's irradiance entry. Yellow: it took that but
+            // refused the shadow entry, which is the case worth seeing — shadow is keyed per
+            // voxel at level zero while irradiance coarsens with distance, so there are vastly
+            // more of them and they are the ones that run out first.
+            // Red: the table refused this face's irradiance entry. Yellow: it took that and
+            // refused the shadow entry, which is worth separating because shadow is keyed per
+            // voxel while irradiance coarsens with distance, so there are far more of them.
+            vec3 mark = (slot == 0xFFFFFFFFu)          ? vec3(1.0, 0.0, 0.0)
+                        : (shadow_slot == 0xFFFFFFFFu) ? vec3(1.0, 1.0, 0.0)
+                                                       : vec3(0.0, 0.7, 0.0);
             imageStore(out_colour, pixel, vec4(mark, 1.0));
             return;
         }
@@ -1604,8 +1647,8 @@ void main() {
                     occluded(from, sun_sample_at(stratified_pair(pixel, trace.control.z, 1u, state)))
                         ? 0.0
                         : 1.0;
-                contribute_shadow(shadow_slot, measured);
-                contribute_shadow(parent_slot, measured);
+                contribute_shadow(shadow_slot, measured, edit_window);
+                contribute_shadow(parent_slot, measured, edit_window);
             }
 
             uint own_count = (shadow_slot != 0xFFFFFFFFu) ? faces.items[shadow_slot].count : 0u;
@@ -1809,7 +1852,7 @@ void main() {
         } else {
             vec3 n2 = vec3(second.normal);
             vec3 p2 = from + bounce_dir * second.t;
-            vec3 from2 = p2 + n2 * surface_offset(second.level);
+            vec3 from2 = p2 + n2 * surface_offset(second.level, hit.t + second.t);
             Material m2 = (second.level == 0) ? material_of(second.type_id)
                                               : material_from_colour(second.colour);
 
@@ -1897,16 +1940,16 @@ void main() {
         // what arrives from the hemisphere and belongs in the face's irradiance. Mixing them
         // would make each wrong in a different way.
         if (measured && spec_bounce) {
-            contribute(rad_slot, clamped);
+            contribute(rad_slot, clamped, edit_window);
         } else if (measured) {
-            contribute(slot, clamped);
+            contribute(slot, clamped, edit_window);
 
             // And to the parent node. One extra set of atomics buys a node one level up that
             // is always populated Ã¢â‚¬â€ which is what a face being looked at for the first time
             // inherits from, instead of a single noisy ray.
             uint plo, phi;
             face_key(voxel, hit.normal, min(level + 1u, 6u), kFaceIndirect, plo, phi);
-            contribute(face_slot(plo, phi, true, trace.control.z), clamped);
+            contribute(face_slot(plo, phi, true, trace.control.z), clamped, edit_window);
         }
 
         // Then shade from the face, which now includes every other pixel standing on it this
