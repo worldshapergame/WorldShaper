@@ -86,6 +86,15 @@ struct Options {
     // which is what makes frame times comparable between builds.
     std::string camera;
 
+    // "vx,vy,vz,vyaw" in metres and degrees per second, applied every frame.
+    //
+    // A still camera is the one case the path tracer is never judged in. It accumulates
+    // hundreds of samples per pixel and every measurement taken that way says the picture is
+    // clean, while the picture a player sees is one sample deep because moving resets the
+    // accumulator every frame. Every rendering conclusion drawn from a static screenshot has
+    // been about an image nobody ever looks at.
+    std::string fly;
+
     // Scripted chisel, for checking the tool without a person holding the mouse.
     // --edit "x0,y0,z0,x1,y1,z1,material" applies one edit through the history at startup;
     // material 0 carves. --preview takes the same six numbers plus a state (1 carve,
@@ -139,6 +148,8 @@ Options parse_options(int argc, char** argv) {
             options.size_explicit = true;
         } else if (arg == "--cam") {
             if (i + 1 < argc) options.camera = argv[++i];
+        } else if (arg == "--fly") {
+            if (i + 1 < argc) options.fly = argv[++i];
         } else if (arg == "--edit") {
             if (i + 1 < argc) options.edit = argv[++i];
         } else if (arg == "--preview") {
@@ -196,6 +207,8 @@ void print_help() {
         "  --debug-mode N        0 shaded, 1 steps, 2 normals, 3 detail, 4 clip ghost,\n"
         "                        5 face cache, 6 why a path-traced pixel is dark\n"
         "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
+        "  --fly vx,vy,vz,vyaw   move the camera every frame (m/s, deg/s), so a screenshot\n"
+        "                        is of the moving picture rather than a settled one\n"
         "  --crash-test KIND     prove crash reporting works: read, write, check, throw,\n"
         "                        divzero, frame (faults in-game), report (no crash)\n"
         "  --clip x0,..,z1,dx,dy,dz,copies,turn   scripted clipboard ghost\n"
@@ -528,6 +541,12 @@ private:
     bool face_cache_dirty_ = true;
     bool path_trace_ = false;
     u32 trace_samples_ = 0;      // samples accumulated since the last reset
+
+    // Scripted camera motion, so a measurement can be taken of the moving picture rather than
+    // the settled one. See Options::fly.
+    bool flying_ = false;
+    f64 fly_state_[5]{-22.0, 5.0, -22.0, 45.0, -8.0};   // x, y, z, yaw, pitch
+    f64 fly_velocity_[4]{};                             // vx, vy, vz, vyaw
     // Not a quality setting so much as a safety net: Russian roulette decides when a path
     // stops, weighted by how much light it can still carry, so paths end when they stop
     // mattering rather than at a fixed depth. This only bounds the pathological case.
@@ -2116,6 +2135,15 @@ int Application::run(const Options& options) {
         }
         camera_.set_position_metres(values[0], values[1], values[2]);
         camera_.set_look(values[3], values[4]);
+        for (u32 i = 0; i < 5; ++i) fly_state_[i] = values[i];
+    }
+    if (!options_.fly.empty()) {
+        const char* cursor = options_.fly.c_str();
+        for (u32 i = 0; i < 4 && *cursor != '\0'; ++i) {
+            fly_velocity_[i] = std::strtod(cursor, const_cast<char**>(&cursor));
+            if (*cursor == ',') ++cursor;
+        }
+        flying_ = true;
     }
     debug_mode_ = options_.debug_mode;
 
@@ -2243,6 +2271,18 @@ int Application::run(const Options& options) {
 
         const f64 dt = (stats_.last_ms() > 0.0) ? stats_.last_ms() * 0.001 : 1.0 / 60.0;
         camera_.update(input, (dt > 0.1) ? 0.1 : dt, mouse_look_, !tool_has_wheel);
+
+        // A fixed step rather than the real frame time, so the same frame number is the same
+        // place on every machine and a measurement is comparable between builds.
+        if (flying_) {
+            constexpr f64 kStep = 1.0 / 60.0;
+            for (u32 axis = 0; axis < 3; ++axis) {
+                fly_state_[axis] += fly_velocity_[axis] * kStep;
+            }
+            fly_state_[3] += fly_velocity_[3] * kStep;
+            camera_.set_position_metres(fly_state_[0], fly_state_[1], fly_state_[2]);
+            camera_.set_look(fly_state_[3], fly_state_[4]);
+        }
         update_tools(input, chisel_has_wheel, clipboard_has_wheel, (dt > 0.1) ? 0.1 : dt);
 
         if (window_.minimised()) continue;

@@ -85,7 +85,33 @@ uint hash_u32(uint x) {
 
 // A face is a voxel and one of its six sides, in absolute world voxels so the key does not
 // move when the camera does.
-void face_key(ivec3 voxel, ivec3 normal, uint level, out uint lo, out uint hi) {
+// Two kinds of entry, and they must never share one.
+//
+// Shadow and indirect want opposite things from a cache. Indirect is smooth, expensive, and
+// safe to share over a wide patch — the wider the better, because that is what stops the table
+// drowning at distance. Shadow has hard edges and is cheap, and sharing it over a patch
+// quantises the edge to the size of that patch.
+//
+// They were one entry, keyed by a level taken from how far the pixel is from the camera. So a
+// shadow edge was quantised coarsely far away and finely near, and one straight edge across a
+// floor came out kinked into wedges fanning out from wherever you were standing — a
+// rectangular tower casting a triangular shadow that changed shape as you walked towards it,
+// because the shape was a property of the camera and not of the tower.
+const uint kFaceIndirect = 0u;
+const uint kFaceShadow = 1u;
+
+// The level a shadow entry is always keyed at, whatever the distance. Eight voxels, a quarter
+// of a metre, and the important word is *always*: a fixed node means a shadow edge is quantised
+// the same way wherever you stand, so its shape belongs to the geometry casting it.
+//
+// Swept 0 to 3 against the moving camera. Finer is not better: at level 0 a face at any
+// distance is smaller than a pixel, so it gathers one sample and the yes-or-no shadow ray
+// stays a yes-or-no — the enclosed room came out 70% black and the open scenes measured
+// noisier than before the split. 3 gives each node enough pixels to average over and matches
+// the old quality on open ground exactly (speckle 1.39, both), while halving it indoors.
+const uint kShadowLevel = 3u;
+
+void face_key(ivec3 voxel, ivec3 normal, uint level, uint kind, out uint lo, out uint hi) {
     uint face = (normal.x != 0) ? ((normal.x > 0) ? 0u : 1u)
               : (normal.y != 0) ? ((normal.y > 0) ? 2u : 3u)
                                 : ((normal.z > 0) ? 4u : 5u);
@@ -133,6 +159,7 @@ void face_key(ivec3 voxel, ivec3 normal, uint level, out uint lo, out uint hi) {
     h = hash_u32(h ^ uint(voxel.y));
     h = hash_u32(h ^ uint(voxel.z));
     h = hash_u32(h ^ level);
+    h = hash_u32(h ^ kind);
     lo = hash_u32(h ^ face);
     hi = hash_u32(lo ^ 0x9E3779B9u);
     // Zero is the "never claimed" marker, so the key must never be zero.
@@ -414,7 +441,7 @@ struct FaceLight {
 // the better fallback regardless; the seam is still there and still unexplained.
 const uint kParentLevels = 7u;
 
-void contribute(uint slot, vec3 value, float visibility) {
+void contribute(uint slot, vec3 value) {
     if (slot == 0xFFFFFFFFu) return;
 
     // A sliding window, not a total. Once an entry holds a window's worth of samples it is
@@ -452,8 +479,34 @@ void contribute(uint slot, vec3 value, float visibility) {
     atomicAdd(faces.items[slot].sum.x, uint(value.r * kFixedScale));
     atomicAdd(faces.items[slot].sum.y, uint(value.g * kFixedScale));
     atomicAdd(faces.items[slot].sum.z, uint(value.b * kFixedScale));
+    atomicAdd(faces.items[slot].count, 1u);
+}
+
+// How many shadow samples a face wants before the pixels on it stop tracing for it. Far fewer
+// than indirect needs: this is a yes-or-no answer sampled over half a degree of sky, so a
+// hundred of them already resolve the penumbra to better than the eye can see.
+const uint kShadowTarget = 96u;
+
+// A shadow entry uses the same slot layout and only the w channel. Kept in the same table
+// rather than a second one, because the two share an eviction policy, a probe strategy and a
+// budget, and splitting the storage would mean maintaining all three twice.
+void contribute_shadow(uint slot, float visibility) {
+    if (slot == 0xFFFFFFFFu) return;
+    uint count = faces.items[slot].count;
+    if (count >= kFaceWindow) {
+        if (atomicCompSwap(faces.items[slot].count, count, count - count / 2u) == count) {
+            atomicAdd(faces.items[slot].sum.w, uint(-int(faces.items[slot].sum.w / 2u)));
+        }
+    }
     atomicAdd(faces.items[slot].sum.w, uint(visibility * kFixedScale));
     atomicAdd(faces.items[slot].count, 1u);
+}
+
+float read_shadow(uint slot) {
+    if (slot == 0xFFFFFFFFu) return 0.0;
+    uint count = faces.items[slot].count;
+    if (count == 0u) return 0.0;
+    return clamp(float(faces.items[slot].sum.w) / (kFixedScale * float(count)), 0.0, 1.0);
 }
 
 FaceLight read_face(uint slot);
@@ -482,7 +535,7 @@ FaceLight read_face(uint slot) {
     // Clamped on the way out, as a backstop rather than a correction. Every contribution is
     // clamped to 8 going in, so a mean above that is arithmetic having gone wrong rather than
     // a bright surface — and a wrong entry in a cache does not fade, it persists and spreads.
-    light.visibility = clamp(float(sum.w) * inv, 0.0, 1.0);
+    // Visibility lives in its own entry now; this one holds irradiance only.
     light.indirect = min(vec3(sum.xyz) * inv, vec3(8.0));
     light.count = count;
     light.known = true;
@@ -520,8 +573,8 @@ FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) 
     float f = level - float(l0);
 
     uint lo0, hi0, lo1, hi1;
-    face_key(voxel, normal, l0, lo0, hi0);
-    face_key(voxel, normal, l1, lo1, hi1);
+    face_key(voxel, normal, l0, kFaceIndirect, lo0, hi0);
+    face_key(voxel, normal, l1, kFaceIndirect, lo1, hi1);
     FaceLight a = read_face(face_slot(lo0, hi0, false, frame));
     FaceLight b = read_face(face_slot(lo1, hi1, false, frame));
 
@@ -538,7 +591,7 @@ FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) 
 
 FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
     uint lo, hi;
-    face_key(voxel, normal, level, lo, hi);
+    face_key(voxel, normal, level, kFaceIndirect, lo, hi);
     FaceLight self = read_face(face_slot(lo, hi, false, frame));
     if (self.known && self.count >= kSeedSamples) return self;
 
@@ -547,7 +600,7 @@ FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
     parent.known = false;
     for (uint up = 1u; up < kParentLevels && level + up <= 6u; ++up) {
         uint plo, phi;
-        face_key(voxel, normal, level + up, plo, phi);
+        face_key(voxel, normal, level + up, kFaceIndirect, plo, phi);
         parent = read_face(face_slot(plo, phi, false, frame));
         if (parent.known) break;
     }
@@ -776,7 +829,7 @@ void main() {
         ivec3 voxel = ivec3(floor(point - normal * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
         uint level = cache_level(hit.t);
         uint lo, hi;
-        face_key(voxel, hit.normal, level, lo, hi);
+        face_key(voxel, hit.normal, level, kFaceIndirect, lo, hi);
         uint slot = face_slot(lo, hi, true, trace.control.z);
 
         // Whether this pixel does any work at all beyond the primary ray.
@@ -794,6 +847,23 @@ void main() {
                      kRefineStride) == 0u;
         bool refine = ((have < kFaceTarget) || (rand(state) < 0.02)) && turn;
 
+        // The shadow entry: its own key, at a fixed level, decided on its own terms.
+        //
+        // It is claimed and refined separately from the indirect one because the two converge
+        // at completely different rates. A shadow sample is one ray with a yes-or-no answer and
+        // a hundred of them are plenty; indirect is a whole hemisphere and wants thousands. Tied
+        // together, whichever needed more work kept the other tracing, and whichever needed less
+        // stopped it early.
+        uint shadow_lo, shadow_hi;
+        face_key(voxel, hit.normal, kShadowLevel, kFaceShadow, shadow_lo, shadow_hi);
+        uint shadow_slot = face_slot(shadow_lo, shadow_hi, true, trace.control.z);
+        uint shadow_have = (shadow_slot != 0xFFFFFFFFu) ? faces.items[shadow_slot].count : 0u;
+
+        // Traced when the entry is still thin, or on the small fraction that keep going so a
+        // face is never frozen. Sunless faces never trace at all: the answer is already known.
+        bool faces_sun = dot(normal, trace.sun.xyz) > 0.0;
+        bool trace_shadow = faces_sun && ((shadow_have < kShadowTarget) || (rand(state) < 0.02));
+
         // Debug view 5: whether the table could hold this face at all. Red is a pixel the
         // table refused a slot; green is a face it holds.
         if (push.resolution.z == 5u) {
@@ -807,7 +877,25 @@ void main() {
             return;
         }
 
+        // ---- the sun, on its own entry ------------------------------------------------
+        //
+        // Resolved before and independently of everything below. A pixel that is doing no
+        // other work still keeps the shadow honest, and one that is refining indirect does not
+        // drag the shadow along with it.
+        //
+        // Read back after contributing, so this pixel's own sample is in the average it
+        // shades with. That is what turns a yes-or-no shadow ray into a soft edge: many pixels
+        // standing on one voxel face, each sampling a different point on the sun's disc, and
+        // the face holding the mean of them. Per pixel and unshared, the same rays are
+        // salt-and-pepper.
         float visibility = 0.0;
+        if (faces_sun) {
+            if (trace_shadow) {
+                contribute_shadow(shadow_slot, occluded(from, sun_sample(state)) ? 0.0 : 1.0);
+            }
+            visibility = read_shadow(shadow_slot);
+        }
+
         vec3 incoming = vec3(0.0);
 
         if (!refine) {
@@ -821,15 +909,11 @@ void main() {
             // with sky was tried and is wrong: a sealed box has no sky in it, and inventing a
             // floor of light there makes a room with no way in glow. Waiting is honest, and at
             // this stride the wait is a few frames.
-            radiance += sun_light(normal, dir, m, known.visibility) +
+            radiance += sun_light(normal, dir, m, visibility) +
                         m.albedo * (1.0 - m.metallic) * known.indirect;
             radiance = clamp_finite(radiance);
             write_pixel(pixel, sample_index, radiance, primary_t, aspect);
             return;
-        }
-
-        if (dot(normal, trace.sun.xyz) > 0.0) {
-            visibility = occluded(from, sun_sample(state)) ? 0.0 : 1.0;
         }
 
         // Whether this path found out anything real, or merely failed to find out anything.
@@ -926,14 +1010,14 @@ void main() {
         // a spike â€” in a per-pixel average that is a firefly which washes out, and in a cache
         // it persists and one face wears it for thousands of frames.
         vec3 clamped = min(incoming, vec3(8.0));
-        if (measured) contribute(slot, clamped, visibility);
+        if (measured) contribute(slot, clamped);
 
         // And to the parent node. One extra set of atomics buys a node one level up that is
         // always populated — which is what a face being looked at for the first time inherits
         // from, instead of a single noisy ray.
         uint plo, phi;
-        face_key(voxel, hit.normal, min(level + 1u, 6u), plo, phi);
-        if (measured) contribute(face_slot(plo, phi, true, trace.control.z), clamped, visibility);
+        face_key(voxel, hit.normal, min(level + 1u, 6u), kFaceIndirect, plo, phi);
+        if (measured) contribute(face_slot(plo, phi, true, trace.control.z), clamped);
 
         // Then shade from the face, which now includes every other pixel standing on it this
         // frame. A face the table could not hold falls back to this pixel's own samples: noisy,
@@ -944,14 +1028,13 @@ void main() {
             here = read_face_blended(voxel, hit.normal, cache_level_exact(hit.t), trace.control.z);
         }
         if (!here.known) {
-            here.visibility = visibility;
             here.indirect = incoming;
         }
         if (push.resolution.z == 6u) {
             imageStore(out_colour, pixel, vec4(why_dark(m, here), 1.0));
             return;
         }
-        radiance += sun_light(normal, dir, m, here.visibility) +
+        radiance += sun_light(normal, dir, m, visibility) +
                     m.albedo * (1.0 - m.metallic) * here.indirect;
     }
     write_pixel(pixel, sample_index, clamp_finite(radiance), primary_t, aspect);
