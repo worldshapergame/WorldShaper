@@ -39,11 +39,13 @@
 #include <vector>
 
 #include "core/types.hpp"
+#include "world/ledger.hpp"
 #include "world/op.hpp"
 #include "world/voxel_type.hpp"
 
 namespace ws {
 
+class JobSystem;
 class World;
 
 // What a stamp does to what is already there.
@@ -148,7 +150,44 @@ Clip mirror_clip(const Clip& clip, u32 axis);
 Clip scale_clip(const Clip& clip, const f64 factor[3]);
 
 // The ops that stamp `clip` with its (0,0,0) cell at the given world voxel.
+//
+// This is the form an edit takes when it has to be *recorded* — sent to other players, written
+// to the op log, inverted for undo. It is not the form to use when a clip merely has to land in
+// the world as fast as possible; see paste_clip below.
 u64 clip_to_ops(const Clip& clip, i64 ox, i64 oy, i64 oz, PasteMode mode, u64 tick, u32 player,
                 std::vector<Op>& out);
+
+struct PasteStats {
+    u64 voxels_changed = 0;
+    u64 bricks_written = 0;
+    u64 chunks_touched = 0;
+};
+
+// Stamps `clip` straight into the world's bricks, without going through ops at all.
+//
+// # Why this exists
+//
+// The op route describes a clip as a list of boxes and then applies them. That is the right
+// shape for an edit that has to be replayed, reversed or sent over a wire, and for a clip made
+// of a few materials it is also fast, because the box grower collapses a wall into one op.
+//
+// It collapses nothing when every voxel is its own material. Under the no-two-voxels-alike rule
+// a million-voxel clip becomes very nearly a million single-voxel ops, and each one pays a chunk
+// hash lookup, an octree descent, a brick decode and a re-encode to move one voxel. The facility
+// took twenty seconds to enter the world that way, and almost all of it was that.
+//
+// So the bulk path inverts the loop. Instead of walking the clip and asking the world where each
+// voxel goes, it walks the *world's* bricks and asks the clip what belongs in each — 512 voxels
+// gathered, decided and written in one pass, with the encoding chosen once. The work stops
+// scaling with how varied the clip is and starts scaling with how big it is, which is the
+// property that makes an arbitrarily large clip land in a frame.
+//
+// Chunks are filled in parallel. A chunk is an independent object once it exists, so the only
+// serial part is creating the ones the clip reaches — done up front, before any thread runs.
+//
+// The ledger is charged exactly as the op route charges it, so the audit still balances.
+PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 ox, i64 oy,
+                      i64 oz, PasteMode mode, MatterReason reason, u32 player,
+                      JobSystem* jobs = nullptr);
 
 }  // namespace ws

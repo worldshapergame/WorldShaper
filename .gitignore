@@ -10,3 +10,9 @@ package/
 # The overnight loop's stop marker, created by hand to ask a running loop to finish.
 STOP-LOOP
 
+# A clip's built world, kept beside it so the next run does not rebuild it. Derived from the
+# .clip file, hundreds of megabytes, and rebuilt automatically whenever the clip changes — so it
+# is exactly the kind of thing that must never be committed.
+*.clip.world
+*.clip.world.part
+

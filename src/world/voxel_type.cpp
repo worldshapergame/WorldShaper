@@ -46,7 +46,40 @@ VoxelTypeTable::VoxelTypeTable() {
              "air must be id 0 in every table");
 }
 
+void VoxelTypeTable::adopt(std::vector<VisualRecord> visuals,
+                           std::vector<BehaviourRecord> behaviours,
+                           std::vector<VoxelType> types) {
+    visuals_ = std::move(visuals);
+    behaviours_ = std::move(behaviours);
+    types_ = std::move(types);
+    visual_index_.clear();
+    behaviour_index_.clear();
+    type_index_.clear();
+    indexes_stale_ = !types_.empty();
+}
+
+void VoxelTypeTable::rebuild_indexes() {
+    indexes_stale_ = false;
+    visual_index_.clear();
+    behaviour_index_.clear();
+    type_index_.clear();
+    visual_index_.reserve(visuals_.size());
+    behaviour_index_.reserve(behaviours_.size());
+    type_index_.reserve(types_.size());
+    for (usize i = 0; i < visuals_.size(); ++i) {
+        visual_index_[visuals_[i].content_hash()].push_back(static_cast<VisualId>(i));
+    }
+    for (usize i = 0; i < behaviours_.size(); ++i) {
+        behaviour_index_[behaviours_[i].content_hash()].push_back(static_cast<BehaviourId>(i));
+    }
+    for (usize i = 0; i < types_.size(); ++i) {
+        const u64 key = (static_cast<u64>(types_[i].visual) << 32) | types_[i].behaviour;
+        type_index_.emplace(key, static_cast<VoxelTypeId>(i));
+    }
+}
+
 VisualId VoxelTypeTable::intern_visual(const VisualRecord& record) {
+    if (indexes_stale_) rebuild_indexes();
     ++intern_calls_;
     const u64 hash = record.content_hash();
     std::vector<VisualId>& bucket = visual_index_[hash];
@@ -63,6 +96,7 @@ VisualId VoxelTypeTable::intern_visual(const VisualRecord& record) {
 }
 
 BehaviourId VoxelTypeTable::intern_behaviour(const BehaviourRecord& record) {
+    if (indexes_stale_) rebuild_indexes();
     ++intern_calls_;
     const u64 hash = record.content_hash();
     std::vector<BehaviourId>& bucket = behaviour_index_[hash];
@@ -81,6 +115,7 @@ BehaviourId VoxelTypeTable::intern_behaviour(const BehaviourRecord& record) {
 VoxelTypeId VoxelTypeTable::intern(VisualId visual, BehaviourId behaviour) {
     WS_ASSERT(visual < visuals_.size(), "unknown visual record");
     WS_ASSERT(behaviour < behaviours_.size(), "unknown behaviour record");
+    if (indexes_stale_) rebuild_indexes();
     ++intern_calls_;
 
     const u64 key = (static_cast<u64>(visual) << 32) | behaviour;

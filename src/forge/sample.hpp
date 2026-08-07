@@ -138,9 +138,16 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
 
 // Give every voxel its own version of its material.
 //
-// A second pass, and serial, because interning is a shared table and the gain from threading it
-// is smaller than the cost of guarding it. Runs over the clip in place, replacing each solid
-// voxel's type with a perturbed variant interned on demand.
+// A second pass over the clip in place, replacing each solid voxel's type with a perturbed
+// variant. The awkward part is that interning is a shared table and the perturbing is not, so it
+// runs in three phases: every slab works out its own perturbations against a private table, the
+// private tables are then interned into the real one on a single thread, and a last parallel pass
+// swaps each voxel's private slot for the type id it turned into.
+//
+// The private tables cost a little duplicated work — two slabs that arrive at the same colour
+// each hold it — and interning collapses that anyway, so the only thing lost is a few thousand
+// wasted table entries. What is gained is that the expensive part, which is hashing sixty million
+// voxels and deduplicating them, runs on every core instead of one.
 struct VariationReport {
     u64 voxels = 0;
     u64 distinct_types = 0;
@@ -153,7 +160,7 @@ struct VariationReport {
 
 VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& field,
                                 const Variation& variation, const SampleSettings& settings,
-                                const SampleResult& placed);
+                                const SampleResult& placed, JobSystem* jobs = nullptr);
 
 }  // namespace forge
 }  // namespace ws

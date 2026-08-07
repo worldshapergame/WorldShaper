@@ -838,28 +838,44 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 // not need evaluating. On a clip made of many separate parts this is nearly all
                 // of them, at nearly every voxel.
                 //
-                // Only while the best so far is still positive, and that is not a detail. The
-                // box distance is zero for a point inside the box, and a shape a point is inside
-                // reports a *negative* distance — so within any solid the test would skip
-                // children that could have been more negative still. The sign never changed, so
-                // nothing appeared or vanished; the magnitude did, which moved the surface
-                // normals, which moved the paint rule that follows them. Four hundred voxels of
-                // moss in the wrong place, from an optimisation that looked exact.
-                if (!bounds_.empty() && d >= 0.0 && d <= distance_to(bounds_[n.child[i]], p)) {
-                    continue;
+                // The condition to get right is *strictly outside the box*. A point inside a
+                // child's box has a box distance of zero, and zero is not a lower bound on what
+                // that child will say — a shape you are inside reports a negative distance. The
+                // first version of this guarded on the running answer being positive instead,
+                // which is sound but throws the optimisation away exactly where the work is:
+                // inside a solid, which is where every voxel that becomes matter lives.
+                //
+                // Getting it wrong is not loud. The sign never changed, so nothing appeared or
+                // vanished; the magnitude did, which moved the surface normals, which moved the
+                // paint rule that follows them. Four hundred voxels of moss in the wrong place.
+                if (!bounds_.empty()) {
+                    const f64 away = distance_to(bounds_[n.child[i]], p);
+                    if (away > 0.0 && d <= away) continue;
                 }
                 d = std::min(d, eval(n.child[i], p));
             }
             return d;
         }
         case Op::Intersection: {
+            // No cull here, and there cannot be one of this kind: an intersection takes the
+            // largest answer, and a child the point is far outside is exactly the child most
+            // likely to be it.
             f64 d = eval(n.child[0], p);
             for (u32 i = 1; i < n.children; ++i) d = std::max(d, eval(n.child[i], p));
             return d;
         }
         case Op::Difference: {
             f64 d = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) d = std::max(d, -eval(n.child[i], p));
+            for (u32 i = 1; i < n.children; ++i) {
+                // Carving with something the point is nowhere near. Outside that child's box its
+                // distance is at least `away`, so the term it contributes is at most −away, and
+                // if the running answer already beats that the cut cannot reach here.
+                if (!bounds_.empty()) {
+                    const f64 away = distance_to(bounds_[n.child[i]], p);
+                    if (away > 0.0 && d >= -away) continue;
+                }
+                d = std::max(d, -eval(n.child[i], p));
+            }
             return d;
         }
         case Op::SmoothUnion: {
@@ -1300,7 +1316,126 @@ f64 Field::skip_slack() const {
         if (!bounded(pattern.op)) return 1e30;
         slack += std::abs(n.a[0]);
     }
-    return slack;
+    // Twice the amplitude, and the factor of two is not caution — it is the arithmetic.
+    //
+    // A displaced field is f(p) = d(p) + a·n(p) with |n| ≤ 1. Reading f at one point and asking
+    // what it says about another has to survive the displacement twice: once because the reading
+    // itself may be up to `a` further out than the true shape, and once because the far point may
+    // be up to `a` further in. So f(p) ≥ f(c) − |p − c| − 2a, and a skip that subtracts only one
+    // `a` will eventually step over a bump.
+    //
+    // "Eventually" is the whole problem with getting this wrong: it cost 265 voxels out of fifty
+    // nine million the first time, which is nothing to look at and a hole in a wall to stand in.
+    return slack * 2.0;
+}
+
+f64 Field::metric_slack(u32 at) const {
+    if (at >= nodes_.size()) return kInfiniteSlack;
+    const Node& n = nodes_[at];
+
+    // The patterns whose range is known to be within [-1, 1]. Same list skip_slack uses, and for
+    // the same reason: a displacement by one of these moves the surface by a knowable amount.
+    const auto bounded = [](Op op) {
+        switch (op) {
+            case Op::Sine:
+            case Op::Waves:
+            case Op::Noise:
+            case Op::Fbm:
+            case Op::Ridged:
+            case Op::Rasp:
+            case Op::Checker:
+            case Op::Stripes:
+            case Op::Bricks:
+            case Op::Constant:
+            case Op::Parameter:
+            case Op::Step:
+            case Op::Smoothstep:
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    const auto worst_child = [&](u32 count) {
+        f64 slack = 0.0;
+        for (u32 i = 0; i < count && i < n.children; ++i) {
+            const f64 child = metric_slack(n.child[i]);
+            if (child >= kInfiniteSlack) return kInfiniteSlack;
+            slack = std::max(slack, child);
+        }
+        return slack;
+    };
+
+    switch (n.op) {
+        // Constants have no gradient at all, so they never mislead about a neighbour.
+        case Op::Constant:
+        case Op::Parameter:
+            return 0.0;
+
+        // A coordinate and a radius both move exactly one metre per metre, which is the
+        // condition. `below=0` on either is a half space or a ball, and both are decidable for a
+        // block from its centre.
+        case Op::Coordinate:
+        case Op::Radius:
+            return 0.0;
+
+        // The solids. Some of these are exact distances and some are bounds that under-state,
+        // which is the safe direction: a reading that says "nearer than it really is" can only
+        // make the sampler ask more often, never less.
+        case Op::Sphere:
+        case Op::Box:
+        case Op::Cylinder:
+        case Op::Capsule:
+        case Op::Torus:
+        case Op::Cone:
+        case Op::Plane:
+        case Op::Ellipsoid:
+        case Op::Prism:
+        case Op::Platonic:
+        case Op::Wedge:
+        case Op::Stairs:
+            return 0.0;
+
+        // Combining by min, max or a blend of the two keeps the gradient bounded by its
+        // steepest input, so the slack is the worst child's.
+        case Op::Union:
+        case Op::Intersection:
+        case Op::Difference:
+        case Op::SmoothUnion:
+        case Op::SmoothDifference:
+        case Op::SmoothIntersection:
+            return worst_child(n.children);
+
+        // Moving the point before asking. Rigid motions and folds preserve distance; scaling,
+        // twisting and bending do not, and are left out deliberately.
+        case Op::Translate:
+        case Op::Rotate:
+        case Op::Mirror:
+        case Op::Repeat:
+        case Op::PolarRepeat:
+            return worst_child(1);
+
+        // Changing the answer by a constant, or taking its absolute value, leaves the gradient
+        // alone.
+        case Op::Shell:
+        case Op::Round:
+        case Op::Offset:
+            return worst_child(1);
+
+        case Op::Displace: {
+            if (n.children < 2) return kInfiniteSlack;
+            if (!bounded(nodes_[n.child[1]].op)) return kInfiniteSlack;
+            const f64 base = metric_slack(n.child[0]);
+            if (base >= kInfiniteSlack) return kInfiniteSlack;
+            // Twice the amplitude, for the reason spelled out in skip_slack.
+            return base + std::abs(n.a[0]) * 2.0;
+        }
+
+        default:
+            // Patterns, curvature, occlusion, facing, and anything that distorts space. All of
+            // them are perfectly good to read — they just say nothing about the next voxel.
+            return kInfiniteSlack;
+    }
 }
 
 Vec3 Field::normal_at(u32 at, Vec3 p, f64 step) const {

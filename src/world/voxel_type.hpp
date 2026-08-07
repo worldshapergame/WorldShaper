@@ -141,7 +141,26 @@ public:
     u32 type_count() const { return static_cast<u32>(types_.size()); }
     VoxelTypeStats stats() const;
 
+    // Direct access for a bulk loader, which is the only caller that already knows the records
+    // are distinct and in the right order.
+    const std::vector<VisualRecord>& visuals() const { return visuals_; }
+    const std::vector<BehaviourRecord>& behaviours() const { return behaviours_; }
+    const std::vector<VoxelType>& types() const { return types_; }
+
+    // Takes the whole table at once, replacing whatever was there.
+    //
+    // The dedup indexes are *not* rebuilt here, and that is the point of the method existing. A
+    // million records re-interned one at a time is a million content hashes and a million map
+    // inserts — half a second of work to reconstruct something a bulk load already knows. The
+    // indexes are marked stale instead and rebuilt the first time something actually interns,
+    // which for a loaded world is usually never: placing a material that already exists needs no
+    // lookup, and only creating a *new* record does.
+    void adopt(std::vector<VisualRecord> visuals, std::vector<BehaviourRecord> behaviours,
+               std::vector<VoxelType> types);
+
 private:
+    void rebuild_indexes();
+
     std::vector<VisualRecord> visuals_;
     std::vector<BehaviourRecord> behaviours_;
     std::vector<VoxelType> types_;
@@ -149,6 +168,7 @@ private:
     std::unordered_map<u64, std::vector<VisualId>> visual_index_;
     std::unordered_map<u64, std::vector<BehaviourId>> behaviour_index_;
     std::unordered_map<u64, VoxelTypeId> type_index_;
+    bool indexes_stale_ = false;
 
     u64 dedup_hits_ = 0;
     u64 intern_calls_ = 0;

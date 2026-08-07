@@ -82,6 +82,17 @@ public:
     // 512 — undo capture reads a brick this way rather than through get().
     void decode(VoxelTypeId out[kBrickVoxels]) const;
 
+    // The reverse: replaces all 512 voxels in one pass and picks the smallest encoding that
+    // holds them. This is what a bulk writer wants, and the difference is not small — set()
+    // per voxel re-tests the form, re-searches the palette and may re-pack the whole brick
+    // 512 times over, where this decides once.
+    //
+    // It exists because of the rule that no two voxels in a clip share properties. Under that
+    // rule a brick routinely holds 512 distinct types, which is the exact case every
+    // incremental path is worst at: the palette search alone is quadratic in the distinct
+    // count, so a brick that used to cost a handful of comparisons costs a hundred thousand.
+    void assign(const VoxelTypeId in[kBrickVoxels]);
+
     void occupancy(u64 out[kBrickWords]) const;
     u32 solid_count() const;
 

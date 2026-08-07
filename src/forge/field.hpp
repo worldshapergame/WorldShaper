@@ -297,6 +297,21 @@ public:
     // clip that samples slowly is a nuisance, and one with holes in it is a bug nobody can see.
     f64 skip_slack() const;
 
+    // The same question asked of one expression rather than the whole field.
+    //
+    // `skip_slack` is a blunt instrument: it charges every displacement anywhere in the field
+    // against every skip, and it says nothing about whether the expression is a distance at all.
+    // This walks a single subtree and answers both — the slack to allow, or kInfiniteSlack when
+    // the expression is not a distance in metres and so says nothing about its neighbourhood.
+    //
+    // That second answer is what makes block sampling possible. A paint rule keyed on a shape
+    // ("water where the pool is") can be decided for a whole 8³ block from one reading at its
+    // centre, because a distance bounds what the value can be anywhere within reach. A rule keyed
+    // on a noise cannot be, because noise says nothing about the next voxel along. Knowing which
+    // is which turns fifteen evaluations per voxel into fifteen per block for most of a clip.
+    static constexpr f64 kInfiniteSlack = 1e30;
+    f64 metric_slack(u32 at) const;
+
     // A box each node is known to be contained in, so a union can skip the children that cannot
     // possibly be the nearest thing.
     //

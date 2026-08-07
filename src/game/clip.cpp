@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 #include "core/hash.hpp"
+#include "core/jobs.hpp"
 #include "world/greedy.hpp"
 #include "world/world.hpp"
 
@@ -503,6 +505,273 @@ u64 clip_to_ops(const Clip& clip, i64 ox, i64 oy, i64 oz, PasteMode mode, u64 ti
                          mask));
                  });
     return out.size() - before;
+}
+
+namespace {
+
+// What one chunk's worth of the paste turned out to be, so the ledger can be charged after the
+// threads have finished rather than from inside them.
+//
+// Keyed on the pair, because "matter went from air to type 41" and "matter went from type 12 to
+// type 41" are different events to an audit that exists to prove nothing appears from nowhere.
+//
+// Open-addressed, and that is the whole reason this type exists rather than an unordered_map.
+// Under the no-two-voxels-alike rule a paste produces a million distinct pairs, and a node-based
+// map means a million heap allocations scattered across memory — which measured as most of the
+// paste, for bookkeeping nobody looks at until an audit runs.
+struct LedgerDelta {
+    std::vector<u64> keys;     // 0 is empty; a real pair always has a non-air side
+    std::vector<u64> counts;
+    u64 mask = 0;
+    usize filled = 0;
+
+    LedgerDelta() {
+        keys.assign(4096, 0);
+        counts.assign(4096, 0);
+        mask = keys.size() - 1;
+    }
+
+    void grow() {
+        std::vector<u64> old_keys;
+        std::vector<u64> old_counts;
+        old_keys.swap(keys);
+        old_counts.swap(counts);
+        keys.assign(old_keys.size() * 2, 0);
+        counts.assign(old_keys.size() * 2, 0);
+        mask = keys.size() - 1;
+        for (usize i = 0; i < old_keys.size(); ++i) {
+            if (old_keys[i] == 0) continue;
+            u64 at = (old_keys[i] * 0x9E3779B97F4A7C15ull) >> 32 & mask;
+            while (keys[at] != 0) at = (at + 1) & mask;
+            keys[at] = old_keys[i];
+            counts[at] = old_counts[i];
+        }
+    }
+
+    void add(VoxelTypeId from, VoxelTypeId to, u64 count) {
+        const u64 key = (static_cast<u64>(from) << 32) | static_cast<u64>(to);
+        u64 at = (key * 0x9E3779B97F4A7C15ull) >> 32 & mask;
+        while (keys[at] != 0 && keys[at] != key) at = (at + 1) & mask;
+        if (keys[at] == 0) {
+            keys[at] = key;
+            ++filled;
+        }
+        counts[at] += count;
+        if (filled * 2 > keys.size()) grow();
+    }
+};
+
+}  // namespace
+
+PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 ox, i64 oy,
+                      i64 oz, PasteMode mode, MatterReason reason, u32 player, JobSystem* jobs) {
+    PasteStats stats;
+    if (clip.empty()) return stats;
+
+    const i64 lo[3] = {ox, oy, oz};
+    const i64 hi[3] = {ox + clip.size[0] - 1, oy + clip.size[1] - 1, oz + clip.size[2] - 1};
+
+    const WriteMask mask = (mode == PasteMode::IntoAir) ? WriteMask::IntoAir : WriteMask::All;
+    const bool clears = (mode == PasteMode::Replace);   // the clip's empty parts erase
+
+    // Which chunks the clip reaches into, and a pointer to each.
+    //
+    // Creating them all here, on one thread, is what makes the fill below safe to run in
+    // parallel: the map is never touched again, and World holds its chunks in a node-based
+    // map, so a Chunk* stays valid however many more are inserted.
+    struct Target {
+        ChunkCoord coord;
+        Chunk* chunk;
+    };
+    std::vector<Target> targets;
+    for (i64 cz = chunk_of(lo[2]); cz <= chunk_of(hi[2]); ++cz) {
+        for (i64 cy = chunk_of(lo[1]); cy <= chunk_of(hi[1]); ++cy) {
+            for (i64 cx = chunk_of(lo[0]); cx <= chunk_of(hi[0]); ++cx) {
+                const ChunkCoord coord{cx, cy, cz};
+                // A chunk the clip only covers with air, in a mode where air writes nothing,
+                // must not be brought into existence. An empty chunk that exists is not the
+                // same as one that does not: it costs memory, it streams, and it makes the
+                // chunk count a lie.
+                if (!clears) {
+                    const i64 base[3] = {cx << 8, cy << 8, cz << 8};
+                    bool any = false;
+                    // Asked of the coarse mask, one byte per 8³ block, so this is a few
+                    // thousand reads for a chunk rather than sixteen million.
+                    const i64 c0[3] = {std::max(lo[0], base[0]) - ox,
+                                       std::max(lo[1], base[1]) - oy,
+                                       std::max(lo[2], base[2]) - oz};
+                    const i64 c1[3] = {std::min(hi[0], base[0] + 255) - ox,
+                                       std::min(hi[1], base[1] + 255) - oy,
+                                       std::min(hi[2], base[2] + 255) - oz};
+                    for (i64 z = c0[2] >> 3; z <= (c1[2] >> 3) && !any; ++z) {
+                        for (i64 y = c0[1] >> 3; y <= (c1[1] >> 3) && !any; ++y) {
+                            for (i64 x = c0[0] >> 3; x <= (c1[0] >> 3) && !any; ++x) {
+                                any = clip.coarse[clip.coarse_index(
+                                          static_cast<i32>(x), static_cast<i32>(y),
+                                          static_cast<i32>(z))] != 0;
+                            }
+                        }
+                    }
+                    if (!any) continue;
+                }
+                targets.push_back({coord, &world.chunk_for_write(coord)});
+            }
+        }
+    }
+    if (targets.empty()) return stats;
+    stats.chunks_touched = targets.size();
+
+    std::vector<LedgerDelta> deltas(targets.size());
+    std::vector<u64> changed(targets.size(), 0);
+    std::vector<u64> written(targets.size(), 0);
+
+    const auto do_chunk = [&](usize begin, usize end) {
+        VoxelTypeId want[kBrickVoxels];
+        VoxelTypeId have[kBrickVoxels];
+        for (usize t = begin; t < end; ++t) {
+            Chunk& chunk = *targets[t].chunk;
+            LedgerDelta& delta = deltas[t];
+            // Counted locally and stored once at the end. Written straight into the shared vector
+            // they would be two neighbouring words in one cache line, and two threads bouncing a
+            // line between them on every brick costs more than the counting does.
+            u64 local_changed = 0;
+            u64 local_written = 0;
+            const i64 base[3] = {targets[t].coord.x << 8, targets[t].coord.y << 8,
+                                 targets[t].coord.z << 8};
+            const i64 clo[3] = {std::max(lo[0], base[0]), std::max(lo[1], base[1]),
+                                std::max(lo[2], base[2])};
+            const i64 chi[3] = {std::min(hi[0], base[0] + 255), std::min(hi[1], base[1] + 255),
+                                std::min(hi[2], base[2] + 255)};
+            bool touched = false;
+
+            for (i64 bz = (clo[2] - base[2]) >> 3; bz <= (chi[2] - base[2]) >> 3; ++bz) {
+                for (i64 by = (clo[1] - base[1]) >> 3; by <= (chi[1] - base[1]) >> 3; ++by) {
+                    for (i64 bx = (clo[0] - base[0]) >> 3; bx <= (chi[0] - base[0]) >> 3; ++bx) {
+                        const i64 origin[3] = {base[0] + (bx << 3), base[1] + (by << 3),
+                                               base[2] + (bz << 3)};
+
+                        // Gather what the clip wants in these 512 cells. A cell outside the
+                        // clip, or one the mode says nothing about, keeps whatever is already
+                        // there — recorded as "no opinion" by leaving the bit clear.
+                        //
+                        // Walked as eight-voxel rows, because a brick row and a clip row run
+                        // along the same axis: the eight cells are contiguous in both, so the
+                        // addressing is worked out once per row rather than once per voxel.
+                        // At sixty million voxels the difference is not a micro-optimisation.
+                        bool wants_any = false;
+                        bool wants_all = true;
+                        u64 opinion[8]{};
+                        for (u32 lz = 0; lz < 8u; ++lz) {
+                            const i64 wz = origin[2] + static_cast<i64>(lz);
+                            const bool z_in = wz >= lo[2] && wz <= hi[2];
+                            for (u32 ly = 0; ly < 8u; ++ly) {
+                                const u32 v0 = brick_index(0, ly, lz);
+                                const i64 wy = origin[1] + static_cast<i64>(ly);
+                                if (!z_in || wy < lo[1] || wy > hi[1]) {
+                                    for (u32 lx = 0; lx < 8u; ++lx) want[v0 + lx] = kAir;
+                                    wants_all = false;
+                                    continue;
+                                }
+                                const usize row = clip.index(static_cast<i32>(origin[0] - ox),
+                                                             static_cast<i32>(wy - oy),
+                                                             static_cast<i32>(wz - oz));
+                                for (u32 lx = 0; lx < 8u; ++lx) {
+                                    const i64 wx = origin[0] + static_cast<i64>(lx);
+                                    VoxelTypeId value = kAir;
+                                    bool has_opinion = false;
+                                    if (wx >= lo[0] && wx <= hi[0]) {
+                                        const usize cell = row + static_cast<usize>(lx);
+                                        if (clip.inside[cell] != 0) {
+                                            value = clip.voxels[cell];
+                                            has_opinion = clears || value != kAir;
+                                        }
+                                    }
+                                    want[v0 + lx] = value;
+                                    if (has_opinion) {
+                                        opinion[(v0 + lx) >> 6] |= (u64{1} << ((v0 + lx) & 63u));
+                                        wants_any = true;
+                                    } else {
+                                        wants_all = false;
+                                    }
+                                }
+                            }
+                        }
+                        if (!wants_any) continue;
+
+                        const Brick* existing = chunk.brick(static_cast<u32>(bx),
+                                                            static_cast<u32>(by),
+                                                            static_cast<u32>(bz));
+
+                        // The common case, and worth its own path: the clip covers this brick
+                        // completely, nothing is there yet, and no mask is filtering. Then the
+                        // brick simply *is* what the clip says, with nothing to read back, merge
+                        // or compare — and building an entire brick's worth of the world costs
+                        // one pass over 512 values.
+                        u64 hits = 0;
+                        if (existing == nullptr && wants_all && mask == WriteMask::All) {
+                            for (u32 v = 0; v < static_cast<u32>(kBrickVoxels); ++v) {
+                                if (want[v] == kAir) continue;
+                                delta.add(kAir, want[v], 1);
+                                ++hits;
+                            }
+                        } else {
+                            if (existing == nullptr) {
+                                if (mask == WriteMask::OntoSolid) continue;
+                                for (u32 v = 0; v < static_cast<u32>(kBrickVoxels); ++v) {
+                                    have[v] = kAir;
+                                }
+                            } else {
+                                existing->decode(have);
+                            }
+
+                            // Merge. Where the clip has no opinion, or the mask refuses, what
+                            // was there survives.
+                            for (u32 v = 0; v < static_cast<u32>(kBrickVoxels); ++v) {
+                                const bool mine = (opinion[v >> 6] & (u64{1} << (v & 63u))) != 0;
+                                if (!mine || !mask_allows(mask, have[v])) {
+                                    want[v] = have[v];
+                                    continue;
+                                }
+                                if (want[v] == have[v]) continue;
+                                delta.add(have[v], want[v], 1);
+                                ++hits;
+                            }
+                        }
+                        if (hits == 0) continue;
+
+                        chunk.brick_for_write(static_cast<u32>(bx), static_cast<u32>(by),
+                                              static_cast<u32>(bz))
+                            .assign(want);
+                        local_changed += hits;
+                        ++local_written;
+                        touched = true;
+                    }
+                }
+            }
+            changed[t] = local_changed;
+            written[t] = local_written;
+            if (touched) chunk.mark_modified();
+        }
+    };
+
+    if (jobs != nullptr && targets.size() > 1) {
+        jobs->parallel_for(targets.size(), 1, do_chunk);
+    } else {
+        do_chunk(0, targets.size());
+    }
+
+    for (usize t = 0; t < targets.size(); ++t) {
+        stats.voxels_changed += changed[t];
+        stats.bricks_written += written[t];
+        const LedgerDelta& delta = deltas[t];
+        for (usize i = 0; i < delta.keys.size(); ++i) {
+            if (delta.keys[i] == 0) continue;
+            const VoxelTypeId from = static_cast<VoxelTypeId>(delta.keys[i] >> 32);
+            const VoxelTypeId to = static_cast<VoxelTypeId>(delta.keys[i] & 0xFFFFFFFFull);
+            ledger.record_bulk(from, to, delta.counts[i], reason, player);
+        }
+    }
+    return stats;
 }
 
 }  // namespace ws

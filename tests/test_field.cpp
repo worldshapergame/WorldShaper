@@ -427,17 +427,49 @@ TEST_CASE("the slack a displacement adds is what stops the sampler skipping too 
     const u32 wave = f.sine(0, 1.0, 0.0);
     CHECK(f.skip_slack() == doctest::Approx(0.0));   // nothing displaced yet
 
+    // Twice the amplitude, not once. A reading may be `a` further out than the true surface, and
+    // the point being asked about may be `a` further in, so a skip has to survive both.
     const u32 rippled = f.displace(wall, wave, 0.25);
-    (void)rippled;
-    CHECK(f.skip_slack() == doctest::Approx(0.25));
+    CHECK(f.skip_slack() == doctest::Approx(0.5));
+    CHECK(f.metric_slack(rippled) == doctest::Approx(0.5));
 
     // Displacing by something whose range is not known turns skipping off entirely rather than
     // guessing at it, because a jump that is too long leaves holes nobody would notice.
     Field g;
     const u32 base = g.sphere({0, 0, 0}, 1.0);
     const u32 unbounded = g.cells(0.5, 1u);   // a distance, not a bounded pattern
-    (void)g.displace(base, unbounded, 0.1);
+    const u32 lumpy = g.displace(base, unbounded, 0.1);
     CHECK(g.skip_slack() > 1e20);
+    CHECK(g.metric_slack(lumpy) > 1e20);
+}
+
+TEST_CASE("an expression that is not a distance says nothing about its neighbourhood") {
+    Field f;
+
+    // Shapes, and everything built out of them by combining, moving or offsetting, are distances
+    // in metres: a reading at one point bounds the reading at every point near it, which is what
+    // lets a whole block of voxels be settled from its centre.
+    const u32 a = f.sphere({0, 0, 0}, 1.0);
+    const u32 b = f.box({2, 0, 0}, {0.5, 0.5, 0.5}, 0.0);
+    CHECK(f.metric_slack(a) == doctest::Approx(0.0));
+    CHECK(f.metric_slack(f.unite({a, b})) == doctest::Approx(0.0));
+    CHECK(f.metric_slack(f.subtract({a, b})) == doctest::Approx(0.0));
+    CHECK(f.metric_slack(f.translate(a, {1, 2, 3})) == doctest::Approx(0.0));
+    CHECK(f.metric_slack(f.round_off(a, 0.1)) == doctest::Approx(0.0));
+
+    // A coordinate moves exactly one metre per metre, so `below=0` on one is a half space and is
+    // decidable for a block just as a shape is.
+    CHECK(f.metric_slack(f.coordinate(1)) == doctest::Approx(0.0));
+
+    // Patterns are not. A noise value at the centre of a block says nothing whatever about the
+    // value a voxel away, so a rule keyed on one has to be asked per voxel — which is exactly
+    // what makes it more expensive, and exactly why the sampler needs to know the difference.
+    CHECK(f.metric_slack(f.fbm(0.5, 4, 0.5, 2.0, 1u)) > 1e20);
+    CHECK(f.metric_slack(f.noise(0.5, 1u)) > 1e20);
+    CHECK(f.metric_slack(f.cells(0.5, 1u)) > 1e20);
+
+    // Twisting a shape stretches space, so distances stop being distances.
+    CHECK(f.metric_slack(f.twist(a, 0.5, 1)) > 1e20);
 }
 
 TEST_CASE("scale keeps the field usable as a distance") {

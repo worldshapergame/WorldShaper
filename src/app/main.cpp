@@ -48,6 +48,7 @@
 #include "world/raycast.hpp"
 #include "world/residency.hpp"
 #include "world/serialize.hpp"
+#include "world/world_cache.hpp"
 #include "world/voxel_type.hpp"
 #include "world/world.hpp"
 
@@ -73,6 +74,7 @@ struct Options {
     // A development build should not go looking for a release older than what is sitting in
     // front of you, and a scripted screenshot should not depend on the network.
     bool no_update_check = (WS_DEBUG != 0);
+    bool no_clip_cache = false;   // always rebuild the clip, never read or write the cache
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
     bool path_trace = false;   // start in the reference path tracer
     u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
@@ -188,6 +190,8 @@ Options parse_options(int argc, char** argv) {
             options.clip_align = true;
         } else if (arg == "--clip-metre") {
             options.clip_metre = static_cast<i32>(next_number(0));
+        } else if (arg == "--no-clip-cache") {
+            options.no_clip_cache = true;
         } else if (arg == "--clip-at") {
             if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
         } else if (arg == "--material") {
@@ -479,7 +483,7 @@ int run_stream_audit(const Options& options) {
             forge::SampleResult built = forge::sample(script.field, script.solid, script.paint,
                                                       script.settings, &build_jobs);
             forge::apply_variation(built.clip, types, script.field, script.variation,
-                                   script.settings, built);
+                                   script.settings, built, &build_jobs);
             std::vector<Op> ops;
             clip_to_ops(built.clip, built.origin_voxel[0], built.origin_voxel[1],
                         built.origin_voxel[2], PasteMode::SolidOnly, 1, 1, ops);
@@ -866,30 +870,81 @@ void Application::build_world() {
     {
         const std::string path =
             options_.clip_file.empty() ? default_clip_path() : options_.clip_file;
-        forge::Script script = forge::load_clip_script(path, types_, tags_);
+
+        // The clip is read once, here, and the text is what everything downstream works from —
+        // the cache key as well as the parser. Reading it twice would let the two disagree.
+        std::string source;
+        {
+            std::ifstream file(path, std::ios::binary);
+            if (file) {
+                std::ostringstream buffer;
+                buffer << file.rdbuf();
+                source = buffer.str();
+            }
+        }
+
+        JobSystem jobs;
+
+        forge::Script script = forge::parse_clip_script(source, types_, tags_);
         for (const forge::ScriptError& error : script.errors) {
             WS_LOG_ERROR("clip", "line {}: {}", error.line, error.message);
         }
+        if (options_.clip_metre > 0) script.settings.voxels_per_metre = options_.clip_metre;
+        const u64 parsed_at = now_ns();
+
+        // A world already built from exactly this text, at exactly this resolution, is worth more
+        // than the ability to build it again. Two hundred million field evaluations do not fit in
+        // a second and never will; a third of a gigabyte off a disk does.
+        //
+        // The resolution comes from the parsed script rather than from an assumption about the
+        // default, because a clip can name its own and a key that ignored that would hand back a
+        // world sampled at the wrong size.
+        const std::string cache_path = path + ".world";
+        const u64 key = world_cache_key(source, script.settings.voxels_per_metre);
+        if (!source.empty() && !options_.no_clip_cache) {
+            WorldCache cache;
+            cache.tags = &tags_;
+            cache.properties = &properties_;
+            cache.types = &types_;
+            cache.world = &world_;
+            cache.ledger = &ledger_;
+            if (read_world_cache(cache_path, key, cache, &jobs)) {
+                materials_ = cache.materials;
+                if (materials_.empty()) materials_.push_back(1);
+                material_index_ = options_.material % materials_.size();
+                chisel_.set_material(materials_[material_index_]);
+                const WorldStats cached_stats = world_.stats();
+                WS_LOG_INFO("world", "'{}' loaded from cache in {:.0f} ms: {} chunks, {} solid "
+                                     "voxels", path, ns_to_ms(now_ns() - start),
+                            cached_stats.chunks, cached_stats.solid_voxels);
+                return;
+            }
+        }
+
         if (script.ok()) {
-            if (options_.clip_metre > 0) script.settings.voxels_per_metre = options_.clip_metre;
-            JobSystem jobs;
             forge::SampleResult built =
                 forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+            const u64 sampled_at = now_ns();
             // Every voxel gets its own version of its material before it goes in, so the world
             // holds the varied clip rather than the flat one.
             const forge::VariationReport variety = forge::apply_variation(
-                built.clip, types_, script.field, script.variation, script.settings, built);
+                built.clip, types_, script.field, script.variation, script.settings, built, &jobs);
+            const u64 varied_at = now_ns();
             if (variety.voxels > 0) {
                 WS_LOG_INFO("clip", "variation: {} records over {} voxels, largest group {}",
                             variety.distinct_types, variety.voxels, variety.largest_group);
             }
-            std::vector<Op> ops;
-            clip_to_ops(built.clip, built.origin_voxel[0] + options_.clip_at[0],
-                        built.origin_voxel[1] + options_.clip_at[1],
-                        built.origin_voxel[2] + options_.clip_at[2], PasteMode::SolidOnly, tick_++,
-                        1, ops);
-            for (const Op& op : ops) apply_op(world_, op, ledger_);
+            paste_clip(world_, ledger_, built.clip, built.origin_voxel[0] + options_.clip_at[0],
+                       built.origin_voxel[1] + options_.clip_at[1],
+                       built.origin_voxel[2] + options_.clip_at[2], PasteMode::SolidOnly,
+                       MatterReason::PlayerPlace, 1, &jobs);
+            const u64 pasted_at = now_ns();
             world_.compact();
+            WS_LOG_INFO("clip", "parse {:.0f} ms, sample {:.0f} ms ({} evaluations), "
+                                "variation {:.0f} ms, paste {:.0f} ms, compact {:.0f} ms",
+                        ns_to_ms(parsed_at - start), ns_to_ms(sampled_at - parsed_at),
+                        built.evaluations, ns_to_ms(varied_at - sampled_at),
+                        ns_to_ms(pasted_at - varied_at), ns_to_ms(now_ns() - pasted_at));
             materials_ = script.material_types;
             if (materials_.empty()) materials_.push_back(1);
             material_index_ = options_.material % materials_.size();
@@ -897,6 +952,18 @@ void Application::build_world() {
             const WorldStats clip_stats = world_.stats();
             WS_LOG_INFO("world", "'{}' built in {:.0f} ms: {} chunks, {} solid voxels", path,
                         ns_to_ms(now_ns() - start), clip_stats.chunks, clip_stats.solid_voxels);
+
+            // Kept, so the next run does not do any of that again.
+            if (!options_.no_clip_cache) {
+                WorldCache cache;
+                cache.tags = &tags_;
+                cache.properties = &properties_;
+                cache.types = &types_;
+                cache.world = &world_;
+                cache.ledger = &ledger_;
+                cache.materials = materials_;
+                write_world_cache(cache_path, key, cache);
+            }
             return;
         }
         // Nothing to fall back to, and that is deliberate. An empty world says plainly that the
@@ -2899,7 +2966,7 @@ int run_clip_tool(const Options& options) {
 
     forge::SampleResult varied = built;
     const forge::VariationReport variety = forge::apply_variation(
-        varied.clip, types, script.field, script.variation, script.settings, built);
+        varied.clip, types, script.field, script.variation, script.settings, built, &jobs);
 
     const forge::Measurement m =
         forge::measure(varied.clip, script.settings.voxels_per_metre);

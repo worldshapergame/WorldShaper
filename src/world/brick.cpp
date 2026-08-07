@@ -211,6 +211,69 @@ void Brick::decode(VoxelTypeId out[kBrickVoxels]) const {
     }
 }
 
+void Brick::assign(const VoxelTypeId in[kBrickVoxels]) {
+    // Which distinct types are present, and which palette slot each voxel wants.
+    //
+    // Found through a small open-addressed table rather than a linear scan of the palette.
+    // A scan is the obvious way and it is fine while bricks hold four or five materials, but
+    // the no-two-voxels-alike rule makes 512-distinct bricks ordinary, and there the scan
+    // costs 512 × 256 comparisons for a brick that this costs 512 probes.
+    constexpr u32 kSlots = 1024;                 // power of two, twice the voxel count
+    constexpr u32 kNoKey = 0xFFFFFFFFu;
+    u32 probe_key[kSlots];
+    u16 probe_slot[kSlots];
+    std::memset(probe_key, 0xFF, sizeof(probe_key));
+
+    VoxelTypeId used[kVoxels];
+    u16 slot_of[kVoxels];
+    u32 used_count = 0;
+
+    for (u32 voxel = 0; voxel < kVoxels; ++voxel) {
+        const u32 type = static_cast<u32>(in[voxel]);
+        u32 at = (type * 0x9E3779B1u) & (kSlots - 1);
+        while (probe_key[at] != kNoKey && probe_key[at] != type) at = (at + 1) & (kSlots - 1);
+        if (probe_key[at] == kNoKey) {
+            probe_key[at] = type;
+            probe_slot[at] = static_cast<u16>(used_count);
+            used[used_count++] = in[voxel];
+        }
+        slot_of[voxel] = probe_slot[at];
+    }
+
+    if (used_count == 1) {
+        fill(used[0]);
+        return;
+    }
+
+    palette_.clear();
+    indices_.clear();
+    direct_.clear();
+
+    if (used_count > 256) {
+        form_ = Form::Direct;
+        palette_.shrink_to_fit();
+        indices_.shrink_to_fit();
+        direct_.assign(in, in + kVoxels);
+    } else {
+        form_ = (used_count <= 2)    ? Form::Palette1
+                : (used_count <= 4)  ? Form::Palette2
+                : (used_count <= 16) ? Form::Palette4
+                                     : Form::Palette8;
+        direct_.shrink_to_fit();
+        palette_.assign(used, used + used_count);
+        const u32 bits = bits_for(form_);
+        indices_.assign((kVoxels * bits + 7) / 8, 0);
+        // The form is already set, so write_index packs at the final stride and no voxel is
+        // ever written twice.
+        for (u32 voxel = 0; voxel < kVoxels; ++voxel) write_index(voxel, slot_of[voxel]);
+    }
+
+    for (u64& word : occupancy_) word = 0;
+    for (u32 voxel = 0; voxel < kVoxels; ++voxel) {
+        if (in[voxel] != kAir) occupancy_[voxel / 64] |= (u64{1} << (voxel % 64));
+    }
+}
+
 void Brick::type_histogram(std::vector<TypeCount>& out) const {
     out.clear();
     if (form_ == Form::Uniform) {

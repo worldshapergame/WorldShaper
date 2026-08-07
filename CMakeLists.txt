@@ -89,6 +89,7 @@ add_library(ws_world STATIC
     src/world/region.cpp
     src/world/history.cpp
     src/world/serialize.cpp
+    src/world/world_cache.cpp
     src/world/gpu_brick.cpp
     src/world/residency.cpp
     src/world/light_list.cpp

@@ -144,14 +144,20 @@ bool read_brick(ByteReader& in, Brick& brick) {
         return true;
     }
 
-    brick.fill(kAir);
+    // Decoded into a plain array and handed over in one go.
+    //
+    // This used to call set() once per voxel, which re-tests the brick's form, searches its
+    // palette and can re-pack all 512 indices — 512 times over, per brick. On a world whose
+    // voxels are individually varied that is Direct-form bricks with 512-entry palettes, and the
+    // search alone is quadratic: loading measured slower than rebuilding the world from its
+    // source, which rather defeats the point of saving it.
+    VoxelTypeId decoded[kBrickVoxels];
 
     if (bits == 32) {
-        for (u32 voxel = 0; voxel < voxels; ++voxel) {
-            const VoxelTypeId type = in.u32v();
-            if (type != kAir) brick.set(voxel, type);
-        }
-        return in.ok();
+        for (u32 voxel = 0; voxel < voxels; ++voxel) decoded[voxel] = in.u32v();
+        if (!in.ok()) return false;
+        brick.assign(decoded);
+        return true;
     }
 
     if (bits != 1 && bits != 2 && bits != 4 && bits != 8) return false;
@@ -163,11 +169,12 @@ bool read_brick(ByteReader& in, Brick& brick) {
         for (u32 i = 0; i < per_byte; ++i) {
             const u32 slot = (packed >> (i * bits)) & mask;
             if (slot >= palette_size) return false;
-            const VoxelTypeId type = palette[slot];
-            if (type != kAir) brick.set(base + i, type);
+            decoded[base + i] = palette[slot];
         }
     }
-    return in.ok();
+    if (!in.ok()) return false;
+    brick.assign(decoded);
+    return true;
 }
 
 // --------------------------------------------------------------------------------------
