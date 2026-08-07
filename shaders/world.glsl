@@ -473,7 +473,11 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
                         // used to fade the cell into the sky, which is the mistake that made
                         // distant window frames dither away in Stage 4.
                         result.colour = (packed & 0x00FFFFFFu) | 0xFF000000u;
-                        result.level = 5;   // a metre, so: coarse, and not a voxel type
+                        // 5 and up marks a summary hit, and which tier it came from — so a
+                        // caller can tell how *big* the thing it hit is. A cell here is
+                        // `span` metres, not a voxel, and anything bouncing off it has to
+                        // leave by more than that or it lands straight back inside.
+                        result.level = 5 + level;
                         flush_missing(report, has_pending, pending);
                         return result;
                     }

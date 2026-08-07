@@ -427,6 +427,21 @@ FaceLight read_face(uint slot) {
 // How many samples of its own a node needs before it stops leaning on its parent.
 const uint kSeedSamples = 48u;
 
+// How far a ray has to leave a surface by, in voxels, before it is clear of it.
+//
+// A voxel wants a hundredth of a voxel and nothing more. A *summary* cell is a metre or more
+// across, and leaving one by a hundredth of a voxel lands the ray straight back inside the
+// block it just left — so every shadow ray reported occluded and every bounce found the same
+// surface again. Distant chunks, which are exactly the ones drawn from summaries, came out
+// uniformly black.
+//
+// Levels 5 and up are summary hits and carry their tier, so the cell size is known: a tier's
+// block is 2^tier chunks and its cells are 2^tier metres, which is 32 << tier voxels.
+float surface_offset(int level) {
+    if (level < 5) return 0.01;
+    return float(32u << uint(level - 5)) * 0.75;
+}
+
 FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
     uint lo, hi;
     face_key(voxel, normal, level, lo, hi);
@@ -463,6 +478,11 @@ FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
 uint cache_level(float t) {
     float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
     float footprint = max(t * pixel_angle, 1.0);
+    // Capped at 6, and raising it makes things worse, which is worth writing down because the
+    // opposite is the intuition. The level is part of the key, so allowing more of them splits
+    // distant surfaces across level 7, 8, 9 and 10 entries instead of pooling them in one -
+    // and adjacent pixels either side of a distance boundary then look up different keys.
+    // Measured: raising the cap to 10 took uncached surface pixels from 3,661 to 18,392.
     return uint(clamp(floor(log2(footprint)), 0.0, 6.0));
 }
 
@@ -534,7 +554,7 @@ void main() {
         primary_t = hit.t;
         vec3 normal = vec3(hit.normal);
         vec3 point = origin + dir * hit.t;
-        vec3 from = point + normal * 0.01;
+        vec3 from = point + normal * surface_offset(hit.level);
         Material m = (hit.level == 0) ? material_of(hit.type_id)
                                       : material_from_colour(hit.colour);
 
@@ -582,7 +602,7 @@ void main() {
         } else {
             vec3 n2 = vec3(second.normal);
             vec3 p2 = from + bounce_dir * second.t;
-            vec3 from2 = p2 + n2 * 0.01;
+            vec3 from2 = p2 + n2 * surface_offset(second.level);
             Material m2 = (second.level == 0) ? material_of(second.type_id)
                                               : material_from_colour(second.colour);
 

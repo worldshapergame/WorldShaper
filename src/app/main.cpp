@@ -1767,10 +1767,17 @@ int Application::run(const Options& options) {
                                            "render params",
                                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
-    // A million faces at 32 bytes. Generous on purpose: a face that cannot find a slot is not
-    // wrong, it just goes uncached and noisy, and the failure is invisible until someone
-    // wonders why one wall is grainier than the rest.
-    constexpr u64 kFaceCacheEntries = 1u << 20;
+    // Four million faces at 32 bytes, so 128 MB.
+    //
+    // A million was enough until parent seeding arrived. Seeding keeps an entry for a node
+    // *and* its parent, so the table holds two levels for everything it sees, and that extra
+    // pressure took uncached surface pixels from 3,661 to 18,400 — a band of noise back along
+    // the skyline, traded for the halved first-look noise seeding buys. This pays for both.
+    //
+    // A face that cannot find a slot is not wrong, it just goes uncached and noisy, and that
+    // failure is invisible until someone wonders why one wall is grainier than the rest —
+    // which is what debug view 5 is for.
+    constexpr u64 kFaceCacheEntries = 4u << 20;
     face_cache_ = create_device_buffer(device_, kFaceCacheEntries * 32,
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "face cache");
     WS_LOG_INFO("app", "face cache: {} entries, {} MB", kFaceCacheEntries,
