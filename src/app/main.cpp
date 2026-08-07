@@ -507,6 +507,11 @@ private:
     VkDescriptorSetLayout pathtrace_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet pathtrace_set_ = VK_NULL_HANDLE;
     GpuImage accum_image_;
+    // One entry per voxel face the camera has looked at, 32 bytes each. Light is computed
+    // once per face and shared by every pixel that sees it, and because the key is a place in
+    // the world rather than on the screen, turning the camera does not throw the work away.
+    GpuBuffer face_cache_;
+    bool face_cache_dirty_ = true;
     bool path_trace_ = false;
     u32 trace_samples_ = 0;      // samples accumulated since the last reset
     // Not a quality setting so much as a safety net: Russian roulette decides when a path
@@ -888,7 +893,11 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // tree first: it holds the node that every level above this chunk was
                     // folded from, and the cache only reads its answers.
                     summary_tree_.invalidate(coord);
-                    trace_samples_ = 0;   // the accumulated image is of a world that changed
+                    // The accumulated image is of a world that changed, and so is every face's
+                    // cached light. The camera moving does *not* do this — that is the point
+                    // of keying on a place in the world rather than on the screen.
+                    trace_samples_ = 0;
+                    face_cache_dirty_ = true;
                     for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
                 }
             }
@@ -1495,6 +1504,25 @@ void Application::record_frame(f32 time_seconds) {
     // Replaces both passes below while it is on, and shares nothing with them but the world.
     // It has no budget: it accumulates while you hold still and is expected to take seconds.
     if (path_trace_) {
+        // Clearing the cache is what "the world changed" means to it. A face's cached light
+        // describes a world that no longer exists the moment something is carved next to it,
+        // and unlike screen-space accumulation it would never wash out on its own — a stale
+        // face keeps its old light until something evicts it, which is never.
+        if (face_cache_dirty_) {
+            vkCmdFillBuffer(cmd, face_cache_.buffer, 0, VK_WHOLE_SIZE, 0);
+            VkMemoryBarrier2 clear_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            clear_barrier.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+            clear_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            clear_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            clear_barrier.dstAccessMask =
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            VkDependencyInfo clear_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            clear_dependency.memoryBarrierCount = 1;
+            clear_dependency.pMemoryBarriers = &clear_barrier;
+            vkCmdPipelineBarrier2(cmd, &clear_dependency);
+            face_cache_dirty_ = false;
+        }
+
         profiler_.begin_pass(cmd, "pathtrace", 1000.0);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.pipeline());
         const u32 trace_offset =
@@ -1738,6 +1766,15 @@ int Application::run(const Options& options) {
                                            "render params",
                                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
+    // A million faces at 32 bytes. Generous on purpose: a face that cannot find a slot is not
+    // wrong, it just goes uncached and noisy, and the failure is invisible until someone
+    // wonders why one wall is grainier than the rest.
+    constexpr u64 kFaceCacheEntries = 1u << 20;
+    face_cache_ = create_device_buffer(device_, kFaceCacheEntries * 32,
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "face cache");
+    WS_LOG_INFO("app", "face cache: {} entries, {} MB", kFaceCacheEntries,
+                (kFaceCacheEntries * 32) >> 20);
+
     const u64 clip_bytes = kMaxClipPoolCells * sizeof(u32);
     clip_buffer_ = create_device_buffer(device_, clip_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                         "clip cells");
@@ -1815,8 +1852,8 @@ int Application::run(const Options& options) {
     // includes the same traversal, so the binding numbers come with it — then the parameter
     // block at 13 and the type tables at 14 and 15.
     {
-        VkDescriptorSetLayoutBinding trace_bindings[17]{};
-        for (u32 i = 0; i < 17; ++i) {
+        VkDescriptorSetLayoutBinding trace_bindings[18]{};
+        for (u32 i = 0; i < 18; ++i) {
             trace_bindings[i].binding = i;
             trace_bindings[i].descriptorType =
                 (i < 2)     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -1827,7 +1864,7 @@ int Application::run(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo trace_layout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        trace_layout.bindingCount = 17;
+        trace_layout.bindingCount = 18;
         trace_layout.pBindings = trace_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &trace_layout, nullptr,
                                           &pathtrace_layout_));
@@ -1929,12 +1966,12 @@ int Application::run(const Options& options) {
     // because it includes the same traversal and the binding numbers come with it, plus the
     // type tables at 14 and 15 so a hit becomes a material.
     {
-        constexpr u32 kTraceBuffers = kBufferBindings + 3;   // world, types, visuals, clip
+        constexpr u32 kTraceBuffers = kBufferBindings + 4;   // world, types, visuals, clip, faces
         const VkBuffer trace_buffers[kTraceBuffers]{
             marcher_buffers[0], marcher_buffers[1], marcher_buffers[2],  marcher_buffers[3],
             marcher_buffers[4], marcher_buffers[5], marcher_buffers[6],  marcher_buffers[7],
             marcher_buffers[8], marcher_buffers[9], marcher_buffers[10], world_buffers_.types(),
-            world_buffers_.visuals(), clip_buffer_.buffer,
+            world_buffers_.visuals(), clip_buffer_.buffer,   face_cache_.buffer,
         };
         VkDescriptorBufferInfo trace_infos[kTraceBuffers]{};
         VkWriteDescriptorSet trace_writes[kTraceBuffers + 1]{};
@@ -2125,6 +2162,7 @@ int Application::run(const Options& options) {
     world_buffers_.destroy();
     feedback_.destroy();
     destroy_buffer(device_, params_buffer_);
+    destroy_buffer(device_, face_cache_);
     destroy_buffer(device_, clip_buffer_);
     destroy_buffer(device_, clip_staging_);
     visibility_.destroy();
