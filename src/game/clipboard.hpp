@@ -122,6 +122,11 @@ public:
     void resize(f64 factor);                    // all three axes at once
     void stretch(u32 axis, f64 factor);         // one axis
 
+    // Shell thickness for what this stamps. 0 is solid. Set from the same modifier the
+    // chisel uses, because it is a property of how you are building, not of the tool.
+    void set_hollow(u32 thickness) { hollow_ = thickness; }
+    u32 hollow() const { return hollow_; }
+
     bool holding() const { return !source_.empty(); }
     const ClipboardPreview& preview() const { return preview_; }
     const Clip& clip() const { return shapes_.empty() ? source_ : shapes_.back(); }
@@ -207,6 +212,7 @@ private:
     f64 angles_[3]{0.0, 0.0, 0.0};       // degrees, accumulated, for the last copy
     f64 scale_[3]{1.0, 1.0, 1.0};        // per axis, for the last copy
     i32 copies_ = 1;                     // never 0; negative extrapolates past the ghost
+    u32 hollow_ = 0;                     // shell thickness in voxels; 0 is solid
     PasteMode paste_mode_ = PasteMode::SolidOnly;
     AdjustMode adjust_mode_ = AdjustMode::Copies;
     bool snap_ = false;

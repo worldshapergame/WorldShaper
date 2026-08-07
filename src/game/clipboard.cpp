@@ -552,6 +552,9 @@ bool Clipboard::update(const World& world, const ClipboardInput& input, const f6
             baking_truncated_ = true;
             break;
         }
+        // Hollowed after baking, so the shell follows the copy as it is actually shaped —
+        // turned and stretched — rather than the shape it had before.
+        if (hollow_ > 0) baked = hollow_clip(baked, static_cast<i64>(hollow_));
         clip_to_ops(baked, at[0], at[1], at[2], paste_mode_, tick, player, out);
     }
     last_stamp_ops_ = out.size();

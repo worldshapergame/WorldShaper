@@ -27,6 +27,21 @@ class World;
 
 enum class ChiselMode : u8 { None, Carve, Place };
 
+// Splits a filled box into the six slabs of a shell `thickness` voxels thick, leaving the
+// inside untouched.
+//
+// Untouched, not emptied. A hollow placement should build walls inside a hill without
+// scooping out the hill, and a hollow carve should cut a shell of rock away and leave what was
+// behind it — carving the interior as well would make "hollow" mean "solid" for anything that
+// removes matter, which is exactly backwards.
+//
+// The slabs do not overlap: two ops writing the same voxel would count it twice in the matter
+// ledger, and the ledger is checked against a full recount.
+//
+// A box too thin to have an inside is emitted whole, because a one-voxel wall with a one-voxel
+// shell is a one-voxel wall.
+void hollow_box(const Op& box, i64 thickness, u64& next_id, std::vector<Op>& out);
+
 struct ChiselInput {
     bool left = false;
     bool right = false;

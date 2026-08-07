@@ -106,6 +106,18 @@ struct Clip {
 // copy until something stamps it.
 Clip capture_clip(const World& world, i64 x0, i64 y0, i64 z0, i64 x1, i64 y1, i64 z1);
 
+// Keeps only the cells within `thickness` of the clip's surface, so a stamped copy is a shell.
+//
+// Not the six slabs a box gets: a clip is whatever shape you captured, so its shell has to
+// follow that shape. A cell is on the shell when something within `thickness` of it — measured
+// as a cube, so corners count — is empty or outside the clip.
+//
+// Done as three separable passes rather than one cubic neighbourhood per cell. The naive form
+// is (2t+1)^3 reads per cell, which at a thickness of four is 729; separated it is three passes
+// of 2t+1, which is 27. On a clip of any size that is the difference between instant and a
+// stall while a key is held down.
+Clip hollow_clip(const Clip& clip, i64 thickness);
+
 // Rotates about a world axis (0 = x, 1 = y, 2 = z). The voxel count is preserved exactly.
 Clip rotate_clip(const Clip& clip, u32 axis, f64 radians);
 

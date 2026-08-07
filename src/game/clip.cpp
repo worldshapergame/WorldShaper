@@ -8,6 +8,61 @@
 #include "world/world.hpp"
 
 namespace ws {
+
+Clip hollow_clip(const Clip& clip, i64 thickness) {
+    if (thickness <= 0) return clip;
+
+    const i64 sx = static_cast<i64>(clip.size[0]);
+    const i64 sy = static_cast<i64>(clip.size[1]);
+    const i64 sz = static_cast<i64>(clip.size[2]);
+    if (sx <= 0 || sy <= 0 || sz <= 0) return clip;
+
+    const usize count = static_cast<usize>(sx * sy * sz);
+    auto index = [&](i64 x, i64 y, i64 z) { return static_cast<usize>((z * sy + y) * sx + x); };
+
+    // Erode: a cell survives only if everything within `thickness` of it is also solid. Cells
+    // outside the clip count as empty, which is what makes the outer surface part of the shell.
+    std::vector<u8> solid(count, 0);
+    for (usize i = 0; i < count && i < clip.inside.size(); ++i) {
+        solid[i] = (clip.inside[i] != 0 && clip.voxels[i] != kAir) ? 1u : 0u;
+    }
+
+    std::vector<u8> a = solid;
+    std::vector<u8> b(count, 0);
+
+    for (u32 axis = 0; axis < 3; ++axis) {
+        for (i64 z = 0; z < sz; ++z) {
+            for (i64 y = 0; y < sy; ++y) {
+                for (i64 x = 0; x < sx; ++x) {
+                    u8 keep = 1;
+                    for (i64 d = -thickness; d <= thickness && keep != 0; ++d) {
+                        const i64 nx = x + (axis == 0 ? d : 0);
+                        const i64 ny = y + (axis == 1 ? d : 0);
+                        const i64 nz = z + (axis == 2 ? d : 0);
+                        if (nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz) {
+                            keep = 0;   // outside is empty, so the rim is always shell
+                            break;
+                        }
+                        if (a[index(nx, ny, nz)] == 0) keep = 0;
+                    }
+                    b[index(x, y, z)] = keep;
+                }
+            }
+        }
+        a.swap(b);
+    }
+
+    // The shell is what was solid and did not survive the erosion.
+    Clip out = clip;
+    for (usize i = 0; i < count && i < out.inside.size(); ++i) {
+        if (solid[i] != 0 && a[i] != 0) {
+            out.inside[i] = 0;
+            out.voxels[i] = kAir;
+        }
+    }
+    out.build_coarse();
+    return out;
+}
 namespace {
 
 constexpr f64 kPi = 3.14159265358979323846;

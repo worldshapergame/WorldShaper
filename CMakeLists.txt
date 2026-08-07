@@ -243,6 +243,7 @@ add_executable(ws_tests
     tests/test_residency.cpp
     tests/test_thumbnail.cpp
     tests/test_thumb_cache.cpp
-    tests/test_summary_tree.cpp)
+    tests/test_summary_tree.cpp
+    tests/test_hollow.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_doctest)
 add_test(NAME unit COMMAND ws_tests)

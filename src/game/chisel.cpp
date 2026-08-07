@@ -7,6 +7,46 @@
 #include "world/world.hpp"
 
 namespace ws {
+
+void hollow_box(const Op& box, i64 thickness, u64& next_id, std::vector<Op>& out) {
+    Op b = box;
+    b.normalise();
+
+    const i64 span[3] = {b.x1 - b.x0 + 1, b.y1 - b.y0 + 1, b.z1 - b.z0 + 1};
+    if (thickness <= 0 || span[0] <= 2 * thickness || span[1] <= 2 * thickness ||
+        span[2] <= 2 * thickness) {
+        // No inside to leave alone, so the shell is the whole thing.
+        Op whole = b;
+        whole.tick = next_id++;
+        out.push_back(whole);
+        return;
+    }
+
+    const i64 t = thickness;
+    auto slab = [&](i64 x0, i64 y0, i64 z0, i64 x1, i64 y1, i64 z1) {
+        Op piece = b;
+        piece.tick = next_id++;
+        piece.x0 = x0; piece.y0 = y0; piece.z0 = z0;
+        piece.x1 = x1; piece.y1 = y1; piece.z1 = z1;
+        out.push_back(piece);
+    };
+
+    // Six slabs, cut so no two share a voxel. Overlapping them would be simpler to write and
+    // would count the shared voxels twice in the matter ledger, which is audited against a
+    // full recount and would fail.
+    slab(b.x0, b.y0, b.z0, b.x1, b.y0 + t - 1, b.z1);                        // bottom
+    slab(b.x0, b.y1 - t + 1, b.z0, b.x1, b.y1, b.z1);                        // top
+
+    const i64 my0 = b.y0 + t;
+    const i64 my1 = b.y1 - t;
+    slab(b.x0, my0, b.z0, b.x1, my1, b.z0 + t - 1);                          // front
+    slab(b.x0, my0, b.z1 - t + 1, b.x1, my1, b.z1);                          // back
+
+    const i64 mz0 = b.z0 + t;
+    const i64 mz1 = b.z1 - t;
+    slab(b.x0, my0, mz0, b.x0 + t - 1, my1, mz1);                            // left
+    slab(b.x1 - t + 1, my0, mz0, b.x1, my1, mz1);                            // right
+}
 namespace {
 
 i64 floor_i64(f64 v) { return static_cast<i64>(std::floor(v)); }

@@ -192,7 +192,8 @@ void print_help() {
         "In game:  F1 developer panel   F2 overlay   F4 path trace   F5 reload shaders\n"
         "          F11 toggle vsync     Esc quit\n"
         "  chisel: hold LMB carve   RMB place   G+wheel distance   MMB constraint\n"
-        "          Z undo   X redo   R clear points   C cancel   Q/E material");
+        "          Z undo   X redo   R clear points   C cancel   Q/E material\n"
+        "          H+wheel hollow shell thickness (0 = solid)");
 }
 
 // Per-dispatch parameters for the path tracer. Push constants rather than another field on
@@ -518,6 +519,10 @@ private:
     // stops, weighted by how much light it can still carry, so paths end when they stop
     // mattering rather than at a fixed depth. This only bounds the pathological case.
     u32 trace_bounces_ = 64;
+    // Shell thickness in voxels for anything the tools place. 0 is solid. Shared by the
+    // chisel and the clipboard, because it is a property of how you are building rather than
+    // of which tool is in your hand.
+    u32 hollow_ = 0;
     f32 trace_camera_[6]{};
     f32 trace_forward_[3]{};
     bool accum_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
@@ -810,6 +815,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
 
     std::vector<Op> ops;
     if (toolbelt_.active() == ToolKind::Clipboard) {
+        clipboard_.set_hollow(hollow_);
         ClipboardInput tool{};
         tool.left = left;
         tool.right = right;
@@ -846,7 +852,16 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
 
         Op op;
         if (!chisel_.update(world_, tool, origin, direction, tick_, kLocalPlayer, op)) return;
-        ops.push_back(op);
+
+        // A hollow box is six slabs with the middle left alone — untouched rather than
+        // emptied, so placing a hollow shape inside a hill builds walls in it instead of
+        // scooping the hill out.
+        if (hollow_ > 0) {
+            u64 id = op.tick;
+            hollow_box(op, static_cast<i64>(hollow_), id, ops);
+        } else {
+            ops.push_back(op);
+        }
     }
 
     const u64 started = now_ns();
@@ -2110,14 +2125,30 @@ int Application::run(const Options& options) {
             }
         }
         const bool cycling = held_slot < kToolSlots;
-        const bool chisel_has_wheel = input.is_down(Key::G);
+
+        // H takes the wheel and sets how thick a shell a placement leaves. Zero is solid,
+        // which is where it starts and what it goes back to.
+        //
+        // It claims the wheel ahead of everything else, including tool cycling, because it is
+        // a modifier you hold deliberately — the same bargain G already makes for distance.
+        const bool hollow_has_wheel = input.is_down(Key::H);
+        if (hollow_has_wheel && input.wheel != 0.0f) {
+            const i32 step = (input.wheel > 0.0f) ? 1 : -1;
+            hollow_ = static_cast<u32>(std::max(0, static_cast<i32>(hollow_) + step));
+            WS_LOG_INFO("tool", "hollow {}",
+                        (hollow_ == 0) ? std::string("off (solid)")
+                                       : std::to_string(hollow_) + " voxel shell");
+        }
+
+        const bool chisel_has_wheel = !hollow_has_wheel && input.is_down(Key::G);
         // The clipboard only claims the wheel once it is holding something. With nothing
         // selected it has nothing to slide, so the wheel goes back to flight speed — which
         // is what you want while flying somewhere to make a selection.
-        const bool clipboard_has_wheel = !cycling && !chisel_has_wheel &&
+        const bool clipboard_has_wheel = !cycling && !chisel_has_wheel && !hollow_has_wheel &&
                                          toolbelt_.active() == ToolKind::Clipboard &&
                                          clipboard_.holding();
-        const bool tool_has_wheel = cycling || chisel_has_wheel || clipboard_has_wheel;
+        const bool tool_has_wheel = cycling || chisel_has_wheel || clipboard_has_wheel ||
+                                    hollow_has_wheel;
 
         const ToolKind tool_before = toolbelt_.active();
         for (u32 slot = 0; slot < kToolSlots; ++slot) {
