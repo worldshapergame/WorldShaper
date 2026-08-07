@@ -890,6 +890,76 @@ float gather_shadow(ivec3 voxel, ivec3 normal, uint frame, uint own_count, float
     return (weight > 0.0) ? sum / weight : own;
 }
 
+// ---- carrying history forward, in face space ------------------------------------------
+//
+// A screen-space path tracer reprojects because its history is stored per pixel and pixels
+// move. None of that applies here and none of it is wanted: a face is its own address in the
+// world, so its history is found by *key*. Turning the camera, walking sideways, looking away
+// for a minute and back — none of it loses anything, and there is no projection to get wrong,
+// no disocclusion to detect, and no smear to leave behind. That much the cache already did.
+//
+// What genuinely does change under a face is its *level*. Detail is picked from distance, and
+// the level is part of the key, so walking towards a wall makes every face on it hand over to a
+// finer entry — a different key, with no history at all. That is the one place in this renderer
+// where a body of accumulated light exists, is still valid, and is about to be dropped. It is
+// the exact situation reprojection exists for, in the one axis where it applies.
+//
+// So it is carried, at the moment the finer entry comes into existence, from the coarser one
+// covering the same place. And unlike a screen-space reprojection this needs no validation
+// whatsoever: the parent is not an estimate of where the surface probably was, it *is* the same
+// piece of world, one level up. There is nothing to be wrong about.
+//
+// It arrives worth a modest number of samples, so it settles the face immediately and is then
+// outvoted within a fraction of a second by measurements at the face's own size. That is what
+// stops the coarse ancestor being *shown*: before this, a fresh face had nothing of its own and
+// was read straight from a node six levels up — a block sixty-four voxels across, which is
+// precisely the chunky shadow that kept reappearing whenever the camera turned or came in from
+// far away. Now the coarse value seeds the fine entry and is refined there, instead of standing
+// in for it on screen.
+const uint kInheritSamples = 12u;
+
+void seed_face(uint slot, ivec3 voxel, ivec3 normal, uint level, uint frame) {
+    if (slot == 0xFFFFFFFFu) return;
+    if (faces.items[slot].count != 0u) return;   // it already has a history of its own
+
+    // The nearest ancestor that knows anything. One level up is usually enough, because every
+    // sample contributes to its parent as well, so the parent is populated by construction.
+    FaceLight from;
+    from.known = false;
+    for (uint up = 1u; up < kParentLevels && level + up <= 6u; ++up) {
+        uint plo, phi;
+        face_key(voxel, normal, level + up, kFaceIndirect, plo, phi);
+        from = read_face(face_slot(plo, phi, false, frame));
+        if (from.known) break;
+    }
+    if (!from.known) return;
+
+    // Exactly one thread seeds it. The compare-and-swap is the claim: whoever moves the count
+    // off zero owns the right to add the samples that go with it, and everyone else leaves it
+    // alone. Without that, every pixel standing on a face seeds it at once and the entry starts
+    // life holding its inheritance a hundred times over.
+    if (atomicCompSwap(faces.items[slot].count, 0u, kInheritSamples) != 0u) return;
+    vec3 carried = from.indirect * float(kInheritSamples) * kFixedScale;
+    atomicAdd(faces.items[slot].sum.x, uint(carried.r));
+    atomicAdd(faces.items[slot].sum.y, uint(carried.g));
+    atomicAdd(faces.items[slot].sum.z, uint(carried.b));
+}
+
+// The same for the sun, from the one ancestor its entries keep.
+void seed_shadow(uint slot, ivec3 voxel, ivec3 normal, uint frame) {
+    if (slot == 0xFFFFFFFFu) return;
+    if (faces.items[slot].count != 0u) return;
+
+    uint plo, phi;
+    face_key(voxel, normal, kShadowParentLevel, kFaceShadow, plo, phi);
+    uint parent = face_slot(plo, phi, false, frame);
+    if (parent == 0xFFFFFFFFu || faces.items[parent].count == 0u) return;
+    float carried = read_shadow(parent);
+
+    if (atomicCompSwap(faces.items[slot].count, 0u, kInheritSamples) != 0u) return;
+    atomicAdd(faces.items[slot].sum.w, uint(carried * float(kInheritSamples) * kFixedScale));
+}
+
 FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) {
     uint l0 = uint(floor(level));
     uint l1 = min(l0 + 1u, 6u);
@@ -1189,6 +1259,7 @@ void main() {
         uint lo, hi;
         face_key(voxel, hit.normal, level, kFaceIndirect, lo, hi);
         uint slot = face_slot(lo, hi, true, trace.control.z);
+        seed_face(slot, voxel, hit.normal, level, trace.control.z);
 
         // Whether this pixel does any work at all beyond the primary ray.
         //
@@ -1215,6 +1286,7 @@ void main() {
         uint shadow_lo, shadow_hi;
         face_key(voxel, hit.normal, kShadowLevel, kFaceShadow, shadow_lo, shadow_hi);
         uint shadow_slot = face_slot(shadow_lo, shadow_hi, true, trace.control.z);
+        seed_shadow(shadow_slot, voxel, hit.normal, trace.control.z);
         uint shadow_have = (shadow_slot != 0xFFFFFFFFu) ? faces.items[shadow_slot].count : 0u;
 
         // Traced when the entry is still thin, or on the small fraction that keep going so a
