@@ -20,6 +20,7 @@
 #include "core/crash.hpp"
 #include "core/log.hpp"
 #include "game/quality.hpp"
+#include "world/light_list.hpp"
 #include "app/updater.hpp"
 #include "core/time.hpp"
 #include "core/version.hpp"
@@ -538,6 +539,7 @@ private:
     void handle_resize();
     void record_frame(f32 time_seconds);
     void update_quality();
+    void update_lights();
     void apply_quality();
     void load_settings();
     void save_settings();
@@ -579,6 +581,12 @@ private:
     // needs, short enough that it is over before anyone places the next voxel.
     u32 shadow_refresh_frames_ = 0;
     static constexpr u32 kShadowRefreshFrames = 120;
+
+    // The emitters the tracer aims at, and the buffer they live in on the GPU. Rebuilt when
+    // the world changes, which is the only time they move.
+    GpuBuffer light_buffer_;
+    u32 light_count_ = 0;
+    bool lights_dirty_ = true;
 
     AutoQuality quality_;
     u32 applied_quality_level_ = 0xFFFFFFFFu;   // what the renderer is currently set to
@@ -1012,6 +1020,7 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
     // tried and it is the smearing, every voxel placed relighting the whole scene at once.
     // This keeps every measured value and simply re-measures faster for a moment.
     shadow_refresh_frames_ = kShadowRefreshFrames;
+    lights_dirty_ = true;   // a placed lamp is a light nothing can aim at until this is rebuilt
     for (const Op& raw : ops) {
         Op op = raw;
         op.normalise();
@@ -1224,6 +1233,27 @@ void Application::save_settings() {
     file << "target_fps " << quality_.target_fps() << "\n"
          << "quality_level " << quality_.level() << "\n"
          << "auto_quality " << (quality_.enabled() ? 1 : 0) << "\n";
+}
+
+// Rebuild the list of emitters when the world has changed, and not otherwise.
+//
+// Sorted nearest-first around the camera, so a capped list keeps the lamps that light what is
+// on screen. Rebuilt on an edit rather than every frame: the scan is cheap because a brick
+// carrying no emitter is rejected by its palette, but it is not free, and lamps do not move.
+void Application::update_lights() {
+    if (!lights_dirty_) return;
+    lights_dirty_ = false;
+
+    const std::vector<LightSource> lights = build_light_list(
+        world_, types_, camera_.chunk_x() * kChunkEdge + static_cast<i64>(camera_.local_x()),
+        camera_.chunk_y() * kChunkEdge + static_cast<i64>(camera_.local_y()),
+        camera_.chunk_z() * kChunkEdge + static_cast<i64>(camera_.local_z()));
+
+    light_count_ = static_cast<u32>(lights.size());
+    if (light_count_ > 0 && light_buffer_.mapped != nullptr) {
+        std::memcpy(light_buffer_.mapped, lights.data(), lights.size() * sizeof(LightSource));
+    }
+    WS_LOG_INFO("light", "{} emitters", light_count_);
 }
 
 // Measure this machine, then hold the frame rate on it.
@@ -1846,6 +1876,7 @@ void Application::record_frame(f32 time_seconds) {
         trace.quality[0] = quality_.knobs().refine_stride;
         trace.quality[1] = quality_.knobs().shadow_target;
         trace.quality[2] = (shadow_refresh_frames_ > 0) ? 1u : 0u;
+        trace.quality[3] = light_count_;
         if (shadow_refresh_frames_ > 0) --shadow_refresh_frames_;
         vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(TracePush), &trace);
@@ -2101,6 +2132,12 @@ int Application::run(const Options& options) {
                                                                 : (2ull << 20);
     face_cache_ = create_device_buffer(device_, kFaceCacheEntries * 32,
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "face cache");
+
+    // Where the lamps are, so a shadow ray can be aimed at one. Small enough to be a staging
+    // buffer written straight from the CPU: a thousand lights is 28 KB and it only changes
+    // when the world does.
+    light_buffer_ = create_staging_buffer(device_, kMaxLights * sizeof(LightSource),
+                                          "light list", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     WS_LOG_INFO("app", "face cache: {} entries, {} MB", kFaceCacheEntries,
                 (kFaceCacheEntries * 32) >> 20);
 
@@ -2154,7 +2191,10 @@ int Application::run(const Options& options) {
 
     const VkDescriptorPoolSize pool_sizes[]{
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 24},
+        // The three sets between them bind the world twice, the type tables, the clip, the
+        // face cache and the light list. Counted generously: running out of pool is a failure
+        // at start-up with a message nobody connects to the binding they just added.
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 48},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 4},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -2181,8 +2221,10 @@ int Application::run(const Options& options) {
     // includes the same traversal, so the binding numbers come with it — then the parameter
     // block at 13 and the type tables at 14 and 15.
     {
-        VkDescriptorSetLayoutBinding trace_bindings[18]{};
-        for (u32 i = 0; i < 18; ++i) {
+        // Nineteen: the two images, the world, the parameter block, the type tables, the
+        // clip, the face cache, and now the light list at 18.
+        VkDescriptorSetLayoutBinding trace_bindings[19]{};
+        for (u32 i = 0; i < 19; ++i) {
             trace_bindings[i].binding = i;
             trace_bindings[i].descriptorType =
                 (i < 2)     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -2193,7 +2235,7 @@ int Application::run(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo trace_layout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        trace_layout.bindingCount = 18;
+        trace_layout.bindingCount = 19;
         trace_layout.pBindings = trace_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &trace_layout, nullptr,
                                           &pathtrace_layout_));
@@ -2295,12 +2337,13 @@ int Application::run(const Options& options) {
     // because it includes the same traversal and the binding numbers come with it, plus the
     // type tables at 14 and 15 so a hit becomes a material.
     {
-        constexpr u32 kTraceBuffers = kBufferBindings + 4;   // world, types, visuals, clip, faces
+        constexpr u32 kTraceBuffers = kBufferBindings + 5;   // world, types, visuals, clip, faces, lights
         const VkBuffer trace_buffers[kTraceBuffers]{
             marcher_buffers[0], marcher_buffers[1], marcher_buffers[2],  marcher_buffers[3],
             marcher_buffers[4], marcher_buffers[5], marcher_buffers[6],  marcher_buffers[7],
             marcher_buffers[8], marcher_buffers[9], marcher_buffers[10], world_buffers_.types(),
             world_buffers_.visuals(), clip_buffer_.buffer,   face_cache_.buffer,
+            light_buffer_.buffer,
         };
         VkDescriptorBufferInfo trace_infos[kTraceBuffers]{};
         VkWriteDescriptorSet trace_writes[kTraceBuffers + 1]{};
@@ -2527,7 +2570,8 @@ int Application::run(const Options& options) {
         if (window_.minimised()) continue;
         if (window_.resized_this_frame() || swapchain_.needs_recreate()) handle_resize();
 
-        update_quality();
+            update_quality();
+        update_lights();
 
         // Where the camera was standing and what it was doing, refreshed every frame, so a
         // crash report says which part of the world provoked it rather than only which
