@@ -305,7 +305,39 @@ Blocks of 4, 16, 64 and 256 chunks summarised the same way as a chunk, to carry 
 | D170 | **Every pixel contributes to its own node and its parent** | D169 | One extra set of atomics, and it guarantees there is always a parent to inherit from — including the first time anything looks that way. Without it, seeding only helps when a surface was seen from further away first |
 | D171 | **Debug view 5 shows where the cache is working**: red fell back to per-pixel, green is held | — | This class of fault was reported twice and both times had to be deduced from a photograph. The view answered it in one frame, and the answer — misses rising with distance — was not the collisions everyone would have guessed |
 
-### Radiance cache: assessed, and worth doing after materials
+### Radiance cache: built, and not the way this section expected
+
+The plan below was written before it was tried, and the part it got wrong is worth keeping
+next to the part it got right.
+
+Right: an irradiance entry is the wrong shape for a shiny surface, the cost is per entry
+rather than per pixel, and directional storage is what a reflection needs.
+
+Wrong: **"one extra ray on shiny pixels only, costs nothing"**. A specular ray beside the
+diffuse one lost the device on every scene tried. It is not the ray's cost — striding it down
+to one pixel in sixteen did not help, and a runtime cost responds to being run less often.
+`march` is enormous and GLSL has no calls, so every mention of it is another inlined copy; the
+shader already carried three, and a fourth is past what the driver will take. The same code
+wrapped in `if (false)` compiled away and the crash went with it, which is what proved it.
+
+So the bounce **chooses a lobe** instead of adding a ray. One ray, sampled from the cosine
+lobe or the GGX lobe in proportion to Fresnel, and its result goes to whichever cache it is a
+measurement of: irradiance for diffuse, a direction bin for specular. Each cache averages only
+its own kind, so each stays unbiased and neither needs the other's weighting.
+
+Also wrong: spherical harmonics. Twenty-four direction bins — dominant axis, sign, and a
+two-by-two split of that cube face — cost one entry each and need no new storage layout at
+all, because a bin is just another key into the table that already exists. SH would have meant
+a new entry format for every kind of entry.
+
+| ID | Decision | Asked by | Why |
+|---|---|---|---|
+| D180 | **A radiance entry is keyed by face *and* direction bin**, in the same table as irradiance and shadow | — | The table already has eviction, probing and a budget; a fourth structure would need all three again. A bin is one more field in the key |
+| D181 | **The bounce picks a lobe rather than tracing both** | the driver | A fourth inlined `march` loses the device regardless of how rarely it runs. Bisected: not the cache, not the claiming, not the cost |
+| D182 | **A bin is shaded from only once it holds several samples** | — | One sample is not an estimate, it is that sample, and samples are clamped at 8 — so a single lucky path leaves a white speck. The diffuse cache learned this as scattered stars on dark walls |
+| D183 | Near-mirrors are **not shared**: below a roughness threshold a pixel uses its own sample | — | A bin is a quarter of a cube face. That is honest for the roughnesses a voxel world is mostly made of and visible nonsense for a mirror |
+
+### The original assessment, kept because its reasoning still holds
 
 The current entry is an **irradiance** cache: one value per face for light arriving from everywhere, which is exactly right for a diffuse surface and wrong for a shiny one. Glossy and metallic surfaces currently read that same diffuse value, so a polished surface reflects an average of its surroundings rather than an image of them.
 

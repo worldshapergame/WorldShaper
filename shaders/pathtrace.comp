@@ -7,7 +7,7 @@
 // have something to be checked against. An approximation with no ground truth is a guess.
 //
 // It asks the world exactly the same question primary visibility does, through the same
-// traversal in world.glsl, at full voxel detail on every bounce ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no coarse levels, because a
+// traversal in world.glsl, at full voxel detail on every bounce ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â no coarse levels, because a
 // filtered colour is a lie about what a surface is and lies compound over bounces.
 #extension GL_GOOGLE_include_directive : require
 
@@ -66,8 +66,8 @@ const float kFixedScale = 4096.0;
 // be smooth, short enough that a face follows the world being built around it.
 const uint kFaceWindow = 512u;
 
-// Eight, not four. A short probe is right ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â spending longer looking is worse than tracing the
-// sample uncached ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â but four was short enough that a noticeable fraction of faces never got a
+// Eight, not four. A short probe is right ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â spending longer looking is worse than tracing the
+// sample uncached ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â but four was short enough that a noticeable fraction of faces never got a
 // slot at all, and every one of them rendered pitch black in shadow.
 const uint kFaceProbes = 8u;
 
@@ -88,19 +88,75 @@ uint hash_u32(uint x) {
 // Two kinds of entry, and they must never share one.
 //
 // Shadow and indirect want opposite things from a cache. Indirect is smooth, expensive, and
-// safe to share over a wide patch â€” the wider the better, because that is what stops the table
+// safe to share over a wide patch Ã¢â‚¬â€ the wider the better, because that is what stops the table
 // drowning at distance. Shadow has hard edges and is cheap, and sharing it over a patch
 // quantises the edge to the size of that patch.
 //
 // They were one entry, keyed by a level taken from how far the pixel is from the camera. So a
 // shadow edge was quantised coarsely far away and finely near, and one straight edge across a
-// floor came out kinked into wedges fanning out from wherever you were standing â€” a
+// floor came out kinked into wedges fanning out from wherever you were standing Ã¢â‚¬â€ a
 // rectangular tower casting a triangular shadow that changed shape as you walked towards it,
 // because the shape was a property of the camera and not of the tower.
 const uint kFaceIndirect = 0u;
 const uint kFaceShadow = 1u;
+const uint kFaceRadiance = 2u;
 
-// The level a shadow entry is keyed at, whatever the distance — and the important word is
+// The third kind: radiance, which is irradiance's opposite number.
+//
+// An irradiance entry answers "how much light arrives here", summed over the hemisphere with
+// no memory of where any of it came from. That is everything a diffuse surface needs and
+// nothing a shiny one does: a mirror reflects one direction and a rough metal a narrow cone
+// about one, so shading either from a hemispherical average puts a flat smear where a
+// reflection belongs. Until now there was no indirect specular at all â€” ggx_half sat unused,
+// and a metal surface reflected the sun and nothing else, in a world that was there to be
+// reflected.
+//
+// So a radiance entry is per direction as well as per face: same node, same face, plus which
+// way the light came from. A specular lookup asks for the bin its reflected ray points down
+// and gets what earlier frames measured going that way.
+//
+// Twenty-four bins: the dominant axis, its sign, and a two-by-two split of that face.
+// Deliberately coarse. Every bin is a table entry, so bin count is table cost, and a
+// reflection blurred to a quarter of a cube face is honest for the roughnesses a voxel world
+// is mostly made of. Anything glossier than kRadianceMinRoughness asks for more than a shared
+// bin can give and is traced for that pixel alone.
+uint direction_bin(vec3 dir) {
+    vec3 a = abs(dir);
+    int axis = (a.x > a.y && a.x > a.z) ? 0 : ((a.y > a.z) ? 1 : 2);
+    int u = (axis + 1) % 3;
+    int v = (axis + 2) % 3;
+    uint sign_bit = (dir[axis] > 0.0) ? 1u : 0u;
+    uint half_u = (dir[u] > 0.0) ? 1u : 0u;
+    uint half_v = (dir[v] > 0.0) ? 1u : 0u;
+    return ((uint(axis) * 2u + sign_bit) * 2u + half_u) * 2u + half_v;
+}
+
+const float kRadianceMinRoughness = 0.25;
+
+// How many samples a bin wants before pixels stop tracing it for themselves. Lower than the
+// diffuse target: a bin covers a narrow cone, so its samples agree with each other far more
+// than a whole hemisphere's do, and it settles sooner.
+const uint kRadianceTarget = 48u;
+
+// And how many before a bin may be shaded from at all. See specular_from_cache.
+const uint kRadianceMinSamples = 8u;
+
+// One pixel in this many may trace a specular ray in a frame, rotating so every pixel gets
+// its turn. Everyone else reads the bin.
+//
+// This is not a tuning knob, it is the difference between working and losing the device. A
+// specular ray is a *fourth* full-length march, on top of the primary, the shadow and the
+// bounce, and this file already records what four marches a pixel costs: it is what tripped
+// the driver's watchdog when summary hits were being traced rather than shaded. Tracing on
+// every refining pixel â€” a quarter of the screen â€” lost the device on every scene tried,
+// bisected down to the ray itself and not to any of the cache machinery around it.
+//
+// Sixteen puts it at about six per cent of pixels. The cache is what makes that enough: a bin
+// needs forty-eight samples and gets them from whichever pixels happen to look that way, over
+// however many frames it takes, and everything else reads the answer.
+const uint kSpecularStride = 16u;
+
+// The level a shadow entry is keyed at, whatever the distance â€” and the important word is
 // *whatever*, because a node chosen from camera distance makes the shadow's shape a property
 // of where you are standing, which is what drew wedges.
 //
@@ -108,7 +164,7 @@ const uint kFaceShadow = 1u;
 // works out whether it can see the sun, and the picture follows from that with nothing spread
 // between faces and nothing blurred across pixels.
 //
-// It was 3 â€” eight voxels, a quarter of a metre â€” and that is visible as a staircase however
+// It was 3 Ã¢â‚¬â€ eight voxels, a quarter of a metre Ã¢â‚¬â€ and that is visible as a staircase however
 // it is filtered, because a filter over blocks is still blocks. Bilinear interpolation across
 // neighbouring nodes was tried and measurably smoothed the edge, and it was still wrong: the
 // shadow of a wall is not a soft ramp a quarter of a metre wide.
@@ -127,7 +183,7 @@ void face_key(ivec3 voxel, ivec3 normal, uint level, uint kind, out uint lo, out
     //
     // The level is what stops the table drowning at distance. A pixel far away covers many
     // voxels, so neighbouring pixels land on different faces, and the number of distinct faces
-    // in view grows without bound while each is seen by about one pixel â€” every entry is
+    // in view grows without bound while each is seen by about one pixel Ã¢â‚¬â€ every entry is
     // expensive to fill and useless once filled. Measured on the test scene: near surfaces were
     // fully cached and 18.5% of surface pixels missed entirely, all of them towards the
     // horizon, and they rendered as patches of noise against a smooth foreground.
@@ -138,7 +194,7 @@ void face_key(ivec3 voxel, ivec3 normal, uint level, uint kind, out uint lo, out
     // marcher already follows for geometry.
     // Quantised *across* the surface, never *through* it.
     //
-    // Shifting all three axes merges everything within 2^level voxels that shares a normal â€”
+    // Shifting all three axes merges everything within 2^level voxels that shares a normal Ã¢â‚¬â€
     // including the two sides of a wall. Build a hollow box and its outer skin and its inner
     // skin land on one entry: the lit outside and the dark inside average together, so the
     // inside glows as though it were emitting and the outside picks up speckle from the dark.
@@ -169,7 +225,7 @@ void face_key_node(ivec3 node, ivec3 normal, uint level, uint kind, out uint lo,
     // That looks fine and behaves badly on exactly this input: voxel coordinates are a dense
     // lattice, and XOR of products over a lattice leaves whole planes of faces landing in the
     // same few buckets. Faces that then failed to find a slot were drawn with no indirect
-    // light at all, which in shadow is pure black ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â scattered black voxels through every
+    // light at all, which in shadow is pure black ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â scattered black voxels through every
     // shadowed surface, which is what this looked like.
     uint h = 0x811C9DC5u;
     h = hash_u32(h ^ uint(voxel.x));
@@ -225,7 +281,7 @@ uint face_slot(uint lo, uint hi, bool claim, uint frame) {
     //
     // Without this the table only ever fills: a slot is claimed the first time a face is seen
     // and never given up, so walking around a world steadily consumes it until every new face
-    // fails to place and falls back to per-pixel sampling. That does not look black any more â€”
+    // fails to place and falls back to per-pixel sampling. That does not look black any more Ã¢â‚¬â€
     // it looks like patches of the world that are noisy while everything around them is
     // smooth, which is what this turned into once the black was fixed.
     //
@@ -273,7 +329,7 @@ uint pcg(inout uint state) {
 float rand(inout uint state) { return float(pcg(state)) * (1.0 / 4294967296.0); }
 
 // Cosine-weighted hemisphere around n. Cosine-weighted because the diffuse BRDF is divided by
-// exactly that cosine, so the two cancel and the estimator is just the albedo ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the lowest
+// exactly that cosine, so the two cancel and the estimator is just the albedo ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â the lowest
 // variance a diffuse bounce can have without knowing where the light is.
 vec3 cosine_hemisphere(vec3 n, inout uint state) {
     float u1 = rand(state);
@@ -322,7 +378,7 @@ vec3 sky_radiance(vec3 dir) {
     vec3 ground = vec3(0.16, 0.15, 0.14);
     // Scaled well below the sun. Those colours were written to be looked at directly, and
     // used unchanged as *radiance* they light the whole hemisphere at nearly the brightness of
-    // the sun itself ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â every surface gets the same flat fill from every direction, shadows
+    // the sun itself ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â every surface gets the same flat fill from every direction, shadows
     // stop reading, and the result is the grey wash a first attempt at this always produces.
     // Real daylight has the sun an order of magnitude above the sky it shares the frame with.
     vec3 base = ((dir.y < 0.0) ? mix(ground, horizon, up * 2.0)
@@ -346,8 +402,17 @@ Material material_of(uint type_id) {
     m.metallic = 0.0;
     m.emission = vec3(0.0);
 
-    uint visual_id = types.items[type_id].x;
-    uvec4 v = visuals.items[visual_id];
+    // Clamped, both of them, because a single out-of-range index here does not produce a
+    // wrong colour â€” it produces a page fault that takes the device down and the whole
+    // process with it. A hit above level 0 carries a filtered colour and no type at all, and
+    // its type_id field is whatever happened to be in the register; every caller is supposed
+    // to check the level first, and one that forgets should get a wrong pixel rather than a
+    // crash report. This cost a device loss: the driver reported four faulting addresses and
+    // the checkpoint named the path tracer, and it was one unguarded call.
+    uint type_count = uint(types.items.length());
+    uint visual_id = types.items[min(type_id, type_count - 1u)].x;
+    uint visual_count = uint(visuals.items.length());
+    uvec4 v = visuals.items[min(visual_id, visual_count - 1u)];
 
     // Byte layout of VisualRecord (world/voxel_type.hpp): rgb + opacity, then roughness,
     // metallic, ior, emissive, then absorption and translucency, then the emissive tint.
@@ -388,7 +453,7 @@ bool occluded(vec3 origin, vec3 dir) {
 }
 
 // Direct sun at a point, sampled rather than waited for. Without this the sun is found only
-// when a bounce happens to land inside its half-degree disc, which is almost never ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
+// when a bounce happens to land inside its half-degree disc, which is almost never ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the
 // difference between converging in seconds and in an hour.
 //
 // Deliberately per pixel and never cached: its shadow edges are sharp, and one value shared
@@ -412,7 +477,7 @@ vec3 sun_sample(inout uint state) {
 }
 
 // Sun light given how much of the sun this face can see. Splitting visibility out is what
-// lets the expensive half ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the shadow ray ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â be traced once per face and shared, while the
+// lets the expensive half ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the shadow ray ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â be traced once per face and shared, while the
 // cheap half, which depends on the viewing angle, stays per pixel.
 vec3 sun_light(vec3 normal, vec3 view, Material m, float visibility) {
     float n_dot_l = dot(normal, trace.sun.xyz);
@@ -450,8 +515,8 @@ struct FaceLight {
 // piece of the same place. Where the place is dark the parent is dark, so a sealed room stays
 // black.
 //
-// It was raised to chase a one-pixel dark seam along horizontal edges â€” 430 pixels on a single
-// scanline of the test scene â€” where a pixel lands on a face no other pixel stands on. That is
+// It was raised to chase a one-pixel dark seam along horizontal edges Ã¢â‚¬â€ 430 pixels on a single
+// scanline of the test scene Ã¢â‚¬â€ where a pixel lands on a face no other pixel stands on. That is
 // not what causes it: the seam went to 423, so those pixels' ancestors are unknown too. Since
 // the normal axis is deliberately not quantised, a voxel that is off by one *along the normal*
 // is a different face at every level, and climbing cannot reunite it. Left raised because it is
@@ -466,7 +531,7 @@ void contribute(uint slot, vec3 value) {
     // before at the same rate.
     //
     // This is what lets an edit *not* wipe the table. Clearing the whole cache whenever
-    // anything was placed meant every voxel put down relit the entire scene at once â€” which
+    // anything was placed meant every voxel put down relit the entire scene at once Ã¢â‚¬â€ which
     // is the smearing: not a gradual settle but the whole room changing while you build. A
     // window means a face notices the wall you just put next to it within a few frames, on
     // its own, and nothing else in the world flinches.
@@ -531,7 +596,7 @@ void contribute_shadow(uint slot, float visibility) {
 // piece of surface it belongs to, and takes over as it learns. Near surfaces reach the
 // threshold in a frame or two and are crisp per voxel; distant ones never do and stay smooth.
 // Both levels are fixed in world space, so neither the shape nor the blend depends on where
-// the camera is standing — which is what made the old distance-chosen level draw wedges.
+// the camera is standing â€” which is what made the old distance-chosen level draw wedges.
 const uint kShadowParentLevel = 6u;
 const uint kShadowSeed = 24u;
 
@@ -552,7 +617,7 @@ FaceLight read_face(uint slot);
 // This is what makes walking up to a surface not shimmer: the coarse node was being filled
 // while it was still far away, so arriving close inherits that instead of starting over. Every
 // pixel contributes to its own level *and* its parent, so the parent is always there to
-// inherit from â€” including the first time anything looks this way.
+// inherit from Ã¢â‚¬â€ including the first time anything looks this way.
 FaceLight read_face(uint slot) {
     FaceLight light;
     light.visibility = 0.0;
@@ -568,7 +633,7 @@ FaceLight read_face(uint slot) {
     float inv = 1.0 / (kFixedScale * float(count));
     // Clamped on the way out, as a backstop rather than a correction. Every contribution is
     // clamped to 8 going in, so a mean above that is arithmetic having gone wrong rather than
-    // a bright surface â€” and a wrong entry in a cache does not fade, it persists and spreads.
+    // a bright surface Ã¢â‚¬â€ and a wrong entry in a cache does not fade, it persists and spreads.
     // Visibility lives in its own entry now; this one holds irradiance only.
     light.indirect = min(vec3(sum.xyz) * inv, vec3(8.0));
     light.count = count;
@@ -583,7 +648,7 @@ const uint kSeedSamples = 48u;
 //
 // A voxel wants a hundredth of a voxel and nothing more. A *summary* cell is a metre or more
 // across, and leaving one by a hundredth of a voxel lands the ray straight back inside the
-// block it just left â€” so every shadow ray reported occluded and every bounce found the same
+// block it just left Ã¢â‚¬â€ so every shadow ray reported occluded and every bounce found the same
 // surface again. Distant chunks, which are exactly the ones drawn from summaries, came out
 // uniformly black.
 //
@@ -597,7 +662,7 @@ float surface_offset(int level) {
 // Reads a node at a *fractional* level, blending the two it falls between.
 //
 // The level is picked from distance and is part of the key, so a whole-number level means a
-// surface swaps to a different entry â€” with its own separate history â€” the moment you cross a
+// surface swaps to a different entry Ã¢â‚¬â€ with its own separate history Ã¢â‚¬â€ the moment you cross a
 // distance boundary. Walking towards a wall made its brightness step, and because each entry
 // keeps its own long average the step did not settle, it smeared. Blending is the same
 // continuous-detail rule the marcher already uses for geometry, applied to light.
@@ -673,13 +738,42 @@ uint cache_level(float t) {
     return uint(clamp(floor(log2(footprint)), 0.0, 6.0));
 }
 
+
+// The Fresnel weight this surface gives its reflection, at this viewing angle.
+vec3 specular_weight(vec3 normal, vec3 view, Material m) {
+    float n_dot_v = max(dot(normal, view), 1e-4);
+    vec3 f0 = mix(vec3(0.04), m.albedo, m.metallic);
+    return f0 + (vec3(1.0) - f0) * pow(1.0 - n_dot_v, 5.0);
+}
+
+// Specular with no ray of its own: whatever earlier frames measured going the way this pixel
+// is looking. Zero when nothing has looked that way yet, which lasts a frame or two, and is
+// never an invention.
+vec3 specular_from_cache(ivec3 voxel, ivec3 normal_i, vec3 normal, vec3 dir, Material m,
+                         uint level, uint frame, inout uint state) {
+    vec3 spec_dir = reflect(dir, ggx_half(normal, m.roughness, state));
+    if (dot(spec_dir, normal) <= 0.0) return vec3(0.0);
+
+    uint lo, hi;
+    face_key(voxel, normal_i, level, kFaceRadiance | (direction_bin(spec_dir) << 4u), lo, hi);
+    FaceLight stored = read_face(face_slot(lo, hi, false, frame));
+
+    // A bin with one sample in it is not an estimate, it is that sample — and a sample is
+    // clamped at 8, so a single path that found something bright shades one pixel eight times
+    // brighter than its neighbours and leaves a white speck. The diffuse cache learned this
+    // the same way, as scattered stars across otherwise dark walls. A few samples cost a
+    // fraction of a second of waiting and are worth more than the speck they prevent.
+    if (!stored.known || stored.count < kRadianceMinSamples) return vec3(0.0);
+    return specular_weight(normal, -dir, m) * stored.indirect;
+}
+
 // How many samples a face needs before the pixels standing on it stop tracing for it.
 const uint kFaceTarget = 192u;
 
 // What fraction of the screen may trace past the primary ray in any one frame: one pixel in
 // this many, rotating so every pixel gets its turn.
 //
-// Standing still this changes nothing â€” the faces are already converged and nobody is
+// Standing still this changes nothing Ã¢â‚¬â€ the faces are already converged and nobody is
 // tracing. It bounds the transient. Arrive somewhere new and every face in front of you is
 // cold at once, so without this every pixel traces a shadow ray and a bounce in the same
 // dispatch, and each of those can march the width of the world. That spike is what a
@@ -698,13 +792,13 @@ vec3 clamp_finite(vec3 v) {
 // What a summary block radiates: the sun with no shadow test, and the sky as ambient.
 //
 // Used by the primary ray and by a bounce that lands on one, and it has to be both. A
-// summary block is geometry that was never streamed, so it has no faces and never will â€”
+// summary block is geometry that was never streamed, so it has no faces and never will Ã¢â‚¬â€
 // nothing contributes to them, so a lookup there returns "unknown" for ever.
 //
 // A bounce landing on one used to read that entry, find nothing, and return zero. Zero is
 // not "no answer yet", it is *black*, and it was then contributed to the face the bounce
 // started from and counted like any other sample. So the near face converged to black on the
-// strength of light that was never measured â€” and because a cache does not wash out, it
+// strength of light that was never measured Ã¢â‚¬â€ and because a cache does not wash out, it
 // stayed. That is distant chunks going black: not the distant geometry being drawn wrong,
 // but the near surfaces that bounce off it being told the world is unlit.
 vec3 summary_radiance(vec3 normal, Material m) {
@@ -718,13 +812,13 @@ vec3 summary_radiance(vec3 normal, Material m) {
 //
 //   red     the material's own albedo is black, so no light could show on it
 //   blue    nothing known about this face, so the pixel is running on its own samples
-//   yellow  a face that is known and holds nothing â€” the one that renders black
+//   yellow  a face that is known and holds nothing Ã¢â‚¬â€ the one that renders black
 //   cyan    no sun here; indirect is all the light there is
 //   grey    lit normally
 //
 // It has to be called at the point of shading, and once per path. Placed anywhere earlier it
 // probes the table before this frame has contributed to it, so every face reads empty and the
-// view says "unknown" everywhere â€” which is what it said, and it was the diagnostic that was
+// view says "unknown" everywhere Ã¢â‚¬â€ which is what it said, and it was the diagnostic that was
 // wrong rather than the renderer.
 vec3 why_dark(Material m, FaceLight light) {
     float albedo_max = max(m.albedo.r, max(m.albedo.g, m.albedo.b));
@@ -752,7 +846,7 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance, float primary_t,
         total *= (kAccumWindow - 1.0) / kAccumWindow;
     }
     // Geometry arriving or leaving resets this outright, on the CPU side, by zeroing the
-    // sample index. Halving it instead was tried, and it is the better-looking option â€” the
+    // sample index. Halving it instead was tried, and it is the better-looking option Ã¢â‚¬â€ the
     // room scene's speckle went from 7.3 to 4.7, because during streaming chunks arrive on
     // almost every frame and a reset means the average never gets past one sample.
     //
@@ -845,7 +939,7 @@ void main() {
         // shaded rather than traced.
         //
         // Tracing it is both wrong and ruinously expensive. Wrong, because the shadow and
-        // bounce rays are cast against a world that is only there in outline â€” they mostly hit
+        // bounce rays are cast against a world that is only there in outline Ã¢â‚¬â€ they mostly hit
         // the same coarse block they started on and report everything occluded, which is the
         // distant chunks coming out black. Expensive, because these are exactly the pixels
         // with nothing resident, so every one of them pays for four full-length marches: at
@@ -871,8 +965,8 @@ void main() {
         // This is where the saving actually lands. A face covered by a thousand pixels reaches
         // a good estimate within a frame or two, and after that every one of those pixels was
         // still tracing a shadow ray and a bounce to tell it what it already knew. Once a face
-        // has enough samples they stop, and a converged surface costs one ray per pixel Ã¢â‚¬â€ the
-        // primary Ã¢â‚¬â€ however many lights and bounces it is standing under.
+        // has enough samples they stop, and a converged surface costs one ray per pixel ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
+        // primary ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â however many lights and bounces it is standing under.
         //
         // A small fraction keep going regardless, so a face is never frozen: light that moves,
         // or a neighbour that changed, still works its way in.
@@ -971,7 +1065,9 @@ void main() {
             // floor of light there makes a room with no way in glow. Waiting is honest, and at
             // this stride the wait is a few frames.
             radiance += sun_light(normal, dir, m, visibility) +
-                        m.albedo * (1.0 - m.metallic) * known.indirect;
+                        m.albedo * (1.0 - m.metallic) * known.indirect +
+                        specular_from_cache(voxel, hit.normal, normal, dir, m, level,
+                                            trace.control.z, state);
             radiance = clamp_finite(radiance);
             write_pixel(pixel, sample_index, radiance, primary_t, aspect);
             return;
@@ -987,7 +1083,7 @@ void main() {
         // The sky, a summary block, an emitter and a face that is already known are all real
         // answers, so light still bootstraps from anything open to the sky and spreads inward a
         // bounce per frame. A sealed box has none of them, contributes nothing, and stays black
-        // â€” which is correct, and is what makes it black for the right reason rather than by
+        // Ã¢â‚¬â€ which is correct, and is what makes it black for the right reason rather than by
         // accident.
         bool measured = true;
 
@@ -997,10 +1093,47 @@ void main() {
         // light comes from, and geometry it lands on is geometry the picture depends on.
         //
         // Left silent, a surface only ever touched by bounces never streams, so it stays a
-        // summary block, and a summary block answers nothing â€” so the light there never
+        // summary block, and a summary block answers nothing Ã¢â‚¬â€ so the light there never
         // arrives and the room stays dark for want of asking. Inside a closed box a sixth of
         // all bounces were landing on unstreamed walls that nothing had ever requested.
-        vec3 bounce_dir = cosine_hemisphere(normal, state);
+        // Which lobe this bounce is for â€” and it is a choice, not an addition.
+        //
+        // The obvious way to get indirect specular is a second bounce ray beside the diffuse
+        // one. That was written, and it lost the device on every scene tried. Bisected: not
+        // the cache, not the claiming, not the cost. Striding it down to one pixel in sixteen
+        // did not help, and that is the tell â€” a runtime cost responds to being run less
+        // often, and this did not. The problem is *static*. march is enormous and GLSL has no
+        // calls, so every mention of it is another inlined copy; the shader already carried
+        // three, for the primary, the shadow and the bounce, and a fourth is past what the
+        // driver will take. Wrapping the same code in `if (false)` made it compile away and
+        // the crash vanish, which is what proved it.
+        //
+        // So the bounce picks a lobe instead. One ray, sampled from the cosine lobe or the GGX
+        // lobe in proportion to Fresnel, and its result goes to whichever cache it belongs to:
+        // irradiance for diffuse, the direction bin for specular. Each cache averages only its
+        // own kind of sample, so each stays an unbiased estimate of its own quantity, and
+        // neither needs the other's weighting.
+        vec3 fresnel = specular_weight(normal, -dir, m);
+        float spec_chance = clamp(max(fresnel.r, max(fresnel.g, fresnel.b)), 0.05, 0.9);
+        bool spec_bounce = rand(state) < spec_chance;
+
+        vec3 bounce_dir = spec_bounce ? reflect(dir, ggx_half(normal, m.roughness, state))
+                                      : cosine_hemisphere(normal, state);
+        // A GGX sample can point into the surface; that carries no light and there is no
+        // second ray to spend, so it becomes a diffuse sample rather than a wasted one.
+        if (spec_bounce && dot(bounce_dir, normal) <= 0.0) {
+            spec_bounce = false;
+            bounce_dir = cosine_hemisphere(normal, state);
+        }
+
+        uint rad_slot = 0xFFFFFFFFu;
+        if (spec_bounce) {
+            uint rad_lo, rad_hi;
+            face_key(voxel, hit.normal, level,
+                     kFaceRadiance | (direction_bin(bounce_dir) << 4u), rad_lo, rad_hi);
+            rad_slot = face_slot(rad_lo, rad_hi, true, trace.control.z);
+        }
+
         Hit second = march(from, bounce_dir, 0.0, 0.0, true);
         if (!second.hit) {
             incoming = sky_radiance(bounce_dir);
@@ -1068,27 +1201,36 @@ void main() {
         }
 
         // Contribute. Clamped, because a single path that finds the sun through a gap carries
-        // a spike Ã¢â‚¬â€ in a per-pixel average that is a firefly which washes out, and in a cache
+        // a spike ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â in a per-pixel average that is a firefly which washes out, and in a cache
         // it persists and one face wears it for thousands of frames.
         vec3 clamped = min(incoming, vec3(8.0));
-        if (measured) contribute(slot, clamped);
 
-        // And to the parent node. One extra set of atomics buys a node one level up that is
-        // always populated â€” which is what a face being looked at for the first time inherits
-        // from, instead of a single noisy ray.
-        uint plo, phi;
-        face_key(voxel, hit.normal, min(level + 1u, 6u), kFaceIndirect, plo, phi);
-        if (measured) contribute(face_slot(plo, phi, true, trace.control.z), clamped);
+        // To whichever cache this sample is a measurement of. A specular sample says what
+        // arrives from one direction and belongs in that direction's bin; a diffuse one says
+        // what arrives from the hemisphere and belongs in the face's irradiance. Mixing them
+        // would make each wrong in a different way.
+        if (measured && spec_bounce) {
+            contribute(rad_slot, clamped);
+        } else if (measured) {
+            contribute(slot, clamped);
+
+            // And to the parent node. One extra set of atomics buys a node one level up that
+            // is always populated Ã¢â‚¬â€ which is what a face being looked at for the first time
+            // inherits from, instead of a single noisy ray.
+            uint plo, phi;
+            face_key(voxel, hit.normal, min(level + 1u, 6u), kFaceIndirect, plo, phi);
+            contribute(face_slot(plo, phi, true, trace.control.z), clamped);
+        }
 
         // Then shade from the face, which now includes every other pixel standing on it this
         // frame. A face the table could not hold falls back to this pixel's own samples: noisy,
-        // and *correct*, where before it fell back to nothing at all Ã¢â‚¬â€ which in shadow, where
+        // and *correct*, where before it fell back to nothing at all ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which in shadow, where
         // indirect is the only light there is, drew pure black.
         FaceLight here = read_face_seeded(voxel, hit.normal, level, trace.control.z);
         if (here.known && here.count >= kSeedSamples) {
             here = read_face_blended(voxel, hit.normal, cache_level_exact(hit.t), trace.control.z);
         }
-        if (!here.known) {
+        if (!here.known && !spec_bounce) {
             here.indirect = incoming;
         }
         if (push.resolution.z == 6u) {
@@ -1096,7 +1238,9 @@ void main() {
             return;
         }
         radiance += sun_light(normal, dir, m, visibility) +
-                    m.albedo * (1.0 - m.metallic) * here.indirect;
+                    m.albedo * (1.0 - m.metallic) * here.indirect +
+                    specular_from_cache(voxel, hit.normal, normal, dir, m, level,
+                                        trace.control.z, state);
     }
     write_pixel(pixel, sample_index, clamp_finite(radiance), primary_t, aspect);
 }
