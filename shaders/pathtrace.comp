@@ -922,8 +922,7 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance, float primary_t,
 }
 
 void main() {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    if (pixel.x >= int(push.resolution.x) || pixel.y >= int(push.resolution.y)) return;
+    ivec2 pixel = min(ivec2(gl_GlobalInvocationID.xy), ivec2(push.resolution.xy) - 1);
 
     uint sample_index = trace.control.x;
     uint state = (uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + sample_index * 26699u) | 1u;
