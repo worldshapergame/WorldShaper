@@ -399,17 +399,27 @@ void contribute(uint slot, vec3 value, float visibility) {
     // window means a face notices the wall you just put next to it within a few frames, on
     // its own, and nothing else in the world flinches.
     //
-    // Two threads can halve at once and the entry ends up a quarter. That only shortens its
-    // memory for a moment, which is harmless, and taking a lock to prevent it would cost far
-    // more than the thing it prevents.
+    // Exactly one thread halves, and it claims that right with a compare-and-swap.
+    //
+    // Letting every thread that sees a full entry halve it was written here once, with a
+    // comment calling the race harmless. It is the opposite of harmless. A thousand pixels
+    // stand on one face in the same dispatch; they all read the same count, they all subtract
+    // half of it, and the sums are *unsigned*, so they wrap to four billion. On screen that is
+    // a saturated cyan or red square, and because a cache does not wash out it stays there and
+    // more of them appear while you stand still.
+    //
+    // With the swap, only the thread that moved count from N to N/2 subtracts anything. It
+    // then subtracts half of a sum it read *after* winning, and sums only ever grow in
+    // between, so the subtraction can never take one below zero.
     uint count = faces.items[slot].count;
     if (count >= kFaceWindow) {
-        uvec4 sum = faces.items[slot].sum;
-        atomicAdd(faces.items[slot].count, uint(-int(count / 2u)));
-        atomicAdd(faces.items[slot].sum.x, uint(-int(sum.x / 2u)));
-        atomicAdd(faces.items[slot].sum.y, uint(-int(sum.y / 2u)));
-        atomicAdd(faces.items[slot].sum.z, uint(-int(sum.z / 2u)));
-        atomicAdd(faces.items[slot].sum.w, uint(-int(sum.w / 2u)));
+        if (atomicCompSwap(faces.items[slot].count, count, count - count / 2u) == count) {
+            uvec4 sum = faces.items[slot].sum;
+            atomicAdd(faces.items[slot].sum.x, uint(-int(sum.x / 2u)));
+            atomicAdd(faces.items[slot].sum.y, uint(-int(sum.y / 2u)));
+            atomicAdd(faces.items[slot].sum.z, uint(-int(sum.z / 2u)));
+            atomicAdd(faces.items[slot].sum.w, uint(-int(sum.w / 2u)));
+        }
     }
     atomicAdd(faces.items[slot].sum.x, uint(value.r * kFixedScale));
     atomicAdd(faces.items[slot].sum.y, uint(value.g * kFixedScale));
@@ -441,8 +451,11 @@ FaceLight read_face(uint slot) {
 
     uvec4 sum = faces.items[slot].sum;
     float inv = 1.0 / (kFixedScale * float(count));
-    light.visibility = float(sum.w) * inv;
-    light.indirect = vec3(sum.xyz) * inv;
+    // Clamped on the way out, as a backstop rather than a correction. Every contribution is
+    // clamped to 8 going in, so a mean above that is arithmetic having gone wrong rather than
+    // a bright surface — and a wrong entry in a cache does not fade, it persists and spreads.
+    light.visibility = clamp(float(sum.w) * inv, 0.0, 1.0);
+    light.indirect = min(vec3(sum.xyz) * inv, vec3(8.0));
     light.count = count;
     light.known = true;
     return light;

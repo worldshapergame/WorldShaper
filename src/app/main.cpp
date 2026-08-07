@@ -936,19 +936,12 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // camera moving does the same; the face cache does not, because it is
                     // keyed to places in the world rather than to the screen.
                     //
-                    // The face cache goes too. Wiping it wholesale is heavy-handed - it is
-                    // what makes the whole scene relight when you place one voxel - but the
-                    // sliding-window alternative that was meant to replace it corrupted
-                    // entries and then faulted the GPU outright, so this stays until that is
-                    // redone properly. See the decision log.
-                    face_cache_dirty_ = true;
-                    // The note below is kept because it is still the right target:
-                    // deliberately *not* wiped would mean
-                    // every voxel placed relit the entire scene at once, which is what the
-                    // smearing while building actually was. Entries average over a sliding
-                    // window instead, so a face follows what was built beside it within a few
-                    // frames on its own and nothing further away flinches — see kFaceWindow
-                    // in pathtrace.comp.
+                    // The face cache deliberately is *not* wiped. Wiping it meant every voxel
+                    // placed relit the entire scene at once, which is what the smearing while
+                    // building actually was — not a settle but the whole room changing under
+                    // you. Entries average over a sliding window instead, so a face follows
+                    // what was built beside it within a few frames on its own and nothing
+                    // further away flinches. See kFaceWindow in pathtrace.comp.
                     trace_samples_ = 0;
                     for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
                 }
