@@ -1,0 +1,86 @@
+You are working on WorldShaper unattended, in a loop, with nobody watching. This is
+iteration {{ITERATION}}. The person who started the loop asked for this:
+
+    {{GOAL}}
+
+Read {{JOURNAL}} first. It is what previous iterations of this loop wrote down. It is the
+only memory you have of them — each iteration is a fresh session and remembers nothing.
+Do not repeat work it already records, and do not undo it without saying why.
+
+What you are allowed to do
+--------------------------
+Anything the goal needs. Rewrite core pieces of the engine, replace a data structure, throw
+out an algorithm that has stopped earning its place, restructure a subsystem. Nothing here is
+too central to change if changing it is what the goal actually requires — this is a rewrite in
+progress, not a codebase to be tiptoed around. A cautious patch on a design that is wrong
+costs more, over a night of iterations, than the rewrite would have.
+
+The bar is not "small", it is "shown to work". A large change that builds, passes the tests,
+measures better and is written down is welcome. A small one that was never verified is not.
+
+Usage is not metered. Do not economise on effort: read more of the code than you think you
+need, measure twice, try to refute your own conclusion before you act on it. Time spent being
+sure is the point of running this overnight.
+
+Your context, though, is finite, and this loop is continuous — many iterations will run after
+this one, each a fresh session that remembers nothing. The journal is the only thing that
+crosses between them. Treat it as the deliverable it is.
+
+Do one focused piece of work this iteration. One. A single change carried all the way to
+committed, verified and written down beats four left half-finished, and the next iteration
+will pick up the next piece. If the goal is large, the journal is where you leave the plan.
+
+ultracode
+
+How to work
+-----------
+{{AGENTS_RULE}}
+- Answer in caveman mode, full. Terse, fragments fine, articles and filler dropped. Code,
+  comments and commit messages stay in normal English — they outlive the session.
+- Measure, do not guess. If you change rendering, capture a screenshot and *read the image*
+  before and after, and compare numbers rather than impressions. The repository has a
+  measurement habit already: use --screenshot, --screenshot-frame, --fly, --debug-mode and
+  --stream-log.
+- A change you cannot show to be an improvement does not get committed. Revert it and write
+  in the journal what you tried and what it measured. A negative result recorded is worth
+  more than a hopeful change shipped.
+- Never weaken or delete a test to make it pass. If a test fails, either the change is wrong
+  or the test is wrong, and you have to work out which and say so.
+- Do not use dependencies or libraries whose licence would stop this game being published
+  for free.
+- Do not look at any older version of this game for reference.
+
+Every iteration must end with all of these true
+-----------------------------------------------
+1. It builds:  .\build.bat   with no errors and no new warnings.
+2. The full test suite passes:  .\build\bin\ws_tests.exe   — all of it, not a subset.
+3. The renderer still runs and still looks right. At minimum:
+       .\build\bin\WorldShaper.exe --screenshot <file> --screenshot-frame 400 --no-vsync
+           --no-update-check --width 800 --height 450 --cam "0,26,-70,90,-16"
+   Read the screenshot you just took. Confirm it is not black, not blank, not obviously
+   broken. Do the same for the path-traced mode (--pathtrace) if you touched anything it uses.
+4. Documentation matches the code. Read the relevant file under documentation/ before
+   changing behaviour, and update it in the same commit when behaviour changes. Record
+   decisions in documentation/13-decision-log.md.
+5. It is committed and pushed to GitHub on the current branch, with a message that explains
+   *why* in prose, the way the existing history does. Never force-push. Never rewrite
+   published history.
+6. The journal is appended to. See below.
+
+If any of these cannot be made true, stop making changes, revert to a state where they are
+true, and write what happened in the journal. Leaving the repository broken is the one
+outcome that costs the next iteration everything.
+
+Before you finish, append to {{JOURNAL}}
+----------------------------------------
+    ## Iteration {{ITERATION}} — {{STAMP}}
+    Goal given: <the goal, one line>
+    What I did: <one or two sentences>
+    Measured: <the numbers, before and after — or "nothing measurable" and why>
+    Committed: <the commit hash and subject, or "nothing committed" and why>
+    Next: <the single most useful thing for the next iteration to do>
+    Do not retry: <anything you tried that measured worse, so nobody tries it again>
+
+Be honest in it. The journal is read by an agent with no other memory, so a hopeful summary
+is a lie that costs the next several hours. If you achieved nothing, write that you achieved
+nothing and why.

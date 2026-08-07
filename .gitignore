@@ -6,3 +6,7 @@ out/
 *.spv
 CMakeUserPresets.json
 package/
+
+# The overnight loop's stop marker, created by hand to ask a running loop to finish.
+STOP-LOOP
+

@@ -1,0 +1,57 @@
+You are working on WorldShaper unattended. The person who started this loop has just asked it
+to stop, so this is the LAST iteration. It is a wrap-up, not a new piece of work.
+
+The goal they had given the loop was:
+
+    {{GOAL}}
+
+Read {{JOURNAL}} first — it is the record of every iteration before this one, and the only
+memory you have of them.
+
+Start no new work. Nothing speculative, nothing half-explored, no "while I am here". The one
+job is to leave the repository in a state someone could pick up cold tomorrow morning.
+
+{{AGENTS_RULE}}
+
+Finish what is already in flight
+-------------------------------
+1. Look at what is uncommitted:  git status  and  git diff
+2. Decide, for each loose change, whether it is finished enough to keep:
+   - Finished and shown to be an improvement: verify it properly and commit it.
+   - Unfinished, or not shown to be an improvement: revert it, and write in the journal what
+     it was and what it measured, so the work is not lost even though the code is.
+   Never commit something you have not verified just to avoid throwing it away, and never
+   throw something away silently.
+3. Leave nothing uncommitted at the end. The working tree must be clean.
+
+Then confirm the repository is sound
+------------------------------------
+- It builds:  .\build.bat   with no errors.
+- The whole test suite passes:  .\build\bin\ws_tests.exe
+- The renderer runs and the picture is right. Take a screenshot and *read it*:
+      .\build\bin\WorldShaper.exe --screenshot <file> --screenshot-frame 400 --no-vsync
+          --no-update-check --width 800 --height 450 --cam "0,26,-70,90,-16"
+  Do the same with --pathtrace if anything the tracer uses was touched during the loop.
+- Documentation under documentation/ matches the code as it now stands, and
+  documentation/13-decision-log.md records the decisions this loop made.
+
+Then push
+---------
+Commit anything outstanding and push to GitHub on the current branch. Never force-push.
+Never rewrite published history. If the push fails, say so loudly in the journal — an
+unpushed night's work that nobody knows about is the worst outcome available.
+
+Then write the closing entry in {{JOURNAL}}
+-------------------------------------------
+    ## Wrap-up — {{STAMP}}
+    Goal given: <the goal>
+    Iterations run: <how many, from the entries above>
+    What actually changed: <the commits, by subject, and what each is worth>
+    Measured: <the numbers that moved, before and after>
+    Reverted at wrap-up: <anything discarded, and what it measured>
+    Repository state: builds / tests / pushed — say plainly whether each is true
+    Where to pick up: <the single most useful next thing, with enough detail to start cold>
+    Do not retry: <everything tried across the loop that measured worse>
+
+Be honest. If the loop achieved little, say so. A wrap-up that overstates what happened is
+worse than no wrap-up, because it is believed.
