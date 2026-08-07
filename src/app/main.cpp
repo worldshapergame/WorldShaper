@@ -566,6 +566,8 @@ private:
     VkDescriptorSetLayout pathtrace_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet pathtrace_set_ = VK_NULL_HANDLE;
     GpuImage accum_image_;
+    GpuImage guide_image_;
+    ComputePipeline denoise_;
     // One entry per voxel face the camera has looked at, 32 bytes each. Light is computed
     // once per face and shared by every pixel that sees it, and because the key is a place in
     // the world rather than on the screen, turning the camera does not throw the work away.
@@ -712,6 +714,10 @@ bool Application::create_render_target(u32 width, u32 height) {
     // exactly what this mode exists to show.
     accum_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
                                         "path trace accumulation");
+    // Normal, depth and albedo per pixel, so the denoiser knows which neighbours are the same
+    // surface and which only look like it.
+    guide_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_UINT,
+                                        "denoise guide");
     trace_samples_ = 0;
     accum_ready_ = false;   // a new image, so it needs its one transition out of UNDEFINED
 
@@ -731,7 +737,11 @@ bool Application::create_render_target(u32 width, u32 height) {
     accum_info.imageView = accum_image_.view;
     accum_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[6]{};
+    VkDescriptorImageInfo guide_info{};
+    guide_info.imageView = guide_image_.view;
+    guide_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[7]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -755,7 +765,10 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[5].dstSet = pathtrace_set_;
     writes[5].dstBinding = 1;
     writes[5].pImageInfo = &colour_info;
-    vkUpdateDescriptorSets(device_.handle(), 6, writes, 0, nullptr);
+    writes[6].dstSet = pathtrace_set_;
+    writes[6].dstBinding = 19;
+    writes[6].pImageInfo = &guide_info;
+    vkUpdateDescriptorSets(device_.handle(), 7, writes, 0, nullptr);
     return true;
 }
 
@@ -764,6 +777,7 @@ void Application::destroy_render_target() {
     if (render_target_.valid()) destroy_image(device_, render_target_);
     if (depth_target_.valid()) destroy_image(device_, depth_target_);
     if (accum_image_.valid()) destroy_image(device_, accum_image_);
+    if (guide_image_.valid()) destroy_image(device_, guide_image_);
 }
 
 void Application::handle_resize() {
@@ -1894,6 +1908,27 @@ void Application::record_frame(f32 time_seconds) {
         trace_dependency.memoryBarrierCount = 1;
         trace_dependency.pMemoryBarriers = &trace_barrier;
         vkCmdPipelineBarrier2(cmd, &trace_dependency);
+
+        // ---- denoise ---------------------------------------------------------------
+        //
+        // A separate pass because a filter has to read its neighbours, and a neighbour being
+        // written by another thread of the same dispatch is not a value anybody can read.
+        //
+        // Skipped in the debug views. Those write their marks straight to the colour image and
+        // return, and a filter run over them would blend answers that are categories rather
+        // than colours — a view that says "this face has no entry" would come out as a shade
+        // between "no entry" and "lit".
+        if (debug_mode_ == 0) {
+            profiler_.begin_pass(cmd, "denoise", 1.0);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, denoise_.pipeline());
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, denoise_.layout(), 0, 1,
+                                    &pathtrace_set_, 1, &trace_offset);
+            vkCmdPushConstants(cmd, denoise_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(TracePush), &trace);
+            vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+            profiler_.end_pass(cmd);
+            vkCmdPipelineBarrier2(cmd, &trace_dependency);
+        }
     }
 
     // ---- primary visibility ---------------------------------------------------------
@@ -2190,7 +2225,7 @@ int Application::run(const Options& options) {
                                       &resolve_layout_));
 
     const VkDescriptorPoolSize pool_sizes[]{
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 12},
         // The three sets between them bind the world twice, the type tables, the clip, the
         // face cache and the light list. Counted generously: running out of pool is a failure
         // at start-up with a message nobody connects to the binding they just added.
@@ -2223,19 +2258,21 @@ int Application::run(const Options& options) {
     {
         // Nineteen: the two images, the world, the parameter block, the type tables, the
         // clip, the face cache, and now the light list at 18.
-        VkDescriptorSetLayoutBinding trace_bindings[19]{};
-        for (u32 i = 0; i < 19; ++i) {
+        // Twenty: the two images, the world, the parameter block, the type tables, the clip,
+        // the face cache, the light list at 18, and the denoiser's guide at 19.
+        VkDescriptorSetLayoutBinding trace_bindings[20]{};
+        for (u32 i = 0; i < 20; ++i) {
             trace_bindings[i].binding = i;
             trace_bindings[i].descriptorType =
-                (i < 2)     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                : (i == 13) ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                            : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                (i < 2 || i == 19) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                : (i == 13)        ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                   : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             trace_bindings[i].descriptorCount = 1;
             trace_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
         VkDescriptorSetLayoutCreateInfo trace_layout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        trace_layout.bindingCount = 19;
+        trace_layout.bindingCount = 20;
         trace_layout.pBindings = trace_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &trace_layout, nullptr,
                                           &pathtrace_layout_));
@@ -2281,6 +2318,20 @@ int Application::run(const Options& options) {
                                sizeof(TracePush))) {
             WS_LOG_FATAL("app", "could not create the path tracing pipeline: {}",
                          pathtrace_.last_error());
+            return 1;
+        }
+
+        // The denoiser shares the tracer's set and push block outright. It reads the same
+        // accumulation image and the same guide the tracer just wrote, and it draws the tool
+        // previews, which need the clip buffer and the parameter block — all already there. A
+        // second layout would be the same layout with a different name.
+        const std::filesystem::path denoise_spirv = shaders / "denoise.comp.spv";
+        const std::filesystem::path denoise_source =
+            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "denoise.comp";
+        if (!denoise_.create(device_, denoise_source, denoise_spirv, pathtrace_layout_,
+                             sizeof(TracePush))) {
+            WS_LOG_FATAL("app", "could not create the denoise pipeline: {}",
+                         denoise_.last_error());
             return 1;
         }
     }
@@ -2652,6 +2703,10 @@ int Application::run(const Options& options) {
     visibility_.destroy();
     resolve_.destroy();
     pathtrace_.destroy();
+    // Missed once, and the cost was three crash reports: a pipeline still alive when the
+    // device it belongs to is destroyed takes the process with it on the way out, after the
+    // screenshot was already written and everything looked fine.
+    denoise_.destroy();
     destroy_render_target();
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device_.handle(), descriptor_pool_, nullptr);

@@ -1,0 +1,149 @@
+#version 450
+// Edge-aware spatial filter for the path tracer.
+//
+// The face cache already does the temporal half of this, and does it better than a screen-space
+// history buffer could: it is keyed to places in the world, so turning the camera does not
+// throw the work away and there is nothing to reproject and nothing to disocclude. What it
+// cannot do is the last step. A pixel still takes its own primary ray and its own share of the
+// remaining variance, and while the camera moves the accumulator is one sample deep.
+//
+// So this is spatial only, and it is deliberately not a general-purpose denoiser. It is an
+// a-trous pass with three stopping functions:
+//
+//   depth    a surface behind another must not bleed forward
+//   normal   a wall must not average with the floor it meets
+//   albedo   and this one is particular to voxels: a wall is flat, so depth and normal agree
+//            across the whole of it, and a filter guided by those alone averages a pale voxel
+//            into the dark one beside it. The checkerboard of a stone wall turns to porridge
+//            without a colour term.
+//
+// Strength falls away as the accumulator fills. A converged image needs no help and blurring
+// it would only throw away the detail those samples bought, so once a still camera has gathered
+// enough the filter takes its hands off entirely.
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, rgba32f) uniform readonly image2D accum;
+layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
+layout(binding = 19, rgba32ui) uniform readonly uimage2D guide;
+
+// The field list is shared, the binding number is each shader's own. std140 lays out by
+// position, so declaring fewer fields than the buffer holds reads everything after the gap at
+// the wrong offset and says nothing about it.
+layout(std140, binding = 13) uniform RenderParams {
+#include "params.glsl"
+} push;
+
+// The clip the ghosts are drawn from, and the type tables the preview colours them with. Same
+// bindings the tracer uses, because this pass shares its descriptor set.
+layout(std430, binding = 14) readonly buffer Types { uvec2 items[]; } types;
+layout(std430, binding = 15) readonly buffer Visuals { uvec4 items[]; } visuals;
+layout(std430, binding = 16) readonly buffer ClipCells { uint items[]; } clip;
+
+layout(push_constant) uniform Denoise {
+    vec4 sun;
+    vec4 sun_colour;
+    uvec4 control;    // x sample index, y bounce limit, z frame, w world changed
+    uvec4 quality;    // x refine stride, y shadow target, z edit boost, w light count
+} trace;
+
+// preview.glsl colours a ghost from the type tables and wants this.
+vec3 unpack_rgb(uint packed) {
+    return vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
+                float((packed >> 16u) & 0xFFu)) / 255.0;
+}
+#include "preview.glsl"
+
+
+vec3 unpack_normal(uint packed) {
+    vec2 q = vec2(float(packed & 0xFFFFu), float(packed >> 16u)) / 65535.0 * 2.0 - 1.0;
+    vec3 n = vec3(q, 1.0 - abs(q.x) - abs(q.y));
+    if (n.z < 0.0) {
+        n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    }
+    return normalize(n);
+}
+
+vec3 unpack_albedo(uint packed) {
+    return vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
+                float((packed >> 16u) & 0xFFu)) / 255.0;
+}
+
+// How many samples a pixel needs before the filter lets go of it entirely. Roughly a third of
+// a second of standing still.
+const float kFilterFadesBy = 20.0;
+
+// The 5x5 tent, which is the standard a-trous kernel and is separable in spirit though not
+// written that way here: at this radius the straight loop is cheaper than the two passes and
+// the intermediate storage they would need.
+const float kKernel[3] = float[3](3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0);
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(push.resolution.xy);
+    if (pixel.x >= size.x || pixel.y >= size.y) return;
+
+    vec4 centre_accum = imageLoad(accum, pixel);
+    float samples = max(centre_accum.w, 1.0);
+    vec3 mean = centre_accum.rgb / samples;
+
+    uvec4 centre_guide = imageLoad(guide, pixel);
+    float centre_depth = uintBitsToFloat(centre_guide.y);
+    vec3 centre_normal = unpack_normal(centre_guide.x);
+    vec3 centre_albedo = unpack_albedo(centre_guide.z);
+
+    // Once the accumulator has enough, stop touching it.
+    float strength = clamp(1.0 - samples / kFilterFadesBy, 0.0, 1.0);
+    vec3 filtered = mean;
+
+    if (strength > 0.0 && centre_depth < 1e29) {
+        vec3 sum = vec3(0.0);
+        float weight_sum = 0.0;
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                ivec2 at = pixel + ivec2(dx, dy);
+                if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) continue;
+
+                uvec4 g = imageLoad(guide, at);
+                float depth = uintBitsToFloat(g.y);
+                if (depth > 1e29) continue;   // sky never bleeds onto geometry
+
+                // Depth, relative rather than absolute: a centimetre matters against a wall an
+                // arm's length away and means nothing against one across a field.
+                float depth_difference = abs(depth - centre_depth) / max(centre_depth, 1.0);
+                if (depth_difference > 0.02) continue;
+
+                // Normal: axis-aligned here, so this is nearly a yes-or-no, which is what a
+                // voxel world wants. A wall must not average with the floor it meets.
+                if (dot(unpack_normal(g.x), centre_normal) < 0.9) continue;
+
+                // Colour: the voxel-specific one. Neighbouring voxels of a different shade are
+                // different surfaces as far as this filter is concerned.
+                vec3 albedo = unpack_albedo(g.z);
+                if (dot(abs(albedo - centre_albedo), vec3(1.0)) > 0.12) continue;
+
+                vec4 neighbour = imageLoad(accum, at);
+                float w = kKernel[abs(dx)] * kKernel[abs(dy)];
+                sum += neighbour.rgb / max(neighbour.w, 1.0) * w;
+                weight_sum += w;
+            }
+        }
+        if (weight_sum > 0.0) filtered = mix(mean, sum / weight_sum, strength);
+    }
+
+    // Tone mapping and the tools, exactly as the tracer did them, and for the same reasons:
+    // the curve is deliberately plain because the point is to see what the material does, and
+    // the preview is drawn after it and outside the accumulation because a preview is
+    // interface rather than light. It is also drawn after the filter, so an outline stays a
+    // line rather than being smeared into a band.
+    vec3 mapped = pow(clamp(filtered / (filtered + vec3(1.0)), 0.0, 1.0), vec3(1.0 / 2.2));
+
+    float aspect = float(push.resolution.x) / float(push.resolution.y);
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(push.resolution) * 2.0 - 1.0;
+    vec3 straight = normalize(push.forward.xyz + push.right.xyz * uv.x * push.lens.x * aspect -
+                              push.up.xyz * uv.y * push.lens.x);
+    mapped = draw_preview(mapped, push.origin.xyz, straight, centre_depth);
+
+    imageStore(out_colour, pixel, vec4(mapped, 1.0));
+}
