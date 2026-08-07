@@ -27,6 +27,9 @@
 #include "debug/hud.hpp"
 #include "game/camera.hpp"
 #include "game/chisel.hpp"
+#include "forge/clip_script.hpp"
+#include "forge/measure.hpp"
+#include "forge/sample.hpp"
 #include "game/clipboard.hpp"
 #include "game/repeat.hpp"
 #include "game/toolbelt.hpp"
@@ -81,6 +84,14 @@ struct Options {
     bool benchmark = false;       // re-run the machine measurement and save the result
     u64 edit_frame = 0;           // apply --edit on this frame instead of frame 100
     i32 quality_level = -1;       // -1 means "decide it"
+
+    // A clip authored as a file. With no --screenshot it builds the clip, measures it and
+    // prints what it found without opening a window; with one, the clip is stamped into the
+    // world at the origin so the ordinary camera and screenshot machinery can look at it.
+    std::string clip_file;
+    std::vector<std::string> clip_slices;   // "axis,at" or "axis,at,step"
+    bool clip_symmetry = false;
+    i64 clip_at[3]{0, 0, 0};                // where to stamp it, in voxels
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
     // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
@@ -166,6 +177,14 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.preview = argv[++i];
         } else if (arg == "--clip") {
             if (i + 1 < argc) options.clip = argv[++i];
+        } else if (arg == "--clip-file") {
+            if (i + 1 < argc) options.clip_file = argv[++i];
+        } else if (arg == "--clip-slice") {
+            if (i + 1 < argc) options.clip_slices.push_back(argv[++i]);
+        } else if (arg == "--clip-symmetry") {
+            options.clip_symmetry = true;
+        } else if (arg == "--clip-at") {
+            if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
         } else if (arg == "--material") {
             options.material = static_cast<u32>(next_number(0));
         } else if (arg == "--debug-mode") {
@@ -238,6 +257,11 @@ void print_help() {
         "  --crash-test KIND     prove crash reporting works: read, write, check, throw,\n"
         "                        divzero, frame (faults in-game), report (no crash)\n"
         "  --clip x0,..,z1,dx,dy,dz,copies,turn   scripted clipboard ghost\n"
+        "  --clip-file FILE      build a clip from its file. Alone, it measures it and prints\n"
+        "                        what it found; with --screenshot it stamps it in the world\n"
+        "  --clip-slice a,at[,n] print a slice through it, one character per n voxels\n"
+        "  --clip-symmetry       report how far it is from being mirror symmetric\n"
+        "  --clip-at x,y,z       where to stamp it, in voxels (default the origin)\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "\n"
@@ -2770,6 +2794,77 @@ int run_crash_test(const std::string& kind) {
 }
 
 }  // namespace
+
+// Build a clip from its file and say what it is, without opening a window.
+//
+// The other half of authoring. A screenshot says a room looks plausible; this says the doorway is
+// 1.00 m and not 0.97, that the two halves match to the voxel, and that the material meant for
+// the trim is on 0.4% of the surface rather than none of it because its rule never fired. Both
+// halves are needed and this one is the half that can be run in a second.
+int run_clip_tool(const Options& options) {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const u64 begin = now_ns();
+    forge::Script script = forge::load_clip_script(options.clip_file, types, tags);
+    for (const forge::ScriptError& error : script.errors) {
+        if (error.line > 0) {
+            WS_LOG_ERROR("clip", "line {}: {}", error.line, error.message);
+        } else {
+            WS_LOG_ERROR("clip", "{}", error.message);
+        }
+    }
+    if (!script.ok()) return 1;
+
+    JobSystem jobs;
+    const u64 parsed = now_ns();
+    const forge::SampleResult built =
+        forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+    const u64 sampled = now_ns();
+
+    const forge::Measurement m =
+        forge::measure(built.clip, script.settings.voxels_per_metre);
+
+    std::printf("%s", forge::report(m, &script.material_names).c_str());
+    std::printf("origin        (%lld, %lld, %lld) voxels\n",
+                static_cast<long long>(built.origin_voxel[0]),
+                static_cast<long long>(built.origin_voxel[1]),
+                static_cast<long long>(built.origin_voxel[2]));
+    std::printf("field         %zu nodes, %zu parameters\n", script.field.size(),
+                script.field.parameter_count());
+    for (usize i = 0; i < script.field.parameter_count(); ++i) {
+        std::printf("  %-16s %.4f\n", script.field.parameter_name(i),
+                    script.field.parameter_value(i));
+    }
+    std::printf("cost          parse %.1f ms, sample %.1f ms, %llu field evaluations\n",
+                ns_to_ms(parsed - begin), ns_to_ms(sampled - parsed),
+                static_cast<unsigned long long>(built.evaluations));
+
+    // Slices, asked for as `axis,at` or `axis,at,step`. More than one may be given.
+    for (const std::string& request : options.clip_slices) {
+        i64 values[3]{1, -1, 1};
+        parse_numbers(request, values, 3);
+        const u32 axis = static_cast<u32>(std::clamp<i64>(values[0], 0, 2));
+        const i32 size = built.clip.size[axis];
+        const i32 at = (values[1] < 0) ? size / 2 : static_cast<i32>(values[1]);
+        const i32 step = static_cast<i32>(std::max<i64>(values[2], 1));
+        std::printf("\nslice along %c at %d of %d, one character per %d voxels\n",
+                    "xyz"[axis], at, size, step);
+        std::printf("%s", forge::slice_text(built.clip, axis, at, step).c_str());
+    }
+
+    // Symmetry, when asked. Cheap, and it catches a whole class of mistake nothing else does.
+    if (options.clip_symmetry) {
+        for (u32 axis = 0; axis < 3; ++axis) {
+            const u64 differ = forge::mirror_mismatch(built.clip, axis);
+            std::printf("symmetry %c   %llu cells differ (%.4f%%)\n", "xyz"[axis],
+                        static_cast<unsigned long long>(differ),
+                        100.0 * static_cast<f64>(differ) /
+                            static_cast<f64>(std::max<u64>(built.clip.cell_count(), 1)));
+        }
+    }
+    return 0;
+}
+
 }  // namespace ws
 
 int main(int argc, char** argv) {
@@ -2781,6 +2876,9 @@ int main(int argc, char** argv) {
     if (options.help) {
         ws::print_help();
         return 0;
+    }
+    if (!options.clip_file.empty() && options.screenshot.empty()) {
+        return ws::run_clip_tool(options);
     }
     // A modal dialog in an automated run is a hang, so scripted modes get the stderr line
     // and nothing else.

@@ -113,6 +113,20 @@ target_include_directories(ws_game PUBLIC src)
 target_link_libraries(ws_game PUBLIC ws_core ws_world)
 
 # --------------------------------------------------------------------------------------
+# ws_forge - authoring clips procedurally: the field language every shape and pattern is
+# made of, the sampler that turns one into voxels, and the measurements that check it is
+# what was intended. Headless and free of the GPU, so a clip can be built and reported on
+# from a test.
+# --------------------------------------------------------------------------------------
+add_library(ws_forge STATIC
+    src/forge/field.cpp
+    src/forge/sample.cpp
+    src/forge/measure.cpp
+    src/forge/clip_script.cpp)
+target_include_directories(ws_forge PUBLIC src)
+target_link_libraries(ws_forge PUBLIC ws_core ws_world ws_game)
+
+# --------------------------------------------------------------------------------------
 # ws_platform - window, input, event pump.
 # --------------------------------------------------------------------------------------
 add_library(ws_platform STATIC
@@ -170,7 +184,7 @@ endif()
 
 add_executable(WorldShaper ${WS_APP_SOURCES})
 target_link_libraries(WorldShaper PRIVATE
-    ws_core ws_world ws_game ws_platform ws_gpu ws_imgui ws_version)
+    ws_core ws_world ws_game ws_forge ws_platform ws_gpu ws_imgui ws_version)
 if(WIN32)
     # The update check speaks HTTPS through the system's own stack, so there is no HTTP
     # library to depend on, to license, or to keep patched.
@@ -228,6 +242,8 @@ target_compile_definitions(ws_gpu PUBLIC WS_GLSLC_PATH="${Vulkan_GLSLC_EXECUTABL
 enable_testing()
 add_executable(ws_tests
     tests/test_main.cpp
+    tests/test_field.cpp
+    tests/test_clip_script.cpp
     tests/test_fixed.cpp
     tests/test_hash.cpp
     tests/test_arena.cpp
@@ -256,5 +272,5 @@ add_executable(ws_tests
     tests/test_log_ring.cpp
     tests/test_quality.cpp
     tests/test_light_list.cpp)
-target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_doctest)
+target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_doctest)
 add_test(NAME unit COMMAND ws_tests)
