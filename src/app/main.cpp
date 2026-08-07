@@ -700,6 +700,12 @@ private:
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
     FrameStats stats_;
+    // A device that dies of a timeout and a device that dies of a bad address leave exactly the
+    // same message behind. The difference is in the frames just before it, and those are gone by
+    // the time anyone reads the report — so they are kept here, and a frame slow enough to be
+    // heading for the driver's patience says so at the time.
+    f64 worst_frame_ms_ = 0.0;
+    u64 worst_frame_at_ = 0;
 };
 
 bool Application::create_render_target(u32 width, u32 height) {
@@ -1591,8 +1597,17 @@ void Application::record_frame(f32 time_seconds) {
     //
     // So: once from UNDEFINED after it is created, and never again. It stays in GENERAL and
     // the read-after-write between frames is covered by an ordinary memory barrier.
+    // The guide goes with it, and it had been going nowhere. It was created and then read and
+    // written by two shaders without ever leaving VK_IMAGE_LAYOUT_UNDEFINED, which is not a
+    // layout an image can be used in: a driver is free to leave the compression metadata of an
+    // undefined image uninitialised, and reads through it then resolve to addresses that were
+    // never mapped. That is the whole shape of the fault this build kept dying of — a page
+    // fault on a read, inside the pathtrace pass, at no particular moment.
     if (!accum_ready_) {
         image_barrier(cmd, accum_image_.image, VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        image_barrier(cmd, guide_image_.image, VK_IMAGE_LAYOUT_UNDEFINED,
                       VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
         accum_ready_ = true;
@@ -2503,6 +2518,16 @@ int Application::run(const Options& options) {
         const u64 frame_start = now_ns();
         stats_.push(ns_to_ms(frame_start - last_ns));
         last_ns = frame_start;
+        if (stats_.last_ms() > worst_frame_ms_) {
+            worst_frame_ms_ = stats_.last_ms();
+            worst_frame_at_ = frame_counter_;
+        }
+        // A graphics driver resets a GPU that has not answered in about two seconds, and the
+        // reset arrives as a lost device with no explanation attached. A frame this slow is
+        // already most of the way there, so it is worth a line of its own.
+        if (stats_.last_ms() > 200.0) {
+            WS_LOG_WARN("frame", "frame {} took {:.0f} ms", frame_counter_, stats_.last_ms());
+        }
 
         const InputState& input = window_.input();
         if (input.was_pressed(Key::Escape)) {
@@ -2644,6 +2669,13 @@ int Application::run(const Options& options) {
                           static_cast<int>(toolbelt_.active()), path_trace_ ? 1 : 0,
                           debug_mode_, residency.resident_chunks, world_.chunk_count());
             crash_set_context("state", what);
+            char timing[160];
+            std::snprintf(timing, sizeof(timing),
+                          "last %.1f ms, worst %.1f ms at frame %llu, last GPU %.2f ms",
+                          stats_.last_ms(), worst_frame_ms_,
+                          static_cast<unsigned long long>(worst_frame_at_),
+                          profiler_.total_gpu_ms());
+            crash_set_context("timing", timing);
         }
 
         hud_.begin_frame();
@@ -2700,6 +2732,7 @@ int Application::run(const Options& options) {
     destroy_buffer(device_, face_cache_);
     destroy_buffer(device_, clip_buffer_);
     destroy_buffer(device_, clip_staging_);
+    destroy_buffer(device_, light_buffer_);
     visibility_.destroy();
     resolve_.destroy();
     pathtrace_.destroy();
