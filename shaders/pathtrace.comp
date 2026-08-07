@@ -575,10 +575,32 @@ void contribute(uint slot, vec3 value) {
 // A shadow entry uses the same slot layout and only the w channel. Kept in the same table
 // rather than a second one, because the two share an eviction policy, a probe strategy and a
 // budget, and splitting the storage would mean maintaining all three twice.
+// How short the shadow window becomes while an edit is settling.
+//
+// This is the whole of why a new voxel cast no shadow until you walked up to it.
+//
+// An entry is a mean over its last kFaceWindow samples. A patch of ground that has been lit
+// for a while holds five hundred samples all saying "lit", so when something is built beside
+// it the new dark samples have to outvote all of them — several hundred measurements before
+// the mean moves, and several hundred more before it arrives. A face right under the camera is
+// covered by dozens of pixels and gathers those in a moment; a face further off is covered by
+// one, and never gets there. Walking closer is what supplies the votes, which is exactly what
+// it looked like: the shadow fading in as you approach and staying once it had.
+//
+// It is also why placing voxels *on* the shadow worked. Those faces are new. They have no
+// history to outvote, so they read dark from their first sample.
+//
+// So for the couple of seconds after an edit the window is short: the mean tracks the last few
+// dozen samples instead of the last five hundred, and the truth wins immediately at any
+// distance. Then it lengthens again, because a long window is what keeps a settled scene
+// quiet.
+const uint kEditWindow = 24u;
+
 void contribute_shadow(uint slot, float visibility) {
     if (slot == 0xFFFFFFFFu) return;
+    uint window = (trace.quality.z != 0u) ? kEditWindow : kFaceWindow;
     uint count = faces.items[slot].count;
-    if (count >= kFaceWindow) {
+    if (count >= window) {
         if (atomicCompSwap(faces.items[slot].count, count, count - count / 2u) == count) {
             atomicAdd(faces.items[slot].sum.w, uint(-int(faces.items[slot].sum.w / 2u)));
         }
