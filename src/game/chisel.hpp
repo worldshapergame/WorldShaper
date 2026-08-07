@@ -8,8 +8,10 @@
 // that distance; wind it all the way down to zero and it stops being a distance at all and
 // snaps to whatever voxel you are looking at.
 //
-// Middle click drops a constraint point. The box has to reach it, so the shape grows to
-// touch it at its edge — the way to make a cut line up with something without eyeballing it.
+// X drops a constraint point. The box has to reach it, so the shape grows to touch it at its
+// edge — the way to make a cut line up with something without eyeballing it. On a key rather
+// than middle click because dropping a point is something you do *while* dragging a box out
+// with a mouse button already held, and a hand cannot press two mouse buttons apart cleanly.
 //
 // Boxes only for now. The tool is deliberately one shape done properly rather than five
 // half-done; spheres, cylinders and lines come with the shape library later.
@@ -45,7 +47,7 @@ void hollow_box(const Op& box, i64 thickness, u64& next_id, std::vector<Op>& out
 struct ChiselInput {
     bool left = false;
     bool right = false;
-    bool middle = false;
+    bool add_point = false;         // X, pressed this frame
     f32 wheel = 0.0f;
     bool adjust_distance = false;   // the modifier that hands the wheel to the chisel
     bool clear_points = false;      // pressed this frame

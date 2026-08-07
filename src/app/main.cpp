@@ -853,6 +853,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         tool.left = left;
         tool.right = right;
         tool.middle = middle;
+        tool.add_point = input.was_pressed(Key::X);
         tool.wheel = clipboard_has_wheel ? input.wheel : 0.0f;
         tool.big_step = input.is_down(Key::Shift);
         tool.adjust_distance = chisel_has_wheel;
@@ -875,7 +876,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         ChiselInput tool{};
         tool.left = left;
         tool.right = right;
-        tool.middle = middle;
+        tool.add_point = input.was_pressed(Key::X);
         tool.wheel = chisel_has_wheel ? input.wheel : 0.0f;
         tool.adjust_distance = chisel_has_wheel;
         tool.clear_points = input.was_pressed(Key::R);

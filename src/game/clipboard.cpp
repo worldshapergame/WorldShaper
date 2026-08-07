@@ -367,7 +367,7 @@ bool Clipboard::update(const World& world, const ClipboardInput& input, const f6
     if (source_.empty()) {
         ChiselInput drag{};
         drag.left = input.left;
-        drag.middle = input.middle;
+        drag.add_point = input.add_point;
         drag.wheel = input.wheel;
         drag.adjust_distance = input.adjust_distance;
         drag.clear_points = input.clear_points;

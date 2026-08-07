@@ -22,6 +22,32 @@ bool step(Chisel& chisel, const World& world, ChiselInput input, Op& out,
 
 }  // namespace
 
+TEST_CASE("the idle preview sits where the block would actually go") {
+    // O decides whether a placement lands against the face you are aiming at or replaces the
+    // voxel itself. The preview has to agree with it: marking the solid voxel under the
+    // crosshair while the block appears in the empty one next to it means the one thing the
+    // preview exists to show — where matter is about to be — is the one thing it gets wrong.
+    World world;
+    world.set(10, 0, 0, kRock);
+    Chisel chisel;
+    REQUIRE(chisel.snapping());
+
+    Op op;
+    ChiselInput idle;
+    CHECK_FALSE(step(chisel, world, idle, op));
+    REQUIRE(chisel.preview().active);
+    CHECK(chisel.preview().min[0] == 9);   // against the face, on the near side
+    CHECK(chisel.preview().max[0] == 9);
+
+    // Turn it off and the preview moves onto the voxel itself, which is what will be replaced.
+    ChiselInput toggle;
+    toggle.toggle_anchor = true;
+    CHECK_FALSE(step(chisel, world, toggle, op));
+    REQUIRE(chisel.preview().active);
+    CHECK(chisel.preview().min[0] == 10);
+    CHECK(chisel.preview().max[0] == 10);
+}
+
 TEST_CASE("snapped carving picks the aimed voxel") {
     World world;
     world.set(10, 0, 0, kRock);
@@ -167,7 +193,7 @@ TEST_CASE("constraint points pull the box out to reach them") {
 
     Op op;
     ChiselInput mark;
-    mark.middle = true;
+    mark.add_point = true;
     const f64 far_ray[3] = {10.0, 0.0, 40.0};
     step(chisel, world, mark, op, kEye, far_ray);
     REQUIRE(chisel.constraints().size() == 1);
@@ -190,7 +216,7 @@ TEST_CASE("constraint points can be cleared without editing") {
 
     Op op;
     ChiselInput mark;
-    mark.middle = true;
+    mark.add_point = true;
     step(chisel, world, mark, op);
     CHECK(chisel.constraints().size() == 1);
 

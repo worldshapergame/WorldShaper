@@ -50,7 +50,8 @@ const char* adjust_mode_name(AdjustMode mode);
 struct ClipboardInput {
     bool left = false;
     bool right = false;
-    bool middle = false;
+    bool middle = false;            // drops the held ghost on what you are looking at
+    bool add_point = false;         // X: a constraint point, while the selection is dragged
     f32 wheel = 0.0f;
     bool big_step = false;          // move by a whole clip length instead of one voxel
     bool adjust_distance = false;   // G, handed through to the selection drag
