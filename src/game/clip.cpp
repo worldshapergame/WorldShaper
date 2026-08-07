@@ -564,7 +564,8 @@ struct LedgerDelta {
 }  // namespace
 
 PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 ox, i64 oy,
-                      i64 oz, PasteMode mode, MatterReason reason, u32 player, JobSystem* jobs) {
+                      i64 oz, PasteMode mode, MatterReason reason, u32 player, JobSystem* jobs,
+                      usize type_count) {
     PasteStats stats;
     if (clip.empty()) return stats;
 
@@ -626,11 +627,11 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
     std::vector<u64> written(targets.size(), 0);
     std::vector<u8> empty(targets.size(), 0);
 
-    // How far the type ids in this clip reach, so the per-thread tally below can be a plain array
-    // indexed by type. One pass over the clip, spread across the cores, because at this size even
-    // reading an array is worth doing in parallel.
-    usize type_count = 1;
-    {
+    // How far the type ids in this clip reach, so the per-worker tally below can be a plain array
+    // indexed by type. The caller usually knows already; when it does not, one pass over the clip
+    // finds out, spread across the cores because at this size even reading an array is work.
+    if (type_count == 0) {
+        type_count = 1;
         const usize stripes = std::max<usize>(1, (jobs != nullptr) ? jobs->worker_count() + 1 : 1);
         std::vector<u32> highest(stripes, 0);
         const auto scan = [&](usize begin, usize end) {
@@ -803,7 +804,11 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
     };
 
     if (jobs != nullptr && targets.size() > 1) {
-        jobs->parallel_for(targets.size(), 1, do_chunk);
+        // Batched so that each worker is called about once, because the per-batch scratch is the
+        // size of the type table — a million counters — and allocating and clearing that for
+        // every handful of chunks costs more than the load balancing it buys back.
+        const usize workers = std::max<usize>(1, jobs->worker_count() + 1);
+        jobs->parallel_for(targets.size(), (targets.size() + workers - 1) / workers, do_chunk);
     } else {
         do_chunk(0, targets.size());
     }

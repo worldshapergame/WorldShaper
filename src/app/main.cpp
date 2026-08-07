@@ -964,15 +964,19 @@ void Application::build_world() {
                 world_, ledger_, built.clip, built.origin_voxel[0] + options_.clip_at[0],
                 built.origin_voxel[1] + options_.clip_at[1],
                 built.origin_voxel[2] + options_.clip_at[2], PasteMode::SolidOnly,
-                MatterReason::PlayerPlace, 1, &jobs);
+                MatterReason::PlayerPlace, 1, &jobs, types_.type_count());
             const u64 pasted_at = now_ns();
             if (stamped.chunks_left_empty) world_.compact();
-            WS_LOG_INFO("clip", "parse {:.0f} ms, sample {:.0f} ms ({} shape + {} paint), "
+            WS_LOG_INFO("clip", "parse {:.0f} ms, sample {:.0f} ms ({} shape + {} paint, "
+                                "{} voxels asked, {} settled in bulk), "
                                 "variation {:.0f} ms, paste {:.0f} ms, compact {:.0f} ms",
                         ns_to_ms(parsed_at - start), ns_to_ms(sampled_at - parsed_at),
-                        built.shape_evaluations, built.paint_evaluations,
-                        ns_to_ms(varied_at - sampled_at), ns_to_ms(pasted_at - varied_at),
-                        ns_to_ms(now_ns() - pasted_at));
+                        built.shape_evaluations, built.paint_evaluations, built.voxels_asked,
+                        built.voxels_settled, ns_to_ms(varied_at - sampled_at),
+                        ns_to_ms(pasted_at - varied_at), ns_to_ms(now_ns() - pasted_at));
+            WS_LOG_INFO("clip", "slack {:.4f} m worst, {:.4f} m to settle a box, {:.4f} m for the "
+                                "easiest of {} parts",
+                        built.slack, built.prune_slack, built.best_part_slack, built.parts);
             materials_ = script.material_types;
             if (materials_.empty()) materials_.push_back(1);
             material_index_ = options_.material % materials_.size();

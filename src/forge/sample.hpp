@@ -130,6 +130,17 @@ struct SampleResult {
     // about boxes instead of points, paint questions by settling a rule for a whole region.
     u64 shape_evaluations = 0;
     u64 paint_evaluations = 0;
+    u64 voxels_asked = 0;      // boxes that came down to a single voxel
+    u64 voxels_settled = 0;    // voxels decided in bulk, never asked about
+
+    // How much the sampler had to allow for, which is what decides how early a box can settle.
+    // Reported because it is the single number that most affects how long a clip takes to build,
+    // and it comes from the clip rather than the code — an author who displaces a whole site by
+    // five centimetres has asked for something expensive without any way of knowing.
+    f64 slack = 0.0;             // the worst case, over the whole field
+    f64 prune_slack = 0.0;       // the worst case for settling a box
+    f64 best_part_slack = 0.0;   // the least any one part needs
+    usize parts = 0;             // how many parts could be told apart; 0 means none could
 };
 
 // Fill a clip from a field.

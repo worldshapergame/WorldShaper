@@ -192,8 +192,11 @@ struct PasteStats {
 // serial part is creating the ones the clip reaches — done up front, before any thread runs.
 //
 // The ledger is charged exactly as the op route charges it, so the audit still balances.
+// `type_count` is how many voxel types exist, if the caller happens to know — it sizes a per-
+// worker tally and saves a pass over the clip to find the largest id in it. Zero means "work it
+// out", which is always correct and costs one extra read of a possibly very large array.
 PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 ox, i64 oy,
                       i64 oz, PasteMode mode, MatterReason reason, u32 player,
-                      JobSystem* jobs = nullptr);
+                      JobSystem* jobs = nullptr, usize type_count = 0);
 
 }  // namespace ws

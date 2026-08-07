@@ -219,6 +219,24 @@ TEST_CASE("the sampler agrees with asking every voxel, whatever it skips") {
                    brute_force(f, slab, paint, bounded), "bounded");
     }
 
+    // Repetition folds a coordinate into its nearest cell, which gives the distance to the copy
+    // in *that* cell rather than to the nearest copy. With the shape hard against one side of its
+    // cell — a row of slats, a colonnade — those differ, and the fold reports the larger. A
+    // sampler that trusted it skipped whole slats.
+    SUBCASE("a row of repeated slats, each off-centre in its cell") {
+        Field f;
+        const u32 slat = f.box({0.05, 0.0, 0.0}, {0.05, 0.9, 0.25}, 0.0);
+        const u32 row = f.repeat(slat, {0.26, 0.0, 0.0}, {5.0, 0.0, 0.0});
+        const u32 plinth = f.box({0, -1.0, 0}, {1.4, 0.15, 1.4}, 0.0);
+        const u32 all = f.unite({row, plinth});
+
+        std::vector<PaintRule> paint;
+        paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+
+        must_match(sample(f, all, paint, settings, &jobs).clip,
+                   brute_force(f, all, paint, settings), "repeated");
+    }
+
     SUBCASE("many small things, so most boxes hold nothing at all") {
         Field f;
         std::vector<u32> parts;

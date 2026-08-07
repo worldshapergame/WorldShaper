@@ -933,7 +933,27 @@ f64 Field::eval(u32 at, Vec3 p) const {
             return eval(n.child[0], with_axis(p, axis, std::abs(axis_of(p, axis))));
         }
         case Op::Repeat: {
+            // Folded into the nearest cell, and then checked against the neighbouring cell on the
+            // side the point leans toward.
+            //
+            // The fold on its own answers "how far to the copy in *this* cell", which is not the
+            // same question as "how far to the nearest copy" whenever a copy sits off-centre in
+            // its cell. For a row of slats each hard against the left of its cell, a point just
+            // past one slat is told the distance back to it rather than the shorter distance
+            // forward to the next — an overstatement, and the dangerous direction, because a
+            // sampler that believes there is nothing nearby skips over the slat that is.
+            //
+            // Checking the leaning neighbour makes it exact, and exact is worth far more than the
+            // one extra evaluation costs: an honest distance can be trusted to settle whole boxes
+            // at once, where a bound loose enough to be safe settles nothing. A copy lives inside
+            // its own cell, so no cell beyond the immediate neighbour can hold anything nearer.
+            //
+            // A cell the limit has clamped away has no copy in it and must not be consulted:
+            // taking the minimum against a copy that does not exist invents matter.
             Vec3 q = p;
+            u32 axes[3];
+            f64 leaning[3];
+            u32 neighbours = 0;
             for (u32 axis = 0; axis < 3; ++axis) {
                 const f64 period = a[axis];
                 if (period <= 0.0) continue;
@@ -941,9 +961,29 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 const f64 value = axis_of(p, axis);
                 f64 cell = std::round(value / period);
                 if (limit > 0.0) cell = clamp(cell, -limit, limit);
-                q = with_axis(q, axis, value - period * cell);
+                const f64 folded = value - period * cell;
+                q = with_axis(q, axis, folded);
+
+                f64 other = cell + ((folded >= 0.0) ? 1.0 : -1.0);
+                if (limit > 0.0) other = clamp(other, -limit, limit);
+                if (other != cell) {
+                    axes[neighbours] = axis;
+                    leaning[neighbours] = value - period * other;
+                    ++neighbours;
+                }
             }
-            return eval(n.child[0], q);
+
+            f64 best = eval(n.child[0], q);
+            // Every combination of leaning neighbours, because with two axes repeating it is the
+            // diagonal copy that can be nearest.
+            for (u32 mask = 1; mask < (1u << neighbours); ++mask) {
+                Vec3 shifted = q;
+                for (u32 i = 0; i < neighbours; ++i) {
+                    if ((mask >> i) & 1u) shifted = with_axis(shifted, axes[i], leaning[i]);
+                }
+                best = std::min(best, eval(n.child[0], shifted));
+            }
+            return best;
         }
         case Op::PolarRepeat: {
             const u32 count = std::max(1u, static_cast<u32>(a[0]));
@@ -1424,12 +1464,32 @@ u32 Field::undisplaced(u32 at, f64& amplitude) const {
 void Field::union_children(u32 at, std::vector<u32>& out) const {
     out.clear();
     if (at >= nodes_.size()) return;
-    const Node& n = nodes_[at];
-    if (n.op != Op::Union && n.op != Op::SmoothUnion) {
-        out.push_back(at);
-        return;
+
+    // Flattened through nested unions, and that is the point of the method rather than an
+    // incidental tidiness. A node holds four children, so a union of six parts is stored as a
+    // union of a union — and a nested union's bounding box is the box around everything in it.
+    // Stopping at the first level therefore hands back a "part" whose box covers the ground *and*
+    // the building, so a box anywhere in the building counts as near the ground and is charged
+    // the ground's displacement. Which is how a five-centimetre allowance meant for a lawn ended
+    // up deciding how fast every wall in the building sampled.
+    std::vector<u32> pending{at};
+    while (!pending.empty() && out.size() < 256) {
+        const u32 node = pending.back();
+        pending.pop_back();
+        if (node >= nodes_.size()) continue;
+        const Node& n = nodes_[node];
+        if (n.op != Op::Union && n.op != Op::SmoothUnion) {
+            out.push_back(node);
+            continue;
+        }
+        for (u32 i = 0; i < n.children; ++i) pending.push_back(n.child[i]);
     }
-    for (u32 i = 0; i < n.children; ++i) out.push_back(n.child[i]);
+    // A union too wide to enumerate is better reported as one part than as a truncated list that
+    // silently leaves some of the shape unaccounted for.
+    if (!pending.empty()) {
+        out.clear();
+        out.push_back(at);
+    }
 }
 
 f64 Field::metric_slack(u32 at) const {
@@ -1488,14 +1548,49 @@ f64 Field::metric_slack(u32 at) const {
         case Op::SmoothIntersection:
             return worst_child(n.children);
 
-        // Moving the point before asking. Rigid motions and folds preserve distance; scaling,
-        // twisting and bending do not, and are left out deliberately.
+        // Moving the point before asking. A rigid motion preserves distance exactly, and folding
+        // about a plane is the distance to the shape and its reflection, which is also exact.
         case Op::Translate:
         case Op::Rotate:
         case Op::Mirror:
-        case Op::Repeat:
-        case Op::PolarRepeat:
             return worst_child(1);
+
+        // Repetition does not, and this is worth being precise about because it looks like it
+        // should. Folding a coordinate into its nearest cell gives the distance to the copy in
+        // *that* cell — which is not the nearest copy when the shape sits off-centre in its cell.
+        // A row of slats each hard against the left of its cell reports, for a point just past
+        // one slat, the distance back to that slat rather than the shorter distance forward to
+        // the next. That is an *over*-statement, which is the dangerous direction: it says
+        // "nothing near here" when there is something near here, and a sampler that believes it
+        // skips over the slat.
+        //
+        // Found by making the sampler faster: with the parts of a shape told apart, boxes near
+        // the screen of slats began settling on that overstated distance, and sixteen hundred
+        // voxels of slat quietly stopped existing.
+        //
+        // Except that eval no longer folds blindly: it checks the leaning neighbour as well, which
+        // makes the answer the true distance to the nearest copy — provided a copy fits inside its
+        // own cell. When one does not, copies overlap, no bounded number of neighbours is enough,
+        // and there is nothing honest to say.
+        case Op::Repeat: {
+            const f64 base = metric_slack(n.child[0]);
+            if (base >= kInfiniteSlack) return kInfiniteSlack;
+            const Aabb child = bounds_of(n.child[0]);
+            for (u32 axis = 0; axis < 3; ++axis) {
+                const f64 period = n.a[axis];
+                if (period <= 0.0) continue;      // this axis does not repeat
+                if (child.infinite()) return kInfiniteSlack;
+                if (axis_of(child.high, axis) - axis_of(child.low, axis) > period) {
+                    return kInfiniteSlack;
+                }
+            }
+            return base;
+        }
+
+        // The same objection, about an angle rather than a coordinate, and without the tidy
+        // bound: how far a sector is depends on how far out you are.
+        case Op::PolarRepeat:
+            return kInfiniteSlack;
 
         // Changing the answer by a constant, or taking its absolute value, leaves the gradient
         // alone.

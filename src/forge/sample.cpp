@@ -22,19 +22,28 @@ i64 voxel_floor(f64 metres, i32 per_metre) {
 
 namespace {
 
-u32 hash3(i64 x, i64 y, i64 z, u32 seed) {
-    u32 h = static_cast<u32>(x) * 0x8da6b343u ^ static_cast<u32>(y) * 0xd8163841u ^
-            static_cast<u32>(z) * 0xcb1ab31fu ^ seed;
-    h ^= h >> 16; h *= 0x7feb352du;
-    h ^= h >> 15; h *= 0x846ca68bu;
-    h ^= h >> 16;
+// One hash of a voxel's position, wide enough to cut four ways.
+//
+// The four channels a voxel's material is perturbed on used to be four separate hashes of the
+// same three coordinates — the same mixing work done four times over for four slices of the
+// answer. Sixty million voxels is sixty million times to do that.
+u64 hash_voxel(i64 x, i64 y, i64 z, u32 seed) {
+    u64 h = static_cast<u64>(x) * 0x9E3779B97F4A7C15ull;
+    h ^= static_cast<u64>(y) * 0xC2B2AE3D27D4EB4Full;
+    h ^= static_cast<u64>(z) * 0x165667B19E3779F9ull;
+    h ^= static_cast<u64>(seed) * 0x27D4EB2F165667C5ull;
+    h ^= h >> 33; h *= 0xFF51AFD7ED558CCDull;
+    h ^= h >> 33; h *= 0xC4CEB9FE1A85EC53ull;
+    h ^= h >> 33;
     return h;
 }
 
-// A signed value in [-1, 1] from a hash, so a voxel's perturbation is a property of where it is
-// and not of when it was computed. The same clip built twice is the same clip.
-f64 hash_signed(i64 x, i64 y, i64 z, u32 seed) {
-    return static_cast<f64>(hash3(x, y, z, seed)) * (2.0 / 4294967296.0) - 1.0;
+// A signed value in [-1, 1] from sixteen bits of that hash. Deterministic in position, so a
+// voxel's perturbation is a property of where it is and not of when it was computed — the same
+// clip built twice is the same clip.
+f64 signed_slice(u64 h, u32 which) {
+    const u32 bits = static_cast<u32>((h >> (which * 16u)) & 0xFFFFu);
+    return static_cast<f64>(bits) * (2.0 / 65536.0) - 1.0;
 }
 
 u8 nudge(u8 base, f64 amount, f64 signed_unit) {
@@ -124,11 +133,14 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
     const f64 centre_shift = settings.sample_at_centre ? 0.5 : 0.0;
 
     // Split by z, the axis the clip is laid out along, so no two slabs share a cache line.
-    // More slabs than workers, because a clip is not evenly full and a slab through the roof
-    // finishes long before one through the floor.
+    //
+    // How many is a balance and not an obvious choice. More slabs means smaller private tables,
+    // which probe faster because they fit in cache — and more copies of the same perturbations
+    // discovered independently, which the merge then has to collapse. Three per worker measured
+    // best on the facility; eight per worker made the merge cost more than the probing saved.
     const usize slab_count =
         std::min<usize>(static_cast<usize>(clip.size[2]),
-                        std::max<usize>(1, (jobs != nullptr) ? jobs->worker_count() * 8 + 8 : 1));
+                        std::max<usize>(1, (jobs != nullptr) ? jobs->worker_count() * 3 + 3 : 1));
     std::vector<usize> edge(slab_count + 1);
     for (usize s = 0; s <= slab_count; ++s) {
         edge[s] = static_cast<usize>(clip.size[2]) * s / slab_count;
@@ -145,6 +157,8 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
             LocalTable& table = tables[s];
             table.reserve(4096);
             u64 count = 0;
+            VoxelTypeId cached_base = kAir;
+            VisualRecord cached_source{};
             for (usize zi = edge[s]; zi < edge[s + 1]; ++zi) {
                 const i32 z = static_cast<i32>(zi);
                 const i64 wz = placed.origin_voxel[2] + z;
@@ -166,19 +180,23 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
                             scale = std::clamp(field.eval(variation.by, p), 0.0, 1.0);
                         }
 
-                        const VisualRecord& source = types.visual_of(base);
+                        // Looked up through a small cache rather than through the table. A clip
+                        // has a dozen materials and sixty million voxels, so the same handful of
+                        // records is fetched over and over through two indirections apiece.
+                        if (base != cached_base) {
+                            cached_base = base;
+                            cached_source = types.visual_of(base);
+                        }
+                        const VisualRecord& source = cached_source;
                         VisualRecord record = source;
                         if (scale > 0.0) {
                             const f64 c = variation.colour * scale;
                             const f64 r = variation.roughness * scale;
-                            record.red =
-                                nudge(source.red, c, hash_signed(wx, wy, wz, variation.seed));
-                            record.green = nudge(source.green, c,
-                                                 hash_signed(wx, wy, wz, variation.seed + 71u));
-                            record.blue = nudge(source.blue, c,
-                                                hash_signed(wx, wy, wz, variation.seed + 149u));
-                            record.roughness = nudge(source.roughness, r,
-                                                     hash_signed(wx, wy, wz, variation.seed + 227u));
+                            const u64 h = hash_voxel(wx, wy, wz, variation.seed);
+                            record.red = nudge(source.red, c, signed_slice(h, 0));
+                            record.green = nudge(source.green, c, signed_slice(h, 1));
+                            record.blue = nudge(source.blue, c, signed_slice(h, 2));
+                            record.roughness = nudge(source.roughness, r, signed_slice(h, 3));
                         }
 
                         // A key that is never zero, because zero is the empty slot: the base id
@@ -221,7 +239,10 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
     // the only cost is that every worker reads every slab's list — a sequential scan, which is
     // the cheap kind of memory traffic, in exchange for the expensive kind (fourteen million
     // random probes) being divided by the number of cores.
-    const usize parts = std::max<usize>(1, (jobs != nullptr) ? jobs->worker_count() + 1 : 1);
+    // A power of two, so choosing a key's owner is a mask rather than a division — asked once
+    // per record per worker, which on a clip this size is a hundred million divisions.
+    usize parts = 1;
+    while (jobs != nullptr && parts < jobs->worker_count() + 1u) parts <<= 1;
     std::vector<LocalTable> merged(parts);
     std::vector<std::vector<u32>> to_merged(slab_count);
     for (usize s = 0; s < slab_count; ++s) to_merged[s].assign(tables[s].records.size(), 0);
@@ -236,7 +257,7 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
                     const u64 key = table.slot_keys[i];
                     // A different mixing constant from the one the table probes with, so a key's
                     // owner and its slot are not correlated.
-                    if (((key * 0xD6E8FEB86659FD93ull) >> 56) % parts != p) continue;
+                    if ((((key * 0xD6E8FEB86659FD93ull) >> 56) & (parts - 1)) != p) continue;
                     const u32 slot = sink.slot_for(key, table.records[i], table.bases[i]);
                     // slot_for counts one voxel for the slot it created or found; the slab knows
                     // the real number, so correct it.
@@ -381,6 +402,9 @@ struct Descent {
     std::vector<Field::Aabb> part_box;
     std::vector<f64> part_slack;
     bool parts_usable = false;
+    // True when no bounds shape narrows the clip, so every cell belongs to it and the mask was
+    // filled in once at allocation.
+    bool inside_by_default = false;
     const std::vector<PaintRule>* paint = nullptr;
     const SampleSettings* settings = nullptr;
     Clip* clip = nullptr;
@@ -416,8 +440,12 @@ f64 slack_here(const Descent& d, Vec3 middle, f64 radius) {
         if (d.part_slack[i] <= worst) continue;
         if (away_from(d.part_box[i], middle) > radius) continue;
         worst = d.part_slack[i];
+        if (worst >= Field::kInfiniteSlack) return Field::kInfiniteSlack;
     }
-    return std::min(worst + d.outer_amplitude, d.prune_slack);
+    // Not capped by the whole-shape figure, deliberately. A part that says nothing about its
+    // neighbourhood — a repetition, a twist — makes boxes near *it* undecidable, and taking the
+    // smaller of the two numbers would quietly turn that back into a decision.
+    return worst + d.outer_amplitude;
 }
 
 // Where a box's sample points are centred, and how far the furthest of them is from that centre.
@@ -436,12 +464,18 @@ void box_centre(const Descent& d, const i32 low[3], const i32 high[3], Vec3& mid
 }
 
 // Marks every cell of a box as part of the clip, and optionally fills it with one material.
-void fill_box(Clip& clip, const i32 low[3], const i32 high[3], VoxelTypeId type, bool matter) {
+//
+// When nothing narrows the clip the mask was filled in when it was allocated and there is nothing
+// to mark — which makes a settled *empty* box free, and settled empty boxes are most of a clip.
+void fill_box(const Descent& d, const i32 low[3], const i32 high[3], VoxelTypeId type,
+              bool matter) {
+    if (!matter && d.inside_by_default) return;
+    Clip& clip = *d.clip;
     for (i32 z = low[2]; z < high[2]; ++z) {
         for (i32 y = low[1]; y < high[1]; ++y) {
             const usize row = clip.index(0, y, z);
             for (i32 x = low[0]; x < high[0]; ++x) {
-                clip.inside[row + x] = 1;
+                if (!d.inside_by_default) clip.inside[row + x] = 1;
                 if (matter) clip.voxels[row + x] = type;
             }
         }
@@ -453,6 +487,8 @@ void fill_box(Clip& clip, const i32 low[3], const i32 high[3], VoxelTypeId type,
 struct Tally {
     u64 shape = 0;
     u64 paint = 0;
+    u64 singles = 0;   // boxes that came all the way down to one voxel
+    u64 settled = 0;   // voxels decided in bulk, without being asked about
 };
 
 void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_covered,
@@ -505,7 +541,7 @@ void paint_solid(const Descent& d, const i32 low[3], const i32 high[3], const u8
                 // worse to silently drop it than to give it the first type asked for, because a
                 // hole in a wall is harder to notice than a wrong colour.
                 if (type == kAir && !paint.empty()) type = paint.front().type;
-                d.clip->inside[row + x] = 1;
+                if (!d.inside_by_default) d.clip->inside[row + x] = 1;
                 d.clip->voxels[row + x] = type;
             }
         }
@@ -541,8 +577,14 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
     // difference is the whole of what makes this descend rather than crawl — the undisplaced
     // shape is a true distance, so half as much has to be allowed for, and it does not evaluate
     // the noise the displacement is made of.
+    //
+    // (Asking the undisplaced shape first at a single voxel, and consulting the noise only when
+    // the answer is close enough to zero for displacement to flip it, was tried and measured
+    // neutral. A voxel only reaches this level *because* it is near the surface, so the shortcut
+    // almost never fires and mostly buys a second evaluation.)
     const f64 dc = d.field->eval(single ? d.root : d.prune_root, middle);
     ++local.shape;
+    if (single) ++local.singles;
 
     if (dc > reach || (single && dc > 0.0)) {
         // Empty. The cells still have to be marked as part of the clip: empty *inside the clip*
@@ -551,11 +593,13 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
         // left ragged holes in the mask — invisible in the voxels, and visible the moment a slice
         // was printed.
         if (whole_covered) {
-            fill_box(clip, low, high, kAir, false);
+            fill_box(d, low, high, kAir, false);
+            local.settled += static_cast<u64>(high[0] - low[0]) * static_cast<u64>(high[1] - low[1]) *
+                             static_cast<u64>(high[2] - low[2]);
             return;
         }
         if (single) {
-            clip.inside[clip.index(low[0], low[1], low[2])] = 1;
+            if (!d.inside_by_default) clip.inside[clip.index(low[0], low[1], low[2])] = 1;
             return;
         }
         // Partly covered, so which cells belong is still a per-cell question — but the shape is
@@ -625,7 +669,9 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
                 if (state[i] == 1) type = paint[i].type;
             }
             if (type == kAir && !paint.empty()) type = paint.front().type;
-            fill_box(clip, low, high, type, true);
+            fill_box(d, low, high, type, true);
+            local.settled += static_cast<u64>(high[0] - low[0]) * static_cast<u64>(high[1] - low[1]) *
+                             static_cast<u64>(high[2] - low[2]);
             return;
         }
         // The shape is settled but a pattern rule is not, so the voxels are walked for the paint
@@ -696,7 +742,9 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     const usize cells = static_cast<usize>(size[0]) * static_cast<usize>(size[1]) *
                         static_cast<usize>(size[2]);
     clip.voxels.assign(cells, kAir);
-    clip.inside.assign(cells, 0);
+    // Every cell belongs to the clip unless a bounds shape says otherwise, so in the ordinary case
+    // the mask is right the moment it exists and the sampler never touches it again.
+    clip.inside.assign(cells, settings.has_bounds ? u8{0} : u8{1});
 
     const f64 centre_shift = settings.sample_at_centre ? 0.5 : 0.0;
 
@@ -771,6 +819,7 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     descent.prune_root = prune_root;
     descent.prune_slack = prune_slack;
     descent.outer_amplitude = amplitude;
+    descent.inside_by_default = !settings.has_bounds;
 
     // The parts the shape is made of, each with its own box and its own allowance. Only usable
     // when every part can be bounded and measured — one part that cannot is one part that could
@@ -780,13 +829,11 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
         field.union_children(prune_root, parts);
         descent.parts_usable = !parts.empty();
         for (u32 part : parts) {
-            const f64 part_slack = field.metric_slack(part);
-            if (part_slack >= Field::kInfiniteSlack) {
-                descent.parts_usable = false;
-                break;
-            }
+            // A part nothing can be said about is kept rather than abandoning the whole scheme:
+            // it makes boxes near that part undecidable, which is correct, and leaves every box
+            // elsewhere free to settle on what its own neighbours need.
             descent.part_box.push_back(field.bounds_of(part));
-            descent.part_slack.push_back(part_slack);
+            descent.part_slack.push_back(field.metric_slack(part));
         }
     }
     descent.paint = &paint;
@@ -800,6 +847,12 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
         descent.lo[axis] = lo[axis];
         descent.size[axis] = size[axis];
     }
+
+    result.slack = slack;
+    result.prune_slack = prune_slack;
+    result.parts = descent.parts_usable ? descent.part_slack.size() : 0;
+    result.best_part_slack = Field::kInfiniteSlack;
+    for (f64 s : descent.part_slack) result.best_part_slack = std::min(result.best_part_slack, s);
 
     // The top of the tree is cut into pieces first so there is something to spread across the
     // cores. Sixty-four voxels — two metres — is small enough that a clip of any size has more
@@ -840,6 +893,8 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     for (const Tally& n : counted) {
         result.shape_evaluations += n.shape;
         result.paint_evaluations += n.paint;
+        result.voxels_asked += n.singles;
+        result.voxels_settled += n.settled;
     }
     result.evaluations = result.shape_evaluations + result.paint_evaluations;
     clip.build_coarse();
