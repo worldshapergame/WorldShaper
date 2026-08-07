@@ -69,6 +69,7 @@ struct Options {
     bool no_update_check = (WS_DEBUG != 0);
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
     bool path_trace = false;   // start in the reference path tracer
+    u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
 
     // Render a fixed number of frames, save the last one, and exit. This is how a
     // rendering change gets checked without a person having to look at the screen.
@@ -153,6 +154,8 @@ Options parse_options(int argc, char** argv) {
             options.validation = true;
         } else if (arg == "--stream-log") {
             options.stream_log = true;
+        } else if (arg == "--hollow" && i + 1 < argc) {
+            options.hollow = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--pathtrace") {
             options.path_trace = true;
         } else if (arg == "--no-update-check") {
@@ -544,6 +547,9 @@ private:
     Chisel chisel_;
     Clipboard clipboard_;
     Toolbelt toolbelt_;
+    // Undo and redo repeat while held: thirty steps back should be one long press.
+    KeyRepeat repeat_undo_;
+    KeyRepeat repeat_redo_;
     KeyRepeat repeat_more_;
     KeyRepeat repeat_fewer_;
     KeyRepeat repeat_turn_[4];   // left, right, up, down
@@ -732,7 +738,15 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
                                    (type == kAir) ? MatterReason::PlayerBreak
                                                   : MatterReason::PlayerPlace);
         const u64 started = now_ns();
-        const OpResult result = history_.apply(world_, ledger_, op_log_, op);
+        // Through the same hollowing the interactive path uses, so --hollow tests the thing
+        // the player gets rather than a parallel implementation of it.
+        std::vector<Op> scripted;
+        if (hollow_ > 0) {
+            hollow_box(op, static_cast<i64>(hollow_), tick_, scripted);
+        } else {
+            scripted.push_back(op);
+        }
+        const OpResult result = history_.apply_group(world_, ledger_, op_log_, scripted);
         WS_LOG_INFO("chisel",
                     "scripted edit: {} voxels changed of {} visited in {:.3f} ms "
                     "(apply {:.3f}, undo capture {:.3f} into {} ops)",
@@ -792,12 +806,21 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         chisel_.set_material(materials_[material_index_]);
     }
 
-    if (input.was_pressed(Key::Z)) {
+    // Undo on Z or Ctrl+Z, redo on X, Y or Ctrl+Y — and all of them repeat while held.
+    //
+    // Undoing thirty steps should be one long press, not thirty presses. The repeat is the
+    // same time-based one the clipboard's counters use: a pause before it starts, so a single
+    // tap is still a single step, then steadily.
+    const bool ctrl = input.is_down(Key::Ctrl);
+    const bool undo_down = input.is_down(Key::Z);
+    const bool redo_down = input.is_down(Key::X) || input.is_down(Key::Y) ||
+                           (ctrl && input.is_down(Key::Y));
+    if (repeat_undo_.poll(undo_down, dt) > 0) {
         if (history_.undo(world_, ledger_, op_log_, tick_++, kLocalPlayer)) {
             rebuild_coarse_grids();
         }
     }
-    if (input.was_pressed(Key::X)) {
+    if (repeat_redo_.poll(redo_down, dt) > 0) {
         if (history_.redo(world_, ledger_, op_log_, tick_++, kLocalPlayer)) {
             rebuild_coarse_grids();
         }
@@ -908,11 +931,17 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // tree first: it holds the node that every level above this chunk was
                     // folded from, and the cache only reads its answers.
                     summary_tree_.invalidate(coord);
-                    // The accumulated image is of a world that changed, and so is every face's
-                    // cached light. The camera moving does *not* do this — that is the point
-                    // of keying on a place in the world rather than on the screen.
+                    // The accumulated *image* is of a world that changed, so it restarts. The
+                    // camera moving does the same; the face cache does not, because it is
+                    // keyed to places in the world rather than to the screen.
+                    //
+                    // And the face cache deliberately is *not* wiped here. Doing that meant
+                    // every voxel placed relit the entire scene at once, which is what the
+                    // smearing while building actually was. Entries average over a sliding
+                    // window instead, so a face follows what was built beside it within a few
+                    // frames on its own and nothing further away flinches — see kFaceWindow
+                    // in pathtrace.comp.
                     trace_samples_ = 0;
-                    face_cache_dirty_ = true;
                     for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
                 }
             }
@@ -936,12 +965,12 @@ void Application::rebuild_coarse_grids() {
     // the one place the thumbnail cache needs telling that its work list is stale.
     for (ThumbnailCache& tier : thumb_tiers_) tier.mark_world_changed();
 
-    // Every face's cached light describes a world that has just changed, so the whole table
-    // goes. Here rather than beside the per-chunk invalidation below, because that is guarded
-    // by "does the world still have this chunk" — and an edit that empties a chunk out of
-    // existence skipped it entirely. Delete a torch and its light stayed baked into everything
-    // around it, because nothing ever told the cache the torch was gone.
-    face_cache_dirty_ = true;
+    // Deliberately *not* clearing the face cache here any more.
+    //
+    // Wiping the table on every edit meant each voxel placed relit the whole scene at once,
+    // which is what the smearing while building actually was. Entries now average over a
+    // sliding window instead, so a face notices what was built beside it within a few frames
+    // on its own, and nothing further away flinches. See kFaceWindow in pathtrace.comp.
 
     // And the one place to note how far the world reaches, which is how far a ray can
     // usefully travel now that thumbnails draw well past what is resident.
@@ -2054,6 +2083,7 @@ int Application::run(const Options& options) {
     // starting; nothing is downloaded unless the player says so.
     Updater::clean_up_previous();
     path_trace_ = options_.path_trace;
+    hollow_ = options_.hollow;
     if (!options_.no_update_check) updater_.begin_check();
     WS_LOG_INFO("app", "ready. F1 developer panel, F2 overlay, F5 reload shaders, Esc quit");
 

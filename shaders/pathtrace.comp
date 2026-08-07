@@ -62,7 +62,9 @@ layout(std430, binding = 17) buffer FaceCache { FaceEntry items[]; } faces;
 // has to run everywhere. 4096 steps per unit is finer than the eye on any display, and the
 // count is capped well before the sum could wrap.
 const float kFixedScale = 4096.0;
-const uint kMaxFaceSamples = 60000u;
+// How many contributions an entry averages over before it starts forgetting. Long enough to
+// be smooth, short enough that a face follows the world being built around it.
+const uint kFaceWindow = 512u;
 
 // Eight, not four. A short probe is right Ã¢â‚¬â€ spending longer looking is worse than tracing the
 // sample uncached Ã¢â‚¬â€ but four was short enough that a noticeable fraction of faces never got a
@@ -386,7 +388,29 @@ const uint kParentLevels = 3u;
 
 void contribute(uint slot, vec3 value, float visibility) {
     if (slot == 0xFFFFFFFFu) return;
-    if (faces.items[slot].count >= kMaxFaceSamples) return;
+
+    // A sliding window, not a total. Once an entry holds a window's worth of samples it is
+    // halved, so it averages roughly the last kFaceWindow contributions and forgets what came
+    // before at the same rate.
+    //
+    // This is what lets an edit *not* wipe the table. Clearing the whole cache whenever
+    // anything was placed meant every voxel put down relit the entire scene at once — which
+    // is the smearing: not a gradual settle but the whole room changing while you build. A
+    // window means a face notices the wall you just put next to it within a few frames, on
+    // its own, and nothing else in the world flinches.
+    //
+    // Two threads can halve at once and the entry ends up a quarter. That only shortens its
+    // memory for a moment, which is harmless, and taking a lock to prevent it would cost far
+    // more than the thing it prevents.
+    uint count = faces.items[slot].count;
+    if (count >= kFaceWindow) {
+        uvec4 sum = faces.items[slot].sum;
+        atomicAdd(faces.items[slot].count, uint(-int(count / 2u)));
+        atomicAdd(faces.items[slot].sum.x, uint(-int(sum.x / 2u)));
+        atomicAdd(faces.items[slot].sum.y, uint(-int(sum.y / 2u)));
+        atomicAdd(faces.items[slot].sum.z, uint(-int(sum.z / 2u)));
+        atomicAdd(faces.items[slot].sum.w, uint(-int(sum.w / 2u)));
+    }
     atomicAdd(faces.items[slot].sum.x, uint(value.r * kFixedScale));
     atomicAdd(faces.items[slot].sum.y, uint(value.g * kFixedScale));
     atomicAdd(faces.items[slot].sum.z, uint(value.b * kFixedScale));

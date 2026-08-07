@@ -31,6 +31,7 @@ Key key_from_scancode(SDL_Scancode code) {
         case SDL_SCANCODE_C: return Key::C;
         case SDL_SCANCODE_V: return Key::V;
         case SDL_SCANCODE_X: return Key::X;
+        case SDL_SCANCODE_Y: return Key::Y;
         case SDL_SCANCODE_Z: return Key::Z;
         case SDL_SCANCODE_O: return Key::O;
         case SDL_SCANCODE_P: return Key::P;

@@ -16,7 +16,7 @@ namespace ws {
 enum class Key : u16 {
     Unknown = 0,
     Escape, Space, Tab, Enter, Backspace,
-    W, A, S, D, Q, E, R, F, G, H, C, V, X, Z, O, P, T, U,
+    W, A, S, D, Q, E, R, F, G, H, C, V, X, Y, Z, O, P, T, U,
     // Tool slots. Contiguous and in order, so slot n is Digit1 + n — anything that relies
     // on that says so at the point of use.
     Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
