@@ -79,6 +79,20 @@ const float kFilterFadesBy = 20.0;
 // the intermediate storage they would need.
 const float kKernel[3] = float[3](3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0);
 
+// How far apart the taps are spaced. This is the "a-trous" part — the holes — and it is what
+// lets five taps per axis cover far more than five pixels for the same cost.
+//
+// It matters more here than in a triangle renderer. The fine per-pixel speckle a 5x5 removes
+// was never the noise anyone complained about; what shows is *blotches*, and a blotch is one
+// voxel face whose cached value is off, so it is as wide on screen as the face is. Taps a
+// pixel apart cannot reach across a face. Spaced out, the same twenty-five taps span sixteen
+// pixels and start averaging one face against its neighbours — which is exactly what a face
+// with a poor estimate needs.
+//
+// The stopping functions still hold it back at real edges, so a wider reach does not mean a
+// blurrier picture: it means a longer reach along surfaces that genuinely are the same.
+const int kTapSpacing = 4;
+
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = ivec2(push.resolution.xy);
@@ -100,9 +114,18 @@ void main() {
     if (strength > 0.0 && centre_depth < 1e29) {
         vec3 sum = vec3(0.0);
         float weight_sum = 0.0;
-        for (int dy = -2; dy <= 2; ++dy) {
+        // Two scales in one pass, which is what a-trous normally spends two passes on. The
+        // tight set removes the fine per-pixel speckle; the spaced set reaches across a voxel
+        // face to its neighbours, which is where the blotches live. Spacing alone measured
+        // worse than no spacing at all — 4.85 against 2.62 — because it steps straight over
+        // the near neighbours that carry the fine noise. Both together, or neither.
+        for (int level = 0; level < 2; ++level) {
+            int spacing = (level == 0) ? 1 : kTapSpacing;
+            float scale = (level == 0) ? 1.0 : 0.5;
+            for (int dy = -2; dy <= 2; ++dy) {
             for (int dx = -2; dx <= 2; ++dx) {
-                ivec2 at = pixel + ivec2(dx, dy);
+                if (level == 1 && dx == 0 && dy == 0) continue;   // counted once
+                ivec2 at = pixel + ivec2(dx, dy) * spacing;
                 if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) continue;
 
                 uvec4 g = imageLoad(guide, at);
@@ -124,9 +147,10 @@ void main() {
                 if (dot(abs(albedo - centre_albedo), vec3(1.0)) > 0.12) continue;
 
                 vec4 neighbour = imageLoad(accum, at);
-                float w = kKernel[abs(dx)] * kKernel[abs(dy)];
+                float w = kKernel[abs(dx)] * kKernel[abs(dy)] * scale;
                 sum += neighbour.rgb / max(neighbour.w, 1.0) * w;
                 weight_sum += w;
+            }
             }
         }
         if (weight_sum > 0.0) filtered = mix(mean, sum / weight_sum, strength);
