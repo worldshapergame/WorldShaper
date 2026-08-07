@@ -1122,6 +1122,23 @@ void Application::record_frame(f32 time_seconds) {
         }
     }
 
+    // Geometry arriving or leaving means the samples already in the accumulator were taken of
+    // a different world, so the average has to start again.
+    //
+    // Without this the tracer keeps them for ever. The accumulator is a running mean over
+    // every sample since the last reset, so a hundred bright frames taken while a wall was
+    // still a summary block — drawn as if it stood in daylight — stay in the average once the
+    // real wall arrives and the true answer is zero. A sealed box with no lights in it settled
+    // at 8 to 16 of 255 rather than black, uniformly, and no amount of waiting cleared it:
+    // every later sample was correct and simply diluted the old ones more slowly.
+    //
+    // This is also why light "did not update properly" anywhere else. Anything streaming in
+    // behind you left its stand-in's brightness baked into the picture.
+    if (path_trace_ && (batch.chunks_added > 0 || batch.chunks_evicted > 0 ||
+                        batch.chunks_refreshed > 0)) {
+        trace_samples_ = 0;
+    }
+
     world_buffers_.upload_tables(cmd, types_);
     profiler_.add_bytes(world_buffers_.stats().staged_bytes);
     profiler_.end_pass(cmd);

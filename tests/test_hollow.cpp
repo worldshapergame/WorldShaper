@@ -50,6 +50,69 @@ TEST_CASE("a hollow box is a shell with the inside left alone") {
     CHECK(total_volume(ops) == 1000 - 512);
 }
 
+TEST_CASE("a hollow shell has no way through it") {
+    // The invariant a sealed room depends on. A single voxel of gap anywhere — a seam between
+    // two slabs, a corner one short — lets sunlight in, and a room with a pinhole is not a
+    // room the renderer can be asked to draw black.
+    //
+    // Flood fill from the middle and assert it never reaches the outside. That tests the
+    // shell as a solid, which is what light sees, rather than testing the arithmetic that
+    // produced it: the volume and overlap checks either side of this both pass on a shell
+    // with a hole in it.
+    for (i64 thickness : {i64{1}, i64{2}, i64{3}}) {
+        u64 id = 1;
+        std::vector<Op> ops;
+        const i64 hi = 11;
+        hollow_box(Op::fill_box(0, 0, 0, 0, 0, hi, hi, hi, 1, MatterReason::PlayerPlace),
+                   thickness, id, ops);
+
+        const i64 span = hi + 3;   // a one-voxel skirt of outside on every side
+        auto index = [span](i64 x, i64 y, i64 z) {
+            return static_cast<usize>(((z + 1) * span + (y + 1)) * span + (x + 1));
+        };
+        std::vector<u8> solid(static_cast<usize>(span) * span * span, 0);
+        for (const Op& raw : ops) {
+            Op op = raw;
+            op.normalise();
+            for (i64 z = op.z0; z <= op.z1; ++z) {
+                for (i64 y = op.y0; y <= op.y1; ++y) {
+                    for (i64 x = op.x0; x <= op.x1; ++x) solid[index(x, y, z)] = 1;
+                }
+            }
+        }
+
+        std::vector<u8> seen(solid.size(), 0);
+        std::vector<std::array<i64, 3>> stack{{hi / 2, hi / 2, hi / 2}};
+        REQUIRE(solid[index(hi / 2, hi / 2, hi / 2)] == 0);   // the middle really is hollow
+        seen[index(hi / 2, hi / 2, hi / 2)] = 1;
+
+        bool escaped = false;
+        while (!stack.empty()) {
+            const std::array<i64, 3> at = stack.back();
+            stack.pop_back();
+            if (at[0] < 0 || at[1] < 0 || at[2] < 0 || at[0] > hi || at[1] > hi || at[2] > hi) {
+                escaped = true;
+                break;
+            }
+            const i64 steps[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                                     {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+            for (const auto& step : steps) {
+                const i64 nx = at[0] + step[0];
+                const i64 ny = at[1] + step[1];
+                const i64 nz = at[2] + step[2];
+                if (nx < -1 || ny < -1 || nz < -1 || nx > hi + 1 || ny > hi + 1 || nz > hi + 1) {
+                    continue;
+                }
+                const usize at_index = index(nx, ny, nz);
+                if (solid[at_index] || seen[at_index]) continue;
+                seen[at_index] = 1;
+                stack.push_back({nx, ny, nz});
+            }
+        }
+        CHECK_MESSAGE(!escaped, "light can get out of a shell of thickness ", thickness);
+    }
+}
+
 TEST_CASE("the slabs of a shell never share a voxel") {
     // Two ops writing the same voxel count it twice in the matter ledger, and the ledger is
     // audited against a full recount — so an overlap here fails an invariant somewhere else

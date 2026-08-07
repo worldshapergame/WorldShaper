@@ -210,7 +210,7 @@ vec3 unpack_rgb(uint packed) {
 layout(push_constant) uniform Trace {
     vec4 sun;          // xyz direction *towards* the sun, w cosine of its angular radius
     vec4 sun_colour;   // rgb radiance
-    uvec4 control;     // x sample index, y bounce limit, z frame counter, w unused
+    uvec4 control;     // x sample index, y bounce limit, z frame counter, w world changed
 } trace;
 
 const float kPi = 3.14159265359;
@@ -649,8 +649,30 @@ vec3 why_dark(Material m, FaceLight light) {
     return vec3(0.35);
 }
 
+// How many samples the per-pixel average looks back over before it starts forgetting.
+//
+// A running mean over every sample since the last reset keeps its early samples for ever, and
+// early samples are the least trustworthy ones: they were taken while the geometry in front of
+// the camera was still arriving. Anything wrong about them is diluted and never removed.
+//
+// The same sliding window the face cache uses, for the same reason. Long enough that a still
+// camera converges smoothly, short enough that the picture is of the world as it is now.
+const float kAccumWindow = 1024.0;
+
 void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance, float primary_t, float aspect) {
     vec4 total = (sample_index == 0u) ? vec4(0.0) : imageLoad(accum, pixel);
+    if (total.w >= kAccumWindow) {
+        total *= (kAccumWindow - 1.0) / kAccumWindow;
+    }
+    // Geometry arriving or leaving resets this outright, on the CPU side, by zeroing the
+    // sample index. Halving it instead was tried, and it is the better-looking option — the
+    // room scene's speckle went from 7.3 to 4.7, because during streaming chunks arrive on
+    // almost every frame and a reset means the average never gets past one sample.
+    //
+    // It is not the correct option. Halving leaves a residue that nothing clears once
+    // streaming stops, and a sealed box with no lights in it settled at a mean of 2.9 instead
+    // of zero. A room with no way into it has to be black, so the reset stays and the noise
+    // during streaming is the price.
     total.rgb += radiance;
     total.w += 1.0;
     imageStore(accum, pixel, total);
