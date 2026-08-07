@@ -377,13 +377,38 @@ vec3 sun_light(vec3 normal, vec3 view, Material m, float visibility) {
 struct FaceLight {
     float visibility;
     vec3 indirect;
+    uint count;
     bool known;
 };
 
+// How many levels up to look when this one knows nothing yet.
+const uint kParentLevels = 3u;
+
+void contribute(uint slot, vec3 value, float visibility) {
+    if (slot == 0xFFFFFFFFu) return;
+    if (faces.items[slot].count >= kMaxFaceSamples) return;
+    atomicAdd(faces.items[slot].sum.x, uint(value.r * kFixedScale));
+    atomicAdd(faces.items[slot].sum.y, uint(value.g * kFixedScale));
+    atomicAdd(faces.items[slot].sum.z, uint(value.b * kFixedScale));
+    atomicAdd(faces.items[slot].sum.w, uint(visibility * kFixedScale));
+    atomicAdd(faces.items[slot].count, 1u);
+}
+
+FaceLight read_face(uint slot);
+
+// A face nobody has looked at before has no history, and one sample is noise. Its parent
+// covers eight times the volume, has been gathering samples from everything around it, and is
+// a far better first guess than a single ray.
+//
+// This is what makes walking up to a surface not shimmer: the coarse node was being filled
+// while it was still far away, so arriving close inherits that instead of starting over. Every
+// pixel contributes to its own level *and* its parent, so the parent is always there to
+// inherit from — including the first time anything looks this way.
 FaceLight read_face(uint slot) {
     FaceLight light;
     light.visibility = 0.0;
     light.indirect = vec3(0.0);
+    light.count = 0u;
     light.known = false;
     if (slot == 0xFFFFFFFFu) return light;
 
@@ -394,8 +419,43 @@ FaceLight read_face(uint slot) {
     float inv = 1.0 / (kFixedScale * float(count));
     light.visibility = float(sum.w) * inv;
     light.indirect = vec3(sum.xyz) * inv;
+    light.count = count;
     light.known = true;
     return light;
+}
+
+// How many samples of its own a node needs before it stops leaning on its parent.
+const uint kSeedSamples = 48u;
+
+FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
+    uint lo, hi;
+    face_key(voxel, normal, level, lo, hi);
+    FaceLight self = read_face(face_slot(lo, hi, false, frame));
+    if (self.known && self.count >= kSeedSamples) return self;
+
+    // Find the nearest ancestor that knows anything.
+    FaceLight parent;
+    parent.known = false;
+    for (uint up = 1u; up < kParentLevels && level + up <= 6u; ++up) {
+        uint plo, phi;
+        face_key(voxel, normal, level + up, plo, phi);
+        parent = read_face(face_slot(plo, phi, false, frame));
+        if (parent.known) break;
+    }
+    if (!parent.known) return self;
+    if (!self.known) return parent;
+
+    // Blend rather than switch. A node with three samples of its own is mostly noise and
+    // should mostly show its parent; by the time it has a few dozen it should be showing
+    // itself. Switching at a threshold instead puts a visible seam wherever the threshold
+    // falls, which on a wall lit from one side is a line across it.
+    float weight = float(self.count) / float(kSeedSamples);
+    FaceLight blended;
+    blended.visibility = mix(parent.visibility, self.visibility, weight);
+    blended.indirect = mix(parent.indirect, self.indirect, weight);
+    blended.count = self.count;
+    blended.known = true;
+    return blended;
 }
 
 // The node size a pixel can resolve at this distance, as a power of two. The geometry is
@@ -481,8 +541,9 @@ void main() {
         radiance = m.emission;
 
         ivec3 voxel = ivec3(floor(point - normal * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
+        uint level = cache_level(hit.t);
         uint lo, hi;
-        face_key(voxel, hit.normal, cache_level(hit.t), lo, hi);
+        face_key(voxel, hit.normal, level, lo, hi);
         uint slot = face_slot(lo, hi, true, trace.control.z);
 
         // Whether this pixel does any work at all beyond the primary ray.
@@ -502,7 +563,7 @@ void main() {
         vec3 incoming = vec3(0.0);
 
         if (!refine) {
-            FaceLight known = read_face(slot);
+            FaceLight known = read_face_seeded(voxel, hit.normal, level, trace.control.z);
             radiance += sun_light(normal, dir, m, known.visibility) +
                         m.albedo * (1.0 - m.metallic) * known.indirect;
             radiance = clamp_finite(radiance);
@@ -533,7 +594,8 @@ void main() {
             ivec3 voxel2 = ivec3(floor(p2 - n2 * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
             uint lo2, hi2;
             face_key(voxel2, second.normal, cache_level(hit.t + second.t), lo2, hi2);
-            FaceLight far = read_face(face_slot(lo2, hi2, false, trace.control.z));
+            FaceLight far = read_face_seeded(voxel2, second.normal,
+                                             cache_level(hit.t + second.t), trace.control.z);
 
             incoming = m2.emission + sun_light(n2, bounce_dir, m2, far.visibility) +
                        m2.albedo * (1.0 - m2.metallic) * far.indirect;
@@ -542,14 +604,15 @@ void main() {
         // Contribute. Clamped, because a single path that finds the sun through a gap carries
         // a spike â€” in a per-pixel average that is a firefly which washes out, and in a cache
         // it persists and one face wears it for thousands of frames.
-        if (slot != 0xFFFFFFFFu && faces.items[slot].count < kMaxFaceSamples) {
-            vec3 clamped = min(incoming, vec3(8.0));
-            atomicAdd(faces.items[slot].sum.x, uint(clamped.r * kFixedScale));
-            atomicAdd(faces.items[slot].sum.y, uint(clamped.g * kFixedScale));
-            atomicAdd(faces.items[slot].sum.z, uint(clamped.b * kFixedScale));
-            atomicAdd(faces.items[slot].sum.w, uint(visibility * kFixedScale));
-            atomicAdd(faces.items[slot].count, 1u);
-        }
+        vec3 clamped = min(incoming, vec3(8.0));
+        contribute(slot, clamped, visibility);
+
+        // And to the parent node. One extra set of atomics buys a node one level up that is
+        // always populated — which is what a face being looked at for the first time inherits
+        // from, instead of a single noisy ray.
+        uint plo, phi;
+        face_key(voxel, hit.normal, min(level + 1u, 6u), plo, phi);
+        contribute(face_slot(plo, phi, true, trace.control.z), clamped, visibility);
 
         // Then shade from the face, which now includes every other pixel standing on it this
         // frame. A face the table could not hold falls back to this pixel's own samples: noisy,
@@ -566,7 +629,7 @@ void main() {
             return;
         }
 
-        FaceLight here = read_face(slot);
+        FaceLight here = read_face_seeded(voxel, hit.normal, level, trace.control.z);
         if (!here.known) {
             here.visibility = visibility;
             here.indirect = incoming;

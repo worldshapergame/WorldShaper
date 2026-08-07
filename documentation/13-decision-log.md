@@ -297,6 +297,28 @@ Blocks of 4, 16, 64 and 256 chunks summarised the same way as a chunk, to carry 
 
 **Measured.** Clean at 60 samples where the uncached tracer needed 500, at 5.5 ms a frame for 800×450. With the mode off the real-time path is unchanged at 0.779 ms and 98 of 98 chunks.
 
+## Face cache: seeding, and where it goes next
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D169 | **A node blends its parent's estimate in until it has samples of its own** | user report | The first look at anything is noisy because a new node has one sample. Its parent covers eight times the volume and has been gathering from everything around it, so it is a far better first guess than a single ray. Blended rather than switched at a threshold: a switch puts a visible seam wherever the threshold falls, which on a wall lit from one side is a line across it. Measured on a cold start: neighbour-difference noise 6.25 to 3.09 at two samples, 3.80 to 2.06 at four |
+| D170 | **Every pixel contributes to its own node and its parent** | D169 | One extra set of atomics, and it guarantees there is always a parent to inherit from — including the first time anything looks that way. Without it, seeding only helps when a surface was seen from further away first |
+| D171 | **Debug view 5 shows where the cache is working**: red fell back to per-pixel, green is held | — | This class of fault was reported twice and both times had to be deduced from a photograph. The view answered it in one frame, and the answer — misses rising with distance — was not the collisions everyone would have guessed |
+
+### Radiance cache: assessed, and worth doing after materials
+
+The current entry is an **irradiance** cache: one value per face for light arriving from everywhere, which is exactly right for a diffuse surface and wrong for a shiny one. Glossy and metallic surfaces currently read that same diffuse value, so a polished surface reflects an average of its surroundings rather than an image of them.
+
+A **radiance** cache stores light per *direction*, which is what a reflection needs.
+
+**Worth it, and not yet.** The reasoning:
+
+- It is the difference between metal looking like grey plastic and looking like metal, and there is no cheaper way to get that — a screen-space reflection cannot see anything off screen, which in an enclosed voxel build is most of the room.
+- The cost is per entry, not per pixel: four spherical-harmonic coefficients per channel is 12 values against today's 3, so the table grows about four times, or the entry count shrinks by four for the same memory. That buys plausible low-gloss response but *not* a mirror — SH cannot represent a sharp reflection at any order worth storing.
+- Sharp reflections need a different mechanism entirely: trace the specular ray per pixel and let *it* read the cache where it lands. That is one extra ray on shiny pixels only, costs nothing on the rough surfaces that are most of a world, and gives a true mirror rather than an approximation of one.
+
+**So the plan is both, in that order, and after Stage 6:** SH irradiance for low-gloss response, plus a per-pixel specular ray that reads the cache at its far end for anything smooth. Doing it before materials exist would be tuning a reflection model against six placeholder substances, which is how you end up rewriting it once the real ones arrive.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
