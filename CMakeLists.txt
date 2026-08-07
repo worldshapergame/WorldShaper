@@ -91,6 +91,7 @@ add_library(ws_world STATIC
     src/world/serialize.cpp
     src/world/gpu_brick.cpp
     src/world/residency.cpp
+    src/world/light_list.cpp
     src/world/thumbnail.cpp
     src/world/thumb_cache.cpp
     src/world/summary_tree.cpp
@@ -253,6 +254,7 @@ add_executable(ws_tests
     tests/test_summary_tree.cpp
     tests/test_hollow.cpp
     tests/test_log_ring.cpp
-    tests/test_quality.cpp)
+    tests/test_quality.cpp
+    tests/test_light_list.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_doctest)
 add_test(NAME unit COMMAND ws_tests)
