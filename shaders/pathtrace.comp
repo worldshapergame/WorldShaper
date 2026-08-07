@@ -690,6 +690,49 @@ FaceLight read_face(uint slot) {
 // How many samples of its own a node needs before it stops leaning on its parent.
 const uint kSeedSamples = 48u;
 
+// ---- filtering in face space ---------------------------------------------------------
+//
+// Every pixel standing on one voxel face reads one value, so the noise that survives is
+// face-shaped: patches three centimetres across, each holding an estimate slightly different
+// from the one beside it. Blotches, not speckle.
+//
+// A screen-space filter is the wrong tool for that, and the picture said so — it came out
+// painterly. It works in the wrong unit. A face is a hundred pixels across when you stand at it
+// and a fraction of one across the field, so no radius in pixels is ever the right size: narrow
+// enough to keep detail near to, and it cannot reach across a face; wide enough to cross a face
+// far away, and near to it smears everything into everything.
+//
+// A face has neighbours of its own, and they are exact. The key is built from the node, so the
+// face one step along the surface is the same key with one coordinate moved — no search, no
+// screen, and no way to blur into something that is merely adjacent from where the camera
+// happens to be standing. Averaging a face with the four beside it is a filter over the surface
+// itself. Geometry cannot leak across it, because a neighbour that is not there is simply not
+// read, and a wall's edge is where its faces stop.
+//
+// Weighted by what each one knows, which makes it a pooled mean rather than a blur: a face with
+// three samples takes almost all of its answer from better-sampled neighbours, and one that has
+// converged keeps its own. Past kFaceSettled it is skipped outright, so a still scene pays
+// nothing for this and a settled surface is never softened.
+const uint kFaceSettled = 192u;
+
+// Neighbours count for half of what they hold. They are a measurement of the patch next door,
+// not of this one, and the difference between the two is the detail worth keeping.
+const float kNeighbourWeight = 0.5;
+
+// The two axes across a face, which are the two the normal is not.
+void face_tangents(ivec3 normal, out ivec3 a, out ivec3 b) {
+    if (normal.x != 0)      { a = ivec3(0, 1, 0); b = ivec3(0, 0, 1); }
+    else if (normal.y != 0) { a = ivec3(1, 0, 0); b = ivec3(0, 0, 1); }
+    else                    { a = ivec3(1, 0, 0); b = ivec3(0, 1, 0); }
+}
+
+// A step of one node at this level, which is what moves the key to the next face along.
+ivec3 face_step(ivec3 a, ivec3 b, int which, uint level) {
+    int size = 1 << level;
+    ivec3 axis = ((which & 1) == 0) ? a : b;
+    return axis * (((which & 2) == 0) ? size : -size);
+}
+
 // How far a ray has to leave a surface by, in voxels, before it is clear of it.
 //
 // A voxel wants a hundredth of a voxel and nothing more. A *summary* cell is a metre or more
@@ -712,6 +755,72 @@ float surface_offset(int level) {
 // distance boundary. Walking towards a wall made its brightness step, and because each entry
 // keeps its own long average the step did not settle, it smeared. Blending is the same
 // continuous-detail rule the marcher already uses for geometry, applied to light.
+// The centre pooled with the four faces beside it on the same surface. Samples add, so this is
+// the mean of everything the neighbourhood has measured rather than a blend of its opinions —
+// which is why a face with almost nothing of its own can be given a usable answer without the
+// answer being invented.
+FaceLight gather_face(ivec3 voxel, ivec3 normal, uint level, uint frame, FaceLight self) {
+    if (self.known && self.count >= kFaceSettled) return self;
+
+    ivec3 ta, tb;
+    face_tangents(normal, ta, tb);
+
+    vec3 sum = self.known ? self.indirect * float(self.count) : vec3(0.0);
+    float weight = self.known ? float(self.count) : 0.0;
+
+    for (int i = 0; i < 4; ++i) {
+        uint lo, hi;
+        face_key(voxel + face_step(ta, tb, i, level), normal, level, kFaceIndirect, lo, hi);
+        FaceLight side = read_face(face_slot(lo, hi, false, frame));
+        if (!side.known) continue;
+        float w = float(side.count) * kNeighbourWeight;
+        sum += side.indirect * w;
+        weight += w;
+    }
+    if (weight <= 0.0) return self;
+
+    FaceLight pooled;
+    pooled.indirect = sum / weight;
+    pooled.visibility = self.visibility;
+    // How many samples stand behind the answer, which is the whole neighbourhood's worth. A
+    // face backed by its neighbours genuinely does know enough to stop leaning on its parent.
+    pooled.count = uint(weight);
+    pooled.known = true;
+    return pooled;
+}
+
+// The same pooling for the sun's yes-or-no, and gated far tighter.
+//
+// A shadow entry is a hard edge by nature, and pooling it with its neighbours softens that edge
+// by a voxel. Three centimetres of penumbra is not a lie — the sun is half a degree wide and
+// real shadow edges are soft — but it is not this filter's business to invent it, so as soon as
+// a face has a couple of dozen samples of its own it is left alone entirely and the edge is
+// exactly as sharp as the rays measured it.
+const uint kShadowSettled = 24u;
+
+float gather_shadow(ivec3 voxel, ivec3 normal, uint frame, uint own_count, float own) {
+    if (own_count >= kShadowSettled) return own;
+
+    ivec3 ta, tb;
+    face_tangents(normal, ta, tb);
+
+    float sum = own * float(own_count);
+    float weight = float(own_count);
+    for (int i = 0; i < 4; ++i) {
+        uint lo, hi;
+        face_key(voxel + face_step(ta, tb, i, kShadowLevel), normal, kShadowLevel, kFaceShadow,
+                 lo, hi);
+        uint slot = face_slot(lo, hi, false, frame);
+        if (slot == 0xFFFFFFFFu) continue;
+        uint count = faces.items[slot].count;
+        if (count == 0u) continue;
+        float w = float(count) * kNeighbourWeight;
+        sum += read_shadow(slot) * w;
+        weight += w;
+    }
+    return (weight > 0.0) ? sum / weight : own;
+}
+
 FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) {
     uint l0 = uint(floor(level));
     uint l1 = min(l0 + 1u, 6u);
@@ -720,8 +829,10 @@ FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) 
     uint lo0, hi0, lo1, hi1;
     face_key(voxel, normal, l0, kFaceIndirect, lo0, hi0);
     face_key(voxel, normal, l1, kFaceIndirect, lo1, hi1);
-    FaceLight a = read_face(face_slot(lo0, hi0, false, frame));
-    FaceLight b = read_face(face_slot(lo1, hi1, false, frame));
+    FaceLight a = gather_face(voxel, normal, l0, frame,
+                              read_face(face_slot(lo0, hi0, false, frame)));
+    FaceLight b = gather_face(voxel, normal, l1, frame,
+                              read_face(face_slot(lo1, hi1, false, frame)));
 
     if (!a.known) return b;
     if (!b.known) return a;
@@ -737,7 +848,8 @@ FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) 
 FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
     uint lo, hi;
     face_key(voxel, normal, level, kFaceIndirect, lo, hi);
-    FaceLight self = read_face(face_slot(lo, hi, false, frame));
+    FaceLight self = gather_face(voxel, normal, level, frame,
+                                 read_face(face_slot(lo, hi, false, frame)));
     if (self.known && self.count >= kSeedSamples) return self;
 
     // Find the nearest ancestor that knows anything.
@@ -1205,7 +1317,8 @@ void main() {
             }
 
             uint own_count = (shadow_slot != 0xFFFFFFFFu) ? faces.items[shadow_slot].count : 0u;
-            float own = read_shadow(shadow_slot);
+            float own = gather_shadow(voxel, hit.normal, trace.control.z, own_count,
+                                      read_shadow(shadow_slot));
             if (own_count >= kShadowSeed) {
                 visibility = own;
             } else {
