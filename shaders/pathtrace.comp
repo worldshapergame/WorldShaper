@@ -58,16 +58,6 @@ struct FaceEntry {
 
 layout(std430, binding = 17) buffer FaceCache { FaceEntry items[]; } faces;
 
-// Where the emitters are, in absolute world voxels, with the radiance each gives off and how
-// many voxels merged into it. Built on the CPU, rebuilt only when the world changes; see
-// src/world/light_list.hpp.
-struct LightSource {
-    int x, y, z;
-    float red, green, blue;
-    uint voxels;
-};
-layout(std430, binding = 18) readonly buffer Lights { LightSource items[]; } lights;
-
 // Fixed point, because atomically adding floats needs an extension that is not core and this
 // has to run everywhere. 4096 steps per unit is finer than the eye on any display, and the
 // count is capped well before the sum could wrap.
@@ -110,29 +100,6 @@ uint hash_u32(uint x) {
 const uint kFaceIndirect = 0u;
 const uint kFaceShadow = 1u;
 const uint kFaceRadiance = 2u;
-const uint kFaceEmitter = 3u;
-
-// The fourth kind: light arriving from lamps, aimed at rather than stumbled upon.
-//
-// It needs an entry of its own and that is the whole lesson of the first attempt. Emitter
-// samples were put into the irradiance entry, where they measured something else: a lamp
-// sample is mostly zero, because the lamp is mostly occluded, while a bounce sample estimates
-// a cosine-weighted hemisphere. Two estimators sharing one mean is only valid when both
-// measure the same thing the same way, and the result was a wash — 5.13 speckle against a
-// 5.28 baseline, which is noise rather than an improvement.
-//
-// Separated, each entry averages its own kind: the zeros belong in the emitter mean, where
-// they correctly say "this face sees that lamp one time in five", and stay out of the
-// irradiance mean, where they said nothing at all.
-
-// How many of the nearest lamps a pixel may aim at.
-//
-// Not all of them. Picking uniformly across every lamp in a build makes each sample carry the
-// weight of all of them, which then clamps at eight, so nearly every sample saturates:
-// measured at 29.0 speckle against 5.3 with eighty-four lamps in play. Eight nearest is enough
-// to cover the ones that light a room, and the list is sorted by distance so they are the
-// first eight.
-const uint kLampCandidates = 8u;
 
 // The third kind: radiance, which is irradiance's opposite number.
 //
@@ -481,21 +448,11 @@ Material material_from_colour(uint packed) {
     return m;
 }
 
-// The one shadow ray a pixel gets, and what it found.
-//
-// It returns the hit rather than a yes-or-no because it serves two questions now. Aimed at the
-// sun, anything in the way is an occluder. Aimed at a lamp, the lamp is its own occluder, so
-// what matters is whether the first thing hit is as far away as the lamp.
-//
-// One function and one call site on purpose: march is enormous and GLSL has no calls, so every
-// mention of it is another inlined copy. The shader carries three and a fourth loses the
-// device — bisected, not guessed. Aiming at lamps therefore shares this ray instead of adding
-// one.
-//
-// Full detail, and no feedback: a shadow ray must not drag streaming towards wherever it
-// happened to point.
-Hit shadow_probe(vec3 origin, vec3 dir) {
-    return march(origin, dir, 0.0, 0.0, false);
+bool occluded(vec3 origin, vec3 dir) {
+    // Full detail, and no feedback: a shadow ray must not drag streaming towards wherever it
+    // happened to point.
+    Hit hit = march(origin, dir, 0.0, 0.0, false);
+    return hit.hit;
 }
 
 // Direct sun at a point, sampled rather than waited for. Without this the sun is found only
@@ -1094,80 +1051,16 @@ void main() {
         // standing on one voxel face, each sampling a different point on the sun's disc, and
         // the face holding the mean of them. Per pixel and unshared, the same rays are
         // salt-and-pepper.
-        // ---- lamps, sharing the sun's one ray -------------------------------------------
-        //
-        // Next-event estimation for emitters, which the tracer had for the sun and nothing
-        // else. A lamp was found only when a bounce happened to land on it — a few voxels
-        // against a whole hemisphere — so indoors almost every sample came back black and the
-        // rare hit came back very bright. That is a sampling problem, not a cache one, which
-        // is why rounds of cache tuning never touched it.
-        //
-        // A pixel gets one shadow ray, so this is a choice: half the time it goes to the sun,
-        // half to a lamp from the nearest few. Each answer is worth twice as much for being
-        // asked half as often, which is the 2.0.
-        uint light_count = min(trace.quality.w, kLampCandidates);
-        bool sample_lamp = false;
-        vec3 lamp_dir = vec3(0.0);
-        float lamp_distance = 0.0;
-        vec3 lamp_arriving = vec3(0.0);
-        // Only where the sun cannot reach. A face in daylight is lit by six orders of
-        // magnitude more sun than lamp, so spending its one ray on a lamp buys nothing and
-        // costs the shadow its samples — outdoors that is the whole picture. A face turned
-        // away from the sun, or one whose shadow entry already says it is in shade, has
-        // nothing better to do with the ray.
-        bool sun_serves = faces_sun && read_shadow(shadow_slot) > 0.15;
-        if (light_count > 0u && !sun_serves && rand(state) < 0.5) {
-            uint pick = min(uint(rand(state) * float(light_count)), light_count - 1u);
-            LightSource lamp = lights.items[pick];
-            // The list is in absolute world voxels; everything here is relative to the
-            // camera's chunk, which is the point of a floating origin.
-            vec3 lamp_point = vec3(ivec3(lamp.x, lamp.y, lamp.z) -
-                                   push.camera_chunk.xyz * kChunkEdge) + vec3(0.5);
-            vec3 delta = lamp_point - point;
-            lamp_distance = length(delta);
-            if (lamp_distance > 0.5) {
-                lamp_dir = delta / lamp_distance;
-                if (dot(lamp_dir, normal) > 0.0) {
-                    sample_lamp = true;
-                    // A fitting of many voxels is brighter than one, and the inverse square is
-                    // in metres so a lamp across a room is not divided into nothing. Clamped
-                    // near the source, where a surface pressed against a lamp would otherwise
-                    // divide by almost zero.
-                    float metres = max(lamp_distance / 32.0, 0.5);
-                    lamp_arriving = vec3(lamp.red, lamp.green, lamp.blue) * float(lamp.voxels) /
-                                    (metres * metres) * dot(lamp_dir, normal) *
-                                    float(light_count) * 2.0;
-                }
-            }
-        }
-
-        // Its own entry, keyed like the irradiance one but never sharing with it.
-        uint emitter_lo, emitter_hi;
-        face_key(voxel, hit.normal, level, kFaceEmitter, emitter_lo, emitter_hi);
-        uint emitter_slot = face_slot(emitter_lo, emitter_hi, light_count > 0u, trace.control.z);
-
         float visibility = 0.0;
-        if (faces_sun || sample_lamp) {
+        if (faces_sun) {
             uint parent_lo, parent_hi;
             face_key(voxel, hit.normal, kShadowParentLevel, kFaceShadow, parent_lo, parent_hi);
             uint parent_slot = face_slot(parent_lo, parent_hi, true, trace.control.z);
 
-            // One ray, one call site. Two calls would be two inlined copies of march.
-            bool cast_sun = trace_shadow && !sample_lamp;
-            if (sample_lamp || cast_sun) {
-                vec3 probe_dir = sample_lamp ? lamp_dir : sun_sample(state);
-                Hit probe = shadow_probe(from, probe_dir);
-                if (sample_lamp) {
-                    // Reached if nothing is in the way before the lamp itself. The zero when it
-                    // is blocked belongs in the average: it is this face seeing that lamp one
-                    // time in five, which is what a soft shadow from a lamp is made of.
-                    bool reached = !probe.hit || probe.t >= lamp_distance - 1.5;
-                    contribute(emitter_slot, reached ? min(lamp_arriving, vec3(8.0)) : vec3(0.0));
-                } else {
-                    float measured = probe.hit ? 0.0 : 1.0;
-                    contribute_shadow(shadow_slot, measured);
-                    contribute_shadow(parent_slot, measured);
-                }
+            if (trace_shadow) {
+                float measured = occluded(from, sun_sample(state)) ? 0.0 : 1.0;
+                contribute_shadow(shadow_slot, measured);
+                contribute_shadow(parent_slot, measured);
             }
 
             uint own_count = (shadow_slot != 0xFFFFFFFFu) ? faces.items[shadow_slot].count : 0u;
@@ -1207,8 +1100,7 @@ void main() {
             // floor of light there makes a room with no way in glow. Waiting is honest, and at
             // this stride the wait is a few frames.
             radiance += sun_light(normal, dir, m, visibility) +
-                        m.albedo * (1.0 - m.metallic) *
-                            (known.indirect + read_face(emitter_slot).indirect) +
+                        m.albedo * (1.0 - m.metallic) * known.indirect +
                         specular_from_cache(voxel, hit.normal, normal, dir, m, level,
                                             trace.control.z, state);
             radiance = clamp_finite(radiance);
@@ -1326,18 +1218,15 @@ void main() {
                                                  cache_level(hit.t + second.t),
                                                  trace.control.z);
 
-                // Dropped when lamps are aimed at directly, or each is counted twice:
-                // once by the ray sent to it and once by the bounce that landed on it.
-                vec3 hit_emission = (trace.quality.w > 0u) ? vec3(0.0) : m2.emission;
                 if (far.known) {
-                    incoming = hit_emission + sun_light(n2, bounce_dir, m2, far.visibility) +
+                    incoming = m2.emission + sun_light(n2, bounce_dir, m2, far.visibility) +
                                m2.albedo * (1.0 - m2.metallic) * far.indirect;
                 } else {
                     // Nothing known there yet. Its own light is still a real measurement, so
                     // an emitter is seen immediately; the rest of what that surface reflects
                     // is simply not known this frame.
-                    incoming = hit_emission;
-                    measured = any(greaterThan(hit_emission, vec3(0.0)));
+                    incoming = m2.emission;
+                    measured = any(greaterThan(m2.emission, vec3(0.0)));
                 }
             }
         }
@@ -1397,8 +1286,7 @@ void main() {
             return;
         }
         radiance += sun_light(normal, dir, m, visibility) +
-                    m.albedo * (1.0 - m.metallic) *
-                        (here.indirect + read_face(emitter_slot).indirect) +
+                    m.albedo * (1.0 - m.metallic) * here.indirect +
                     specular_from_cache(voxel, hit.normal, normal, dir, m, level,
                                         trace.control.z, state);
     }
