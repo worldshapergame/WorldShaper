@@ -111,11 +111,9 @@ const uint kFaceShadow = 1u;
 // the old quality on open ground exactly (speckle 1.39, both), while halving it indoors.
 const uint kShadowLevel = 3u;
 
-void face_key(ivec3 voxel, ivec3 normal, uint level, uint kind, out uint lo, out uint hi) {
-    uint face = (normal.x != 0) ? ((normal.x > 0) ? 0u : 1u)
-              : (normal.y != 0) ? ((normal.y > 0) ? 2u : 3u)
-                                : ((normal.z > 0) ? 4u : 5u);
+void face_key_node(ivec3 node, ivec3 normal, uint level, uint kind, out uint lo, out uint hi);
 
+void face_key(ivec3 voxel, ivec3 normal, uint level, uint kind, out uint lo, out uint hi) {
     // Keyed by (node, level, face), not by (voxel, face).
     //
     // The level is what stops the table drowning at distance. A pixel far away covers many
@@ -145,7 +143,17 @@ void face_key(ivec3 voxel, ivec3 normal, uint level, uint kind, out uint lo, out
     if (normal.x != 0) node.x = voxel.x;
     else if (normal.y != 0) node.y = voxel.y;
     else node.z = voxel.z;
-    voxel = node;
+    face_key_node(node, normal, level, kind, lo, hi);
+}
+
+// The same key from node coordinates that have already been worked out. Reading a shadow
+// needs the four nodes around a point, not the one containing it, and those are computed
+// directly rather than by finding a voxel inside each.
+void face_key_node(ivec3 node, ivec3 normal, uint level, uint kind, out uint lo, out uint hi) {
+    uint face = (normal.x != 0) ? ((normal.x > 0) ? 0u : 1u)
+              : (normal.y != 0) ? ((normal.y > 0) ? 2u : 3u)
+                                : ((normal.z > 0) ? 4u : 5u);
+    ivec3 voxel = node;
 
     // Mixed one axis at a time, rather than XORing three multiplications together.
     //
@@ -507,6 +515,60 @@ float read_shadow(uint slot) {
     uint count = faces.items[slot].count;
     if (count == 0u) return 0.0;
     return clamp(float(faces.items[slot].sum.w) / (kFixedScale * float(count)), 0.0, 1.0);
+}
+
+// The shadow at a point, blended across the four nodes around it rather than taken from the
+// one it happens to sit in.
+//
+// A node is eight voxels across, and reading it flat means every point inside gets the same
+// answer — so a shadow edge comes out as a staircase of quarter-metre blocks, which is
+// exactly what it looked like. The node size is a *sampling* rate, not the resolution the
+// shadow is allowed to have: the samples are spaced eight voxels apart, and what belongs
+// between them is an interpolation, the same as any other filtered lookup.
+//
+// Bilinear across the surface, using the two axes the normal is not on, so the blend runs
+// along the wall or the floor and never through it. Nodes nothing is known about drop out of
+// the average and the weights renormalise, so an edge of the known region fades rather than
+// darkening into it.
+float read_shadow_filtered(vec3 world_point, ivec3 voxel, ivec3 normal, uint frame) {
+    int axis = (normal.x != 0) ? 0 : ((normal.y != 0) ? 1 : 2);
+    int a = (axis + 1) % 3;
+    int b = (axis + 2) % 3;
+
+    float size = float(1 << kShadowLevel);
+    // Half a node back, because a node's sample stands at its centre rather than its corner.
+    float fa = world_point[a] / size - 0.5;
+    float fb = world_point[b] / size - 0.5;
+    int ia = int(floor(fa));
+    int ib = int(floor(fb));
+    float ta = fa - float(ia);
+    float tb = fb - float(ib);
+
+    ivec3 node = voxel >> int(kShadowLevel);
+    node[axis] = voxel[axis];   // exact along the normal: never blend through a surface
+
+    float total = 0.0;
+    float weight = 0.0;
+    for (int j = 0; j < 2; ++j) {
+        for (int i = 0; i < 2; ++i) {
+            ivec3 at = node;
+            at[a] = ia + i;
+            at[b] = ib + j;
+            uint lo, hi;
+            face_key_node(at, normal, kShadowLevel, kFaceShadow, lo, hi);
+            uint slot = face_slot(lo, hi, false, frame);
+            if (slot == 0xFFFFFFFFu) continue;
+            uint count = faces.items[slot].count;
+            if (count == 0u) continue;
+            float w = (i == 0 ? 1.0 - ta : ta) * (j == 0 ? 1.0 - tb : tb);
+            if (w <= 0.0) continue;
+            total += w * clamp(float(faces.items[slot].sum.w) / (kFixedScale * float(count)),
+                               0.0, 1.0);
+            weight += w;
+        }
+    }
+    if (weight <= 0.0) return 0.0;
+    return total / weight;
 }
 
 FaceLight read_face(uint slot);
@@ -893,7 +955,19 @@ void main() {
             if (trace_shadow) {
                 contribute_shadow(shadow_slot, occluded(from, sun_sample(state)) ? 0.0 : 1.0);
             }
-            visibility = read_shadow(shadow_slot);
+            // Written to the node this point sits in, read back across the four around it.
+            vec3 world_point = point + vec3(push.camera_chunk.xyz * kChunkEdge);
+            visibility = read_shadow_filtered(world_point, voxel, hit.normal, trace.control.z);
+        }
+
+        // Debug view 9: the sun term on its own, with no albedo and no texture over it.
+        //
+        // Every measurement of shadow quality taken against the shaded image was really a
+        // measurement of the ground's per-voxel colour, which varies far more than the shadow
+        // does and drowns it. This is the quantity being complained about, by itself.
+        if (push.resolution.z == 9u) {
+            imageStore(out_colour, pixel, vec4(vec3(visibility), 1.0));
+            return;
         }
 
         vec3 incoming = vec3(0.0);
