@@ -101,6 +101,25 @@ text file — edit it to change how the loop behaves. In short, it says:
 commit or revert it deliberately, confirm the build and tests, push, and write the closing
 entry.
 
+## If it refuses to start
+
+Before the loop begins, it asks Claude one trivial question and waits for an answer. Two
+seconds, a fraction of a penny, and it turns "nothing happened all night" into "it would not
+start, and here is what it said."
+
+**"The Claude CLI is not logged in."** The command-line `claude` keeps its own credentials,
+separate from any Claude app installed beside it. Being signed in there says nothing about
+being signed in here. Sign it in once:
+
+```bash
+claude
+```
+
+then `/login` inside it, close that window, and run `loop.bat` again.
+
+**Anything else** is printed as Claude's own words rather than a guess at the cause. If the
+model name is the problem, `loop.bat -Model opus` uses whatever the CLI's alias resolves to.
+
 ## Worth knowing before you leave it running
 
 - It runs with permission checks bypassed. That is what "unattended" means: it can edit any

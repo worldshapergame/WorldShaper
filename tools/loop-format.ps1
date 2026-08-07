@@ -64,12 +64,19 @@ function Show-Event($line) {
             }
         }
         "result" {
-            $bits = @($e.subtype)
+            # subtype says "success" even when is_error is set — it describes how the turn
+            # ended, not whether it achieved anything. Trusting it printed a cheerful green
+            # line over "Not logged in", so is_error is what decides the word and the colour.
+            $bits = @()
+            $bits += if ($e.is_error) { "FAILED" } else { "done" }
             if ($e.num_turns)      { $bits += "turns $($e.num_turns)" }
             if ($e.duration_ms)    { $bits += ("{0:N1} min" -f ($e.duration_ms / 60000.0)) }
             if ($e.total_cost_usd) { $bits += ("cost {0:N2} USD" -f $e.total_cost_usd) }
             $colour = if ($e.is_error) { "Red" } else { "Green" }
             Write-Host ("  == " + ($bits -join "  ")) -ForegroundColor $colour
+            if ($e.is_error -and $e.result) {
+                Write-Host ("     " + (Trim-To (($e.result -replace '\s+', ' ').Trim()) 300)) -ForegroundColor Red
+            }
         }
     }
 }

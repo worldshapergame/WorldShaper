@@ -44,6 +44,47 @@ function Get-RunningLoop {
 
 . (Join-Path $PSScriptRoot "loop-format.ps1")
 
+# Ask Claude one trivial question before committing a night to it.
+#
+# Worth the two seconds and the fraction of a penny. The first run of this failed on
+# "Not logged in - Please run /login" and reported it as a possible bad model name, because
+# all the loop could see was a non-zero exit in under a second. The CLI keeps its own
+# credentials, separate from any Claude app installed beside it, so being signed in there
+# says nothing about being signed in here.
+function Test-ClaudeReady($claudePath, $model, $stateDir) {
+    $inFile  = Join-Path $stateDir "preflight-in.txt"
+    $outFile = Join-Path $stateDir "preflight-out.txt"
+    Set-Content -Path $inFile -Value "Reply with one word: ready" -Encoding utf8
+
+    $p = Start-Process -FilePath $claudePath `
+        -ArgumentList @("-p", "--model", $model, "--output-format", "json") `
+        -RedirectStandardInput $inFile `
+        -RedirectStandardOutput $outFile `
+        -RedirectStandardError ($outFile + ".err") `
+        -NoNewWindow -PassThru
+    if (-not $p.WaitForExit(180000)) {
+        try { $p.Kill($true) } catch {}
+        return @{ ok = $false; why = "Claude did not answer within three minutes." }
+    }
+
+    $text = ""
+    if (Test-Path $outFile) { $text = Get-Content $outFile -Raw }
+    $err = ""
+    if (Test-Path ($outFile + ".err")) { $err = Get-Content ($outFile + ".err") -Raw }
+
+    if ($text -match "authentication_failed" -or $text -match "Not logged in" -or
+        $err  -match "authentication_failed" -or $err  -match "Not logged in") {
+        return @{ ok = $false; auth = $true; why = "The Claude CLI is not logged in." }
+    }
+    if ($text -match '"is_error"\s*:\s*true' -or $p.ExitCode -ne 0) {
+        $said = ""
+        try { $said = ($text | ConvertFrom-Json).result } catch { $said = $text }
+        if (-not $said) { $said = $err }
+        return @{ ok = $false; why = ("Claude answered with an error: " + (Trim-To ($said -replace '\s+', ' ') 300)) }
+    }
+    return @{ ok = $true }
+}
+
 function Write-Banner($text, $colour = "Cyan") {
     Write-Host ""
     Write-Host ("=" * 78) -ForegroundColor $colour
@@ -144,6 +185,27 @@ if ($useAgents -match '^[Yy]') {
 "@
 }
 Write-Host ("Subagents: " + $(if ($useAgents -match '^[Yy]') { "allowed" } else { "off" })) -ForegroundColor DarkGray
+
+Write-Host ""
+Write-Host "Checking Claude answers before starting..." -ForegroundColor DarkGray
+$ready = Test-ClaudeReady $claude.Source $Model $stateDir
+if (-not $ready.ok) {
+    Write-Banner "Not starting: $($ready.why)" "Red"
+    if ($ready.auth) {
+        Write-Host "The command-line Claude keeps its own login, separate from any Claude app" -ForegroundColor Yellow
+        Write-Host "installed beside it. Sign it in once and it stays signed in:" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "    claude" -ForegroundColor White
+        Write-Host "    /login" -ForegroundColor White
+        Write-Host ""
+        Write-Host "Then close that window and run loop.bat again." -ForegroundColor Yellow
+    } else {
+        Write-Host "If the model name is the problem, try:  loop.bat -Model opus" -ForegroundColor Yellow
+    }
+    Read-Host "Press Enter to close"
+    exit 1
+}
+Write-Host "Claude answered. Starting." -ForegroundColor Green
 
 $template = Get-Content (Join-Path $PSScriptRoot "loop-prompt.txt") -Raw
 $wrapTemplate = Get-Content (Join-Path $PSScriptRoot "loop-wrapup-prompt.txt") -Raw
@@ -262,20 +324,36 @@ while ($true) {
     $minutes = [math]::Round(((Get-Date) - $started).TotalMinutes, 1)
     Write-Host "Finished in $minutes min (exit $($process.ExitCode))." -ForegroundColor DarkGray
 
-    # An iteration that dies in seconds is not doing work, it is refusing to start — a wrong
-    # model name, an expired login. Said plainly on the first one, because the alternative is
-    # finding a thousand identical failures in the morning.
-    if ($iteration -eq 1 -and $process.ExitCode -ne 0 -and $minutes -lt 0.5) {
-        Write-Host ""
-        Write-Host "Iteration 1 failed immediately. Claude is not starting, so nothing will happen" -ForegroundColor Red
-        Write-Host "all night. Common causes: the model name '$Model' is not one this CLI accepts," -ForegroundColor Red
-        Write-Host "or you are not logged in. What it said:" -ForegroundColor Red
-        if (Test-Path ($log + ".err")) { Get-Content ($log + ".err") -Tail 15 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red } }
-        if (Test-Path $log)            { Get-Content $log -Tail 15            | ForEach-Object { Write-Host "  $_" -ForegroundColor Red } }
-        Write-Host ""
-        Write-Host "Try:  loop.bat -Model opus" -ForegroundColor Yellow
-        Read-Host "Press Enter to close"
-        exit 1
+    # An iteration that ends in seconds did no work; it refused to start. Say what Claude
+    # actually said rather than guessing at causes — the guess was wrong the first time this
+    # happened, and a wrong diagnosis printed confidently is worse than none.
+    if ($minutes -lt 0.5) {
+        $said = ""
+        if (Test-Path $log) {
+            foreach ($line in (Get-Content $log)) {
+                if ($line -match '"type"\s*:\s*"result"') {
+                    try { $said = ($line | ConvertFrom-Json).result } catch { }
+                }
+            }
+        }
+        Write-Banner "Iteration $iteration ended in seconds without doing anything" "Red"
+        if ($said) { Write-Host "Claude said: $said" -ForegroundColor Red }
+        if (Test-Path ($log + ".err")) {
+            $e = (Get-Content ($log + ".err") -Raw)
+            if ($e -and $e.Trim()) { Write-Host "stderr: $((Trim-To ($e -replace '\s+', ' ') 300))" -ForegroundColor Red }
+        }
+        if ("$said" -match "logged in|authentication") {
+            Write-Host ""
+            Write-Host "Sign the command-line Claude in once:  claude   then  /login" -ForegroundColor Yellow
+            Read-Host "Press Enter to close"
+            exit 1
+        }
+        Write-Host "Full log: $log" -ForegroundColor Yellow
+        if ($iteration -ge 3) {
+            Write-Host "Three iterations in a row have done nothing. Stopping rather than spinning." -ForegroundColor Red
+            Read-Host "Press Enter to close"
+            exit 1
+        }
     }
 
     if (Test-Path ($log + ".err")) {
