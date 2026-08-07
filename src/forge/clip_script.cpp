@@ -576,6 +576,17 @@ void Parser::statement() {
             return;
         }
         bindings_[name] = node;
+        // Re-binding a name replaces what it means, so the record is replaced rather than added
+        // to: a part is whatever its name finally referred to.
+        bool replaced = false;
+        for (auto& part : script_.parts) {
+            if (part.first == name) {
+                part.second = node;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) script_.parts.emplace_back(name, node);
         return;
     }
     if (head == "paint") {

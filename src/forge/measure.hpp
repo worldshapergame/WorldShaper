@@ -119,6 +119,73 @@ u64 mirror_mismatch(const Clip& clip, u32 axis);
 // screen, taking the most common cell in each block so a thin wall does not vanish.
 std::string slice_text(const Clip& clip, u32 axis, i32 at, i32 step = 1);
 
+// --- checks: the mistakes a screenshot shows and a measurement does not ---------------------
+//
+// A stair flight hanging in mid-air, a column growing through the floor above, a step nobody
+// could climb. Every one of these was in the facility, every one was obvious the moment somebody
+// looked at a picture, and not one of them moved a single number in the report above — the
+// volume, the extent and the material shares were all exactly what they should have been.
+//
+// They are not subtle bugs. They are bugs of a *kind* that measuring quantities cannot see,
+// because they are about how parts relate rather than how big they are. So they get their own
+// pass, and it answers the three questions a builder would ask: is it all joined together, can
+// you walk on it, and is anything inside anything else.
+
+// Every island of matter that is not connected to the largest one.
+//
+// Six-connected, because that is what "held up" means for voxels — touching at a corner is not
+// support. The largest component is assumed to be the building; anything else is either a
+// deliberate separate object or a mistake, and the report says how many and how big so the
+// author can tell which.
+struct Island {
+    i32 low[3]{0, 0, 0};
+    i32 high[3]{0, 0, 0};
+    u64 voxels = 0;
+};
+
+struct Connectivity {
+    u64 components = 0;
+    u64 largest = 0;
+    u64 floating_voxels = 0;      // everything not in the largest component
+    std::vector<Island> islands;  // the biggest few of them, for pointing at
+};
+
+Connectivity connectivity(const Clip& clip, usize report_at_most = 8);
+
+// Can a person walk it?
+//
+// Looks down every column of the clip for the top of the matter, then compares neighbouring
+// columns: a change of more than a step is a step nobody can take, and a change of more than a
+// wall is a wall. Reports the worst rise found and where, and how much of the walkable surface
+// is reachable from the lowest floor without exceeding a step.
+struct Walkability {
+    i32 max_rise = 0;            // in voxels, between neighbouring columns
+    i32 max_rise_at[3]{0, 0, 0};
+    u64 surfaces = 0;            // columns with a walkable top at all
+    u64 reachable = 0;           // of those, how many are reachable from the start
+    f64 reachable_fraction() const {
+        return (surfaces > 0) ? static_cast<f64>(reachable) / static_cast<f64>(surfaces) : 0.0;
+    }
+};
+
+// `max_step` is the tallest rise a person may take, in voxels. Anything taller is a wall, and
+// walls stop the flood rather than failing it — the question is what you can reach, not whether
+// the clip contains a cliff.
+Walkability walkability(const Clip& clip, i32 max_step, i32 head_room);
+
+// Where two parts of a shape occupy the same voxels.
+//
+// Not an error in itself — a building is full of deliberate overlaps, and a union is how you
+// make one. It is an error when it is *not* deliberate: a column through the floor above, a
+// stair through a wall. So this answers a question the author asks about two specific things,
+// and the answer is a count and a box, so it can be looked at.
+struct Overlap {
+    u64 voxels = 0;
+    i32 low[3]{0, 0, 0};
+    i32 high[3]{0, 0, 0};
+    bool any() const { return voxels > 0; }
+};
+
 // The whole measurement as a report, in the order a person reads it.
 //
 // The names may be null; when given, entry i is the name of voxel type i, so the report says

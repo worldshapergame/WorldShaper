@@ -203,6 +203,172 @@ std::string slice_text(const Clip& clip, u32 axis, i32 at, i32 step) {
     return out;
 }
 
+Connectivity connectivity(const Clip& clip, usize report_at_most) {
+    Connectivity out;
+    if (clip.empty()) return out;
+
+    const usize cells = static_cast<usize>(clip.size[0]) * static_cast<usize>(clip.size[1]) *
+                        static_cast<usize>(clip.size[2]);
+    std::vector<u8> seen(cells, 0);
+    std::vector<i32> stack;
+    std::vector<Island> islands;
+
+    const auto solid = [&](i32 x, i32 y, i32 z) {
+        return x >= 0 && y >= 0 && z >= 0 && x < clip.size[0] && y < clip.size[1] &&
+               z < clip.size[2] && clip.at(x, y, z) != kAir;
+    };
+
+    for (i32 z = 0; z < clip.size[2]; ++z) {
+        for (i32 y = 0; y < clip.size[1]; ++y) {
+            for (i32 x = 0; x < clip.size[0]; ++x) {
+                if (!solid(x, y, z)) continue;
+                const usize start = clip.index(x, y, z);
+                if (seen[start]) continue;
+
+                Island island;
+                island.low[0] = island.high[0] = x;
+                island.low[1] = island.high[1] = y;
+                island.low[2] = island.high[2] = z;
+
+                seen[start] = 1;
+                stack.clear();
+                stack.push_back(x);
+                stack.push_back(y);
+                stack.push_back(z);
+                while (!stack.empty()) {
+                    const i32 cz = stack.back(); stack.pop_back();
+                    const i32 cy = stack.back(); stack.pop_back();
+                    const i32 cx = stack.back(); stack.pop_back();
+                    ++island.voxels;
+                    island.low[0] = std::min(island.low[0], cx);
+                    island.low[1] = std::min(island.low[1], cy);
+                    island.low[2] = std::min(island.low[2], cz);
+                    island.high[0] = std::max(island.high[0], cx);
+                    island.high[1] = std::max(island.high[1], cy);
+                    island.high[2] = std::max(island.high[2], cz);
+
+                    const i32 steps[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                                             {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+                    for (const auto& step : steps) {
+                        const i32 nx = cx + step[0], ny = cy + step[1], nz = cz + step[2];
+                        if (!solid(nx, ny, nz)) continue;
+                        const usize at = clip.index(nx, ny, nz);
+                        if (seen[at]) continue;
+                        seen[at] = 1;
+                        stack.push_back(nx);
+                        stack.push_back(ny);
+                        stack.push_back(nz);
+                    }
+                }
+                islands.push_back(island);
+            }
+        }
+    }
+
+    out.components = islands.size();
+    std::sort(islands.begin(), islands.end(),
+              [](const Island& a, const Island& b) { return a.voxels > b.voxels; });
+    if (!islands.empty()) {
+        out.largest = islands.front().voxels;
+        for (usize i = 1; i < islands.size(); ++i) out.floating_voxels += islands[i].voxels;
+        for (usize i = 1; i < islands.size() && out.islands.size() < report_at_most; ++i) {
+            out.islands.push_back(islands[i]);
+        }
+    }
+    return out;
+}
+
+Walkability walkability(const Clip& clip, i32 max_step, i32 head_room) {
+    Walkability out;
+    if (clip.empty()) return out;
+    const i32 width = clip.size[0];
+    const i32 depth = clip.size[2];
+
+    // The top of the matter in each column, and whether there is room to stand on it.
+    std::vector<i32> top(static_cast<usize>(width) * static_cast<usize>(depth), -1);
+    for (i32 z = 0; z < depth; ++z) {
+        for (i32 x = 0; x < width; ++x) {
+            i32 found = -1;
+            for (i32 y = clip.size[1] - 1; y >= 0; --y) {
+                if (clip.at(x, y, z) == kAir) continue;
+                // Standing needs clear air above.
+                i32 clear = 0;
+                for (i32 h = y + 1; h < clip.size[1] && clear < head_room; ++h) {
+                    if (clip.at(x, h, z) != kAir) break;
+                    ++clear;
+                }
+                if (clear >= head_room) found = y;
+                break;
+            }
+            top[static_cast<usize>(z) * width + x] = found;
+            if (found >= 0) ++out.surfaces;
+        }
+    }
+
+    // The worst rise between neighbouring columns that both have a surface.
+    for (i32 z = 0; z < depth; ++z) {
+        for (i32 x = 0; x < width; ++x) {
+            const i32 here = top[static_cast<usize>(z) * width + x];
+            if (here < 0) continue;
+            const i32 neighbours[2][2] = {{1, 0}, {0, 1}};
+            for (const auto& step : neighbours) {
+                const i32 nx = x + step[0], nz = z + step[1];
+                if (nx >= width || nz >= depth) continue;
+                const i32 there = top[static_cast<usize>(nz) * width + nx];
+                if (there < 0) continue;
+                const i32 rise = std::abs(there - here);
+                // A genuine wall is not a bad step, so only rises a person might have been
+                // meant to take are counted.
+                if (rise > out.max_rise && rise <= max_step * 4) {
+                    out.max_rise = rise;
+                    out.max_rise_at[0] = x;
+                    out.max_rise_at[1] = here;
+                    out.max_rise_at[2] = z;
+                }
+            }
+        }
+    }
+
+    // Flood from the lowest surface, stepping only where the rise is climbable.
+    i32 start = -1;
+    i32 lowest = clip.size[1];
+    for (i32 z = 0; z < depth; ++z) {
+        for (i32 x = 0; x < width; ++x) {
+            const i32 here = top[static_cast<usize>(z) * width + x];
+            if (here >= 0 && here < lowest) {
+                lowest = here;
+                start = static_cast<i32>(z) * width + x;
+            }
+        }
+    }
+    if (start < 0) return out;
+
+    std::vector<u8> reached(top.size(), 0);
+    std::vector<i32> queue{start};
+    reached[static_cast<usize>(start)] = 1;
+    while (!queue.empty()) {
+        const i32 at = queue.back();
+        queue.pop_back();
+        ++out.reachable;
+        const i32 x = at % width;
+        const i32 z = at / width;
+        const i32 here = top[static_cast<usize>(at)];
+        const i32 steps[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (const auto& step : steps) {
+            const i32 nx = x + step[0], nz = z + step[1];
+            if (nx < 0 || nz < 0 || nx >= width || nz >= depth) continue;
+            const usize next = static_cast<usize>(nz) * width + nx;
+            if (reached[next]) continue;
+            const i32 there = top[next];
+            if (there < 0) continue;
+            if (std::abs(there - here) > max_step) continue;
+            reached[next] = 1;
+            queue.push_back(static_cast<i32>(next));
+        }
+    }
+    return out;
+}
+
 std::string report(const Measurement& m, const std::vector<std::string>* names) {
     char line[256];
     std::string out;

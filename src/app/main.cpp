@@ -90,6 +90,7 @@ struct Options {
     std::string clip_file;
     std::vector<std::string> clip_slices;   // "axis,at" or "axis,at,step"
     bool clip_symmetry = false;
+    bool clip_align = false;
     i64 clip_at[3]{0, 0, 0};                // where to stamp it, in voxels
     i32 clip_metre = 0;                     // override the file's resolution, for quick previews
 
@@ -183,6 +184,8 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.clip_slices.push_back(argv[++i]);
         } else if (arg == "--clip-symmetry") {
             options.clip_symmetry = true;
+        } else if (arg == "--clip-align") {
+            options.clip_align = true;
         } else if (arg == "--clip-metre") {
             options.clip_metre = static_cast<i32>(next_number(0));
         } else if (arg == "--clip-at") {
@@ -263,6 +266,7 @@ void print_help() {
         "                        what it found; with --screenshot it stamps it in the world\n"
         "  --clip-slice a,at[,n] print a slice through it, one character per n voxels\n"
         "  --clip-symmetry       report how far it is from being mirror symmetric\n"
+        "  --clip-align          report parts that nearly line up but do not\n"
         "  --clip-at x,y,z       where to stamp it, in voxels (default the origin)\n"
         "  --clip-metre N        sample at N voxels per metre instead of the file's\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
@@ -2934,6 +2938,103 @@ int run_clip_tool(const Options& options) {
         std::printf("\nslice along %c at %d of %d, one character per %d voxels\n",
                     "xyz"[axis], at, size, step);
         std::printf("%s", forge::slice_text(varied.clip, axis, at, step).c_str());
+    }
+
+    // The checks that catch what a measurement cannot: matter that is not held up, and surfaces
+    // nobody can walk on. Always run, because both were wrong in the facility and neither showed
+    // in any number until somebody looked at a picture.
+    {
+        const forge::Connectivity joined = forge::connectivity(varied.clip);
+        std::printf("\nconnected     %llu components, largest %llu voxels",
+                    static_cast<unsigned long long>(joined.components),
+                    static_cast<unsigned long long>(joined.largest));
+        if (joined.floating_voxels > 0) {
+            std::printf(", %llu voxels NOT joined to it\n",
+                        static_cast<unsigned long long>(joined.floating_voxels));
+            for (const forge::Island& island : joined.islands) {
+                std::printf("  floating   %8llu voxels at (%d,%d,%d)-(%d,%d,%d)\n",
+                            static_cast<unsigned long long>(island.voxels), island.low[0],
+                            island.low[1], island.low[2], island.high[0], island.high[1],
+                            island.high[2]);
+            }
+        } else {
+            std::printf(", all of it joined\n");
+        }
+
+        // A step is 0.18 m and a doorway is 2.0 m, in voxels at this clip's resolution.
+        const i32 per_metre = script.settings.voxels_per_metre;
+        const i32 max_step = std::max(1, (per_metre * 20) / 100);
+        const i32 head_room = std::max(1, per_metre * 2);
+        const forge::Walkability walk = forge::walkability(varied.clip, max_step, head_room);
+        std::printf("walkable      %.1f%% of %llu standable columns reachable from the lowest; "
+                    "worst rise %d voxels (%.2f m) at (%d,%d,%d)\n",
+                    walk.reachable_fraction() * 100.0,
+                    static_cast<unsigned long long>(walk.surfaces), walk.max_rise,
+                    static_cast<f64>(walk.max_rise) / static_cast<f64>(per_metre),
+                    walk.max_rise_at[0], walk.max_rise_at[1], walk.max_rise_at[2]);
+    }
+
+    // Alignment: which parts nearly line up with each other, and by how much they miss.
+    //
+    // Architecture is mostly things lining up. A column under a beam, a wall over a wall, a sill
+    // level with a sill — and the failure that matters is never a part in wildly the wrong place,
+    // which anyone sees at once. It is the part that is *almost* right: four centimetres proud,
+    // a voxel short, a face that was meant to be flush and is not. Those read as sloppiness
+    // without anyone being able to say why, and no measurement of a single part can find one,
+    // because each part is individually fine.
+    //
+    // So this measures every named part's box and looks for near misses: faces that differ by
+    // less than a hand's width but are not equal. Exact agreement is silence; that is the point.
+    if (options.clip_align) {
+        struct PartBox {
+            std::string name;
+            f64 low[3];
+            f64 high[3];
+            bool any = false;
+        };
+        std::vector<PartBox> boxes;
+        for (const auto& part : script.parts) {
+            const forge::Field::Aabb box = script.field.bounds_of(part.second);
+            if (box.infinite()) continue;   // nothing bounded to compare
+            PartBox entry;
+            entry.name = part.first;
+            entry.low[0] = box.low.x; entry.low[1] = box.low.y; entry.low[2] = box.low.z;
+            entry.high[0] = box.high.x; entry.high[1] = box.high.y; entry.high[2] = box.high.z;
+            entry.any = true;
+            boxes.push_back(entry);
+        }
+
+        // A hand's width. Closer than this and they were meant to meet; further and they are
+        // simply different things in different places.
+        constexpr f64 kNear = 0.12;
+        constexpr f64 kExact = 1e-6;
+        u32 found = 0;
+        std::printf("\nalignment     %zu parts with a known extent\n", boxes.size());
+        for (usize i = 0; i < boxes.size(); ++i) {
+            for (usize j = i + 1; j < boxes.size(); ++j) {
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    const f64 pairs[4][2] = {
+                        {boxes[i].low[axis], boxes[j].low[axis]},
+                        {boxes[i].high[axis], boxes[j].high[axis]},
+                        {boxes[i].low[axis], boxes[j].high[axis]},
+                        {boxes[i].high[axis], boxes[j].low[axis]},
+                    };
+                    const char* what[4] = {"starts", "ends", "start/end", "end/start"};
+                    for (u32 k = 0; k < 4; ++k) {
+                        const f64 gap = std::abs(pairs[k][0] - pairs[k][1]);
+                        if (gap <= kExact || gap > kNear) continue;
+                        if (found < 40) {
+                            std::printf("  %-12s %-12s %c %s differ by %.3f m\n",
+                                        boxes[i].name.c_str(), boxes[j].name.c_str(),
+                                        "xyz"[axis], what[k], gap);
+                        }
+                        ++found;
+                    }
+                }
+            }
+        }
+        std::printf("  %u near misses%s\n", found,
+                    (found > 40) ? " (first 40 shown)" : (found == 0 ? " — everything is flush" : ""));
     }
 
     // Symmetry, when asked. Cheap, and it catches a whole class of mistake nothing else does.

@@ -46,6 +46,7 @@
 // same array, and either can be saved as either.
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/types.hpp"
@@ -102,6 +103,11 @@ struct Script {
 
     u32 solid = 0;
     bool has_solid = false;
+
+    // Every name the file bound, in order, with the node it ended up meaning. Kept so the tools
+    // can talk about a clip in the author's own words — "the canopy is four centimetres off the
+    // column below it" rather than "node 47 is off node 52".
+    std::vector<std::pair<std::string, u32>> parts;
 
     // Names in the order they were declared, so a report can say "stone" rather than "type 3",
     // and a visual editor can show what the file called things.

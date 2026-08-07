@@ -80,8 +80,8 @@ let approach = stairs -27 0 -5   -22 plinth_top 5 run=0.42 rise=0.15
 
 # A reflecting pool west of the entrance. Water is the flattest, smoothest surface here and the
 # only one that will show the sky and the building in it, which is the specular path's test.
-let pool_cut  = box -20 0.15 -7   -14 plinth_top 7
-let pool_fill = box -20 0.15 -7   -14 0.5 7
+let pool_cut  = box -25.6 -0.12 6.4   -21.4 0 11.6
+let pool_fill = box -25.6 -0.12 6.4   -21.4 -0.02 11.6
 
 # ==============================================================================================
 # THE MAIN MASS
@@ -129,14 +129,20 @@ let shell = difference { shell entry_cut glaze_s glaze_n glaze_u }
 # A deep cantilever over the entrance, on slender columns. The overhang is what puts a soft
 # gradient of shadow across the entrance floor, and the columns are thin enough to be a real
 # test of the marcher.
-let canopy   = box -24 5.2 -6   -17.5 5.6 6 round=0.05
+let canopy   = box -24.2 5.2 -6.4   -18.05 5.6 6.4 round=0.04
+# The columns stop clear of the building, and that is not a detail of composition.
+#
+# At a 3 m spacing two either side of x = -20.5, the outermost stood at -17.5 — inside the wall
+# line at -18, so it grew up through the first floor slab and came out of the floor above as a
+# stub. From outside it read as a column; from the gallery it read as a mistake. 2.6 m spacing
+# with one either side keeps every column between -23.6 and -18.4, clear of the envelope.
 let column   = cylinder 0 0 0 r=0.16 h=4.6 axis=y
-let col_row  = repeat { column } x=3.0 nx=2
-let columns  = translate { col_row } -20.5 2.9 0
-let col_row2 = repeat { column } x=3.0 nx=2
-let columns2 = translate { col_row2 } -20.5 2.9 -4.5
-let col_row3 = repeat { column } x=3.0 nx=2
-let columns3 = translate { col_row3 } -20.5 2.9 4.5
+let col_row  = repeat { column } x=2.6 nx=1
+let columns  = translate { col_row } -21.0 2.9 0
+let col_row2 = repeat { column } x=2.6 nx=1
+let columns2 = translate { col_row2 } -21.0 2.9 -4.5
+let col_row3 = repeat { column } x=2.6 nx=1
+let columns3 = translate { col_row3 } -21.0 2.9 4.5
 let posts    = union { columns columns2 columns3 }
 let portico  = union { canopy posts }
 
@@ -145,7 +151,11 @@ let portico  = union { canopy posts }
 # ==============================================================================================
 # Double height, and the only room lit from two levels at once. Its far wall is the one the
 # clerestory slots wash, which is the light path with the longest way to travel.
-let hall_floor = box -17.75 plinth_top -9.75   -0.5 0.85 9.75
+# One floor for the whole footprint, not one per room.
+# Three separate slabs left the ground with holes in it between them, and the stair landed in
+# one of those holes -- five thousand voxels of concrete stair hanging over nothing, which the
+# connectivity check found and no measurement of volume ever could.
+let hall_floor = box -17.75 plinth_top -9.75   17.75 0.85 9.75
 
 # A single freestanding wall in the hall, faced in colour on each side: the colour-bleed test.
 # White floor, red one side, blue the other, and the bounce is the only thing that can put
@@ -161,7 +171,7 @@ let bleed_blue = box -7.6 0.85 -2   -7.46 4.4 4
 # continuous surface running away from the eye, so the detail levels and the summary tiers have
 # somewhere to disagree visibly if they are going to.
 let spine_void = box -0.5 plinth_top 2.2   17.75 3.9 4.6
-let spine_slab = box -0.5 plinth_top 2.2   17.75 0.85 4.6
+let spine_slab = box -0.5 plinth_top 2.2   17.75 0.85 4.6   # kept for the stone paint mask
 
 # The rooms off the spine, cut as one row of voids and then divided.
 let rooms_void = box 0.5 plinth_top 5.0   17.5 3.9 9.6
@@ -183,9 +193,9 @@ let doors      = translate { door_row } 2.6 0 0
 # A switchback, at a rise and run a person can actually walk: 0.167 by 0.29 is a shallow public
 # stair. Two flights of twelve with a landing between them, which is what makes four metres of
 # height climbable without a ladder.
-let flight_a  = stairs 0.6 plinth_top -8.0   3.0 2.6 -4.5 run=run rise=rise
-let landing   = box 0.6 2.6 -4.9   5.6 2.85 -4.5
-let flight_b  = stairs 3.2 2.6 -8.0   5.6 floor_two -4.5 run=run rise=rise
+let flight_a  = stairs 0.6 0.85 -8.0   3.0 2.6 -4.5 run=run rise=rise
+let landing   = box 0.6 0.85 -4.95   5.6 2.85 -4.45
+let flight_b  = stairs 3.2 0.85 -8.0   5.6 floor_two -4.5 run=run rise=rise
 let stair     = union { flight_a landing flight_b }
 
 # The void the stair rises through, and a balustrade round the opening above.
@@ -205,14 +215,16 @@ let balustrade = difference { rail_o rail_i }
 # floor and up the far wall, and every one of them is a soft-edged shadow with a penumbra that
 # widens with distance from its column — which is the sun's half degree, and the thing a shadow
 # map cannot do at all.
-let post_1    = cylinder 0 0 0 r=0.13 h=3.0 axis=y
+let post_1    = cylinder 0 0 0 r=0.13 h=3.1 axis=y
 let post_row  = repeat { post_1 } x=0.9 nx=2
-let colonnade = translate { post_row } 3.0 2.1 7.6
+let colonnade = translate { post_row } 3.0 2.05 7.6
 
 # --- bay 2, x 5..9: materials ------------------------------------------------------------------
 # A row of spheres on a shelf, from matte to mirror and from dielectric to metal. Nothing else in
 # the bay, because the point is to compare them against each other under one light.
-let shelf     = box 5.4 1.4 6.4   8.6 1.6 7.4 round=0.03
+let shelf_top = box 5.4 1.4 6.4   8.6 1.6 7.4 round=0.03
+let shelf_leg = box 5.5 0.8 6.5   8.5 1.42 7.3
+let shelf     = union { shelf_top shelf_leg }
 let ball_a    = sphere 5.9 2.0 6.9 r=0.34
 let ball_b    = sphere 6.7 2.0 6.9 r=0.34
 let ball_c    = sphere 7.5 2.0 6.9 r=0.34
@@ -225,22 +237,23 @@ let gallery   = union { shelf ball_a ball_b ball_c ball_d }
 # million tries, so without asking the lamp directly the room is noise.
 let fitting   = box 0 0 0   0.34 0.16 0.34
 let fit_row   = repeat { fitting } x=2.2 nx=1
-let lamps     = translate { fit_row } 11.0 3.5 7.3
+# Fixed to the soffit, not hovering below it. A light that floats is a light nothing holds up.
+let lamps     = translate { fit_row } 11.0 3.78 7.3
 
 # A pedestal under them, so there is something for the light to fall on and something to cast a
 # contact shadow — the hardest shadow there is, because it is where the geometry meets.
-let pedestal  = box 10.6 0.85 6.9   11.4 1.9 7.7 round=0.02
+let pedestal  = box 10.6 0.80 6.9   11.4 1.9 7.7 round=0.02
 
 # --- bay 4, x 13..17: thin things, and the sealed vault ---------------------------------------
 # A screen of slats: the hardest geometry a ray marcher meets, because each slat is thinner than
 # the distance the marcher would like to step.
-let slat      = box 0 0 0   0.06 2.0 0.5
-let slat_row  = repeat { slat } x=0.24 nx=8
-let screen    = translate { slat_row } 15.0 2.0 6.2
+let slat      = box 0 0 0   0.10 2.2 0.5
+let slat_row  = repeat { slat } x=0.26 nx=8
+let screen    = translate { slat_row } 15.0 0.78 6.2
 
 # And a sealed box with nothing inside and no way in. It must render pitch black for ever. It is
 # the one test in the building that is not walkable, and it cannot be: an opening would defeat it.
-let vault_o   = box 15.6 0.85 8.2   17.2 2.6 9.4
+let vault_o   = box 15.6 0.80 8.2   17.2 2.6 9.4
 let vault_i   = box 15.8 1.05 8.4   17.0 2.4 9.2
 let vault     = difference { vault_o vault_i }
 
@@ -250,7 +263,7 @@ let vault     = difference { vault_o vault_i }
 # already open. Bays 1 and 2 are alcoves off one open volume, which is what a modern plan looks
 # like and is fine for daylight. A lamp is only a test of direct light sampling if there is
 # nothing else lighting the room, so bay 3 needs a real wall and a real door.
-let part_wall = box 8.9 plinth_top 4.9   17.6 3.9 5.15
+let part_wall = box 8.9 0.80 4.9   17.6 3.9 5.15
 let part_door = box 10.3 plinth_top 4.8   11.5 door_h 5.25
 let partition = difference { part_wall part_door }
 
@@ -270,7 +283,10 @@ let built = union {
 }
 
 # The voids, taken out last so nothing can fill them back in.
-let carved = difference { built spine_void rooms_void hall_void doors pool_cut }
+# The voids are gone from here. The shell is hollow already, so they carved nothing that was
+# not already air -- except the things standing in them, which they deleted: the partition wall,
+# the shelf, the screen. Only the door openings and the pool basin are real cuts.
+let carved = difference { built doors pool_cut }
 
 # Every floor slab, as one mask for the stone coat.
 let floors = union { hall_floor spine_slab rooms_slab slab_two landing }
@@ -279,6 +295,26 @@ let floors = union { hall_floor spine_slab rooms_slab slab_two landing }
 # very void that makes the room they stand in — the rooms are cut as one volume, and anything
 # already in that volume is cut with it.
 let all = union { ground carved fittings pool_fill bleed_red bleed_blue }
+
+# --- and then the things that stop it looking like a diagram --------------------------------
+#
+# Micro-relief first. A cast concrete face is not flat -- it has the grain of its shuttering and
+# the sand of its mix, and at a centimetre it is exactly the scale a voxel can hold. Twelve
+# millimetres is under half a voxel at full detail, so it does not move a single wall; what it
+# does is stop every face being a perfect plane, which is what made them read as drawn rather
+# than built.
+let all = displace { all fine } amount=0.012
+
+# No weathering here yet, and the reason is worth writing down rather than leaving as a gap.
+#
+# `weather desert 0.14` was tried and it bleached the lawn. Weathering applies to the whole clip
+# and its coats go on after the author's, so sand and sun-bleaching landed on the grass as
+# readily as on the concrete — which is right for a building in a desert and wrong for a building
+# with a garden. Weathering needs to be scopeable to named parts before it belongs on something
+# with more than one material, and that is the next piece of work on it.
+#
+# The demonstration lives in clips/weather_demo.clip, where a single-material block is cracked
+# and overgrown and the effect can be judged on its own.
 
 # ==============================================================================================
 # PAINT
@@ -308,5 +344,10 @@ paint brushed    where=ball_c below=0
 paint chrome     where=ball_d below=0
 paint timber     where=screen below=0
 paint lamp       where=lamps below=0
+
+# No two voxels alike. Every one gets its own version of its material, hashed from where it is,
+# so the same file always builds the same building and no two square centimetres of a wall are
+# the same. This is the single biggest reason the facility stops reading as a voxel model.
+variation colour=0.035 rough=0.075 seed=17
 
 solid all
