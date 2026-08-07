@@ -997,7 +997,13 @@ void main() {
         // Traced when the entry is still thin, or on the small fraction that keep going so a
         // face is never frozen. Sunless faces never trace at all: the answer is already known.
         bool faces_sun = dot(normal, trace.sun.xyz) > 0.0;
-        bool trace_shadow = faces_sun && ((shadow_have < trace.quality.y) || (rand(state) < 0.02));
+        // Traced when the entry is thin, when an edit has just asked everything to look
+        // again, or on the small trickle that keeps a face from freezing. The middle case is
+        // what makes a newly placed voxel cast a shadow at any distance: a converged face two
+        // hundred metres away is covered by less than a pixel, and a two per cent trickle of
+        // less than a pixel never re-measures anything.
+        bool trace_shadow = faces_sun && ((shadow_have < trace.quality.y) ||
+                                          (trace.quality.z != 0u) || (rand(state) < 0.02));
 
         // Debug view 5: whether the table could hold this face at all. Red is a pixel the
         // table refused a slot; green is a face it holds.

@@ -78,6 +78,7 @@ struct Options {
     f32 target_fps = 0.0f;        // 0 means "the monitor's refresh rate"
     bool no_auto_quality = false;
     bool benchmark = false;       // re-run the machine measurement and save the result
+    u64 edit_frame = 0;           // apply --edit on this frame instead of frame 100
     i32 quality_level = -1;       // -1 means "decide it"
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
@@ -180,6 +181,8 @@ Options parse_options(int argc, char** argv) {
             options.stream_log = true;
         } else if (arg == "--target-fps" && i + 1 < argc) {
             options.target_fps = static_cast<f32>(std::atof(argv[++i]));
+        } else if (arg == "--edit-frame" && i + 1 < argc) {
+            options.edit_frame = static_cast<u64>(std::atoll(argv[++i]));
         } else if (arg == "--benchmark") {
             options.benchmark = true;
         } else if (arg == "--no-auto-quality") {
@@ -571,6 +574,12 @@ private:
 
     // Holds the frame rate by spending detail where it is worth most. Measured on the machine
     // it is running on, once, the first time the game starts. See documentation/19.
+    // Frames left during which every surface re-measures its shadow, set by an edit. About two
+    // seconds: long enough for a distant face covered by one pixel to gather the samples it
+    // needs, short enough that it is over before anyone places the next voxel.
+    u32 shadow_refresh_frames_ = 0;
+    static constexpr u32 kShadowRefreshFrames = 120;
+
     AutoQuality quality_;
     u32 applied_quality_level_ = 0xFFFFFFFFu;   // what the renderer is currently set to
     bool benchmark_pending_ = false;
@@ -794,7 +803,11 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
     // being built. That is deliberate: an edit made before streaming exists proves nothing,
     // and the interesting question is whether an edit to an already-resident chunk reaches
     // the GPU. Applying it at a known frame makes that testable from a screenshot.
-    constexpr u64 kScriptedEditFrame = 100;
+    // Late by choice, when asked. An edit at frame 100 lands while the shadow entries around
+    // it are still filling, so it cannot show whether an edit reaches surfaces that have
+    // already converged — which is the case a player is actually in, and the one where new
+    // shadows were reported missing.
+    const u64 kScriptedEditFrame = (options_.edit_frame > 0) ? options_.edit_frame : 100;
     if (!options_.edit.empty() && frame_counter_ == kScriptedEditFrame) {
         // (the scripted clip below shares this frame number)
         i64 values[7]{0, 0, 0, 0, 0, 0, 0};
@@ -982,6 +995,23 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
 //
 // The edit knows exactly which chunks it touched, so it says so.
 void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
+    // And for a couple of seconds afterwards, every surface re-measures its shadow.
+    //
+    // A converged face stops tracing shadow rays and is only refreshed by a two per cent
+    // trickle. Close to the camera a face is covered by hundreds of pixels, so two per cent of
+    // them is a steady stream and a new shadow arrives at once; at distance a face is covered
+    // by one pixel or less, two per cent of that is nothing, and the shadow of something just
+    // placed never appears. Worse, a face below kShadowSeed samples leans on a parent node
+    // sixty-four voxels across, which is dominated by surface that is still lit — so the new
+    // shadow is not merely late, it is actively averaged away.
+    //
+    // That is exactly the report: new voxels cast no shadow until the camera comes close, and
+    // then it fades in and stays. Coming close is what finally supplies the samples.
+    //
+    // So an edit says "look again" to everything, briefly. Not a wipe of the cache — that was
+    // tried and it is the smearing, every voxel placed relighting the whole scene at once.
+    // This keeps every measured value and simply re-measures faster for a moment.
+    shadow_refresh_frames_ = kShadowRefreshFrames;
     for (const Op& raw : ops) {
         Op op = raw;
         op.normalise();
@@ -996,6 +1026,23 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // stale chunk is one the renderer can still find.
                     if (!world_.has_chunk(coord)) continue;
                     residency_.invalidate(coord);
+
+                    // And ask for it outright, which invalidate() alone does not do: it
+                    // refreshes a chunk that is already resident and drops one that is not.
+                    //
+                    // A chunk nobody has looked at closely is not resident, and a shadow ray
+                    // cannot be occluded by geometry that is not there. Shadow rays are also
+                    // the one kind that deliberately never request streaming, so a structure
+                    // built at a distance was never fetched by the rays that needed it: it
+                    // cast no shadow until the camera came close enough for *primary* rays to
+                    // pull it in, at which point the shadow was measured, cached, and stayed —
+                    // which is precisely the "shadows only appear when I get close, then fade
+                    // in and remain" that was reported. Measured: with the camera 400 m away,
+                    // an edited region was 0 of 101 chunks resident.
+                    //
+                    // A chunk the player just built is not a guess about what might be looked
+                    // at. It is the one thing on screen they are certain to care about.
+                    residency_.request(coord);
                     // A summary is a summary of contents, so changing the contents makes it
                     // wrong too — and it is what this chunk draws as from a distance. The
                     // tree first: it holds the node that every level above this chunk was
@@ -1798,6 +1845,8 @@ void Application::record_frame(f32 time_seconds) {
         trace.control[2] = static_cast<u32>(frame_counter_);   // for cache eviction
         trace.quality[0] = quality_.knobs().refine_stride;
         trace.quality[1] = quality_.knobs().shadow_target;
+        trace.quality[2] = (shadow_refresh_frames_ > 0) ? 1u : 0u;
+        if (shadow_refresh_frames_ > 0) --shadow_refresh_frames_;
         vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(TracePush), &trace);
 
