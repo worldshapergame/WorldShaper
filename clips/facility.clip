@@ -1,0 +1,310 @@
+# facility.clip — the engine test facility.
+#
+# A building, not a diagram. Everything in it is here to put some part of the engine under a
+# light and let it be looked at, but it is laid out as architecture: a plinth, an approach, a
+# double-height hall, a spine you can walk down, rooms off it, a stair to a gallery above, and
+# outside space on three sides. If a test cannot be reached on foot it is in the wrong place.
+#
+# Datum: ground is y = 0. The plinth is 0.6 high and everything indoors is measured from its top.
+# Floor to floor is 4.0. The long axis is x, depth is z, up is y.
+#
+#   preview   WorldShaper.exe --clip-file clips/facility.clip --clip-metre 8 --pathtrace ...
+#   measure   WorldShaper.exe --clip-file clips/facility.clip --clip-metre 16 --clip-slice 2,-1,6
+#
+# Stage 1 is the building itself and the first four test rooms. Stages after it fill the
+# remaining bays, which is why the bays are laid out on a grid rather than sized to their
+# contents.
+
+metre 32
+bounds -26 -0.5 -14   26 10.5 14
+
+# --- the grid ---------------------------------------------------------------------------------
+# Everything dimensioned from these, so the proportions hold together when one of them moves.
+param plinth_top   0.6
+param floor_two    4.6
+param roof         8.6
+param wall         0.25
+param bay          4.0
+param door_w       1.1
+param door_h       2.15
+param rise         0.1667
+param run          0.29
+
+# --- materials --------------------------------------------------------------------------------
+# A modern palette: board-formed concrete, pale stone, warm timber, dark steel, glass, water.
+material concrete   rgb=176,174,168 rough=215
+material concrete_d rgb=108,107,104 rough=225
+material stone      rgb=214,210,200 rough=190
+material timber     rgb=150,104,58  rough=180
+material steel      rgb=118,120,126 rough=70  metal=210
+material glass      rgb=196,214,218 rough=8   opacity=40 ior=1.5 translucent=220
+material water      rgb=110,140,158 rough=12  opacity=90 ior=1.33 translucent=200
+material lamp       rgb=255,244,214 emit=205
+material red        rgb=176,54,44   rough=200
+material blue       rgb=44,86,164   rough=200
+material grass      rgb=86,112,62   rough=245
+# The gallery's four, from matte dielectric to mirror metal. Roughness is the only thing that
+# changes between the first two and metalness the only thing between the last two, so any
+# difference in how they read is the renderer's answer and not the material's.
+material matte      rgb=196,192,186 rough=252
+material gloss      rgb=196,192,186 rough=26
+material brushed    rgb=182,180,176 rough=120 metal=235
+material chrome     rgb=214,214,216 rough=10  metal=250
+
+# --- patterns ---------------------------------------------------------------------------------
+# Board forming: the horizontal shutter lines cast in concrete. Shallow, because at three
+# centimetres a voxel it is two voxels deep and any more reads as corrugation.
+# A thin dark line every 20 cm, not a 50/50 band. At duty 0.46 and painted on the wide side it
+# read as corrugation rather than shuttering — half the building was the "accent" colour.
+let boards   = stripes axis=y period=0.20 duty=0.10
+let grain    = fbm size=0.35 octaves=4 seed=11
+let fine     = fbm size=0.07 octaves=3 seed=23
+let scuff    = rasp size=0.05 depth=1.0 seed=37
+let ripple   = waves axis=y a=0.9 b=1.3
+let height   = axis of=y
+let masonry  = bricks length=0.42 height=0.21 mortar=0.02 facing=z
+
+# ==============================================================================================
+# THE SITE
+# ==============================================================================================
+# Ground, with a shallow grain so it is not a mirror-flat plane — flat ground hides exactly the
+# shading errors this facility exists to show.
+let ground_slab = box -26 -0.5 -14   26 0 14
+let ground      = displace { ground_slab grain } amount=0.05
+
+# The plinth the building stands on, and the broad steps up to it from the west.
+let plinth  = box -22 0 -12   22 plinth_top 12 round=0.03
+let approach = stairs -27 0 -5   -22 plinth_top 5 run=0.42 rise=0.15
+
+# A reflecting pool west of the entrance. Water is the flattest, smoothest surface here and the
+# only one that will show the sky and the building in it, which is the specular path's test.
+let pool_cut  = box -20 0.15 -7   -14 plinth_top 7
+let pool_fill = box -20 0.15 -7   -14 0.5 7
+
+# ==============================================================================================
+# THE MAIN MASS
+# ==============================================================================================
+# A shell, then everything cut out of it. Building this as one hollow volume rather than six
+# walls is what keeps the corners honest: there is no seam to be a voxel out.
+let envelope = box -18 plinth_top -10   18 roof 10
+let inner    = box -17.75 plinth_top -9.75   17.75 roof 9.75
+let shell    = difference { envelope inner }
+
+# The upper floor slab, with the double-height hall left open through it.
+let slab_two  = box -18 floor_two -10   18 4.85 10
+let hall_void = box -13 floor_two -8.5   -1 4.85 1.5
+let slab_two  = difference { slab_two hall_void }
+
+# The roof, with clerestory slots along the north edge that throw light down the hall wall.
+let roof_slab = box -18 roof -10   18 9.0 10
+let clere_cut = box -13 roof -9.9   -1 9.0 -8.6
+let roof_slab = difference { roof_slab clere_cut }
+
+# A parapet, so the roof reads as a roof and the terrace has an edge.
+let parapet_o = box -18 9.0 -10   18 9.8 10
+let parapet_i = box -17.7 9.0 -9.7   17.7 9.8 9.7
+let parapet   = difference { parapet_o parapet_i }
+
+# --- openings ---------------------------------------------------------------------------------
+# The entrance: a tall recessed slot on the west face, the width of two bays.
+let entry_cut = box -18.4 plinth_top -3.2   -17.6 5.2 3.2
+
+# Glazing to the south, floor to soffit, in bays. One long slot rather than punched windows,
+# because a continuous aperture is the harder light for a renderer: the gradient across the
+# floor has nowhere to hide a step.
+let glaze_s = box -16 1.0 -10.4   16 3.6 -9.6
+# The south glazing stops short of the last two bays on purpose. Rooms 3 and 4 are the ones that
+# have to be dark — a lamp is only a test of direct light sampling if there is nothing else in
+# the room, and a vault is only a test of the black invariant if no light can reach it.
+let glaze_n = box -16 1.0 9.6   8 3.6 10.4
+let glaze_u = box -16 5.4 -10.4   16 7.6 -9.6
+
+let shell = difference { shell entry_cut glaze_s glaze_n glaze_u }
+
+# ==============================================================================================
+# THE PORTICO
+# ==============================================================================================
+# A deep cantilever over the entrance, on slender columns. The overhang is what puts a soft
+# gradient of shadow across the entrance floor, and the columns are thin enough to be a real
+# test of the marcher.
+let canopy   = box -24 5.2 -6   -17.5 5.6 6 round=0.05
+let column   = cylinder 0 0 0 r=0.16 h=4.6 axis=y
+let col_row  = repeat { column } x=3.0 nx=2
+let columns  = translate { col_row } -20.5 2.9 0
+let col_row2 = repeat { column } x=3.0 nx=2
+let columns2 = translate { col_row2 } -20.5 2.9 -4.5
+let col_row3 = repeat { column } x=3.0 nx=2
+let columns3 = translate { col_row3 } -20.5 2.9 4.5
+let posts    = union { columns columns2 columns3 }
+let portico  = union { canopy posts }
+
+# ==============================================================================================
+# INSIDE: THE HALL
+# ==============================================================================================
+# Double height, and the only room lit from two levels at once. Its far wall is the one the
+# clerestory slots wash, which is the light path with the longest way to travel.
+let hall_floor = box -17.75 plinth_top -9.75   -0.5 0.85 9.75
+
+# A single freestanding wall in the hall, faced in colour on each side: the colour-bleed test.
+# White floor, red one side, blue the other, and the bounce is the only thing that can put
+# either colour on the floor.
+let bleed_wall = box -8.0 0.85 -2   -7.6 4.4 4 round=0.02
+let bleed_red  = box -8.14 0.85 -2   -8.0 4.4 4
+let bleed_blue = box -7.6 0.85 -2   -7.46 4.4 4
+
+# ==============================================================================================
+# INSIDE: THE SPINE
+# ==============================================================================================
+# A corridor the length of the building, which is the long sight line: thirty-odd metres of
+# continuous surface running away from the eye, so the detail levels and the summary tiers have
+# somewhere to disagree visibly if they are going to.
+let spine_void = box -0.5 plinth_top 2.2   17.75 3.9 4.6
+let spine_slab = box -0.5 plinth_top 2.2   17.75 0.85 4.6
+
+# The rooms off the spine, cut as one row of voids and then divided.
+let rooms_void = box 0.5 plinth_top 5.0   17.5 3.9 9.6
+let rooms_slab = box 0.5 plinth_top 5.0   17.5 0.85 9.6
+
+# Cross walls between the rooms, on the bay grid.
+let cross      = box 0 plinth_top 5.0   wall 3.9 9.6
+let cross_row  = repeat { cross } x=bay nx=3
+let cross_wall = translate { cross_row } 9.0 0 0
+
+# Doors from the spine into each room.
+let door       = box 0 plinth_top 4.4   door_w door_h 5.6
+let door_row   = repeat { door } x=bay nx=3
+let doors      = translate { door_row } 2.6 0 0
+
+# ==============================================================================================
+# THE STAIR
+# ==============================================================================================
+# A switchback, at a rise and run a person can actually walk: 0.167 by 0.29 is a shallow public
+# stair. Two flights of twelve with a landing between them, which is what makes four metres of
+# height climbable without a ladder.
+let flight_a  = stairs 0.6 plinth_top -8.0   3.0 2.6 -4.5 run=run rise=rise
+let landing   = box 0.6 2.6 -4.9   5.6 2.85 -4.5
+let flight_b  = stairs 3.2 2.6 -8.0   5.6 floor_two -4.5 run=run rise=rise
+let stair     = union { flight_a landing flight_b }
+
+# The void the stair rises through, and a balustrade round the opening above.
+let stair_void = box 0.5 floor_two -8.2   5.8 4.85 -4.3
+let rail_o     = box 0.3 floor_two -8.4   6.0 5.65 -4.1
+let rail_i     = box 0.5 floor_two -8.2   5.8 5.65 -4.3
+let balustrade = difference { rail_o rail_i }
+
+# ==============================================================================================
+# THE TEST ROOMS
+# ==============================================================================================
+# Four bays off the spine, each aimed at one thing the renderer has to get right. They are rooms
+# rather than exhibits: you walk in through a door, and what is being tested is the room.
+
+# --- bay 1, x 1..5: shadow ---------------------------------------------------------------------
+# A colonnade in a daylit room. Round columns in a row throw a rhythm of shadows across the
+# floor and up the far wall, and every one of them is a soft-edged shadow with a penumbra that
+# widens with distance from its column — which is the sun's half degree, and the thing a shadow
+# map cannot do at all.
+let post_1    = cylinder 0 0 0 r=0.13 h=3.0 axis=y
+let post_row  = repeat { post_1 } x=0.9 nx=2
+let colonnade = translate { post_row } 3.0 2.1 7.6
+
+# --- bay 2, x 5..9: materials ------------------------------------------------------------------
+# A row of spheres on a shelf, from matte to mirror and from dielectric to metal. Nothing else in
+# the bay, because the point is to compare them against each other under one light.
+let shelf     = box 5.4 1.4 6.4   8.6 1.6 7.4 round=0.03
+let ball_a    = sphere 5.9 2.0 6.9 r=0.34
+let ball_b    = sphere 6.7 2.0 6.9 r=0.34
+let ball_c    = sphere 7.5 2.0 6.9 r=0.34
+let ball_d    = sphere 8.3 2.0 6.9 r=0.34
+let gallery   = union { shelf ball_a ball_b ball_c ball_d }
+
+# --- bay 3, x 9..13: lamps ---------------------------------------------------------------------
+# A windowless room lit only by four small fittings. Each is a few centimetres across, which is
+# the case direct light sampling exists for: a bounce finds a lamp that size about once in a
+# million tries, so without asking the lamp directly the room is noise.
+let fitting   = box 0 0 0   0.34 0.16 0.34
+let fit_row   = repeat { fitting } x=2.2 nx=1
+let lamps     = translate { fit_row } 11.0 3.5 7.3
+
+# A pedestal under them, so there is something for the light to fall on and something to cast a
+# contact shadow — the hardest shadow there is, because it is where the geometry meets.
+let pedestal  = box 10.6 0.85 6.9   11.4 1.9 7.7 round=0.02
+
+# --- bay 4, x 13..17: thin things, and the sealed vault ---------------------------------------
+# A screen of slats: the hardest geometry a ray marcher meets, because each slat is thinner than
+# the distance the marcher would like to step.
+let slat      = box 0 0 0   0.06 2.0 0.5
+let slat_row  = repeat { slat } x=0.24 nx=8
+let screen    = translate { slat_row } 15.0 2.0 6.2
+
+# And a sealed box with nothing inside and no way in. It must render pitch black for ever. It is
+# the one test in the building that is not walkable, and it cannot be: an opening would defeat it.
+let vault_o   = box 15.6 0.85 8.2   17.2 2.6 9.4
+let vault_i   = box 15.8 1.05 8.4   17.0 2.4 9.2
+let vault     = difference { vault_o vault_i }
+
+# Bays 3 and 4 are closed off the spine by a partition, and that is what makes them a test.
+#
+# The shell is hollow throughout, so cutting "voids" inside it carves nothing — the interior was
+# already open. Bays 1 and 2 are alcoves off one open volume, which is what a modern plan looks
+# like and is fine for daylight. A lamp is only a test of direct light sampling if there is
+# nothing else lighting the room, so bay 3 needs a real wall and a real door.
+let part_wall = box 8.9 plinth_top 4.9   17.6 3.9 5.15
+let part_door = box 10.3 plinth_top 4.8   11.5 door_h 5.25
+let partition = difference { part_wall part_door }
+
+let fittings  = union { colonnade gallery lamps pedestal screen vault partition }
+
+# ==============================================================================================
+# ASSEMBLY
+# ==============================================================================================
+let slab_two = difference { slab_two stair_void }
+
+let built = union {
+    plinth approach shell portico
+    hall_floor spine_slab rooms_slab
+    slab_two roof_slab parapet
+    cross_wall stair balustrade
+    bleed_wall
+}
+
+# The voids, taken out last so nothing can fill them back in.
+let carved = difference { built spine_void rooms_void hall_void doors pool_cut }
+
+# Every floor slab, as one mask for the stone coat.
+let floors = union { hall_floor spine_slab rooms_slab slab_two landing }
+
+# The fittings go in after the carve, not before it. Inside uilt they were deleted by the
+# very void that makes the room they stand in — the rooms are cut as one volume, and anything
+# already in that volume is cut with it.
+let all = union { ground carved fittings pool_fill bleed_red bleed_blue }
+
+# ==============================================================================================
+# PAINT
+# ==============================================================================================
+# Coats, in order. Concrete is the undercoat; everything else is a rule about where it is not.
+# Coats, in order, each painting over the last.
+#
+# The masks are *shapes*, not heights. A shape is a field like any other, so `where=pool_fill
+# below=0` reads as "inside the pool" and needs nothing the language did not already have.
+#
+# Keyed off the y coordinate first, and it painted a third of the building as water — because
+# "below half a metre" is true of the ground under the entire site, not just of the pool. The
+# giveaway was that deleting the water rule changed nothing, which is impossible, and which
+# turned out to mean the edit removing it had never applied.
+paint concrete
+paint concrete_d where=boards below=0.0
+paint stone      where=floors below=0
+paint timber     where=canopy below=0
+paint steel      where=posts below=0
+paint grass      where=ground below=0
+paint water      where=pool_fill below=0
+paint red        where=bleed_red below=0
+paint blue       where=bleed_blue below=0
+paint matte      where=ball_a below=0
+paint gloss      where=ball_b below=0
+paint brushed    where=ball_c below=0
+paint chrome     where=ball_d below=0
+paint timber     where=screen below=0
+paint lamp       where=lamps below=0
+
+solid all

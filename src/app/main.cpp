@@ -92,6 +92,7 @@ struct Options {
     std::vector<std::string> clip_slices;   // "axis,at" or "axis,at,step"
     bool clip_symmetry = false;
     i64 clip_at[3]{0, 0, 0};                // where to stamp it, in voxels
+    i32 clip_metre = 0;                     // override the file's resolution, for quick previews
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
     // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
@@ -183,6 +184,8 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.clip_slices.push_back(argv[++i]);
         } else if (arg == "--clip-symmetry") {
             options.clip_symmetry = true;
+        } else if (arg == "--clip-metre") {
+            options.clip_metre = static_cast<i32>(next_number(0));
         } else if (arg == "--clip-at") {
             if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
         } else if (arg == "--material") {
@@ -262,6 +265,7 @@ void print_help() {
         "  --clip-slice a,at[,n] print a slice through it, one character per n voxels\n"
         "  --clip-symmetry       report how far it is from being mirror symmetric\n"
         "  --clip-at x,y,z       where to stamp it, in voxels (default the origin)\n"
+        "  --clip-metre N        sample at N voxels per metre instead of the file's\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "\n"
@@ -821,6 +825,41 @@ void Application::handle_resize() {
 void Application::build_world() {
     const TestScenePalette palette = create_test_palette(types_, tags_);
     const u64 start = now_ns();
+
+    // A clip file, when one is given, replaces the scripted scene outright. The point of the
+    // facility is to be the thing under test, and standing it next to the old scene would mean
+    // measuring both at once.
+    if (!options_.clip_file.empty()) {
+        forge::Script script = forge::load_clip_script(options_.clip_file, types_, tags_);
+        for (const forge::ScriptError& error : script.errors) {
+            WS_LOG_ERROR("clip", "line {}: {}", error.line, error.message);
+        }
+        if (script.ok()) {
+            if (options_.clip_metre > 0) script.settings.voxels_per_metre = options_.clip_metre;
+            JobSystem jobs;
+            const forge::SampleResult built =
+                forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+            std::vector<Op> ops;
+            clip_to_ops(built.clip, built.origin_voxel[0] + options_.clip_at[0],
+                        built.origin_voxel[1] + options_.clip_at[1],
+                        built.origin_voxel[2] + options_.clip_at[2], PasteMode::SolidOnly, tick_++,
+                        1, ops);
+            for (const Op& op : ops) apply_op(world_, op, ledger_);
+            world_.compact();
+            materials_ = script.material_types.empty()
+                             ? std::vector<VoxelTypeId>{palette.stone}
+                             : script.material_types;
+            material_index_ = options_.material % materials_.size();
+            chisel_.set_material(materials_[material_index_]);
+            const WorldStats clip_stats = world_.stats();
+            WS_LOG_INFO("world", "clip '{}' built in {:.0f} ms: {} chunks, {} solid voxels",
+                        options_.clip_file, ns_to_ms(now_ns() - start), clip_stats.chunks,
+                        clip_stats.solid_voxels);
+            return;
+        }
+        WS_LOG_ERROR("clip", "falling back to the scripted scene");
+    }
+
     build_test_scene(world_, palette, 1024, ledger_);
     world_.compact();
 
@@ -2815,6 +2854,7 @@ int run_clip_tool(const Options& options) {
     }
     if (!script.ok()) return 1;
 
+    if (options.clip_metre > 0) script.settings.voxels_per_metre = options.clip_metre;
     JobSystem jobs;
     const u64 parsed = now_ns();
     const forge::SampleResult built =
