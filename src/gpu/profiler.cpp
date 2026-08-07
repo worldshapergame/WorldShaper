@@ -58,7 +58,7 @@ void GpuProfiler::begin_pass(VkCommandBuffer cmd, const char* name, f64 budget_m
     frame.budgets[frame.count] = budget_ms;
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, frame.pool,
                          frame.count * 2);
-    if (device_->has_checkpoints()) {
+    if (device_->has_checkpoints() && vkCmdSetCheckpointNV) {
         vkCmdSetCheckpointNV(cmd, const_cast<char*>(name));
     }
 }
@@ -68,7 +68,7 @@ void GpuProfiler::end_pass(VkCommandBuffer cmd) {
     if (open_pass_ < 0) return;
     vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, frame.pool,
                          static_cast<u32>(open_pass_) * 2 + 1);
-    if (device_->has_checkpoints()) {
+    if (device_->has_checkpoints() && vkCmdSetCheckpointNV) {
         vkCmdSetCheckpointNV(cmd, const_cast<char*>(kPassFinished));
     }
     ++frame.count;

@@ -384,6 +384,13 @@ bool Device::create_logical_device() {
         transfer_family_ = graphics_family_;
     }
 
+    // The extension being advertised is not the same as its entry points being loadable, and
+    // the difference is only discovered at the worst possible moment. Settle it here, once,
+    // while everything still works.
+    checkpoints_ = checkpoints_ && vkCmdSetCheckpointNV != nullptr &&
+                   vkGetQueueCheckpointDataNV != nullptr;
+    device_fault_ = device_fault_ && vkGetDeviceFaultInfoEXT != nullptr;
+
     g_device_for_lost_report = this;
     WS_LOG_INFO("gpu", "device-lost diagnostics: checkpoints {}, fault info {}",
                 checkpoints_ ? "yes" : "no", device_fault_ ? "yes" : "no");
@@ -396,19 +403,25 @@ void Device::log_device_lost() const {
     // Which passes the GPU had actually reached. Markers are recorded at the top and tail of
     // every pass, so the last TOP_OF_PIPE marker without its matching BOTTOM_OF_PIPE is the
     // pass that was still running — which is the pass that killed it.
-    if (checkpoints_ && graphics_queue_ != VK_NULL_HANDLE) {
+    // Every one of these is null-checked, and that is not defensive habit — it is a bug this
+    // code already caused. vkGetQueueCheckpointData2NV is the revision-2 entry point and volk
+    // leaves it null on a driver that only exposes revision 1, so calling it turned a lost
+    // device into "execute at 0x0" with an empty stack. The crash handler destroyed the very
+    // report it exists to write. Anything reached only while the GPU is already dead has to
+    // assume it is the last code that will run.
+    if (checkpoints_ && graphics_queue_ != VK_NULL_HANDLE && vkGetQueueCheckpointDataNV) {
         u32 count = 0;
-        vkGetQueueCheckpointData2NV(graphics_queue_, &count, nullptr);
+        vkGetQueueCheckpointDataNV(graphics_queue_, &count, nullptr);
         if (count == 0) {
             WS_LOG_ERROR("gpu", "  no checkpoints reported");
         } else {
-            std::vector<VkCheckpointData2NV> data(
-                count, VkCheckpointData2NV{VK_STRUCTURE_TYPE_CHECKPOINT_DATA_2_NV});
-            vkGetQueueCheckpointData2NV(graphics_queue_, &count, data.data());
-            for (const VkCheckpointData2NV& point : data) {
+            std::vector<VkCheckpointDataNV> data(
+                count, VkCheckpointDataNV{VK_STRUCTURE_TYPE_CHECKPOINT_DATA_NV});
+            vkGetQueueCheckpointDataNV(graphics_queue_, &count, data.data());
+            for (const VkCheckpointDataNV& point : data) {
                 const char* marker = static_cast<const char*>(point.pCheckpointMarker);
-                WS_LOG_ERROR("gpu", "  checkpoint stage 0x{:016X}: {}",
-                             static_cast<u64>(point.stage), marker ? marker : "(null)");
+                WS_LOG_ERROR("gpu", "  checkpoint stage 0x{:08X}: {}",
+                             static_cast<u32>(point.stage), marker ? marker : "(null)");
             }
         }
     } else {
@@ -418,7 +431,7 @@ void Device::log_device_lost() const {
     // Page faults and their addresses, where the driver will say. This distinguishes the two
     // things a lost device usually is: a shader reading out of bounds, or a dispatch that ran
     // long enough for the operating system to reset the GPU underneath it.
-    if (device_fault_ && device_ != VK_NULL_HANDLE) {
+    if (device_fault_ && device_ != VK_NULL_HANDLE && vkGetDeviceFaultInfoEXT) {
         VkDeviceFaultCountsEXT counts{VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
         if (vkGetDeviceFaultInfoEXT(device_, &counts, nullptr) == VK_SUCCESS) {
             std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);

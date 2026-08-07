@@ -1895,7 +1895,20 @@ int Application::run(const Options& options) {
     // A face that cannot find a slot is not wrong, it just goes uncached and noisy, and that
     // failure is invisible until someone wonders why one wall is grainier than the rest —
     // which is what debug view 5 is for.
-    constexpr u64 kFaceCacheEntries = 4u << 20;
+    // Doubled again when the sun moved into entries of its own. Two kinds of entry per surface
+    // instead of one is more pressure on the same table, and the table answers pressure by
+    // refusing slots: refusals in an enclosed room went from 4.6% of surface pixels to 12.2%,
+    // and a refused face has no light at all, so they show up as grainy patches the size of
+    // whatever region saturated. Lengthening the probe instead reached 7% and cost a fifth of
+    // the frame; the memory is the cheaper answer.
+    // Sized from VRAM, like the world buffers, rather than fixed. A quarter of a gigabyte is
+    // the right answer on a card with sixteen and plainly the wrong one on a handheld with
+    // four, and a table that cannot be allocated is worse than a smaller one: a refused face
+    // is noisy, an absent buffer is nothing at all.
+    const u64 face_vram = device_.caps().device_local_bytes;
+    const u64 kFaceCacheEntries = (face_vram >= (8ull << 30))   ? (8ull << 20)
+                                  : (face_vram >= (4ull << 30)) ? (4ull << 20)
+                                                                : (2ull << 20);
     face_cache_ = create_device_buffer(device_, kFaceCacheEntries * 32,
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "face cache");
     WS_LOG_INFO("app", "face cache: {} entries, {} MB", kFaceCacheEntries,
