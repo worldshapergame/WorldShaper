@@ -624,10 +624,39 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
     std::vector<LedgerDelta> deltas(targets.size());
     std::vector<u64> changed(targets.size(), 0);
     std::vector<u64> written(targets.size(), 0);
+    std::vector<u8> empty(targets.size(), 0);
+
+    // How far the type ids in this clip reach, so the per-thread tally below can be a plain array
+    // indexed by type. One pass over the clip, spread across the cores, because at this size even
+    // reading an array is worth doing in parallel.
+    usize type_count = 1;
+    {
+        const usize stripes = std::max<usize>(1, (jobs != nullptr) ? jobs->worker_count() + 1 : 1);
+        std::vector<u32> highest(stripes, 0);
+        const auto scan = [&](usize begin, usize end) {
+            for (usize s = begin; s < end; ++s) {
+                const usize from = clip.voxels.size() * s / stripes;
+                const usize to = clip.voxels.size() * (s + 1) / stripes;
+                u32 top = 0;
+                for (usize i = from; i < to; ++i) top = std::max(top, clip.voxels[i]);
+                highest[s] = top;
+            }
+        };
+        if (jobs != nullptr && stripes > 1) {
+            jobs->parallel_for(stripes, 1, scan);
+        } else {
+            scan(0, stripes);
+        }
+        for (u32 top : highest) type_count = std::max(type_count, static_cast<usize>(top) + 1);
+    }
 
     const auto do_chunk = [&](usize begin, usize end) {
         VoxelTypeId want[kBrickVoxels];
         VoxelTypeId have[kBrickVoxels];
+        // One counter per type, for the common case of matter arriving where there was none.
+        // Allocated per batch of chunks rather than per chunk, because it is the size of the type
+        // table and clearing it once per chunk would cost more than it saves.
+        std::vector<u32> from_air(type_count, 0);
         for (usize t = begin; t < end; ++t) {
             Chunk& chunk = *targets[t].chunk;
             LedgerDelta& delta = deltas[t];
@@ -709,9 +738,15 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
                         // one pass over 512 values.
                         u64 hits = 0;
                         if (existing == nullptr && wants_all && mask == WriteMask::All) {
+                            // Everything here comes from air, so the ledger only needs a count
+                            // per type — a straight increment into a dense array, no key, no
+                            // probe. Under the no-two-voxels-alike rule that array is the whole
+                            // type table and the increments are scattered across it, so making
+                            // each one a single indexed write rather than a hash lookup is worth
+                            // it sixty million times over.
                             for (u32 v = 0; v < static_cast<u32>(kBrickVoxels); ++v) {
                                 if (want[v] == kAir) continue;
-                                delta.add(kAir, want[v], 1);
+                                ++from_air[want[v]];
                                 ++hits;
                             }
                         } else {
@@ -751,6 +786,19 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
             changed[t] = local_changed;
             written[t] = local_written;
             if (touched) chunk.mark_modified();
+            empty[t] = touched ? u8{0} : u8{1};
+        }
+
+        // Fold the batch's air-to-matter counts into the first chunk's delta. Safe without a
+        // lock: only this thread ever touched these chunks, so only this thread touches that
+        // delta.
+        if (begin < end) {
+            LedgerDelta& sink = deltas[begin];
+            for (usize type = 1; type < from_air.size(); ++type) {
+                if (from_air[type] != 0) {
+                    sink.add(kAir, static_cast<VoxelTypeId>(type), from_air[type]);
+                }
+            }
         }
     };
 
@@ -763,6 +811,7 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
     for (usize t = 0; t < targets.size(); ++t) {
         stats.voxels_changed += changed[t];
         stats.bricks_written += written[t];
+        if (empty[t] != 0) stats.chunks_left_empty = true;
         const LedgerDelta& delta = deltas[t];
         for (usize i = 0; i < delta.keys.size(); ++i) {
             if (delta.keys[i] == 0) continue;

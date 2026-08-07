@@ -161,6 +161,12 @@ struct PasteStats {
     u64 voxels_changed = 0;
     u64 bricks_written = 0;
     u64 chunks_touched = 0;
+
+    // True when a chunk was created that nothing ended up being written into, which is the only
+    // reason a paste ever leaves anything worth compacting. The bricks it does write are built by
+    // Brick::assign, which already picks the smallest encoding that fits — running compact over
+    // them re-decodes and re-encodes sixty million voxels to reach the answer they already have.
+    bool chunks_left_empty = false;
 };
 
 // Stamps `clip` straight into the world's bricks, without going through ops at all.

@@ -156,8 +156,9 @@ struct Cursor {
 
 }  // namespace
 
-u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre) {
+u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre, u64 build_stamp) {
     u64 h = hash_mix(kVersion);
+    h = hash_combine(h, build_stamp);
     h = hash_combine(h, static_cast<u64>(voxels_per_metre));
     h = hash_combine(h, static_cast<u64>(source_text.size()));
     for (char c : source_text) h = hash_combine(h, static_cast<u64>(static_cast<u8>(c)));

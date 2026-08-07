@@ -54,8 +54,14 @@ struct WorldCache {
 };
 
 // A number that changes whenever anything that would change the world changes: the source text,
-// the resolution it was sampled at, and the format version.
-u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre);
+// the resolution it was sampled at, the format version — and the build that produced it.
+//
+// The build matters and it is easy to forget. A cache keyed only on the clip is right until the
+// sampler changes, and then it is silently wrong: the file still matches its key, so it loads,
+// and the change that was just made to how clips are built has no visible effect. That is a
+// particularly nasty failure because it looks like the change did nothing. `build_stamp` is the
+// executable's own modification time, which changes exactly when the code does.
+u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre, u64 build_stamp);
 
 // Writes to a temporary beside the target and renames, so a run interrupted mid-write leaves the
 // old cache intact rather than a truncated one that looks valid.

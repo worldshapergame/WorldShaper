@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include "core/jobs.hpp"
+#include "core/time.hpp"
 
 namespace ws {
 namespace forge {
@@ -61,6 +62,7 @@ struct alignas(64) LocalTable {
     std::vector<VisualRecord> records;
     std::vector<VoxelTypeId> bases;
     std::vector<u64> counts;      // voxels that landed on each slot, for the report
+    std::vector<u64> slot_keys;   // the key each slot stands for, in slot order
     u64 mask = 0;
 
     void reserve(usize expected) {
@@ -102,6 +104,7 @@ struct alignas(64) LocalTable {
         records.push_back(record);
         bases.push_back(base);
         counts.push_back(1);
+        slot_keys.push_back(key);
         if (records.size() * 2 > keys.size()) grow();
         return slot;
     }
@@ -193,52 +196,117 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
         }
     };
 
+    const u64 phase_start = now_ns();
     if (jobs != nullptr && slab_count > 1) {
         jobs->parallel_for(slab_count, 1, do_slab);
     } else {
         do_slab(0, slab_count);
     }
+    const u64 perturbed_at = now_ns();
+    report.perturb_ms = ns_to_ms(perturbed_at - phase_start);
 
-    // Phase two, serial: intern every private record into the real table. This is where slabs
-    // that independently arrived at the same colour collapse onto one id, and where the budget
-    // is enforced — it is the only point that can see the global count.
-    std::vector<std::vector<VoxelTypeId>> resolve(slab_count);
-    std::unordered_map<VoxelTypeId, u64> tally;
-    std::unordered_map<VoxelTypeId, std::vector<VoxelTypeId>> spent;   // base -> variants made
-    u64 minted = 0;
-    for (usize s = 0; s < slab_count; ++s) {
-        LocalTable& table = tables[s];
-        resolve[s].resize(table.records.size());
-        for (usize i = 0; i < table.records.size(); ++i) {
-            const VoxelTypeId base = table.bases[i];
-            VoxelTypeId variant;
-            if (minted < variation.budget) {
-                const u32 before = types.type_count();
-                variant = types.intern(table.records[i], types.behaviour_of(base));
-                if (types.type_count() != before) {
-                    ++minted;
-                    spent[base].push_back(variant);
+    // Phase two, serial: turn the private tables into real type ids.
+    //
+    // Merged before interning, and that is the whole trick. Every slab discovers the same
+    // perturbations independently — seventy slabs across a wall of one material arrive at the
+    // same few hundred thousand colours — so handing each slab's records to the type table one
+    // at a time asks it to deduplicate fourteen million records down to one million. The table
+    // does that correctly and slowly: three node-based hash lookups per call, ten seconds of
+    // them, for an answer a flat array gives in one probe.
+    //
+    // So the duplicates are collapsed here first, against a single open-addressed table keyed on
+    // the same quantised key the slabs used, and only the survivors are interned.
+    // Collapsed in parallel, by splitting on the key: each worker owns a share of the key space
+    // and merges every slab's records that fall in it. The shares never touch, so no locking, and
+    // the only cost is that every worker reads every slab's list — a sequential scan, which is
+    // the cheap kind of memory traffic, in exchange for the expensive kind (fourteen million
+    // random probes) being divided by the number of cores.
+    const usize parts = std::max<usize>(1, (jobs != nullptr) ? jobs->worker_count() + 1 : 1);
+    std::vector<LocalTable> merged(parts);
+    std::vector<std::vector<u32>> to_merged(slab_count);
+    for (usize s = 0; s < slab_count; ++s) to_merged[s].assign(tables[s].records.size(), 0);
+
+    const auto do_merge = [&](usize begin, usize end) {
+        for (usize p = begin; p < end; ++p) {
+            LocalTable& sink = merged[p];
+            sink.reserve(4096);
+            for (usize s = 0; s < slab_count; ++s) {
+                const LocalTable& table = tables[s];
+                for (usize i = 0; i < table.records.size(); ++i) {
+                    const u64 key = table.slot_keys[i];
+                    // A different mixing constant from the one the table probes with, so a key's
+                    // owner and its slot are not correlated.
+                    if (((key * 0xD6E8FEB86659FD93ull) >> 56) % parts != p) continue;
+                    const u32 slot = sink.slot_for(key, table.records[i], table.bases[i]);
+                    // slot_for counts one voxel for the slot it created or found; the slab knows
+                    // the real number, so correct it.
+                    sink.counts[slot] += table.counts[i] - 1;
+                    to_merged[s][i] = (static_cast<u32>(p) << 24) | slot;
                 }
-            } else {
-                // The budget is spent. Reuse one of the variants already made for this base,
-                // picked by the key so the choice is stable, which keeps the surface varied —
-                // just no longer uniquely so — and keeps the renderer's table within its buffer.
-                report.reused += table.counts[i];
-                const std::vector<VoxelTypeId>& pool = spent[base];
-                variant = pool.empty() ? base : pool[i % pool.size()];
             }
-            resolve[s][i] = variant;
-            tally[variant] += table.counts[i];
         }
-        // The tables are large and nothing needs them past this point.
+    };
+    if (jobs != nullptr && parts > 1) {
+        jobs->parallel_for(parts, 1, do_merge);
+    } else {
+        do_merge(0, parts);
+    }
+
+    for (usize s = 0; s < slab_count; ++s) {
+        // The slab tables are large and nothing needs them past this point.
+        LocalTable& table = tables[s];
         table.keys.clear();
         table.keys.shrink_to_fit();
         table.slots.clear();
         table.slots.shrink_to_fit();
         table.records.clear();
         table.records.shrink_to_fit();
+        table.slot_keys.clear();
+        table.slot_keys.shrink_to_fit();
         report.voxels += touched[s];
     }
+
+    // Interned on one thread, because the type table is one table and the order records enter it
+    // is what makes a clip build the same way twice.
+    std::vector<std::vector<VoxelTypeId>> part_id(parts);
+    std::unordered_map<VoxelTypeId, std::vector<VoxelTypeId>> spent;   // base -> variants made
+    u64 minted = 0;
+    for (usize p = 0; p < parts; ++p) {
+        const LocalTable& sink = merged[p];
+        part_id[p].assign(sink.records.size(), kAir);
+        for (usize i = 0; i < sink.records.size(); ++i) {
+            const VoxelTypeId base = sink.bases[i];
+            if (minted < variation.budget) {
+                const u32 before = types.type_count();
+                part_id[p][i] = types.intern(sink.records[i], types.behaviour_of(base));
+                if (types.type_count() != before) {
+                    ++minted;
+                    spent[base].push_back(part_id[p][i]);
+                }
+            } else {
+                // The budget is spent. Reuse one of the variants already made for this base,
+                // picked by position so the choice is stable, which keeps the surface varied —
+                // just no longer uniquely so — and keeps the renderer's table within its buffer.
+                report.reused += sink.counts[i];
+                const std::vector<VoxelTypeId>& pool = spent[base];
+                part_id[p][i] = pool.empty() ? base : pool[i % pool.size()];
+            }
+        }
+    }
+
+    std::vector<std::vector<VoxelTypeId>> resolve(slab_count);
+    for (usize s = 0; s < slab_count; ++s) {
+        resolve[s].assign(to_merged[s].size(), kAir);
+        for (usize i = 0; i < to_merged[s].size(); ++i) {
+            const u32 code = to_merged[s][i];
+            resolve[s][i] = part_id[code >> 24][code & 0xFFFFFFu];
+        }
+        to_merged[s].clear();
+        to_merged[s].shrink_to_fit();
+    }
+
+    report.intern_ms = ns_to_ms(now_ns() - perturbed_at);
+    const u64 resolve_start = now_ns();
 
     // Phase three, parallel: swap each voxel's private slot for the type id it became.
     const auto resolve_slab = [&](usize begin, usize end) {
@@ -261,13 +329,339 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
         resolve_slab(0, slab_count);
     }
 
-    report.distinct_types = tally.size();
-    for (const auto& entry : tally) {
-        report.largest_group = std::max(report.largest_group, entry.second);
+    report.resolve_ms = ns_to_ms(now_ns() - resolve_start);
+
+    // How many distinct records there really are, and how large the largest group of identical
+    // voxels is. Counted by sorting a million (id, count) pairs rather than by a hash map, which
+    // for a million entries is several times faster and does not allocate a million nodes. Two
+    // different keys can still land on one id — two materials that share a behaviour and happen
+    // on the same colour — so the pairs really do have to be aggregated, not just counted.
+    {
+        std::vector<std::pair<VoxelTypeId, u64>> groups;
+        for (usize p = 0; p < parts; ++p) {
+            for (usize i = 0; i < part_id[p].size(); ++i) {
+                groups.emplace_back(part_id[p][i], merged[p].counts[i]);
+            }
+        }
+        std::sort(groups.begin(), groups.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (usize i = 0; i < groups.size();) {
+            usize j = i;
+            u64 total = 0;
+            while (j < groups.size() && groups[j].first == groups[i].first) {
+                total += groups[j].second;
+                ++j;
+            }
+            ++report.distinct_types;
+            report.largest_group = std::max(report.largest_group, total);
+            i = j;
+        }
     }
-    clip.build_coarse();
+
+    // The coarse occupancy mask is deliberately not rebuilt. Variation changes what a voxel is
+    // made of and never whether there is one — air stays air, matter stays matter — so the mask
+    // the sampler built is still exactly right, and rebuilding it means another pass over every
+    // cell in the box to arrive at the same bytes.
     return report;
 }
+
+namespace {
+
+// Everything the descent needs, gathered once so the recursion carries a pointer instead of a
+// dozen captured references.
+struct Descent {
+    const Field* field = nullptr;
+    u32 root = 0;
+    // The shape under any displacement, used to settle whole boxes. See Field::undisplaced.
+    u32 prune_root = 0;
+    f64 prune_slack = 0.0;         // the worst case, when the parts cannot be told apart
+    f64 outer_amplitude = 0.0;     // the displacement that applies everywhere, allowed for always
+    // Each part of the shape, with its own box and its own slack, so a box can allow only for
+    // the parts it is actually near.
+    std::vector<Field::Aabb> part_box;
+    std::vector<f64> part_slack;
+    bool parts_usable = false;
+    const std::vector<PaintRule>* paint = nullptr;
+    const SampleSettings* settings = nullptr;
+    Clip* clip = nullptr;
+    const std::vector<f64>* rule_slack = nullptr;
+    i64 lo[3]{0, 0, 0};
+    i32 size[3]{0, 0, 0};
+    f64 voxel = 0.0;
+    f64 centre_shift = 0.5;
+    f64 slack = 0.0;
+};
+
+// How far a point is from a box, zero inside it.
+f64 away_from(const Field::Aabb& box, Vec3 p) {
+    if (box.infinite()) return 0.0;
+    const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
+    const f64 dy = std::max(std::max(box.low.y - p.y, p.y - box.high.y), 0.0);
+    const f64 dz = std::max(std::max(box.low.z - p.z, p.z - box.high.z), 0.0);
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// How much this box has to allow for, given where it is.
+//
+// A part of the shape whose box the whole sample box lies outside cannot make the union negative
+// anywhere inside it, and its own distance is bounded by its box without any allowance — so its
+// displacement is not this box's problem. Only the parts within reach are charged for.
+//
+// The bounding boxes are already grown by the displacement amount (see build_bounds), so "outside
+// the box" already means "outside the displaced shape", and this stays conservative.
+f64 slack_here(const Descent& d, Vec3 middle, f64 radius) {
+    if (!d.parts_usable) return d.prune_slack;
+    f64 worst = 0.0;
+    for (usize i = 0; i < d.part_box.size(); ++i) {
+        if (d.part_slack[i] <= worst) continue;
+        if (away_from(d.part_box[i], middle) > radius) continue;
+        worst = d.part_slack[i];
+    }
+    return std::min(worst + d.outer_amplitude, d.prune_slack);
+}
+
+// Where a box's sample points are centred, and how far the furthest of them is from that centre.
+// Measured over the points rather than the cube, because the points are all the field is ever
+// asked about and a box one voxel wide has a radius of zero, not half a voxel.
+void box_centre(const Descent& d, const i32 low[3], const i32 high[3], Vec3& middle, f64& radius) {
+    f64 half[3];
+    f64 at[3];
+    for (u32 axis = 0; axis < 3; ++axis) {
+        const f64 span = static_cast<f64>(high[axis] - 1 - low[axis]) * 0.5;
+        half[axis] = span * d.voxel;
+        at[axis] = (static_cast<f64>(d.lo[axis] + low[axis]) + span + d.centre_shift) * d.voxel;
+    }
+    middle = Vec3{at[0], at[1], at[2]};
+    radius = std::sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2]);
+}
+
+// Marks every cell of a box as part of the clip, and optionally fills it with one material.
+void fill_box(Clip& clip, const i32 low[3], const i32 high[3], VoxelTypeId type, bool matter) {
+    for (i32 z = low[2]; z < high[2]; ++z) {
+        for (i32 y = low[1]; y < high[1]; ++y) {
+            const usize row = clip.index(0, y, z);
+            for (i32 x = low[0]; x < high[0]; ++x) {
+                clip.inside[row + x] = 1;
+                if (matter) clip.voxels[row + x] = type;
+            }
+        }
+    }
+}
+
+// Counted apart, because the two kinds of question are reduced by different means and knowing
+// which of them dominates is the difference between optimising the sampler and guessing at it.
+struct Tally {
+    u64 shape = 0;
+    u64 paint = 0;
+};
+
+void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_covered,
+             const u8* parent_state, bool inherited, Tally& local);
+
+// A box that is solid all through, so the shape need not be asked again — but whose paint still
+// has rules nobody could settle. Walks the voxels evaluating only those.
+void paint_solid(const Descent& d, const i32 low[3], const i32 high[3], const u8* state,
+                 Tally& local) {
+    const std::vector<PaintRule>& paint = *d.paint;
+    for (i32 z = low[2]; z < high[2]; ++z) {
+        const f64 pz = (static_cast<f64>(d.lo[2] + z) + d.centre_shift) * d.voxel;
+        for (i32 y = low[1]; y < high[1]; ++y) {
+            const f64 py = (static_cast<f64>(d.lo[1] + y) + d.centre_shift) * d.voxel;
+            const usize row = d.clip->index(0, y, z);
+            for (i32 x = low[0]; x < high[0]; ++x) {
+                const f64 px = (static_cast<f64>(d.lo[0] + x) + d.centre_shift) * d.voxel;
+                const Vec3 p{px, py, pz};
+                VoxelTypeId type = kAir;
+                Vec3 normal{0, 0, 0};
+                bool have_normal = false;
+                for (usize i = 0; i < paint.size(); ++i) {
+                    if (state[i] == 0) continue;
+                    if (state[i] == 1) {
+                        type = paint[i].type;
+                        continue;
+                    }
+                    const PaintRule& rule = paint[i];
+                    const f64 value = d.field->eval(rule.test, p);
+                    ++local.paint;
+                    if (value < rule.low || value > rule.high) continue;
+                    if (rule.facing_axis < 3) {
+                        if (!have_normal) {
+                            normal = d.field->normal_at(d.root, p, d.voxel);
+                            have_normal = true;
+                            local.paint += 6;
+                        }
+                        const f64 component = (rule.facing_axis == 0)   ? normal.x
+                                              : (rule.facing_axis == 1) ? normal.y
+                                                                        : normal.z;
+                        if (rule.facing_min >= 0.0) {
+                            if (component < rule.facing_min) continue;
+                        } else {
+                            if (component > rule.facing_min) continue;
+                        }
+                    }
+                    type = rule.type;
+                }
+                // A cell with matter in it and no rule that matched is still matter — it would be
+                // worse to silently drop it than to give it the first type asked for, because a
+                // hole in a wall is harder to notice than a wrong colour.
+                if (type == kAir && !paint.empty()) type = paint.front().type;
+                d.clip->inside[row + x] = 1;
+                d.clip->voxels[row + x] = type;
+            }
+        }
+    }
+}
+
+void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_covered,
+             const u8* parent_state, bool inherited, Tally& local) {
+    if (low[0] >= high[0] || low[1] >= high[1] || low[2] >= high[2]) return;
+
+    const std::vector<PaintRule>& paint = *d.paint;
+    const SampleSettings& settings = *d.settings;
+    Clip& clip = *d.clip;
+
+    Vec3 middle;
+    f64 radius = 0.0;
+    box_centre(d, low, high, middle, radius);
+    const bool single = (high[0] - low[0] == 1) && (high[1] - low[1] == 1) &&
+                        (high[2] - low[2] == 1);
+    const f64 reach = radius + (single ? d.slack : slack_here(d, middle, radius));
+
+    // Is any of this box part of the clip at all?
+    if (!whole_covered && settings.has_bounds) {
+        const f64 db = d.field->eval(settings.bounds, middle);
+        ++local.shape;
+        if (db > reach) return;              // none of it is; leave the mask clear
+        if (db < -reach) whole_covered = true;
+        else if (single) whole_covered = db <= 0.0;
+        if (single && !whole_covered) return;
+    }
+
+    // A box is settled from the undisplaced shape; a voxel is decided from the real one. The
+    // difference is the whole of what makes this descend rather than crawl — the undisplaced
+    // shape is a true distance, so half as much has to be allowed for, and it does not evaluate
+    // the noise the displacement is made of.
+    const f64 dc = d.field->eval(single ? d.root : d.prune_root, middle);
+    ++local.shape;
+
+    if (dc > reach || (single && dc > 0.0)) {
+        // Empty. The cells still have to be marked as part of the clip: empty *inside the clip*
+        // means "this cell is air and stamping should clear whatever is there", where a cell
+        // outside the clip is none of its business. Skipping the mark as well as the evaluation
+        // left ragged holes in the mask — invisible in the voxels, and visible the moment a slice
+        // was printed.
+        if (whole_covered) {
+            fill_box(clip, low, high, kAir, false);
+            return;
+        }
+        if (single) {
+            clip.inside[clip.index(low[0], low[1], low[2])] = 1;
+            return;
+        }
+        // Partly covered, so which cells belong is still a per-cell question — but the shape is
+        // settled and is not asked again.
+        for (i32 z = low[2]; z < high[2]; ++z) {
+            const f64 pz = (static_cast<f64>(d.lo[2] + z) + d.centre_shift) * d.voxel;
+            for (i32 y = low[1]; y < high[1]; ++y) {
+                const f64 py = (static_cast<f64>(d.lo[1] + y) + d.centre_shift) * d.voxel;
+                const usize row = clip.index(0, y, z);
+                for (i32 x = low[0]; x < high[0]; ++x) {
+                    const f64 px = (static_cast<f64>(d.lo[0] + x) + d.centre_shift) * d.voxel;
+                    ++local.shape;
+                    if (d.field->eval(settings.bounds, {px, py, pz}) <= 0.0) {
+                        clip.inside[row + x] = 1;
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    const bool all_solid = (dc < -reach) || single;
+
+    // Settle what can be settled for this box. Rules the parent already decided are inherited
+    // rather than re-asked; only the ones still open are tested, and they get sharper every time
+    // the box halves.
+    u8 stack_state[64];
+    const usize rules = paint.size();
+    u8* state = stack_state;
+    std::vector<u8> heap_state;
+    if (rules > sizeof(stack_state)) {
+        heap_state.assign(rules, 2);
+        state = heap_state.data();
+    }
+    bool every_rule_known = true;
+    for (usize i = 0; i < rules; ++i) {
+        const u8 was = (inherited && parent_state != nullptr) ? parent_state[i] : u8{2};
+        if (was != 2) {
+            state[i] = was;
+            continue;
+        }
+        if ((*d.rule_slack)[i] >= Field::kInfiniteSlack) {
+            state[i] = 2;
+            every_rule_known = false;
+            continue;
+        }
+        const f64 value = d.field->eval(paint[i].test, middle);
+        ++local.paint;
+        const f64 span = radius + (*d.rule_slack)[i];
+        if (value - span > paint[i].high || value + span < paint[i].low) {
+            state[i] = 0;
+        } else if (value - span >= paint[i].low && value + span <= paint[i].high) {
+            state[i] = 1;
+        } else if (single) {
+            state[i] = (value >= paint[i].low && value <= paint[i].high) ? u8{1} : u8{0};
+        } else {
+            state[i] = 2;
+            every_rule_known = false;
+        }
+    }
+
+    if (all_solid && whole_covered) {
+        if (every_rule_known) {
+            // One material all through, and nothing left to ask. This is the inside of a wall.
+            VoxelTypeId type = kAir;
+            for (usize i = 0; i < rules; ++i) {
+                if (state[i] == 1) type = paint[i].type;
+            }
+            if (type == kAir && !paint.empty()) type = paint.front().type;
+            fill_box(clip, low, high, type, true);
+            return;
+        }
+        // The shape is settled but a pattern rule is not, so the voxels are walked for the paint
+        // alone. Splitting further would only re-ask the shape for an answer already known.
+        paint_solid(d, low, high, state, local);
+        return;
+    }
+
+    if (single) {
+        // A single voxel that is neither settled solid nor settled empty cannot happen — the
+        // tests above are exhaustive at this size — but the box may still be outside the clip.
+        return;
+    }
+
+    // Halve on every axis that has more than one voxel left.
+    i32 mid[3];
+    for (u32 axis = 0; axis < 3; ++axis) {
+        mid[axis] = low[axis] + (high[axis] - low[axis]) / 2;
+        if (mid[axis] <= low[axis]) mid[axis] = high[axis];
+    }
+    for (u32 child = 0; child < 8; ++child) {
+        i32 clow[3];
+        i32 chigh[3];
+        bool empty = false;
+        for (u32 axis = 0; axis < 3; ++axis) {
+            const bool upper = ((child >> axis) & 1u) != 0;
+            clow[axis] = upper ? mid[axis] : low[axis];
+            chigh[axis] = upper ? high[axis] : mid[axis];
+            if (clow[axis] >= chigh[axis]) empty = true;
+        }
+        if (empty) continue;
+        descend(d, clow, chigh, whole_covered, state, true, local);
+    }
+}
+
+}  // namespace
 
 SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,
                     const SampleSettings& settings, JobSystem* jobs) {
@@ -339,241 +733,115 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
         rule_slack[i] = field.metric_slack(paint[i].test);
     }
 
-    // The same argument, applied to a block instead of a row.
+    // Asked of a box, and then of its halves, and then of theirs.
     //
-    // Walking a row and jumping along it only skips in one direction. A clip is empty in all
-    // three, and a room is a hundred voxels of nothing in every direction from the middle — asked
-    // row by row that is a thousand questions, each answering the same thing.
+    // A signed distance says more than "is there matter at this point". It says how far away the
+    // nearest matter is, and that bounds the answer for every point within that distance. So the
+    // sampler need never ask about a point at all until it has narrowed down to somewhere the
+    // answer could still go either way — which is a thin shell around the surface, and nothing
+    // else.
     //
-    // So the sampler asks about an 8×8×8 block first, at its centre. The distance there bounds
-    // the distance everywhere in the block: no point in it is further from the centre than the
-    // half-diagonal, so a centre distance greater than that (plus the displacement slack) proves
-    // every voxel in the block is empty, and one evaluation stands in for five hundred and twelve.
-    // The same test the other way round proves a block is entirely solid, which saves the shape
-    // evaluation on every voxel inside a wall and leaves only the paint.
+    // A box is read once at its centre. If the distance there exceeds the half-diagonal (plus what
+    // displacement can hide) then every point in the box is on the same side of the surface, and
+    // the box is settled: filled or empty, in one reading, however large it is. Otherwise it is
+    // cut in half on each axis and its eight children are asked the same question. Only a box that
+    // has come all the way down to a single voxel and *still* straddles the surface costs a
+    // per-voxel evaluation.
     //
-    // Eight is the brick edge deliberately. It is the granularity the world stores at, so the
-    // blocks the sampler skips are the blocks the world will not allocate.
-    constexpr i32 kBlock = 8;
-    const i32 blocks[3] = {(size[0] + kBlock - 1) / kBlock, (size[1] + kBlock - 1) / kBlock,
-                           (size[2] + kBlock - 1) / kBlock};
-    std::vector<u64> counted(static_cast<usize>(blocks[2]), 0);
+    // The work therefore scales with the area of the surface rather than the volume of the box.
+    // That is the difference between a building costing what its walls cost and costing what the
+    // air around them costs — for the facility, sixty million shape evaluations became four.
+    //
+    // The paint comes down with it. A rule keyed on a shape is settled by the same argument, so
+    // "water where the pool is" is answered once for the half of the site that has no pool in it
+    // rather than three million times. A rule keyed on a pattern cannot be settled that way — a
+    // noise says nothing about the next voxel — so it is inherited as "still to ask" and paid for
+    // per voxel, which is the honest price of asking for one.
+    // The shape without its outermost displacements, for settling boxes.
+    f64 amplitude = 0.0;
+    const u32 prune_root = field.undisplaced(root, amplitude);
+    const f64 prune_inner = field.metric_slack(prune_root);
+    const f64 prune_slack = (prune_inner >= Field::kInfiniteSlack)
+                                ? Field::kInfiniteSlack
+                                : std::min(prune_inner + amplitude, slack);
 
-    const auto do_slab = [&](usize z_begin, usize z_end) {
-        // 0 = cannot apply anywhere in this block, 1 = applies to all of it, 2 = ask per voxel.
-        std::vector<u8> rule_state(paint.size(), 2);
-        for (usize bzi = z_begin; bzi < z_end; ++bzi) {
-            u64 local = 0;
-            const i32 z0 = static_cast<i32>(bzi) * kBlock;
-            const i32 z1 = std::min(z0 + kBlock, size[2]);
-            for (i32 by = 0; by < blocks[1]; ++by) {
-                const i32 y0 = by * kBlock;
-                const i32 y1 = std::min(y0 + kBlock, size[1]);
-                for (i32 bx = 0; bx < blocks[0]; ++bx) {
-                    const i32 x0 = bx * kBlock;
-                    const i32 x1 = std::min(x0 + kBlock, size[0]);
+    Descent descent;
+    descent.field = &field;
+    descent.root = root;
+    descent.prune_root = prune_root;
+    descent.prune_slack = prune_slack;
+    descent.outer_amplitude = amplitude;
 
-                    // The centre of the block's sample points, and how far the furthest of them
-                    // is from it. Measured over the points, not the cube, because the points are
-                    // all the field is ever asked about.
-                    const f64 half[3] = {static_cast<f64>(x1 - 1 - x0) * 0.5 * voxel,
-                                         static_cast<f64>(y1 - 1 - y0) * 0.5 * voxel,
-                                         static_cast<f64>(z1 - 1 - z0) * 0.5 * voxel};
-                    const Vec3 middle{
-                        (static_cast<f64>(lo[0] + x0) + static_cast<f64>(x1 - 1 - x0) * 0.5 +
-                         centre_shift) * voxel,
-                        (static_cast<f64>(lo[1] + y0) + static_cast<f64>(y1 - 1 - y0) * 0.5 +
-                         centre_shift) * voxel,
-                        (static_cast<f64>(lo[2] + z0) + static_cast<f64>(z1 - 1 - z0) * 0.5 +
-                         centre_shift) * voxel};
-                    const f64 radius = std::sqrt(half[0] * half[0] + half[1] * half[1] +
-                                                 half[2] * half[2]);
-                    const f64 reach = radius + slack;
-
-                    // Is any of this block part of the clip?
-                    bool whole_covered = !settings.has_bounds;
-                    if (settings.has_bounds) {
-                        const f64 db = field.eval(settings.bounds, middle);
-                        ++local;
-                        if (db > reach) continue;               // none of it is
-                        whole_covered = db < -reach;            // all of it is
-                    }
-
-                    const f64 dc = field.eval(root, middle);
-                    ++local;
-                    const bool all_air = dc > reach;
-                    const bool all_solid = dc < -reach;
-
-                    if (all_air) {
-                        // Nothing in here. The cells still have to be marked as part of the clip:
-                        // empty *inside the clip* means "this cell is air and stamping should
-                        // clear whatever is there", where a cell outside the clip is none of its
-                        // business. Skipping the mark as well as the evaluation left ragged holes
-                        // in the mask — invisible in the voxels, and visible the moment a slice
-                        // was printed.
-                        if (whole_covered) {
-                            for (i32 z = z0; z < z1; ++z) {
-                                for (i32 y = y0; y < y1; ++y) {
-                                    const usize row = clip.index(0, y, z);
-                                    for (i32 x = x0; x < x1; ++x) clip.inside[row + x] = 1;
-                                }
-                            }
-                            continue;
-                        }
-                        // Partly covered: the bounds still have to be asked per voxel, but the
-                        // shape does not.
-                        for (i32 z = z0; z < z1; ++z) {
-                            const f64 pz = (static_cast<f64>(lo[2] + z) + centre_shift) * voxel;
-                            for (i32 y = y0; y < y1; ++y) {
-                                const f64 py = (static_cast<f64>(lo[1] + y) + centre_shift) * voxel;
-                                const usize row = clip.index(0, y, z);
-                                for (i32 x = x0; x < x1; ++x) {
-                                    const f64 px =
-                                        (static_cast<f64>(lo[0] + x) + centre_shift) * voxel;
-                                    ++local;
-                                    if (field.eval(settings.bounds, {px, py, pz}) <= 0.0) {
-                                        clip.inside[row + x] = 1;
-                                    }
-                                }
-                            }
-                        }
-                        continue;
-                    }
-
-                    // Settle what can be settled for the block as a whole.
-                    bool every_rule_known = true;
-                    for (usize i = 0; i < paint.size(); ++i) {
-                        if (rule_slack[i] >= Field::kInfiniteSlack) {
-                            rule_state[i] = 2;
-                            every_rule_known = false;
-                            continue;
-                        }
-                        const f64 value = field.eval(paint[i].test, middle);
-                        ++local;
-                        const f64 span = radius + rule_slack[i];
-                        if (value - span > paint[i].high || value + span < paint[i].low) {
-                            rule_state[i] = 0;
-                        } else if (value - span >= paint[i].low && value + span <= paint[i].high) {
-                            rule_state[i] = 1;
-                        } else {
-                            rule_state[i] = 2;
-                            every_rule_known = false;
-                        }
-                    }
-
-                    // Solid all through, inside the clip all through, and every coat of paint
-                    // decided. Then the block is one material and there is nothing left to ask.
-                    // This is the inside of a wall, which is most of a building.
-                    if (all_solid && whole_covered && every_rule_known) {
-                        VoxelTypeId type = kAir;
-                        for (usize i = 0; i < paint.size(); ++i) {
-                            if (rule_state[i] == 1) type = paint[i].type;
-                        }
-                        if (type == kAir && !paint.empty()) type = paint.front().type;
-                        for (i32 z = z0; z < z1; ++z) {
-                            for (i32 y = y0; y < y1; ++y) {
-                                const usize row = clip.index(0, y, z);
-                                for (i32 x = x0; x < x1; ++x) {
-                                    clip.inside[row + x] = 1;
-                                    clip.voxels[row + x] = type;
-                                }
-                            }
-                        }
-                        continue;
-                    }
-
-                    for (i32 z = z0; z < z1; ++z) {
-                        const f64 pz = (static_cast<f64>(lo[2] + z) + centre_shift) * voxel;
-                        for (i32 y = y0; y < y1; ++y) {
-                            const f64 py = (static_cast<f64>(lo[1] + y) + centre_shift) * voxel;
-                            const usize row = clip.index(0, y, z);
-                            for (i32 x = x0; x < x1; ++x) {
-                                const f64 px = (static_cast<f64>(lo[0] + x) + centre_shift) * voxel;
-                                const Vec3 p{px, py, pz};
-                                const usize index = row + static_cast<usize>(x);
-
-                                if (!whole_covered) {
-                                    ++local;
-                                    if (field.eval(settings.bounds, p) > 0.0) continue;
-                                }
-                                clip.inside[index] = 1;
-
-                                // Is there matter here? Not asked when the block proved solid.
-                                if (!all_solid) {
-                                    const f64 d = field.eval(root, p);
-                                    ++local;
-                                    if (d > 0.0) {
-                                        // Empty here, and empty for a while along the row.
-                                        const f64 clear = d - slack;
-                                        if (clear > voxel && whole_covered) {
-                                            const i32 jump = static_cast<i32>(clear / voxel);
-                                            if (jump > 1) {
-                                                const i32 last = std::min(x + jump - 1, x1 - 1);
-                                                for (i32 fill = x + 1; fill <= last; ++fill) {
-                                                    clip.inside[row + fill] = 1;
-                                                }
-                                                x = last;
-                                            }
-                                        }
-                                        continue;
-                                    }
-                                }
-
-                                // What is it made of? Later rules paint over earlier ones, so the
-                                // list reads as a stack of coats.
-                                VoxelTypeId type = kAir;
-                                Vec3 normal{0, 0, 0};
-                                bool have_normal = false;
-                                for (usize i = 0; i < paint.size(); ++i) {
-                                    const PaintRule& rule = paint[i];
-                                    if (rule_state[i] == 0) continue;   // decided for the block
-                                    if (rule_state[i] == 1) {
-                                        type = rule.type;
-                                        continue;
-                                    }
-                                    const f64 value = field.eval(rule.test, p);
-                                    ++local;
-                                    if (value < rule.low || value > rule.high) continue;
-                                    if (rule.facing_axis < 3) {
-                                        if (!have_normal) {
-                                            normal = field.normal_at(root, p, voxel);
-                                            have_normal = true;
-                                            local += 6;
-                                        }
-                                        const f64 component = (rule.facing_axis == 0)   ? normal.x
-                                                              : (rule.facing_axis == 1) ? normal.y
-                                                                                        : normal.z;
-                                        if (rule.facing_min >= 0.0) {
-                                            if (component < rule.facing_min) continue;
-                                        } else {
-                                            if (component > rule.facing_min) continue;
-                                        }
-                                    }
-                                    type = rule.type;
-                                }
-                                // A cell with matter in it and no rule that matched is still
-                                // matter — it would be worse to silently drop it than to give it
-                                // the first type asked for, because a hole in a wall is harder to
-                                // notice than a wrong colour.
-                                if (type == kAir && !paint.empty()) type = paint.front().type;
-                                clip.voxels[index] = type;
-                            }
-                        }
-                    }
-                }
+    // The parts the shape is made of, each with its own box and its own allowance. Only usable
+    // when every part can be bounded and measured — one part that cannot is one part that could
+    // be anywhere, and then the worst case is the only honest answer.
+    {
+        std::vector<u32> parts;
+        field.union_children(prune_root, parts);
+        descent.parts_usable = !parts.empty();
+        for (u32 part : parts) {
+            const f64 part_slack = field.metric_slack(part);
+            if (part_slack >= Field::kInfiniteSlack) {
+                descent.parts_usable = false;
+                break;
             }
-            counted[bzi] = local;
+            descent.part_box.push_back(field.bounds_of(part));
+            descent.part_slack.push_back(part_slack);
+        }
+    }
+    descent.paint = &paint;
+    descent.settings = &settings;
+    descent.clip = &clip;
+    descent.rule_slack = &rule_slack;
+    descent.voxel = voxel;
+    descent.centre_shift = centre_shift;
+    descent.slack = slack;
+    for (u32 axis = 0; axis < 3; ++axis) {
+        descent.lo[axis] = lo[axis];
+        descent.size[axis] = size[axis];
+    }
+
+    // The top of the tree is cut into pieces first so there is something to spread across the
+    // cores. Sixty-four voxels — two metres — is small enough that a clip of any size has more
+    // pieces than it has cores, and large enough that the descent does the interesting work
+    // rather than the loop that hands it out.
+    constexpr i32 kTop = 64;
+    const i32 tops[3] = {(size[0] + kTop - 1) / kTop, (size[1] + kTop - 1) / kTop,
+                         (size[2] + kTop - 1) / kTop};
+    const usize top_count = static_cast<usize>(tops[0]) * static_cast<usize>(tops[1]) *
+                            static_cast<usize>(tops[2]);
+    std::vector<Tally> counted(top_count);
+
+    const auto do_top = [&](usize begin, usize end) {
+        for (usize t = begin; t < end; ++t) {
+            const i32 bx = static_cast<i32>(t % static_cast<usize>(tops[0]));
+            const i32 by = static_cast<i32>((t / static_cast<usize>(tops[0])) %
+                                            static_cast<usize>(tops[1]));
+            const i32 bz = static_cast<i32>(t / (static_cast<usize>(tops[0]) *
+                                                 static_cast<usize>(tops[1])));
+            const i32 low[3] = {bx * kTop, by * kTop, bz * kTop};
+            const i32 high[3] = {std::min(low[0] + kTop, size[0]),
+                                 std::min(low[1] + kTop, size[1]),
+                                 std::min(low[2] + kTop, size[2])};
+            Tally local;
+            descend(descent, low, high, /*whole_covered=*/!settings.has_bounds,
+                    /*parent_state=*/nullptr, /*inherited=*/false, local);
+            counted[t] = local;
         }
     };
 
     (void)wants_normal;
-    if (jobs != nullptr && blocks[2] > 1) {
-        jobs->parallel_for(static_cast<usize>(blocks[2]), 1, do_slab);
+    if (jobs != nullptr && top_count > 1) {
+        jobs->parallel_for(top_count, 1, do_top);
     } else {
-        do_slab(0, static_cast<usize>(blocks[2]));
+        do_top(0, top_count);
     }
 
-    for (u64 n : counted) result.evaluations += n;
+    for (const Tally& n : counted) {
+        result.shape_evaluations += n.shape;
+        result.paint_evaluations += n.paint;
+    }
+    result.evaluations = result.shape_evaluations + result.paint_evaluations;
     clip.build_coarse();
     return result;
 }

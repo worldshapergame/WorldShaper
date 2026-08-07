@@ -59,6 +59,17 @@ f64 distance_to(const Field::Aabb& box, Vec3 p) {
     return std::sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+// The same, squared, for the cull test — which compares against a distance it already has and so
+// never needs the root. One square root per child per evaluation is not much; a hundred million
+// evaluations with thirty children each is a hundred million square roots too many.
+f64 squared_distance_to(const Field::Aabb& box, Vec3 p) {
+    if (box.infinite()) return 0.0;
+    const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
+    const f64 dy = std::max(std::max(box.low.y - p.y, p.y - box.high.y), 0.0);
+    const f64 dz = std::max(std::max(box.low.z - p.z, p.z - box.high.z), 0.0);
+    return dx * dx + dy * dy + dz * dz;
+}
+
 // --- deterministic value noise ----------------------------------------------------------
 //
 // Hash-based rather than table-based, so it needs no setup and no memory, and two machines
@@ -849,8 +860,10 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 // vanished; the magnitude did, which moved the surface normals, which moved the
                 // paint rule that follows them. Four hundred voxels of moss in the wrong place.
                 if (!bounds_.empty()) {
-                    const f64 away = distance_to(bounds_[n.child[i]], p);
-                    if (away > 0.0 && d <= away) continue;
+                    const f64 away = squared_distance_to(bounds_[n.child[i]], p);
+                    // Outside the box at all, and either already inside something (so nothing
+                    // outside can be nearer) or nearer than the box can possibly be.
+                    if (away > 0.0 && (d < 0.0 || d * d <= away)) continue;
                 }
                 d = std::min(d, eval(n.child[i], p));
             }
@@ -871,8 +884,8 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 // distance is at least `away`, so the term it contributes is at most −away, and
                 // if the running answer already beats that the cut cannot reach here.
                 if (!bounds_.empty()) {
-                    const f64 away = distance_to(bounds_[n.child[i]], p);
-                    if (away > 0.0 && d >= -away) continue;
+                    const f64 away = squared_distance_to(bounds_[n.child[i]], p);
+                    if (away > 0.0 && (d >= 0.0 || d * d <= away)) continue;
                 }
                 d = std::max(d, -eval(n.child[i], p));
             }
@@ -1274,6 +1287,45 @@ void Field::build_bounds() {
             // surface by a known amount. Everything else — rotation, scaling, repetition,
             // twisting — is left unbounded rather than approximated, because a bound that is
             // wrong by a little produces a clip with pieces missing.
+            // A limited repeat is a shape with a known extent: the child's box, plus as far
+            // either side as the count allows. Leaving this unbounded was expensive in a way
+            // nothing pointed at — a colonnade and a screen of slats are repeats, so every
+            // evaluation anywhere in the clip walked into them and did the modulo arithmetic to
+            // find out it was nowhere near. An unlimited repeat still gets an infinite box on
+            // that axis, because it genuinely is infinite.
+            case Op::Mirror:
+            case Op::Repeat: {
+                Aabb child = bounds_of(n.child[0]);
+                if (child.infinite()) {
+                    box = child;
+                    break;
+                }
+                if (n.op == Op::Mirror) {
+                    // Folding about the plane means the shape also exists at the mirrored
+                    // coordinate, so the box is the union of the two.
+                    const u32 axis = static_cast<u32>(a[0]);
+                    const f64 low = axis_of(child.low, axis);
+                    const f64 high = axis_of(child.high, axis);
+                    const f64 reach = std::max(std::abs(low), std::abs(high));
+                    child.low = with_axis(child.low, axis, -reach);
+                    child.high = with_axis(child.high, axis, reach);
+                    box = child;
+                    break;
+                }
+                bool unlimited = false;
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    const f64 period = a[axis];
+                    const f64 limit = a[3 + axis];
+                    if (period <= 0.0) continue;         // this axis does not repeat
+                    if (limit <= 0.0) { unlimited = true; break; }
+                    const f64 reach = period * limit;
+                    child.low = with_axis(child.low, axis, axis_of(child.low, axis) - reach);
+                    child.high = with_axis(child.high, axis, axis_of(child.high, axis) + reach);
+                }
+                box = unlimited ? everywhere() : child;
+                break;
+            }
+
             case Op::Shell: box = grown(bounds_of(n.child[0]), a[0]); break;
             case Op::Round: box = grown(bounds_of(n.child[0]), a[0]); break;
             case Op::Offset: box = grown(bounds_of(n.child[0]), std::abs(a[0])); break;
@@ -1329,32 +1381,62 @@ f64 Field::skip_slack() const {
     return slack * 2.0;
 }
 
+namespace {
+
+// The patterns whose range is known to be within [-1, 1]. Anything else displacing a shape means
+// the sampler cannot know how far it is safe to skip.
+bool bounded_pattern(Op op) {
+    switch (op) {
+        case Op::Sine:
+        case Op::Waves:
+        case Op::Noise:
+        case Op::Fbm:
+        case Op::Ridged:
+        case Op::Rasp:
+        case Op::Checker:
+        case Op::Stripes:
+        case Op::Bricks:
+        case Op::Constant:
+        case Op::Parameter:
+        case Op::Step:
+        case Op::Smoothstep:
+            return true;
+        default:
+            return false;
+    }
+}
+
+}  // namespace
+
+u32 Field::undisplaced(u32 at, f64& amplitude) const {
+    amplitude = 0.0;
+    u32 node = at;
+    while (node < nodes_.size()) {
+        const Node& n = nodes_[node];
+        if (n.op != Op::Displace || n.children < 2) break;
+        if (!bounded_pattern(nodes_[n.child[1]].op)) break;
+        amplitude += std::abs(n.a[0]);
+        node = n.child[0];
+    }
+    return node;
+}
+
+void Field::union_children(u32 at, std::vector<u32>& out) const {
+    out.clear();
+    if (at >= nodes_.size()) return;
+    const Node& n = nodes_[at];
+    if (n.op != Op::Union && n.op != Op::SmoothUnion) {
+        out.push_back(at);
+        return;
+    }
+    for (u32 i = 0; i < n.children; ++i) out.push_back(n.child[i]);
+}
+
 f64 Field::metric_slack(u32 at) const {
     if (at >= nodes_.size()) return kInfiniteSlack;
     const Node& n = nodes_[at];
 
-    // The patterns whose range is known to be within [-1, 1]. Same list skip_slack uses, and for
-    // the same reason: a displacement by one of these moves the surface by a knowable amount.
-    const auto bounded = [](Op op) {
-        switch (op) {
-            case Op::Sine:
-            case Op::Waves:
-            case Op::Noise:
-            case Op::Fbm:
-            case Op::Ridged:
-            case Op::Rasp:
-            case Op::Checker:
-            case Op::Stripes:
-            case Op::Bricks:
-            case Op::Constant:
-            case Op::Parameter:
-            case Op::Step:
-            case Op::Smoothstep:
-                return true;
-            default:
-                return false;
-        }
-    };
+    const auto bounded = [](Op op) { return bounded_pattern(op); };
 
     const auto worst_child = [&](u32 count) {
         f64 slack = 0.0;

@@ -452,6 +452,28 @@ int run_headless(const Options& options) {
 // development one. A clip is content, so it is a file on disk rather than something compiled in
 // — which is the whole point of the format, and it means the scene can be edited without a
 // build.
+// When this build was made, as a number.
+//
+// Used to key the clip cache, so that changing how clips are built throws away the worlds built
+// the old way. Taken from the executable's modification time rather than __DATE__, because a
+// source file only gets a new __DATE__ when that particular file is recompiled — and the file
+// whose behaviour changed is rarely the one holding the constant.
+u64 build_stamp() {
+    std::error_code error;
+#if defined(_WIN32)
+    wchar_t buffer[1024]{};
+    const unsigned long length =
+        GetModuleFileNameW(nullptr, buffer, static_cast<unsigned long>(std::size(buffer)));
+    if (length == 0) return 0;
+    const std::filesystem::path self(std::wstring(buffer, length));
+#else
+    const std::filesystem::path self = compiled_shader_dir().parent_path() / "WorldShaper";
+#endif
+    const auto when = std::filesystem::last_write_time(self, error);
+    if (error) return 0;
+    return static_cast<u64>(when.time_since_epoch().count());
+}
+
 std::string default_clip_path() {
     const std::filesystem::path candidates[] = {
         std::filesystem::path("clips") / "facility.clip",
@@ -900,7 +922,8 @@ void Application::build_world() {
         // default, because a clip can name its own and a key that ignored that would hand back a
         // world sampled at the wrong size.
         const std::string cache_path = path + ".world";
-        const u64 key = world_cache_key(source, script.settings.voxels_per_metre);
+        const u64 key =
+            world_cache_key(source, script.settings.voxels_per_metre, build_stamp());
         if (!source.empty() && !options_.no_clip_cache) {
             WorldCache cache;
             cache.tags = &tags_;
@@ -931,20 +954,25 @@ void Application::build_world() {
                 built.clip, types_, script.field, script.variation, script.settings, built, &jobs);
             const u64 varied_at = now_ns();
             if (variety.voxels > 0) {
-                WS_LOG_INFO("clip", "variation: {} records over {} voxels, largest group {}",
-                            variety.distinct_types, variety.voxels, variety.largest_group);
+                WS_LOG_INFO("clip",
+                            "variation: {} records over {} voxels, largest group {} "
+                            "(perturb {:.0f} ms, intern {:.0f} ms, resolve {:.0f} ms)",
+                            variety.distinct_types, variety.voxels, variety.largest_group,
+                            variety.perturb_ms, variety.intern_ms, variety.resolve_ms);
             }
-            paste_clip(world_, ledger_, built.clip, built.origin_voxel[0] + options_.clip_at[0],
-                       built.origin_voxel[1] + options_.clip_at[1],
-                       built.origin_voxel[2] + options_.clip_at[2], PasteMode::SolidOnly,
-                       MatterReason::PlayerPlace, 1, &jobs);
+            const PasteStats stamped = paste_clip(
+                world_, ledger_, built.clip, built.origin_voxel[0] + options_.clip_at[0],
+                built.origin_voxel[1] + options_.clip_at[1],
+                built.origin_voxel[2] + options_.clip_at[2], PasteMode::SolidOnly,
+                MatterReason::PlayerPlace, 1, &jobs);
             const u64 pasted_at = now_ns();
-            world_.compact();
-            WS_LOG_INFO("clip", "parse {:.0f} ms, sample {:.0f} ms ({} evaluations), "
+            if (stamped.chunks_left_empty) world_.compact();
+            WS_LOG_INFO("clip", "parse {:.0f} ms, sample {:.0f} ms ({} shape + {} paint), "
                                 "variation {:.0f} ms, paste {:.0f} ms, compact {:.0f} ms",
                         ns_to_ms(parsed_at - start), ns_to_ms(sampled_at - parsed_at),
-                        built.evaluations, ns_to_ms(varied_at - sampled_at),
-                        ns_to_ms(pasted_at - varied_at), ns_to_ms(now_ns() - pasted_at));
+                        built.shape_evaluations, built.paint_evaluations,
+                        ns_to_ms(varied_at - sampled_at), ns_to_ms(pasted_at - varied_at),
+                        ns_to_ms(now_ns() - pasted_at));
             materials_ = script.material_types;
             if (materials_.empty()) materials_.push_back(1);
             material_index_ = options_.material % materials_.size();

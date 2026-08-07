@@ -109,22 +109,40 @@ void JobSystem::parallel_for(usize count, usize min_chunk,
     if (count == 0) return;
     if (min_chunk == 0) min_chunk = 1;
 
-    const usize slices = (worker_count_ > 0) ? worker_count_ + 1 : 1;
-    usize chunk = (count + slices - 1) / slices;
-    if (chunk < min_chunk) chunk = min_chunk;
+    const usize workers = (worker_count_ > 0) ? worker_count_ + 1 : 1;
 
+    // Handed out on demand rather than divided up in advance.
+    //
+    // Cutting the range into one contiguous piece per worker is the obvious thing and it assumes
+    // the work is spread evenly through the range. Almost nothing here is. Sampling a clip walks
+    // a box of space in which the geometry sits in a layer; the workers given the sky finish
+    // immediately and then sit idle while the one given the ground does everything. The measured
+    // effect on the facility was most of a factor of three — eight cores doing the work of three.
+    //
+    // So the range is cut into many more pieces than there are workers, and each worker takes the
+    // next one when it has finished the last. A worker that draws an easy piece comes back for
+    // another; the range finishes when the work does, not when the unluckiest slice does.
+    usize chunk = (count + workers * 8 - 1) / (workers * 8);
+    if (chunk < min_chunk) chunk = min_chunk;
     if (chunk >= count) {
         body(0, count);
         return;
     }
 
+    auto next = std::make_shared<std::atomic<usize>>(0);
+    const auto take = [&body, next, chunk, count] {
+        for (;;) {
+            const usize begin = next->fetch_add(chunk, std::memory_order_relaxed);
+            if (begin >= count) return;
+            const usize end = (begin + chunk < count) ? begin + chunk : count;
+            body(begin, end);
+        }
+    };
+
     JobCounter counter;
-    for (usize begin = chunk; begin < count; begin += chunk) {
-        const usize end = (begin + chunk < count) ? begin + chunk : count;
-        dispatch([&body, begin, end] { body(begin, end); }, counter);
-    }
-    // The calling thread takes the first chunk instead of sitting idle.
-    body(0, chunk);
+    for (usize i = 1; i < workers; ++i) dispatch(take, counter);
+    // The calling thread pulls its share too rather than sitting idle.
+    take();
     wait(counter);
 }
 

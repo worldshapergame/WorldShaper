@@ -126,6 +126,10 @@ struct SampleResult {
     // coordinates land where they were authored.
     i64 origin_voxel[3]{0, 0, 0};
     u64 evaluations = 0;
+    // Split, because the two come down by completely different means: shape questions by asking
+    // about boxes instead of points, paint questions by settling a rule for a whole region.
+    u64 shape_evaluations = 0;
+    u64 paint_evaluations = 0;
 };
 
 // Fill a clip from a field.
@@ -153,6 +157,13 @@ struct VariationReport {
     u64 distinct_types = 0;
     u64 largest_group = 0;   // how many voxels share the most common record
     u64 reused = 0;          // voxels that had to share a record because the budget ran out
+
+    // What each phase cost, in milliseconds. Reported rather than inferred, because the three do
+    // very different work — one is parallel and arithmetic, one is serial and hash-bound, one is
+    // parallel and memory-bound — and which of them dominates is not guessable.
+    f64 perturb_ms = 0.0;
+    f64 intern_ms = 0.0;
+    f64 resolve_ms = 0.0;
     f64 uniqueness() const {
         return (voxels > 0) ? static_cast<f64>(distinct_types) / static_cast<f64>(voxels) : 0.0;
     }

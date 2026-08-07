@@ -251,6 +251,7 @@ add_executable(ws_tests
     tests/test_field.cpp
     tests/test_clip_script.cpp
     tests/test_weathering.cpp
+    tests/test_sample.cpp
     tests/test_fixed.cpp
     tests/test_hash.cpp
     tests/test_arena.cpp

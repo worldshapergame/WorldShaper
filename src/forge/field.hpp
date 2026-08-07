@@ -312,6 +312,32 @@ public:
     static constexpr f64 kInfiniteSlack = 1e30;
     f64 metric_slack(u32 at) const;
 
+    // The shape underneath any displacement, and how far the displacement can move its surface.
+    //
+    // Worth separating because pruning and deciding want different things. Deciding whether a
+    // *voxel* is matter needs the displaced value, pattern and all. Deciding whether a whole
+    // *box* is settled does not: the undisplaced shape is a true distance, so it needs allowing
+    // for the amplitude once rather than twice, and it costs nothing to evaluate the noise it
+    // does not consult.
+    //
+    // Halving the allowance is not a nicety. A wall a quarter of a metre thick has four voxels
+    // between its face and its middle; with the doubled allowance no box inside it is ever far
+    // enough from a surface to settle, so every voxel in every wall is asked about individually.
+    // Halved, most of the wall settles eight voxels at a time.
+    u32 undisplaced(u32 at, f64& amplitude) const;
+
+    // The parts a union is made of, or just the node itself when it is not one.
+    //
+    // The sampler wants this because slack is not a property of a field, it is a property of a
+    // place. A clip whose ground is displaced by five centimetres and whose building is displaced
+    // by one does not have six centimetres of uncertainty everywhere — it has five near the
+    // ground and one near the building, and charging the whole clip the worst case means no box
+    // anywhere in a quarter-metre wall is ever far enough from a surface to settle.
+    //
+    // With the parts listed separately, a box can ask which of them it is actually near — a
+    // question its bounding box answers for nothing — and allow only for those.
+    void union_children(u32 at, std::vector<u32>& out) const;
+
     // A box each node is known to be contained in, so a union can skip the children that cannot
     // possibly be the nearest thing.
     //
