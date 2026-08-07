@@ -58,6 +58,28 @@ struct FaceEntry {
 
 layout(std430, binding = 17) buffer FaceCache { FaceEntry items[]; } faces;
 
+// Where the lamps are, so a face can ask one for light instead of waiting to be hit by it.
+//
+// Declared field by field rather than as vectors on purpose. The buffer is written by
+// world/light_list.hpp as a tightly packed 28-byte record, and std430 aligns an ivec3 to
+// sixteen bytes — declaring it the obvious way silently reads every lamp after the first from
+// the wrong offset. Scalars are 4-byte aligned and pack exactly as the CPU wrote them.
+struct LightSource {
+    int x;
+    int y;
+    int z;
+    float red;
+    float green;
+    float blue;
+    uint voxels;
+};
+
+layout(std430, binding = 18) readonly buffer Lights { LightSource items[]; } lights;
+
+// Matches kMaxLights in world/light_list.hpp. A list this long has been truncated, and a
+// truncated list is one this cannot safely own — see the completeness test below.
+const uint kMaxLights = 1024u;
+
 // Fixed point, because atomically adding floats needs an extension that is not core and this
 // has to run everywhere. 4096 steps per unit is finer than the eye on any display, and the
 // count is capped well before the sum could wrap.
@@ -657,10 +679,10 @@ FaceLight read_face(uint slot) {
     uvec4 sum = faces.items[slot].sum;
     float inv = 1.0 / (kFixedScale * float(count));
     // Clamped on the way out, as a backstop rather than a correction. Every contribution is
-    // clamped to 8 going in, so a mean above that is arithmetic having gone wrong rather than
+    // clamped to 64 going in, so a mean above that is arithmetic having gone wrong rather than
     // a bright surface Ã¢â‚¬â€ and a wrong entry in a cache does not fade, it persists and spreads.
     // Visibility lives in its own entry now; this one holds irradiance only.
-    light.indirect = min(vec3(sum.xyz) * inv, vec3(8.0));
+    light.indirect = min(vec3(sum.xyz) * inv, vec3(64.0));
     light.count = count;
     light.known = true;
     return light;
@@ -960,6 +982,141 @@ void seed_shadow(uint slot, ivec3 voxel, ivec3 normal, uint frame) {
     atomicAdd(faces.items[slot].sum.w, uint(carried * float(kInheritSamples) * kFixedScale));
 }
 
+// ---- next-event estimation ------------------------------------------------------------
+//
+// A lamp is a voxel like any other, so until now it was found the only way anything is found:
+// by a bounce happening to point at it. For the sun that would be hopeless, which is why the sun
+// has always been sampled directly — and for a lamp in a room it is very nearly as hopeless. A
+// three-centimetre lamp across a room covers a millionth of the hemisphere, so a face needs a
+// million bounces before it learns the lamp is there, and until then the room is lit by whatever
+// bounces happened to get lucky. That is the noise indoors.
+//
+// So a lamp gets asked directly, exactly as the sun does.
+//
+// This has been attempted once before and it put the lights out. The cause was not the idea but
+// the bookkeeping: emission found by a bounce was suppressed whenever any lamp existed, while
+// the direct sampling only covered the nearest handful — so light from every lamp past the
+// eighth, and from every sunlit surface, simply vanished. What follows is arranged so that
+// cannot happen. The two strategies *partition* the light rather than overlapping it: direct
+// sampling owns emitters and nothing else, bounces own everything that is not an emitter, and
+// each is divided by the probability of having been chosen. Nothing is counted twice and
+// nothing is dropped.
+//
+// And the partition is only taken when it can be owned completely. A truncated lamp list would
+// bring back precisely the original bug, so a full list turns the whole thing off instead.
+const uint kNeeCandidates = 8u;
+
+// How often a diffuse sample asks a lamp rather than bouncing.
+//
+// Not a constant, and a constant is what made the first version worse rather than better. Half
+// the rays spent asking about lamps is right for a room lit by one, and badly wrong for a sunlit
+// field with decorative lights on it — there the lamps contribute almost nothing and half the
+// budget goes to measuring it, while the sky and sun that carry the actual light get half as
+// many rays as before. Measured: the platform's noise went from 0.93 to 1.01 doing exactly that.
+//
+// So the split follows the light. The candidate draw already estimates what the lamps would
+// deliver, and it costs no rays, so it can be made before the choice rather than after it; set
+// against the sun and sky the same face is receiving, it gives the share of the light lamps are
+// actually responsible for. A face in a dark room asks lamps nearly always, a face in open sun
+// almost never, and neither has to be told which it is.
+const float kNeeMinChance = 0.05;
+const float kNeeMaxChance = 0.95;
+
+struct LightPick {
+    vec3 dir;
+    float inv_pdf;   // 1 / p(dir), in solid angle
+    float estimate;  // luminance the lamps would deliver here with nothing in the way
+    bool valid;
+};
+
+// Resampled importance sampling, and it is not a refinement here — it is the difference between
+// this helping and hurting. The test scene holds eighty-four lamps. Picking one uniformly makes
+// about one sample in eighty-four useful and gives it eighty-four times the weight, which is
+// unbiased and far noisier than doing nothing at all. So a handful of candidates are drawn, each
+// scored by the light it would deliver if nothing were in the way, and one is kept in proportion
+// to that score. The estimator is corrected by the total weight the draw saw, which keeps it
+// unbiased while concentrating the samples on the lamps that actually matter to this face.
+LightPick pick_light(vec3 from, vec3 normal, uint light_count, inout uint state) {
+    LightPick pick;
+    pick.dir = normal;
+    pick.inv_pdf = 0.0;
+    pick.estimate = 0.0;
+    pick.valid = false;
+
+    uint candidates = min(light_count, kNeeCandidates);
+    float weight_sum = 0.0;
+    float chosen_target = 0.0;
+    vec3 chosen_centre = vec3(0.0);
+    float chosen_radius = 0.5;
+
+    for (uint i = 0u; i < candidates; ++i) {
+        uint index = min(uint(rand(state) * float(light_count)), light_count - 1u);
+        LightSource lamp = lights.items[index];
+        // The list is in absolute world voxels; the shader stands in its camera chunk.
+        vec3 centre = vec3(float(lamp.x), float(lamp.y), float(lamp.z)) + 0.5 -
+                      vec3(push.camera_chunk.xyz) * float(kChunkEdge);
+        vec3 to = centre - from;
+        float distance_sq = max(dot(to, to), 1.0);
+        float cos_surface = dot(to * inversesqrt(distance_sq), normal);
+        if (cos_surface <= 0.0) continue;   // behind the face
+
+        // A cluster of voxels, treated as the sphere that *contains* it rather than the one of
+        // the same volume. The difference is not cosmetic. Direct sampling owns emitters
+        // outright, so a cone too narrow to cover the lamp does not merely sample it badly — the
+        // light from the parts outside the cone is owned by nobody and goes out. An
+        // equal-volume sphere covers about half a cube, and the room measured thirteen per cent
+        // too dark against a long reference run because of it. Erring the other way costs
+        // nothing but noise: a direction that overshoots the lamp finds a wall and honestly
+        // reports nought.
+        float radius = max(0.87 * pow(float(max(lamp.voxels, 1u)), 1.0 / 3.0), 0.87);
+        // Radiance, times the solid angle it covers, times how square-on it is. What this lamp
+        // would contribute with nothing in the way, which is everything about it that can be
+        // known without tracing.
+        float target = face_luminance(vec3(lamp.red, lamp.green, lamp.blue)) * cos_surface *
+                       min(radius * radius / distance_sq, 1.0);
+        if (target <= 0.0) continue;
+
+        weight_sum += target;
+        if (rand(state) * weight_sum <= target) {
+            chosen_target = target;
+            chosen_centre = centre;
+            chosen_radius = radius;
+        }
+    }
+    // What every lamp in the list would deliver here, unshaded: the mean of what the draw saw,
+    // scaled back up to the whole list. This is the number the strategy split is decided by.
+    pick.estimate = float(light_count) * weight_sum / float(candidates);
+    if (chosen_target <= 0.0) return pick;
+
+    // A direction inside the cone the lamp covers, which is what gives it a real solid-angle
+    // density rather than the degenerate one a point light would have.
+    vec3 to = chosen_centre - from;
+    float distance_sq = max(dot(to, to), 1.0);
+    vec3 towards = to * inversesqrt(distance_sq);
+    float sin_max_sq = clamp(chosen_radius * chosen_radius / distance_sq, 0.0, 0.9999);
+    float cos_max = sqrt(1.0 - sin_max_sq);
+
+    float cos_theta = mix(cos_max, 1.0, rand(state));
+    float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
+    float phi = 2.0 * kPi * rand(state);
+
+    vec3 up = (abs(towards.z) < 0.999) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, towards));
+    vec3 bitangent = cross(towards, tangent);
+    pick.dir = normalize(tangent * (cos(phi) * sin_theta) + bitangent * (sin(phi) * sin_theta) +
+                         towards * cos_theta);
+
+    float pdf_direction = 1.0 / (2.0 * kPi * max(1.0 - cos_max, 1e-6));
+    // The resampling correction: the kept candidate stands in for every one the draw saw, so its
+    // density is scaled by the total weight against its own. The uniform density over the whole
+    // list enters as the factor of light_count.
+    float resample = (float(light_count) * weight_sum) /
+                     (float(candidates) * chosen_target);
+    pick.inv_pdf = resample / pdf_direction;
+    pick.valid = dot(pick.dir, normal) > 0.0;
+    return pick;
+}
+
 FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) {
     uint l0 = uint(floor(level));
     uint l1 = min(l0 + 1u, 6u);
@@ -1060,7 +1217,7 @@ vec3 specular_from_cache(ivec3 voxel, ivec3 normal_i, vec3 normal, vec3 dir, Mat
     FaceLight stored = read_face(face_slot(lo, hi, false, frame));
 
     // A bin with one sample in it is not an estimate, it is that sample — and a sample is
-    // clamped at 8, so a single path that found something bright shades one pixel eight times
+    // clamped at 64, so a single path that found something bright shades one pixel many times
     // brighter than its neighbours and leaves a white speck. The diffuse cache learned this
     // the same way, as scattered stars across otherwise dark walls. A few samples cost a
     // fraction of a second of waiting and are worth more than the speck they prevent.
@@ -1448,6 +1605,48 @@ void main() {
             bounce_dir = cosine_hemisphere(normal, state);
         }
 
+        // ---- ask a lamp, or bounce ----------------------------------------------------
+        //
+        // One ray, either way. A second ray for the lamp would be a fourth inlined march and the
+        // device does not survive a fourth, so this chooses instead — the same trick the lobe
+        // above uses, and the reason both are divided by the chance of having been chosen.
+        //
+        // Only when the list is complete. A truncated one cannot own emitters, because the ones
+        // past the end would be owned by nobody and would go out; then the bounce keeps them,
+        // exactly as before this existed.
+        uint light_count = min(trace.quality.w, kMaxLights);
+        bool lights_complete = light_count > 0u && light_count < kMaxLights;
+        float nee_chance = 0.0;
+        bool nee = false;
+        float nee_inv_pdf = 0.0;
+
+        if (!spec_bounce && lights_complete) {
+            // The draw first, because it costs no rays and it is what says how much the lamps
+            // are worth here. Then the split, from the lamps' share of everything this face is
+            // receiving: the sun it can see, the sky above it, and the lamps around it.
+            LightPick pick = pick_light(from, normal, light_count, state);
+            float from_sun = face_luminance(trace.sun_colour.rgb) *
+                             max(dot(normal, trace.sun.xyz), 0.0) * visibility;
+            float from_sky = face_luminance(sky_radiance(normal));
+            nee_chance = clamp(pick.estimate / (pick.estimate + from_sun + from_sky + 1e-4),
+                               kNeeMinChance, kNeeMaxChance);
+            if (pick.estimate <= 0.0) nee_chance = 0.0;
+
+            // Committed once the coin lands, whatever the draw turned up. A draw that found no
+            // candidate in front of the face is not a failure to be backed out of — it is that
+            // draw's answer, and it is zero. Falling back to a bounce would make the two
+            // strategies' probabilities no longer the ones everything below divides by, and the
+            // estimate would drift by however often the fallback fired.
+            if (nee_chance > 0.0 && rand(state) < nee_chance) {
+                nee = true;
+                spec_bounce = false;
+                if (pick.valid) {
+                    nee_inv_pdf = pick.inv_pdf;
+                    bounce_dir = pick.dir;
+                }
+            }
+        }
+
         uint rad_slot = 0xFFFFFFFFu;
         if (spec_bounce) {
             uint rad_lo, rad_hi;
@@ -1457,8 +1656,26 @@ void main() {
         }
 
         Hit second = march(from, bounce_dir, 0.0, 0.0, true);
-        if (!second.hit) {
-            incoming = sky_radiance(bounce_dir);
+        if (nee) {
+            // Direct sampling owns emitters and nothing else. Whatever the ray reached, only its
+            // emission counts here; if it reached a wall, or the lamp with something in the way,
+            // the answer is nought — and nought is a real answer, measured, which is why this
+            // still contributes. A face learning that a direction is dark is a face that stops
+            // guessing about it.
+            vec3 emitted = vec3(0.0);
+            if (second.hit && second.level == 0) {
+                Material lamp = material_of(second.type_id);
+                emitted = lamp.emission;
+            }
+            // The estimator for the same quantity the bounce estimates: the cosine-weighted mean
+            // radiance over the hemisphere, divided by pi. The bounce gets this for free by
+            // sampling proportionally to the cosine; sampling a lamp instead has to put it back
+            // by hand, along with the density it was drawn from and the chance of having come
+            // this way at all.
+            incoming = emitted * (dot(bounce_dir, normal) * nee_inv_pdf / (kPi * nee_chance));
+            measured = true;
+        } else if (!second.hit) {
+            incoming = sky_radiance(bounce_dir) / (1.0 - nee_chance);
         } else {
             vec3 n2 = vec3(second.normal);
             vec3 p2 = from + bounce_dir * second.t;
@@ -1492,16 +1709,25 @@ void main() {
                                                  cache_level(hit.t + second.t),
                                                  trace.control.z);
 
+                // Emitters belong to the direct sampling while it is running, and to the bounce
+                // when it is not. Never to both — that is the double count that would make every
+                // lamp in the world twice as bright.
+                vec3 emitted = (nee_chance > 0.0) ? vec3(0.0) : m2.emission;
                 if (far.known) {
-                    incoming = m2.emission + sun_light(n2, bounce_dir, m2, far.visibility) +
+                    incoming = emitted + sun_light(n2, bounce_dir, m2, far.visibility) +
                                m2.albedo * (1.0 - m2.metallic) * far.indirect;
                 } else {
                     // Nothing known there yet. Its own light is still a real measurement, so
                     // an emitter is seen immediately; the rest of what that surface reflects
                     // is simply not known this frame.
-                    incoming = m2.emission;
-                    measured = any(greaterThan(m2.emission, vec3(0.0)));
+                    incoming = emitted;
+                    measured = (nee_chance > 0.0)
+                                   ? false
+                                   : any(greaterThan(m2.emission, vec3(0.0)));
                 }
+                // The other half of choosing: this ray only happens when the coin did not land
+                // on the lamp, so what it finds stands for all the times it was not traced.
+                incoming /= (1.0 - nee_chance);
             }
         }
 
@@ -1525,8 +1751,17 @@ void main() {
         // Contribute. Clamped, because a single path that finds the sun through a gap carries
         // a spike ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â in a per-pixel average that is a firefly which washes out, and in a cache
         // it persists and one face wears it for thousands of frames.
-        vec3 clamped = min(incoming, vec3(8.0));
-
+        // Raised from 8 once direct light sampling existed to be measured against. A lamp's
+        // radiance is about forty, so a bounce that landed on one had five sixths of it thrown
+        // away, and a room lit by lamps settled at a permanently wrong answer rather than a
+        // noisy right one: the tower interior held 139 where a long run with the clamp opened
+        // gives 203. Sixteen per cent of that room's light was being clipped and nothing in the
+        // picture said so, because a uniformly dim room looks like a dim room.
+        //
+        // It costs nothing where the old value was already enough. Every outdoor scene measured
+        // identical to the decimal -- sun radiance is about three and sky about one, so neither
+        // was ever near the limit. The clamp still catches exactly what it was put there for.
+        vec3 clamped = min(incoming, vec3(64.0));
         // To whichever cache this sample is a measurement of. A specular sample says what
         // arrives from one direction and belongs in that direction's bin; a diffuse one says
         // what arrives from the hemisphere and belongs in the face's irradiance. Mixing them
