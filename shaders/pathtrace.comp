@@ -16,7 +16,13 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 // Radiance summed over every sample so far, and the count in .w. Kept in full float: at a few
 // thousand samples an 8-bit buffer would have quantised away the very differences between
 // materials this exists to show.
-layout(binding = 0, rgba32f) uniform image2D accum;
+//
+// Two of them, and the frame alternates. The reprojection needs last frame's average still
+// intact while this frame's is being written, and one image cannot be both: a pixel reading
+// its neighbour's history would be reading a value this frame had already overwritten. Two
+// images and a parity bit costs nothing per frame, where copying one to the other would cost
+// its whole size in bandwidth every frame for the same result.
+layout(binding = 0, rgba32f) uniform image2D accum[2];
 layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
 
 // What the denoiser needs to know about each pixel to avoid blurring across things that are
@@ -27,27 +33,13 @@ layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
 // voxel into the dark one beside it — the checkerboard of a stone wall turns to porridge. The
 // colour has to be a stopping function too.
 //
-//   x  normal, octahedral, two 16-bit halves
-//   y  distance along the primary ray, as float bits
-//   z  albedo, packed rgb8
-//   w  unused
-layout(binding = 19, rgba32ui) uniform writeonly uimage2D guide;
+// The layout itself is in guide.glsl, shared with the filter that reads it.
+//
+// Paired for the same reason the accumulation is: the reprojection checks this frame's surface
+// against last frame's, so last frame's has to survive being overwritten.
+layout(binding = 19, rgba32ui) uniform uimage2D guide[2];
 
-uint pack_normal(vec3 n) {
-    // Octahedral: cheap, and a normal is one of six axis directions here anyway.
-    vec3 a = n / (abs(n.x) + abs(n.y) + abs(n.z));
-    vec2 p = (a.z >= 0.0) ? a.xy
-                          : (1.0 - abs(a.yx)) * vec2(a.x >= 0.0 ? 1.0 : -1.0,
-                                                     a.y >= 0.0 ? 1.0 : -1.0);
-    uvec2 q = uvec2(clamp((p * 0.5 + 0.5) * 65535.0, vec2(0.0), vec2(65535.0)));
-    return q.x | (q.y << 16u);
-}
-
-uint pack_albedo(vec3 c) {
-    uvec3 q = uvec3(clamp(c, vec3(0.0), vec3(1.0)) * 255.0);
-    return q.r | (q.g << 8u) | (q.b << 16u);
-}
-
+#include "guide.glsl"
 #include "world.glsl"
 
 // The voxel type table, so a hit becomes a material. Same records the real-time pipeline
@@ -898,8 +890,131 @@ vec3 why_dark(Material m, FaceLight light) {
 // camera converges smoothly, short enough that the picture is of the world as it is now.
 const float kAccumWindow = 1024.0;
 
+// What this pixel is looking at, filled in where the guide is written so the reprojection can
+// compare like with like without tracing anything again.
+float g_depth = 1e30;
+vec3 g_normal = vec3(0.0);
+vec3 g_dir = vec3(0.0, 0.0, 1.0);   // this sample's primary ray, jitter and all
+
+// ---- temporal reprojection -----------------------------------------------------------
+//
+// The face cache remembers light per *place in the world*, so turning round does not throw it
+// away. What it cannot remember is the pixel: its own primary ray, its own jitter through the
+// pixel's area, its own draw from the sun's disc. That average lived only as long as the camera
+// stood still and was dropped whole the moment it moved, which is precisely when a picture is
+// hardest to look at.
+//
+// So the pixel's average is carried instead of dropped. Where this pixel's surface sat on the
+// screen last frame is arithmetic and not a guess: the point in the world is known, last
+// frame's camera is known, so project one through the other.
+//
+// What it is not is *guaranteed*. The surface may have been hidden behind something last frame,
+// or this pixel may now be looking at a different thing entirely, and believing the history in
+// either case is what produces smear — a trail behind everything that moves, which never
+// clears, because every sample carries equal weight however wrong it is. So the history is
+// checked before it is believed, on the same three counts the spatial filter stops on: how far
+// away, which way it faces, and what colour it is. A pixel that fails starts again from
+// nothing, which is what it would have done every frame before this existed.
+// The tests are deliberately not the filter's tests, though the first attempt used them and
+// measured worse than no reprojection at all — a still camera went from 0.53 speckle to 0.78,
+// which is the tell, because a still camera reprojects onto the very pixel it came from and
+// should have been untouched.
+//
+// The reason is the jitter. Each sample is thrown to a random point inside the pixel's own
+// area, which is the whole of the anti-aliasing here, so consecutive samples of one pixel are
+// deliberately *not* of the same point:
+//
+//   albedo   a pixel straddling two voxels samples one this frame and the other next, so the
+//            colour test rejects it every time. Yet averaging those two is not an error, it is
+//            exactly the edge the jitter exists to resolve. The test is right for the filter,
+//            which must not blur two neighbouring pixels together, and wrong here.
+//
+//   depth    a floor seen at a glancing angle changes distance by several per cent across one
+//            pixel, so a flat tolerance rejects most of the ground. What matters is whether the
+//            history is further away than the surface itself could have moved, which is the
+//            slope: how fast distance changes per pixel, which is the footprint divided by how
+//            square-on the surface is.
+//
+//   normal   the same straddle, and worse: faces are axis-aligned, so the test reads one or
+//            zero with nothing in between, and a pixel sitting on a voxel edge fails it every
+//            single frame. See where it is not applied, below.
+const float kReprojectDepth = 0.02;
+const float kReprojectSlopes = 2.0;   // how many pixels' worth of slope to forgive
+
+vec4 reprojected_history(vec3 dir, float primary_t, float aspect, uint previous) {
+    if (push.prev_origin.w == 0.0) return vec4(0.0);
+
+    // Where the pixel's surface is, and where that sits relative to last frame's camera.
+    vec3 point = push.origin.xyz + dir * primary_t;
+    vec3 offset = point - push.prev_origin.xyz;
+    float ahead = dot(offset, push.prev_forward.xyz);
+    if (ahead <= 1e-4) return vec4(0.0);   // behind the previous camera, or in its plane
+
+    // The inverse of the ray the shader builds below: forward + right*u*lens*aspect -
+    // up*v*lens. Solving that for u and v is the whole of the projection, and there is no
+    // matrix anywhere because the camera was never expressed as one.
+    float across = dot(offset, push.prev_right.xyz);
+    float down = dot(offset, push.prev_up.xyz);
+    vec2 uv = vec2(across / (ahead * push.lens.x * aspect), -down / (ahead * push.lens.x));
+    vec2 at = (uv * 0.5 + 0.5) * vec2(push.resolution.xy) - 0.5;
+
+    // Nearest rather than bilinear. Four taps would each need their own rejection test, and
+    // the ones that passed would be blended across a boundary the test exists to protect; the
+    // jitter already averages the pixel's area, so the softening a bilinear fetch buys here is
+    // softening this renderer gets for free.
+    ivec2 prev = ivec2(floor(at + 0.5));
+    if (prev.x < 0 || prev.y < 0 || prev.x >= int(push.resolution.x) ||
+        prev.y >= int(push.resolution.y)) {
+        return vec4(0.0);                  // off the edge of last frame's picture
+    }
+
+    uvec4 g = imageLoad(guide[previous], prev);
+    float was = uintBitsToFloat(g.y);
+
+    if (g_depth >= kGuideSky) {
+        // Sky against sky. Nothing to compare but the fact of it, and that is enough: the sky
+        // is infinitely far, so the camera moving cannot change what a direction sees.
+        if (was < kGuideSky) return vec4(0.0);
+    } else {
+        if (was >= kGuideSky) return vec4(0.0);
+        // Distance from *last frame's* camera, which is what its guide recorded — not this
+        // frame's, which is the whole reason the surface moved on the screen at all.
+        float expected = length(offset);
+        // How far the surface's own distance can legitimately shift over a pixel: the pixel's
+        // footprint, stretched by however far from square-on the surface is. A wall face-on
+        // barely changes; a floor at a glancing angle changes enormously, and rejecting that is
+        // rejecting the ground.
+        float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
+        float slope = expected * pixel_angle / max(abs(dot(g_normal, g_dir)), 0.05);
+        if (abs(was - expected) > max(expected * kReprojectDepth, slope * kReprojectSlopes)) {
+            return vec4(0.0);
+        }
+        // And no normal test, which is the surprise. It was written, and it costs more than it
+        // saves: a pixel straddling two voxel faces samples one this frame and the other next,
+        // so it is rejected every frame and never accumulates anything. Measured on the test
+        // platform — a still camera 0.62 speckle with it and 0.56 without, moving 0.55 with and
+        // 0.49 without — and visible as dark specks scattered across ground that is otherwise
+        // smooth, which is exactly what a pixel permanently one sample deep looks like.
+        //
+        // What it was there to catch is a history that is a different surface at the same
+        // distance, and depth-with-slope already refuses the silhouettes, which is nearly all of
+        // them. What is left is the inside corner where a wall meets a floor, and the picture
+        // was checked at the base of the towers with it on and off: no smear either way.
+    }
+
+    return imageLoad(accum[previous], prev);
+}
+
 void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance, float primary_t, float aspect) {
-    vec4 total = (sample_index == 0u) ? vec4(0.0) : imageLoad(accum, pixel);
+    uint current = trace.control.z & 1u;
+    uint previous = 1u - current;
+
+    // A zero sample index is the hard reset: the world itself changed, and every sample taken
+    // of the old one is of a picture that no longer exists. Reprojecting across that would
+    // carry the old world forward pixel by pixel, which is the one thing the reset is for.
+    vec4 total = (sample_index == 0u)
+                     ? vec4(0.0)
+                     : reprojected_history(g_dir, primary_t, aspect, previous);
     if (total.w >= kAccumWindow) {
         total *= (kAccumWindow - 1.0) / kAccumWindow;
     }
@@ -914,7 +1029,7 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance, float primary_t,
     // during streaming is the price.
     total.rgb += radiance;
     total.w += 1.0;
-    imageStore(accum, pixel, total);
+    imageStore(accum[current], pixel, total);
 
     // Tone mapping, the tools and the write to the screen all belong to the denoiser now. It
     // runs after this pass and needs the raw accumulated radiance to filter, so anything done
@@ -935,6 +1050,7 @@ void main() {
     vec3 dir = normalize(push.forward.xyz + push.right.xyz * uv.x * push.lens.x * aspect -
                          push.up.xyz * uv.y * push.lens.x);
     vec3 origin = push.origin.xyz;
+    g_dir = dir;
 
     vec3 radiance = vec3(0.0);
     float primary_t = push.lens.y;   // kept for the preview's depth test
@@ -953,7 +1069,8 @@ void main() {
         radiance = sky_radiance(dir);
         // Sky: no surface for the filter to respect, and a distance nothing can match, so it
         // never averages with anything solid in front of it.
-        imageStore(guide, pixel, uvec4(0u, floatBitsToUint(1e30), 0u, 0u));
+        imageStore(guide[trace.control.z & 1u], pixel,
+                   uvec4(0u, floatBitsToUint(1e30), 0u, 0u));
     } else {
         primary_t = hit.t;
         vec3 normal = vec3(hit.normal);
@@ -962,8 +1079,11 @@ void main() {
         Material m = (hit.level == 0) ? material_of(hit.type_id)
                                       : material_from_colour(hit.colour);
 
-        imageStore(guide, pixel, uvec4(pack_normal(normal), floatBitsToUint(hit.t),
-                                       pack_albedo(m.albedo), 0u));
+        imageStore(guide[trace.control.z & 1u], pixel,
+                   uvec4(pack_normal(normal), floatBitsToUint(hit.t),
+                         pack_albedo(m.albedo), 0u));
+        g_depth = hit.t;
+        g_normal = normal;
 
         radiance = m.emission;
 
