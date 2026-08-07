@@ -7,7 +7,7 @@
 // have something to be checked against. An approximation with no ground truth is a guess.
 //
 // It asks the world exactly the same question primary visibility does, through the same
-// traversal in world.glsl, at full voxel detail on every bounce â€” no coarse levels, because a
+// traversal in world.glsl, at full voxel detail on every bounce ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no coarse levels, because a
 // filtered colour is a lie about what a surface is and lies compound over bounces.
 #extension GL_GOOGLE_include_directive : require
 
@@ -63,7 +63,11 @@ layout(std430, binding = 17) buffer FaceCache { FaceEntry items[]; } faces;
 // count is capped well before the sum could wrap.
 const float kFixedScale = 4096.0;
 const uint kMaxFaceSamples = 60000u;
-const uint kFaceProbes = 4u;
+
+// Eight, not four. A short probe is right Ã¢â‚¬â€ spending longer looking is worse than tracing the
+// sample uncached Ã¢â‚¬â€ but four was short enough that a noticeable fraction of faces never got a
+// slot at all, and every one of them rendered pitch black in shadow.
+const uint kFaceProbes = 8u;
 
 uint hash_u32(uint x) {
     x ^= x >> 16; x *= 0x7feb352du;
@@ -78,10 +82,20 @@ void face_key(ivec3 voxel, ivec3 normal, out uint lo, out uint hi) {
     uint face = (normal.x != 0) ? ((normal.x > 0) ? 0u : 1u)
               : (normal.y != 0) ? ((normal.y > 0) ? 2u : 3u)
                                 : ((normal.z > 0) ? 4u : 5u);
-    lo = hash_u32(uint(voxel.x) * 73856093u ^ uint(voxel.y) * 19349663u ^
-                  uint(voxel.z) * 83492791u ^ (face * 2654435761u));
-    hi = hash_u32(uint(voxel.x) + uint(voxel.y) * 0x9E3779B9u + uint(voxel.z) * 0x85EBCA6Bu +
-                  face * 0xC2B2AE35u);
+
+    // Mixed one axis at a time, rather than XORing three multiplications together.
+    //
+    // That looks fine and behaves badly on exactly this input: voxel coordinates are a dense
+    // lattice, and XOR of products over a lattice leaves whole planes of faces landing in the
+    // same few buckets. Faces that then failed to find a slot were drawn with no indirect
+    // light at all, which in shadow is pure black Ã¢â‚¬â€ scattered black voxels through every
+    // shadowed surface, which is what this looked like.
+    uint h = 0x811C9DC5u;
+    h = hash_u32(h ^ uint(voxel.x));
+    h = hash_u32(h ^ uint(voxel.y));
+    h = hash_u32(h ^ uint(voxel.z));
+    lo = hash_u32(h ^ face);
+    hi = hash_u32(lo ^ 0x9E3779B9u);
     // Zero is the "never claimed" marker, so the key must never be zero.
     if (lo == 0u) lo = 1u;
 }
@@ -138,7 +152,7 @@ uint pcg(inout uint state) {
 float rand(inout uint state) { return float(pcg(state)) * (1.0 / 4294967296.0); }
 
 // Cosine-weighted hemisphere around n. Cosine-weighted because the diffuse BRDF is divided by
-// exactly that cosine, so the two cancel and the estimator is just the albedo â€” the lowest
+// exactly that cosine, so the two cancel and the estimator is just the albedo ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the lowest
 // variance a diffuse bounce can have without knowing where the light is.
 vec3 cosine_hemisphere(vec3 n, inout uint state) {
     float u1 = rand(state);
@@ -187,7 +201,7 @@ vec3 sky_radiance(vec3 dir) {
     vec3 ground = vec3(0.16, 0.15, 0.14);
     // Scaled well below the sun. Those colours were written to be looked at directly, and
     // used unchanged as *radiance* they light the whole hemisphere at nearly the brightness of
-    // the sun itself â€” every surface gets the same flat fill from every direction, shadows
+    // the sun itself ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â every surface gets the same flat fill from every direction, shadows
     // stop reading, and the result is the grey wash a first attempt at this always produces.
     // Real daylight has the sun an order of magnitude above the sky it shares the frame with.
     vec3 base = ((dir.y < 0.0) ? mix(ground, horizon, up * 2.0)
@@ -253,14 +267,35 @@ bool occluded(vec3 origin, vec3 dir) {
 }
 
 // Direct sun at a point, sampled rather than waited for. Without this the sun is found only
-// when a bounce happens to land inside its half-degree disc, which is almost never — the
+// when a bounce happens to land inside its half-degree disc, which is almost never Ã¢â‚¬â€ the
 // difference between converging in seconds and in an hour.
 //
 // Deliberately per pixel and never cached: its shadow edges are sharp, and one value shared
 // across a whole face would smear them.
-vec3 direct_light(vec3 from, vec3 normal, vec3 view, Material m) {
+// A direction inside the sun's disc, so its shadows have a penumbra. A point light casts an
+// edge with none at all, which is the single most obvious way a render looks synthetic.
+vec3 sun_sample(inout uint state) {
+    float cos_max = trace.sun.w;
+    float u1 = rand(state);
+    float u2 = rand(state);
+    float cos_theta = mix(cos_max, 1.0, u1);
+    float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
+    float phi = 2.0 * kPi * u2;
+
+    vec3 n = trace.sun.xyz;
+    vec3 up = (abs(n.z) < 0.999) ? vec3(0, 0, 1) : vec3(1, 0, 0);
+    vec3 tangent = normalize(cross(up, n));
+    vec3 bitangent = cross(n, tangent);
+    return normalize(tangent * (sin_theta * cos(phi)) + bitangent * (sin_theta * sin(phi)) +
+                     n * cos_theta);
+}
+
+// Sun light given how much of the sun this face can see. Splitting visibility out is what
+// lets the expensive half Ã¢â‚¬â€ the shadow ray Ã¢â‚¬â€ be traced once per face and shared, while the
+// cheap half, which depends on the viewing angle, stays per pixel.
+vec3 sun_light(vec3 normal, vec3 view, Material m, float visibility) {
     float n_dot_l = dot(normal, trace.sun.xyz);
-    if (n_dot_l <= 0.0 || occluded(from, trace.sun.xyz)) return vec3(0.0);
+    if (n_dot_l <= 0.0 || visibility <= 0.0) return vec3(0.0);
 
     vec3 diffuse = m.albedo * (1.0 - m.metallic) / kPi;
 
@@ -275,7 +310,66 @@ vec3 direct_light(vec3 from, vec3 normal, vec3 view, Material m) {
     vec3 f = f0 + (vec3(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
     vec3 specular = d * g * f / max(4.0 * n_dot_v * n_dot_l, 1e-4);
 
-    return (diffuse + specular) * trace.sun_colour.rgb * n_dot_l;
+    return (diffuse + specular) * trace.sun_colour.rgb * n_dot_l * visibility;
+}
+
+// Everything a face knows: how much of the sun it can see, and the light arriving from
+// everywhere else. Both come from the same entry and the same sample count.
+struct FaceLight {
+    float visibility;
+    vec3 indirect;
+    bool known;
+};
+
+FaceLight read_face(uint slot) {
+    FaceLight light;
+    light.visibility = 0.0;
+    light.indirect = vec3(0.0);
+    light.known = false;
+    if (slot == 0xFFFFFFFFu) return light;
+
+    uint count = faces.items[slot].count;
+    if (count == 0u) return light;
+
+    uvec4 sum = faces.items[slot].sum;
+    float inv = 1.0 / (kFixedScale * float(count));
+    light.visibility = float(sum.w) * inv;
+    light.indirect = vec3(sum.xyz) * inv;
+    light.known = true;
+    return light;
+}
+
+// How many samples a face needs before the pixels standing on it stop tracing for it.
+const uint kFaceTarget = 192u;
+
+// Anything not finite would poison the average for every sample after it, and one bad pixel
+// would never wash out.
+vec3 clamp_finite(vec3 v) {
+    return (any(isnan(v)) || any(isinf(v))) ? vec3(0.0) : v;
+}
+
+void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance, float primary_t, float aspect) {
+    vec4 total = (sample_index == 0u) ? vec4(0.0) : imageLoad(accum, pixel);
+    total.rgb += radiance;
+    total.w += 1.0;
+    imageStore(accum, pixel, total);
+
+    vec3 mean = total.rgb / max(total.w, 1.0);
+
+    // Reinhard with a shoulder, and gamma. Deliberately plain: the point is to see what the
+    // material does, not what a grading curve does to it. The physical post stack is Stage 9.
+    vec3 mapped = pow(clamp(mean / (mean + vec3(1.0)), 0.0, 1.0), vec3(1.0 / 2.2));
+
+    // The tools, over the top, exactly as the real-time pipeline draws them. After tone mapping
+    // and outside the accumulation, because a preview is interface rather than light: it must
+    // not be averaged in, must not converge, and must not be dimmed by an exposure curve.
+    // Unjittered, so an outline is a line rather than a smeared band.
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(push.resolution) * 2.0 - 1.0;
+    vec3 straight = normalize(push.forward.xyz + push.right.xyz * uv.x * push.lens.x * aspect -
+                              push.up.xyz * uv.y * push.lens.x);
+    mapped = draw_preview(mapped, push.origin.xyz, straight, primary_t);
+
+    imageStore(out_colour, pixel, vec4(mapped, 1.0));
 }
 
 void main() {
@@ -297,12 +391,15 @@ void main() {
     vec3 radiance = vec3(0.0);
     float primary_t = push.lens.y;   // kept for the preview's depth test
 
-    // Direct light per pixel, indirect through the cache.
+    // Both halves of the light go through the face, and each is split so that only the
+    // expensive part is shared.
     //
-    // The split is the point. Direct sun has hard shadow edges that one value shared across a
-    // whole face would smear into mush, and it is cheap: one shadow ray. Indirect is smooth,
-    // expensive, and looks the same from everywhere on a face — so it is exactly what is worth
-    // computing once and sharing.
+    // For the sun that is the shadow ray: whether a face can see the sun is a property of the
+    // face, so it is traced once and reused, while the part that depends on where you are
+    // standing is recomputed per pixel from it. A voxel face is three centimetres, so quantising
+    // shadow to it costs almost nothing and removes a ray from every pixel of every frame.
+    //
+    // For everything else it is the whole bounce.
     Hit hit = march(origin, dir, 0.0, 0.0, true);
     if (!hit.hit) {
         radiance = sky_radiance(dir);
@@ -314,20 +411,43 @@ void main() {
         Material m = (hit.level == 0) ? material_of(hit.type_id)
                                       : material_from_colour(hit.colour);
 
-        radiance = m.emission + direct_light(from, normal, dir, m);
+        radiance = m.emission;
 
-        // The face this pixel is looking at, in world voxels so the key survives the camera
-        // moving. floor of the point pulled just inside the surface.
         ivec3 voxel = ivec3(floor(point - normal * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
         uint lo, hi;
         face_key(voxel, hit.normal, lo, hi);
         uint slot = face_slot(lo, hi, true);
 
-        // One indirect sample from this face, whatever the cache already knows. Every pixel
-        // that lands here contributes, so a face covering a thousand pixels gathers a thousand
-        // samples a frame — the reason this converges in a fraction of the time.
-        vec3 bounce_dir = cosine_hemisphere(normal, state);
+        // Whether this pixel does any work at all beyond the primary ray.
+        //
+        // This is where the saving actually lands. A face covered by a thousand pixels reaches
+        // a good estimate within a frame or two, and after that every one of those pixels was
+        // still tracing a shadow ray and a bounce to tell it what it already knew. Once a face
+        // has enough samples they stop, and a converged surface costs one ray per pixel â€” the
+        // primary â€” however many lights and bounces it is standing under.
+        //
+        // A small fraction keep going regardless, so a face is never frozen: light that moves,
+        // or a neighbour that changed, still works its way in.
+        uint have = (slot != 0xFFFFFFFFu) ? faces.items[slot].count : 0u;
+        bool refine = (have < kFaceTarget) || (rand(state) < 0.02);
+
+        float visibility = 0.0;
         vec3 incoming = vec3(0.0);
+
+        if (!refine) {
+            FaceLight known = read_face(slot);
+            radiance += sun_light(normal, dir, m, known.visibility) +
+                        m.albedo * (1.0 - m.metallic) * known.indirect;
+            radiance = clamp_finite(radiance);
+            write_pixel(pixel, sample_index, radiance, primary_t, aspect);
+            return;
+        }
+
+        if (dot(normal, trace.sun.xyz) > 0.0) {
+            visibility = occluded(from, sun_sample(state)) ? 0.0 : 1.0;
+        }
+
+        vec3 bounce_dir = cosine_hemisphere(normal, state);
         Hit second = march(from, bounce_dir, 0.0, 0.0, false);
         if (!second.hit) {
             incoming = sky_radiance(bounce_dir);
@@ -337,80 +457,44 @@ void main() {
             vec3 from2 = p2 + n2 * 0.01;
             Material m2 = (second.level == 0) ? material_of(second.type_id)
                                               : material_from_colour(second.colour);
-            incoming = m2.emission + direct_light(from2, n2, bounce_dir, m2);
 
-            // And the cache again at the far end. This is what makes the bounce count
-            // unbounded for free: what is read there already contains its own indirect from
-            // previous frames, so light gains a bounce per frame and keeps it. No path is
-            // traced deeper, and none has to be.
+            // The far end reads its own face rather than tracing on. This is what makes the
+            // bounce count unbounded for nothing: what is read there already contains its own
+            // sun and its own indirect from earlier frames, so light gains a bounce per frame
+            // and keeps it. If that face is not in the table yet its light is simply missing
+            // this frame and arrives once it is.
             ivec3 voxel2 = ivec3(floor(p2 - n2 * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
             uint lo2, hi2;
             face_key(voxel2, second.normal, lo2, hi2);
-            uint slot2 = face_slot(lo2, hi2, false);
-            if (slot2 != 0xFFFFFFFFu) {
-                uint count2 = faces.items[slot2].count;
-                if (count2 > 0u) {
-                    uvec4 sum2 = faces.items[slot2].sum;
-                    vec3 mean2 = vec3(sum2.xyz) / (kFixedScale * float(count2));
-                    incoming += m2.albedo * (1.0 - m2.metallic) * mean2;
-                }
-            }
+            FaceLight far = read_face(face_slot(lo2, hi2, false));
+
+            incoming = m2.emission + sun_light(n2, bounce_dir, m2, far.visibility) +
+                       m2.albedo * (1.0 - m2.metallic) * far.indirect;
         }
 
-        // Contribute it. Clamped because a single path that finds the sun through a gap
-        // carries a spike that one face would then wear for thousands of frames — the classic
-        // firefly, and in a cache it does not average away, it persists.
-        if (slot != 0xFFFFFFFFu && any(greaterThan(incoming, vec3(0.0)))) {
+        // Contribute. Clamped, because a single path that finds the sun through a gap carries
+        // a spike â€” in a per-pixel average that is a firefly which washes out, and in a cache
+        // it persists and one face wears it for thousands of frames.
+        if (slot != 0xFFFFFFFFu && faces.items[slot].count < kMaxFaceSamples) {
             vec3 clamped = min(incoming, vec3(8.0));
-            uint count = faces.items[slot].count;
-            if (count < kMaxFaceSamples) {
-                atomicAdd(faces.items[slot].sum.x, uint(clamped.r * kFixedScale));
-                atomicAdd(faces.items[slot].sum.y, uint(clamped.g * kFixedScale));
-                atomicAdd(faces.items[slot].sum.z, uint(clamped.b * kFixedScale));
-                atomicAdd(faces.items[slot].count, 1u);
-            }
+            atomicAdd(faces.items[slot].sum.x, uint(clamped.r * kFixedScale));
+            atomicAdd(faces.items[slot].sum.y, uint(clamped.g * kFixedScale));
+            atomicAdd(faces.items[slot].sum.z, uint(clamped.b * kFixedScale));
+            atomicAdd(faces.items[slot].sum.w, uint(visibility * kFixedScale));
+            atomicAdd(faces.items[slot].count, 1u);
         }
 
-        // Then read what the face knows, which includes this frame's contributions from every
-        // other pixel on it.
-        if (slot != 0xFFFFFFFFu) {
-            uint count = faces.items[slot].count;
-            if (count > 0u) {
-                uvec4 sum = faces.items[slot].sum;
-                vec3 mean = vec3(sum.xyz) / (kFixedScale * float(count));
-                radiance += m.albedo * (1.0 - m.metallic) * mean;
-            }
+        // Then shade from the face, which now includes every other pixel standing on it this
+        // frame. A face the table could not hold falls back to this pixel's own samples: noisy,
+        // and *correct*, where before it fell back to nothing at all â€” which in shadow, where
+        // indirect is the only light there is, drew pure black.
+        FaceLight here = read_face(slot);
+        if (!here.known) {
+            here.visibility = visibility;
+            here.indirect = incoming;
         }
+        radiance += sun_light(normal, dir, m, here.visibility) +
+                    m.albedo * (1.0 - m.metallic) * here.indirect;
     }
-    // Anything not finite would poison the average for every sample after it, and one bad
-    // pixel would never wash out.
-    if (any(isnan(radiance)) || any(isinf(radiance))) radiance = vec3(0.0);
-
-    vec4 total = (sample_index == 0u) ? vec4(0.0) : imageLoad(accum, pixel);
-    total.rgb += radiance;
-    total.w += 1.0;
-    imageStore(accum, pixel, total);
-
-    vec3 mean = total.rgb / max(total.w, 1.0);
-
-    // Reinhard with a shoulder, and gamma. Deliberately plain: the point is to see what the
-    // material does, not what a grading curve does to it. The physical post stack is Stage 9.
-    vec3 mapped = pow(clamp(mean / (mean + vec3(1.0)), 0.0, 1.0), vec3(1.0 / 2.2));
-
-    // The tools, over the top, exactly as the real-time pipeline draws them. Drawn *after*
-    // tone mapping and outside the accumulation, because a preview is interface rather than
-    // light: it must not be averaged in, must not converge, and must not be dimmed by an
-    // exposure curve. It is also the whole reason this mode is usable â€” a tracer you cannot
-    // edit inside is a screenshot generator, not a way to judge a material in place.
-    //
-    // The primary ray's own distance is the depth test, so a box behind a wall reads as buried
-    // and one in the open reads as in the open.
-    vec3 dir_unjittered = normalize(push.forward.xyz +
-                                    push.right.xyz * ((vec2(pixel) + 0.5) / vec2(push.resolution) *
-                                                          2.0 - 1.0).x * push.lens.x * aspect -
-                                    push.up.xyz * ((vec2(pixel) + 0.5) / vec2(push.resolution) *
-                                                       2.0 - 1.0).y * push.lens.x);
-    mapped = draw_preview(mapped, push.origin.xyz, dir_unjittered, primary_t);
-
-    imageStore(out_colour, pixel, vec4(mapped, 1.0));
+    write_pixel(pixel, sample_index, clamp_finite(radiance), primary_t, aspect);
 }
