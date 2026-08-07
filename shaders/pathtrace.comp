@@ -442,6 +442,35 @@ float surface_offset(int level) {
     return float(32u << uint(level - 5)) * 0.75;
 }
 
+// Reads a node at a *fractional* level, blending the two it falls between.
+//
+// The level is picked from distance and is part of the key, so a whole-number level means a
+// surface swaps to a different entry — with its own separate history — the moment you cross a
+// distance boundary. Walking towards a wall made its brightness step, and because each entry
+// keeps its own long average the step did not settle, it smeared. Blending is the same
+// continuous-detail rule the marcher already uses for geometry, applied to light.
+FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) {
+    uint l0 = uint(floor(level));
+    uint l1 = min(l0 + 1u, 6u);
+    float f = level - float(l0);
+
+    uint lo0, hi0, lo1, hi1;
+    face_key(voxel, normal, l0, lo0, hi0);
+    face_key(voxel, normal, l1, lo1, hi1);
+    FaceLight a = read_face(face_slot(lo0, hi0, false, frame));
+    FaceLight b = read_face(face_slot(lo1, hi1, false, frame));
+
+    if (!a.known) return b;
+    if (!b.known) return a;
+
+    FaceLight out_light;
+    out_light.visibility = mix(a.visibility, b.visibility, f);
+    out_light.indirect = mix(a.indirect, b.indirect, f);
+    out_light.count = min(a.count, b.count);
+    out_light.known = true;
+    return out_light;
+}
+
 FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
     uint lo, hi;
     face_key(voxel, normal, level, lo, hi);
@@ -475,6 +504,12 @@ FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
 
 // The node size a pixel can resolve at this distance, as a power of two. The geometry is
 // still marched at full voxel detail - this only decides how coarsely faces are *shared*.
+float cache_level_exact(float t) {
+    float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
+    float footprint = max(t * pixel_angle, 1.0);
+    return clamp(log2(footprint), 0.0, 6.0);
+}
+
 uint cache_level(float t) {
     float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
     float footprint = max(t * pixel_angle, 1.0);
@@ -583,7 +618,8 @@ void main() {
         vec3 incoming = vec3(0.0);
 
         if (!refine) {
-            FaceLight known = read_face_seeded(voxel, hit.normal, level, trace.control.z);
+            FaceLight known = read_face_blended(voxel, hit.normal, cache_level_exact(hit.t),
+                                                trace.control.z);
             radiance += sun_light(normal, dir, m, known.visibility) +
                         m.albedo * (1.0 - m.metallic) * known.indirect;
             radiance = clamp_finite(radiance);
@@ -650,6 +686,9 @@ void main() {
         }
 
         FaceLight here = read_face_seeded(voxel, hit.normal, level, trace.control.z);
+        if (here.known && here.count >= kSeedSamples) {
+            here = read_face_blended(voxel, hit.normal, cache_level_exact(hit.t), trace.control.z);
+        }
         if (!here.known) {
             here.visibility = visibility;
             here.indirect = incoming;

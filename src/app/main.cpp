@@ -921,6 +921,13 @@ void Application::rebuild_coarse_grids() {
     // the one place the thumbnail cache needs telling that its work list is stale.
     for (ThumbnailCache& tier : thumb_tiers_) tier.mark_world_changed();
 
+    // Every face's cached light describes a world that has just changed, so the whole table
+    // goes. Here rather than beside the per-chunk invalidation below, because that is guarded
+    // by "does the world still have this chunk" — and an edit that empties a chunk out of
+    // existence skipped it entirely. Delete a torch and its light stayed baked into everything
+    // around it, because nothing ever told the cache the torch was gone.
+    face_cache_dirty_ = true;
+
     // And the one place to note how far the world reaches, which is how far a ray can
     // usefully travel now that thumbnails draw well past what is resident.
     world_bounds_valid_ = false;
