@@ -103,6 +103,7 @@ target_link_libraries(ws_world PUBLIC ws_core)
 # on the window or the GPU, so it can be tested headless and driven by the network later.
 # --------------------------------------------------------------------------------------
 add_library(ws_game STATIC
+    src/game/quality.cpp
     src/game/chisel.cpp
     src/game/clip.cpp
     src/game/clipboard.cpp
@@ -251,6 +252,7 @@ add_executable(ws_tests
     tests/test_thumb_cache.cpp
     tests/test_summary_tree.cpp
     tests/test_hollow.cpp
-    tests/test_log_ring.cpp)
+    tests/test_log_ring.cpp
+    tests/test_quality.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_doctest)
 add_test(NAME unit COMMAND ws_tests)

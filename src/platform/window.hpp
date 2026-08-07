@@ -79,6 +79,12 @@ public:
 
     u32 width() const { return width_; }
     u32 height() const { return height_; }
+
+    // What the display this window is on actually refreshes at. The default frame-rate target,
+    // because rendering faster than the monitor can show is work nobody sees — and on a
+    // machine with room to spare that time is better spent on samples than thrown away.
+    // Returns 60 when the display will not say, which is the safe guess.
+    f32 refresh_hz() const;
     bool minimised() const { return minimised_; }
     bool resized_this_frame() const { return resized_; }
 

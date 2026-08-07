@@ -135,6 +135,13 @@ bool Window::create(const std::string& title, u32 width, u32 height, bool allow_
     return true;
 }
 
+f32 Window::refresh_hz() const {
+    if (window_ == nullptr) return 60.0f;
+    const SDL_DisplayID display = SDL_GetDisplayForWindow(window_);
+    const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display);
+    if (mode == nullptr || mode->refresh_rate <= 0.0f) return 60.0f;
+    return mode->refresh_rate;
+}
 void Window::destroy() {
     if (window_ != nullptr) {
         SDL_DestroyWindow(window_);

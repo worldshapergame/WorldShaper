@@ -311,6 +311,9 @@ layout(push_constant) uniform Trace {
     vec4 sun;          // xyz direction *towards* the sun, w cosine of its angular radius
     vec4 sun_colour;   // rgb radiance
     uvec4 control;     // x sample index, y bounce limit, z frame counter, w world changed
+    // Quality, chosen at runtime by the auto-quality controller rather than compiled in:
+    // x refine stride, y shadow sample target. See src/game/quality.hpp.
+    uvec4 quality;
 } trace;
 
 const float kPi = 3.14159265359;
@@ -567,7 +570,7 @@ void contribute(uint slot, vec3 value) {
 // How many shadow samples a face wants before the pixels on it stop tracing for it. Far fewer
 // than indirect needs: this is a yes-or-no answer sampled over half a degree of sky, so a
 // hundred of them already resolve the penumbra to better than the eye can see.
-const uint kShadowTarget = 96u;
+// Set from the quality controller; see trace.quality.
 
 // A shadow entry uses the same slot layout and only the w channel. Kept in the same table
 // rather than a second one, because the two share an eviction policy, a probe strategy and a
@@ -785,7 +788,7 @@ const uint kFaceTarget = 192u;
 //
 // The same reasoning as the streaming budget: work that must happen is spread over frames
 // rather than allowed to arrive all at once. Four frames is a sixteenth of a second.
-const uint kRefineStride = 4u;
+// Set from the quality controller; see trace.quality.
 
 // Anything not finite would poison the average for every sample after it, and one bad pixel
 // would never wash out.
@@ -976,7 +979,7 @@ void main() {
         // or a neighbour that changed, still works its way in.
         uint have = (slot != 0xFFFFFFFFu) ? faces.items[slot].count : 0u;
         bool turn = ((uint(pixel.x) * 3u + uint(pixel.y) * 5u + trace.control.z) %
-                     kRefineStride) == 0u;
+                     max(trace.quality.x, 1u)) == 0u;
         bool refine = ((have < kFaceTarget) || (rand(state) < 0.02)) && turn;
 
         // The shadow entry: its own key, at a fixed level, decided on its own terms.
@@ -994,7 +997,7 @@ void main() {
         // Traced when the entry is still thin, or on the small fraction that keep going so a
         // face is never frozen. Sunless faces never trace at all: the answer is already known.
         bool faces_sun = dot(normal, trace.sun.xyz) > 0.0;
-        bool trace_shadow = faces_sun && ((shadow_have < kShadowTarget) || (rand(state) < 0.02));
+        bool trace_shadow = faces_sun && ((shadow_have < trace.quality.y) || (rand(state) < 0.02));
 
         // Debug view 5: whether the table could hold this face at all. Red is a pixel the
         // table refused a slot; green is a face it holds.

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <filesystem>
 #include <string>
 
@@ -18,6 +19,7 @@
 #include "core/jobs.hpp"
 #include "core/crash.hpp"
 #include "core/log.hpp"
+#include "game/quality.hpp"
 #include "app/updater.hpp"
 #include "core/time.hpp"
 #include "core/version.hpp"
@@ -71,6 +73,12 @@ struct Options {
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
     bool path_trace = false;   // start in the reference path tracer
     u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
+
+    // Automatic quality. Off, or pinned, or aimed at something other than the monitor.
+    f32 target_fps = 0.0f;        // 0 means "the monitor's refresh rate"
+    bool no_auto_quality = false;
+    bool benchmark = false;       // re-run the machine measurement and save the result
+    i32 quality_level = -1;       // -1 means "decide it"
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
     // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
@@ -170,6 +178,14 @@ Options parse_options(int argc, char** argv) {
             options.validation = true;
         } else if (arg == "--stream-log") {
             options.stream_log = true;
+        } else if (arg == "--target-fps" && i + 1 < argc) {
+            options.target_fps = static_cast<f32>(std::atof(argv[++i]));
+        } else if (arg == "--benchmark") {
+            options.benchmark = true;
+        } else if (arg == "--no-auto-quality") {
+            options.no_auto_quality = true;
+        } else if (arg == "--quality" && i + 1 < argc) {
+            options.quality_level = std::atoi(argv[++i]);
         } else if (arg == "--crash-test" && i + 1 < argc) {
             options.crash_test = argv[++i];
         } else if (arg == "--hollow" && i + 1 < argc) {
@@ -209,6 +225,10 @@ void print_help() {
         "                        7 what the primary ray hit, 8 what the bounce found,\n"
         "                        9 the sun's visibility on its own\n"
         "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
+        "  --target-fps N        frame rate to hold (default: the monitor's refresh rate)\n"
+        "  --quality N           pin the quality level 0-7 instead of deciding it\n"
+        "  --no-auto-quality     leave quality where it is and never adjust it\n"
+        "  --benchmark           measure this machine again and save the result\n"
         "  --fly vx,vy,vz,vyaw   move the camera every frame (m/s, deg/s), so a screenshot\n"
         "                        is of the moving picture rather than a settled one\n"
         "  --crash-test KIND     prove crash reporting works: read, write, check, throw,\n"
@@ -230,9 +250,10 @@ void print_help() {
 struct TracePush {
     f32 sun[4]{};          // xyz towards the sun, w cos of its angular radius
     f32 sun_colour[4]{};
-    u32 control[4]{};      // x sample index, y bounce limit
+    u32 control[4]{};      // x sample index, y bounce limit, z frame, w world changed
+    u32 quality[4]{};      // x refine stride, y shadow sample target
 };
-static_assert(sizeof(TracePush) == 48, "TracePush must match the shader's push block");
+static_assert(sizeof(TracePush) == 64, "TracePush must match the shader's push block");
 
 // Where the compiled shaders are.
 //
@@ -513,6 +534,10 @@ private:
     void destroy_render_target();
     void handle_resize();
     void record_frame(f32 time_seconds);
+    void update_quality();
+    void apply_quality();
+    void load_settings();
+    void save_settings();
 
     void build_world();
     void stream(f64 seconds);
@@ -543,6 +568,19 @@ private:
     bool face_cache_dirty_ = true;
     bool path_trace_ = false;
     u32 trace_samples_ = 0;      // samples accumulated since the last reset
+
+    // Holds the frame rate by spending detail where it is worth most. Measured on the machine
+    // it is running on, once, the first time the game starts. See documentation/19.
+    AutoQuality quality_;
+    u32 applied_quality_level_ = 0xFFFFFFFFu;   // what the renderer is currently set to
+    bool benchmark_pending_ = false;
+    u64 benchmark_until_ = 0;
+    f64 benchmark_total_ms_ = 0.0;
+    u32 benchmark_frames_ = 0;
+    // Long enough for shaders to finish compiling and the first chunks to arrive: timing those
+    // measures the loading, not the machine. Then a second or so of actual frames.
+    static constexpr u64 kBenchmarkWarmupFrames = 90;
+    static constexpr u64 kBenchmarkFrames = 90;
 
     // Scripted camera motion, so a measurement can be taken of the moving picture rather than
     // the settled one. See Options::fly.
@@ -1102,6 +1140,105 @@ void Application::stream(f64 seconds) {
     }
 }
 
+// Where the quality decision is remembered between runs. Beside the logs and the crash
+// reports, under %LOCALAPPDATA%, because an installed copy may sit somewhere unwritable.
+namespace {
+std::string settings_path() {
+    const std::string& dir = crash_log_dir();
+    if (dir.empty()) return {};
+    return dir + "settings.txt";
+}
+}  // namespace
+
+// Deliberately the plainest format that works: one `key value` per line. A player who wants
+// to force a quality level or a target should be able to open it in Notepad and see what the
+// game decided about their machine, and an unreadable or half-written file should cost a
+// benchmark rather than a crash.
+void Application::load_settings() {
+    const std::string path = settings_path();
+    if (path.empty()) return;
+    std::ifstream file(path);
+    if (!file) return;
+
+    std::string key;
+    f64 value = 0.0;
+    while (file >> key >> value) {
+        if (key == "target_fps") quality_.set_target_fps(static_cast<f32>(value));
+        else if (key == "quality_level") { quality_.set_level(static_cast<u32>(value)); benchmark_pending_ = false; }
+        else if (key == "auto_quality") quality_.set_enabled(value != 0.0);
+    }
+}
+
+void Application::save_settings() {
+    const std::string path = settings_path();
+    if (path.empty()) return;
+    std::ofstream file(path, std::ios::trunc);
+    if (!file) return;
+    file << "target_fps " << quality_.target_fps() << "\n"
+         << "quality_level " << quality_.level() << "\n"
+         << "auto_quality " << (quality_.enabled() ? 1 : 0) << "\n";
+}
+
+// Measure this machine, then hold the frame rate on it.
+//
+// The first run benchmarks rather than guesses. A quality level chosen on the machine the
+// game was written on means nothing anywhere else, and asking a player to find the settings
+// before the game looks right is asking them to do the work the game should have done. So the
+// first few seconds are spent at full detail, timed, and the answer is written down; every
+// run after that starts from it and the controller takes over.
+void Application::update_quality() {
+    if (benchmark_pending_) {
+        // Skip the opening frames: shaders are still compiling, chunks are still arriving, and
+        // the pipeline is cold. Timing those measures the loading screen, not the machine.
+        if (frame_counter_ > kBenchmarkWarmupFrames) {
+            benchmark_total_ms_ += stats_.last_ms();
+            ++benchmark_frames_;
+        }
+        if (frame_counter_ >= benchmark_until_ && benchmark_frames_ > 0) {
+            const f64 average_ms = benchmark_total_ms_ / static_cast<f64>(benchmark_frames_);
+            const u32 level = level_for_frame_time(average_ms, quality_.target_fps());
+            quality_.set_level(level);
+            benchmark_pending_ = false;
+            WS_LOG_INFO("quality",
+                        "benchmark: {:.2f} ms a frame at full detail, target {:.0f} fps "
+                        "-> starting at level {} of {}",
+                        average_ms, quality_.target_fps(), level, kQualityLevels - 1);
+            save_settings();
+        }
+        return;   // nothing is adjusted while the measurement is being taken
+    }
+
+    quality_.observe(stats_.last_ms());
+    if (quality_.level() != applied_quality_level_) {
+        const u32 from = applied_quality_level_;
+        applied_quality_level_ = quality_.level();
+        apply_quality();
+        if (from != 0xFFFFFFFFu) {
+            WS_LOG_INFO("quality", "level {} -> {} ({:.1f} ms a frame, target {:.1f})", from,
+                        applied_quality_level_, quality_.smoothed_ms(),
+                        1000.0f / quality_.target_fps());
+        }
+    }
+}
+
+// Push the current level's knobs into the things that read them.
+//
+// All of these are read fresh every frame — from the parameter block or the push constants —
+// so changing a level costs nothing and cannot fail. Nothing is rebuilt and nothing waits on
+// the device.
+//
+// resolution_scale is the exception and is deliberately *not* applied yet. The dispatch size,
+// the parameter block's resolution and the descriptor-bound images all derive from the
+// swapchain extent, so rendering smaller than the window means changing all three together
+// and getting the blit to scale up. That is a real change to the frame's structure rather
+// than a knob, and shipping it unverified is how the last several faults got in. The ladder
+// carries the value so the ordering is already decided; the wiring is the next piece of work.
+void Application::apply_quality() {
+    const QualityKnobs& knobs = quality_.knobs();
+    detail_bias_ = knobs.detail_bias;
+    trace_bounces_ = knobs.bounce_limit;
+}
+
 void Application::record_frame(f32 time_seconds) {
     const VkCommandBuffer cmd = swapchain_.cmd();
     const VkExtent2D extent = swapchain_.extent();
@@ -1659,6 +1796,8 @@ void Application::record_frame(f32 time_seconds) {
         trace.control[0] = trace_samples_;
         trace.control[1] = trace_bounces_;
         trace.control[2] = static_cast<u32>(frame_counter_);   // for cache eviction
+        trace.quality[0] = quality_.knobs().refine_stride;
+        trace.quality[1] = quality_.knobs().shadow_target;
         vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(TracePush), &trace);
 
@@ -2162,6 +2301,42 @@ int Application::run(const Options& options) {
     }
     debug_mode_ = options_.debug_mode;
 
+    // The monitor decides the target unless someone says otherwise: rendering faster than the
+    // display can show is work nobody sees, and that spare time buys samples instead.
+    quality_.create(window_.refresh_hz(), kQualityLevels - 1);
+    benchmark_pending_ = true;
+    benchmark_until_ = kBenchmarkWarmupFrames + kBenchmarkFrames;
+    load_settings();   // a remembered level cancels the benchmark
+    if (options_.target_fps > 0.0f) quality_.set_target_fps(options_.target_fps);
+    if (options_.no_auto_quality) quality_.set_enabled(false);
+    if (options_.quality_level >= 0) {
+        quality_.set_level(static_cast<u32>(options_.quality_level));
+        benchmark_pending_ = false;
+    }
+    // A scripted run must be repeatable, so it never benchmarks, never drifts, and — this is
+    // the part that matters — ignores whatever level was saved. Otherwise every screenshot in
+    // this repository would be taken at whatever quality the last interactive session happened
+    // to settle on, and two measurements taken a day apart would not be comparable. Full
+    // detail unless a level was named outright.
+    if (!options_.screenshot.empty() && !options_.benchmark) {
+        benchmark_pending_ = false;
+        quality_.set_enabled(false);
+        if (options_.quality_level < 0) quality_.set_level(kQualityLevels - 1);
+    }
+    if (options_.benchmark) {
+        benchmark_pending_ = true;
+        benchmark_total_ms_ = 0.0;
+        benchmark_frames_ = 0;
+        benchmark_until_ = frame_counter_ + kBenchmarkWarmupFrames + kBenchmarkFrames;
+        quality_.set_level(kQualityLevels - 1);   // measured at full detail or not at all
+    }
+    apply_quality();
+    applied_quality_level_ = quality_.level();
+    WS_LOG_INFO("quality", "target {:.0f} fps ({}), level {} of {}{}", quality_.target_fps(),
+                options_.target_fps > 0.0f ? "asked for" : "the monitor's refresh rate",
+                quality_.level(), kQualityLevels - 1,
+                benchmark_pending_ ? ", benchmarking this machine first" : "");
+
     if (!hud_.create(device_, window_, swapchain_.format())) return 1;
 
     // The compile time, every run. A stale binary is otherwise invisible: the build tool
@@ -2303,6 +2478,8 @@ int Application::run(const Options& options) {
         if (window_.minimised()) continue;
         if (window_.resized_this_frame() || swapchain_.needs_recreate()) handle_resize();
 
+        update_quality();
+
         // Where the camera was standing and what it was doing, refreshed every frame, so a
         // crash report says which part of the world provoked it rather than only which
         // function noticed. Two snprintfs a frame against a fault nobody can reproduce.
@@ -2364,6 +2541,12 @@ int Application::run(const Options& options) {
             break;
         }
     }
+
+    // Where it settled, so the next run starts there rather than climbing the ladder again
+    // from whatever the benchmark guessed. Written on the way out rather than on every change:
+    // a controller that touches the disk each time it moves would write during exactly the
+    // stutter that made it move.
+    if (options_.screenshot.empty()) save_settings();
 
     device_.wait_idle();
     hud_.destroy();
