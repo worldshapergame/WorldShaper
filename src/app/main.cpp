@@ -183,7 +183,7 @@ void print_help() {
         "  --no-validation       force them off\n"
         "  --cam x,y,z,yaw,pitch scripted camera (metres, degrees)\n"
         "  --screenshot FILE     save frame --screenshot-frame N and exit\n"
-        "  --debug-mode N        0 shaded, 1 step count, 2 normals, 3 detail, 4 clip ghost\n"
+        "  --debug-mode N        0 shaded, 1 steps, 2 normals, 3 detail, 4 clip ghost, 5 face cache\n"
         "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
         "  --clip x0,..,z1,dx,dy,dz,copies,turn   scripted clipboard ghost\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
@@ -1549,6 +1549,7 @@ void Application::record_frame(f32 time_seconds) {
         trace.sun_colour[2] = 2.75f;
         trace.control[0] = trace_samples_;
         trace.control[1] = trace_bounces_;
+        trace.control[2] = static_cast<u32>(frame_counter_);   // for cache eviction
         vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(TracePush), &trace);
 
@@ -2046,7 +2047,7 @@ int Application::run(const Options& options) {
         }
         if (input.was_pressed(Key::F1)) hud_.toggle_developer_panel();
         if (input.was_pressed(Key::F2)) hud_.toggle_overlay();
-        if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 5;
+        if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 6;
         if (input.was_pressed(Key::F4)) {
             path_trace_ = !path_trace_;
             trace_samples_ = 0;
