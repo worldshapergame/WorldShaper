@@ -66,6 +66,7 @@ function Test-ClaudeReady($claudePath, $model, $stateDir) {
         try { $p.Kill($true) } catch {}
         return @{ ok = $false; why = "Claude did not answer within three minutes." }
     }
+    $p.WaitForExit()
 
     $text = ""
     if (Test-Path $outFile) { $text = Get-Content $outFile -Raw }
@@ -76,13 +77,27 @@ function Test-ClaudeReady($claudePath, $model, $stateDir) {
         $err  -match "authentication_failed" -or $err  -match "Not logged in") {
         return @{ ok = $false; auth = $true; why = "The Claude CLI is not logged in." }
     }
-    if ($text -match '"is_error"\s*:\s*true' -or $p.ExitCode -ne 0) {
-        $said = ""
-        try { $said = ($text | ConvertFrom-Json).result } catch { $said = $text }
-        if (-not $said) { $said = $err }
-        return @{ ok = $false; why = ("Claude answered with an error: " + (Trim-To ($said -replace '\s+', ' ') 300)) }
+
+    # Judged on what Claude replied, and never on the exit code.
+    #
+    # A process started with -PassThru and no -Wait does not reliably carry an ExitCode here
+    # at all: measured, it reads empty both before and after WaitForExit. The first version of
+    # this check tested `ExitCode -ne 0`, so an empty code compared as not-zero and a perfectly
+    # good answer of "ready" was reported as an error. The reply is the only first-hand account
+    # of whether the model answered, so it is the only thing consulted.
+    $json = $null
+    try { $json = $text | ConvertFrom-Json } catch { }
+    if ($json) {
+        if ($json.is_error) {
+            $said = if ($json.result) { $json.result } else { "no message" }
+            return @{ ok = $false; why = ("Claude answered with an error: " + (Trim-To ($said -replace '\s+', ' ') 300)) }
+        }
+        return @{ ok = $true }
     }
-    return @{ ok = $true }
+
+    $detail = if ($err -and $err.Trim()) { $err } else { $text }
+    if (-not $detail -or -not $detail.Trim()) { $detail = "nothing at all" }
+    return @{ ok = $false; why = ("Claude replied with something unreadable: " + (Trim-To ($detail -replace '\s+', ' ') 300)) }
 }
 
 function Write-Banner($text, $colour = "Cyan") {
@@ -321,8 +336,10 @@ while ($true) {
     }
     if (-not $killed) { $process.WaitForExit() }
 
+    $exit = try { $process.ExitCode } catch { $null }
     $minutes = [math]::Round(((Get-Date) - $started).TotalMinutes, 1)
-    Write-Host "Finished in $minutes min (exit $($process.ExitCode))." -ForegroundColor DarkGray
+    $exitText = if ($null -eq $exit) { "unknown" } else { "$exit" }
+    Write-Host "Finished in $minutes min (exit $exitText)." -ForegroundColor DarkGray
 
     # An iteration that ends in seconds did no work; it refused to start. Say what Claude
     # actually said rather than guessing at causes — the guess was wrong the first time this
