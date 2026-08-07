@@ -16,6 +16,7 @@
 #include "core/arena.hpp"
 #include "core/hash.hpp"
 #include "core/jobs.hpp"
+#include "core/crash.hpp"
 #include "core/log.hpp"
 #include "app/updater.hpp"
 #include "core/time.hpp"
@@ -70,6 +71,10 @@ struct Options {
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
     bool path_trace = false;   // start in the reference path tracer
     u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
+
+    // Deliberately crash, to prove reporting works on this machine before it is needed.
+    // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
+    std::string crash_test;
 
     // Render a fixed number of frames, save the last one, and exit. This is how a
     // rendering change gets checked without a person having to look at the screen.
@@ -154,6 +159,8 @@ Options parse_options(int argc, char** argv) {
             options.validation = true;
         } else if (arg == "--stream-log") {
             options.stream_log = true;
+        } else if (arg == "--crash-test" && i + 1 < argc) {
+            options.crash_test = argv[++i];
         } else if (arg == "--hollow" && i + 1 < argc) {
             options.hollow = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--pathtrace") {
@@ -189,6 +196,8 @@ void print_help() {
         "  --debug-mode N        0 shaded, 1 steps, 2 normals, 3 detail, 4 clip ghost,\n"
         "                        5 face cache, 6 why a path-traced pixel is dark\n"
         "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
+        "  --crash-test KIND     prove crash reporting works: read, write, check, throw,\n"
+        "                        divzero, frame (faults in-game), report (no crash)\n"
         "  --clip x0,..,z1,dx,dy,dz,copies,turn   scripted clipboard ghost\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
@@ -1725,6 +1734,17 @@ int Application::run(const Options& options) {
         return 1;
     }
     if (!device_.create(&window_, options_.validation)) return 1;
+    {
+        // Which card and which driver, in every crash report from here on. A fault that only
+        // happens on one machine is answerable; a fault on "a PC" is not.
+        const DeviceCapabilities& caps = device_.caps();
+        crash_set_context(
+            "gpu", std::format("{} (vendor 0x{:04X}, driver {}.{}.{}, {} MB)", caps.name,
+                               caps.vendor_id, VK_API_VERSION_MAJOR(caps.driver_version),
+                               VK_API_VERSION_MINOR(caps.driver_version),
+                               VK_API_VERSION_PATCH(caps.driver_version),
+                               caps.device_local_bytes >> 20));
+    }
     if (!swapchain_.create(device_, window_.width(), window_.height(), options_.vsync)) {
         return 1;
     }
@@ -2203,6 +2223,28 @@ int Application::run(const Options& options) {
         if (window_.minimised()) continue;
         if (window_.resized_this_frame() || swapchain_.needs_recreate()) handle_resize();
 
+        // Where the camera was standing and what it was doing, refreshed every frame, so a
+        // crash report says which part of the world provoked it rather than only which
+        // function noticed. Two snprintfs a frame against a fault nobody can reproduce.
+        {
+            char where[160];
+            std::snprintf(where, sizeof(where),
+                          "frame %llu  chunk %lld,%lld,%lld  local %.1f,%.1f,%.1f",
+                          static_cast<unsigned long long>(frame_counter_),
+                          static_cast<long long>(camera_.chunk_x()),
+                          static_cast<long long>(camera_.chunk_y()),
+                          static_cast<long long>(camera_.chunk_z()), camera_.local_x(),
+                          camera_.local_y(), camera_.local_z());
+            crash_set_context("camera", where);
+            char what[160];
+            const ResidencyStats residency = residency_.stats();
+            std::snprintf(what, sizeof(what),
+                          "tool %d  path trace %d  debug %u  resident %u/%zu chunks",
+                          static_cast<int>(toolbelt_.active()), path_trace_ ? 1 : 0,
+                          debug_mode_, residency.resident_chunks, world_.chunk_count());
+            crash_set_context("state", what);
+        }
+
         hud_.begin_frame();
         hud_.draw(stats_, profiler_, device_.caps(), swapchain_);
 
@@ -2215,6 +2257,13 @@ int Application::run(const Options& options) {
 
         record_frame(static_cast<f32>(ns_to_ms(frame_start - start_ns) * 0.001));
         swapchain_.end_frame();
+
+        // Deliberate fault at the same moment a scripted screenshot would be taken, so the
+        // report it produces is a real in-game one: camera, device and all.
+        if (options_.crash_test == "frame" && frame_counter_ >= options_.screenshot_frame) {
+            volatile int* target = nullptr;
+            *target = 1;
+        }
 
         if (!options_.screenshot.empty() && frame_counter_ >= options_.screenshot_frame) {
             device_.wait_idle();
@@ -2267,14 +2316,56 @@ int Application::run(const Options& options) {
     return 0;
 }
 
+// Break on purpose, each kind through a different path into the handler, so a report that
+// never arrives points at which mechanism is missing rather than at the whole system.
+int run_crash_test(const std::string& kind) {
+    crash_set_context("crash test", kind);
+    WS_LOG_INFO("crash", "deliberate crash: {}", kind);
+    if (kind == "report") {
+        const std::string path = crash_write_report("requested by --crash-test report");
+        WS_LOG_INFO("crash", "report written to {}", path);
+        return 0;
+    }
+    if (kind == "check") {
+        WS_CHECK(false, "deliberate check failure from --crash-test");
+    } else if (kind == "throw") {
+        throw std::runtime_error("deliberate exception from --crash-test");
+    } else if (kind == "divzero") {
+        // Through a volatile so the optimiser cannot fold it away at compile time.
+        volatile int zero = 0;
+        return 1 / zero;
+    } else if (kind == "write") {
+        volatile int* target = nullptr;
+        *target = 1;
+    } else {
+        volatile const int* target = nullptr;
+        return *target;
+    }
+    return 0;
+}
+
 }  // namespace
 }  // namespace ws
 
 int main(int argc, char** argv) {
+    // First statement in the program, before anything exists that could fault. A crash
+    // before this point is a crash nobody can report.
+    ws::crash_install();
+
     const ws::Options options = ws::parse_options(argc, argv);
     if (options.help) {
         ws::print_help();
         return 0;
+    }
+    // A modal dialog in an automated run is a hang, so scripted modes get the stderr line
+    // and nothing else.
+    ws::crash_set_dialog(!options.headless && !options.stream_audit &&
+                         options.screenshot.empty());
+
+    // "frame" is the one kind that has to happen inside the running game, because what it
+    // proves is that a report carries the camera and the device with it.
+    if (!options.crash_test.empty() && options.crash_test != "frame") {
+        return ws::run_crash_test(options.crash_test);
     }
     if (options.stream_audit) return ws::run_stream_audit(options);
     if (options.headless) return ws::run_headless(options);

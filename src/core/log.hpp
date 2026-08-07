@@ -14,6 +14,21 @@ enum class LogLevel : u8 { Trace, Debug, Info, Warn, Error, Fatal };
 void log_set_level(LogLevel level);
 LogLevel log_level();
 
+// Tee everything to a file as well as the console. A build started from Explorer has no
+// console at all, so without this a crash leaves nothing behind to read. Opening twice
+// closes the previous file. Returns false if the path could not be opened for writing.
+bool log_open_file(const char* path);
+void log_close_file();
+
+// The last few hundred lines, oldest first, written into `buffer` as one newline-separated
+// block and always null-terminated. Returns the number of bytes written, not counting the
+// terminator.
+//
+// Deliberately lock-free: the caller is usually a crash handler, and the thread that just
+// faulted may well be the one holding the log mutex. A torn line in a crash report is a far
+// smaller problem than a deadlock in the code meant to explain the crash.
+usize log_recent(char* buffer, usize capacity);
+
 // Prefer the macros below; this is the sink they all funnel into.
 void log_write(LogLevel level, std::string_view category, std::string_view message);
 

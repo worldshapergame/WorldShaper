@@ -21,6 +21,7 @@ This folder is the source of truth for design, architecture, and planning. Code 
 | **[12-plain-english.md](12-plain-english.md)** | **How the whole game works, in plain language with no jargon. Start here.** |
 | [13-decision-log.md](13-decision-log.md) | Every decision made, when, and why |
 | [14-ui-style.md](14-ui-style.md) | The visual language: no colour, blurred glass, per-pixel opposing ink, tooltips |
+| [17-crash-reports.md](17-crash-reports.md) | What a crash writes down, where it puts it, and how to prove it works |
 
 ## Status
 

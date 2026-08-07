@@ -57,11 +57,17 @@ target_compile_definitions(ws_options INTERFACE
 # --------------------------------------------------------------------------------------
 add_library(ws_core STATIC
     src/core/log.cpp
+    src/core/crash.cpp
     src/core/jobs.cpp
     src/core/time.cpp
     src/core/block_pool.cpp)
 target_include_directories(ws_core PUBLIC src)
 target_link_libraries(ws_core PUBLIC ws_options ws_version)
+if(WIN32)
+    # dbghelp walks the stack and writes the minidump; user32 shows the dialog that tells a
+    # player a report exists. Both ship with Windows, so neither adds a redistributable.
+    target_link_libraries(ws_core PUBLIC dbghelp user32)
+endif()
 
 # --------------------------------------------------------------------------------------
 # ws_world - the voxel data model: bricks, chunks, voxel types, tags, properties, ops,
@@ -244,6 +250,7 @@ add_executable(ws_tests
     tests/test_thumbnail.cpp
     tests/test_thumb_cache.cpp
     tests/test_summary_tree.cpp
-    tests/test_hollow.cpp)
+    tests/test_hollow.cpp
+    tests/test_log_ring.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_doctest)
 add_test(NAME unit COMMAND ws_tests)
