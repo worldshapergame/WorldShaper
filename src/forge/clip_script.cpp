@@ -1,5 +1,6 @@
 #include "forge/clip_script.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -609,6 +610,49 @@ void Parser::statement() {
         script_.paint.push_back(rule);
         return;
     }
+    if (head == "weather") {
+        const std::string kind = take();
+        Keys keys;
+        f64 amount = 0.0;
+        value(amount);
+        keys_into(keys);
+        WeatherRequest request;
+        request.amount = keys.number("amount", amount);
+        request.scale = keys.number("scale", 1.0);
+        request.seed = static_cast<u32>(keys.number("seed", 1.0));
+        request.level = keys.number("level", 0.0);
+        if (kind == "desert") request.kind = Weather::Desert;
+        else if (kind == "overgrown") request.kind = Weather::Overgrown;
+        else if (kind == "cracks") request.kind = Weather::Cracks;
+        else if (kind == "burnt") request.kind = Weather::Burnt;
+        else if (kind == "sea") request.kind = Weather::Sea;
+        else {
+            fail("unknown weathering '" + kind +
+                 "' — desert, overgrown, cracks, burnt or sea");
+            return;
+        }
+        script_.weather.push_back(request);
+        return;
+    }
+    if (head == "variation") {
+        Keys keys;
+        keys_into(keys);
+        script_.variation.colour = keys.number("colour", keys.number("color", 0.03));
+        script_.variation.roughness = keys.number("rough", 0.05);
+        script_.variation.seed = static_cast<u32>(keys.number("seed", 1.0));
+        script_.variation.budget = static_cast<u32>(keys.number("budget", 1000000.0));
+        const std::string by = keys.word("by", "");
+        if (!by.empty()) {
+            auto bound = bindings_.find(by);
+            if (bound == bindings_.end()) {
+                fail("variation by=" + by + " does not name anything");
+                return;
+            }
+            script_.variation.by = bound->second;
+            script_.variation.has_by = true;
+        }
+        return;
+    }
     if (head == "solid") {
         u32 node = 0;
         if (!expression(node)) {
@@ -636,6 +680,210 @@ void Parser::statement() {
     skip_statement();
 }
 
+// --- weathering ---------------------------------------------------------------------------
+//
+// Each kind expands into two things: a deformation of the solid, and coats of paint that follow
+// the same geometry the deformation followed. They are built here rather than written in the
+// clip file because the expansion is long, fiddly and identical every time — an author wants to
+// say "half weathered by the sea", not to re-derive what that means from curvature and cavity.
+
+VoxelTypeId make_material(VoxelTypeTable& types, Script& script, const char* name, u8 r, u8 g,
+                          u8 b, u8 rough) {
+    // Reuse the author's material of the same name when there is one, so a clip that declares
+    // its own `moss` keeps it and weathering paints with that rather than inventing a second.
+    for (usize i = 0; i < script.material_names.size(); ++i) {
+        if (script.material_names[i] == name) return static_cast<VoxelTypeId>(i);
+    }
+    VisualRecord visual;
+    visual.red = r;
+    visual.green = g;
+    visual.blue = b;
+    visual.roughness = rough;
+    BehaviourRecord behaviour;
+    behaviour.material = static_cast<u32>(script.material_names.size() + 64);
+    const VoxelTypeId type = types.intern(visual, behaviour);
+    if (script.material_names.size() <= type) {
+        script.material_names.resize(static_cast<usize>(type) + 1);
+    }
+    script.material_names[type] = name;
+    return type;
+}
+
+void apply_weather(Script& script, VoxelTypeTable& types) {
+    if (script.weather.empty() || !script.has_solid) return;
+    Field& f = script.field;
+
+    for (const WeatherRequest& request : script.weather) {
+        const f64 a = std::clamp(request.amount, 0.0, 1.0);
+        if (a <= 0.0) continue;
+        const f64 s = (request.scale > 0.0) ? request.scale : 1.0;
+        const u32 seed = request.seed;
+
+        // The three questions every kind asks of the shape.
+        const u32 shape = script.solid;
+        const u32 cavity = f.occlusion(shape, 0.22 * s);          // 0 exposed, 1 buried
+        const u32 edge = f.curvature(shape, 0.10 * s);            // + on an arris, - in a hollow
+        const u32 up = f.facing(shape, 1);                        // + up, - down
+        const u32 height = f.coordinate(1);
+
+        switch (request.kind) {
+            case Weather::Desert: {
+                // Sand settles on anything facing up and lodges in every hollow; the wind takes
+                // the arrises off. Both follow the shape, so a sill collects and its nose does
+                // not — which is the whole reason for doing this from geometry.
+                const u32 grit = f.fbm(0.09 * s, 3u, 0.55, 2.3, seed + 3u);
+                const u32 scour = f.multiply({f.smoothstep(edge, 0.2, 1.2), f.constant(a)});
+                script.solid = f.displace(script.solid, scour, 0.05 * s);
+
+                const u32 sand = make_material(types, script, "sand", 198, 176, 132, 245);
+                const u32 bleach = make_material(types, script, "bleached", 208, 202, 188, 235);
+
+                PaintRule sun_bleach;
+                sun_bleach.type = bleach;
+                sun_bleach.test = f.add({f.multiply({up, f.constant(0.6)}),
+                                         f.multiply({grit, f.constant(0.4)})});
+                sun_bleach.low = 0.55 - 0.35 * a;
+                script.paint.push_back(sun_bleach);
+
+                PaintRule drift;
+                drift.type = sand;
+                // Up-facing, plus low down, plus in the hollows: three ways sand arrives, added
+                // rather than chosen between, because a low up-facing hollow gets the most.
+                drift.test = f.add({f.multiply({up, f.constant(0.5)}),
+                                    f.multiply({cavity, f.constant(0.5)}),
+                                    f.smoothstep(f.negate(height), -request.level - 1.5 * s,
+                                                 -request.level)});
+                drift.low = 1.15 - 0.75 * a;
+                script.paint.push_back(drift);
+                break;
+            }
+            case Weather::Overgrown: {
+                // Growth wants damp and shelter, so it follows the cavity term and the up-facing
+                // one, and it swells the surface slightly where it takes hold.
+                const u32 clumps = f.fbm(0.35 * s, 4u, 0.5, 2.1, seed + 11u);
+                const u32 where = f.add({f.multiply({cavity, f.constant(0.55)}),
+                                         f.multiply({up, f.constant(0.35)}),
+                                         f.multiply({clumps, f.constant(0.4)})});
+                script.solid =
+                    f.displace(script.solid, f.multiply({f.smoothstep(where, 0.35, 0.95),
+                                                         f.constant(-a)}),
+                               0.045 * s);
+
+                const u32 moss = make_material(types, script, "moss", 74, 108, 54, 250);
+                const u32 lichen = make_material(types, script, "lichen", 138, 148, 108, 248);
+
+                PaintRule pale;
+                pale.type = lichen;
+                pale.test = where;
+                pale.low = 0.55 - 0.35 * a;
+                script.paint.push_back(pale);
+
+                PaintRule green;
+                green.type = moss;
+                green.test = where;
+                green.low = 0.85 - 0.55 * a;
+                script.paint.push_back(green);
+                break;
+            }
+            case Weather::Cracks: {
+                // A crack is not a line drawn on a surface, it is the seam between two regions,
+                // which is exactly what the distance between the two nearest scattered points
+                // gives — and it branches and meets itself for free, because seams do.
+                const u32 seams = f.cell_edge(0.55 * s, seed + 17u);
+                const u32 wander = f.fbm(0.2 * s, 3u, 0.5, 2.0, seed + 29u);
+                // Narrow where the amount is low, opening as it rises.
+                const u32 opened =
+                    f.smoothstep(f.add({seams, f.multiply({wander, f.constant(0.05 * s)})}),
+                                 0.02 * s + 0.06 * s * a, 0.0);
+                // Added to the distance, not subtracted from it. Displacement moves a surface by
+                // adding to how far away it says it is, so a *positive* value on the seams eats
+                // into the solid — which is what a crack is. Negated, the seams stood proud of
+                // the face instead, and the block came out bigger than it started.
+                script.solid = f.displace(script.solid, opened, 0.09 * s * a);
+
+                const u32 dark = make_material(types, script, "fissure", 66, 62, 58, 250);
+                PaintRule inside;
+                inside.type = dark;
+                inside.test = opened;
+                inside.low = 0.35;
+                script.paint.push_back(inside);
+                break;
+            }
+            case Weather::Burnt: {
+                // Heat rounds what it touches and soot collects where nothing washes it off:
+                // undersides, and the backs of hollows. So the deformation is a rounding of the
+                // arrises and the paint follows the down-facing and the cavity.
+                const u32 soot_grain = f.fbm(0.14 * s, 4u, 0.6, 2.4, seed + 41u);
+                script.solid = f.round_off(script.solid, 0.02 * s * a);
+
+                const u32 char_ = make_material(types, script, "charred", 44, 40, 38, 252);
+                const u32 soot = make_material(types, script, "soot", 28, 26, 25, 254);
+                const u32 scorch = make_material(types, script, "scorched", 96, 78, 62, 246);
+
+                PaintRule light;
+                light.type = scorch;
+                light.test = f.add({soot_grain, f.multiply({cavity, f.constant(0.5)})});
+                light.low = 0.5 - 0.45 * a;
+                script.paint.push_back(light);
+
+                PaintRule mid;
+                mid.type = char_;
+                mid.test = f.add({f.multiply({cavity, f.constant(0.7)}),
+                                  f.multiply({soot_grain, f.constant(0.5)})});
+                mid.low = 0.75 - 0.55 * a;
+                script.paint.push_back(mid);
+
+                PaintRule under;
+                under.type = soot;
+                under.test = f.add({f.negate(up), f.multiply({cavity, f.constant(0.8)})});
+                under.low = 1.05 - 0.75 * a;
+                script.paint.push_back(under);
+                break;
+            }
+            case Weather::Sea: {
+                // A tide line divides the whole thing. Above it, salt and bleaching; below it,
+                // barnacles crusting the exposed faces and weed in everything sheltered. The
+                // line is `level`, and it is the one weathering that cares where the datum is.
+                const u32 crust = f.fbm(0.05 * s, 3u, 0.6, 2.6, seed + 53u);
+                const u32 lumps = f.cells(0.08 * s, seed + 59u);
+                const u32 below = f.smoothstep(f.negate(height), -request.level,
+                                               -request.level + 0.9 * s);
+
+                // Barnacles are added matter, not removed: they stand proud of the surface.
+                const u32 growth =
+                    f.multiply({below, f.smoothstep(lumps, 0.045 * s, 0.0), f.constant(-a)});
+                script.solid = f.displace(script.solid, growth, 0.05 * s);
+
+                const u32 salt = make_material(types, script, "salt", 206, 204, 196, 250);
+                const u32 barnacle = make_material(types, script, "barnacle", 190, 186, 172, 244);
+                const u32 weed = make_material(types, script, "weed", 58, 84, 62, 250);
+
+                PaintRule dried;
+                dried.type = salt;
+                dried.test = f.add({f.multiply({f.negate(below), f.constant(0.7)}),
+                                    f.multiply({crust, f.constant(0.5)})});
+                dried.low = 0.75 - 0.5 * a;
+                script.paint.push_back(dried);
+
+                PaintRule shells;
+                shells.type = barnacle;
+                shells.test = f.multiply({below, f.smoothstep(lumps, 0.05 * s, 0.0)});
+                shells.low = 0.55 - 0.4 * a;
+                script.paint.push_back(shells);
+
+                PaintRule green;
+                green.type = weed;
+                green.test = f.multiply({below, f.add({cavity, f.multiply({crust,
+                                                                           f.constant(0.4)})})});
+                green.low = 0.7 - 0.45 * a;
+                script.paint.push_back(green);
+                break;
+            }
+            default: break;
+        }
+    }
+}
+
 }  // namespace
 
 Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const TagRegistry& tags) {
@@ -643,6 +891,10 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
     const std::vector<Token> tokens = tokenize(text);
     Parser parser(tokens, script, types, tags);
     parser.run();
+    // Weathering is expanded after the whole file is read, because it acts on whatever ends up
+    // being the solid and appends its coats after the author's.
+    apply_weather(script, types);
+
     // The graph is complete now, so the boxes that let a union skip its distant children can be
     // worked out. Done here rather than in the sampler because a Field can be sampled many
     // times and its shape does not change between them.

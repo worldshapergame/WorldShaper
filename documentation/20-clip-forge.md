@@ -154,7 +154,79 @@ measurement of the matter could have.
 With `--screenshot` the same `--clip-file` stamps the clip into the world instead, so the
 ordinary camera and screenshot machinery can look at it.
 
-## 6. What this is for
+## 6. Weathering follows the shape
+
+Weathering is not a texture laid over a surface. It is a consequence of the surface's own
+geometry: sand piles where a wall meets the ground and blows off an exposed arris, moss grows
+where a corner stays damp, soot collects under an overhang and washes off a sill, cracks open
+across a face and branch where they meet. Paste a weathering texture on and it looks right in one
+screenshot and wrong the moment the shape changes.
+
+So three questions are asked of the geometry, and everything else follows from them:
+
+| quantity | what it is | what it drives |
+|---|---|---|
+| `curvature` | the field's Laplacian at a radius: **+** on an arris, **−** in a hollow | wear on edges, collection in corners |
+| `occlusion` | how much of a small sphere is solid: 0 open, 1 buried | damp, soot, drift — everything that needs shelter |
+| `facing` | the surface normal along an axis | up collects, down stays dry and takes soot |
+
+Five kinds, each an amount from 0 to 1, composing in any order:
+
+```
+weather desert    0.4 scale=1.0 level=0
+weather overgrown 0.6
+weather cracks    0.5 scale=0.8 seed=3
+weather burnt     0.3
+weather sea       0.5 level=1.2      # the tide line
+```
+
+Each expands into **both** a deformation of the solid and coats of paint that follow the same
+geometry — cracks carve fissures and darken inside them, growth swells the surface and greens it,
+barnacles stand proud below the tide while salt bleaches above it. Each brings its own materials
+unless the file already declares one of that name, so `weather overgrown 0.6` is a one-liner.
+
+A crack is worth singling out. It is not drawn as a line: it is the seam between two scattered
+points that are equally near — `cell_edge` — which branches, meets itself and closes loops for
+free, because seams do.
+
+Signs are easy to get backwards here. Displacement moves a surface by *adding* to how far away it
+says it is, so a positive value eats into the solid and a negative one grows it. Cracks were
+negated at first and stood proud of the face like veins, and the block came out bigger than it
+started.
+
+## 7. No two voxels alike
+
+A real surface has no two square centimetres the same. Photograph a concrete wall or scan a
+weathered stone and every patch differs from every other in colour and in how it catches the
+light — not by much, and never by nothing. A clip built from a handful of materials has the
+opposite property: millions of voxels sharing a dozen records. **That repetition is why a voxel
+wall reads as a voxel wall however good the lighting is.**
+
+```
+variation colour=0.05 rough=0.10 seed=4 [budget=1000000] [by=<field>]
+```
+
+Every voxel gets its own perturbation of its material, hashed from where it is — so the same clip
+always builds identically, which is what makes a clip shareable and cacheable. `by` scales it by
+any field, so a weathered face can be more varied than a sheltered one.
+
+Measured rather than asserted: a weathered block of 1.24 M voxels yields **585,559 distinct
+records, largest identical group 45**. The report always says how close to unique a clip got.
+
+Two honest limits:
+
+- Literal uniqueness costs one visual record per voxel. At the facility's scale that is millions
+  of records for a difference no eye can resolve.
+- The renderer's type table is a fixed GPU buffer. It held 262,144 records, and the first
+  properly varied block asked for 595,846 and took the renderer down with an assertion. It now
+  holds 2,097,152 — 48 MB beside a 460 MB payload buffer — and `budget` stops the variation pass
+  minting more than it can take. Past the budget records are reused, so the ceiling costs quality
+  and never correctness.
+
+Players can turn it off. Omit `variation` and every voxel of a material is identical, which is
+faster to build and smaller to store.
+
+## 8. What this is for
 
 A clip is the unit of authored content in this game, and it will nearly always be procedural — a
 tree that is a different tree each time, a wall that fits the gap it is put in. The test facility

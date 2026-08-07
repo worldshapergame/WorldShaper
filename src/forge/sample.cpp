@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 
 #include "core/jobs.hpp"
 
@@ -17,6 +18,116 @@ i64 voxel_floor(f64 metres, i32 per_metre) {
 }
 
 }  // namespace
+
+namespace {
+
+u32 hash3(i64 x, i64 y, i64 z, u32 seed) {
+    u32 h = static_cast<u32>(x) * 0x8da6b343u ^ static_cast<u32>(y) * 0xd8163841u ^
+            static_cast<u32>(z) * 0xcb1ab31fu ^ seed;
+    h ^= h >> 16; h *= 0x7feb352du;
+    h ^= h >> 15; h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return h;
+}
+
+// A signed value in [-1, 1] from a hash, so a voxel's perturbation is a property of where it is
+// and not of when it was computed. The same clip built twice is the same clip.
+f64 hash_signed(i64 x, i64 y, i64 z, u32 seed) {
+    return static_cast<f64>(hash3(x, y, z, seed)) * (2.0 / 4294967296.0) - 1.0;
+}
+
+u8 nudge(u8 base, f64 amount, f64 signed_unit) {
+    const f64 moved = static_cast<f64>(base) + signed_unit * amount * 255.0;
+    return static_cast<u8>(std::clamp(moved, 0.0, 255.0));
+}
+
+}  // namespace
+
+VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& field,
+                                const Variation& variation, const SampleSettings& settings,
+                                const SampleResult& placed) {
+    VariationReport report;
+    if (clip.empty() || !variation.any()) return report;
+
+    const i32 per_metre = (settings.voxels_per_metre > 0) ? settings.voxels_per_metre
+                                                          : kVoxelsPerMetre;
+    const f64 voxel = 1.0 / static_cast<f64>(per_metre);
+    const f64 centre_shift = settings.sample_at_centre ? 0.5 : 0.0;
+
+    // One cache per base type, so a wall of one material does not re-intern the same variant
+    // millions of times. The key is the quantised perturbation, which is what makes the count of
+    // distinct records finite and knowable rather than a matter of luck.
+    std::map<u64, VoxelTypeId> made;
+    std::map<VoxelTypeId, u64> tally;
+
+    for (i32 z = 0; z < clip.size[2]; ++z) {
+        for (i32 y = 0; y < clip.size[1]; ++y) {
+            for (i32 x = 0; x < clip.size[0]; ++x) {
+                const usize index = clip.index(x, y, z);
+                const VoxelTypeId base = clip.voxels[index];
+                if (base == kAir) continue;
+                ++report.voxels;
+
+                const i64 wx = placed.origin_voxel[0] + x;
+                const i64 wy = placed.origin_voxel[1] + y;
+                const i64 wz = placed.origin_voxel[2] + z;
+
+                f64 scale = 1.0;
+                if (variation.has_by) {
+                    const Vec3 p{(static_cast<f64>(wx) + centre_shift) * voxel,
+                                 (static_cast<f64>(wy) + centre_shift) * voxel,
+                                 (static_cast<f64>(wz) + centre_shift) * voxel};
+                    scale = std::clamp(field.eval(variation.by, p), 0.0, 1.0);
+                }
+                if (scale <= 0.0) {
+                    ++tally[base];
+                    continue;
+                }
+
+                const VisualRecord& source = types.visual_of(base);
+                VisualRecord record = source;
+                const f64 c = variation.colour * scale;
+                const f64 r = variation.roughness * scale;
+                record.red = nudge(source.red, c, hash_signed(wx, wy, wz, variation.seed));
+                record.green = nudge(source.green, c, hash_signed(wx, wy, wz, variation.seed + 71u));
+                record.blue = nudge(source.blue, c, hash_signed(wx, wy, wz, variation.seed + 149u));
+                record.roughness =
+                    nudge(source.roughness, r, hash_signed(wx, wy, wz, variation.seed + 227u));
+
+                const u64 key = (static_cast<u64>(base) << 40) |
+                                (static_cast<u64>(record.red) << 32) |
+                                (static_cast<u64>(record.green) << 24) |
+                                (static_cast<u64>(record.blue) << 16) |
+                                (static_cast<u64>(record.roughness) << 8);
+                auto it = made.find(key);
+                VoxelTypeId variant;
+                if (it != made.end()) {
+                    variant = it->second;
+                } else if (made.size() < variation.budget) {
+                    variant = types.intern(record, types.behaviour_of(base));
+                    made.emplace(key, variant);
+                } else {
+                    // The budget is spent. Reuse the nearest record already made for this base
+                    // rather than minting another, which keeps the surface varied — just no
+                    // longer uniquely so — and keeps the renderer's table within its buffer.
+                    ++report.reused;
+                    auto near = made.lower_bound(key);
+                    if (near == made.end()) --near;
+                    variant = near->second;
+                }
+                clip.voxels[index] = variant;
+                ++tally[variant];
+            }
+        }
+    }
+
+    report.distinct_types = tally.size();
+    for (const auto& entry : tally) {
+        report.largest_group = std::max(report.largest_group, entry.second);
+    }
+    clip.build_coarse();
+    return report;
+}
 
 SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,
                     const SampleSettings& settings, JobSystem* jobs) {

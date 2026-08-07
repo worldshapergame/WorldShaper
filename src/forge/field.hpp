@@ -123,6 +123,23 @@ enum class Op : u8 {
     Ridged,        // 1 - |fbm|, the sharp-crested one: same arguments
     Rasp,          // high frequency ridges, for a filed or scratched surface
     Cells,         // distance to the nearest of a scattered set of points: size a[0], seed a[1]
+    CellEdge,      // how near the boundary *between* two cells: size a[0], seed a[1]. This is
+                   // what a crack is — cells are not the pattern, the seams between them are
+
+    // --- what the shape is doing here, rather than what is here -------------------------
+    //
+    // Weathering is not a texture laid over a surface, it is a consequence of the surface's
+    // own geometry: rain runs off a sill and stains beneath it, sand piles where a wall meets
+    // the ground, moss grows where a corner stays damp, an exposed arris wears round while the
+    // hollow behind it keeps its edge. All of that follows from two questions — which way is
+    // this surface bending, and how much of the sky can it see — and both are answerable from
+    // the distance field alone.
+    Curvature,     // child 0, sampled at radius a[0]. Positive on a convex edge, negative in a
+                   // concave corner, near zero on a flat face
+    Occlusion,     // child 0, radius a[0]. How much of a sphere at this point is inside the
+                   // shape: 0 out in the open, 1 buried. The cavity term
+    Facing,        // child 0's surface normal along axis a[0]. Up-facing collects, down-facing
+                   // stays dry and takes soot
     Checker,       // alternating, cell a[0..2]
     Stripes,       // along axis a[0], period a[1], duty a[2]
     Bricks,        // running bond: brick a[0..2], mortar a[3], on the plane facing axis a[4]
@@ -239,6 +256,12 @@ public:
     u32 ridged(f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed);
     u32 rasp(f64 size, f64 depth, u32 seed);
     u32 cells(f64 size, u32 seed);
+    u32 cell_edge(f64 size, u32 seed);
+
+    // --- what the shape is doing, for weathering ------------------------------------------
+    u32 curvature(u32 child, f64 radius);
+    u32 occlusion(u32 child, f64 radius);
+    u32 facing(u32 child, u32 axis);
     u32 checker(Vec3 cell);
     u32 stripes(u32 axis, f64 period, f64 duty);
     u32 bricks(Vec3 brick, f64 mortar, u32 face_axis);

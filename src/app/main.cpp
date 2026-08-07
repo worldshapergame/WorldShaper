@@ -48,7 +48,6 @@
 #include "world/raycast.hpp"
 #include "world/residency.hpp"
 #include "world/serialize.hpp"
-#include "world/test_scene.hpp"
 #include "world/voxel_type.hpp"
 #include "world/world.hpp"
 
@@ -439,6 +438,25 @@ int run_headless(const Options& options) {
 // camera path over it, and assert after every frame that what the streamer holds is
 // bit-identical to what the world holds. Eviction, re-upload and pool churn are all
 // exercised because the budget is deliberately too small to hold the scene at once.
+// Where the facility lives, looked for in the places it can be.
+//
+// Beside the compiled shaders in a shipped build, and up from the source shaders in a
+// development one. A clip is content, so it is a file on disk rather than something compiled in
+// — which is the whole point of the format, and it means the scene can be edited without a
+// build.
+std::string default_clip_path() {
+    const std::filesystem::path candidates[] = {
+        std::filesystem::path("clips") / "facility.clip",
+        compiled_shader_dir().parent_path() / "clips" / "facility.clip",
+        std::filesystem::path(WS_SHADER_SOURCE_DIR).parent_path() / "clips" / "facility.clip",
+    };
+    for (const auto& candidate : candidates) {
+        std::error_code error;
+        if (std::filesystem::exists(candidate, error)) return candidate.string();
+    }
+    return (std::filesystem::path("clips") / "facility.clip").string();
+}
+
 int run_stream_audit(const Options& options) {
     const u64 frames = (options.stream_frames > 0) ? options.stream_frames : 600;
     WS_LOG_INFO("app", "streaming audit: {} frames over the test scene", frames);
@@ -449,9 +467,21 @@ int run_stream_audit(const Options& options) {
     World world;
     MatterLedger ledger;
 
-    const TestScenePalette palette = create_test_palette(types, tags);
     const u64 build_start = now_ns();
-    build_test_scene(world, palette, 1024, ledger);
+    {
+        forge::Script script = forge::load_clip_script(default_clip_path(), types, tags);
+        if (script.ok()) {
+            JobSystem build_jobs;
+            forge::SampleResult built = forge::sample(script.field, script.solid, script.paint,
+                                                      script.settings, &build_jobs);
+            forge::apply_variation(built.clip, types, script.field, script.variation,
+                                   script.settings, built);
+            std::vector<Op> ops;
+            clip_to_ops(built.clip, built.origin_voxel[0], built.origin_voxel[1],
+                        built.origin_voxel[2], PasteMode::SolidOnly, 1, 1, ops);
+            for (const Op& op : ops) apply_op(world, op, ledger);
+        }
+    }
     world.compact();
     const f64 build_ms = ns_to_ms(now_ns() - build_start);
 
@@ -822,23 +852,33 @@ void Application::handle_resize() {
     create_render_target(swapchain_.extent().width, swapchain_.extent().height);
 }
 
+
 void Application::build_world() {
-    const TestScenePalette palette = create_test_palette(types_, tags_);
     const u64 start = now_ns();
 
-    // A clip file, when one is given, replaces the scripted scene outright. The point of the
-    // facility is to be the thing under test, and standing it next to the old scene would mean
-    // measuring both at once.
-    if (!options_.clip_file.empty()) {
-        forge::Script script = forge::load_clip_script(options_.clip_file, types_, tags_);
+    // The facility *is* the scene. There is no scripted fallback any more: a hand-written scene
+    // in C++ and a clip file were two ways of saying the same thing, and only one of them can be
+    // edited without a compiler, measured by the forge, or weathered.
+    {
+        const std::string path =
+            options_.clip_file.empty() ? default_clip_path() : options_.clip_file;
+        forge::Script script = forge::load_clip_script(path, types_, tags_);
         for (const forge::ScriptError& error : script.errors) {
             WS_LOG_ERROR("clip", "line {}: {}", error.line, error.message);
         }
         if (script.ok()) {
             if (options_.clip_metre > 0) script.settings.voxels_per_metre = options_.clip_metre;
             JobSystem jobs;
-            const forge::SampleResult built =
+            forge::SampleResult built =
                 forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+            // Every voxel gets its own version of its material before it goes in, so the world
+            // holds the varied clip rather than the flat one.
+            const forge::VariationReport variety = forge::apply_variation(
+                built.clip, types_, script.field, script.variation, script.settings, built);
+            if (variety.voxels > 0) {
+                WS_LOG_INFO("clip", "variation: {} records over {} voxels, largest group {}",
+                            variety.distinct_types, variety.voxels, variety.largest_group);
+            }
             std::vector<Op> ops;
             clip_to_ops(built.clip, built.origin_voxel[0] + options_.clip_at[0],
                         built.origin_voxel[1] + options_.clip_at[1],
@@ -846,29 +886,21 @@ void Application::build_world() {
                         1, ops);
             for (const Op& op : ops) apply_op(world_, op, ledger_);
             world_.compact();
-            materials_ = script.material_types.empty()
-                             ? std::vector<VoxelTypeId>{palette.stone}
-                             : script.material_types;
+            materials_ = script.material_types;
+            if (materials_.empty()) materials_.push_back(1);
             material_index_ = options_.material % materials_.size();
             chisel_.set_material(materials_[material_index_]);
             const WorldStats clip_stats = world_.stats();
-            WS_LOG_INFO("world", "clip '{}' built in {:.0f} ms: {} chunks, {} solid voxels",
-                        options_.clip_file, ns_to_ms(now_ns() - start), clip_stats.chunks,
-                        clip_stats.solid_voxels);
+            WS_LOG_INFO("world", "'{}' built in {:.0f} ms: {} chunks, {} solid voxels", path,
+                        ns_to_ms(now_ns() - start), clip_stats.chunks, clip_stats.solid_voxels);
             return;
         }
-        WS_LOG_ERROR("clip", "falling back to the scripted scene");
+        // Nothing to fall back to, and that is deliberate. An empty world says plainly that the
+        // clip did not load; a stand-in scene would say the clip loaded and looked like that.
+        WS_LOG_ERROR("clip", "'{}' did not build — the world is empty", path);
+        materials_.push_back(1);
+        material_index_ = 0;
     }
-
-    build_test_scene(world_, palette, 1024, ledger_);
-    world_.compact();
-
-    // What the chisel places, cycled with Q and E. The scene's own palette for now; the
-    // material picker is part of the interface stage.
-    materials_ = {palette.stone,  palette.stone_light, palette.stone_dark, palette.wood,
-                  palette.metal,  palette.glass,       palette.lamp};
-    material_index_ = options_.material % materials_.size();
-    chisel_.set_material(materials_[material_index_]);
 
 
     const WorldStats stats = world_.stats();
@@ -2861,10 +2893,22 @@ int run_clip_tool(const Options& options) {
         forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
     const u64 sampled = now_ns();
 
+    forge::SampleResult varied = built;
+    const forge::VariationReport variety = forge::apply_variation(
+        varied.clip, types, script.field, script.variation, script.settings, built);
+
     const forge::Measurement m =
-        forge::measure(built.clip, script.settings.voxels_per_metre);
+        forge::measure(varied.clip, script.settings.voxels_per_metre);
 
     std::printf("%s", forge::report(m, &script.material_names).c_str());
+    if (variety.voxels > 0) {
+        std::printf("variation     %llu distinct records over %llu voxels (%.4f%%), "
+                    "largest identical group %llu\n",
+                    static_cast<unsigned long long>(variety.distinct_types),
+                    static_cast<unsigned long long>(variety.voxels),
+                    variety.uniqueness() * 100.0,
+                    static_cast<unsigned long long>(variety.largest_group));
+    }
     std::printf("origin        (%lld, %lld, %lld) voxels\n",
                 static_cast<long long>(built.origin_voxel[0]),
                 static_cast<long long>(built.origin_voxel[1]),
@@ -2889,17 +2933,17 @@ int run_clip_tool(const Options& options) {
         const i32 step = static_cast<i32>(std::max<i64>(values[2], 1));
         std::printf("\nslice along %c at %d of %d, one character per %d voxels\n",
                     "xyz"[axis], at, size, step);
-        std::printf("%s", forge::slice_text(built.clip, axis, at, step).c_str());
+        std::printf("%s", forge::slice_text(varied.clip, axis, at, step).c_str());
     }
 
     // Symmetry, when asked. Cheap, and it catches a whole class of mistake nothing else does.
     if (options.clip_symmetry) {
         for (u32 axis = 0; axis < 3; ++axis) {
-            const u64 differ = forge::mirror_mismatch(built.clip, axis);
+            const u64 differ = forge::mirror_mismatch(varied.clip, axis);
             std::printf("symmetry %c   %llu cells differ (%.4f%%)\n", "xyz"[axis],
                         static_cast<unsigned long long>(differ),
                         100.0 * static_cast<f64>(differ) /
-                            static_cast<f64>(std::max<u64>(built.clip.cell_count(), 1)));
+                            static_cast<f64>(std::max<u64>(varied.clip.cell_count(), 1)));
         }
     }
     return 0;

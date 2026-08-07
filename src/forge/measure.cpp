@@ -262,8 +262,20 @@ std::string report(const Measurement& m, const std::vector<std::string>* names) 
                   (m.size[2] > 0) ? m.centroid[2] / static_cast<f64>(m.size[2] - 1) : 0.0);
     out += line;
 
-    out += "materials\n";
+    // Capped, because per-voxel variation turns a dozen materials into tens of thousands of
+    // records and a report nobody can read is a report nobody reads. The tail is summarised
+    // rather than dropped, so the count is still honest.
+    constexpr usize kShown = 12;
+    std::snprintf(line, sizeof(line), "materials     %zu distinct records\n", m.types.size());
+    out += line;
+    usize shown = 0;
+    u64 remainder = 0;
     for (const TypeShare& share : m.types) {
+        if (shown >= kShown) {
+            remainder += share.count;
+            continue;
+        }
+        ++shown;
         const char* name = "";
         if (names != nullptr && static_cast<usize>(share.type) < names->size()) {
             name = (*names)[share.type].c_str();
@@ -271,6 +283,14 @@ std::string report(const Measurement& m, const std::vector<std::string>* names) 
         std::snprintf(line, sizeof(line), "  %-5u %-16s %10llu   %6.2f%%\n",
                       static_cast<unsigned>(share.type), name,
                       static_cast<unsigned long long>(share.count), share.fraction * 100.0);
+        out += line;
+    }
+    if (remainder > 0) {
+        std::snprintf(line, sizeof(line), "  %-22s %10llu   %6.2f%%\n", "... and the rest",
+                      static_cast<unsigned long long>(remainder),
+                      (m.solid > 0) ? 100.0 * static_cast<f64>(remainder) /
+                                          static_cast<f64>(m.solid)
+                                    : 0.0);
         out += line;
     }
     return out;

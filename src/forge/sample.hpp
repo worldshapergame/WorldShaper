@@ -81,6 +81,44 @@ struct SampleSettings {
     bool has_bounds = false;
 };
 
+// No two voxels alike.
+//
+// A real surface has no two square centimetres the same. Photograph a concrete wall, scan a
+// weathered stone, and every patch differs from every other in colour and in how it catches the
+// light — not by much, and never by nothing. A clip built from a handful of materials has the
+// opposite property: millions of voxels sharing a dozen records, which is why a voxel wall reads
+// as a voxel wall however good the lighting is. The repetition is the tell.
+//
+// So every voxel is given its own perturbation of its material: a little colour, a little
+// roughness, hashed from where it is, so the same clip always comes out the same. Under a path
+// tracer this is nearly free — the variation lives in the type table, not per voxel — and it is
+// the difference between a surface and a texture.
+//
+// What it cannot honestly be is *literally* unique. Uniqueness at the facility's scale means one
+// visual record per voxel: nine million records, a hundred and forty megabytes, for a difference
+// no eye can resolve. So the amounts below set how finely the perturbation is quantised, the
+// measurement reports how many distinct records actually resulted and how large the biggest
+// group of identical voxels is, and the author can see exactly how close to unique they are.
+struct Variation {
+    // How far a channel may stray, as a fraction of full scale. 0 turns it off.
+    f64 colour = 0.0;
+    f64 roughness = 0.0;
+    u32 seed = 1;
+
+    // Optional: a field that scales the variation, so a weathered face can be more varied than
+    // a sheltered one. Zero means "everywhere the same amount".
+    u32 by = 0;
+    bool has_by = false;
+
+    // The most records this may create. Not a tuning knob but a safety rail: the renderer's
+    // type table is a fixed GPU buffer, and a clip that asks for more records than it holds used
+    // to take the renderer down with an assertion. Past the budget the pass stops minting new
+    // records and reuses what it has, so the ceiling costs quality and never correctness.
+    u32 budget = 1000000;
+
+    bool any() const { return colour > 0.0 || roughness > 0.0; }
+};
+
 // The result of sampling, with the numbers a caller needs to place it in the world.
 struct SampleResult {
     Clip clip;
@@ -97,6 +135,25 @@ struct SampleResult {
 // the same cache line.
 SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,
                     const SampleSettings& settings, JobSystem* jobs = nullptr);
+
+// Give every voxel its own version of its material.
+//
+// A second pass, and serial, because interning is a shared table and the gain from threading it
+// is smaller than the cost of guarding it. Runs over the clip in place, replacing each solid
+// voxel's type with a perturbed variant interned on demand.
+struct VariationReport {
+    u64 voxels = 0;
+    u64 distinct_types = 0;
+    u64 largest_group = 0;   // how many voxels share the most common record
+    u64 reused = 0;          // voxels that had to share a record because the budget ran out
+    f64 uniqueness() const {
+        return (voxels > 0) ? static_cast<f64>(distinct_types) / static_cast<f64>(voxels) : 0.0;
+    }
+};
+
+VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& field,
+                                const Variation& variation, const SampleSettings& settings,
+                                const SampleResult& placed);
 
 }  // namespace forge
 }  // namespace ws

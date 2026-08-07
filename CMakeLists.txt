@@ -94,8 +94,7 @@ add_library(ws_world STATIC
     src/world/light_list.cpp
     src/world/thumbnail.cpp
     src/world/thumb_cache.cpp
-    src/world/summary_tree.cpp
-    src/world/test_scene.cpp)
+    src/world/summary_tree.cpp)
 target_include_directories(ws_world PUBLIC src)
 target_link_libraries(ws_world PUBLIC ws_core)
 
@@ -233,6 +232,12 @@ endforeach()
 add_custom_target(ws_shaders ALL DEPENDS ${WS_SPV_FILES})
 add_dependencies(WorldShaper ws_shaders)
 
+# The clips are content, and the facility is the scene now, so they have to travel with the
+# executable the way the compiled shaders do.
+add_custom_command(TARGET WorldShaper POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/clips" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/clips")
+
 # Record where glslc lives so runtime hot reload can find it without a PATH lookup.
 target_compile_definitions(ws_gpu PUBLIC WS_GLSLC_PATH="${Vulkan_GLSLC_EXECUTABLE}")
 
@@ -244,6 +249,7 @@ add_executable(ws_tests
     tests/test_main.cpp
     tests/test_field.cpp
     tests/test_clip_script.cpp
+    tests/test_weathering.cpp
     tests/test_fixed.cpp
     tests/test_hash.cpp
     tests/test_arena.cpp

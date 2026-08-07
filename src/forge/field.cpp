@@ -121,13 +121,18 @@ f64 fbm_noise(Vec3 p, f64 size, u32 octaves, f64 gain, f64 lacunarity, u32 seed)
     return (total > 0.0) ? sum / total : 0.0;
 }
 
-// Distance to the nearest of one scattered point per cell. The classic cellular pattern, and
-// the basis for anything that wants to look like grains, cobbles or crystals.
-f64 cell_noise(Vec3 p, f64 size, u32 seed) {
+// Distance to the nearest of one scattered point per cell, and to the second nearest.
+//
+// The nearest alone gives grains, cobbles and crystals. The *difference* between the two gives
+// the seams between them, and a seam is what a crack is: a thin branching network that meets
+// itself at junctions and never simply stops. Drawing cracks as lines needs a line-drawing
+// algorithm; getting them as the boundary between two nearest points needs only this.
+void cell_noise(Vec3 p, f64 size, u32 seed, f64& nearest, f64& second) {
     if (size <= 0.0) size = 1.0;
     const Vec3 q{p.x / size, p.y / size, p.z / size};
     const f64 fx = std::floor(q.x), fy = std::floor(q.y), fz = std::floor(q.z);
     f64 best = 1e30;
+    f64 next = 1e30;
     for (i32 dz = -1; dz <= 1; ++dz) {
         for (i32 dy = -1; dy <= 1; ++dy) {
             for (i32 dx = -1; dx <= 1; ++dx) {
@@ -141,11 +146,17 @@ f64 cell_noise(Vec3 p, f64 size, u32 seed) {
                                 static_cast<f64>(cy) + jitter.y,
                                 static_cast<f64>(cz) + jitter.z};
                 const f64 d = length(q - site);
-                best = std::min(best, d);
+                if (d < best) {
+                    next = best;
+                    best = d;
+                } else if (d < next) {
+                    next = d;
+                }
             }
         }
     }
-    return best * size;
+    nearest = best * size;
+    second = next * size;
 }
 
 // --- the exact distance functions ---------------------------------------------------------
@@ -681,6 +692,31 @@ u32 Field::cells(f64 size, u32 seed) {
     return push(n);
 }
 
+u32 Field::cell_edge(f64 size, u32 seed) {
+    Node n;
+    n.op = Op::CellEdge;
+    n.a[0] = size; n.a[1] = static_cast<f64>(seed);
+    return push(n);
+}
+
+u32 Field::curvature(u32 child, f64 radius) {
+    Node n = unary(Op::Curvature, child);
+    n.a[0] = radius;
+    return push(n);
+}
+
+u32 Field::occlusion(u32 child, f64 radius) {
+    Node n = unary(Op::Occlusion, child);
+    n.a[0] = radius;
+    return push(n);
+}
+
+u32 Field::facing(u32 child, u32 axis) {
+    Node n = unary(Op::Facing, child);
+    n.a[0] = static_cast<f64>(axis);
+    return push(n);
+}
+
 u32 Field::checker(Vec3 cell) {
     Node n;
     n.op = Op::Checker;
@@ -952,7 +988,54 @@ f64 Field::eval(u32 at, Vec3 p) const {
             const f64 v = fbm_noise(p, a[0], 3u, 0.5, 2.7, static_cast<u32>(a[2]));
             return -std::abs(v) * a[1];
         }
-        case Op::Cells: return cell_noise(p, a[0], static_cast<u32>(a[1]));
+        case Op::Cells: {
+            f64 nearest = 0.0, second = 0.0;
+            cell_noise(p, a[0], static_cast<u32>(a[1]), nearest, second);
+            return nearest;
+        }
+        case Op::CellEdge: {
+            f64 nearest = 0.0, second = 0.0;
+            cell_noise(p, a[0], static_cast<u32>(a[1]), nearest, second);
+            return second - nearest;   // zero on a seam, growing towards a cell's middle
+        }
+
+        case Op::Curvature: {
+            // The mean of the field around a point against the field at it. For a distance
+            // field that is its Laplacian, and the Laplacian of a distance field is curvature:
+            // outside a convex shape the neighbourhood is further away than the centre, inside
+            // a concave one it is nearer. Six samples, on the axes, which is enough to tell an
+            // arris from a hollow and cheap enough to ask per voxel.
+            const f64 r = (a[0] > 0.0) ? a[0] : 0.05;
+            const f64 centre = eval(n.child[0], p);
+            f64 sum = 0.0;
+            sum += eval(n.child[0], {p.x + r, p.y, p.z});
+            sum += eval(n.child[0], {p.x - r, p.y, p.z});
+            sum += eval(n.child[0], {p.x, p.y + r, p.z});
+            sum += eval(n.child[0], {p.x, p.y - r, p.z});
+            sum += eval(n.child[0], {p.x, p.y, p.z + r});
+            sum += eval(n.child[0], {p.x, p.y, p.z - r});
+            return (sum / 6.0 - centre) / r;
+        }
+        case Op::Occlusion: {
+            // How much of a small sphere around this point is solid. Fourteen fixed directions —
+            // the six axes and the eight diagonals — rather than a random spray, because a
+            // weathering pattern that shimmers when the clip is re-sampled is not a pattern.
+            const f64 r = (a[0] > 0.0) ? a[0] : 0.15;
+            const f64 k = 0.5773502691896258;   // one over root three, for the diagonals
+            const Vec3 dirs[14] = {{1, 0, 0},  {-1, 0, 0}, {0, 1, 0},  {0, -1, 0}, {0, 0, 1},
+                                   {0, 0, -1}, {k, k, k},  {k, k, -k}, {k, -k, k}, {k, -k, -k},
+                                   {-k, k, k}, {-k, k, -k}, {-k, -k, k}, {-k, -k, -k}};
+            u32 inside = 0;
+            for (u32 i = 0; i < 14; ++i) {
+                if (eval(n.child[0], p + dirs[i] * r) < 0.0) ++inside;
+            }
+            return static_cast<f64>(inside) / 14.0;
+        }
+        case Op::Facing: {
+            const Vec3 normal = normal_at(n.child[0], p, (a[1] > 0.0) ? a[1] : 0.02);
+            const u32 axis = static_cast<u32>(a[0]);
+            return (axis == 0) ? normal.x : (axis == 1) ? normal.y : normal.z;
+        }
         case Op::Checker: {
             f64 sum = 0.0;
             for (u32 axis = 0; axis < 3; ++axis) {

@@ -16,7 +16,7 @@
 # contents.
 
 metre 32
-bounds -26 -0.5 -14   26 10.5 14
+bounds -26 -0.18 -14   26 10.5 14
 
 # --- the grid ---------------------------------------------------------------------------------
 # Everything dimensioned from these, so the proportions hold together when one of them moves.
@@ -69,7 +69,9 @@ let masonry  = bricks length=0.42 height=0.21 mortar=0.02 facing=z
 # ==============================================================================================
 # Ground, with a shallow grain so it is not a mirror-flat plane — flat ground hides exactly the
 # shading errors this facility exists to show.
-let ground_slab = box -26 -0.5 -14   26 0 14
+# Thin on purpose. Only the top of it is ever seen, and every centimetre of depth across a
+# fifty-metre site is another million voxels to sample and to hold.
+let ground_slab = box -26 -0.18 -14   26 0 14
 let ground      = displace { ground_slab grain } amount=0.05
 
 # The plinth the building stands on, and the broad steps up to it from the west.

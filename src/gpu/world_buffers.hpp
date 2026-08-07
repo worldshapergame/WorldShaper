@@ -112,7 +112,20 @@ private:
 
     u32 uploaded_types_ = 0;
     u32 uploaded_visuals_ = 0;
-    static constexpr u32 kMaxTables = 262144;
+    // How many voxel types and visual records the GPU will hold.
+    //
+    // A quarter of a million was ample while a world used a palette of a few dozen materials.
+    // It stopped being ample the moment clips started giving every voxel its own version of its
+    // material — a surface with no two square centimetres alike is what makes a voxel wall stop
+    // reading as a voxel wall, and it costs one record per voxel to do properly. A single
+    // weathered block of a million voxels asked for six hundred thousand records and took the
+    // renderer down with an assertion.
+    //
+    // Two million, then: 32 MB of visuals and 16 MB of types, which is small beside the
+    // 460 MB payload buffer next to it and enough for a two-million-voxel clip to be entirely
+    // unique. Past that the variation pass reuses records rather than making new ones, so the
+    // limit is a quality ceiling and never a crash.
+    static constexpr u32 kMaxTables = 2097152;
 
     u64 staging_capacity_per_frame_ = 0;
     u64 staging_cursor_ = 0;

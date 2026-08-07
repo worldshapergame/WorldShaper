@@ -64,10 +64,41 @@ struct ScriptError {
     std::string message;
 };
 
+// How worn a clip is, and in what way.
+//
+// Weathering is not a texture laid over a surface. It is a consequence of the surface's own
+// shape: sand piles where a wall meets the ground and blows off an exposed arris, moss grows
+// where a corner stays damp, soot collects under an overhang and washes off a sill, cracks open
+// across a face and branch where they meet. Every one of those is answerable from the geometry —
+// which way a surface bends, how much sky it can see, which way it faces — so weathering here
+// reads those and follows them, and a clip that changes shape weathers differently without
+// anything being re-authored.
+//
+// Five kinds, each an amount from 0 to 1, and they compose: a burnt-out seaside ruin is
+// `weather burnt 0.7` and `weather sea 0.5` and `weather cracks 0.4`, in any order.
+enum class Weather : u8 {
+    Desert,      // sand, bleaching, wind-scoured edges
+    Overgrown,   // moss and growth in the damp and the dark
+    Cracks,      // fissures that open and branch
+    Burnt,       // char and soot, and edges softened by heat
+    Sea,         // salt above the tide, barnacles and weed below it
+    Count,
+};
+
+struct WeatherRequest {
+    Weather kind = Weather::Desert;
+    f64 amount = 0.0;
+    f64 scale = 1.0;    // the size of its features, in metres
+    u32 seed = 1;
+    f64 level = 0.0;    // the datum it works from: the ground for sand, the tide for sea
+};
+
 struct Script {
     Field field;
     SampleSettings settings;
     std::vector<PaintRule> paint;
+    std::vector<WeatherRequest> weather;
+    Variation variation;
 
     u32 solid = 0;
     bool has_solid = false;
