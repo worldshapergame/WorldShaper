@@ -573,8 +573,31 @@ struct FaceLight {
     float visibility;
     vec3 indirect;
     uint count;
+    // How far this entry's mean is likely to be wrong, as a fraction of itself. Measured from
+    // the samples rather than assumed from their number, which is the whole point: a face
+    // looking at a blank wall and a face looking at a window through a doorway need wildly
+    // different amounts of work, and a sample count cannot tell them apart.
+    float error;
     bool known;
 };
+
+// The second moment lives in sum.w, which costs nothing because an irradiance entry has never
+// used it — that channel carries the sun's visibility, and visibility lives in its own kind of
+// entry. So the table stays exactly 32 bytes a slot and 256 MB in total.
+//
+// Its own fixed-point scale, and a much coarser one. A squared luminance can reach a few
+// thousand where a linear one reaches sixty, and at the linear scale five hundred of them
+// overflow a 32-bit word — which would not look like an error, it would look like a face
+// deciding at random that it had converged.
+const float kSquareScale = 256.0;
+
+// A floor under the error estimate, so that a face reading pure black still has a tolerance and
+// does not refuse every neighbour by dividing by nothing.
+const float kEdgeFloor = 0.02;
+
+float face_luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
 
 // How many levels up to look when this one knows nothing yet.
 //
@@ -629,6 +652,10 @@ void contribute(uint slot, vec3 value) {
     atomicAdd(faces.items[slot].sum.x, uint(value.r * kFixedScale));
     atomicAdd(faces.items[slot].sum.y, uint(value.g * kFixedScale));
     atomicAdd(faces.items[slot].sum.z, uint(value.b * kFixedScale));
+    // And the square of it, which is what lets the entry say how well it knows itself rather
+    // than only how often it has been asked.
+    float lum = face_luminance(value);
+    atomicAdd(faces.items[slot].sum.w, uint(lum * lum * kSquareScale));
     atomicAdd(faces.items[slot].count, 1u);
 }
 
@@ -713,6 +740,7 @@ FaceLight read_face(uint slot) {
     light.visibility = 0.0;
     light.indirect = vec3(0.0);
     light.count = 0u;
+    light.error = 1e3;
     light.known = false;
     if (slot == 0xFFFFFFFFu) return light;
 
@@ -727,6 +755,19 @@ FaceLight read_face(uint slot) {
     // Visibility lives in its own entry now; this one holds irradiance only.
     light.indirect = min(vec3(sum.xyz) * inv, vec3(64.0));
     light.count = count;
+
+    // How far the mean is likely to be out, as a fraction of itself.
+    //
+    // The samples' own spread, divided by the root of how many there were — the standard error
+    // of a mean, which is the only honest statement a running average can make about itself.
+    // A face whose bounces all come back alike knows its answer after a few dozen; one that
+    // sees a bright window through a doorway and a dark wall either side of it does not know it
+    // after a thousand, and the two are indistinguishable by sample count.
+    float mean_luminance = face_luminance(light.indirect);
+    float mean_square = float(sum.w) / (kSquareScale * float(count));
+    float variance = max(mean_square - mean_luminance * mean_luminance, 0.0);
+    light.error = sqrt(variance / float(count)) / (mean_luminance + kEdgeFloor);
+
     light.known = true;
     return light;
 }
@@ -791,13 +832,6 @@ const int kFaceRings = 3;
 // of being either permanently soft or permanently stepped.
 const float kEdgeSigmas = 4.0;
 
-// A floor under the error estimate, so that a face reading pure black still has a tolerance and
-// does not refuse every neighbour by dividing by nothing.
-const float kEdgeFloor = 0.02;
-
-float face_luminance(vec3 c) {
-    return dot(c, vec3(0.2126, 0.7152, 0.0722));
-}
 
 // How far to reach, given how much a face already knows.
 int face_rings(uint count) {
@@ -902,6 +936,10 @@ FaceLight gather_face(ivec3 voxel, ivec3 normal, uint level, uint frame, FaceLig
     // A face backed by well-measured neighbours genuinely does know enough to stop leaning on a
     // coarse ancestor, and saying so is what keeps the blocky fallback off the screen.
     pooled.count = uint(weight);
+    // Pooling with the neighbours is itself a reduction in uncertainty, by the root of how many
+    // samples now stand behind the answer against how many this face had alone.
+    pooled.error = self.known ? self.error * sqrt(float(max(self.count, 1u)) / max(weight, 1.0))
+                              : 1.0;
     pooled.known = true;
     return pooled;
 }
@@ -1180,6 +1218,7 @@ FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) 
     out_light.visibility = mix(a.visibility, b.visibility, f);
     out_light.indirect = mix(a.indirect, b.indirect, f);
     out_light.count = min(a.count, b.count);
+    out_light.error = max(a.error, b.error);
     out_light.known = true;
     return out_light;
 }
@@ -1270,6 +1309,15 @@ vec3 specular_from_cache(ivec3 voxel, ivec3 normal_i, vec3 normal, vec3 dir, Mat
 
 // How many samples a face needs before the pixels standing on it stop tracing for it.
 const uint kFaceTarget = 192u;
+
+// How well a face has to know itself before its pixels stop tracing for it: the mean within
+// about a twentieth of itself, which is finer than an eight-bit screen can show.
+const float kErrorTarget = 0.05;
+
+// And how many samples it must have before that judgement is worth anything. The spread of a
+// handful is mostly noise about the spread, and a face that happened to draw three similar
+// samples would otherwise declare itself finished on the strength of a coincidence.
+const uint kErrorMinSamples = 32u;
 
 // What fraction of the screen may trace past the primary ray in any one frame: one pixel in
 // this many, rotating so every pixel gets its turn.
@@ -1471,10 +1519,26 @@ void main() {
         //
         // A small fraction keep going regardless, so a face is never frozen: light that moves,
         // or a neighbour that changed, still works its way in.
-        uint have = (slot != 0xFFFFFFFFu) ? faces.items[slot].count : 0u;
+        // Spend rays where the answer is still uncertain, rather than where the count is low.
+        //
+        // A fixed target treats every face alike, and faces are not alike. One looking at a
+        // blank wall a metre away has the same answer from every direction and is done in a few
+        // dozen samples; one seeing a bright window through a doorway, with dark wall either
+        // side of it, is not done after a thousand. Counting samples cannot tell those apart, so
+        // it kept tracing the first long after it had converged and stopped tracing the second
+        // while it was still visibly wrong.
+        //
+        // The entry now knows how far its own mean is likely to be out, so that is the question
+        // asked. Below the target it is left alone entirely, which hands its share of the ray
+        // budget to the faces that still need it.
+        FaceLight own = read_face(slot);
+        uint have = own.count;
         bool turn = ((uint(pixel.x) * 3u + uint(pixel.y) * 5u + trace.control.z) %
                      max(trace.quality.x, 1u)) == 0u;
-        bool refine = ((have < kFaceTarget) || (rand(state) < 0.02)) && turn;
+        // Not before a minimum, because the spread of a handful of samples is itself mostly
+        // noise, and a face that got three similar ones by chance would declare itself finished.
+        bool settled = own.known && own.count >= kErrorMinSamples && own.error < kErrorTarget;
+        bool refine = (!settled || (rand(state) < 0.02)) && turn;
 
         // The shadow entry: its own key, at a fixed level, decided on its own terms.
         //
