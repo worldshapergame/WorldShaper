@@ -186,7 +186,8 @@ void print_help() {
         "  --no-validation       force them off\n"
         "  --cam x,y,z,yaw,pitch scripted camera (metres, degrees)\n"
         "  --screenshot FILE     save frame --screenshot-frame N and exit\n"
-        "  --debug-mode N        0 shaded, 1 steps, 2 normals, 3 detail, 4 clip ghost, 5 face cache\n"
+        "  --debug-mode N        0 shaded, 1 steps, 2 normals, 3 detail, 4 clip ghost,\n"
+        "                        5 face cache, 6 why a path-traced pixel is dark\n"
         "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
         "  --clip x0,..,z1,dx,dy,dz,copies,turn   scripted clipboard ghost\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
@@ -935,7 +936,14 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                     // camera moving does the same; the face cache does not, because it is
                     // keyed to places in the world rather than to the screen.
                     //
-                    // And the face cache deliberately is *not* wiped here. Doing that meant
+                    // The face cache goes too. Wiping it wholesale is heavy-handed - it is
+                    // what makes the whole scene relight when you place one voxel - but the
+                    // sliding-window alternative that was meant to replace it corrupted
+                    // entries and then faulted the GPU outright, so this stays until that is
+                    // redone properly. See the decision log.
+                    face_cache_dirty_ = true;
+                    // The note below is kept because it is still the right target:
+                    // deliberately *not* wiped would mean
                     // every voxel placed relit the entire scene at once, which is what the
                     // smearing while building actually was. Entries average over a sliding
                     // window instead, so a face follows what was built beside it within a few
@@ -1458,7 +1466,9 @@ void Application::record_frame(f32 time_seconds) {
                 params.box_max[box][axis] = static_cast<i32>(hi[axis] - base[axis]);
             }
             params.box_min[box][3] = state;
-            params.box_max[box][3] = outline ? 1 : 0;
+            // Low byte is the outline flag, next byte is the shell thickness, so the
+            // preview can draw the void a hollow placement will leave.
+            params.box_max[box][3] = (outline ? 1 : 0) | (static_cast<i32>(hollow_ & 0xFFu) << 8);
             ++box;
         };
 
@@ -2106,7 +2116,7 @@ int Application::run(const Options& options) {
         }
         if (input.was_pressed(Key::F1)) hud_.toggle_developer_panel();
         if (input.was_pressed(Key::F2)) hud_.toggle_overlay();
-        if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 6;
+        if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 7;
         if (input.was_pressed(Key::F4)) {
             path_trace_ = !path_trace_;
             trace_samples_ = 0;

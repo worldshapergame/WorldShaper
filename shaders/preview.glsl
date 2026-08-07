@@ -292,7 +292,7 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
             // Only the copy being steered is outlined; the rest are their own voxels. See
             // the note where these boxes are filled in â€” six plane tests a pixel, sixteen
             // times over, was most of what put this pass over its budget.
-            if (push.box_max[b].w != 0) {
+            if ((push.box_max[b].w & 0xFF) != 0) {
                 colour = draw_one_box(colour, origin, dir, depth, lo, hi, 2, 0.02);
             }
             ++drawn;
@@ -303,6 +303,23 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
         // so the wash thins as the row gets longer while the outlines stay crisp.
         float wash = 0.07 / (1.0 + 0.35 * float(drawn));
         colour = draw_one_box(colour, origin, dir, depth, lo, hi, state, wash);
+
+        // The shell, drawn as a second outline set in by its thickness.
+        //
+        // Without it a hollow placement looks exactly like a solid one right up until you let
+        // go, and the setting reads as doing nothing at all — which is precisely how it was
+        // reported. The inner box is the void that will be left, so seeing it is seeing the
+        // wall thickness.
+        int shell = (push.box_max[b].w >> 8) & 0xFF;
+        if (shell > 0) {
+            vec3 inner_lo = lo + vec3(float(shell));
+            vec3 inner_hi = hi - vec3(float(shell));
+            // Only when there is an inside left to draw; below that the placement is solid
+            // anyway and a second outline would be a lie.
+            if (all(greaterThan(inner_hi, inner_lo))) {
+                colour = draw_one_box(colour, origin, dir, depth, inner_lo, inner_hi, state, 0.0);
+            }
+        }
         ++drawn;
     }
 

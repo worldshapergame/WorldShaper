@@ -258,6 +258,13 @@ bool Clipboard::bake_instance(u32 n, Clip& out) const {
     try {
         Clip baked = rotate_clip(source_, radians);
         out = scale_clip(baked, factor);
+        // Hollowed here, in the bake both the ghost and the stamp go through, so the preview
+        // shows the shell that will actually be placed. Doing it only at stamp time meant the
+        // ghost was solid and the shell appeared out of nowhere on release — a preview that
+        // does not show what the tool will do is worse than none.
+        //
+        // After the turn and the resize, so the shell follows the copy as it is really shaped.
+        if (hollow_ > 0) out = hollow_clip(out, static_cast<i64>(hollow_));
     } catch (const std::bad_alloc&) {
         return false;
     }
@@ -552,9 +559,7 @@ bool Clipboard::update(const World& world, const ClipboardInput& input, const f6
             baking_truncated_ = true;
             break;
         }
-        // Hollowed after baking, so the shell follows the copy as it is actually shaped —
-        // turned and stretched — rather than the shape it had before.
-        if (hollow_ > 0) baked = hollow_clip(baked, static_cast<i64>(hollow_));
+        // Already hollowed by bake_instance, so what is stamped is exactly what the ghost drew.
         clip_to_ops(baked, at[0], at[1], at[2], paste_mode_, tick, player, out);
     }
     last_stamp_ops_ = out.size();
