@@ -103,7 +103,23 @@ void face_key(ivec3 voxel, ivec3 normal, uint level, out uint lo, out uint hi) {
     // the count stops growing, and it costs nothing visible, because a node smaller than a
     // pixel is exactly the thing whose detail cannot be seen anyway. It is the same rule the
     // marcher already follows for geometry.
-    voxel >>= int(level);
+    // Quantised *across* the surface, never *through* it.
+    //
+    // Shifting all three axes merges everything within 2^level voxels that shares a normal —
+    // including the two sides of a wall. Build a hollow box and its outer skin and its inner
+    // skin land on one entry: the lit outside and the dark inside average together, so the
+    // inside glows as though it were emitting and the outside picks up speckle from the dark.
+    // Anything the box happened to enclose lights up the same way.
+    //
+    // Holding the normal axis at full resolution costs nothing. A flat surface has one value
+    // along that axis by definition, so the number of entries is unchanged; all it buys is
+    // that two surfaces at different depths stay different faces. A wall one voxel thick is
+    // enough to separate them, which is the thinnest wall there is.
+    ivec3 node = voxel >> int(level);
+    if (normal.x != 0) node.x = voxel.x;
+    else if (normal.y != 0) node.y = voxel.y;
+    else node.z = voxel.z;
+    voxel = node;
 
     // Mixed one axis at a time, rather than XORing three multiplications together.
     //
@@ -384,7 +400,19 @@ struct FaceLight {
 };
 
 // How many levels up to look when this one knows nothing yet.
-const uint kParentLevels = 3u;
+//
+// All the way to the top rather than three: the nearest ancestor that knows anything is worth
+// having, and climbing invents nothing, because a parent is a real measurement of a larger
+// piece of the same place. Where the place is dark the parent is dark, so a sealed room stays
+// black.
+//
+// It was raised to chase a one-pixel dark seam along horizontal edges — 430 pixels on a single
+// scanline of the test scene — where a pixel lands on a face no other pixel stands on. That is
+// not what causes it: the seam went to 423, so those pixels' ancestors are unknown too. Since
+// the normal axis is deliberately not quantised, a voxel that is off by one *along the normal*
+// is a different face at every level, and climbing cannot reunite it. Left raised because it is
+// the better fallback regardless; the seam is still there and still unexplained.
+const uint kParentLevels = 7u;
 
 void contribute(uint slot, vec3 value, float visibility) {
     if (slot == 0xFFFFFFFFu) return;
@@ -751,6 +779,11 @@ void main() {
             imageStore(out_colour, pixel, vec4(mark, 1.0));
             return;
         }
+        // A pixel that is not tracing this frame has no bounce to report on.
+        if (push.resolution.z == 8u && !refine) {
+            imageStore(out_colour, pixel, vec4(1.0, 0.0, 0.0, 1.0));
+            return;
+        }
 
         float visibility = 0.0;
         vec3 incoming = vec3(0.0);
@@ -762,14 +795,10 @@ void main() {
                 imageStore(out_colour, pixel, vec4(why_dark(m, known), 1.0));
                 return;
             }
-            if (!known.known) {
-                // Not this pixel's turn to trace, and nothing known here yet. The sky floor
-                // again rather than zero — for the frame or two before its turn comes round,
-                // a surface should read as dim, not as unlit.
-                radiance += m.albedo * sky_radiance(normal) * 0.5;
-                write_pixel(pixel, sample_index, clamp_finite(radiance), primary_t, aspect);
-                return;
-            }
+            // Nothing known yet shades as its own emission and no more. Standing in for it
+            // with sky was tried and is wrong: a sealed box has no sky in it, and inventing a
+            // floor of light there makes a room with no way in glow. Waiting is honest, and at
+            // this stride the wait is a few frames.
             radiance += sun_light(normal, dir, m, known.visibility) +
                         m.albedo * (1.0 - m.metallic) * known.indirect;
             radiance = clamp_finite(radiance);
@@ -781,8 +810,31 @@ void main() {
             visibility = occluded(from, sun_sample(state)) ? 0.0 : 1.0;
         }
 
+        // Whether this path found out anything real, or merely failed to find out anything.
+        //
+        // The distinction is the whole of it. Zero light and no answer are the same number and
+        // must not be the same sample: a sample means "I looked, and this is what is there",
+        // and averaging a non-answer in teaches the face that the world is dark. Two surfaces
+        // facing each other then each teach the other, and a cache does not wash out.
+        //
+        // The sky, a summary block, an emitter and a face that is already known are all real
+        // answers, so light still bootstraps from anything open to the sky and spreads inward a
+        // bounce per frame. A sealed box has none of them, contributes nothing, and stays black
+        // — which is correct, and is what makes it black for the right reason rather than by
+        // accident.
+        bool measured = true;
+
+        // The bounce reports what it could not find, where the shadow ray deliberately does
+        // not. They are not the same case. A shadow ray is a yes-or-no about one direction and
+        // must not drag streaming wherever it happens to point; a bounce is where all indirect
+        // light comes from, and geometry it lands on is geometry the picture depends on.
+        //
+        // Left silent, a surface only ever touched by bounces never streams, so it stays a
+        // summary block, and a summary block answers nothing — so the light there never
+        // arrives and the room stays dark for want of asking. Inside a closed box a sixth of
+        // all bounces were landing on unstreamed walls that nothing had ever requested.
         vec3 bounce_dir = cosine_hemisphere(normal, state);
-        Hit second = march(from, bounce_dir, 0.0, 0.0, false);
+        Hit second = march(from, bounce_dir, 0.0, 0.0, true);
         if (!second.hit) {
             incoming = sky_radiance(bounce_dir);
         } else {
@@ -793,10 +845,20 @@ void main() {
                                               : material_from_colour(second.colour);
 
             if (second.level >= 5) {
-                // Shaded, not looked up. A summary block has no faces and never will, so the
-                // lookup below would return zero every time and that zero would be averaged
-                // into the face this bounce came from as though it were a measurement.
-                incoming = summary_radiance(n2, m2);
+                // A summary block is fine to *draw* and useless to *measure light from*.
+                //
+                // It stands in for geometry that has not been streamed, and nothing about it
+                // says whether that geometry is a hillside in the sun or the far wall of the
+                // room you are standing in. Shading it as sunlit was tried, and it lights the
+                // inside of a sealed box: bounces land on the box's own unstreamed walls and
+                // come back carrying daylight, so a room with no way in glows. Measured at 90
+                // of 255 mean brightness inside a closed box, and forcing this term to black
+                // took it to 1.
+                //
+                // So it answers nothing. A surface that can see the sky still has plenty of
+                // bounces that reach it, and those are real.
+                incoming = vec3(0.0);
+                measured = false;
             } else {
                 // The far end reads its own face rather than tracing on. This is what makes
                 // the bounce count unbounded for nothing: what is read there already contains
@@ -812,32 +874,44 @@ void main() {
                     incoming = m2.emission + sun_light(n2, bounce_dir, m2, far.visibility) +
                                m2.albedo * (1.0 - m2.metallic) * far.indirect;
                 } else {
-                    // Nothing known there yet. Returning zero is the tempting thing and it is
-                    // how a wall goes black and stays black: zero is not "no answer", it is
-                    // "no light", and it gets averaged into this face and counted like a
-                    // measurement. Two surfaces facing each other in shadow then each teach
-                    // the other that the world is dark, and a cache does not wash out.
-                    //
-                    // The sky is a floor everything outdoors actually stands under, and it is
-                    // the one term available without another ray. Biased low rather than
-                    // absent, and it gives way as real samples arrive.
-                    incoming = m2.emission + m2.albedo * sky_radiance(n2) * 0.5;
+                    // Nothing known there yet. Its own light is still a real measurement, so
+                    // an emitter is seen immediately; the rest of what that surface reflects
+                    // is simply not known this frame.
+                    incoming = m2.emission;
+                    measured = any(greaterThan(m2.emission, vec3(0.0)));
                 }
             }
+        }
+
+        // Debug view 8: what the bounce found, which is where indirect light comes from and
+        // therefore where a wrong answer about indirect light must come from too.
+        //
+        //   cyan     open sky
+        //   blue     a summary block: unstreamed geometry, so no answer
+        //   green    a real surface whose face is known
+        //   yellow   a real surface nothing knows about yet
+        //   red      the pixel did not trace this frame
+        if (push.resolution.z == 8u) {
+            vec3 mark;
+            if (!second.hit) mark = vec3(0.0, 1.0, 1.0);
+            else if (second.level >= 5) mark = vec3(0.0, 0.0, 1.0);
+            else mark = measured ? vec3(0.0, 0.8, 0.0) : vec3(1.0, 1.0, 0.0);
+            imageStore(out_colour, pixel, vec4(mark, 1.0));
+            return;
         }
 
         // Contribute. Clamped, because a single path that finds the sun through a gap carries
         // a spike â€” in a per-pixel average that is a firefly which washes out, and in a cache
         // it persists and one face wears it for thousands of frames.
         vec3 clamped = min(incoming, vec3(8.0));
-        contribute(slot, clamped, visibility);
+        if (measured) contribute(slot, clamped, visibility);
 
         // And to the parent node. One extra set of atomics buys a node one level up that is
         // always populated — which is what a face being looked at for the first time inherits
         // from, instead of a single noisy ray.
         uint plo, phi;
         face_key(voxel, hit.normal, min(level + 1u, 6u), plo, phi);
-        contribute(face_slot(plo, phi, true, trace.control.z), clamped, visibility);
+        if (measured) contribute(face_slot(plo, phi, true, trace.control.z), clamped, visibility);
 
         // Then shade from the face, which now includes every other pixel standing on it this
         // frame. A face the table could not hold falls back to this pixel's own samples: noisy,
