@@ -1100,7 +1100,12 @@ const uint kNeeCandidates = 8u;
 // against the sun and sky the same face is receiving, it gives the share of the light lamps are
 // actually responsible for. A face in a dark room asks lamps nearly always, a face in open sun
 // almost never, and neither has to be told which it is.
-const float kNeeMinChance = 0.05;
+// The floor is low on purpose. It exists only to keep the division by it finite — it is not a
+// minimum amount of attention lamps deserve, and treating it as one costs real noise. If the
+// lamps are half a per cent of the light reaching a face, then half a per cent of its rays is
+// exactly the right share; a floor of one in twenty spent forty times that on measuring almost
+// nothing, and the outdoor scenes went from 0.934 speckle to 0.976 paying for it.
+const float kNeeMinChance = 0.005;
 const float kNeeMaxChance = 0.95;
 
 struct LightPick {
@@ -1743,7 +1748,19 @@ void main() {
             float from_sky = face_luminance(sky_radiance(normal));
             nee_chance = clamp(pick.estimate / (pick.estimate + from_sun + from_sky + 1e-4),
                                kNeeMinChance, kNeeMaxChance);
-            if (pick.estimate <= 0.0) nee_chance = 0.0;
+            // Never zero, and that is not a detail: which strategy owns emitters has to be
+            // settled before the draw rather than by it.
+            //
+            // Zeroing the chance when a draw happened to turn up nothing handed emitters back to
+            // the bounce for exactly those samples, while direct sampling was still counting the
+            // ones it did find — so a lamp was counted twice whenever the dice came up empty,
+            // and the total moved with how often that happened. Small here, about a per cent
+            // against a long reference, and invisible until something changed how often draws
+            // come up empty.
+            //
+            // A draw that finds nothing is not a reason to change the rules. It is an estimate
+            // of zero, which the floor lets through at its own small weight, and the draws that
+            // do find something carry the answer.
 
             // Committed once the coin lands, whatever the draw turned up. A draw that found no
             // candidate in front of the face is not a failure to be backed out of — it is that
