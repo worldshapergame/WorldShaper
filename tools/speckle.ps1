@@ -39,6 +39,15 @@ param(
     [int]$Height = 360,
     [int]$Quality = 7,
     [switch]$PathTrace,
+    # "vx,vy,vz,vyaw" in metres and degrees a second. THE case that matters, and the one a
+    # screenshot cannot show.
+    #
+    # A still camera accumulates hundreds of samples a pixel and every measurement taken that way
+    # says the picture is clean. A moving one resets the accumulator every frame and shows what a
+    # player actually looks at. `Options::fly` in src/app/main.cpp makes the same point and is the
+    # reason it exists; measuring only the still case is how a renderer ends up tuned for a
+    # photograph nobody takes.
+    [string]$Fly = "",
     [string]$Out = ""
 )
 
@@ -110,7 +119,8 @@ function Measure-Speckle([string]$png) {
     }
 }
 
-Write-Host ("camera {0}   {1}x{2}" -f $Cam, $Width, $Height)
+Write-Host ("camera {0}   {1}x{2}{3}" -f $Cam, $Width, $Height,
+            $(if ($Fly -ne "") { "   flying " + $Fly } else { "   still" }))
 Write-Host ""
 Write-Host ("  {0,7}  {1,9}  {2,10}  {3}" -f "frames", "speckle", "fireflies", "image")
 
@@ -128,6 +138,7 @@ foreach ($f in ($Frames -split "," | ForEach-Object { [int]$_.Trim() })) {
               "--screenshot-frame", "$f", "--screenshot", $png, "--cam", $Cam)
     if ($Metre -gt 0) { $shot += @("--clip-metre", "$Metre") }
     if ($PathTrace) { $shot += "--pathtrace" }
+    if ($Fly -ne "") { $shot += @("--fly", $Fly) }
 
     # Deliberately not `2>&1`. Windows PowerShell wraps each stderr line from a native program in
     # an ErrorRecord, so redirecting it turns the renderer's ordinary warnings into terminating
