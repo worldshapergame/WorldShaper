@@ -778,6 +778,29 @@ private:
     // stays, because a level change is the same operation and will want to report the same way.
     LoadProgress progress_;
     LoadingScreen loading_screen_;
+    // ---- sharpening the world while it is being walked around in --------------------------
+    //
+    // The world is built coarse so the player is in it in a second and a half, then sampled again
+    // at twice the detail, and again, until it reaches what the clip asked for. Each pass replaces
+    // the last: there is only ever ONE world, getting finer, rather than levels of detail sitting
+    // beside each other waiting to be swapped by distance.
+    //
+    // Sampling happens on a thread of its own with its own workers. Everything that touches shared
+    // state — interning the varied materials, writing voxels, replaying the edit log — happens on
+    // the main thread between frames, because the type table and the world are not thread-safe and
+    // making them so to save a few milliseconds a minute would be a poor trade.
+    std::unique_ptr<forge::Script> refine_script_;
+    std::unique_ptr<JobSystem> refine_jobs_;
+    std::unique_ptr<forge::SampleResult> refine_result_;
+    std::thread refine_thread_;
+    std::atomic<bool> refine_ready_{false};
+    bool refine_running_ = false;
+    u32 refine_scale_ = 1;      // what the world is at now; 1 is the clip's own detail
+    i32 refine_authored_ = 0;   // voxels per metre the clip asked for
+    i64 refine_at_[3]{0, 0, 0};
+    void start_refinement();
+    void pump_refinement();
+
     LoadHistory load_history_;
     u64 load_began_ns_ = 0;
     u64 loading_drawn_ns_ = 0;    // when the last loading frame went out, so it can be paced
@@ -1212,6 +1235,112 @@ void Application::draw_loading() {
     loading_screen_.present(swapchain_, frame);
 }
 
+// Begin sampling the next rung, if there is one.
+//
+// Halving the scale each time doubles the detail and multiplies the work by eight, so the ladder
+// spends almost all of its total on the last step. That is the property that makes this worth
+// doing: every rung before the last is nearly free next to it, and the player sees the world from
+// the first one.
+void Application::start_refinement() {
+    if (refine_running_ || refine_script_ == nullptr || refine_scale_ <= 1) return;
+
+    const u32 next = refine_scale_ / 2;
+    refine_script_->settings.voxels_per_metre =
+        std::max<i32>(1, refine_authored_ / static_cast<i32>(next));
+
+    if (refine_jobs_ == nullptr) {
+        // Fewer workers than the main system, and deliberately. This runs while somebody is
+        // playing; taking every core would sharpen the world by stuttering it.
+        const u32 hardware = std::thread::hardware_concurrency();
+        refine_jobs_ = std::make_unique<JobSystem>(hardware > 4 ? hardware / 2 : 1);
+    }
+
+    refine_ready_.store(false, std::memory_order_release);
+    refine_running_ = true;
+    refine_thread_ = std::thread([this, next] {
+        auto built = std::make_unique<forge::SampleResult>(forge::sample(
+            refine_script_->field, refine_script_->solid, refine_script_->paint,
+            refine_script_->settings, refine_jobs_.get(), {}));
+        refine_result_ = std::move(built);
+        WS_LOG_INFO("clip", "refined to scale {} in the background", next);
+        refine_ready_.store(true, std::memory_order_release);
+    });
+}
+
+// Take delivery of a finished rung, if one is ready, and put it in the world.
+void Application::pump_refinement() {
+    if (!refine_running_) {
+        start_refinement();
+        return;
+    }
+    if (!refine_ready_.load(std::memory_order_acquire)) return;
+
+    refine_thread_.join();
+    refine_running_ = false;
+    if (refine_result_ == nullptr) return;
+
+    const u32 next = refine_scale_ / 2;
+    const u64 began = now_ns();
+
+    // Varied ONCE, at the rung that keeps it.
+    //
+    // Variation gives every voxel its own version of its material, so it interns something close to
+    // one type per voxel — a million of them on this building. Run on every rung it interns a
+    // million MORE each time, because the types the previous rung made are still referenced by
+    // nothing and released by nobody. Three rungs in, the table hit two million and overran the GPU
+    // buffer it is uploaded through, which is an assert and a crash report rather than a slow frame.
+    //
+    // Nothing is lost by waiting. A coarse rung is blocky, and no-two-voxels-alike shading on a
+    // blocky world is a variation nobody can see.
+    if (next == 1) {
+        forge::apply_variation(refine_result_->clip, types_, refine_script_->field,
+                               refine_script_->variation, refine_script_->settings,
+                               *refine_result_, nullptr);
+    }
+
+    const PasteStats stamped = paste_clip(world_, ledger_, refine_result_->clip,
+               refine_result_->origin_voxel[0] * static_cast<i64>(next) + refine_at_[0],
+               refine_result_->origin_voxel[1] * static_cast<i64>(next) + refine_at_[1],
+               refine_result_->origin_voxel[2] * static_cast<i64>(next) + refine_at_[2],
+               // REPLACE, not SolidOnly. A rung supersedes the one before it, so the clip has to
+               // land whole and its empty parts have to clear what the coarser pass left there.
+               // Stamped instead of replaced, each pass only ever ADDS: the blocky overshoot of the
+               // coarse build survives outside the finer surface and the world grows every rung
+               // rather than sharpening. It read as eighty-four chunks where the full build has
+               // seventy-four.
+               //
+               // Clearing the player's edits along with it is correct, because they are put back
+               // immediately below and put back at the new detail.
+               PasteMode::Replace, MatterReason::PlayerPlace, 1, nullptr, types_.type_count(),
+               next);
+
+    // Replace writes air wherever the clip is empty, and a chunk that is asked for and then filled
+    // with nothing still exists. Without this the count climbs every rung — a hundred and twenty
+    // chunks against the seventy-four the finished world has — and every one of them is streamed,
+    // uploaded and marched for the sake of holding no matter.
+    if (stamped.chunks_left_empty) world_.compact();
+
+    // Everything the player did to the coarse world, done again to the fine one.
+    //
+    // An op is a SHAPE — FillBox carries two corners in world voxels, not a list of the voxels it
+    // happened to change — so replaying it against finer geometry re-cuts the same volume at the
+    // new detail. A chisel stroke that took out a blocky lump when the world was coarse takes out
+    // exactly the region it described, now with an edge on it. The cut re-measures itself; nothing
+    // here has to understand what it meant.
+    const std::vector<Op>& done = op_log_.ops();
+    if (!done.empty()) apply_ops(world_, done, ledger_);
+
+    refine_scale_ = next;
+    const WorldStats now = world_.stats();
+    WS_LOG_INFO("clip", "world sharpened to scale {} in {:.0f} ms: {} chunks, {} solid voxels, "
+                        "{} edits replayed",
+                refine_scale_, ns_to_ms(now_ns() - began), now.chunks, now.solid_voxels,
+                done.size());
+
+    refine_result_.reset();
+    start_refinement();
+}
+
 void Application::build_world() {
     const u64 start = now_ns();
 
@@ -1390,9 +1519,14 @@ void Application::build_world() {
             const u64 sampled_at = now_ns();
             progress_.enter(LoadStage::Varying);
             // Every voxel gets its own version of its material before it goes in, so the world
-            // holds the varied clip rather than the flat one.
-            const forge::VariationReport variety = forge::apply_variation(
-                built.clip, types_, script.field, script.variation, script.settings, built, &jobs);
+            // holds the varied clip rather than the flat one — but only at the detail that keeps
+            // it. On a coarse build the ladder will replace this world several times over, and
+            // interning a million materials per rung overruns the table; see pump_refinement.
+            const forge::VariationReport variety =
+                (coarse > 1) ? forge::VariationReport{}
+                             : forge::apply_variation(built.clip, types_, script.field,
+                                                      script.variation, script.settings, built,
+                                                      &jobs);
             const u64 varied_at = now_ns();
             if (variety.voxels > 0) {
                 WS_LOG_INFO("clip",
@@ -1411,6 +1545,19 @@ void Application::build_world() {
                 coarse);
             const u64 pasted_at = now_ns();
             if (stamped.chunks_left_empty) world_.compact();
+
+            // Hold on to everything the ladder needs. The script owns the field, which the
+            // background sampler reads and nothing else touches once parsing is done.
+            if (coarse > 1) {
+                refine_authored_ = (options_.clip_metre > 0) ? options_.clip_metre
+                                                             : script.settings.voxels_per_metre *
+                                                                   static_cast<i32>(coarse);
+                refine_scale_ = coarse;
+                refine_at_[0] = options_.clip_at[0];
+                refine_at_[1] = options_.clip_at[1];
+                refine_at_[2] = options_.clip_at[2];
+                refine_script_ = std::make_unique<forge::Script>(std::move(script));
+            }
             // The two ns figures are summed across worker threads, so they exceed the wall clock
             // on a parallel build. What they are for is the RATIO: how much of the sampling is
             // actually inside the field, and how much is everything around it.
@@ -3691,6 +3838,9 @@ int Application::run(const Options& options) {
             crash_set_context("timing", timing);
         }
 
+        // A rung of the ladder, if one has finished sampling since the last frame.
+        pump_refinement();
+
         hud_.begin_frame();
         hud_.draw(stats_, profiler_, device_.caps(), swapchain_);
 
@@ -3768,6 +3918,7 @@ int Application::run(const Options& options) {
     // alive: a ComputePipeline left to its own destructor runs after ~Application has taken the
     // device with it, and destroying a pipeline against a dead device is an access violation in
     // the driver with this file nowhere in the stack.
+    if (refine_thread_.joinable()) refine_thread_.join();
     clouds_.destroy();
     destroy_render_target();
     if (descriptor_pool_ != VK_NULL_HANDLE) {
