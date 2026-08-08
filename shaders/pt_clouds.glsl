@@ -241,8 +241,22 @@ float worley(vec3 p) {
 
 // Two octaves rather than three. The third is a fifth of the amplitude and a third of the cost of
 // the whole function, and at cloud scale nothing in the picture depends on it.
+// Every octave TURNED as well as scaled.
+//
+// Scaling alone leaves all of them on the same cubic lattice, differing only in spacing. Their
+// features line up along the world axes and reinforce each other there, so the sum carries a faint
+// grid — which reads as the sky repeating, because the eye finds the axes even when it cannot find
+// the period. It was reported as clouds that "repeat slightly", and this is where that comes from:
+// not from a period that is too short, but from a lattice that is never hidden.
+//
+// A fixed rotation between octaves costs six multiplies and two adds and puts each one on its own
+// axes. Irrational-ish angles, so no two octaves ever come back into alignment.
+const mat3 kOctaveTurn = mat3( 0.00,  0.80,  0.60,
+                              -0.80,  0.36, -0.48,
+                              -0.60, -0.48,  0.64);
+
 float worley_fbm(vec3 p, float lacunarity) {
-    return worley(p) * 0.72 + worley(p * lacunarity) * 0.28;
+    return worley(p) * 0.72 + worley(kOctaveTurn * p * lacunarity) * 0.28;
 }
 
 float perlin_fbm(vec3 p, int octaves) {
@@ -250,7 +264,7 @@ float perlin_fbm(vec3 p, int octaves) {
     for (int i = 0; i < octaves; ++i) {
         sum += perlin_noise(p) * amplitude;
         total += amplitude;
-        p *= 2.02;                 // not exactly two, so the octaves do not share a lattice
+        p = kOctaveTurn * p * 2.02;   // turned as well as scaled; see kOctaveTurn
         amplitude *= 0.5;
     }
     return sum / max(total, 1e-4);
@@ -423,17 +437,36 @@ float low_deck_density(vec3 p, float height_m, bool detail) {
     // coarse path skips is the erosion, which only ever REMOVES density — so the coarse answer is
     // an over-estimate of the fine one, and an over-estimate is the safe direction for a strider:
     // it stops early and creeps, which costs a step and cannot miss anything.
-    // Squashed vertically before the noise is sampled, which makes the cloud TALLER for the same
-    // horizontal size: a sphere in the noise's space is an egg standing on end in the world's. It
-    // is the cheapest way to get the proportions of convection, which rises.
-    vec3 base_p = q * vec3(1.0, 0.55, 1.0) * (1.0 / metres(850.0));
+    // ISOTROPIC, and the vertical squash that used to be here was the worst fault in the file.
+    //
+    // The density is shape(p) times profile(height). Squashing the noise vertically makes `shape`
+    // vary slowly in y — nearly a two-dimensional pattern — and a two-dimensional pattern
+    // multiplied by a height function is an EXTRUSION. Every cloud became a vertical curtain hung
+    // from a flat ceiling, all of them starting and ending at the same two heights, which from
+    // inside the deck looks like a roof with stalactites and from below looks like sheets stacked
+    // on sheets. It was reported as "layers on top of each other" and that is exactly what the
+    // arithmetic was building.
+    //
+    // Isotropic noise varies as fast vertically as horizontally, so the profile shapes the deck
+    // without extruding it: two clouds at the same place have different tops, because `shape` is
+    // different at their tops and not merely scaled.
+    vec3 base_p = q * (1.0 / metres(850.0));
     float perlin = perlin_fbm(base_p, detail ? 3 : 2);
     float cells = detail ? worley_fbm(base_p * 2.4, 2.1) : worley(base_p * 2.4);
     float shape = remap(perlin, cells - 1.0, 1.0, 0.0, 1.0);
 
-    // Coverage carves into it. Remapping rather than thresholding keeps the interior gradient: a
-    // threshold gives a binary edge and a flat fill, which is a silhouette with paint in it.
-    float density = remap(shape * profile, 1.0 - w.coverage, 1.0, 0.0, 1.0);
+    // Coverage carves the SHAPE, and the profile tapers the result. That order is the whole of it.
+    //
+    // Multiplying by the profile first and thresholding after makes the threshold height-dependent:
+    // shape has to beat 1 - coverage after being scaled down by the profile, so only the height
+    // where the profile is near one can clear it at all. The cloud is then a slab at the profile's
+    // peak with nothing above or below, however tall the profile said the deck was — which is why
+    // they stayed flat lozenges after the extrusion was fixed.
+    //
+    // Carving first lets the coverage decide WHERE there is cloud, in three dimensions, and leaves
+    // the profile to decide how it thins towards its base and its top. Same two numbers, and the
+    // difference between a slab and a cumulus.
+    float density = remap(shape, 1.0 - w.coverage, 1.0, 0.0, 1.0) * profile;
     if (density <= 0.0) return 0.0;
 
     if (detail) {
@@ -473,7 +506,7 @@ float mid_deck_density(vec3 p, float height_m, bool detail) {
     float cells = detail ? worley_fbm(base_p * 2.0, 2.0) : worley(base_p * 2.0);
     float shape = remap(perlin, cells - 1.0, 1.0, 0.0, 1.0);
     float profile = remap(h, 0.0, 0.25, 0.0, 1.0) * remap(h, 0.45, 0.9, 1.0, 0.0);
-    float density = remap(shape * profile, 1.0 - coverage, 1.0, 0.0, 1.0);
+    float density = remap(shape, 1.0 - coverage, 1.0, 0.0, 1.0) * profile;
     if (detail && density > 0.0) {
         float fine = worley_fbm(q * (1.0 / metres(90.0)), 2.0);
         density = remap(density, fine * 0.45, 1.0, 0.0, 1.0);
@@ -496,7 +529,7 @@ float high_deck_density(vec3 p, float height_m) {
     float profile = remap(h, 0.0, 0.3, 0.0, 1.0) * remap(h, 0.5, 1.0, 1.0, 0.0);
     // And far less of it. Cirrus is a garnish on a sky, not a layer of it.
     float coverage = clamp(push.sky_cloud.x * 0.45, 0.0, 1.0);
-    return clamp(remap(shape * profile, 1.0 - coverage, 1.0, 0.0, 1.0), 0.0, 1.0) * 0.12;
+    return clamp(remap(shape, 1.0 - coverage, 1.0, 0.0, 1.0) * profile, 0.0, 1.0) * 0.12;
 }
 
 float cloud_density(vec3 p, float height_m, bool detail) {
@@ -589,6 +622,13 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
     vec3 air_colour = sky_radiance(dir);
 
     float travelled = enter_m;
+    // The furthest point that has been INTEGRATED. The strider is allowed to step back to look
+    // more closely at an edge it overshot, but never back past this: anything before it has
+    // already contributed to `scattered`, and walking it again adds the same cloud to the picture
+    // a second time — in front of itself, since the second pass is composited later. It showed up
+    // as clouds appearing through nearer clouds, which is exactly what re-integrating a region
+    // that is already behind you looks like.
+    float integrated_to = enter_m;
     bool creeping = false;
     int empty_run = 0;
 
@@ -632,11 +672,16 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
 
         if (!creeping) {
             // Found the edge with a long stride. Step back to where the stride began and creep
-            // from there, or the whole first stride of the cloud is missed and its face is cut
-            // off flat two hundred metres in.
+            // from there, or the whole first stride of the cloud is missed and its face is cut off
+            // flat three hundred metres in.
+            //
+            // Never back past what has already been integrated. `step_m` grows with distance, so
+            // `travelled - step_m` is not the previous sample's position — it can land further
+            // back than that, inside cloud this march has already added, which then gets added
+            // again on the way through.
             creeping = true;
             empty_run = 0;
-            travelled = max(travelled - step_m, enter_m);
+            travelled = max(travelled - step_m, integrated_to);
             continue;
         }
 
@@ -694,6 +739,7 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
 
         scattered += transmittance * here;
         transmittance *= step_t;
+        integrated_to = travelled;
     }
     return scattered;
 }
