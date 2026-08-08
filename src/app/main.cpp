@@ -144,6 +144,10 @@ struct Options {
     // accumulator every frame. Every rendering conclusion drawn from a static screenshot has
     // been about an image nobody ever looks at.
     std::string fly;
+    // radius,height,degrees a second,how far in and out. Circles the origin looking at it, so the
+    // subject stays in frame for the whole run — which a constant velocity cannot do, and a
+    // benchmark that flies past the building in the first second measures empty sky.
+    std::string orbit;
 
     // Scripted chisel, for checking the tool without a person holding the mouse.
     // --edit "x0,y0,z0,x1,y1,z1,material" applies one edit through the history at startup;
@@ -219,6 +223,8 @@ Options parse_options(int argc, char** argv) {
             options.size_explicit = true;
         } else if (arg == "--cam") {
             if (i + 1 < argc) options.camera = argv[++i];
+        } else if (arg == "--orbit") {
+            if (i + 1 < argc) options.orbit = argv[++i];
         } else if (arg == "--fly") {
             if (i + 1 < argc) options.fly = argv[++i];
         } else if (arg == "--edit") {
@@ -822,6 +828,7 @@ private:
     };
     std::vector<RefineRegion> refine_regions_;
     usize refine_region_ = 0;   // the one being sampled right now
+    bool refine_wants_compact_ = false;
     void start_refinement();
     void pump_refinement();
 
@@ -910,6 +917,9 @@ private:
     // the settled one. See Options::fly.
     bool flying_ = false;
     f64 fly_state_[5]{-22.0, 5.0, -22.0, 45.0, -8.0};   // x, y, z, yaw, pitch
+    f64 orbit_[4]{30.0, 6.0, 25.0, 26.0};   // radius, height, degrees a second, how far in and out
+    f64 orbit_angle_ = 0.0;
+    bool orbiting_ = false;
     f64 fly_velocity_[4]{};                             // vx, vy, vz, vyaw
     // Shell thickness in voxels for anything the tools place. 0 is solid. Shared by the
     // chisel and the clipboard, because it is a property of how you are building rather than
@@ -1401,7 +1411,17 @@ void Application::pump_refinement() {
         refine_result_->origin_voxel[1] + refine_at_[1],
         refine_result_->origin_voxel[2] + refine_at_[2], PasteMode::Replace,
         MatterReason::PlayerPlace, 1, refine_jobs_.get(), types_.type_count(), 1);
-    if (stamped.chunks_left_empty) world_.compact();
+    // NOT compacted here, and that was the hiccup.
+    //
+    // compact() walks the whole world to find chunks that have been emptied. Called once at the end
+    // of a build that is the right thing; called after every REGION it is the whole world walked
+    // three hundred times over, and it does not care how small the region was. That is why halving
+    // the region size made the stall MORE frequent rather than smaller: the cost of finishing a box
+    // is fixed, not proportional to its volume, and the fixed part was this.
+    //
+    // A region paste replaces coarse voxels with fine ones in the same place, so it very rarely
+    // empties a chunk at all. Left to the end, where there is one walk instead of hundreds.
+    if (stamped.chunks_left_empty) refine_wants_compact_ = true;
 
     // Everything the player did, done again. An op is a SHAPE — FillBox carries two corners in
     // world voxels, not the voxels it happened to change — so replaying it against finer geometry
@@ -1419,6 +1439,8 @@ void Application::pump_refinement() {
     WS_LOG_INFO("clip", "region sharpened in {:.0f} ms, {} left", ns_to_ms(now_ns() - began), left);
 
     if (left == 0) {
+        // The one walk, now that there is nothing left to empty.
+        if (refine_wants_compact_) world_.compact();
         const WorldStats now = world_.stats();
         WS_LOG_INFO("clip", "world fully sharpened: {} chunks, {} solid voxels", now.chunks,
                     now.solid_voxels);
@@ -1666,6 +1688,9 @@ void Application::build_world() {
                 // compaction — is not most of the work.
                 const forge::Vec3 lo = refine_script_->settings.low;
                 const forge::Vec3 hi = refine_script_->settings.high;
+                // Four metres. Two was tried and is worse — see the compaction below: the cost of
+                // finishing a box is very nearly FIXED rather than proportional to its volume, so
+                // smaller boxes do not buy smaller stalls, they buy more of them.
                 const f64 want = 4.0;
                 const auto steps = [&](f64 a, f64 b) {
                     return std::max<i32>(1, static_cast<i32>(std::ceil((b - a) / want)));
@@ -3725,6 +3750,12 @@ int Application::run(const Options& options) {
         camera_.set_position_metres(values[0], values[1], values[2]);
         camera_.set_look(values[3], values[4]);
         for (u32 i = 0; i < 5; ++i) fly_state_[i] = values[i];
+    }
+    if (!options_.orbit.empty()) {
+        f64 values[4] = {30.0, 6.0, 25.0, 26.0};
+        parse_reals(options_.orbit, values, 4);
+        for (u32 i = 0; i < 4; ++i) orbit_[i] = values[i];
+        orbiting_ = true;
     }
     if (!options_.fly.empty()) {
         const char* cursor = options_.fly.c_str();
