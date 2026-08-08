@@ -871,6 +871,56 @@ const uint kSeedSamples = 160u;
 const uint kFaceSettled = 512u;
 const int kFaceRings = 3;
 
+const uint kMaxFaceLevel = 12u;
+
+// How many levels of ancestor every sample is also written to, and it must cover every level the
+// composite can reach down for.
+//
+// A level nobody writes to reads back as unknown, and an unknown level contributes nothing to the
+// composite — so the answer falls back on the fine, noisy one, which is exactly what the whole
+// scheme exists to avoid. The failure is silent: the picture simply stays speckled and every
+// constant looks innocent. Measured while this was being built, going from four ancestors to three
+// doubled the speckle at sixty-four frames, from 61.6 to 116.5, with nothing else changed.
+//
+// Six, because a starved face on busy geometry walks a long way up before it finds anything that
+// knows its own answer. Each level costs one more set of atomics on an entry shared by four times
+// as many faces, so the traffic per level falls as fast as the sharing rises.
+const uint kAncestorWrites = 6u;
+
+// Samples at which a face has earned its own voxel back.
+const float kSharpSamples = 256.0;
+
+// How curved the surface is under this pixel, from how far its real normal has turned away from
+// the axis of the face it belongs to. Nought on a flat wall, rising round a column or a vault.
+//
+// This is what makes the coarse levels aware of the shape rather than merely of the place. A
+// coarse entry pools every face within a block that shares an AXIS, and on a curved surface those
+// faces are looking in genuinely different directions and receiving genuinely different light — so
+// pooling them returns the curve's average and the curve shades flat. Damping the coarse levels
+// where the surface turns keeps the gradient: a column stays round, a barrel vault keeps its
+// falloff, and a flat wall, where the signal is nought, is unaffected and keeps all its pooling.
+//
+// `shading_normal` already separates a curve from a corner — see the note at the top of
+// pt_normals.glsl — so what arrives here is the curve and not the staircase of a voxel edge.
+float surface_curve(vec3 smooth_normal, ivec3 face) {
+    return clamp(1.0 - dot(smooth_normal, normalize(vec3(face))), 0.0, 1.0);
+}
+
+// How hard the marcher worked to get here, against how far it came. One is ordinary.
+float shape_complexity(float t, uint steps) {
+    float expected = 4.0 + max(t, 0.0) * 0.06;
+    return clamp(float(steps) / expected - 1.0, 0.0, 1.0);
+}
+
+// How much of the fine end survives on the most complicated geometry there is. Never nought: a
+// carved surface still knows its own light better than the wall behind it does.
+const float kShapeTrust = 0.35;
+
+// How much of a coarse level survives, per level, where the surface is fully turned away from its
+// own axis. A curve holds on to its own measurements rather than borrowing the block's average.
+const float kCurveHolds = 0.45;
+
+
 // How many standard errors apart two faces have to be before they count as genuinely different
 // light rather than the same light measured twice.
 //
@@ -1423,28 +1473,115 @@ LightPick pick_light(vec3 from, vec3 normal, uint light_count, inout uint state)
     return pick;
 }
 
-FaceLight read_face_blended(ivec3 voxel, ivec3 normal, float level, uint frame) {
-    uint l0 = uint(floor(level));
-    uint l1 = min(l0 + 1u, 6u);
-    float f = level - float(l0);
+// The light here, composed from every level that knows anything, finest first.
+//
+// # Detail is an overlay, not a rung
+//
+// There is no level of detail here and nothing swaps. Every level of the pyramid over this face is
+// a measurement of the same light across a different sized piece of the same surface, and they are
+// composited the way layers are: the finest level lays down as much of the answer as it can
+// support, whatever it cannot support passes through, and the next level down catches it. What
+// reaches the bottom is a piece of surface a hundred voxels across that has been measured tens of
+// thousands of times and is therefore never in doubt.
+//
+// So the fine answer always wins where it exists, the coarse answer is only ever what shows
+// through where nothing finer has been measured, and both are visible at once in the same pixel in
+// whatever proportion each has earned. There is no boundary between blocky lighting and detailed
+// lighting because they are not two things — a pixel is some of each, continuously, and the
+// proportion moves every frame as samples arrive.
+//
+// # What makes it blocky, and none of it is a setting
+//
+// RESOLUTION decides where the walk starts: the base level is the footprint in voxels under a
+// pixel, so rendering smaller starts the composite further up the pyramid and the light is
+// blockier. Continuously, with no rungs and no limit.
+//
+// RAY INFORMATION decides how far down the walk goes, and it needs no term of its own — a level
+// that has been measured twice can support almost none of the answer and passes almost all of it
+// on, which IS the fallback. A face that has never been seen shows its ancestor; the same face a
+// second later shows itself.
+//
+// SHAPE decides how much the finest levels are trusted to begin with. Complicated geometry is
+// where the fine answer is dearest — a hundred tiny faces each starved — and least visible,
+// because the shape is already busy. A flat wall keeps its detail; a carved cornice lets more
+// through.
+//
+// # Why it costs about what the old two-level blend cost
+//
+// The walk stops as soon as the answer is covered, so a settled face reads one level and leaves.
+// Only the starved ones climb, and they are the ones that would have been noise.
+FaceLight read_face_pyramid(ivec3 voxel, ivec3 normal, float base, float complexity,
+                            float curve, uint frame) {
+    uint start = uint(clamp(floor(base), 0.0, float(kMaxFaceLevel)));
 
-    uint lo0, hi0, lo1, hi1;
-    face_key(voxel, normal, l0, kFaceIndirect, lo0, hi0);
-    face_key(voxel, normal, l1, kFaceIndirect, lo1, hi1);
-    FaceLight a = gather_face(voxel, normal, l0, frame,
-                              read_face(face_slot(lo0, hi0, false, frame)));
-    FaceLight b = gather_face(voxel, normal, l1, frame,
-                              read_face(face_slot(lo1, hi1, false, frame)));
+    // The finest level fades out as the base crosses into the next one, so walking towards a wall
+    // hands over smoothly instead of stepping. This is the only place the fractional part is used
+    // and it is the whole of the distance continuity.
+    float first_share = 1.0 - fract(clamp(base, 0.0, float(kMaxFaceLevel)));
 
-    if (!a.known) return b;
-    if (!b.known) return a;
+    // How much of the fine end is trusted at all. Busy geometry lets more through to the coarse
+    // levels; a flat surface keeps what it has measured.
+    float fine_trust = mix(1.0, kShapeTrust, clamp(complexity, 0.0, 1.0));
+
+    // What each level above the first keeps, compounding as the walk climbs. On a flat surface
+    // this is one and the pyramid behaves exactly as before; on a curve it falls away, so the
+    // answer stays near the levels small enough to still be following the shape.
+    float coarse_keep = 1.0 - kCurveHolds * clamp(curve, 0.0, 1.0);
+
+    vec3 light = vec3(0.0);
+    float visible = 0.0;
+    float carried = 0.0;      // how much of the answer has been laid down
+    float remaining = 1.0;    // and how much is still showing through
+    uint samples = 0u;
+    float error = 1.0;
+    bool any = false;
+
+    for (uint l = start; l <= kMaxFaceLevel; ++l) {
+        uint lo, hi;
+        face_key(voxel, normal, l, kFaceIndirect, lo, hi);
+        FaceLight entry = read_face(face_slot(lo, hi, false, frame));
+
+        // Only the finest level is filtered across its neighbours. The coarse ones are already an
+        // average over hundreds of faces and filtering them again buys nothing for real cost.
+        if (l == start) entry = gather_face(voxel, normal, l, frame, entry);
+        if (!entry.known) continue;
+
+        // What this level can support: how close it is to knowing its own answer.
+        float cover = clamp(float(entry.count) / kSharpSamples, 0.0, 1.0);
+        if (l == start) cover *= first_share * fine_trust;
+        else {
+            cover *= pow(coarse_keep, float(l - start));
+            if (l == start + 1u) cover *= fine_trust;
+        }
+
+        float take = remaining * cover;
+        if (take <= 0.0) continue;
+
+        light += entry.indirect * take;
+        visible += entry.visibility * take;
+        samples += entry.count;
+        error = any ? min(error, entry.error) : entry.error;
+        carried += take;
+        remaining -= take;
+        any = true;
+        if (remaining < 0.002) break;
+    }
 
     FaceLight out_light;
-    out_light.visibility = mix(a.visibility, b.visibility, f);
-    out_light.indirect = mix(a.indirect, b.indirect, f);
-    out_light.count = min(a.count, b.count);
-    out_light.error = max(a.error, b.error);
-    out_light.known = true;
+    out_light.known = any && carried > 0.0;
+    if (!out_light.known) {
+        out_light.visibility = 0.0;
+        out_light.indirect = vec3(0.0);
+        out_light.count = 0u;
+        out_light.error = 1e3;
+        return out_light;
+    }
+    // Normalised by what was actually laid down. If even the coarsest level was thin, the answer
+    // is still the best available average of everything that had anything to say.
+    out_light.indirect = light / carried;
+    out_light.visibility = visible / carried;
+    out_light.count = samples;
+    out_light.error = error;
     return out_light;
 }
 
@@ -1480,42 +1617,40 @@ FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
     return blended;
 }
 
-// How much coarser a face is than the pixel that reads it, and the answer is NOT AT ALL.
+// How blocky the light is, as a continuous number of levels above what the pixel resolves.
 //
-// This was the largest lever there was and it is closed on purpose, so here is the whole of it.
+// Not a level-of-detail ladder. There are no rungs and nothing swaps: the level is a real number,
+// the two integer levels either side of it are both read, and the answer is mixed between them.
+// Three things push it up, and each is a different reason the fine answer is not worth having.
 //
-// Coarsening works, spectacularly. Two levels is sixteen times the pixels standing on a face and
-// therefore sixteen times the samples a frame; three is sixty-four. Measured on the vestibule it
-// took speckle from 140 to 52 and fireflies from 128 to 36, and the frame got very slightly
-// FASTER while it did, because fewer distinct entries is a better-behaved cache.
+// RESOLUTION. Already the whole of the base level, and it always was: the footprint is
+// `t * pixel_angle` where the angle is the field of view over the render HEIGHT, so halving the
+// resolution doubles the voxels under a pixel and coarsens the light by one level on its own.
+// Rendering small is therefore blockier than rendering large, continuously and with no limit,
+// which is what a lower setting should mean.
 //
-// It is still wrong, and the picture says so louder than any metric: a face eight voxels across is
-// eight voxels of one brightness, so a wall under the camera comes back as squares. Light in this
-// renderer is per voxel face. That is a property of the thing and not a quality setting.
+// RAY INFORMATION. A face that has been measured once cannot say anything a face measured a
+// hundred times cannot say better, and the larger piece of surface it belongs to HAS been measured
+// a hundred times, because it is a hundred faces. So a starved face reads from its parent and
+// sharpens towards its own voxel as it learns. This is the term that makes a moving camera clean:
+// what a player sees while turning is entirely faces that have just come into view, and those now
+// come in smooth and coarse instead of sharp and wrong.
 //
-// A ramp was tried next — no coarsening close up, easing in with distance — on the reasoning that
-// a face smaller than a pixel cannot be seen as a block. The reasoning is wrong and the arithmetic
-// says why. The level already IS the footprint in voxels per pixel, so a face at that level is
-// exactly one pixel across; any coarsening on top makes it larger than a pixel, which is a block,
-// at every distance. There is no window where sharing is free. The ramp only moved the blocks
-// further away, and they were still blocks.
+// SHAPE. The marcher's own step count says how complicated the geometry here is, relative to how
+// far the ray had to travel. Complex geometry is exactly where the fine answer is both dearest —
+// a hundred tiny faces each starved of samples — and least visible, because the shape itself is
+// already busy. A flat wall keeps its detail; a carved cornice shares.
 //
-// So: nought, and the speckle it would have bought is bought in gather_face instead, which filters
-// ACROSS faces as it reads them and leaves what is stored alone. That is the same trade in the one
-// place it can be made without consequence — a filter can be stopped at an edge, and a shared
-// cache entry cannot.
-const float kFaceCoarsening = 0.0;
-
-float coarsened_level(float base) {
-    return base + kFaceCoarsening;
-}
+// There is no ceiling on the sum beyond the one arithmetic imposes: `voxel >> level` stops meaning
+// anything past thirty-one, and a level of twelve already shares four thousand voxels along a
+// surface, which is larger than any room in the building.
 
 // The node size a pixel can resolve at this distance, as a power of two. The geometry is
 // still marched at full voxel detail - this only decides how coarsely faces are *shared*.
 float cache_level_exact(float t) {
     float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
     float footprint = max(t * pixel_angle, 1.0);
-    return clamp(coarsened_level(log2(footprint)), 0.0, 6.0);
+    return clamp(log2(footprint), 0.0, float(kMaxFaceLevel));
 }
 
 uint cache_level(float t) {
@@ -1526,7 +1661,7 @@ uint cache_level(float t) {
     // distant surfaces across level 7, 8, 9 and 10 entries instead of pooling them in one -
     // and adjacent pixels either side of a distance boundary then look up different keys.
     // Measured: raising the cap to 10 took uncached surface pixels from 3,661 to 18,392.
-    return uint(clamp(floor(coarsened_level(log2(footprint))), 0.0, 6.0));
+    return uint(clamp(floor(log2(footprint)), 0.0, 6.0));
 }
 
 
@@ -2105,8 +2240,10 @@ void main() {
         vec3 incoming = vec3(0.0);
 
         if (!refine) {
-            FaceLight known = read_face_blended(voxel, hit.normal, cache_level_exact(hit.t),
-                                                trace.control.z);
+            FaceLight known = read_face_pyramid(voxel, hit.normal, cache_level_exact(hit.t),
+                                               shape_complexity(hit.t, hit.steps),
+                                               surface_curve(normal, hit.normal),
+                                               trace.control.z);
             if (push.resolution.z == 6u) {
                 imageStore(out_colour, pixel, vec4(why_dark(m, known), 1.0));
                 return;
@@ -2445,12 +2582,16 @@ void main() {
         } else if (measured) {
             contribute(slot, clamped, edit_window);
 
-            // And to the parent node. One extra set of atomics buys a node one level up that
-            // is always populated Ã¢â‚¬â€ which is what a face being looked at for the first time
-            // inherits from, instead of a single noisy ray.
-            uint plo, phi;
-            face_key(voxel, hit.normal, min(level + 1u, 6u), kFaceIndirect, plo, phi);
-            contribute(face_slot(plo, phi, true, trace.control.z), clamped, edit_window);
+            // And to the ancestors, so that every level the composite can reach for has something
+            // in it. One parent was enough while a read never went more than one level above the
+            // pixel; the composite walks as far up as it needs to find an answer worth having.
+            // See kAncestorWrites.
+            for (uint up = 1u; up <= kAncestorWrites; ++up) {
+                uint plo, phi;
+                face_key(voxel, hit.normal, min(level + up, kMaxFaceLevel), kFaceIndirect,
+                         plo, phi);
+                contribute(face_slot(plo, phi, true, trace.control.z), clamped, edit_window);
+            }
         }
 
         // Then shade from the face, which now includes every other pixel standing on it this
@@ -2459,7 +2600,9 @@ void main() {
         // indirect is the only light there is, drew pure black.
         FaceLight here = read_face_seeded(voxel, hit.normal, level, trace.control.z);
         if (here.known && here.count >= kSeedSamples) {
-            here = read_face_blended(voxel, hit.normal, cache_level_exact(hit.t), trace.control.z);
+            here = read_face_pyramid(voxel, hit.normal, cache_level_exact(hit.t),
+                                     shape_complexity(hit.t, hit.steps),
+                                     surface_curve(normal, hit.normal), trace.control.z);
         }
         if (!here.known && !spec_bounce) {
             here.indirect = incoming;
