@@ -501,6 +501,9 @@ layout(push_constant) uniform Trace {
 #include "pt_sampling.glsl"
 // ---------------------------------------------------------------------------------------
 #include "pt_sky.glsl"
+// After the sky, because a cloud is lit by it and by the sun, and before everything that draws
+// a sky ray, because the cloud is in front of what the sky returns.
+#include "pt_clouds.glsl"
 
 #include "pt_material.glsl"
 #include "pt_normals.glsl"
@@ -574,7 +577,16 @@ vec3 sun_sample(inout uint state) {
 // Sun light given how much of the sun this face can see. Splitting visibility out is what
 // lets the expensive half ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the shadow ray ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â be traced once per face and shared, while the
 // cheap half, which depends on the viewing angle, stays per pixel.
-vec3 sun_light(vec3 normal, vec3 view, Material m, float visibility) {
+vec3 sun_light(vec3 normal, vec3 view, Material m, float visibility, vec3 point) {
+    if (visibility <= 0.0) return vec3(0.0);
+
+    // And whatever cloud is between this point and the sun.
+    //
+    // Multiplied in here rather than folded into `visibility`, and that is the whole design:
+    // `visibility` is cached per face over hundreds of frames, and cloud shadows MOVE. Cached,
+    // a cloud shadow settles into a permanent grey over the whole courtyard instead of sweeping
+    // across it — which is the difference between weather and a stain.
+    visibility *= cloud_shadow(point, world_height_metres(point));
     if (visibility <= 0.0) return vec3(0.0);
     // Every lobe of it lives in pt_material.glsl. What a surface does with light is the
     // material's business; the sun is only one direction to ask it about, and asking here rather
@@ -1855,7 +1867,12 @@ void main() {
         vec3 ray_dir = dir;
         bool inside = false;         // travelling through a medium rather than through air
         vec3 medium_absorb = vec3(0.0);
-        float first_t = 0.0;
+        // The far plane and not nought, for the same reason `primary_t` is initialised to it
+        // above: this is the depth the preview box is tested against, and a ray that hits nothing
+        // is infinitely far away rather than at the eye. At nought every sky pixel reads as being
+        // in front of the chisel's box, and the box is drawn over the sky — a hard-edged rectangle
+        // hanging among the clouds, which is how this was found.
+        float first_t = push.lens.y;
 
         // The one segment after a scatter into a translucent solid is marched with the marcher
         // told to pass through what it meets, which is the machinery a shadow ray already uses
@@ -1992,7 +2009,15 @@ void main() {
         // around it is caught by one or two of them -- so one face in a few hundred settles at
         // twice its neighbours and stays there, a cache not being the sort of thing that washes
         // out. Every other call below is a cache or a reflection and keeps sky_radiance.
-        radiance = sky_view(dir);
+        // The sky, with whatever cloud is between the eye and it.
+        //
+        // Composited here rather than inside sky_view because a volume has to be integrated along
+        // the ray from where the ray starts, and sky_view only ever knew a direction. What the
+        // march does not block is what the sky is worth behind it.
+        float through = 1.0;
+        vec3 cloud = cloud_march(origin, dir, world_height_metres(origin), kCloudFarMetres,
+                                 through);
+        radiance = cloud + through * sky_view(dir);
     } else {
         primary_t = hit.t;
         vec3 point = origin + dir * hit.t;
@@ -2252,7 +2277,7 @@ void main() {
             // with sky was tried and is wrong: a sealed box has no sky in it, and inventing a
             // floor of light there makes a room with no way in glow. Waiting is honest, and at
             // this stride the wait is a few frames.
-            radiance += sun_light(normal, dir, m, visibility) +
+            radiance += sun_light(normal, dir, m, visibility, point) +
                         m.albedo * (1.0 - m.metallic) * known.indirect +
                         specular_from_cache(voxel, hit.normal, normal, dir, m,
                                             trace.control.z, state);
@@ -2491,7 +2516,7 @@ void main() {
                 // lamp in the world twice as bright.
                 vec3 emitted = (nee_chance > 0.0) ? vec3(0.0) : m2.emission;
                 if (far.known) {
-                    incoming = emitted + sun_light(n2, bounce_dir, m2, far.visibility) +
+                    incoming = emitted + sun_light(n2, bounce_dir, m2, far.visibility, p2) +
                                m2.albedo * (1.0 - m2.metallic) * far.indirect;
 
                     // A mirror at the far end reflects as well, and this is the whole of how a
@@ -2652,7 +2677,7 @@ void main() {
                                              trace.control.z, state);
         }
 
-        radiance += sun_light(normal, dir, m, visibility) +
+        radiance += sun_light(normal, dir, m, visibility, point) +
                     m.albedo * (1.0 - m.metallic) * here.indirect + reflection;
     }
     // The air between here and there is charged in write_pixel, which is the only place every

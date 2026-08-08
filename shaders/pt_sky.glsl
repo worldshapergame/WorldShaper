@@ -262,56 +262,14 @@ float sky_fbm(vec2 p) {
 }
 
 // ---------------------------------------------------------------------------------------
-// Cloud
+// The cloud used to be here: a two-dimensional noise projected onto a dome at infinity, and the
+// note in its place said it was crude and still earned its keep. It did. It is a marched volume at
+// real altitudes now — shaders/pt_clouds.glsl — which this file deliberately knows nothing about,
+// because a volume has to be integrated along a ray from where that ray starts and everything here
+// only ever knew a direction. Whoever asks for the sky composites the cloud in front of it.
 //
-// Crude, and it still earns its place: a perfectly clear sky is the one thing no photograph of
-// a building has ever had.
-//
-// The deck is projected as dir.xz / (dir.y + 0.32). The offset in the denominator is not a
-// guard against dividing by zero, it is the whole shape of the thing: a true 1/y projection
-// puts unbounded detail at the horizon, which aliases into a band that no amount of
-// accumulation clears. This compresses the deck towards the horizon the way perspective does
-// and then stops, so the last few degrees are thin haze rather than moire.
-//
-// Static, deliberately. The accumulator averages hundreds of frames of the same sky; a cloud
-// that moved between them would smear rather than drift. Animating it needs a time push
-// constant AND the CPU resetting the accumulation when it changes, on exactly the rule the
-// camera already obeys.
-const float kCloudScale = 2.6;
-const float kCloudLevel = 0.50;   // fbm above this is cloud: about a third of the sky
-const float kCloudSoft  = 0.26;   // and this much of the fbm's range is the edge of one
-const float kCloudSunlit = 0.10;  // a sunlit top comes out near five times the zenith sky,
-                                  // which is where a real cumulus sits against a real one
-
-// Density of cloud in a direction, 0 clear and 1 a thick core.
-float cloud_density(vec3 dir) {
-    vec2 p = dir.xz / (dir.y + 0.32) * kCloudScale;
-    return smoothstep(kCloudLevel, kCloudLevel + kCloudSoft, sky_fbm(p));
-}
-
-// What a cloud is worth, given the clear sky it is standing in.
-//
-// Lit from above by the sun and filled from below and behind by the sky, which is the whole of
-// why a cloud goes orange at sunset and grey under an overcast one: it is not painted, it is
-// the colour of whatever is lighting it. Nothing here is a fixed colour, so there is no
-// constant that has to be kept in step with the time of day.
-vec3 cloud_radiance(vec3 dir, vec3 clear, float thickness) {
-    // Scattered without preference for wavelength, so a cloud is much less blue than the air
-    // around it even when the air is all that is lighting it.
-    float grey = dot(clear, vec3(0.2126, 0.7152, 0.0722));
-    vec3 filled = mix(clear, vec3(grey), 0.6);
-
-    // Thin edges take the sun almost undimmed and thick cores are in their own shadow, which
-    // is the difference between a cumulus and a grey blanket.
-    vec3 body = cloud_sunlight() * (kCloudSunlit * mix(1.0, 0.22, thickness)) +
-                filled * mix(2.0, 0.85, thickness);
-
-    // Forward scattering: the rim that lights up when a cloud is between the eye and the sun.
-    float forward = max(dot(dir, trace.sun.xyz), 0.0);
-    body += cloud_sunlight() * (0.05 * pow(forward, 14.0) * (1.0 - 0.7 * thickness));
-    return body;
-}
-
+// cloud_sunlight above is kept and still used: it is the sun's colour at cloud altitude, which is
+// a property of the air between the sun and the deck rather than of the deck.
 // ---------------------------------------------------------------------------------------
 // Night
 //
@@ -473,10 +431,6 @@ vec3 sky_evaluate(vec3 dir, bool points) {
         // which is not a fade for the look of it: a deck at two kilometres genuinely is not in
         // front of ground a kilometre away, and carried the full twelve degrees it smears into
         // vertical streaks, because the projection is constant down a column of one bearing.
-        float edge_cloud = cloud_density(edge) * (1.0 - smoothstep(0.0, 0.05, -dir.y));
-        if (edge_cloud > 0.0) {
-            haze = mix(haze, cloud_radiance(edge, haze, edge_cloud), edge_cloud);
-        }
         return mix(ground, haze, air);
     }
 
@@ -495,10 +449,6 @@ vec3 sky_evaluate(vec3 dir, bool points) {
 
     // Cloud last, over everything the sky itself is made of, because a cloud is in front of the
     // stars and in front of the air.
-    float thickness = cloud_density(d);
-    if (thickness > 0.0) {
-        radiance = mix(radiance, cloud_radiance(d, clear, thickness), thickness);
-    }
 
     if (points && to_moon > trace.sun.w) {
         // The maria, so it reads as the moon and not as a hole punched in the sky. Flat, with
@@ -510,8 +460,9 @@ vec3 sky_evaluate(vec3 dir, bool points) {
         vec2 face = vec2(dot(d, tangent), dot(d, cross(axis, tangent))) /
                     sqrt(max(1.0 - trace.sun.w * trace.sun.w, 1e-9));
         float mare = smoothstep(0.30, 0.72, sky_fbm(face * 2.4 + 8.0));
-        radiance += vec3(0.95, 1.00, 1.09) * (kMoonDisc * night * mix(0.58, 1.0, mare) *
-                                              (1.0 - thickness));
+        // No cloud term: the deck is a volume in front of this now, and whoever composites it
+        // attenuates the moon along with everything else the sky returned.
+        radiance += vec3(0.95, 1.00, 1.09) * (kMoonDisc * night * mix(0.58, 1.0, mare));
     }
 
     // The sun's disc, so a mirror reflects something rather than a flat gradient, and drawn

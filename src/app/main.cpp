@@ -849,6 +849,13 @@ private:
     f32 prev_up_[3]{0.0f, 1.0f, 0.0f};
     i64 prev_camera_chunk_[3]{};
     bool motion_blur_ = true;
+
+    // The weather. 0 is a clear sky and 1 an overcast; a shade under a half is a fair-weather day
+    // with cumulus in it, which is what a building wants to be photographed under.
+    f32 cloud_coverage_ = 0.45f;
+    // The low deck's wind in metres a second. Six is a gentle breeze; the higher decks derive
+    // their own from it, faster and veered, in shaders/pt_clouds.glsl.
+    f32 cloud_wind_[2]{5.0f, 2.0f};
     bool accum_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
     GpuImage visibility_image_;
     GpuImage render_target_;
@@ -2229,6 +2236,13 @@ void Application::record_frame(f32 time_seconds) {
         // not a longer exposure, it is the same exposure arriving late.
         params.motion[0] = motion_blur_ ? kShutterFraction : 0.0f;
         params.motion[1] = kLongestStreak;
+
+        // The weather. Coverage is what kind of day it is; the time is what moves the decks, and
+        // moving the decks is what moves their shadows across the ground.
+        params.sky_cloud[0] = cloud_coverage_;
+        params.sky_cloud[1] = time_seconds;
+        params.sky_wind[0] = cloud_wind_[0];
+        params.sky_wind[1] = cloud_wind_[1];
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
         // blurs against the frame before it rather than against itself.

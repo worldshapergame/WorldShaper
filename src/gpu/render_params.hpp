@@ -117,8 +117,15 @@ struct RenderParams {
     // y: the longest streak allowed, in pixels, so a fast turn cannot cost an unbounded number of
     // taps. z and w spare.
     f32 motion[4];
+
+    // The weather. x is coverage, 0 clear to 1 overcast; y is the time in seconds, which is what
+    // moves the decks and therefore their shadows. See shaders/pt_clouds.glsl.
+    f32 sky_cloud[4];
+    // The low deck's wind, in metres a second. Higher decks are derived from it: faster with
+    // altitude and veered, which is both true and what makes a sky read as deep.
+    f32 sky_wind[4];
 };
-static_assert(sizeof(RenderParams) == 1520 + 80, "RenderParams must match the GLSL block");
+static_assert(sizeof(RenderParams) == 1520 + 80 + 32, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

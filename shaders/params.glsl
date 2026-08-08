@@ -38,3 +38,7 @@
     vec4 prev_right;
     vec4 prev_up;
     vec4 motion;          // x shutter as a fraction of a frame, y longest streak in pixels
+
+    // Weather. See shaders/pt_clouds.glsl.
+    vec4 sky_cloud;       // x coverage 0 clear to 1 overcast, y time in seconds, zw spare
+    vec4 sky_wind;        // xy the low deck's wind in metres a second, zw spare
