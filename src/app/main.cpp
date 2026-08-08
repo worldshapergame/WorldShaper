@@ -865,6 +865,11 @@ private:
     bool frame_stats_zeroed_ = false;   // the very first frame has no previous frame to read
     bool path_trace_ = false;
     u32 trace_samples_ = 0;      // samples accumulated since the last reset
+    // How many more frames an edited world holds its accumulator down. Long enough that the light
+    // around the edit has actually moved, short enough that it is over before anybody looks for it.
+    static constexpr u32 kEditSettleFrames = 20;
+    static constexpr f32 kEditKeepsWeight = 24.0f;
+    u32 edited_recently_ = 0;
 
     // Holds the frame rate by spending detail where it is worth most. Measured on the machine
     // it is running on, once, the first time the game starts. See documentation/19.
@@ -2494,9 +2499,26 @@ void Application::record_frame(f32 time_seconds) {
     //
     // This is also why light "did not update properly" anywhere else. Anything streaming in
     // behind you left its stand-in's brightness baked into the picture.
-    if (path_trace_ && (batch.chunks_added > 0 || batch.chunks_evicted > 0 ||
-                        batch.chunks_refreshed > 0)) {
-        trace_samples_ = 0;
+    // Arriving or leaving is a different world; a chunk being EDITED is not.
+    //
+    // The reasoning above holds when a summary block becomes a real wall: the samples in the
+    // accumulator were taken of geometry that was never there, and they have to go. It does not
+    // hold for a voxel placed with the chisel. That chunk is refreshed, the reset fires, and the
+    // running mean of the entire screen goes back to a single sample — which is a raw path traced
+    // sample, which is noise with a colour in it. Reported as blue and cyan artefacts flashing over
+    // everything whenever a voxel is placed, settling a moment later.
+    //
+    // The mean was very nearly right, because one voxel is not a new world. What is wrong after an
+    // edit is only how much that mean should be TRUSTED, so the accumulator is demoted rather than
+    // emptied: the average stays exactly where it was and a few dozen frames are enough to replace
+    // it. See the weight clamp in pt_post.glsl.
+    if (path_trace_) {
+        if (batch.chunks_added > 0 || batch.chunks_evicted > 0) {
+            trace_samples_ = 0;
+            edited_recently_ = 0;
+        } else if (batch.chunks_refreshed > 0) {
+            edited_recently_ = kEditSettleFrames;
+        }
     }
 
     world_buffers_.upload_tables(cmd, types_);
@@ -2782,6 +2804,9 @@ void Application::record_frame(f32 time_seconds) {
         params.motion[1] = kLongestStreak;
         // And which cloud history holds this frame's answer, for the tracer to read.
         params.motion[2] = static_cast<f32>(cloud_parity_);
+        // Nought means "trust the accumulator as far as it has earned"; anything else caps it.
+        params.motion[3] = (edited_recently_ > 0) ? kEditKeepsWeight : 0.0f;
+        if (edited_recently_ > 0) --edited_recently_;
 
         // The weather. Coverage is what kind of day it is; the time is what moves the decks, and
         // moving the decks is what moves their shadows across the ground.

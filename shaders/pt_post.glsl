@@ -601,6 +601,21 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
     if (total.w >= kAccumWindow) {
         total *= (kAccumWindow - 1.0) / kAccumWindow;
     }
+
+    // The world was edited. Keep what the accumulator says and stop TRUSTING it so much.
+    //
+    // Throwing it away instead is what covers the screen in coloured speckle every time a voxel is
+    // placed: a running mean of one sample is a raw path traced sample, and a raw path traced sample
+    // is noise with a colour. The whole picture went back to that for a second, everywhere, because
+    // one voxel changed somewhere.
+    //
+    // But the mean was very nearly right — one voxel is not a new world — and it is only its WEIGHT
+    // that is now overstated, since the next samples need to be able to move it. Scaling the pair
+    // keeps the average exactly where it was and lets a few dozen frames replace it, which is the
+    // difference between a picture that settles and a picture that starts again.
+    if (push.motion.w > 0.0 && total.w > push.motion.w) {
+        total *= push.motion.w / total.w;
+    }
     // The outlier test goes here, before the sum and not after it, because the sum is what it
     // exists to protect: a spike that gets in is in for the length of the window.
     total.rgb += reject_outlier(pixel, radiance, total);

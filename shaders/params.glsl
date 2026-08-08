@@ -37,7 +37,9 @@
     vec4 prev_forward;
     vec4 prev_right;
     vec4 prev_up;
-    vec4 motion;          // x shutter as a fraction of a frame, y longest streak in pixels
+    vec4 motion;          // x shutter as a fraction of a frame, y longest streak in pixels,
+                          // z which cloud history holds this frame, w how much accumulated weight
+                          // an edited world is allowed to keep -- zero means no limit
 
     // Weather. See shaders/pt_clouds.glsl.
     vec4 sky_cloud;       // x coverage 0 clear to 1 overcast, y time in seconds, zw spare
