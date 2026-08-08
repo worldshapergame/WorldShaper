@@ -1,0 +1,43 @@
+# Whether a paint rule reaches the voxels the displacement made.
+#
+# Every rule here is written the way an author would write it if nobody had ever been bitten:
+# `where=<shape> below=0`, the plain reading of "this material where that shape is inside". The
+# shape is then displaced by five centimetres of grain, and displacement moves a surface outward
+# as often as inward. A voxel that exists only because the grain pushed the surface out sits
+# OUTSIDE the shape its own rule names.
+#
+# The first coat is therefore a colour nothing in the scene should ever be. Any magenta in the
+# render is a voxel that fell through every rule to the fallback -- the rind. There should be
+# none of it anywhere.
+
+metre 32
+bounds -4 -0.6 -6   4 3 2.5
+
+# Nothing is meant to come out this colour. It exists to be conspicuous when it does.
+material rind    rgb=236,30,190 rough=200
+
+material floor   rgb=152,150,146 rough=225
+material red     rgb=188,52,44   rough=205
+material green   rgb=58,148,72   rough=205
+material blue    rgb=52,80,190   rough=205
+
+let dp_slab  = box -4 -0.6 -6   4 0 2.5 round=0.02
+let dp_ball  = sphere -1.9 0.8 -1.9 r=0.8
+let dp_block = box 0.1 0 -2.6   1.5 1.5 -1.2 round=0.05
+let dp_post  = cylinder 2.7 0.95 -3.6 r=0.42 h=1.9 axis=y
+
+let dp_all   = union { dp_slab dp_ball dp_block dp_post }
+
+# Coarse and deep on purpose: at thirty-two voxels to the metre this is a rind more than a voxel
+# and a half thick, which is the difference between a bug you can see in a render and one you
+# have to count pixels to find.
+let grain    = fbm size=0.09 octaves=3 seed=17
+let dp_all   = displace { dp_all grain } amount=0.05
+
+paint rind
+paint floor where=dp_slab  below=0
+paint red   where=dp_ball  below=0
+paint green where=dp_block below=0
+paint blue  where=dp_post  below=0
+
+solid dp_all

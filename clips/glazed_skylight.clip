@@ -1,0 +1,42 @@
+# Three shadows of the same hole in the same roof, side by side.
+#
+# The complaint: the primary ray learned to pass through glass, so a glazed opening looks like an
+# opening, and the shadow ray did not, so the room behind it was lit exactly as if the opening
+# had been bricked up. A pane standing in a field casts a shadow you have to go looking for; a
+# room only has the light that gets in, which is why the test is a room.
+#
+# One opening in the roof, in three strips: the first left open, the second glazed clear, the
+# third glazed green. The sun stands at (0.4, 0.85, 0.3), so all three cast their patch onto the
+# same stretch of floor about a metre and a half to the -x, -z side of the opening, in three
+# bands that touch. Anything to argue about — is the ray clearing the jamb, is the pane really
+# glass — is answered by comparing the bands with each other rather than by trusting a
+# calculation, because they differ in nothing but what fills the hole.
+#
+# What it should look like: band one full sun, band two very slightly dimmer (clear glass takes
+# about a twentieth), band three markedly dimmer and, when the shadow entry can carry a colour,
+# green. What it looked like before: three bands of nothing, and a room lit only by bounce.
+
+metre 32
+bounds -0.4 -0.4 -0.4   6.4 3.6 6.4
+
+material stone      rgb=178,174,166 rough=215
+material clearglass rgb=232,240,244 rough=14 opacity=26 ior=1.5
+material greenglass rgb=120,210,160 rough=14 opacity=52 ior=1.5 absorb=6,1,4
+
+let sk_shell   = box 0 0 0        6 3.2 6
+let sk_cavity  = box 0.3 0.3 0.3  5.7 2.9 5.7
+let sk_hole    = box 1.2 2.8 1.6  4.8 3.3 3.6
+let sk_walls   = difference { sk_shell sk_cavity }
+let sk_walls   = difference { sk_walls sk_hole }
+
+# The glazing, set in the roof's own thickness. The first strip, 1.2 to 2.4, is left open.
+let sk_clear   = box 2.4 2.9 1.6  3.6 3.02 3.6
+let sk_green   = box 3.6 2.9 1.6  4.8 3.02 3.6
+
+let sk_all = union { sk_walls sk_clear sk_green }
+
+paint stone
+paint clearglass where=sk_clear below=0.02
+paint greenglass where=sk_green below=0.02
+
+solid sk_all
