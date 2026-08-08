@@ -1,0 +1,7 @@
+Strawberry Shader
+-----------------
+
+Techniques in WorldShaper's path tracer are adapted from the Strawberry shaderpack, used with the
+author's permission, given directly. The pack carried no licence file.
+
+Nothing is copied verbatim. What was taken is described where it is used.

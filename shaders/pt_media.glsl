@@ -372,6 +372,55 @@ float media_visibility(vec3 p, ivec2 pixel, uint frame, bool may_measure, inout 
     return read_shadow(slot);
 }
 
+// ---- structure in the fog ----------------------------------------------------------------
+//
+// Adapted from Derivative's volumetric fog, which shapes its density with several octaves of noise
+// drifting on the wind instead of leaving it a smooth function of height. The difference is between
+// haze -- an even wash that thickens with distance -- and WEATHER: banks of it lying in the low
+// ground, thinner patches you can see through, an edge that moves.
+//
+// # Where it is applied, and why not where the original applies it
+//
+// The original multiplies its density by this and marches the result. That cannot be done here, and
+// the reason is worth setting down because it is the good property of this file.
+//
+// The transmittance and the sampling above are CLOSED FORM. Density is an exponential in height and
+// height is linear along a ray, so the optical depth integrates analytically and the scattering
+// point can be drawn from the transmittance exactly. That is what makes four samples enough, and
+// what stops the fog's thickness depending on where the samples happened to land. Multiplying a
+// noise into the density destroys all of it: no closed form, no exact inverse, and the fog's
+// opacity becomes an estimate with variance in it -- which is noise in the one quantity that must
+// not be noisy, because it multiplies the entire scene behind it.
+//
+// So the noise shapes what each parcel SCATTERS rather than how much it extinguishes. The sampler
+// stays exact, the fog behind stays smooth, and the structure appears where it can be seen -- in
+// the light the fog sends to the eye, which is the whole of what fog looks like when it is lit.
+// The extinction is then slightly smoother than the scattering implies. For fog thin enough to see
+// structure in, the two are close, and it is the honest approximation of the pair.
+float fog_structure(vec3 local_p) {
+    vec3 world_m = world_position(local_p) / kVoxelsPerMetre;
+
+    // Drifting, at a fraction of the cloud deck's speed. Fog sits in the boundary layer where the
+    // ground drags on the wind, so it moves noticeably slower than anything above it.
+    vec2 wind = cloud_drift() * push.sky_cloud.y * 0.12;
+    vec3 at = (world_m - vec3(wind.x, 0.0, wind.y)) * (1.0 / 78.0);
+
+    // Four octaves at four to one. Fog has no fine structure worth resolving -- it is diffusion
+    // acting on a temperature field, and diffusion is a low-pass filter -- so the octaves that
+    // matter are the ones several metres across and up.
+    float noise = 0.0, weight = 0.5;
+    for (int i = 0; i < 4; ++i, weight *= 0.5) {
+        noise += weight * perlin_noise(at);
+        at = kOctaveTurn * at * 4.0;
+    }
+
+    // Contrast, then normalised so the AVERAGE is one. Without that last step, turning structure on
+    // would silently change how thick the fog is, and the setting for it would stop meaning what it
+    // says. This redistributes the fog it was already given and never adds any.
+    float shaped = smoothstep(0.34, 0.63, noise);
+    return mix(0.30, 1.78, shaped) * (1.0 / 1.04);
+}
+
 // ---------------------------------------------------------------------------------------
 
 vec3 apply_media(vec3 radiance, vec3 origin, vec3 dir, float distance) {
@@ -424,6 +473,21 @@ vec3 apply_media(vec3 radiance, vec3 origin, vec3 dir, float distance) {
         // at a screen's worth of rays takes no time at all.
         uint measuring = min(uint(rand(state) * float(kMediaSteps)), kMediaSteps - 1u);
 
+        // The cloud shadow, ONCE for the ray rather than once per sample.
+        //
+        // It is a six-step march through the deck and it was by far the most expensive thing added
+        // here -- with four samples each paying for it the frame went from 10 ms to 29. What it
+        // returns varies over KILOMETRES, because that is the size of the cloud casting it, while
+        // the four samples of one ray are spread over a few hundred metres of fog. Asking it four
+        // times returned four copies of one answer at four times the price.
+        //
+        // Taken at the median of the scattering distribution, which is where the fog's contribution
+        // is actually centred.
+        float median_t = media_distance_at(med, y, dir.y,
+                                           -log(max(1.0 - 0.5 * scattered, 1.0e-30)));
+        vec3 shade_at = world_position(origin + dir * min(median_t, length));
+        float deck = cloud_shadow(shade_at, world_height_metres(shade_at));
+
         float gathered = 0.0;
         for (uint i = 0u; i < kMediaSteps; ++i) {
             // Stratified over the transmittance, so the four samples cover the fog between them
@@ -431,8 +495,14 @@ vec3 apply_media(vec3 radiance, vec3 origin, vec3 dir, float distance) {
             float u = (float(i) + rand(state)) / float(kMediaSteps);
             float target = -log(max(1.0 - u * scattered, 1.0e-30));
             float t = media_distance_at(med, y, dir.y, target);
-            gathered += media_visibility(origin + dir * min(t, length), pixel, trace.control.z,
-                                         i == measuring, state);
+            vec3 at = origin + dir * min(t, length);
+
+            // Cloud shadow ON THE AIR, not only on the ground. A shaft of sun through fog is only a
+            // shaft because the light around it was stopped by something; with the deck ignored
+            // here, an overcast sky still put full sunbeams through the fog under it, and the beams
+            // were the brightest thing in a scene whose ground had correctly gone dark.
+            gathered += media_visibility(at, pixel, trace.control.z, i == measuring, state) *
+                        deck * fog_structure(at);
         }
 
         // Divided by extinction rather than multiplied by a density: what survives the change of
