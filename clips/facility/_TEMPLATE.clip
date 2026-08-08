@@ -1,0 +1,44 @@
+# <name> — <one line saying what this part is>
+#
+# Copy this file to clips/facility/<name>.clip to add a new part to the building. Adding a room,
+# a wing, a machine, a courtyard — anything — is four lines of change and one new file:
+#
+#   1. copy this file to clips/facility/<name>.clip
+#   2. add `include "facility/<name>.clip"` to clips/facility.clip, in the right group
+#   3. add `part_<name>` to the `shell` or `inside` union in that file
+#   4. if it hollows anything, add `void_<name>` to the `hollowed` difference
+#
+# and, if it reaches outside the current sampled box, widen `bounds` in _contract.clip.
+#
+# That is the whole procedure, and it is the reason the building is written this way. The old
+# facility was one file of six hundred lines; adding a room to it meant reading all six hundred
+# and hoping. This one is twenty files that do not know about each other, and a new one is
+# genuinely new work rather than an edit to somebody else's.
+#
+# Rules, in full, in clips/facility/BRIEF.md. The short version:
+#   - every dimension is a multiple of the module M = 0.45 m
+#   - one part named part_<name>; every other binding starts with <name>_
+#   - symmetric about x = 0 unless there is a reason not to be
+#   - nothing floats; overlap what you stand on by 0.05 m
+#   - paint only where your own shapes are, and always elow=0.02, never elow=0 -- the
+#     building is displaced by 12 mm of grain at the end and a test at zero misses the voxels
+#     that displacement created, leaving a pale rind over your part
+#   - risers 0.18, runs 0.32, head height 2.10, doors 2.40
+#   - every stone edge gets a small round
+#
+# Say here what part of the ENGINE this part is meant to put under load, because that is half of
+# why the building exists. Thin matter? A hollow only light can reach through a small opening? A
+# material nothing else uses? Write it down so the next person does not delete it by accident.
+
+include "_contract.clip"
+
+let <name>_body = box 0 0 0  1 1 1 round=0.02
+
+let part_<name> = <name>_body
+
+# If this part removes matter — a room, a doorway, a window — bind it here and add it to the
+# manifest's `hollowed` difference. Always bind it, even when it is nothing, so the manifest
+# never has to know whether you did.
+# let void_<name> = <shape>
+
+# paint limestone where=<name>_body below=0.02

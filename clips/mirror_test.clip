@@ -48,17 +48,22 @@ let grain = fbm size=0.06 octaves=3 seed=11
 let mt_all = union { mt_slab mt_posts mt_ball_a mt_ball_b mt_ball_c mt_kerb }
 let mt_all = displace { mt_all grain } amount=0.004
 
+# Every test is widened past the 4 mm the grain displaces the surface by. A voxel that only
+# exists because the grain pushed the surface outward sits OUTSIDE the shape its rule names, so
+# elow=0 misses it, no rule matches, and it falls back to the first coat -- a rind of grey
+# voxels on every outward-facing surface. Displacement moves a surface; it does not move which
+# part a voxel belongs to, and the test has to say so.
 paint floor_satin
-paint floor_polish where=mt_left below=0
-paint floor_satin  where=mt_right below=0
-paint post_red     where=mt_row_a below=0
-paint post_blue    where=mt_row_b below=0
-paint post_white   where=mt_row_c below=0
-paint post_red     where=mt_row_d below=0
-paint chrome       where=mt_ball_a below=0
-paint brushed      where=mt_ball_b below=0
-paint gold         where=mt_ball_c below=0
-paint kerb         where=mt_kerb below=0
+paint floor_polish where=mt_left below=0.008
+paint floor_satin  where=mt_right below=0.008
+paint post_red     where=mt_row_a below=0.008
+paint post_blue    where=mt_row_b below=0.008
+paint post_white   where=mt_row_c below=0.008
+paint post_red     where=mt_row_d below=0.008
+paint chrome       where=mt_ball_a below=0.008
+paint brushed      where=mt_ball_b below=0.008
+paint gold         where=mt_ball_c below=0.008
+paint kerb         where=mt_kerb below=0.008
 
 variation colour=0.020 rough=0.040 seed=5
 
