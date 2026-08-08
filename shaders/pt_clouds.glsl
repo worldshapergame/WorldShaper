@@ -218,11 +218,6 @@ float cloud_hash1(vec3 cell) {
     return float(cloud_key(ivec3(cell)) >> 8) * (1.0 / 16777216.0);
 }
 
-vec3 cloud_hash3(vec3 cell) {
-    uint h = cloud_key(ivec3(cell));
-    return vec3(float(h & 0x3FFu), float((h >> 10) & 0x3FFu), float((h >> 20) & 0x3FFu)) *
-           (1.0 / 1023.0);
-}
 
 // Ordinary gradient-ish value noise: smooth, and on its own it makes fog.
 float perlin_noise(vec3 p) {
@@ -316,7 +311,6 @@ const vec3 kWindNoise = vec3(2e-3, 2e-4, 1e-3);
 // honest cumulus at honest speed would cross the sky at a few hundred metres a second.
 const float kCloudSpeed = 0.08;
 
-vec3 cloud_wind() { return kWindNoise * push.sky_cloud.y * kCloudSpeed; }
 
 // How fast the pattern crosses the world, in metres per second of game time. The reprojection needs
 // this to follow a cloud rather than the pixel it used to be under, and it is derived here rather

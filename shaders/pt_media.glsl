@@ -72,456 +72,232 @@ vec4 media_fog_shape() { return trace.fog_shape; }
 // for putting the glass tint there: a dozen places write a pixel and threading anything through
 // all of them is how one gets missed.
 
-struct Medium {
-    vec3 scatter;    // sigma_s, per voxel of path, at the reference height
-    float extinct;   // sigma_t, per voxel of path, at the reference height
-    float g;         // Henyey-Greenstein asymmetry: 0 isotropic, positive forward
-    float height;    // e-folding height in voxels; zero or less means uniform density
-    float base;      // the world height, in absolute voxels, the coefficients are quoted at
+// ---- what this file is, and what it deliberately is not -----------------------------------
+//
+// Fog and haze in the world the player is standing in. NOT a planetary atmosphere.
+//
+// That distinction was learned by writing the other thing first. A full Rayleigh-Mie-ozone model
+// went in here, with the measured coefficients, and it produced a black sky and a white ground. Two
+// reasons, and both are structural rather than tuning:
+//
+//   - pt_sky.glsl ALREADY computes atmospheric colour for every direction. A second atmosphere
+//     applied on top of it does not add realism, it double-counts: the sky's own light is
+//     extinguished by air it has already been through.
+//
+//   - A ray that hits nothing carries the far plane as its length. Integrating sea-level air over
+//     that distance gives an optical depth in the hundreds, and the sky goes to black.
+//
+// So the species here are the ones that live near the ground and that the sky shader knows nothing
+// about. The real-world numbers below are for AUTHORING them, which is where they belong.
+
+// ---- Koschmieder's law, which is how fog is actually specified ----------------------------
+//
+// Meteorological visibility is defined as the distance at which a black object against the horizon
+// falls to two per cent contrast. That fixes the relationship between what an observer reports and
+// what the renderer needs:
+//
+//     extinction = ln(1 / 0.02) / visibility = 3.912 / visibility
+//
+// It is the honest way to author fog because it is how fog is MEASURED. Every published figure is a
+// visibility band, and each of these is a real definition rather than a preset:
+//
+//     fog          under 1 km      extinction over 3.9e-3 per metre
+//     mist         1 to 2 km       2.0e-3 to 3.9e-3
+//     haze         2 to 5 km       7.8e-4 to 2.0e-3
+//     clear        over 10 km      under 3.9e-4
+//     exceptional  over 50 km      under 7.8e-5
+//
+// --fog takes extinction per metre and main.cpp divides by the clip's voxels-per-metre once, so
+// everything below is per VOXEL and no conversion happens in this file. Converting here with the
+// cloud module's fixed thirty-two was tried and is wrong: the metre is a property of the clip.
+
+// Droplets are tens of times the wavelength of light, which decides two things that are usually got
+// wrong. Fog is GREY -- Mie scattering off particles that large is colourless to within a per cent,
+// so there is no wavelength term here and adding one would be inventing physics. And water barely
+// absorbs visible light, so nearly everything scattered comes back out: fog is the BRIGHTEST thing
+// in an overcast landscape, not a grey veil that darkens it.
+const float kFogAlbedo = 0.99;
+
+// Haze sits above the fog and is thinner, broader and made of dry aerosol rather than droplets --
+// dust, salt, smoke. Its particles are smaller, so it is more forward-scattering still and it does
+// absorb a little.
+const float kHazeAlbedo = 0.90;
+const float kHazeOfFog = 0.12;      // how much haze comes with a given fog, by extinction
+const float kHazeHeightScale = 8.0; // and how much further up it reaches
+
+struct Air {
+    float fog_extinct;    // per voxel, at the reference height
+    float fog_g;
+    float fog_height;     // e-folding, voxels; zero or less means uniform
+    float fog_base;       // absolute world height in voxels, where the coefficient is quoted
+    float haze_extinct;
+    float haze_height;
+    bool any;
 };
 
-Medium world_medium() {
+Air world_air() {
     vec4 fog = media_fog();
     vec4 shape = media_fog_shape();
-    Medium m;
-    m.extinct = max(fog.w, 0.0);
-    // Scattering cannot exceed extinction: the difference is what the medium absorbs, and a
-    // negative absorption is a medium that creates light. Clamped rather than trusted, because
-    // the parameters are authored and an authored number is eventually wrong.
-    m.scatter = clamp(fog.xyz, vec3(0.0), vec3(m.extinct));
-    // Just short of one either way. At exactly one the phase function's denominator is zero in
-    // the forward direction, which is an infinity in a pixel rather than a bright one.
-    m.g = clamp(shape.x, -0.95, 0.95);
-    m.height = shape.y;
-    m.base = shape.z;
-    return m;
+
+    Air a;
+    a.fog_extinct = max(fog.w, 0.0);
+    // Just short of one either way: at exactly one the phase function's denominator is zero in the
+    // forward direction, which is an infinity in a pixel rather than a bright one.
+    a.fog_g = clamp(shape.x, -0.95, 0.95);
+    a.fog_height = shape.y;
+    a.fog_base = shape.z;
+
+    // Haze is derived rather than authored. Fog does not occur in clean air -- the droplets need
+    // something to condense on -- so a scene with fog in it has aerosol above the fog by
+    // construction, and asking for both separately would be asking for a combination that does not
+    // happen. It is what keeps a distant hill from being perfectly sharp above a valley full of fog.
+    a.haze_extinct = a.fog_extinct * kHazeOfFog;
+    a.haze_height = a.fog_height > 0.0 ? a.fog_height * kHazeHeightScale : 0.0;
+
+    a.any = a.fog_extinct > 0.0;
+    return a;
 }
 
-// ---- density, and the optical depth of a straight line through it ------------------------
-//
-// Density falls off exponentially with height, so fog pools in a valley and thins above a roof.
-// One e-folding scale and one reference height is the whole model, and it is the model every
-// atmosphere is written with, because the alternative -- a density that is a function of the
-// world -- is a second volume to stream.
-float media_density(Medium med, float y) {
-    if (med.height <= 0.0) return 1.0;
-    // Clamped because the exponent is a world height over a scale height and both are authored.
-    // Below the reference height this grows, and at forty it is already 2.4e17.
-    return exp(clamp((med.base - y) / med.height, -40.0, 40.0));
+// The density of an exponential layer at a height, relative to its reference.
+float layer_density(float y, float base, float scale) {
+    if (scale <= 0.0) return 1.0;
+    return exp(clamp((base - y) / scale, -40.0, 40.0));
 }
 
-// The optical depth of `length` voxels of medium, starting at world height `y` on a ray whose
-// vertical component is `dy`.
+// The integral of that layer along a ray, in voxel-units of reference density.
 //
-// Closed form rather than summed over the steps below, because the density is an exponential in
-// height and height is linear in t, so the integral is another exponential. It costs one call to
-// exp and it removes the whole class of error where the same fog is a different thickness at
-// four steps and at sixteen -- which matters here, because the steps below are drawn at random
-// and a transmittance that depended on where they landed would be noise in the one quantity that
-// has no business being noisy.
-float media_depth(Medium med, float y, float dy, float length) {
+// Closed form, and keeping it closed form is the most important property of this file.
+//
+// Density is an exponential in height and height is linear in distance along a ray, so the integral
+// is another exponential: one call to exp for a quantity that would otherwise need a march. It is
+// what makes the whole model a handful of instructions rather than a loop, and it is also what stops
+// the fog's thickness depending on where any samples happened to land. Transmittance multiplies the
+// entire scene behind it, so noise in it is noise in everything.
+float layer_integral(float y0, float dy, float length, float base, float scale) {
     if (length <= 0.0) return 0.0;
-    float rho = media_density(med, y);
-    if (med.height <= 0.0) return med.extinct * rho * length;
+    float rho = layer_density(y0, base, scale);
+    if (scale <= 0.0) return rho * length;
 
-    float k = dy / med.height;
-    // Near-horizontal, or a scale height so large the ramp over the segment cannot be told from
-    // a straight line. The closed form divides by k, so this is a correctness guard as well as a
-    // cheaper path.
-    if (abs(k) * length < 1.0e-3) return med.extinct * rho * length;
-    return med.extinct * rho * (1.0 - exp(clamp(-k * length, -40.0, 40.0))) / k;
+    float k = dy / scale;
+    // Near-horizontal, or a scale height so large the ramp cannot be told from a straight line. The
+    // closed form divides by k, so this is a correctness guard and not only a cheaper path.
+    if (abs(k) * length < 1.0e-3) return rho * length;
+    return rho * (1.0 - exp(clamp(-k * length, -40.0, 40.0))) / k;
 }
 
-// And the inverse: how far along the ray a given optical depth is reached. This is what lets a
-// sample be drawn from the transmittance itself rather than spread evenly along a ray that is
-// mostly empty -- see the loop in apply_media.
-float media_distance_at(Medium med, float y, float dy, float depth) {
-    float rho = media_density(med, y);
-    float a = med.extinct * rho;
-    if (a <= 0.0) return 0.0;
-    if (med.height <= 0.0) return depth / a;
-
-    float k = dy / med.height;
-    if (abs(k) * (depth / a) < 1.0e-3) return depth / a;
-    return -log(max(1.0 - k * depth / a, 1.0e-30)) / k;
-}
-
-// Henyey-Greenstein, so the medium can be forward-scattering the way real haze is: looking into
-// the sun through it is bright and looking away from it is not, which is most of what tells haze
-// apart from a flat grey wash laid over the distance.
-//
-// Normalised over the sphere, so it is a redistribution of the light the medium scatters and
-// never an addition to it.
+// Henyey-Greenstein, normalised over the sphere, so it redistributes what the medium scatters and
+// never adds to it. Forward-heavy for both species here, which is what makes looking into a low sun
+// through fog blinding and looking away from it merely grey.
 float henyey_greenstein(float cos_theta, float g) {
     float gg = g * g;
     float d = max(1.0 + gg - 2.0 * g * cos_theta, 1.0e-4);
     return (1.0 - gg) / (4.0 * kPi * d * sqrt(d));
 }
 
-// ---- does the sun reach this parcel of air? ----------------------------------------------
-
-// The fourth kind of entry in the face table, beside irradiance, shadow and radiance.
-//
-// Its normal is the sun's dominant axis rather than a surface's, because the face it belongs to
-// is the side of the parcel the sun is on. That makes it one value per node per frame, the same
-// from wherever it is read, which is the property that matters.
-const uint kFaceMedia = 3u;
-
-// Four voxels, and fixed -- never chosen from how far away the camera is.
-//
-// Fixed for the reason the shadow's level and the radiance bin's level are both fixed: a level
-// taken from the pixel's footprint makes the *key* a function of where you are standing, so
-// walking towards a beam re-keys every parcel in it at once. That fault has been shipped twice
-// in this renderer, as wedges in the shadows and as a grid of cubes sliding over reflections.
-//
-// Four rather than one because a parcel of air is a volume and volumes are expensive: entries go
-// as the cube of the level, where a surface's go as the square. Four voxels is an eighth of a
-// metre in the test scenes, which is finer than the edge of a real beam is sharp, and the
-// jittered lookup below softens the boundary between two of them into a ramp of that width.
-const uint kMediaLevel = 2u;
-
-// How many samples a parcel wants before the pixels passing through it stop testing for it.
-// The same order as the sun's own entries want on a surface and for the same reason: this is a
-// yes-or-no answer sampled over half a degree of sky, and a few dozen of them already resolve
-// the edge of a beam finer than the eye can see.
-const uint kMediaSamples = 32u;
-
-// A coarser parcel to lean on while a fine one is still thin was written here and taken out
-// again, and the reason is worth keeping so nobody adds it back on the same reasoning.
-//
-// The sun's entries on a surface have one, and the argument transfers on paper: down a long view
-// a parcel is thinner than a pixel, gets one yes-or-no measurement, and ought to defer to the
-// larger piece of air it belongs to. Measured on the beam scene it bought nothing -- the shaft
-// read 41.8 against 42.5 at forty frames and 113.0 against 113.3 at four hundred, which is
-// noise -- and it made the room around the beam slightly worse, 10.1 against 8.9, because a
-// two-metre parent straddles the edge of a shaft and hands some of it to the dark air outside.
-// It also costs a second claim and a second set of atomics on every measurement.
-//
-// The difference from the surface case is that a face is found by *one* ray and a parcel by
-// four, so a parcel a pixel wide is still measured four times by that pixel alone, and its
-// neighbours cross it too. It reaches an answer without help.
-
-// How far the occlusion test may step before it gives up and calls the parcel lit.
-//
-// It steps a whole chunk at a time where the world holds nothing, a whole brick at a time through
-// a chunk that is empty here, and a voxel at a time only inside a brick that holds something --
-// so ninety-six steps crosses several chunks of open air and still resolves a one-voxel roof.
-const uint kMediaShadowSteps = 96u;
-
-// How many parcels a single ray samples. Four, not sixteen, because the samples are drawn from
-// the transmittance itself: each one lands where the fog actually is rather than being spread
-// evenly along a ray that is mostly empty, and this tracer averages a thousand frames of them
-// over a stationary camera. Each one costs a probe into a quarter-gigabyte table, which is what
-// the number is really buying.
-const uint kMediaSteps = 4u;
-
-// Three answers, not two. See media_sun_reaches for why the third one has to exist.
-const int kMediaBlocked = 0;
-const int kMediaClear = 1;
-const int kMediaUnknown = -1;
-
-// How far to the far side of the axis-aligned cell of edge `cell` containing `p`. The skip that
-// makes the walk affordable: one of these crosses an empty brick, or a whole empty chunk, in a
-// single step.
-float media_exit(vec3 p, vec3 dir, float cell) {
-    vec3 base = floor(p / cell) * cell;
-    vec3 far = base + mix(vec3(0.0), vec3(cell), step(vec3(0.0), dir));
-    // A component of dir at zero would divide by nothing; replaced by something small enough
-    // that its boundary is never the nearest one.
-    vec3 safe = mix(dir, vec3(1.0e-6), lessThan(abs(dir), vec3(1.0e-6)));
-    vec3 hit = (far - p) / safe;
-    // A nudge past the boundary, or a ray starting exactly on one never leaves the cell. A
-    // thousandth of a voxel is far below anything the picture can resolve.
-    return max(min(hit.x, min(hit.y, hit.z)), 0.0) + 1.0e-3;
-}
-
-// Does the sun reach this point? Level 0 only, and silent.
-//
-// No detail selection, no summary tiers, no streaming feedback, no materials, no normals: a
-// parcel of air asks whether anything is in the way and nothing else, and this is the whole of
-// what answering it takes. That is why it is not a fourth march.
-//
-// It has three answers rather than two, and that third one is not fastidiousness -- it is the
-// difference between a beam and a room full of milk. A chunk with no record is either empty
-// world or world that has not streamed in yet, and calling both of them clear means that during
-// the second or two a scene takes to arrive, every walk in it comes back lit. Those answers go
-// into the cache, and the cache outlives them: the accumulator is reset when geometry arrives,
-// so the picture starts again clean, and the parcels do not. Measured on the beam scene, that
-// left a dark sealed room reading 13% lit for hundreds of frames after it had finished
-// streaming -- a uniform glow with no cause in the world at all.
-//
-// So the two cases are told apart, by the same occupancy grid march uses to decide whether a
-// missing chunk is worth reporting: level 0 of it answers "does the world have anything here".
-// Nothing there means carry on; something there that has not arrived means this walk has no
-// answer, and a non-answer is not contributed. Zero and "not yet" are different.
-int media_sun_reaches(vec3 from, vec3 towards) {
-    float t = 0.0;
-    for (uint step_index = 0u; step_index < kMediaShadowSteps; ++step_index) {
-        vec3 p = from + towards * t;
-        ivec3 voxel = ivec3(floor(p));
-        ivec3 chunk = ivec3(floor_div(voxel.x, kChunkEdge), floor_div(voxel.y, kChunkEdge),
-                            floor_div(voxel.z, kChunkEdge));
-        // Left the resident box, which march treats as empty by definition -- so nothing further
-        // along this walk can block anything. Without it the walk carries on asking the occupancy
-        // grid about world the renderer does not have, and that grid answers "aliased, assume
-        // occupied" for a cell describing somewhere else entirely, which would turn a clear sky
-        // into a permanent non-answer.
-        if (any(lessThan(chunk, push.bounds_min.xyz)) ||
-            any(greaterThan(chunk, push.bounds_max.xyz))) return kMediaClear;
-
-        uint record = find_record(push.camera_chunk.xyz + chunk);
-        if (record == kNoRecord) {
-            if (coarse_occupied(0, push.camera_chunk.xyz + chunk)) return kMediaUnknown;
-            t += media_exit(p, towards, float(kChunkEdge));   // genuinely empty: cross it whole
-            continue;
-        }
-        ivec3 local = voxel - chunk * kChunkEdge;
-        ivec3 brick = local >> 3;
-        if (!mask_bit(record, 0u, brick)) {
-            t += media_exit(p, towards, 8.0);
-            continue;
-        }
-        if (voxel_solid(brick_slot(record, brick), local & 7)) return kMediaBlocked;
-        t += media_exit(p, towards, 1.0);
-    }
-    // Out of steps. Clear, because every step that got here crossed empty world -- an empty
-    // brick, or a whole empty chunk -- so a walk that runs out has crossed a great deal of
-    // nothing. It is the same answer march gives a shadow ray that reaches kMaxSteps.
-    return kMediaClear;
-}
-
-// The sun's face of a parcel: which side of it the light comes in through. Constant over a
-// frame, so every parcel in the world keys the same way and two rays crossing meet the same
-// entry.
-ivec3 media_face(vec3 towards) {
-    vec3 a = abs(towards);
-    if (a.x > a.y && a.x > a.z) return ivec3(towards.x > 0.0 ? 1 : -1, 0, 0);
-    if (a.y > a.z) return ivec3(0, towards.y > 0.0 ? 1 : -1, 0);
-    return ivec3(0, 0, towards.z > 0.0 ? 1 : -1);
-}
-
-// Is this point outside the world the renderer has? march clips every ray to the resident box
-// and calls everything beyond it empty by definition, so a parcel out there has nothing that can
-// stand between it and the sun.
-bool media_outside_world(vec3 p) {
-    ivec3 chunk = ivec3(floor_div(int(floor(p.x)), kChunkEdge),
-                        floor_div(int(floor(p.y)), kChunkEdge),
-                        floor_div(int(floor(p.z)), kChunkEdge));
-    return any(lessThan(chunk, push.bounds_min.xyz)) ||
-           any(greaterThan(chunk, push.bounds_max.xyz));
-}
-
-// What this parcel of air knows about the sun, and -- on the one sample per pixel per frame that
-// is allowed to -- one more measurement towards knowing it.
-//
-// Nothing is invented. A parcel with no entry yet returns nought and scatters nothing, which is
-// the same answer a surface with no face entry gives: waiting is honest, and an estimate averaged
-// in from somewhere else teaches a volume that light is where it is not. The beam therefore
-// arrives over the first few frames rather than being wrong immediately.
-float media_visibility(vec3 p, ivec2 pixel, uint frame, bool may_measure, inout uint state) {
-    // Answered outright, and never cached.
-    //
-    // A ray that hits nothing is integrated to the far plane, so most of its samples land in open
-    // sky hundreds of metres out. Those are parcels no second ray will ever visit: each would
-    // claim an entry, be measured once, and never be read again -- a table filling with
-    // single-sample answers to a question that has no second asker.
-    //
-    // And the answer is already known. Outside the resident box the walk terminates on its first
-    // step, so there is nothing to measure and nothing worth remembering. This is not an
-    // assumption about the sky; it is the same statement march makes about the same region.
-    if (media_outside_world(p)) return 1.0;
-
-    // Jittered by up to half a node before it is quantised.
-    //
-    // A parcel is four voxels across and its answer is one number, so read straight the boundary
-    // between two of them is a step. Offsetting the lookup at random inside the node turns that
-    // step into a ramp one node wide once the frame average has done its work -- the same trick
-    // the marcher's ordered dither plays on level boundaries, for the same reason. It costs one
-    // lookup, where interpolating the eight surrounding entries would cost eight.
-    float node = float(1u << kMediaLevel);
-    vec3 offset = (vec3(rand(state), rand(state), rand(state)) - 0.5) * node;
-    ivec3 voxel = ivec3(floor(p + offset)) + push.camera_chunk.xyz * kChunkEdge;
-
-    ivec3 face = media_face(trace.sun.xyz);
-    uint lo, hi;
-    face_key_node(voxel >> int(kMediaLevel), face, kMediaLevel, kFaceMedia, lo, hi);
-    uint slot = face_slot(lo, hi, may_measure, frame);
-
-    uint have = (slot != 0xFFFFFFFFu) ? faces.items[slot].count : 0u;
-    // A trickle carries on for ever, so a parcel is never frozen: build a wall across a beam and
-    // the air in it notices without anything having to clear the table.
-    if (may_measure && (have < kMediaSamples || rand(state) < 0.02)) {
-        // A different point on the sun's disc per pixel, stratified across the pixels that share
-        // a parcel exactly as the surface shadow is. That is what makes the edge of a beam a
-        // penumbra rather than a hard boundary: many pixels crossing one parcel, each testing a
-        // different part of the sun, and the entry holding the mean of them.
-        // Salt 6, and the number is load bearing. 1 is the surface sun disc, 2 the diffuse
-        // hemisphere bounce, 3 the lamp cone. Under the old hash a shared salt only partly
-        // correlated two draws; stratified_pair is now a pure function of (pixel, frame, salt),
-        // so sharing one makes them bit-identical -- a beam and the bounce off the floor under
-        // it would have sampled the same point of the sun in lockstep for ever.
-        int reaches = media_sun_reaches(p, sun_sample_at(stratified_pair(pixel, frame, 6u, state)));
-        if (reaches != kMediaUnknown) {
-            contribute_shadow(slot, float(reaches),
-                              in_edited_region(voxel) ? kEditWindow : kFaceWindow);
-        }
-    }
-    // Read back after contributing, so this pixel's own measurement is in the average it shades
-    // with -- the same order the surface shadow reads in, and for the same reason. A parcel the
-    // table refused, or one nobody has asked about yet, reads nought and scatters nothing.
-    return read_shadow(slot);
-}
-
-// ---- structure in the fog ----------------------------------------------------------------
-//
-// Adapted from Derivative's volumetric fog, which shapes its density with several octaves of noise
-// drifting on the wind instead of leaving it a smooth function of height. The difference is between
-// haze -- an even wash that thickens with distance -- and WEATHER: banks of it lying in the low
-// ground, thinner patches you can see through, an edge that moves.
-//
-// # Where it is applied, and why not where the original applies it
-//
-// The original multiplies its density by this and marches the result. That cannot be done here, and
-// the reason is worth setting down because it is the good property of this file.
-//
-// The transmittance and the sampling above are CLOSED FORM. Density is an exponential in height and
-// height is linear along a ray, so the optical depth integrates analytically and the scattering
-// point can be drawn from the transmittance exactly. That is what makes four samples enough, and
-// what stops the fog's thickness depending on where the samples happened to land. Multiplying a
-// noise into the density destroys all of it: no closed form, no exact inverse, and the fog's
-// opacity becomes an estimate with variance in it -- which is noise in the one quantity that must
-// not be noisy, because it multiplies the entire scene behind it.
-//
-// So the noise shapes what each parcel SCATTERS rather than how much it extinguishes. The sampler
-// stays exact, the fog behind stays smooth, and the structure appears where it can be seen -- in
-// the light the fog sends to the eye, which is the whole of what fog looks like when it is lit.
-// The extinction is then slightly smoother than the scattering implies. For fog thin enough to see
-// structure in, the two are close, and it is the honest approximation of the pair.
-float fog_structure(vec3 local_p) {
-    vec3 world_m = world_position(local_p) / kVoxelsPerMetre;
-
-    // Drifting, at a fraction of the cloud deck's speed. Fog sits in the boundary layer where the
-    // ground drags on the wind, so it moves noticeably slower than anything above it.
-    vec2 wind = cloud_drift() * push.sky_cloud.y * 0.12;
-    vec3 at = (world_m - vec3(wind.x, 0.0, wind.y)) * (1.0 / 78.0);
-
-    // Four octaves at four to one. Fog has no fine structure worth resolving -- it is diffusion
-    // acting on a temperature field, and diffusion is a low-pass filter -- so the octaves that
-    // matter are the ones several metres across and up.
-    float noise = 0.0, weight = 0.5;
-    for (int i = 0; i < 4; ++i, weight *= 0.5) {
-        noise += weight * perlin_noise(at);
-        at = kOctaveTurn * at * 4.0;
-    }
-
-    // Contrast, then normalised so the AVERAGE is one. Without that last step, turning structure on
-    // would silently change how thick the fog is, and the setting for it would stop meaning what it
-    // says. This redistributes the fog it was already given and never adds any.
-    float shaped = smoothstep(0.34, 0.63, noise);
-    return mix(0.30, 1.78, shaped) * (1.0 / 1.04);
-}
-
 // ---------------------------------------------------------------------------------------
 
 vec3 apply_media(vec3 radiance, vec3 origin, vec3 dir, float distance) {
-    Medium med = world_medium();
-    // Clear air, which is what the renderer has always assumed and what almost every scene is.
-    // One compare against a push constant, uniform across the whole dispatch, so the branch is
-    // free and everything below it is never reached.
-    if (med.extinct <= 0.0) return radiance;
+    Air air = world_air();
+    // Clear air, which is what almost every scene is. One compare against a push constant, uniform
+    // across the whole dispatch, so the branch is free and nothing below it is reached.
+    if (!air.any) return radiance;
 
-    // A ray that hit nothing carries no distance -- main leaves it at zero -- and the air in
-    // front of it runs to the far plane.
+    // A ray that hit nothing carries no distance -- main leaves it at zero -- and the air in front
+    // of it runs to the far plane. That is correct here in a way it was not for a planetary model:
+    // a fog layer a hundred metres deep integrates to a finite depth along any upward ray, and along
+    // a horizontal one it integrates to opaque, which is exactly what fog looks like at the horizon.
     float length = (distance > 0.0) ? distance : push.lens.y;
+    if (length <= 0.0) return radiance;
 
-    float y = origin.y + float(push.camera_chunk.y * kChunkEdge);
-    float depth = media_depth(med, y, dir.y, length);
+    float y0 = origin.y + float(push.camera_chunk.y * kChunkEdge);
+
+    float fog_path = layer_integral(y0, dir.y, length, air.fog_base, air.fog_height);
+    float haze_path = layer_integral(y0, dir.y, length, air.fog_base, air.haze_height);
+
+    float depth = air.fog_extinct * fog_path + air.haze_extinct * haze_path;
     float transmittance = exp(-min(depth, 40.0));
 
-    // What the surface behind the fog still delivers.
+    // What the surface behind still delivers.
     vec3 result = radiance * transmittance;
 
-    // ---- and what the fog itself sends towards the eye -----------------------------------
-    //
-    // The scattering point is drawn from the transmittance rather than picked at even spacing.
-    //
-    // The integral is of sigma_t * rho(t) * T(t) times what arrives there, and the first three
-    // factors are exactly a probability density over t once they are divided by the total
-    // (1 - T) -- so drawing from them and estimating the rest is the textbook change of
-    // variable, and the estimator that comes out is albedo * phase * visibility * (1 - T) with
-    // no density and no transmittance left in it at all. Every sample therefore lands inside the
-    // fog instead of a hundred metres past the point where it stopped mattering, which is what
-    // lets four of them be enough, and there is no integration range to choose and get wrong.
     float scattered = 1.0 - transmittance;
-    if (scattered > 1.0e-4) {
-        ivec2 pixel = min(ivec2(gl_GlobalInvocationID.xy), ivec2(push.resolution.xy) - 1);
-        // Its own stream, salted off the one main is using so the two do not draw the same
-        // numbers in step. Derived rather than passed in, so this needs nothing of main's.
-        uint state = hash_u32((uint(pixel.x) * 1973u + uint(pixel.y) * 9277u +
-                               trace.control.x * 26699u) ^ 0x4D454449u);
-        state |= 1u;
+    if (scattered <= 1.0e-4) return result;
 
-        // The angle between the way the sunlight is travelling and the way the eye's ray is,
-        // both as directions of propagation: trace.sun points *at* the sun, and the eye receives
-        // along -dir, so the two negatives cancel. Forward scattering therefore brightens looking
-        // into the sun, which is what haze does.
-        float phase = henyey_greenstein(dot(dir, trace.sun.xyz), med.g);
+    // ---- and what the air itself sends towards the eye ------------------------------------
+    //
+    // Single scattering, integrated ANALYTICALLY rather than sampled.
+    //
+    // The exact integral carries the sun's transmittance to every point along the ray, which has no
+    // closed form. It is evaluated once, at the middle of the scattering, and taken out of the
+    // integral. That is the one approximation here and it is a mild one: the sun's path to two
+    // points a few hundred metres apart differs by very little, because the two paths share nearly
+    // all of their length.
+    //
+    // What this replaces drew four samples and traced an occlusion ray at each of them. It cost
+    // twenty milliseconds of a thirty millisecond frame, and it is what made --fog unusable. Nothing
+    // below traces anything, and the whole of it measures as six hundredths of a millisecond.
+    //
+    // The price is that there are no shafts through GEOMETRY -- no beam through a doorway. Shafts
+    // through cloud survive, because the deck is sampled below. That is the deliberate trade for
+    // fog that can be left on.
+    float cos_theta = dot(dir, trace.sun.xyz);
 
-        // Only one sample per pixel per frame may pay for an occlusion test. Four tests on one
-        // pixel is not four times the cost of one, it is a frame that misses its budget; and a
-        // parcel needs a few dozen measurements from whichever pixels happen to cross it, which
-        // at a screen's worth of rays takes no time at all.
-        uint measuring = min(uint(rand(state) * float(kMediaSteps)), kMediaSteps - 1u);
+    // Where along the ray the scattering actually HAPPENS, which is not the halfway point.
+    //
+    // In-scatter is weighted by the transmittance in front of it, so in thick air most of what
+    // reaches the eye was scattered close to the eye and the far half of the ray contributes almost
+    // nothing. The median of that distribution is where 1 - e^-ot reaches half of 1 - e^-oL, which
+    // for thick air is a small fraction of the way along and for thin air is the midpoint.
+    //
+    // Sampling the deck at the halfway point instead put the sample kilometres away on a grazing
+    // ray, and since the ray's own length varies hugely across a view of flat ground, neighbouring
+    // pixels sampled the cloud shadow at wildly separated places. That is the diagonal streaking the
+    // first render of this showed: a high-contrast field point-sampled and then used as though it
+    // were the average over a long path.
+    float sigma = depth / max(length, 1.0e-6);
+    float median = sigma > 1.0e-8 ? min(-log(max(1.0 - 0.5 * scattered, 1.0e-30)) / sigma,
+                                        length)
+                                  : length * 0.5;
+    vec3 mid = origin + dir * median;
+    vec3 mid_world = world_position(mid);
+    // And softened towards one, because a point sample is standing in for an AVERAGE over the whole
+    // scattering path. A cloud edge crossing that path dims part of it, never all of it, so taking
+    // the point value whole gives an in-scatter that swings five to one where the truth barely
+    // moves.
+    float deck = mix(1.0, cloud_shadow(mid_world, world_height_metres(mid_world)), 0.55);
 
-        // The cloud shadow, ONCE for the ray rather than once per sample.
-        //
-        // It is a six-step march through the deck and it was by far the most expensive thing added
-        // here -- with four samples each paying for it the frame went from 10 ms to 29. What it
-        // returns varies over KILOMETRES, because that is the size of the cloud casting it, while
-        // the four samples of one ray are spread over a few hundred metres of fog. Asking it four
-        // times returned four copies of one answer at four times the price.
-        //
-        // Taken at the median of the scattering distribution, which is where the fog's contribution
-        // is actually centred.
-        float median_t = media_distance_at(med, y, dir.y,
-                                           -log(max(1.0 - 0.5 * scattered, 1.0e-30)));
-        vec3 shade_at = world_position(origin + dir * min(median_t, length));
-        float deck = cloud_shadow(shade_at, world_height_metres(shade_at));
+    // The sun, dimmed by the deck overhead. A shaft of sun through fog is a shaft only because the
+    // light around it was stopped by something, and at this scale that something is cloud. Without
+    // it an overcast sky still put full sunbeams through the fog underneath it, and those beams were
+    // the brightest thing in a scene whose ground had correctly gone dark.
+    vec3 sunlight = sun_radiance() * deck;
 
-        float gathered = 0.0;
-        for (uint i = 0u; i < kMediaSteps; ++i) {
-            // Stratified over the transmittance, so the four samples cover the fog between them
-            // rather than landing where chance puts them.
-            float u = (float(i) + rand(state)) / float(kMediaSteps);
-            float target = -log(max(1.0 - u * scattered, 1.0e-30));
-            float t = media_distance_at(med, y, dir.y, target);
-            vec3 at = origin + dir * min(t, length);
+    // Skylight, and its absence is what made thick fog go BLACK.
+    //
+    // The model this replaces lit the air with the sun alone. Put fog under an overcast, or at dusk,
+    // and there is no sun -- so the air scattered nothing while still extinguishing everything
+    // behind it, and the ground went to black with the sampling noise standing on top of it. That is
+    // backwards. Fog is bright in an overcast precisely because it is lit by the WHOLE SKY rather
+    // than by one direction, and droplets return nearly all of what reaches them.
+    //
+    // Isotropic, because a hemisphere averaged over every direction has no lobe left in it.
+    vec3 skylight = sky_radiance(vec3(0.0, 1.0, 0.0));
+    const float kIsotropic = 1.0 / (4.0 * kPi);
 
-            // Cloud shadow ON THE AIR, not only on the ground. A shaft of sun through fog is only a
-            // shaft because the light around it was stopped by something; with the deck ignored
-            // here, an overcast sky still put full sunbeams through the fog under it, and the beams
-            // were the brightest thing in a scene whose ground had correctly gone dark.
-            gathered += media_visibility(at, pixel, trace.control.z, i == measuring, state) *
-                        deck * fog_structure(at);
-        }
+    // Each species with its own coefficient, albedo and phase, weighted by how much of it the ray
+    // actually passed through.
+    float fog_share = air.fog_extinct * fog_path;
+    float haze_share = air.haze_extinct * haze_path;
+    float total_share = max(fog_share + haze_share, 1.0e-8);
 
-        // Divided by extinction rather than multiplied by a density: what survives the change of
-        // variable is the single-scattering albedo, which is the fraction of what the medium
-        // takes out of the beam that it puts back rather than absorbing.
-        //
-        // The sun is not dimmed on its way in, and that is a decision rather than an oversight.
-        // A medium thick enough for it to matter is one where the light that reaches the eye has
-        // bounced inside the fog several times, and single scattering is already the wrong model
-        // there -- charging a second exponential would make thick fog dark, which is the exact
-        // opposite of what thick fog looks like. Under-lighting it slightly is the honest error.
-        //
-        // The beam is sun_radiance() and not trace.sun_colour, which is the same thing at noon
-        // and nothing like it at dusk. Every surface in the scene is lit through that function
-        // now (see pt_sky.glsl), so fog lit by the raw constant would be a shaft of noon
-        // hanging in a red room -- and worse, a sun a degree under the horizon would still put
-        // a beam through the air after the ground it lights had gone dark.
-        result += (med.scatter / med.extinct) * sun_radiance() * phase * scattered *
-                  (gathered / float(kMediaSteps));
-    }
-    return result;
+    vec3 lit = vec3(0.0);
+    lit += (fog_share / total_share) * kFogAlbedo *
+           (sunlight * henyey_greenstein(cos_theta, air.fog_g) + skylight * kIsotropic * 4.0 * kPi);
+    lit += (haze_share / total_share) * kHazeAlbedo *
+           (sunlight * henyey_greenstein(cos_theta, 0.76) + skylight * kIsotropic * 4.0 * kPi);
+
+    // Times how much of the beam was scattered at all. This is the change of variable the sampled
+    // version did by drawing from the transmittance: the density and the extinction cancel exactly,
+    // and what is left is albedo times phase times one minus the transmittance.
+    return result + lit * scattered;
 }
