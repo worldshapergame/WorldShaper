@@ -725,6 +725,19 @@ private:
     VkExtent2D scaled_extent() const;
     void handle_resize();
     void record_frame(f32 time_seconds);
+
+    // The sun, the weather and the air, for whichever renderer is running.
+    //
+    // Both of them need it. It used to be built inside the path tracer's branch, which is a large
+    // part of why none of the sky work reached the game: the pass that runs by default could not
+    // see any of it, so it drew a hardcoded gradient with no sun, no cloud and no air in it.
+    TracePush make_trace_push();
+
+    // The cloud volume, into the buffer both renderers read. Also hoisted out of the path tracer's
+    // branch, and for the same reason: in raster mode the buffer was never written at all, so
+    // binding it to that pass would have shown a stale image or an empty one.
+    void dispatch_clouds(VkCommandBuffer cmd, TracePush& trace, VkExtent2D render_extent,
+                         u32 trace_offset);
     void update_quality();
     void update_lights();
     void apply_quality();
@@ -1024,7 +1037,7 @@ bool Application::create_render_target(u32 width, u32 height) {
     cloud_info[1].imageView = cloud_image_prev_.view;
     cloud_info[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[8]{};
+    VkWriteDescriptorSet writes[9]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -1059,7 +1072,12 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[7].dstSet = pathtrace_set_;
     writes[7].dstBinding = kCloudMarchedBinding;
     writes[7].pImageInfo = &marched_info;
-    vkUpdateDescriptorSets(device_.handle(), 8, writes, 0, nullptr);
+    // And the same pair to the raster pass, which draws the sky the player actually sees.
+    writes[8].dstSet = resolve_set_;
+    writes[8].dstBinding = kCloudBinding;
+    writes[8].descriptorCount = 2;
+    writes[8].pImageInfo = cloud_info;
+    vkUpdateDescriptorSets(device_.handle(), 9, writes, 0, nullptr);
     return true;
 }
 
@@ -1943,6 +1961,102 @@ void Application::apply_quality() {
     }
 }
 
+TracePush Application::make_trace_push() {
+    TracePush trace{};
+    // Up and to one side, matching the light the real-time shading already assumes, so
+    // the two are comparable rather than merely both plausible.
+    const f32 sun[3] = {0.4f, 0.85f, 0.3f};
+    const f32 length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+    trace.sun[0] = sun[0] / length;
+    trace.sun[1] = sun[1] / length;
+    trace.sun[2] = sun[2] / length;
+    // The real sun is about half a degree across. A point light casts a shadow with no
+    // penumbra at all, which is the single most obvious way a render looks synthetic.
+    trace.sun[3] = std::cos(0.5f * 3.14159265f / 180.0f);
+    // Chosen so a 0.5-albedo surface facing the sun lands near mid-grey. At 12 every
+    // material blew to white, which hides exactly the differences this mode exists to
+    // show. Real exposure control is Stage 9's job.
+    trace.sun_colour[0] = 3.2f;
+    trace.sun_colour[1] = 3.05f;
+    trace.sun_colour[2] = 2.75f;
+    trace.control[0] = trace_samples_;
+    // Which of the two histories the cloud pass writes this frame; it reads the other.
+    cloud_parity_ ^= 1u;
+    trace.control[1] = cloud_parity_;
+    trace.control[2] = static_cast<u32>(frame_counter_);   // for cache eviction
+    trace.quality[0] = quality_.knobs().refine_stride;
+    trace.quality[1] = quality_.knobs().shadow_target;
+    trace.quality[2] = (shadow_refresh_frames_ > 0) ? 1u : 0u;
+    trace.quality[3] = light_count_;
+    std::memcpy(trace.fog, fog_, sizeof(trace.fog));
+    std::memcpy(trace.fog_shape, fog_shape_, sizeof(trace.fog_shape));
+    if (shadow_refresh_frames_ > 0) --shadow_refresh_frames_;
+    return trace;
+}
+
+void Application::dispatch_clouds(VkCommandBuffer cmd, TracePush& trace,
+                                  VkExtent2D render_extent, u32 trace_offset) {
+    // The cloud volume first, at a quarter of the resolution in each axis, into the buffer the
+    // tracer reads. One march per sixteen pixels: see the head of shaders/clouds.comp for why
+    // cloud can afford that and nothing else in the picture can.
+    if (clouds_.pipeline() != VK_NULL_HANDLE) {
+        profiler_.begin_pass(cmd, "cloud", 0.55);
+        const VkImageLayout was =
+            cloud_ready_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        image_barrier(cmd, cloud_image_.image, was, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        image_barrier(cmd, cloud_image_prev_.image, was, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        image_barrier(cmd, cloud_marched_.image, was, VK_IMAGE_LAYOUT_GENERAL,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+        cloud_ready_ = true;
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.pipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.layout(), 0, 1,
+                                &pathtrace_set_, 1, &trace_offset);
+        vkCmdPushConstants(cmd, clouds_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(TracePush), &trace);
+        // The packed march: one invocation per four-by-four block, all of them marching.
+        const u32 blocks_w = (render_extent.width + kCloudScale - 1) / kCloudScale;
+        const u32 blocks_h = (render_extent.height + kCloudScale - 1) / kCloudScale;
+        vkCmdDispatch(cmd, (blocks_w + 7) / 8, (blocks_h + 7) / 8, 1);
+
+        VkMemoryBarrier2 marched{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        marched.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        marched.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        marched.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        marched.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        VkDependencyInfo marched_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        marched_dependency.memoryBarrierCount = 1;
+        marched_dependency.pMemoryBarriers = &marched;
+        vkCmdPipelineBarrier2(cmd, &marched_dependency);
+
+        // And the resolve, over every pixel: this frame's marches where they landed, and last
+        // frame's answer reprojected everywhere else. Bit 1 of the parity word picks the half.
+        trace.control[1] |= 2u;
+        vkCmdPushConstants(cmd, clouds_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(TracePush), &trace);
+        vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
+        trace.control[1] &= ~2u;
+        profiler_.end_pass(cmd);
+
+        // Written by one dispatch and read by the next, so they have to be told apart.
+        VkMemoryBarrier2 wrote_cloud{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        wrote_cloud.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        wrote_cloud.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        wrote_cloud.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        wrote_cloud.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        VkDependencyInfo cloud_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        cloud_dependency.memoryBarrierCount = 1;
+        cloud_dependency.pMemoryBarriers = &wrote_cloud;
+        vkCmdPipelineBarrier2(cmd, &cloud_dependency);
+
+    }
+}
+
 void Application::record_frame(f32 time_seconds) {
     const VkCommandBuffer cmd = swapchain_.cmd();
     const VkExtent2D extent = swapchain_.extent();
@@ -2603,99 +2717,14 @@ void Application::record_frame(f32 time_seconds) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.layout(), 0, 1,
                                 &pathtrace_set_, 1, &trace_offset);
 
-        TracePush trace{};
-        // Up and to one side, matching the light the real-time shading already assumes, so
-        // the two are comparable rather than merely both plausible.
-        const f32 sun[3] = {0.4f, 0.85f, 0.3f};
-        const f32 length = std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
-        trace.sun[0] = sun[0] / length;
-        trace.sun[1] = sun[1] / length;
-        trace.sun[2] = sun[2] / length;
-        // The real sun is about half a degree across. A point light casts a shadow with no
-        // penumbra at all, which is the single most obvious way a render looks synthetic.
-        trace.sun[3] = std::cos(0.5f * 3.14159265f / 180.0f);
-        // Chosen so a 0.5-albedo surface facing the sun lands near mid-grey. At 12 every
-        // material blew to white, which hides exactly the differences this mode exists to
-        // show. Real exposure control is Stage 9's job.
-        trace.sun_colour[0] = 3.2f;
-        trace.sun_colour[1] = 3.05f;
-        trace.sun_colour[2] = 2.75f;
-        trace.control[0] = trace_samples_;
-        // Which of the two histories the cloud pass writes this frame; it reads the other.
-        cloud_parity_ ^= 1u;
-        trace.control[1] = cloud_parity_;
-        trace.control[2] = static_cast<u32>(frame_counter_);   // for cache eviction
-        trace.quality[0] = quality_.knobs().refine_stride;
-        trace.quality[1] = quality_.knobs().shadow_target;
-        trace.quality[2] = (shadow_refresh_frames_ > 0) ? 1u : 0u;
-        trace.quality[3] = light_count_;
-        std::memcpy(trace.fog, fog_, sizeof(trace.fog));
-        std::memcpy(trace.fog_shape, fog_shape_, sizeof(trace.fog_shape));
-        if (shadow_refresh_frames_ > 0) --shadow_refresh_frames_;
+        TracePush trace = make_trace_push();
         vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(TracePush), &trace);
 
-        // The cloud volume first, at a quarter of the resolution in each axis, into the buffer the
-        // tracer reads. One march per sixteen pixels: see the head of shaders/clouds.comp for why
-        // cloud can afford that and nothing else in the picture can.
-        if (clouds_.pipeline() != VK_NULL_HANDLE) {
-            profiler_.begin_pass(cmd, "cloud", 0.55);
-            const VkImageLayout was =
-                cloud_ready_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
-            image_barrier(cmd, cloud_image_.image, was, VK_IMAGE_LAYOUT_GENERAL,
-                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
-                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            image_barrier(cmd, cloud_image_prev_.image, was, VK_IMAGE_LAYOUT_GENERAL,
-                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
-                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            image_barrier(cmd, cloud_marched_.image, was, VK_IMAGE_LAYOUT_GENERAL,
-                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
-                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-            cloud_ready_ = true;
+        dispatch_clouds(cmd, trace, render_extent, trace_offset);
+        // The tracer's own pipeline back, since the cloud pass bound its own over it.
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.pipeline());
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.pipeline());
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.layout(), 0, 1,
-                                    &pathtrace_set_, 1, &trace_offset);
-            vkCmdPushConstants(cmd, clouds_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(TracePush), &trace);
-            // The packed march: one invocation per four-by-four block, all of them marching.
-            const u32 blocks_w = (render_extent.width + kCloudScale - 1) / kCloudScale;
-            const u32 blocks_h = (render_extent.height + kCloudScale - 1) / kCloudScale;
-            vkCmdDispatch(cmd, (blocks_w + 7) / 8, (blocks_h + 7) / 8, 1);
-
-            VkMemoryBarrier2 marched{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-            marched.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            marched.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-            marched.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            marched.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-            VkDependencyInfo marched_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            marched_dependency.memoryBarrierCount = 1;
-            marched_dependency.pMemoryBarriers = &marched;
-            vkCmdPipelineBarrier2(cmd, &marched_dependency);
-
-            // And the resolve, over every pixel: this frame's marches where they landed, and last
-            // frame's answer reprojected everywhere else. Bit 1 of the parity word picks the half.
-            trace.control[1] |= 2u;
-            vkCmdPushConstants(cmd, clouds_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(TracePush), &trace);
-            vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
-            trace.control[1] &= ~2u;
-            profiler_.end_pass(cmd);
-
-            // Written by one dispatch and read by the next, so they have to be told apart.
-            VkMemoryBarrier2 wrote_cloud{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-            wrote_cloud.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            wrote_cloud.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-            wrote_cloud.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            wrote_cloud.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-            VkDependencyInfo cloud_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            cloud_dependency.memoryBarrierCount = 1;
-            cloud_dependency.pMemoryBarriers = &wrote_cloud;
-            vkCmdPipelineBarrier2(cmd, &cloud_dependency);
-
-            // The tracer's own pipeline back, since the cloud pass bound its own over it.
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.pipeline());
-        }
 
         vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
         profiler_.end_pass(cmd);
@@ -2736,10 +2765,20 @@ void Application::record_frame(f32 time_seconds) {
     vis_dependency.pMemoryBarriers = &vis_barrier;
     vkCmdPipelineBarrier2(cmd, &vis_dependency);
 
+    // The same sky the path tracer draws: the cloud volume into the shared buffer, then the
+    // parameters the resolve pass needs to read it and to light the air.
+    TracePush trace = make_trace_push();
+    const u32 trace_offset =
+        static_cast<u32>(swapchain_.frame_index()) * static_cast<u32>(params_stride_);
+    dispatch_clouds(cmd, trace, render_extent, trace_offset);
+
     profiler_.begin_pass(cmd, "resolve", 0.8);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, resolve_.pipeline());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, resolve_.layout(), 0, 1,
                             &resolve_set_, 1, &params_offset);
+    // The sun, the weather and the air. This pass drew a hardcoded gradient for want of them.
+    vkCmdPushConstants(cmd, resolve_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(TracePush),
+                       &trace);
     vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
     profiler_.add_bytes(static_cast<u64>(render_extent.width) * render_extent.height * 20);
     profiler_.end_pass(cmd);
@@ -3060,7 +3099,11 @@ int Application::run(const Options& options) {
 
     // Resolve set: the visibility image in, the colour image out, plus the two tables it
     // needs to turn a voxel type into a colour.
-    VkDescriptorSetLayoutBinding resolve_bindings[6]{};
+    // Seven, not six: the last is the cloud history at kCloudBinding, which this pass reads so the
+    // sky it draws is the same sky the path tracer draws. Binding numbers need not be contiguous,
+    // and using the same number as the tracer means shaders/pt_clouds.glsl and its consumers do not
+    // have to care which pass included them.
+    VkDescriptorSetLayoutBinding resolve_bindings[7]{};
     for (u32 i = 0; i < 6; ++i) {
         resolve_bindings[i].binding = i;
         // 0-1 images, 2-3 the type and visual tables, 4 the parameter block, 5 the
@@ -3073,9 +3116,14 @@ int Application::run(const Options& options) {
         resolve_bindings[i].descriptorCount = 1;
         resolve_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
+    resolve_bindings[6].binding = kCloudBinding;
+    resolve_bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    resolve_bindings[6].descriptorCount = 2;   // read and write alternate; the shader picks by parity
+    resolve_bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
     VkDescriptorSetLayoutCreateInfo resolve_layout_info{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    resolve_layout_info.bindingCount = 6;
+    resolve_layout_info.bindingCount = 7;
     resolve_layout_info.pBindings = resolve_bindings;
     WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &resolve_layout_info, nullptr,
                                       &resolve_layout_));
@@ -3175,8 +3223,10 @@ int Application::run(const Options& options) {
     const std::filesystem::path resolve_spirv = shaders / "resolve.comp.spv";
     const std::filesystem::path resolve_source =
         std::filesystem::path(WS_SHADER_SOURCE_DIR) / "resolve.comp";
+    // The same push constant the tracer takes. It carries the sun, the weather and the air, none
+    // of which this pass could see before — which is why it drew a hardcoded gradient.
     if (!resolve_.create(device_, resolve_source, resolve_spirv, resolve_layout_,
-                         0)) {
+                         sizeof(TracePush))) {
         WS_LOG_FATAL("app", "could not create the resolve pipeline: {}",
                      resolve_.last_error());
         return 1;
