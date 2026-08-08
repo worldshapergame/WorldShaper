@@ -821,3 +821,145 @@ TEST_CASE("a spiral that opens outward is bounded by where it ends, not where it
     // And the far end really is out there.
     CHECK(at(f, out, 2.0, 0, 0) == doctest::Approx(-0.05).epsilon(0.05));
 }
+
+// --- turning and stretching a shape ------------------------------------------------------------
+//
+// A box round a rotated shape is easy to write backwards: the evaluation turns the POINT by the
+// negated angle, so a bound derived by copying that code lands the box on the mirror image of
+// where the shape actually is. Nothing catches that except looking, because the clip still builds
+// — the box simply excludes the shape, the sampler culls it everywhere, and the piece vanishes.
+//
+// So this does not check the box against arithmetic. It walks the shape, finds where it really is,
+// and insists the box contains that.
+
+namespace {
+
+// Every point of `shape` that is inside it must be inside `box`. Walked coarsely over a region
+// large enough to contain the shape wherever it ended up.
+void bounds_really_contain(const Field& f, u32 shape, const Field::Aabb& box, f64 reach,
+                           f64 step) {
+    u32 found = 0;
+    for (f64 x = -reach; x <= reach; x += step) {
+        for (f64 y = -reach; y <= reach; y += step) {
+            for (f64 z = -reach; z <= reach; z += step) {
+                if (f.eval(shape, Vec3{x, y, z}) >= 0.0) continue;
+                ++found;
+                INFO("solid at " << x << "," << y << "," << z << " but the box is "
+                                 << box.low.x << "," << box.low.y << "," << box.low.z << " to "
+                                 << box.high.x << "," << box.high.y << "," << box.high.z);
+                REQUIRE(x >= box.low.x - 1e-9);
+                REQUIRE(x <= box.high.x + 1e-9);
+                REQUIRE(y >= box.low.y - 1e-9);
+                REQUIRE(y <= box.high.y + 1e-9);
+                REQUIRE(z >= box.low.z - 1e-9);
+                REQUIRE(z <= box.high.z + 1e-9);
+            }
+        }
+    }
+    // A test that found nothing solid would pass for the wrong reason.
+    CHECK(found > 0);
+}
+
+}  // namespace
+
+TEST_CASE("the bounds contain a rotated shape, whichever way it was turned") {
+    // Long in x and thin in y and z, so turning it is unmistakable: a box that came out of the
+    // wrong rotation is long along the wrong axis and the walk finds solid outside it.
+    for (const Vec3 turns : {Vec3{0, 0, 0.125}, Vec3{0, 0.25, 0}, Vec3{0.1, 0.2, 0.3},
+                             Vec3{0, 0, -0.125}}) {
+        Field f;
+        const u32 bar = f.box({0.4, 0, 0}, {0.9, 0.1, 0.1});
+        const u32 turned = f.rotate(bar, turns);
+        f.build_bounds();
+
+        const Field::Aabb box = f.bounds_of(turned);
+        REQUIRE(!box.infinite());
+        bounds_really_contain(f, turned, box, 2.2, 0.05);
+    }
+}
+
+TEST_CASE("a quarter turn about z puts the box where the shape went") {
+    // The same claim stated in numbers, so a failure says which way it went wrong rather than
+    // only that it did. A bar along +x, turned a quarter turn, lies along one of the y axes.
+    Field f;
+    const u32 bar = f.box({1.0, 0, 0}, {0.5, 0.1, 0.1});   // x from 0.5 to 1.5
+    const u32 turned = f.rotate(bar, {0, 0, 0.25});
+    f.build_bounds();
+
+    const Field::Aabb box = f.bounds_of(turned);
+    REQUIRE(!box.infinite());
+    // Long in y now, and thin in x, whichever sign the turn came out as.
+    CHECK(box.high.y - box.low.y == doctest::Approx(1.0));
+    CHECK(box.high.x - box.low.x == doctest::Approx(0.2));
+    bounds_really_contain(f, turned, box, 2.0, 0.05);
+}
+
+TEST_CASE("a uniform scale is bounded and a stretched one is not") {
+    // Uniform: the node reports the true distance, so a cull may read the box.
+    for (const Vec3 by : {Vec3{2.0, 2.0, 2.0}, Vec3{0.5, 0.5, 0.5}, Vec3{-2.0, -2.0, -2.0}}) {
+        Field f;
+        const u32 lump = f.box({0.6, 0, 0}, {0.3, 0.2, 0.2});
+        const u32 sized = f.scale(lump, by);
+        f.build_bounds();
+
+        const Field::Aabb box = f.bounds_of(sized);
+        REQUIRE(!box.infinite());
+        bounds_really_contain(f, sized, box, 2.5, 0.05);
+    }
+
+    // Stretched: the shape really is inside the scaled box, but the node under-reports how far
+    // away it is, and a cull that believed the box would drop it while it was still the nearest
+    // thing. So it gets no box, on purpose.
+    Field f;
+    const u32 lump = f.box({0.6, 0, 0}, {0.3, 0.2, 0.2});
+    const u32 stretched = f.scale(lump, {2.0, 1.0, 1.0});
+    f.build_bounds();
+    CHECK(f.bounds_of(stretched).infinite());
+}
+
+TEST_CASE("min and max are union and intersection, and are bounded like them") {
+    // How the facility cuts its rustication joints: a band of masonry intersected with an
+    // arithmetic term that has no extent of its own. The band bounds the result; without this the
+    // whole thing was unbounded and every solid voxel in the building was asked about it.
+    Field f;
+    const u32 band = f.box({0, 3.0, 0}, {5.0, 0.2, 5.0});
+    const u32 open = f.add({f.constant(0.02), f.negate(f.sphere({0, 3.0, 0}, 0.4))});
+    const u32 joint = f.maximum({band, open});
+    f.build_bounds();
+
+    const Field::Aabb box = f.bounds_of(joint);
+    REQUIRE(!box.infinite());
+    // The band's box, not the sphere's and not everywhere.
+    CHECK(box.high.y - box.low.y == doctest::Approx(0.4));
+    CHECK(box.high.x == doctest::Approx(5.0));
+
+    // A union of the two is unbounded, because the arithmetic half is.
+    const u32 either = f.minimum({band, open});
+    f.build_bounds();
+    CHECK(f.bounds_of(either).infinite());
+}
+
+TEST_CASE("a sum is settleable only when at most one of its terms moves") {
+    Field f;
+    const u32 ball = f.sphere({0, 0, 0}, 1.0);
+    const u32 other = f.sphere({3, 0, 0}, 1.0);
+
+    // A shape shifted by a constant is the same shape read at a different level, so it settles.
+    CHECK(f.metric_slack(f.add({f.constant(0.02), ball})) == doctest::Approx(0.0));
+    // Negating it changes nothing about how fast it moves.
+    CHECK(f.metric_slack(f.negate(ball)) == doctest::Approx(0.0));
+    CHECK(f.metric_slack(f.add({f.constant(0.02), f.negate(ball)})) == doctest::Approx(0.0));
+
+    // Two moving terms can, added, vary twice as fast as either — so the sampler must not be
+    // told it may decide a block from one reading at the centre.
+    CHECK(f.metric_slack(f.add({ball, other})) >= Field::kInfiniteSlack);
+
+    // min and max keep whichever term varies most, and both terms here are exact distances.
+    CHECK(f.metric_slack(f.maximum({ball, other})) == doctest::Approx(0.0));
+    CHECK(f.metric_slack(f.minimum({ball, other})) == doctest::Approx(0.0));
+
+    // A pattern has no distance in it at all, and nothing built on one may claim otherwise.
+    const u32 grain = f.fbm(0.1, 3, 0.5, 2.0, 1);
+    CHECK(f.metric_slack(f.add({f.constant(0.02), grain})) >= Field::kInfiniteSlack);
+    CHECK(f.metric_slack(f.maximum({ball, grain})) >= Field::kInfiniteSlack);
+}

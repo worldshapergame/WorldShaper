@@ -1648,10 +1648,82 @@ void Field::build_bounds() {
                 box = child;
                 break;
             }
+            // Turning a bounded shape leaves it bounded, and this is where the facility's time
+            // went.
+            //
+            // A rotation moves the box's eight corners and the box round WHERE THEY LAND contains
+            // the shape. That is looser than the shape's own extent — a long thin thing turned
+            // forty-five degrees gets a box half again as wide as it needs — and it is exact
+            // enough for the only thing a box is for, which is knowing when not to look.
+            //
+            // Leaving this unbounded was the single most expensive thing in the building. There
+            // are a hundred and eighty-three rotations in the facility, and an unbounded child
+            // makes its parent union unbounded and that one's parent too, so a colonnade turned
+            // to face a courtyard took the box off everything above it all the way to the site.
+            // Thirty-eight per cent of the field carried no box, and a node with no box is a node
+            // no cull can skip: every evaluation anywhere walked into every one of them.
+            //
+            // The direction matters and is easy to get backwards, so `bounds contain a rotated
+            // shape` in tests/test_field.cpp samples the surface and checks it is inside.
+            case Op::Rotate: {
+                Aabb child = bounds_of(n.child[0]);
+                if (child.infinite()) { box = everywhere(); break; }
+                // `eval` turns the POINT by the negated angles, so the shape itself turns by the
+                // positive ones — and the inverse of that composition is these three applied in
+                // the opposite order.
+                const f64 cx = std::cos(a[0] * kTau), sx = std::sin(a[0] * kTau);
+                const f64 cy = std::cos(a[1] * kTau), sy = std::sin(a[1] * kTau);
+                const f64 cz = std::cos(a[2] * kTau), sz = std::sin(a[2] * kTau);
+                Vec3 lo{1e30, 1e30, 1e30};
+                Vec3 hi{-1e30, -1e30, -1e30};
+                for (u32 corner = 0; corner < 8; ++corner) {
+                    Vec3 q{(corner & 1u) ? child.high.x : child.low.x,
+                           (corner & 2u) ? child.high.y : child.low.y,
+                           (corner & 4u) ? child.high.z : child.low.z};
+                    q = {q.x * cz - q.y * sz, q.x * sz + q.y * cz, q.z};
+                    q = {q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy};
+                    q = {q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx};
+                    lo = {std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z)};
+                    hi = {std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z)};
+                }
+                box = Aabb{lo, hi};
+                break;
+            }
+
+            // Scaling is the same argument with one condition on it, and the condition is not
+            // about where the shape is — it is about what the node REPORTS.
+            //
+            // A box is not only a claim that the shape is inside it. Every cull that reads one
+            // also assumes that a point `away` outside the box gets an answer of at least `away`,
+            // because that is what lets it skip a child without asking. A non-uniform scale breaks
+            // that: it evaluates the child at `p / s` and multiplies by the SMALLEST factor, so a
+            // shape stretched twice along x reports half the true distance out there. The box
+            // would be right and the cull reading it would still drop a child that could have been
+            // nearest — which is a piece of the clip quietly missing.
+            //
+            // A uniform scale reports the distance exactly, so it is bounded and the rest are
+            // left alone. `the boxes round a revolve, a spiral and a scaled shape cull nothing
+            // they should keep` in tests/test_field.cpp is what says so: it takes every answer
+            // before the boxes exist and demands the same ones after, and it caught this.
+            case Op::Scale: {
+                Aabb child = bounds_of(n.child[0]);
+                if (child.infinite()) { box = everywhere(); break; }
+                const Vec3 s{a[0] != 0.0 ? a[0] : 1.0, a[1] != 0.0 ? a[1] : 1.0,
+                             a[2] != 0.0 ? a[2] : 1.0};
+                const f64 least = std::min(std::abs(s.x), std::min(std::abs(s.y), std::abs(s.z)));
+                const f64 most = std::max(std::abs(s.x), std::max(std::abs(s.y), std::abs(s.z)));
+                if (most - least > 1e-12) { box = everywhere(); break; }
+                const Vec3 one{child.low.x * s.x, child.low.y * s.y, child.low.z * s.z};
+                const Vec3 two{child.high.x * s.x, child.high.y * s.y, child.high.z * s.z};
+                box = Aabb{{std::min(one.x, two.x), std::min(one.y, two.y), std::min(one.z, two.z)},
+                           {std::max(one.x, two.x), std::max(one.y, two.y), std::max(one.z, two.z)}};
+                break;
+            }
+
             // A shell reaches out as far as it reaches in; rounding and offsetting move the
-            // surface by a known amount. Everything else — rotation, scaling, repetition,
-            // twisting — is left unbounded rather than approximated, because a bound that is
-            // wrong by a little produces a clip with pieces missing.
+            // surface by a known amount. What is left unbounded — twisting, bending — is left that
+            // way rather than approximated, because a bound that is wrong by a little produces a
+            // clip with pieces missing.
             // A limited repeat is a shape with a known extent: the child's box, plus as far
             // either side as the count allows. Leaving this unbounded was expensive in a way
             // nothing pointed at — a colonnade and a screen of slats are repeats, so every
@@ -2050,6 +2122,42 @@ f64 Field::metric_slack(u32 at) const {
         case Op::Coordinate:
         case Op::Radius:
             return 0.0;
+
+        // Negating a field mirrors its values and changes none of its variation, so a shape and
+        // its complement are settleable on exactly the same terms.
+        case Op::Negate: return worst_child(1);
+
+        // `min` and `max` again, and settleable for the same reason unions and intersections are:
+        // the larger (or smaller) of two fields that each move at most a metre per metre also
+        // moves at most a metre per metre.
+        case Op::Max:
+        case Op::Min:
+            return worst_child(n.children);
+
+        // Adding is where this stops being obvious, and the condition is exact.
+        //
+        // Two fields that each vary by at most the radius of a box can, added, vary by twice it —
+        // so a sum is NOT settleable in general and giving it a slack would let the sampler decide
+        // a block from a reading that does not bound it. But a term that does not vary in space at
+        // all contributes nothing to the variation, so a sum with at most one moving part is as
+        // settleable as that part.
+        //
+        // That is not a corner case, it is how a mason's rule is written: the facility cuts its
+        // rustication joints with `max { ashlar_band  add { constant 0.02  negate { bond } } }`,
+        // and without this the four rules that do it were asked at every solid voxel inside the
+        // walls — twenty-six million evaluations each, half of all the paint in the building.
+        case Op::Add: {
+            f64 slack = 0.0;
+            u32 moving = 0;
+            for (u32 i = 0; i < n.children; ++i) {
+                const Node& child = nodes_[n.child[i]];
+                if (child.op == Op::Constant || child.op == Op::Parameter) continue;
+                if (++moving > 1) return kInfiniteSlack;
+                slack = metric_slack(n.child[i]);
+                if (slack >= kInfiniteSlack) return kInfiniteSlack;
+            }
+            return slack;
+        }
 
         // The solids. Some of these are exact distances and some are bounds that under-state,
         // which is the safe direction: a reading that says "nearer than it really is" can only
