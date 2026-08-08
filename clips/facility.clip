@@ -52,6 +52,19 @@ include "facility/halls.clip"
 include "facility/stair.clip"
 include "facility/fittings.clip"
 
+# --- and what the weather has done to all of it ------------------------------------------------
+#
+# Last, and that is the whole of why it is here rather than up with the site it mostly acts on.
+# Weathering appends its coats after the author's, so whatever is included last is painted over
+# everything before it — which is exactly right for sand, moss and stain, and exactly wrong if it
+# is included in the middle.
+#
+# This line was missing for the building's whole first life. The fragment was written, the three
+# `weather` statements in it were correct, and nothing included the file — so the one subsystem
+# the facility exists to exercise was silently absent, and the only sign of it was that the report
+# said one weathering coat where there should have been thirteen.
+include "facility/surface.clip"
+
 # --- assembly ------------------------------------------------------------------------------------
 
 let shell = union {
@@ -62,7 +75,7 @@ let shell = union {
 }
 
 let inside = union {
-    part_vestibule part_rotunda part_halls part_stair part_fittings
+    part_vestibule part_rotunda part_halls part_stair part_fittings part_surface
 }
 
 let built = union { shell inside }

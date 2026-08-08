@@ -1298,8 +1298,25 @@ f64 Field::eval(u32 at, Vec3 p) const {
             return v;
         }
         case Op::Multiply: {
+            // Stops at the first factor that is nought.
+            //
+            // A product of patterns is how every mask in this language is written, and a mask
+            // exists to be zero nearly everywhere. The factor that says so is usually cheap — a
+            // smoothstep of a box, a coordinate — and the factors it is multiplying are usually
+            // not: an occlusion or a curvature samples the field several times over, and a
+            // weathering mask is built from both.
+            //
+            // Eagerly, a product costs the sum of its factors everywhere in the clip, including
+            // everywhere the answer is nought. That is not a small constant: the facility's
+            // weathering multiplied an occlusion of the whole building by a scope mask that was
+            // zero across ninety-nine per cent of it, and sampling went from 2.4 seconds to 623.
+            //
+            // So write the cheap discriminating factor first, and this pays for it. It is exact —
+            // zero times anything finite is zero — and the one thing it changes is that a factor
+            // after a zero is not evaluated, which nothing can observe because nothing in this
+            // language has side effects.
             f64 v = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) v *= eval(n.child[i], p);
+            for (u32 i = 1; i < n.children && v != 0.0; ++i) v *= eval(n.child[i], p);
             return v;
         }
         case Op::Min: {
