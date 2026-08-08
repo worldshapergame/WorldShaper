@@ -10,9 +10,63 @@
 #include <map>
 #include <sstream>
 
+#include "core/log.hpp"
 #include "world/tags.hpp"
 
+
+
 namespace ws {
+
+// A displacement smaller than a voxel cannot be geometry. It can only be dither.
+//
+// Moving a surface by a fraction of a voxel is a thing an SDF can express and a voxel grid cannot.
+// What the sampler does with it is decide, voxel by voxel, whether the shifted surface now falls on
+// the far side of that voxel's centre -- so instead of a surface moving smoothly, individual voxels
+// switch on and off wherever the pattern crosses the threshold. On a curved or diagonal surface that
+// is nearly harmless, because the surface already cuts the grid at every angle. On a FLAT
+// AXIS-ALIGNED one it is at its worst, because the whole face lies on the grid at once and the
+// entire wall dithers together.
+//
+// The facility is flat axis-aligned walls almost everywhere, and it carried
+//
+//     let all = displace { hollowed grain_fine } amount=0.012
+//     # ... which is under half a voxel at full detail, so it moves no wall
+//
+// At metre 32 that is 0.38 of a voxel. The comment states the danger and reads it as the safety
+// argument: being under a voxel is not what makes it harmless, it is precisely what makes it
+// dither, because a displacement too small to move a wall is still large enough to flip the voxels
+// the wall is made of. It rendered as a raspy speckle over every flat surface, and once the
+// rasterizer gained real sun-and-sky lighting it became black pepper, because a flipped voxel
+// exposes a face pointing a different way and a differently-facing face is now several times
+// darker.
+//
+// Below the cutoff the displacement is dropped rather than scaled up. Scaling it up would be
+// inventing detail nobody asked for; the shape the author wrote is simply finer than the grid they
+// chose to sample it on, and the honest answer at that resolution is the undisplaced surface.
+f64 usable_displacement(f64 amount, i32 voxels_per_metre, const char* what) {
+    if (voxels_per_metre <= 0) return amount;
+    // HALF a voxel, and the number is derived rather than chosen.
+    //
+    // A surface sitting at a voxel's centre has half a voxel to travel before it reaches the next
+    // one. A displacement smaller than that can therefore never move a grid-aligned surface a whole
+    // cell anywhere along it -- all it can do is push voxels back and forth across their own
+    // thresholds, which is dither by definition. At or above a half, the surface genuinely
+    // relocates somewhere, and what it does in between is a real deformation with ragged edges
+    // rather than noise pretending to be one.
+    //
+    // Three quarters was tried first and is too strict: it swallowed a 0.72-voxel weathering
+    // deformation, which is very nearly a whole cell and unambiguously real. A test caught it.
+    const f64 kLeastUseful = 0.5;
+    const f64 voxels = std::abs(amount) * static_cast<f64>(voxels_per_metre);
+    if (voxels >= kLeastUseful) return amount;
+    if (voxels > 1.0e-9) {
+        WS_LOG_WARN("clip",
+                    "{} amount {} m is {:.2f} of a voxel at metre {} -- too small to move a "
+                    "surface, large enough to dither one. Dropped.",
+                    what, amount, voxels, voxels_per_metre);
+    }
+    return 0.0;
+}
 namespace forge {
 
 namespace {
@@ -621,7 +675,9 @@ bool Parser::call(u32& out) {
                 fail("displace needs a shape and a pattern");
                 return false;
             }
-            out = f.displace(parts[0], parts[1], keys.number("amount", arg(0, 0.05)));
+            out = f.displace(parts[0], parts[1],
+                             usable_displacement(keys.number("amount", arg(0, 0.05)),
+                                                 script_.settings.voxels_per_metre, "displace"));
         }
         return true;
     }
@@ -1033,7 +1089,7 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
             return f.multiply(factors);
         };
         const auto weather_within = [&](u32 solid, u32 pattern, f64 amount) {
-            return f.displace(solid, pattern, amount);
+            return f.displace(solid, pattern, usable_displacement(amount, script.settings.voxels_per_metre, "weather"));
         };
 
         // The three questions every kind asks of the shape.
