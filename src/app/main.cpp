@@ -1377,11 +1377,22 @@ void Application::pump_refinement() {
 
     const u64 began = now_ns();
 
-    // Varied, because this box arrives at its final detail and keeps it. Only the coarse build that
-    // the player entered on is left flat, and that one is replaced entirely.
-    forge::apply_variation(refine_result_->clip, types_, refine_script_->field,
-                           refine_script_->variation, refine_script_->settings, *refine_result_,
-                           refine_jobs_.get());
+    // NOT varied, and this is the second time that lesson has been learned.
+    //
+    // Variation gives every voxel its own version of its material, so it interns something close to
+    // one type per voxel. Done once over a whole clip that is a million of them, which is already
+    // most of the table. Done per REGION it is a million per region and they do not share: the same
+    // perturbed colour is interned again in every box that happens to contain it. Three hundred and
+    // seventy-eight boxes reached 2,105,602 types and overran the buffer the table is uploaded
+    // through — an assert, mid-play, after several minutes of hitching.
+    //
+    // It was also most of the hitch. Interning a million materials on the main thread is what those
+    // two-hundred to nine-hundred millisecond frames were.
+    //
+    // So the world keeps the flat materials its paint rules give it. The no-two-voxels-alike
+    // shading is lost until there is somewhere to put it that does not scale with how the world was
+    // divided up — which is a real gap and is recorded as one, not a decision that this looks
+    // better.
 
     // REPLACE, so the box supersedes the coarse voxels standing in for it. Stamped instead, the
     // blocky overshoot survives outside the finer surface and the world only ever grows.
