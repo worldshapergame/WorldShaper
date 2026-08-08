@@ -1,0 +1,10 @@
+# parapet - the balustrade above the cornice, dies and corner pedestals
+#
+# PLACEHOLDER. Replace everything below with the real part.
+# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+#
+# This file must define exactly one part named `part_parapet`. Every other name it binds must
+# start with `parapet_` so nothing collides with another fragment.
+
+let parapet_placeholder = sphere 0 -1.30 0 r=0.25
+let part_parapet = parapet_placeholder

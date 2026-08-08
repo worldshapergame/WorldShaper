@@ -1,0 +1,205 @@
+# portico — the hexastyle Ionic portico: six columns, two antae, and the coffered soffit over them
+#
+# The face of the building. Six columns of the order in a row on the podium at y = 1.80, their
+# axes on the contract's six numbers, with the antae returning to the south wall at z = -7.50 and
+# the coffered ceiling closing the whole thing over at y = 9.90.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD — do not "tidy" any of it away.
+#
+# THE DEEPEST EXTERIOR SHADOW IN THE BUILDING, AND THE HARDEST AMBIENT-OCCLUSION GRADIENT.
+#
+# A portico is a room with one wall missing. This one is 15.30 m across, 3.65 m deep from the
+# column axis to the wall, and 8.10 m from the floor to the ceiling, and it is roofed. Direct sun
+# reaches the front third of the floor and NOTHING ELSE: every other surface in here — the north
+# face of six shafts, both antae, the whole coffered ceiling — is lit only by light that has
+# bounced at least once off the podium. That is the one place in this building where the path
+# tracer has nowhere to hide, and it is why this part exists.
+#
+# Three things are stacked inside that shadow on purpose, hardest last:
+#
+#   1. SIX FLUTED SHAFTS IN A ROW. Each is the order's `ionic_column` — 24 flutes, and the flat
+#      fillet between two of them is 0.030 m, ONE VOXEL at the contract's metre 32. Six of them
+#      at 2.70 m centres means the gradient across a shaft (bright fillet, dark flute, bright
+#      fillet) repeats 144 times across the elevation, and it does it in a light that has no
+#      direct term at all. If the sampler, the mesher or the denoiser is going to turn a one-voxel
+#      feature into grey mud, it turns THIS into grey mud, and it does it six times over.
+#
+#   2. TWENTY COFFERS OVERHEAD. `coffer_unit` from the order is a 0.90 m square hollow 0.225 m
+#      deep, stepping back in three moulded courses whose steps are 0.0225 m — UNDER a voxel. A
+#      coffer is the textbook soft occlusion gradient: a small square hollow in a ceiling that is
+#      itself in shadow, so the only light in it is second-bounce light that got into a box with
+#      one open face. Twenty of them, side by side, is twenty chances to see banding, splotching
+#      or a flat grey pan where there should be a gradient from the lip to the corner.
+#
+#   3. A GILT ROSETTE AT THE BACK OF EVERY ONE. 0.18 m square, hanging 0.075 m below the pan, so
+#      it sits 0.195 m up inside a hollow that is itself in permanent shade. `gilt` is rough=64
+#      metal=225 — a sharp specular metal — and a sharp specular metal lit ONLY by third-bounce
+#      light is the single nastiest thing in this scene for an importance sampler. It is either a
+#      warm point of light at the back of each coffer or it is black, and which of those it comes
+#      out as is the whole verdict on the indirect path.
+#
+# There is also a rough/polished pair here to be judged side by side in the same light and nowhere
+# else: limestone (rough=205) ceiling against marble (rough=140) columns, 0.05 m apart at the
+# abacus, both of them in bounce light only.
+#
+# NO WEATHERING IN THIS FILE, DELIBERATELY. Every weathering coat displaces the surface, and the
+# smallest amount worth writing is several times the 0.030 m fillet between two flutes and an
+# order of magnitude over the 0.0225 m step in a coffer moulding. Weathering the portico would
+# sand off precisely the features this part is here to test. The manifest's 12 mm of grain and the
+# `variation` line give it the no-two-voxels-alike surface without touching the thin matter.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45. Every number below is one of those, a multiple, or a simple
+# fraction. Three are not, and all three are named where they occur:
+#
+#   z = -11.15   the column axis, the contract's own — 1.35 (3M) behind the portico line at -12.50
+#   0.50         the band where the ceiling meets the wall: what the contract's 5.00 m portico
+#                depth leaves over once the coffers are laid out from the column axis
+#   0.05         the overlap the brief asks for wherever this part stands on somebody else's, and
+#                0.02 the same thing for a paint test. Both are the building's constants, not
+#                dimensions of anything — nothing is measured from either.
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE COLUMNS — six, hexastyle, on the podium
+# ================================================================================================
+#
+# Axes at x = +-1.35, +-4.05, +-6.75 (3M, 9M, 15M): eustyle, 3 D between axes, the contract's own
+# six numbers and the spine of the whole south elevation. All six stand on z = -11.15, which is
+# 1.35 (3M) behind the portico's front line at -12.50.
+#
+# Built once as a unit at the origin and carried to three places on +x, then folded. Three
+# translates and a mirror rather than a repeat, because a rigid motion is exact and a fold is
+# exact, and both let the sampler settle whole boxes; see the note in _order.clip about what a
+# polar repeat costs this building.
+
+# The shoe. The column's own plinth starts at 1.80 and so does the podium, and a butt joint on a
+# surface the manifest later displaces is a hairline crack waiting to happen. This is the plinth's
+# own footprint (1.35 square, 3M) sunk 0.05 into the podium and reaching 0.05 up inside the
+# plinth, so it is invisible from every angle and the join is certain.
+let portico_col_shoe = box -0.675 -0.05 -0.675   0.675 0.05 0.675  round=0.015
+
+# The bed, and the same argument at the top of the column: the abacus finishes at 9.90 and the
+# soffit begins at 9.90. This block straddles that line by 0.05 either side, M/3 square, small
+# enough to be inside the abacus below the line and inside the ceiling above it wherever it is
+# used. It never shows, because at both ends it is buried in stone that is already there.
+#
+# It is drawn only on +z — the north half — because the soffit does not reach south of the column
+# axis, and this is also the anta's bed, which after its half turn is drawn only on -z. One shape,
+# used twice, on the only side both of them have in common.
+let portico_bed = box -0.15 8.05 0   0.15 8.15 0.15
+
+let portico_col_unit = union { ionic_column portico_col_shoe portico_bed }
+
+let portico_col_in  = translate { portico_col_unit } 1.35 1.80 -11.15
+let portico_col_mid = translate { portico_col_unit } 4.05 1.80 -11.15
+let portico_col_out = translate { portico_col_unit } 6.75 1.80 -11.15
+
+let portico_columns = mirror { union { portico_col_in portico_col_mid portico_col_out } } axis=x
+
+# ================================================================================================
+# THE ANTAE — the order returned to the wall at z = -7.50
+# ================================================================================================
+#
+# One at each end, on the axis of the corner column (x = +-6.75), standing against the south face
+# of the main block. `ionic_pilaster` is drawn with its wall face on z = 0 projecting to z = +0.18,
+# so a half turn about y points it south, which is the way this building faces.
+#
+# The anta is what the flank of the portico lands on: without it the coffered ceiling arrives at
+# the wall carried by nothing, and the eye reads a 5 m soffit floating off a flat wall.
+#
+# THE ANTAE LIVE HERE AND NOWHERE ELSE. pilasters.clip stood two of its own for a while, at
+# x = 7.20, half a module out from these; two Ionic capitals 0.45 apart at the end of the
+# elevation is the worst thing that could happen to this front, and it agreed to drop them. Its
+# nearest minor pilaster now starts at x = 9.45. If you are adding pilasters to the south wall,
+# start there and leave x = 6.75 alone.
+let portico_anta_shoe = box -0.675 -0.05 -0.05   0.675 0.05 0.18   round=0.015
+
+let portico_anta_unit = union { ionic_pilaster portico_anta_shoe portico_bed }
+let portico_anta_turn = rotate { portico_anta_unit } y=0.5
+let portico_anta_east = translate { portico_anta_turn } 6.75 1.80 -7.50
+
+let portico_antae = mirror { portico_anta_east } axis=x
+
+# ================================================================================================
+# THE SOFFIT — the coffered ceiling, its underside on y = 9.90
+# ================================================================================================
+#
+# A slab 0.90 (D) thick from 9.90 to 10.80, over the whole portico from x -7.65 to 7.65 (the
+# contract's portico_x, 17M) and from the column axis at z = -11.15 back to z = -7.35 — which is
+# 0.15 (M/3) INSIDE the wall face at -7.50, so the ceiling and the wall certainly meet however far
+# the manifest's grain moves the wall's surface.
+#
+# It stops at the column axis and not in front of it. Everything south of -11.15 at this height
+# belongs to the entablature, whose architrave sits on these abaci and whose corona hangs out over
+# them; any face I put out there would either be buried or would read as a ledge under theirs. The
+# north half of each abacus is 0.36 deep and 1.08 wide, which is all the bearing this needs.
+let portico_soffit_slab = box -7.65 9.90 -11.15   7.65 10.80 -7.35  round=0.02
+
+# THE COFFERS. `coffer_unit` is a void 0.90 (D) square, so the grid is laid out on a pitch of
+# 1.35 (3M) and the band of stone between two coffers is 0.45 (M) — the classical 2:1.
+#
+# IN X the bands land on the column axes, which is where a ceiling's beams belong: the coffer
+# centres are the half-pitches between them, +-0.675, +-2.025, +-3.375, +-4.725, +-6.075, so a
+# band 0.45 wide sits centred on 0, +-1.35, +-2.70, +-4.05, +-5.40 and +-6.75. Ten across.
+#
+# IN Z, from the column axis northwards: a plain band 0.90 (D) wide over the columns, which is the
+# soffit of the architrave and is not coffered; then a row, a 0.45 band, and a second row. That
+# accounts for 3.15 of the 3.65 between the column axis and the wall, and THE REMAINING 0.50 IS
+# THE ONE NUMBER IN THIS FILE THAT IS NOT A MODULE FRACTION. It cannot be: the contract makes the
+# portico 5.00 m deep and 5.00 is not a whole number of 0.45. It is taken at the wall, because
+# that is where a real ceiling has its widest member and where the wall's own cornice will land.
+#
+#   -11.15 .. -10.25   architrave band     0.90  (D)
+#   -10.25 ..  -9.35   coffer row, centre -9.80
+#    -9.35 ..  -8.90   band                0.45  (M)
+#    -8.90 ..  -8.00   coffer row, centre -8.45
+#    -8.00 ..  -7.50   the remainder, against the wall
+#
+# The void is dropped 0.02 below the ceiling plane so the opening is cut past the rounding on the
+# first step's bottom arris and reads as a clean 0.90 square.
+#
+# A repeat is safe here where a polar repeat would not be: the copy is 0.90 across inside a 1.35
+# period, so it fits in its own cell, and the field returns a true distance and can still settle
+# boxes. The seed sits at x = 0 for exactly that reason — a shape straddling a cell boundary makes
+# the whole thing infinitely slack — and the finished line is carried out to 3.375 afterwards, so
+# the five copies land on 0.675, 2.025, 3.375, 4.725 and 6.075.
+let portico_cof_seed  = translate { coffer_unit } 0 9.88 -9.80
+let portico_cof_line  = repeat { portico_cof_seed } x=1.35 nx=2
+let portico_cof_row_s = translate { portico_cof_line } 3.375 0 0
+let portico_cof_row_n = translate { portico_cof_row_s } 0 0 1.35
+let portico_coffers   = mirror { union { portico_cof_row_s portico_cof_row_n } } axis=x
+
+let portico_soffit = difference { portico_soffit_slab portico_coffers }
+
+# THE ROSETTES, named again so they can be gilded. `coffer_unit` leaves a 0.18 (0.4 M) square boss
+# standing in the middle of each pan, hanging 0.075 (M/6) below it. This is the same block in the
+# same twenty places — it paints the boss, it adds no matter of its own, and it is the reason the
+# hardest thing in this scene is at the back of a hollow rather than out where the sun is.
+let portico_ros_seed  = box -0.09 10.030 -9.89   0.09 10.105 -9.71  round=0.018
+let portico_ros_line  = repeat { portico_ros_seed } x=1.35 nx=2
+let portico_ros_row_s = translate { portico_ros_line } 3.375 0 0
+let portico_ros_row_n = translate { portico_ros_row_s } 0 0 1.35
+let portico_rosettes  = mirror { union { portico_ros_row_s portico_ros_row_n } } axis=x
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let part_portico = union { portico_soffit portico_columns portico_antae }
+
+# This part removes nothing from anybody. The coffers are cut out of my own slab, above, so the
+# manifest never has to know they exist. Bound anyway, so it never has to ask.
+# let void_portico = <nothing>
+
+# --- paint ---------------------------------------------------------------------------------------
+#
+# Ceiling first, columns over it, gilt last, because a later coat covers an earlier one and the
+# rosettes are inside the ceiling. `below=0.02` on every rule, never 0: the manifest displaces the
+# whole building by 12 mm at the end and a test at zero misses the voxels that displacement made.
+paint limestone where=portico_soffit   below=0.02
+paint marble    where=portico_columns  below=0.02
+paint marble    where=portico_antae    below=0.02
+paint gilt      where=portico_rosettes below=0.02

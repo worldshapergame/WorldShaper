@@ -1,0 +1,266 @@
+# walls — the outer walls of the main block: rusticated ground storey, string course, ashlar,
+#         and quoins at every external corner.
+#
+# The plain rectangle of the main block, x -16.00 .. 16.00 by z -7.50 .. 7.50, 0.90 thick (D),
+# standing on the podium at 1.80 and running up to the main cornice line at 11.90. It does not
+# cut a single opening: every window and every door is a void owned by the fragment that draws
+# it, taken away by the manifest after everything is assembled.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD: the largest flat surface in the building, and therefore the
+# no-two-voxels-alike variation, which up here has to carry the whole look on its own.
+#
+# Above the string course this wall is a PLANE. 5.85 to 9.90 of it, all the way round a 94 m
+# perimeter — about 380 m² outside and as much again inside — with no moulding, no relief, no
+# shadow and nothing at all for the eye to hold on to except the surface itself. Everywhere else
+# in this building the geometry does the work. Here there is no geometry to do it, and if this
+# wall comes back as a slab of flat grey then the variation, the paint stack and the material
+# table are not doing theirs.
+#
+# So the surface is built to be looked at at three scales at once, all of them SURFACE and none
+# of them geometry:
+#
+#   metres        stone from three beds — limestone, with patches of a paler and a warmer stone
+#                 keyed on one broad fbm, so the wall is not one colour anywhere
+#   0.03 m        the ashlar joints, PAINTED and not cut: a 0.03 m line (M/15, the same width as
+#                 the fillet between two flutes on a column) that is ONE VOXEL at the contract's
+#                 metre 32. A one-voxel dark line on a flat pale field, with no geometry under it
+#                 to help a denoiser guess where it goes, is the hardest thing on this wall
+#   one voxel     the manifest's `variation colour=0.030 rough=0.070`, which is the whole point:
+#                 four materials on the outer face means four base records for it to perturb, and
+#                 the measured answer is in the report line `variation ... distinct records`
+#
+# DO NOT CUT THE JOINTS INTO THE STONE. The moment they are geometry this stops being a test of
+# the surface path and becomes another relief wall like everything else in the building. They are
+# paint on a plane on purpose. For the same reason the ashlar storey has no rustication, no
+# panels and no band courses: the flatness is the load.
+#
+# The rusticated storey below is the other half of the bargain — 0.09 wide by 0.135 deep channels
+# on a 0.60 course, about 350 of them round the building, which is where the sampler has to settle
+# a great many small boxes cut out of one very large one.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45. Every number below is one of those or a simple fraction of one.
+# The ones that look odd, and why:
+#
+#   16.00, 7.50   the contract's own block outline. They are not module multiples; the contract
+#                 says so and everything else here is measured from them.
+#   0.60          the rustication course. The contract fixes it (`courses`, `ashlar`) and the
+#                 brief names it. It is 4M/3.
+#   0.675, 1.35   the ashlar course and block, 1.5 M and 3 M. Chosen so that SIX courses fit
+#                 exactly between the string course at 5.85 and the column head at 9.90, and so
+#                 that two blocks make one bay of 2.70.
+#   1.75          1.80 less the 0.05 the brief requires every part to bury into what it stands on.
+#                 An overlap, not a dimension.
+#   0.045, 0.135  0.1 M and 0.3 M — the quoin projection and the channel depth.
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE RING — 0.90 thick, 1.75 to 11.90
+# ================================================================================================
+#
+# Outer face on the contract's block outline, ±16.00 and ±7.50, FOR BOTH STOREYS. The rusticated
+# storey is not set forward and the ashlar is not set back: the rustication reads by what is cut
+# out of it, not by where its face is. That is deliberate and it is for the neighbours — the
+# entablature, the pilasters and the window surrounds all take ±16.00 / ±7.50 from the contract
+# and will land flush on this wall without having read this file.
+#
+# The core is cut through in y beyond both ends so the ring is open top and bottom; the roof and
+# the podium close it.
+let walls_outer = box -16.00 1.75 -7.50   16.00 11.90 7.50 round=0.015
+let walls_core  = box -15.10 1.55 -6.60   15.10 12.10 6.60 round=0.015
+let walls_ring  = difference { walls_outer walls_core }
+
+# ================================================================================================
+# THE RUSTICATED GROUND STOREY — 1.80 to 5.40, six courses of 0.60
+# ================================================================================================
+#
+# Channels 0.09 across (0.2 M) and 0.135 deep (0.3 M), cut out of the face rather than left
+# between applied blocks, which is what a channelled rustication is. Five horizontal joints at
+# 2.40, 3.00, 3.60, 4.20 and 4.80, and vertical joints every 1.35 (3 M) staggered half a block
+# course by course, so it is a running bond and not a grid.
+#
+# The horizontal channel is one FRAME — the difference of two boxes — so it wraps all four faces
+# and both corners in one shape and the mitre is free. It is repeated in y; the repeat's child
+# has to sit in the first cell, at the origin, and the whole repeat is then carried up to where
+# the joints belong, which is why the translate is on the outside.
+
+let walls_hchan_out = box -16.10 -0.045 -7.60    16.10 0.045 7.60
+let walls_hchan_in  = box -15.865 -0.20 -7.365   15.865 0.20 7.365
+let walls_hchan_one = difference { walls_hchan_out walls_hchan_in }
+let walls_hchan     = translate { repeat { walls_hchan_one } y=0.60 ny=2 } 0 3.60 0
+
+# The vertical joints. One bar, one course tall and one channel wide, cutting into one face; it is
+# repeated across the face and up it, and the two sets — even courses and odd courses — differ
+# only by half a block in x and half the repeat period in y. Built once on the north face and once
+# on the east face and folded to the other two, which is also what keeps it symmetric about x = 0.
+#
+# BUILT ON THE NORTH FACE AND THE EAST FACE, WHICH IS TO SAY ON POSITIVE z AND POSITIVE x, AND
+# THAT IS NOT A PREFERENCE. `mirror` folds the coordinate to its ABSOLUTE VALUE, so what it shows
+# on both sides is whatever the child has on the POSITIVE side; a child that lives entirely on
+# negative z is asked about at +|z|, finds nothing there, and disappears from the building
+# altogether. It does not warn, it does not halve, it deletes. This file was written the first
+# time with the joints, the string course and every quoin on the south and east faces, and the
+# result parsed, measured, reported one component and rendered — with no quoins anywhere, no
+# vertical rustication on the north or south wall, and a string course that only existed on the
+# two ends. `--clip-part walls_quoins` reported zero components, which is how it was found.
+# South-facing work goes on the north face and gets folded. Always.
+let walls_vbar_n = box -0.045 -0.30 7.365    0.045 0.30 7.60  round=0.012
+let walls_vbar_e = box 15.865 -0.30 -0.045   16.10 0.30 0.045 round=0.012
+
+let walls_vjoint_n_even = translate { repeat { walls_vbar_n } x=1.35 y=1.20 nx=13 ny=1 } 0     3.30 0
+let walls_vjoint_n_odd  = translate { repeat { walls_vbar_n } x=1.35 y=1.20 nx=13 ny=1 } 0.675 3.90 0
+let walls_vjoint_e_even = translate { repeat { walls_vbar_e } z=1.35 y=1.20 nz=7 ny=1 } 0 3.30 0
+let walls_vjoint_e_odd  = translate { repeat { walls_vbar_e } z=1.35 y=1.20 nz=7 ny=1 } 0 3.90 0.675
+
+let walls_vjoint_n = mirror { union { walls_vjoint_n_even walls_vjoint_n_odd } } axis=z
+let walls_vjoint_e = mirror { union { walls_vjoint_e_even walls_vjoint_e_odd } } axis=x
+
+let walls_channels = union { walls_hchan walls_vjoint_n walls_vjoint_e }
+
+# ================================================================================================
+# THE QUOINS — every external corner, 1.80 to 9.90
+# ================================================================================================
+#
+# Long and short alternating course by course, 0.90 on one face and 0.45 on the other and then
+# the other way about, standing 0.135 proud (0.3 M) and buried 0.135 into the wall so nothing can
+# come adrift. Each block is 0.51 tall on a 0.60 pitch, which leaves a 0.09 joint between two of
+# them — the only line on the ashlar storey that is cut rather than painted.
+#
+# 0.135 by 0.09 is the rusticated storey's own channel, depth and width, carried up the corner:
+# the quoins are that masonry continued, which is what quoins over a rusticated base are for.
+# It took two goes to get there. At 0.045 proud with a 0.045 joint they did not exist at metre 16
+# — one voxel of projection is a paint job, not a quoin — and at 0.09 with a 0.045 joint the
+# strip was visible and the individual stones in it were not. What makes a quoin read is the
+# joint between two of them, not how far it stands out; the projection only has to be enough to
+# put the joint in shadow.
+#
+# Built at the NORTH-EAST corner — positive x, positive z — and folded twice. See the note on the
+# vertical joints above for why it has to be that corner and not any of the other three. The two
+# courses are two shapes, each repeated every 1.20 so that together they alternate every 0.60, and
+# the whole set is trimmed at 9.90 — the column head, where the entablature takes over and a
+# projecting quoin would be buried in it.
+
+let walls_qa_x = box 15.865 0 6.735   16.135 0.51 7.635 round=0.012
+let walls_qa_z = box 15.685 0 7.365   16.135 0.51 7.635 round=0.012
+let walls_qb_x = box 15.865 0 7.185   16.135 0.51 7.635 round=0.012
+let walls_qb_z = box 15.235 0 7.365   16.135 0.51 7.635 round=0.012
+
+let walls_quoin_a = union { walls_qa_x walls_qa_z }
+let walls_quoin_b = union { walls_qb_x walls_qb_z }
+
+let walls_quoin_a_all = translate { repeat { walls_quoin_a } y=1.20 ny=7 } 0 1.80 0
+let walls_quoin_b_all = translate { repeat { walls_quoin_b } y=1.20 ny=7 } 0 2.40 0
+let walls_quoin_stack = intersection {
+    union { walls_quoin_a_all walls_quoin_b_all }
+    box 15.00 1.80 6.00   16.30 9.90 7.80
+}
+let walls_quoins = mirror { mirror { walls_quoin_stack } axis=x } axis=z
+
+# ================================================================================================
+# THE STRING COURSE — 5.40 to 5.85 (12 M to 13 M), projecting 0.18 (0.4 M)
+# ================================================================================================
+#
+# The line the whole elevation is divided on: the rustication stops under it and the piano
+# nobile's plain ashlar starts above it. Four members, drawn as sections and run straight:
+#
+#   5.310 - 5.400   astragal   0.09   the necking, springing out of the rusticated face
+#   5.400 - 5.5875  corona     0.1875 a plain bold band with a flat soffit — the shadow line
+#   5.5875- 5.6250  fillet     0.0375 set back 0.045, so the corona has an edge
+#   5.6250- 5.8500  ovolo      0.225  the weathering, doming back into the ashlar face
+#
+# A moulding run is only the band between its two corners, so every one of them starts INSIDE the
+# wall — 0.045 for the two curves, 0.18 for the two square members — and there is no hairline
+# anywhere for the manifest's grain to open.
+#
+# It turns the corner by union and nothing else. Two perpendicular runs, each carried out to the
+# other's outermost projection, meet in exactly the mitre a mason would cut: at any height the
+# north run says "solid within f(y) of z = 7.50" and the east run says "solid within f(y) of
+# x = 16.00", and their union is the square corner block whose two faces trace the profile both
+# ways. That is why the north run reaches x = ±16.18 and the east run z = ±7.68.
+#
+# Drawn on the NORTH face and folded, for the reason given under the vertical joints: a run built
+# on the south face is a run that is not in the building.
+
+let walls_sc_neck_n  = astragal -16.18 5.3100 7.455   16.18 5.4000 7.590
+let walls_sc_band_n  = fillet   -16.18 5.4000 7.320   16.18 5.5875 7.680
+let walls_sc_step_n  = fillet   -16.18 5.5875 7.320   16.18 5.6250 7.635
+let walls_sc_slope_n = ovolo    -16.18 5.6250 7.455   16.18 5.8500 7.635
+
+let walls_sc_neck_e  = astragal 15.955 5.3100 -7.68   16.090 5.4000 7.68
+let walls_sc_band_e  = fillet   15.820 5.4000 -7.68   16.180 5.5875 7.68
+let walls_sc_step_e  = fillet   15.820 5.5875 -7.68   16.135 5.6250 7.68
+let walls_sc_slope_e = ovolo    15.955 5.6250 -7.68   16.135 5.8500 7.68
+
+let walls_sc_north = union { walls_sc_neck_n walls_sc_band_n walls_sc_step_n walls_sc_slope_n }
+let walls_sc_east  = union { walls_sc_neck_e walls_sc_band_e walls_sc_step_e walls_sc_slope_e }
+let walls_string   = union { mirror { walls_sc_north } axis=z  mirror { walls_sc_east } axis=x }
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let walls_mass = union { walls_ring walls_quoins walls_string }
+let part_walls = difference { walls_mass walls_channels }
+
+# ================================================================================================
+# THE SURFACE — where the load actually lives
+# ================================================================================================
+#
+# Zones first, all of them shapes and all of them mine. A paint rule keyed on a shape is settled
+# for a whole block at once by the sampler; one keyed on a pattern has to be asked per voxel,
+# everywhere in the clip, so the pattern rules below are kept to four and all four hang off
+# `walls_ring`, which is two boxes, rather than off the assembled part, which is two hundred.
+
+let walls_lining = intersection { part_walls  box -15.30 1.55 -6.80   15.30 12.10 6.80 }
+let walls_rustic = intersection { part_walls  box -16.40 1.55 -7.90   16.40 5.40 7.90 }
+
+let walls_band_ash = intersection { walls_ring  box -16.30 5.85 -7.80   16.30 11.90 7.80 }
+let walls_ash_ns   = intersection { walls_band_ash  mirror { box -16.30 5.85 6.55   16.30 11.90 7.80 } axis=z }
+let walls_ash_ew   = intersection { walls_band_ash  mirror { box 15.05 5.85 -7.80   16.30 11.90 7.80 } axis=x }
+
+# The bond. `bricks` lays its courses along y and its length along x only when it faces z, so the
+# east and west walls get the same pattern turned a quarter turn about y — the courses stay level
+# and the length runs along z, which is the only way to get a running bond onto a wall whose
+# normal is x. The lift of 0.45 puts a bed joint exactly on 5.85, and then the six courses of
+# 0.675 land on 6.525, 7.20, 7.875, 8.55, 9.225 and 9.90: the string course and the column head.
+#
+# mortar=0.03 is M/15. It is what makes the painted joint one voxel wide at metre 32, and it is
+# the number this part is being judged on. Do not widen it to make the wall look tidier.
+let walls_bond_z = translate { bricks length=1.35 height=0.675 mortar=0.03 facing=z } 0 0.45 0
+let walls_bond_x = rotate { walls_bond_z } y=0.25
+
+# `bricks` is positive in the joint and negative on a stone face, so `0.02 - it` crosses the
+# rules' own 0.02 exactly where the joint begins. Maxed against the zone, which is how a pattern
+# is confined to one part's own geometry: outside the zone the shape's distance is what the rule
+# reads, and it is far too big to pass.
+let walls_joint_ns = max { walls_ash_ns  add { constant 0.02  negate { walls_bond_z } } }
+let walls_joint_ew = max { walls_ash_ew  add { constant 0.02  negate { walls_bond_x } } }
+
+# Three beds of stone in one wall. One broad grain, read high for the paler stone and low for the
+# warmer one, which leaves the limestone in between — so no two square metres of this face are the
+# same colour and none of it is a pattern anybody can name.
+#
+# The three are DELIBERATELY CLOSE: plaster 226,222,212, limestone 208,203,190, stucco 214,206,188,
+# and all three matte within thirty of each other in roughness. The first pass used marble_hot and
+# sandstone, which are 232 and 196 — thirty-six apart — and the wall came back looking like
+# camouflage: big warm blobs on a pale field, a wall that had been *decorated* to hide the fact
+# that nothing else was happening on it. That is the failure this part is supposed to avoid from
+# the other side. Three stones a few values apart is what an ashlar face actually is, and it
+# leaves the per-voxel variation, not the paint, as the thing carrying the surface.
+#
+# Five octaves over a bay, not three over a metre and a half: large, fractal and slow-drifting
+# reads as stone out of different beds, where small and round reads as damp.
+let walls_bed      = fbm size=2.70 octaves=5 seed=71
+let walls_bed_pale = max { walls_band_ash  add { constant 0.30  negate { walls_bed } } }
+let walls_bed_warm = max { walls_band_ash  add { constant 0.30  walls_bed } }
+
+# The coats, in order: later covers earlier.
+paint limestone  where=part_walls        below=0.02
+paint sandstone  where=walls_rustic      below=0.02
+paint plaster    where=walls_bed_pale    below=0.02
+paint stucco     where=walls_bed_warm    below=0.02
+paint gravel     where=walls_joint_ns    below=0.02
+paint gravel     where=walls_joint_ew    below=0.02
+paint plaster    where=walls_lining      below=0.02

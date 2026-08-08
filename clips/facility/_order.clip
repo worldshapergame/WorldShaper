@@ -1,0 +1,456 @@
+# The Ionic order: the vocabulary every other fragment places and repeats.
+#
+# Nothing in this file is placed. It is a dictionary of parts, each drawn once, centred on the
+# origin in x and z and standing on y = 0, so a caller writes `translate { ionic_column } x y z`
+# and never has to know how a volute is made. There is no `part_order` and there never should be:
+# this file contributes no geometry to the building on its own, and the manifest does not include
+# one. If you want a column in the building, place one.
+#
+# For the same reason THIS FILE PAINTS NOTHING. A paint rule here would be keyed on a shape that
+# lives at the origin, not on the eighteen places a caller put a copy, so it would colour a
+# column-shaped hole in the middle of the site and nothing else. Paint your own placed geometry
+# in your own file. What the order wants, if you are asking: marble for column, pilaster and
+# entablature; marble or limestone for balusters; limestone for coffers; bronze for an urn or an
+# acroterion when it stands against the sky.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS FILE PUTS UNDER LOAD: the thinnest matter in the building.
+#
+#   the flutes    24 to a shaft, and the flat fillet between two of them is 0.030 m across
+#   the dentils   0.090 m blocks with a 0.045 m gap between them, 253 of them in a run
+#   the volute    a 0.045 m tube wound two and a half times, standing 0.045 m proud of its face
+#   the baluster  a 0.063 m neck
+#
+# At the contract's metre 32 a voxel is 0.03125 m. So a fillet between two flutes is ONE voxel
+# across, a dentil gap is one and a half, a baluster neck is two. THAT IS DELIBERATE AND IT IS THE
+# POINT. These are the features that break a sampler first (a surface that moves more than a voxel
+# between samples), a mesher second, and a denoiser third — a one-voxel bright fillet beside a
+# one-voxel dark flute is the highest spatial frequency the renderer will ever be handed, and if
+# it survives a path trace without dissolving into grey, the renderer works.
+#
+# DO NOT "FIX" THESE BY MAKING THEM THICKER. If the flutes look noisy, the sampler is what is
+# wrong, not the flutes. A column with comfortable 0.08 m fillets is a column that tests nothing,
+# and there are nineteen of them in this building — it is the largest single share of the engine
+# load in the whole scene. The numbers above are also all module fractions (0.030 = M/15,
+# 0.045 = M/10, 0.090 = M/5), so they are not arbitrary and cannot be nudged without breaking the
+# order.
+#
+# The second load this file carries is the SAMPLER'S DISTANCE FIELD ITSELF: a fluted shaft is an
+# intersection of a revolve with the union of an inward `offset` and twenty-four rotated fins, and
+# a volute is a swept logarithmic spiral. Both report exact distances; neither is a box, and the
+# shaft's outline is a circular arc struck two hundred and fifty diameters away. If box culling or
+# skip-slack regresses, a column is the first thing that will get slow — it already found one such
+# regression, written up in clips/facility/requests/order.md.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90 is the diameter of a column at its foot, M = 0.45 is half of it, and every
+# number below is a multiple or a simple fraction of one of those. The three exceptions are named
+# where they occur: the entablature is 2.00 by the contract (0.25 x the column, rounded), the
+# baluster is 0.70 because that is the height the parapet leaves it, and the entasis is struck
+# with a circle of radius 115.30 whose only job is to pass through three points that ARE module
+# numbers.
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE ATTIC BASE — 0.45 m (0.5 D), standing on y = 0
+# ================================================================================================
+#
+# A square plinth, a large lower torus, a deep scotia between two fillets, a smaller upper torus,
+# and an apophyge into the shaft. Drawn ONCE as a section in (radius, height) and revolved, which
+# is what makes the scotia a scotia: a stacked one is a staircase.
+#
+# Heights, summing to 0.45 exactly:
+#   0.000 - 0.150   plinth            M/3      square, half-width 0.675 (1.5 M)
+#   0.150 - 0.2625  lower torus       M/4      out to 0.630 (1.4 M)
+#   0.2625- 0.28125 fillet            M/24     the core face, 0.5625 (1.25 M)
+#   0.28125- 0.3375 scotia            M/8      cut back to 0.45 (M) — the shaft's own radius
+#   0.3375- 0.35625 fillet            M/24
+#   0.35625- 0.43125 upper torus      M/6
+#   0.43125- 0.45   apophyge          M/24     the congé into the shaft
+
+# The core the mouldings are cut into. It steps: wide under the lower torus, then back to the
+# shaft radius so the scotia has something to be hollowed out of. A moulding section unioned onto
+# a core standing at its first corner is how they are meant to be used.
+let base_core_low  = box 0 0.15    -1  0.50625 0.2625 1
+let base_core_high = box 0 0.2625  -1  0.45    0.45   1
+
+let base_torus_low  = bead   0.50625 0.15     0.63    0.2625
+let base_fillet_low = fillet 0.45    0.2625   0.5625  0.28125
+let base_scotia     = scotia 0.45    0.28125  0.5625  0.3375
+let base_fillet_up  = fillet 0.45    0.3375   0.5625  0.35625
+let base_torus_up   = bead   0.45    0.35625  0.5625  0.43125
+
+let base_section = union {
+    base_core_low base_core_high
+    base_torus_low base_fillet_low base_scotia base_fillet_up base_torus_up
+}
+
+let base_turned = revolve { base_section } axis=y
+
+# The plinth is square and so cannot be part of the revolve.
+let base_plinth = box -0.675 0 -0.675  0.675 0.155 0.675 round=0.015
+
+let ionic_base = union { base_plinth base_turned }
+
+# ================================================================================================
+# THE SHAFT — 7.20 m (8 D), drawn from its own y = 0, placed at 0.45 by the column
+# ================================================================================================
+#
+# 0.45 radius at the foot, 0.375 at the top (five-sixths, exactly), with the entasis struck as a
+# single circular arc through those two radii whose highest point stands a third of the way up.
+#
+# The arc: centre (-114.825, 2.40) in the (radius, height) plane, radius 115.30. Those two numbers
+# are not dimensions, they are the construction — the only three numbers that are dimensions are
+# r(0.00) = 0.450 = M, r(7.20) = 0.375 = 5M/6, and the crown at y = 2.40 = 7.20/3, where the
+# radius comes out 0.475. The swell over the straight taper at that height is 0.050, which is what
+# stops a column looking like a drainpipe.
+let shaft_arc = cylinder -114.825 2.40 0  r=115.30 h=4 axis=z
+let shaft_band = box 0 0 -1  0.60 7.20 1
+let shaft_section = intersection { shaft_band shaft_arc }
+let shaft_solid = revolve { shaft_section } axis=y
+
+# THE FLUTES. Twenty-four hollows with FLAT fillets between them, 0.0375 (M/12) deep.
+#
+# Cut by shrinking the shaft by the flute depth and then putting the original surface back on 24
+# flat fins. That is the only construction that follows the entasis: a straight cutter placed at
+# the foot's radius misses the shaft entirely by the top, and one placed on the taper line is
+# swallowed by the swell in the middle. `offset` moves the surface along its own normal, so the
+# flute floor is parallel to the shaft everywhere, all the way up, at no cost in lines.
+#
+# The fin is 0.030 across (M/15) and it is a BOX, so the fillet it leaves is genuinely flat, which
+# is what tells an Ionic flute from a Doric one. See the load note at the top before you widen it.
+# Twenty-four fins, as a seven-fold quadrant mirrored twice, and NOT as `around { } count=24`.
+#
+# `around` is the obvious way to write this and it costs the whole building its sampler. A polar
+# fold can report a distance larger than the truth for a point near a sector boundary — it is
+# blind to the copy in the next sector — so the field declares it infinitely slack, and infinite
+# slack anywhere in an expression means the sampler cannot skip a single voxel of the bounds
+# ANYWHERE. Written with `around` this column asked the field 85 million times at metre 16 and
+# took ten seconds; written like this it asks it a hundred thousand times. Nineteen columns.
+#
+# Rotations are isometries, so these are exact and each carries a box. Seven fins from 0 to a
+# quarter turn, mirrored in x and then in z, is exactly twenty-four at fifteen degrees apart:
+# the ones on the axes fold onto themselves and the union does not care.
+let shaft_floor = offset { shaft_solid } by=-0.0375
+let shaft_fin   = box 0.30 0 -0.015  0.55 7.20 0.015 round=0.006
+let shaft_fin_b = rotate { shaft_fin } y=0.0416667
+let shaft_fin_c = rotate { shaft_fin } y=0.0833333
+let shaft_fin_d = rotate { shaft_fin } y=0.125
+let shaft_fin_e = rotate { shaft_fin } y=0.1666667
+let shaft_fin_f = rotate { shaft_fin } y=0.2083333
+let shaft_fin_g = rotate { shaft_fin } y=0.25
+let shaft_quad  = union { shaft_fin shaft_fin_b shaft_fin_c shaft_fin_d
+                          shaft_fin_e shaft_fin_f shaft_fin_g }
+let shaft_fins  = mirror { mirror { shaft_quad } axis=x } axis=z
+let order_shaft = intersection { shaft_solid union { shaft_floor shaft_fins } }
+
+# ================================================================================================
+# THE IONIC CAPITAL — 0.45 m (0.5 D), drawn from its own y = 0
+# ================================================================================================
+#
+#   0.000 - 0.045   astragal, the necking ring
+#   0.045 - 0.1575  echinus, carved with egg-and-dart
+#   0.1575- 0.3825  the volutes, and the cushion that joins them on the sides
+#   0.3825- 0.45    abacus
+#
+# The volute is the one thing everyone looks at, so it is a real logarithmic spiral swept as a
+# tube — start radius 0.18 (0.4 M), halving each turn, two and a half turns into the eye — and it
+# stands 0.045 proud of a round face plate, so the channel between the turns is a real hollow that
+# light has to get into and out of. The eyes sit at x = +-0.3375 (0.75 M), y = 0.2475.
+
+# The bell, and above it a narrower drum, so that the face between the two volutes reads as the
+# recessed channel it is rather than as a wall flush with them.
+let cap_bell = cylinder 0 0.07875 0  r=0.3375 h=0.1575 axis=y
+let cap_neck = cylinder 0 0.27     0  r=0.2475 h=0.225  axis=y
+let cap_core = union { cap_bell cap_neck }
+
+let cap_astragal_s = bead  0.3375 0.0     0.3825 0.045
+let cap_echinus_s  = ovolo 0.3375 0.1575  0.4725 0.045
+let cap_astragal = revolve { cap_astragal_s } axis=y
+let cap_ech_solid = revolve { cap_echinus_s } axis=y
+
+# EGG AND DART, carved the same way the flutes are: the echinus is sunk 0.022 and the pattern is
+# what is left standing of the original surface. Sticking blobs on instead does not work — the
+# echinus is a curve, so a blob at one radius is buried at the top of it and floating at the
+# bottom, which is exactly what the first pass did. An egg is 0.096 across and a dart 0.026: three
+# voxels and less than one, at full detail.
+#
+# Sixteen of each, laid out the same way the flutes are and for the same reason: five eggs and
+# four darts from zero to a quarter turn, mirrored twice.
+let cap_ech_floor = offset { cap_ech_solid } by=-0.022
+let cap_egg   = ellipsoid 0.40 0.105 0  rx=0.14 ry=0.042 rz=0.048
+let cap_egg_b = rotate { cap_egg } y=0.0625
+let cap_egg_c = rotate { cap_egg } y=0.125
+let cap_egg_d = rotate { cap_egg } y=0.1875
+let cap_egg_e = rotate { cap_egg } y=0.25
+let cap_dart   = capsule 0.25 0.135 0  0.55 0.05 0 r=0.013
+let cap_dart_a = rotate { cap_dart } y=0.03125
+let cap_dart_b = rotate { cap_dart } y=0.09375
+let cap_dart_c = rotate { cap_dart } y=0.15625
+let cap_dart_d = rotate { cap_dart } y=0.21875
+let cap_carve_quad = union {
+    cap_egg cap_egg_b cap_egg_c cap_egg_d cap_egg_e
+    cap_dart_a cap_dart_b cap_dart_c cap_dart_d
+}
+let cap_carving = mirror { mirror { cap_carve_quad } axis=x } axis=z
+let cap_echinus = intersection { cap_ech_solid union { cap_ech_floor cap_carving } }
+let cap_mould = union { cap_astragal cap_echinus }
+
+# THE VOLUTE. Built at the origin so it can be turned, then carried to its eye.
+#
+# `spiral` starts on +x and winds towards +y. A quarter turn about y reverses the winding without
+# touching the plane it lies in, and three quarters of a turn about z then brings the start to the
+# top, so the band leaves the abacus, sweeps outward and down, and curls in under itself — which
+# is the way round a right-hand volute goes. The left one is this one mirrored, which is also what
+# a real capital does.
+let vol_raw  = spiral 0 0 0  r=0.18 tighten=0.5 tube=0.0225 turns=2.5 axis=z
+let vol_hand = rotate { vol_raw } y=0.5
+let vol_turn = rotate { vol_hand } z=0.75
+let vol_band = translate { vol_turn } 0.3375 0.2475 0.315
+
+# The face the spiral is carved on, and the boss at the eye it winds into.
+let vol_face = cylinder 0.3375 0.2475 0.27   r=0.1575 h=0.045 axis=z
+let vol_eye  = cylinder 0.3375 0.2475 0.3105 r=0.0405 h=0.135 axis=z
+let vol_one  = union { vol_band vol_face vol_eye }
+let cap_volutes = mirror { mirror { vol_one } axis=x } axis=z
+
+# THE CUSHION, the roll that joins the front volute to the back one down each side, with its
+# balteus — the band round its waist.
+let cush_roll = cylinder 0.3375 0.2475 0  r=0.135  h=0.54 axis=z
+let cush_band = torus    0.3375 0.2475 0  ring=0.135 tube=0.0225 axis=z
+let cap_cushion = mirror { union { cush_roll cush_band } } axis=x
+
+# THE ABACUS. Wider than it is deep, as an Ionic abacus is, with a small ovolo lip under it.
+let cap_abacus_low = box -0.495 0.3825 -0.315  0.495 0.405 0.315 round=0.012
+let cap_abacus_top = box -0.54  0.4050 -0.36   0.54  0.45  0.36  round=0.012
+
+let ionic_capital = union {
+    cap_core cap_mould
+    cap_volutes cap_cushion
+    cap_abacus_low cap_abacus_top
+}
+
+# ================================================================================================
+# THE COLUMN — 8.10 m (9 D)
+# ================================================================================================
+
+let ionic_column = union {
+    ionic_base
+    translate { order_shaft } 0 0.45 0
+    translate { ionic_capital } 0 7.65 0
+}
+
+# ================================================================================================
+# THE PILASTER — the same order flattened to a wall
+# ================================================================================================
+#
+# THE WALL FACE IS z = 0 AND THE PILASTER PROJECTS TO z = +0.18 (0.4 M). It is 0.90 wide (D) and
+# 8.10 tall, the same as the column, and it stands on y = 0 like everything else here. A caller
+# on a south-facing wall turns it half a turn about y.
+#
+# The base and capital are the column's own, slid back so that the front volute face lands exactly
+# on z = 0.18 and then sliced off at the wall. That is deliberate: a pilaster is the same order
+# seen edge-on, and if it were drawn separately it would drift away from the column the first time
+# anybody changed a moulding.
+let pil_slab = box -0.70 -0.05 0  0.70 8.15 0.18
+
+# The shaft: flat, eight flutes across the face, cut the same way the column's are — a shrunk copy
+# with the surface put back on flat fins. Nine fins at 0.1125 (M/4) apart, the outer two on the
+# arrises, leaves eight flutes and the same 0.030 fillet — one voxel — as the column.
+let pil_shaft_solid = box -0.45 0.45 0  0.45 7.65 0.18 round=0.008
+let pil_floor = box -0.42 0.45 0  0.42 7.65 0.1425
+let pil_fin   = box -0.015 0.45 0  0.015 7.65 0.20
+let pil_fins  = repeat { pil_fin } x=0.1125 nx=4
+let pil_shaft = intersection { pil_shaft_solid union { pil_floor pil_fins } }
+
+let pil_base_cut = intersection { translate { ionic_base } 0 0 -0.1575  pil_slab }
+let pil_cap_cut  = intersection { translate { ionic_capital } 0 7.65 -0.1575  pil_slab }
+
+# Behind the volutes there is nothing to slice — on a column that space is air between the front
+# scroll and the back one, and on a pilaster it is a window straight through the capital. This is
+# the wall it needs. It stops 0.09 short of the face, which is the depth of the channel between
+# the two scrolls and reads as one.
+let pil_cap_back = box -0.45 7.7625 0  0.45 8.0325 0.09 round=0.008
+
+let ionic_pilaster = union { pil_base_cut pil_shaft pil_cap_back pil_cap_cut }
+
+# ================================================================================================
+# THE ENTABLATURE — 2.00 m, by the contract
+# ================================================================================================
+#
+# Divided in twentieths of its own height (0.05 m), which is how an entablature is divided:
+#
+#   0.00 - 0.65   ARCHITRAVE   three fasciae, each stepping forward of the one below, and a
+#                              crowning cyma reversa
+#   0.65 - 1.25   FRIEZE       plain, flush with the top fascia
+#   1.25 - 2.00   CORNICE      bed mould, dentil band, fillet, ovolo, corona, crowning cyma
+#
+# The whole thing projects 0.72 (1.6 M) from the wall, which is a little less than the cornice is
+# tall — the classical rule, and the reason the shadow under a corona is as black as it is.
+#
+# `entab_profile` is the SECTION, drawn in (projection, height) with the wall at x = 0 and the
+# projection running out along +x, ready to be put straight into `revolve { } axis=y` for a
+# circular entablature, or turned and swept for anything else. `entab_run` below is the same
+# section already run straight, for the far more common case.
+
+let entab_fascia_one = fillet 0    0.00  0.06 0.18
+let entab_fascia_two = fillet 0    0.18  0.10 0.39
+let entab_fascia_thr = fillet 0    0.39  0.14 0.60
+let entab_arch_crown = cyma_reversa 0.20 0.60  0.14 0.65
+let entab_frieze     = fillet 0    0.65  0.14 1.25
+let entab_bed        = cyma_reversa 0.22 1.25  0.14 1.32
+let entab_dent_back  = fillet 0    1.32  0.22 1.50
+let entab_dent_cap   = fillet 0    1.50  0.34 1.545
+let entab_ovolo      = ovolo  0.34 1.62  0.42 1.545
+let entab_corona     = fillet 0    1.62  0.60 1.85
+let entab_crown      = cyma   0.60 1.85  0.72 2.00
+
+# A moulding is only the band between its two corners; the stone BEHIND it is the caller's, and
+# here that is me. Without these four the section is four floating ribbons.
+let entab_back_arch = fillet 0 0.59   0.155 0.65
+let entab_back_bed  = fillet 0 1.24   0.155 1.32
+let entab_back_ov   = fillet 0 1.52   0.355 1.62
+let entab_back_cr   = fillet 0 1.83   0.615 2.00
+
+let entab_profile = union {
+    entab_fascia_one entab_fascia_two entab_fascia_thr entab_back_arch entab_arch_crown
+    entab_frieze
+    entab_back_bed entab_bed entab_dent_back entab_dent_cap
+    entab_back_ov entab_ovolo entab_corona entab_back_cr entab_crown
+}
+
+# ONE DENTIL, for a caller to repeat. Its back is on z = 0 and it projects to z = -0.12; it is
+# 0.090 (M/5) wide and 0.180 (0.4 M) tall, and THE PITCH IS 0.135 (0.3 M), which leaves a gap of
+# 0.045 — one and a half voxels at full detail. Read the load note at the top of this file before
+# you widen that gap.
+let dentil_band = box -0.045 0 -0.12  0.045 0.18 0 round=0.008
+
+# The ready-made straight run: 34 m along x, back on z = 0, projecting south to -z, which is the
+# elevation this building is judged from. Turn it half a turn about y for the north side.
+let entab_run_arch_one = fillet -17 0.00 0     17 0.18 -0.06
+let entab_run_arch_two = fillet -17 0.18 0     17 0.39 -0.10
+let entab_run_arch_thr = fillet -17 0.39 0     17 0.60 -0.14
+let entab_run_arch_cr  = cyma_reversa -17 0.60 -0.20  17 0.65 -0.14
+let entab_run_frieze   = fillet -17 0.65 0     17 1.25 -0.14
+let entab_run_bed      = cyma_reversa -17 1.25 -0.22  17 1.32 -0.14
+let entab_run_dback    = fillet -17 1.32 0     17 1.50 -0.22
+let entab_run_dcap     = fillet -17 1.50 0     17 1.545 -0.34
+let entab_run_ovolo    = ovolo  -17 1.62 -0.34  17 1.545 -0.42
+let entab_run_corona   = fillet -17 1.62 0     17 1.85 -0.60
+let entab_run_crown    = cyma   -17 1.85 -0.60  17 2.00 -0.72
+
+let entab_run_bkarch = fillet -17 0.59 0  17 0.65 -0.155
+let entab_run_bkbed  = fillet -17 1.24 0  17 1.32 -0.155
+let entab_run_bkov   = fillet -17 1.52 0  17 1.62 -0.355
+let entab_run_bkcr   = fillet -17 1.83 0  17 2.00 -0.615
+
+let entab_dentil  = box -0.045 1.32 -0.34  0.045 1.50 -0.22 round=0.008
+let entab_dentils = repeat { entab_dentil } x=0.135 nx=126
+
+let entab_run = union {
+    entab_run_arch_one entab_run_arch_two entab_run_arch_thr
+    entab_run_bkarch entab_run_arch_cr
+    entab_run_frieze
+    entab_run_bkbed entab_run_bed entab_run_dback entab_dentils entab_run_dcap
+    entab_run_bkov entab_run_ovolo entab_run_corona entab_run_bkcr entab_run_crown
+}
+
+# ================================================================================================
+# THE BALUSTER — 0.70 m
+# ================================================================================================
+#
+# 0.70 because that is what the parapet leaves between its plinth and its rail (13.00 - 11.90 is
+# 1.10, less a 0.25 plinth and a 0.15 rail); it is dimensioned in twentieths of itself, 0.035.
+# Turned on the same axis as everything else here, so it is one profile revolved.
+#
+# The neck is 0.063 across. Two voxels. There are a great many of these on the parapet and they
+# are the second-thinnest matter in the building.
+let bal_rod     = box 0 0.00  -1  0.0315 0.70  1
+let bal_lowcore = box 0 0.07  -1  0.036  0.175 1
+let bal_footfil = fillet 0      0.07   0.072  0.105
+let bal_foottor = bead   0.036  0.105  0.081  0.175
+let bal_vase    = cyma_reversa 0.0315 0.175  0.081  0.42
+let bal_astrag  = bead   0.0315 0.42   0.0495 0.455
+let bal_cup     = cyma   0.0315 0.455  0.063  0.595
+let bal_capfil  = fillet 0      0.595  0.072  0.63
+
+let bal_section = union {
+    bal_rod bal_lowcore bal_footfil bal_foottor bal_vase bal_astrag bal_cup bal_capfil
+}
+let bal_turned  = revolve { bal_section } axis=y
+let bal_plinth  = box -0.09 0    -0.09  0.09 0.075 0.09 round=0.008
+let bal_cap     = box -0.081 0.625 -0.081  0.081 0.70 0.081 round=0.008
+
+let ionic_baluster = union { bal_turned bal_plinth bal_cap }
+
+# ================================================================================================
+# ONE COFFER — a square recess with moulded edges
+# ================================================================================================
+#
+# This is a VOID: the shape of the hollow, not the stone round it. A caller unions as many as it
+# wants into its own `void_<part>` and the manifest takes them all away at the end.
+#
+# The opening is 0.90 square (D) and it is 0.225 (M/2) deep, stepping back in three moulded
+# courses of 0.045, with a small square rosette left standing in the middle of the pan. The steps
+# are 0.0225 wide — under a voxel at full detail, so the moulding of a coffer edge is a genuine
+# sub-voxel feature and exactly the thing that decides whether a soft gradient inside a hollow
+# reads as carved or as mud.
+let cof_step_one = box -0.45   0.000 -0.45    0.45   0.045 0.45   round=0.012
+let cof_step_two = box -0.4275 0.045 -0.4275  0.4275 0.090 0.4275 round=0.012
+let cof_step_thr = box -0.405  0.090 -0.405   0.405  0.135 0.405  round=0.012
+let cof_pan      = box -0.36   0.130 -0.36    0.36   0.225 0.36   round=0.012
+let cof_rosette  = box -0.09   0.150 -0.09    0.09   0.225 0.09   round=0.018
+
+let coffer_unit = difference {
+    union { cof_step_one cof_step_two cof_step_thr cof_pan }
+    cof_rosette
+}
+
+# ================================================================================================
+# THE ACROTERION — a palmette for the pediment corners, 0.45 m (M) tall
+# ================================================================================================
+#
+# Seven leaves fanning out of a scrolled foot, flat in z so it stands against the sky as a
+# silhouette. Four leaves from a sixteenth of a turn to a quarter, mirrored in x, is seven of them
+# evenly fanned with the middle one upright. Each leaf is 0.056 across — two voxels.
+let acro_plinth = box -0.135 0     -0.045  0.135 0.075 0.045 round=0.010
+let acro_leaf   = capsule 0.075 0 0  0.33 0 0  r=0.028
+let acro_leaf_b = rotate { acro_leaf } z=0.0625
+let acro_leaf_c = rotate { acro_leaf } z=0.125
+let acro_leaf_d = rotate { acro_leaf } z=0.1875
+let acro_leaf_e = rotate { acro_leaf } z=0.25
+let acro_half   = union { acro_leaf_b acro_leaf_c acro_leaf_d acro_leaf_e }
+let acro_fan_all = mirror { acro_half } axis=x
+let acro_fan     = translate { acro_fan_all } 0 0.09 0
+let acro_heart   = capsule 0 0.075 0  0 0.15 0  r=0.06
+let acro_scroll  = mirror { spiral 0.09 0.12 0 r=0.06 tighten=0.45 tube=0.018 turns=1.5 axis=z } axis=x
+
+let acroterion = union { acro_plinth acro_fan acro_heart acro_scroll }
+
+# ================================================================================================
+# THE URN — 1.35 m (3 M) on its plinth
+# ================================================================================================
+#
+# A square plinth, a moulded foot, a bowl, a flaring lip, a domed lid and a finial: one section,
+# revolved, which is what `revolve` is for.
+let urn_stem    = box 0 0.18  -1  0.09   0.99  1
+let urn_foot    = cyma_reversa 0.09 0.18  0.18 0.27
+let urn_footfil = fillet 0     0.27  0.09  0.315
+let urn_bowl_c  = cylinder 0 0.585 0  r=0.27 h=2 axis=z
+let urn_bowl_b  = box 0 0.315 -1  0.30 0.81 1
+let urn_bowl    = intersection { urn_bowl_c urn_bowl_b }
+let urn_shoulder= fillet 0     0.81  0.135  0.855
+let urn_lip     = cyma   0.135 0.855  0.2475 0.945
+let urn_rim     = fillet 0     0.945  0.2475 0.99
+
+let urn_section = union {
+    urn_stem urn_foot urn_footfil urn_bowl urn_shoulder urn_lip urn_rim
+}
+let urn_turned = revolve { urn_section } axis=y
+let urn_plinth = box -0.18 0 -0.18  0.18 0.185 0.18 round=0.012
+let urn_lid    = intersection { ellipsoid 0 0.985 0 rx=0.2025 ry=0.225 rz=0.2025
+                                box -0.2025 0.98 -0.2025  0.2025 1.21 0.2025 }
+let urn_finial = union { capsule 0 1.18 0  0 1.255 0 r=0.024   sphere 0 1.29 0 r=0.06 }
+
+let urn = union { urn_plinth urn_turned urn_lid urn_finial }

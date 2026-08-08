@@ -1,0 +1,171 @@
+# The facility: the numbers everything else is measured from.
+#
+# This file is the agreement. Every other fragment includes it and derives from it, and nothing
+# else in the building may invent a dimension. That is not tidiness — it is the whole of what
+# makes a classical building look classical. A neoclassical facade is not a collection of
+# pleasing parts; it is one set of proportions repeated at every scale, and the eye catches a
+# part that was sized by taste rather than by the module long before it can say why.
+#
+# The order is Ionic. Its rule is the module: half the diameter of a column at its foot. Every
+# other dimension in the building is some whole or simple fraction of that, and the numbers
+# below are that arithmetic done once, here, so that nobody does it again differently.
+#
+#   diameter  D = 0.90 m          the column at its foot
+#   module    M = 0.45 m          half of it — the unit everything is counted in
+#
+#   column    9 D = 8.10 m        base 0.5 D, shaft 8 D, capital 0.5 D (Ionic is the slender one)
+#   spacing   3 D = 2.70 m        axis to axis: eustyle, the spacing Vitruvius calls the best
+#   entabl.   0.25 × column       architrave, frieze, cornice — 2.02 m, taken as 2.00
+#   pediment  span / 9            the low classical gable, never the steep one
+#
+# # Levels
+#
+# Everything vertical is one of these. A part that needs a height nobody else needs should still
+# reach it by adding to one of these rather than by writing a number.
+#
+#   ground        0.00    the lawn, the datum for everything
+#   podium_top    1.80    the main floor: ten risers of 0.18 up from the ground
+#   floor_one     1.80    the piano nobile — the same thing said the other way
+#   column_foot   1.80
+#   column_head   9.90    1.80 + 8.10
+#   entab_top    11.90    the main cornice, the line the whole building is capped by
+#   parapet_top  13.00    the balustrade above the cornice
+#   drum_top     15.60    the drum of the dome
+#   dome_top     18.20
+#   lantern_top  19.60
+#
+# # Plan
+#
+# North is +z, east is +x. The building faces SOUTH, so the portico and the great steps are at
+# negative z and that is the elevation everything is judged from.
+#
+#   main block     x -16.0 .. 16.0     z  -7.5 ..  7.5      32.0 x 15.0 m
+#   portico        x  -7.65 .. 7.65    z -12.5 .. -7.5      hexastyle, six columns, 5.0 m deep
+#   great steps    x  -9.45 .. 9.45    z -15.7 .. -12.5     ten risers of 0.18, run 0.32
+#   east wing      x   9.0 .. 16.0     the block either side of the centre
+#   west wing      x -16.0 .. -9.0
+#   rotunda        centred on the origin in x, on z = 0, inner radius 4.80
+#
+# The column axes of the portico stand at x = -6.75, -4.05, -1.35, 1.35, 4.05, 6.75. Those six
+# numbers are the spine of the whole south elevation: every window, every pilaster, every step
+# in the entablature above lines up with one of them or with the middle between two.
+
+# The sampled box, and why it is exactly this tight.
+#
+# A clip is a DENSE array over its whole bounds, four bytes a cell plus one for the mask,
+# whether or not there is anything there. This box is 34 x 20.9 x 25 metres, which at thirty-two
+# voxels to the metre is 582 million cells and about 2.8 gigabytes of memory before a single
+# voxel of the building exists. A generous margin of lawn on all four sides would have doubled
+# that for nothing but grass.
+#
+# So the box is cut to the building plus a metre: x to the wing corners, z from the bottom step
+# to the north wall, y from just under the ground to just over the lantern. The site fragment
+# fills what is left, and the site is small on purpose.
+#
+# It also means this clip cannot be used to test anything about distance — streaming, continuous
+# detail, the summary tree, distant thumbnails. Those need hundreds of metres and hundreds of
+# metres do not fit in a dense array. They are the world's problem, not this building's, and
+# pretending otherwise here would only make the building slower.
+metre 32
+bounds -17 -0.9 -16.5   17 20 8.5
+
+# --- the order, as dials -------------------------------------------------------------------
+#
+# Written as parameters and not as bare numbers so the whole building can be re-proportioned by
+# moving one of them — which is the test of whether it really was built to a module.
+
+param D            0.90
+param M            0.45
+param bay          2.70
+param col_h        8.10
+param entab_h      2.00
+
+param ground       0.00
+param podium_top   1.80
+param column_head  9.90
+param entab_top   11.90
+param parapet_top 13.00
+param drum_top    15.60
+param dome_top    18.20
+param lantern_top 19.60
+
+param block_x     16.00
+param block_z      7.50
+param portico_x    7.65
+param portico_z   12.50
+param steps_z     15.70
+
+# --- the materials ---------------------------------------------------------------------------
+#
+# A stone building is not one stone. It is a plinth of something hard and dark, a wall of
+# something pale and soft enough to carve, columns of something better still, and metal where
+# the hand touches it. The list is long on purpose: the renderer is being tested as much as the
+# building is, and a path tracer that only ever sees grey concrete is not being asked anything.
+
+material granite    rgb=126,124,120 rough=225
+material limestone  rgb=208,203,190 rough=205
+material marble     rgb=228,225,217 rough=140 translucent=110
+material marble_hot rgb=232,228,214 rough=120 translucent=110
+material stucco     rgb=214,206,188 rough=230
+material plaster    rgb=226,222,212 rough=238
+material sandstone  rgb=196,178,146 rough=215
+
+material bronze     rgb=112,88,52   rough=110 metal=190 brush=2
+material gilt       rgb=204,164,84  rough=64  metal=225
+material lead       rgb=118,120,124 rough=170 metal=140 brush=2
+material copper     rgb=96,140,124  rough=165 metal=110
+material slate      rgb=70,72,78    rough=190
+
+material oak        rgb=104,74,46   rough=195
+material walnut     rgb=72,50,34    rough=180
+
+material porphyry   rgb=118,52,54   rough=175
+material lapis      rgb=44,64,116   rough=175
+material verde      rgb=62,92,74    rough=180
+material terracotta rgb=168,98,72   rough=220
+
+material lawn       rgb=94,124,66   rough=248
+material hedge      rgb=68,96,54    rough=250
+material gravel     rgb=178,172,158 rough=250
+
+material glass      rgb=198,214,224 rough=30  opacity=64  ior=1.5
+material water      rgb=68,108,132  rough=24  opacity=110 ior=1.33
+material lamp       rgb=255,238,206 rough=140 emit=200
+material sconce     rgb=255,224,178 rough=140 emit=150
+
+# --- shared patterns -------------------------------------------------------------------------
+#
+# Named here so that two parts of one wall are weathered by the same grain rather than by two
+# different ones, which is a seam the eye finds immediately.
+
+let grain_fine   = fbm size=0.07 octaves=3 seed=23
+let grain_broad  = fbm size=0.90 octaves=4 seed=41
+let grain_stone  = fbm size=0.35 octaves=4 seed=57
+let courses      = stripes axis=y period=0.60 duty=0.06
+let ashlar       = bricks length=1.20 height=0.60 mortar=0.02 facing=z
+let flutes_deep  = sine axis=x period=0.10 phase=0.0
+
+# --- what this building is for ----------------------------------------------------------------
+#
+# It is a building, and it is also the only scene the engine is ever judged against, and the
+# second of those is the reason it exists. Every fragment carries a share of that: not "make
+# something that looks classical" but "make something classical that also puts a named part of
+# the engine under load". The shares are written into each fragment's brief.
+#
+# What has to end up exercised, between all of them:
+#
+#   storage      uniform bricks (the podium's mass), palette bricks (a plain wall), and Direct
+#                bricks where every voxel differs (variation, everywhere)
+#   thin matter  features one and two voxels across — glazing bars, flutes, dentils, balusters.
+#                These are what break a mesher, a sampler and a denoiser, in that order.
+#   deep hollow  interiors reached only through small openings: the rotunda lit by an oculus and
+#                a ring of drum windows is the hardest indirect-light problem in the building
+#   materials    rough stone, polished marble, brushed and polished metal, coloured stone,
+#                glass with an index of refraction, water, and emissives — all of them, in one
+#                frame, so they can be compared against each other rather than in isolation
+#   light        hard sun shadow across a fluted shaft; the soft gradient inside a coffer and a
+#                niche; a shaft through the oculus; bounce off a coloured floor onto a white
+#                vault; an emissive sconce as the only light in a closed hall
+#   surface      the no-two-voxels-alike rule, and the weathering system — this is a STONE
+#                building outdoors, which is the subject weathering was written for
+#   walkable     a person can enter, climb, cross, and climb again without stopping

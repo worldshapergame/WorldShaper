@@ -1,0 +1,10 @@
+# fittings - sconces, chandelier, urns, benches - the lit and the small
+#
+# PLACEHOLDER. Replace everything below with the real part.
+# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+#
+# This file must define exactly one part named `part_fittings`. Every other name it binds must
+# start with `fittings_` so nothing collides with another fragment.
+
+let fittings_placeholder = sphere 0 -1.30 0 r=0.25
+let part_fittings = fittings_placeholder

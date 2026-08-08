@@ -1,0 +1,363 @@
+# doors — the great bronze south door, its pedimented doorcase, and the side doors east and west
+#
+# Everything here is cut into the SOUTH FACE OF THE MAIN BLOCK, z = -7.50, standing on the podium
+# floor at y = 1.80, inside the portico. Nothing in this file needs to know anything about the
+# wall it pierces except where its face is: the openings are punched 1.80 m northward, which is
+# deeper than any wall this building can plausibly have, and the manifest takes them away at the
+# end. Add a wing beside this next month without reading a line of it.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS FILE PUTS UNDER LOAD: bronze, and a subtracted detail on a curved surface.
+#
+# The building's rough metal lives here and almost nowhere else: 2.70 x 4.50 m of it on the centre
+# line, in the deepest shadow in the scene, at the one place a viewer walks up to. `bronze` is
+# rough=110 metal=190 — the only brushed metal in the palette that covers an area rather than a
+# moulding, so it is what decides whether the path tracer's rough-metal lobe reads as metal at all
+# when the only light on it is bounce off a limestone soffit.
+#
+# THE REAL TEST IS THE PANELS. The great door's leaves are not flat. Their outer face is a
+# cylinder of radius 5.40 struck from z = -2.25, so the pair bows 0.171 m out of its frame at the
+# centre line. The sunk panels are cut into that curve by intersecting the panel's plan with a
+# CURVED SHELL of the leaf's own surface, so every panel floor is parallel to the door everywhere
+# and the arris round it is a curve, not a straight line pretending. Three depths, and all three
+# are near a voxel at the contract's metre 32 (0.03125):
+#
+#     first step   0.0225   under one voxel
+#     panel floor  0.0450   one and a half
+#     patera face  0.0225   standing back out of the floor
+#     meeting joint 0.045 wide by 0.045 deep, 4.50 m of it, down the centre line
+#
+# The manifest then displaces THE WHOLE BUILDING by 12 mm of `grain_fine` — a third of a voxel,
+# and a quarter of the panel's own depth. A displacement moves a surface along a noise field that
+# knows nothing about which arris it is crossing, so a 45 mm step under a 12 mm swell is exactly
+# the case where a subtracted detail either survives as carving or dissolves into a dented sheet.
+# On a FLAT panel this is easy and everybody's renderer passes. On a curved one the arris is never
+# axis-aligned and never voxel-aligned, so every voxel along it is a partial one.
+#
+# THE SIDE DOORS ARE THE CONTROL AND THAT IS WHY THEY ARE FLAT. Same bronze, same three depths,
+# same 0.045 floor, same grain — panels 0.54 x 0.81 cut into a plane instead of a cylinder. If the
+# flat panels read and the curved ones do not, the fault is the curvature and not the depth. Do
+# not "improve" the side doors by bowing them too; that throws the comparison away.
+#
+# DO NOT DEEPEN THE PANELS to make them survive. 0.045 is M/10 and it is chosen to sit just above
+# the grain, not comfortably above it. Do not `weather` anything in this file either: weathering
+# is a second displacement, and a second displacement on top of the first is precisely what would
+# make this measurement meaningless.
+#
+# The gilt paterae are one more thing on purpose: a 0.27 m disc of gilt (rough=64 metal=225,
+# polished) inside a 0.90 m panel of bronze (rough=110 metal=190, brushed), on the same curve,
+# under the same light, 0.0225 apart in depth. Two metals that differ only in roughness, close
+# enough together to be compared in one glance rather than in two frames.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45. Every number below is one of those or a simple fraction of it:
+# 0.225 = M/2, 0.18 = 0.4M, 0.135 = 0.3M, 0.09 = M/5, 0.045 = M/10, 0.0225 = M/20. The great door
+# is 3D wide by 10M tall; its case is 9M wide over the cornice and its apex is at 8.10 = 18M. The
+# side doorcases run from x = 4.05 to x = 6.75 — the outer column axes of the portico, exactly.
+# The curvature radius 5.40 = 12M, and the numbers that fall out of it (the leaf face standing at
+# z = -7.4785 at the jamb) are construction, not dimension.
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE DOORCASE PLINTH — y 1.71 to 2.25, x -6.75 to 6.75
+# ================================================================================================
+#
+# One band at the foot of all three doorcases, which is what makes this part one piece of stone
+# rather than three. Its lower 0.09 (y 1.71 to 1.80) runs UNDER the openings, buried in the podium,
+# and is the threshold every leaf laps 0.05 into; its upper 0.45 is the plinth block the three
+# architraves stand on, and the openings cut it away where the doorways are.
+#
+# It ends at x = +-6.75, on the outer column axes, so it reads as belonging to the portico's bays.
+
+let doors_plinth_band = box -6.75 1.71 -7.68   6.75 2.16 -7.35 round=0.012
+
+# The congé off the plinth into the wall: full width at the bottom, died into the face at the top.
+# First corner in the stone — at the wall, at the bottom — second in the air.
+let doors_plinth_cap = cavetto -6.75 2.16 -7.50   6.75 2.25 -7.725 run=x
+
+let doors_plinth = union { doors_plinth_band doors_plinth_cap }
+
+# ================================================================================================
+# THE GREAT DOOR — the opening, 2.70 (3D) by 4.50 (10M), on the centre line
+# ================================================================================================
+#
+# x -1.35 .. 1.35, y 1.80 .. 6.30. The width is the portico's central intercolumniation exactly:
+# the door jambs stand on the axes of the two middle columns.
+
+# --- the architrave: three fasciae, each stepping forward of the one below --------------------
+#
+# Written as three rectangular FRAMES — a box minus a box — because that mitres the corners
+# perfectly and for nothing. The inner box of each runs down past the plinth so the frame is a U
+# and no architrave crosses the threshold, which is how a door architrave is drawn.
+#
+#   fascia one    0.180 wide (0.4M), standing 0.045 proud of the wall
+#   astragal      a 0.045 roll on the joint between them
+#   fascia two    0.135 wide (0.3M), 0.090 proud
+#   fascia three  0.135 wide (0.3M), 0.135 proud
+#                 0.450 = M in all
+
+let doors_gd_f1 = difference {
+    box -1.53  2.16 -7.545   1.53  6.48  -7.35 round=0.012
+    box -1.35  1.60 -7.60    1.35  6.30  -7.30 round=0.012
+}
+let doors_gd_f2 = difference {
+    box -1.665 2.16 -7.59    1.665 6.615 -7.35 round=0.012
+    box -1.53  1.60 -7.65    1.53  6.48  -7.30 round=0.012
+}
+let doors_gd_f3 = difference {
+    box -1.80  2.16 -7.635   1.80  6.75  -7.35 round=0.012
+    box -1.665 1.60 -7.70    1.665 6.615 -7.30 round=0.012
+}
+
+# The astragal. A flat frame of no thickness at all, grown by its own radius — which is what a
+# roll IS, and it turns the head-to-jamb corner without a mitre because there is no section to
+# mitre. 0.045 across: one and a half voxels, running 12.6 m round the opening.
+let doors_gd_ast_plate = difference {
+    box -1.53   2.16 -7.5675   1.53   6.48   -7.5675
+    box -1.5075 1.60 -7.70     1.5075 6.4575 -7.40
+}
+let doors_gd_astragal = round { doors_gd_ast_plate } by=0.0225
+
+# --- the frieze, flush with the third fascia ---------------------------------------------------
+let doors_gd_frieze = box -1.80 6.66 -7.635   1.80 7.20 -7.35 round=0.012
+
+# --- the cornice, y 7.20 to 7.65 (M), with a dentil band ---------------------------------------
+#
+#   bed ovolo    7.200 - 7.290   springing from the frieze face out to the dentil ground
+#   dentils      7.290 - 7.470   the order's own dentil, 0.090 wide on a 0.135 pitch
+#   dentil cap   7.470 - 7.515
+#   corona       7.515 - 7.650   projecting 0.45 = M, and no crowning cyma because the raking
+#                                cornice of the pediment takes it over, which is the rule
+
+let doors_gd_bed      = ovolo -2.025 7.29 -7.635   2.025 7.20 -7.755 run=x
+let doors_gd_bed_back = box   -2.025 7.19 -7.635   2.025 7.30 -7.35 round=0.012
+let doors_gd_dback    = box   -2.025 7.25 -7.755   2.025 7.47 -7.35 round=0.012
+let doors_gd_dentil   = translate { dentil_band } 0 7.29 -7.74
+let doors_gd_dentils  = repeat { doors_gd_dentil } x=0.135 nx=14
+let doors_gd_dcap     = box   -2.025 7.44  -7.905  2.025 7.515 -7.35 round=0.012
+let doors_gd_corona   = box   -2.025 7.485 -7.95   2.025 7.65  -7.35 round=0.012
+
+# --- the pediment, span 4.05 (9M), rise 4.05/9 = 0.45 (M) by the contract -----------------------
+#
+# The gable is one wedge and two isometries.
+#
+# `wedge` KEEPS THE SIDE ABOVE ITS DIAGONAL, not below — its triangle is the upright edge, the top
+# edge and the hypotenuse between them — so a wedge on its own is the valley, not the gable. Drawn
+# that way first and the pediment came back off the contact sheet as a flat band with a notch bitten
+# out of the middle. The box MINUS the wedge is the half gable: upright at the centre line, level
+# along the bottom, raking down to the corner. Then a half turn about y carries that half to +x
+# with its slope reversed — the wedge is symmetric in z, so the half turn's z flip changes nothing
+# — and `mirror` brings it back to both sides. Two copies of the whole gable slid straight down
+# give the raking cornice as the band between two parallel rakes, and the tympanum as what is left
+# inside; the three tile the gable exactly and cost three boxes.
+let doors_ped_cut   = wedge -2.025 7.65 -9   0 8.10 9 rise=y run=x
+let doors_ped_w     = difference { box -2.025 7.65 -9   0 8.10 9   doors_ped_cut }
+let doors_ped_gable = mirror { rotate { doors_ped_w } y=0.5 } axis=x
+let doors_ped_b     = translate { doors_ped_gable } 0 -0.135 0
+let doors_ped_c     = translate { doors_ped_gable } 0 -0.18  0
+
+let doors_ped_corona = intersection {
+    difference { doors_ped_gable doors_ped_b }
+    box -2.025 7.56 -7.905   2.025 8.10 -7.35
+}
+let doors_ped_bed = intersection {
+    difference { doors_ped_gable doors_ped_c }
+    box -2.025 7.56 -7.815   2.025 8.10 -7.35
+}
+let doors_ped_tympanum = intersection {
+    doors_ped_c
+    box -2.025 7.47 -7.635   2.025 8.10 -7.35
+}
+
+let doors_gd_case = union {
+    doors_gd_f1 doors_gd_f2 doors_gd_f3 doors_gd_astragal
+    doors_gd_frieze
+    doors_gd_bed doors_gd_bed_back doors_gd_dback doors_gd_dentils
+    doors_gd_dcap doors_gd_corona
+    doors_ped_corona doors_ped_bed doors_ped_tympanum
+}
+
+# ================================================================================================
+# THE GREAT DOOR'S LEAVES — a pair of bronze leaves, bowed
+# ================================================================================================
+#
+# The outer face is a cylinder of radius 5.40 (12M) about the vertical line x = 0, z = -2.25, so it
+# crosses the centre line at z = -7.65 — 0.15 proud of the wall — and has fallen back to z =
+# -7.4785 at the jamb, inside its own reveal. The pair bows 0.171 out of the frame. The inner face
+# is the same cylinder 0.135 (0.3M) smaller, so the leaf is of one thickness everywhere.
+#
+# Each leaf laps 0.045 behind its jamb and 0.05 down into the threshold, which is what holds all of
+# this to the doorcase — and is also just what a door does.
+let doors_gd_cyl_o = cylinder 0 4.05 -2.25 r=5.40   h=9.6 axis=y
+let doors_gd_cyl_a = cylinder 0 4.05 -2.25 r=5.3775 h=9.6 axis=y
+let doors_gd_cyl_b = cylinder 0 4.05 -2.25 r=5.355  h=9.6 axis=y
+let doors_gd_cyl_i = cylinder 0 4.05 -2.25 r=5.265  h=9.6 axis=y
+
+# The two curved shells the panels are cut with. Intersecting a panel's PLAN with one of these is
+# what makes the sinking follow the bow: the floor of every panel is parallel to the door at every
+# point of it, which no box cutter can be.
+let doors_gd_skin_a  = difference { doors_gd_cyl_o doors_gd_cyl_a }
+let doors_gd_skin_ab = difference { doors_gd_cyl_o doors_gd_cyl_b }
+
+let doors_gd_slab = intersection {
+    difference { doors_gd_cyl_o doors_gd_cyl_i }
+    box 0 1.75 -7.95   1.395 6.30 -7.20
+}
+
+# ONE PANEL, and the leaf is four of them. 0.90 square — the coffer's own size — with stiles of
+# 0.225 (M/2) either side and rails of 0.18 (0.4M) between, which is 4 x 0.90 + 5 x 0.18 = 4.50
+# exactly. The row pitch is 1.08, and because the leaf's cylinder stands on y the three copies are
+# a plain translate up it and land on the curve without being asked to.
+let doors_gd_step  = box 0.225 1.98  -7.95   1.125 2.88  -7.30
+let doors_gd_field = box 0.27  2.025 -7.95   1.08  2.835 -7.30
+let doors_gd_pat1  = cylinder 0.675 2.43 -7.60 r=0.135 h=1.2 axis=z
+let doors_gd_cut1  = union {
+    intersection { doors_gd_step doors_gd_skin_a }
+    difference { intersection { doors_gd_field doors_gd_skin_ab } doors_gd_pat1 }
+}
+let doors_gd_cut2 = translate { doors_gd_cut1 } 0 1.08 0
+let doors_gd_cut3 = translate { doors_gd_cut1 } 0 2.16 0
+let doors_gd_cut4 = translate { doors_gd_cut1 } 0 3.24 0
+
+let doors_gd_leaf_e  = difference {
+    doors_gd_slab doors_gd_cut1 doors_gd_cut2 doors_gd_cut3 doors_gd_cut4
+}
+let doors_gd_pair = mirror { doors_gd_leaf_e } axis=x
+
+# The meeting joint: 0.045 wide and 0.045 deep, sunk in the curved skin like the panels, so the
+# two leaves read as two without a slot of daylight between them.
+let doors_gd_joint = intersection {
+    box -0.0225 1.75 -7.95   0.0225 6.30 -7.30
+    doors_gd_skin_ab
+}
+
+# The ring handles, on the rail at 1.17 m above the floor. A 0.036 tube — one voxel — standing
+# 0.033 clear of a curved surface and biting 0.038 into it.
+let doors_gd_boss = cylinder 0.675 2.97 -7.575 r=0.09   h=0.15  axis=z
+let doors_gd_ring = torus    0.675 2.88 -7.605 ring=0.1125 tube=0.036 axis=z
+let doors_gd_furn = mirror { union { doors_gd_boss doors_gd_ring } } axis=x
+
+let doors_gd_leaves = union {
+    difference { doors_gd_pair doors_gd_joint }
+    doors_gd_furn
+}
+
+let doors_gd_pat2 = translate { doors_gd_pat1 } 0 1.08 0
+let doors_gd_pat3 = translate { doors_gd_pat1 } 0 2.16 0
+let doors_gd_pat4 = translate { doors_gd_pat1 } 0 3.24 0
+let doors_gd_pats = mirror {
+    union { doors_gd_pat1 doors_gd_pat2 doors_gd_pat3 doors_gd_pat4 }
+} axis=x
+
+# ================================================================================================
+# THE SIDE DOOR — east, and mirrored west. 1.80 (4M) by 3.15 (7M)
+# ================================================================================================
+#
+# x 4.50 .. 6.30, centred on 5.40 — the middle of the portico's outer bay — with the architrave
+# running out to 4.05 and 6.75, which are the outer column axes. 3.15 m clear, well over the 2.40
+# a door has to give, and this is the door a person actually uses; the great one is ceremonial.
+
+let doors_sd_f1 = difference {
+    box 4.32  2.16 -7.545   6.48  5.13 -7.35 round=0.012
+    box 4.50  1.60 -7.60    6.30  4.95 -7.30 round=0.012
+}
+let doors_sd_f2 = difference {
+    box 4.185 2.16 -7.59    6.615 5.265 -7.35 round=0.012
+    box 4.32  1.60 -7.65    6.48  5.13  -7.30 round=0.012
+}
+let doors_sd_f3 = difference {
+    box 4.05  2.16 -7.635   6.75  5.40  -7.35 round=0.012
+    box 4.185 1.60 -7.70    6.615 5.265 -7.30 round=0.012
+}
+let doors_sd_ast_plate = difference {
+    box 4.32   2.16 -7.5675   6.48   5.13   -7.5675
+    box 4.3425 1.60 -7.70     6.4575 5.1075 -7.40
+}
+let doors_sd_astragal = round { doors_sd_ast_plate } by=0.0225
+
+# The hood: a bed ovolo, a corona, a crowning cyma. No pediment — a side door is subordinate, and
+# its cornice tops out at 5.85, well under the great door's 8.10.
+let doors_sd_bed      = ovolo 3.96 5.49 -7.635   6.84 5.40 -7.725 run=x
+let doors_sd_bed_back = box   3.96 5.39 -7.635   6.84 5.49 -7.35 round=0.012
+let doors_sd_corona   = box   3.96 5.46 -7.83    6.84 5.76 -7.35 round=0.012
+let doors_sd_crown    = cyma  3.96 5.76 -7.83    6.84 5.85 -7.875 run=x
+let doors_sd_crn_back = box   3.96 5.74 -7.83    6.84 5.85 -7.35 round=0.012
+
+let doors_sd_case_e = union {
+    doors_sd_f1 doors_sd_f2 doors_sd_f3 doors_sd_astragal
+    doors_sd_bed doors_sd_bed_back doors_sd_corona doors_sd_crn_back doors_sd_crown
+}
+let doors_sd_case = mirror { doors_sd_case_e } axis=x
+
+# --- the leaves: FLAT, and that is the point (see the load note at the top) ---------------------
+#
+# Set back 0.135 into the reveal, 0.09 (0.2M) thick, lapping 0.045 behind each jamb and 0.05 into
+# the threshold. Three panels of 0.54 x 0.81 to a leaf: 3 x 0.81 + 4 x 0.18 = 3.15, and
+# 0.18 + 0.54 + 0.18 = 0.90. Same first step, same floor, same patera as the great door's.
+let doors_sd_slab = box 4.455 1.75 -7.41   6.345 4.95 -7.32 round=0.006
+
+let doors_sd_step_a  = box 4.68  1.98  -7.46   5.22  2.79  -7.3875
+let doors_sd_step_b  = box 5.58  1.98  -7.46   6.12  2.79  -7.3875
+let doors_sd_field_a = box 4.725 2.025 -7.46   5.175 2.745 -7.365
+let doors_sd_field_b = box 5.625 2.025 -7.46   6.075 2.745 -7.365
+let doors_sd_pat_a   = cylinder 4.95 2.385 -7.60 r=0.09 h=1.2 axis=z
+let doors_sd_pat_b   = cylinder 5.85 2.385 -7.60 r=0.09 h=1.2 axis=z
+
+let doors_sd_pats1 = union { doors_sd_pat_a doors_sd_pat_b }
+let doors_sd_cut1  = union {
+    doors_sd_step_a doors_sd_step_b
+    difference { union { doors_sd_field_a doors_sd_field_b } doors_sd_pats1 }
+}
+let doors_sd_cut2 = translate { doors_sd_cut1 } 0 0.99 0
+let doors_sd_cut3 = translate { doors_sd_cut1 } 0 1.98 0
+let doors_sd_joint = box 5.3775 1.75 -7.46   5.4225 4.95 -7.365
+
+let doors_sd_leaf_e = difference {
+    doors_sd_slab doors_sd_cut1 doors_sd_cut2 doors_sd_cut3 doors_sd_joint
+}
+let doors_sd_leaves = mirror { doors_sd_leaf_e } axis=x
+
+let doors_sd_pats2 = translate { doors_sd_pats1 } 0 0.99 0
+let doors_sd_pats3 = translate { doors_sd_pats1 } 0 1.98 0
+let doors_sd_pats  = mirror {
+    union { doors_sd_pats1 doors_sd_pats2 doors_sd_pats3 }
+} axis=x
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let doors_stone  = union { doors_plinth doors_gd_case doors_sd_case }
+let doors_leaves = union { doors_gd_leaves doors_sd_leaves }
+
+let part_doors = union { doors_stone doors_leaves }
+
+# What is taken out of the building: every opening, MINUS the leaves standing in it. The manifest
+# subtracts this from everything after everything is assembled, so writing the leaves back into
+# the void here is what leaves them standing in a hole that goes clean through the wall — and it
+# guarantees the sunk panels stay sunk however thick somebody else's wall turns out to be.
+#
+# 1.80 m of northward punch (4M) is more than any wall this building can have; 0.45 southward is
+# air under the portico.
+let doors_gd_void   = box -1.35 1.80 -7.95   1.35 6.30 -5.70
+let doors_sd_void_e = box  4.50 1.80 -7.95   6.30 4.95 -5.70
+let doors_sd_void   = mirror { doors_sd_void_e } axis=x
+
+let void_doors = difference {
+    union { doors_gd_void doors_sd_void }
+    doors_leaves
+}
+
+# ================================================================================================
+# PAINT — only my own shapes, always below=0.02
+# ================================================================================================
+
+paint marble  where=doors_stone  below=0.02
+paint granite where=doors_plinth below=0.02
+paint bronze  where=doors_leaves below=0.02
+
+# The paterae last, so they win over the bronze under them. Clipped to the leaves so a cylinder
+# that runs on through the reveal cannot colour anybody else's stone.
+let doors_paterae = intersection { union { doors_gd_pats doors_sd_pats } doors_leaves }
+paint gilt where=doors_paterae below=0.02

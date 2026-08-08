@@ -1,0 +1,14 @@
+# vestibule - the entrance hall behind the door and its screen of columns
+#
+# PLACEHOLDER. Replace everything below with the real part.
+# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+#
+# This file must define exactly one part named `part_vestibule`. Every other name it binds must
+# start with `vestibule_` so nothing collides with another fragment.
+
+let vestibule_placeholder = sphere 0 -1.30 0 r=0.25
+let part_vestibule = vestibule_placeholder
+
+# What this part removes from the building. Taken away in the manifest after everything is
+# assembled, so nothing added later can be eaten by it. Must always be bound, even if empty.
+let void_vestibule = sphere 0 -1.30 0 r=0.02

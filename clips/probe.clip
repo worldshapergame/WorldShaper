@@ -1,0 +1,6 @@
+include "facility/_contract.clip"
+include "facility/_order.clip"
+paint limestone
+include "facility/site.clip"
+include "facility/portico.clip"
+solid part_site

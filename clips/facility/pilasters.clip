@@ -1,0 +1,291 @@
+# pilasters — the engaged Ionic order of the piano nobile: east and west elevations, the returns
+#             of the south front, and the north front, on the 2.70 bay between the windows.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS FILE PUTS UNDER LOAD: SHALLOW RELIEF. A whole Ionic order carved into 0.18 m.
+#
+# Everything here lives between the wall face and a plane 0.18 m (0.4 M) in front of it, and inside
+# that 0.18 there is a plinth, an Attic base of two tori and a scotia, a fluted shaft, a necking
+# astragal, an echinus, two volutes on a sunk face and a two-tier abacus. The whole order is 5.8
+# voxels deep at the contract's metre 32. The steps that have to survive are:
+#
+#   the order's relief        0.1800  (0.4 M)   5.8 voxels — plinth, lower torus, abacus, volute
+#   the shaft face            0.1350  (0.3 M)   4.3 voxels
+#   the flute floor           0.0900  (0.2 M)   2.9 voxels — a flute is 0.045 deep, 1.4 voxels
+#   the volute face plate     0.1575            sunk 0.0225 behind the band that winds on it
+#   the volute band           0.027 across, standing 0.0225 proud of that plate — 0.7 voxel
+#   the volute channel        0.0315            ONE VOXEL of air between two turns of the scroll
+#   the fillet between flutes 0.0300  (M/15)    ONE VOXEL, the same number the columns use
+#   the necking astragal      0.0225 across and 0.0225 tall — 0.7 voxel, both ways
+#   the plinth band           0.045 proud and 0.095 tall, unbroken for 94 m round the block
+#
+# That is the test, and it is a different test from the columns'. A column is thin matter standing
+# in the open, where the sampler can find its surface from every side and the silhouette does half
+# the work of reading it. A pilaster is the same matter lying AGAINST A WALL: no silhouette, no sky
+# behind it, nothing but a 20-to-45 millimetre step in a surface that is otherwise dead flat, lit
+# by the same sun as the flat part. If the sampler smears those steps together the elevation goes
+# blank; if the shading cannot separate a face at 0.135 from a face at 0.180 the whole order reads
+# as wallpaper rather than as stone standing off a wall. There are eighteen of them, ninety metres
+# apart end to end, and they are the only relief on 380 m² of ashlar that walls.clip deliberately
+# left flat.
+#
+# The second load is a MATERIAL edge at that same scale: polished marble (rough 140) against rough
+# granite (rough 225) across the 0.045 step where a base torus rises off its plinth, and against
+# the wall's own limestone across the 0.135 step at the side of every shaft.
+#
+# DO NOT DEEPEN ANY OF IT. Every number is a module fraction and the shallowness is the whole
+# point. A pilaster projecting half a metre is an engaged column, and it tests nothing the portico
+# does not already test better.
+# ------------------------------------------------------------------------------------------------
+#
+# WHAT IT IS, AND WHERE IT SITS AGAINST ITS NEIGHBOURS
+#
+# The order is a MINOR one — d = 0.45 = M, half the diameter of the portico's columns — 4.05 m tall
+# (9 d), standing on the top of the string course at 5.85 and finishing dead on the column head at
+# 9.90, where the entablature takes over. That is the classical arrangement over a rusticated
+# storey and it is what the two heights in the brief add up to: 9.90 - 5.85 = 4.05 = 9 M exactly.
+#
+# It takes three things from the contract and nothing at all from any other fragment:
+#
+#   the wall face      x = +-16.00 and z = +-7.50, the block outline
+#   the string course  its top at 5.85, which is 12 M to 13 M — the level, not anybody's geometry
+#   the bay            2.70, with column axes at 1.35 + 2.70 n
+#
+# On the bay: the windows sit midway between the column axes, so the pilasters sit ON them, and the
+# two interleave at 1.35 without anybody having had to agree anything. Pilaster axes are
+# x = +-9.45, +-12.15, +-14.85 on the south front returns and on the north front, and
+# z = +-1.35, +-4.05, +-6.75 on the east and west elevations. A window falls in the middle of every
+# bay and the widest thing on a window — a pediment, half-span 0.90 — clears the widest thing here
+# — a plinth, half-width 0.3375 — by 0.1125 on both sides.
+#
+# THE PLINTH BAND is the one continuous member: 0.045 proud (0.1 M) and 0.095 tall, an unbroken
+# ring on the block outline at 5.80 to 5.895, bedded 0.09 into the wall. It is the continued plinth
+# of this order and it is what makes eighteen separate pilasters one piece of stone. Its projection
+# is 0.045 ON PURPOSE, and it is the only number here chosen by looking at another fragment: it is
+# shallower than the portico's antae are fluted (their flute floor stands 0.1425 proud), so it
+# passes behind them invisibly instead of banding them, and it is exactly flush with the aprons and
+# console feet of the piano-nobile windows, so it runs into them rather than across them. If either
+# of those neighbours changes, this band gets darker or lighter and nothing else breaks.
+#
+# NO ANTAE HERE. The brief for this part named them; portico.clip already stands two, on the
+# outermost column axes at x = +-6.75, out of the same `ionic_pilaster`. Two sets 0.45 apart would
+# have overlapped shaft on shaft. Reported rather than built.
+#
+# NO WEATHERING, deliberately. `weather` displaces a surface and the smallest thing here is a
+# 0.0225 m astragal; a coat heavy enough to see would eat it, and the manifest's 12 mm of grain is
+# already half the relief of the volute band. If this part ever needs wearing, wear the plinths and
+# leave the order alone: `weather cracks 0.01 on=pilasters_plinths`.
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE PILASTER — d = 0.45 (M), 4.05 tall (9 d), drawn in its own frame
+# ================================================================================================
+#
+# THE WALL FACE IS z = 0, the order projects to z = +0.18, and it stands on its own y = 0 — the
+# same frame `ionic_pilaster` uses in _order.clip, so a caller turns it half a turn about y for a
+# south wall and a quarter for an east one. Every member also runs back to z = -0.09, so the whole
+# thing is bedded a fifth of the wall's thickness into it and no joint anywhere is a plane.
+#
+#   -0.050 - 0.0675   plinth     0.15 M visible, the block the base stands on
+#    0.0225- 0.2250   base       0.5 M, Attic: lower torus, scotia, upper torus
+#    0.1800- 3.7125   shaft      7.75 M, five flutes
+#    3.6675- 4.0500   capital    0.75 M, astragal, echinus, volutes, abacus
+#
+# The ranges overlap by 0.045 wherever one member stands on the next, because the manifest displaces
+# the finished building by 12 mm of grain and a joint that only just touches can be opened by it.
+
+# --- the plinth and the base ---------------------------------------------------------------------
+#
+# The core is the block the three mouldings are cut into, and it stands at 0.1125, which is where
+# the scotia is deepest. A moulding is only the band between its own two corners; the stone behind
+# it is the caller's, and here that is this core.
+let pilasters_min_plinth = box -0.3375 -0.05   -0.09  0.3375 0.0675 0.18   round=0.012
+let pilasters_min_bcore  = box -0.27    0.0225 -0.09  0.27   0.225  0.1125 round=0.008
+let pilasters_min_tor_lo = bead   -0.27 0.0675 0.1125   0.27 0.135 0.18   run=x
+let pilasters_min_scotia = scotia -0.27 0.135  0.1125   0.27 0.18  0.1575 run=x
+let pilasters_min_tor_up = bead   -0.27 0.18   0.1125   0.27 0.225 0.1575 run=x
+
+let pilasters_min_base = union {
+    pilasters_min_plinth pilasters_min_bcore
+    pilasters_min_tor_lo pilasters_min_scotia pilasters_min_tor_up
+}
+
+# --- the shaft -------------------------------------------------------------------------------
+#
+# FIVE FLUTES, cut out of the face rather than built up on it, at a pitch of 0.09 (M/5): hollows
+# 0.060 across on centres 0, +-0.09, +-0.18, which leaves a fillet of 0.030 (M/15) between each two
+# and a 0.015 half-fillet on each arris. 0.030 is ONE VOXEL at the contract's metre 32 and it is
+# the same number the columns and the glazing bars use — read the load note at the top of
+# _order.clip before touching it.
+#
+# The flute is 0.045 deep (M/10), a third of the shaft's own 0.135 of relief, and its floor is
+# therefore at 0.09 — which is exactly the projection of the windows' piano-nobile sill course, so
+# that ring passes through this shaft flush with the bottom of its flutes and neither of us has to
+# know about the other. It stops 0.0675 short at each end, leaving a plain collar under the capital
+# and over the base, and the cutter's own round=0.015 gives the stop a soft end rather than a
+# square one.
+let pilasters_min_shsolid = box -0.225 0.18   -0.09  0.225 3.7125 0.135 round=0.008
+let pilasters_min_flmid   = box -0.030 0.2925 0.09   0.030 3.645 0.20 round=0.015
+let pilasters_min_flcut   = box  0.060 0.2925 0.09   0.120 3.645 0.20 round=0.015
+let pilasters_min_flcut_b = translate { pilasters_min_flcut } 0.09 0 0
+let pilasters_min_flutes  = mirror {
+    union { pilasters_min_flmid pilasters_min_flcut pilasters_min_flcut_b }
+} axis=x
+let pilasters_min_shaft = difference { pilasters_min_shsolid pilasters_min_flutes }
+
+# --- the capital ------------------------------------------------------------------------------
+#
+#   3.7125 - 3.7350   astragal, the necking ring — 0.0225 across and 0.0225 tall
+#   3.7350 - 3.7800   echinus, an ovolo swelling upward and outward to the full 0.18
+#   3.7800 - 4.0050   the volutes, on a face plate over a channel sunk to 0.09
+#   4.0050 - 4.0500   abacus, in two tiers
+#
+# The volute is a real logarithmic spiral and not a stack of rings, built the same way the order's
+# own is: `spiral` starts on +x and winds toward +y, so a half turn about y reverses the winding
+# without leaving the plane it lies in, and three quarters of a turn about z brings the start to
+# the top — which is the way round a right-hand volute goes. The left one is that one mirrored,
+# which is what a real capital does too.
+#
+# It is small — 0.27 across the outer turn — and it is drawn with the smallest numbers that still
+# leave a voxel of AIR between two turns AND a voxel and a half of STONE in the band itself. That
+# is the whole design of it and it took three tries to find:
+#
+#   band  0.045 across (tube=0.0225)          1.44 voxels of stone
+#   gap   0.1125 x (1 - 0.30) = 0.07875       between two turns, centre to centre
+#   air   0.07875 - 0.045 = 0.0338            1.08 voxels of channel
+#
+# The first pass used a 0.027 band and a 0.0315 channel — 0.86 and 1.0 voxels — and the contact
+# sheet came back with the scroll broken into disconnected specks: a band thinner than a voxel does
+# not thin out, it dissolves. Widen the band any further, or slow the tightening, and the channel
+# closes instead and the scroll becomes a plain disc. There is about one voxel of room either way.
+#
+# The face plate is 0.27 across, which is WIDER than the 0.225 the volute band is given between the
+# echinus and the abacus, so it laps down over the echinus by 0.0225. That is not a mistake and it
+# is not a lack of room: on a real Ionic capital the volute hangs in front of the echinus, and the
+# first version, with the plate sized to fit tidily between them, left a bright empty ledge of
+# echinus showing all round it.
+let pilasters_min_neck   = box -0.225  3.6675 -0.09  0.225  3.735 0.135 round=0.008
+let pilasters_min_echcor = box -0.2475 3.735  -0.09  0.2475 3.78  0.135 round=0.008
+let pilasters_min_astrag = bead  -0.225  3.7125 0.135   0.225  3.735 0.1575 run=x
+let pilasters_min_echin  = ovolo -0.2475 3.78   0.135   0.2475 3.735 0.18   run=x
+
+let pilasters_min_chan = box -0.225 3.735 -0.09  0.225 4.0275 0.09 round=0.008
+
+let pilasters_min_vraw  = spiral 0 0 0  r=0.1125 tighten=0.30 tube=0.0225 turns=1.75 axis=z
+let pilasters_min_vhand = rotate { pilasters_min_vraw } y=0.5
+let pilasters_min_vturn = rotate { pilasters_min_vhand } z=0.75
+let pilasters_min_vband = translate { pilasters_min_vturn } 0.18 3.8925 0.1575
+let pilasters_min_vface = cylinder 0.18 3.8925 0.1125   r=0.135 h=0.09   axis=z
+let pilasters_min_veye  = cylinder 0.18 3.8925 0.12375  r=0.036 h=0.1125 axis=z
+let pilasters_min_volute = mirror {
+    union { pilasters_min_vband pilasters_min_vface pilasters_min_veye }
+} axis=x
+
+let pilasters_min_abac_lo = box -0.2925 4.005  -0.09  0.2925 4.0275 0.1575 round=0.008
+let pilasters_min_abac_up = box -0.315  4.0275 -0.09  0.315  4.05   0.18   round=0.008
+
+let pilasters_min_cap = union {
+    pilasters_min_neck pilasters_min_echcor pilasters_min_astrag pilasters_min_echin
+    pilasters_min_chan pilasters_min_volute
+    pilasters_min_abac_lo pilasters_min_abac_up
+}
+
+let pilasters_minor = union { pilasters_min_base pilasters_min_shaft pilasters_min_cap }
+
+# ================================================================================================
+# THE PLINTH BAND — 5.80 to 5.895, a closed ring on the block outline
+# ================================================================================================
+#
+# The continued plinth of the order, and the thing that makes this part one solid. A ring rather
+# than four runs, because the difference of two boxes turns all four corners at once and the mitre
+# is free — the same trick the wall's own string course uses one member below this.
+#
+# 0.045 proud (0.1 M) of the face at +-16.00 / +-7.50 and 0.09 into it. See the header for why
+# 0.045 and not more.
+let pilasters_band_out = box -16.045 5.80 -7.545   16.045 5.895 7.545 round=0.010
+let pilasters_band_in  = box -15.910 5.74 -7.410   15.910 5.955 7.410
+let pilasters_band = difference { pilasters_band_out pilasters_band_in }
+
+# ================================================================================================
+# PLACING IT — the +x half of the building, mirrored at the end
+# ================================================================================================
+#
+# Everything below is built at x >= 0, because `mirror { } axis=x` folds the coordinate and a shape
+# drawn on the -x side of it would simply never be asked for. Half a turn about y reflects x as
+# well as z, so the turn comes BEFORE the translate in every case.
+#
+#   rotate y=0.5    a shape projecting +z projects -z, and lands on the south wall at z = -7.50
+#   rotate y=0      unturned, it lands on the north wall at z = +7.50
+#   rotate y=0.25   it projects +x, and lands on the east wall at x = +16.00
+#
+# 5.85 is the level every one of them is lifted to: the top of the string course, and 4.05 below
+# the column head at 9.90.
+
+let pilasters_min_south = rotate { pilasters_minor } y=0.5
+let pilasters_min_east  = rotate { pilasters_minor } y=0.25
+
+# The returns of the south front: three bays each side, on the column grid continued outward past
+# the portico. The first of them stands 2.25 clear of the portico's east anta.
+let pilasters_south = union {
+    translate { pilasters_min_south }  9.45 5.85 -7.5
+    translate { pilasters_min_south } 12.15 5.85 -7.5
+    translate { pilasters_min_south } 14.85 5.85 -7.5
+}
+
+# The north front has no portico in front of it, so the grid runs the whole way in: six bays on the
+# +x half, and the centre bay left to the door as it is on the south.
+let pilasters_north = union {
+    translate { pilasters_minor }  1.35 5.85 7.5
+    translate { pilasters_minor }  4.05 5.85 7.5
+    translate { pilasters_minor }  6.75 5.85 7.5
+    translate { pilasters_minor }  9.45 5.85 7.5
+    translate { pilasters_minor } 12.15 5.85 7.5
+    translate { pilasters_minor } 14.85 5.85 7.5
+}
+
+# The east elevation: six bays over the 15 m depth of the block, on the same 2.70 spacing measured
+# from z = 0, which leaves five window bays between them and half a bay at each angle for the
+# wall's quoins.
+let pilasters_east = union {
+    translate { pilasters_min_east } 16 5.85 -6.75
+    translate { pilasters_min_east } 16 5.85 -4.05
+    translate { pilasters_min_east } 16 5.85 -1.35
+    translate { pilasters_min_east } 16 5.85  1.35
+    translate { pilasters_min_east } 16 5.85  4.05
+    translate { pilasters_min_east } 16 5.85  6.75
+}
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+#
+# The band is already symmetric about x = 0 and is left outside the fold; the pilasters are built
+# on the +x half only, so the west elevation is the east one exactly and can never drift from it.
+let pilasters_orders = mirror {
+    union { pilasters_south pilasters_north pilasters_east }
+} axis=x
+
+let part_pilasters = union { pilasters_orders pilasters_band }
+
+# The plinths, as one shape, so they can be a different stone from what stands on them: a slice of
+# this part's own geometry taken between 5.75 and 5.9175. Nothing else of this part is in that
+# slice — the base core starts at 5.8725 and is buried inside the plinth block until 5.9175, where
+# the lower torus springs — so the slice is exactly the plinth band and the eighteen plinth blocks.
+let pilasters_plinths = intersection {
+    part_pilasters  box -17.0 5.75 -8.0   17.0 5.9175 8.0
+}
+
+# Marble for the order, matching the portico's columns and antae, and granite for the plinths it
+# stands on: a polished stone at rough 140 against a hard dark one at rough 225, meeting across the
+# 0.045 step where the lower torus rises off its plinth. That edge is the shading half of this
+# part's load and it is 1.4 voxels tall.
+#
+# below=0.02, not below=0, on both. The manifest displaces everything by 12 mm of grain at the very
+# end, and a voxel that only exists because the grain pushed the surface outward sits OUTSIDE the
+# shape its rule names. At below=0 those voxels match no rule, fall back to the base coat, and
+# leave a pale limestone rind over every pilaster in the building.
+paint marble  where=part_pilasters     below=0.02
+paint lapis where=pilasters_plinths  below=0.02
+
+# This part removes no matter, so there is no `void_pilasters` and the manifest names none.

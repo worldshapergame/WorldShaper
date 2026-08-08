@@ -1,0 +1,10 @@
+# roof - the roof planes behind the parapet, leadwork
+#
+# PLACEHOLDER. Replace everything below with the real part.
+# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+#
+# This file must define exactly one part named `part_roof`. Every other name it binds must
+# start with `roof_` so nothing collides with another fragment.
+
+let roof_placeholder = sphere 0 -1.30 0 r=0.25
+let part_roof = roof_placeholder

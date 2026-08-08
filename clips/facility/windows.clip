@@ -1,0 +1,445 @@
+# windows — every opening in the main block, its dressing, and the glazing in it.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS FILE PUTS UNDER LOAD: the glazing bars, and the only refracting surface in the building.
+#
+#   the glazing bars   0.030 m square in section — ONE VOXEL at the contract's metre 32 — laid on a
+#                      0.45 m grid, six to a piano-nobile light, and struck radially in the fanlight
+#                      of every arched window on the ground storey. There are 60 windows; a little
+#                      over four hundred bars.
+#   the arc bar        a torus of tube 0.018 across the fanlight: a one-voxel feature that is CURVED,
+#                      which is a different problem for a mesher than a straight one.
+#   the glass          620 m of pane at 0.045 thick, `ior=1.5`, `opacity=64`. It is the only material
+#                      in the building with an index of refraction and the only vertical transparent
+#                      surface, so the path tracer's glass loop — Fresnel split, bent transmitted
+#                      ray, tinted throughput — is exercised here or nowhere. Ten of the sixty sit
+#                      behind the portico colonnade in deep shade, which is the hard case: a dark
+#                      interior seen through a pane that is mostly reflecting the sunlit column in
+#                      front of it.
+#   the pair together  a one-voxel opaque bar against a transparent pane is the highest-contrast,
+#                      highest-frequency thing the denoiser will be handed. If the bars dissolve
+#                      into the glass, that is the renderer, not the bars.
+#
+# DO NOT FATTEN THE BARS. 0.030 is M/15, the same number the flutes use, and it is deliberate.
+# DO NOT WEATHER THIS PART. A displacement of even 0.012 is 40% of a bar's width; the clip-wide
+# grain in the manifest is already as much as they will take. There is no `weather` line here and
+# that is on purpose.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45. Every number below is a multiple or a simple fraction of one of
+# them. The overlaps that stop things floating are 0.045 (M/10) and 0.09 (M/5), both well past the
+# 0.05 the brief asks for. The two exceptions are named where they occur: the taper of a keystone,
+# which is the line x = y/24 and is a construction rather than a dimension, and the rake of a
+# window pediment, which is 1 in 2 — steeper than the contract's span/9, because span/9 is the rule
+# for the great pediment over a portico and a 1.80 m window pediment drawn at it would be a line.
+#
+# ------------------------------------------------------------------------------------------------
+# WHERE THE OPENINGS ARE, AND THE ONE THING ANOTHER FRAGMENT MIGHT WANT TO KNOW
+#
+# The contract gives the main block as x -16..16, z -7.5..7.5, the wall standing from podium_top
+# 1.80 to column_head 9.90 — 8.10 m, which is two storeys behind the giant order. This file splits
+# them at 5.40 (12 M):
+#
+#     1.80 .. 5.40   the rusticated ground storey     round-headed windows in the centre section,
+#                                                     square-headed with lugs and a heavy keystone
+#                                                     in the wings and on the end walls
+#     5.40 .. 9.90   the piano nobile                 aediculed windows, alternately pedimented
+#                                                     triangular and segmental
+#
+# Openings stand on the 2.70 bay at x = +-2.70, 5.40, 8.10, 10.80, 13.50 on the south and north
+# fronts and at z = 0, +-2.70, +-5.40 on the two end walls: midway between the column axes the
+# contract names, which is where the contract says a window goes. The centre bay is left empty on
+# both fronts, because that is the door's.
+#
+# Nothing here needs anything from anybody. The dressings stand on the wall face at x = +-16 and
+# z = +-7.5 and bite 0.09 into it; the openings are cut 1.80 m (4 M) deep from that face, which is
+# more than any sane outer wall, so a window goes through whatever thickness walls.clip settles on.
+# If that wall ends up thicker than 1.80 the openings stop short and this file has to change: it is
+# the single assumption it makes about anybody else. Written up in requests/windows.md.
+# ------------------------------------------------------------------------------------------------
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE TWO SILL COURSES
+# ================================================================================================
+#
+# The sills of a storey run together into a band, which is what a band course is, and it is what
+# ties every window on a front to every other one. Both are a closed ring round the block, 0.18
+# thick: 0.09 (M/5) proud of the wall face and 0.09 into it.
+
+let windows_band_gr = difference {
+    box -16.09 2.52 -7.59   16.09 2.70 7.59 round=0.015
+    box -15.91 2.46 -7.41   15.91 2.76 7.41
+}
+let windows_band_pn = difference {
+    box -16.09 6.12 -7.59   16.09 6.30 7.59 round=0.015
+    box -15.91 6.06 -7.41   15.91 6.36 7.41
+}
+let windows_bands = union { windows_band_gr windows_band_pn }
+
+# ================================================================================================
+# ONE WINDOW, DRAWN AT THE ORIGIN
+# ================================================================================================
+#
+# Every unit below is centred on x = 0 with THE WALL FACE AT z = 0 AND THE DRESSING PROJECTING TO
+# -z. Heights are absolute, because a window sits at one height and only one. A caller translates
+# in x, and turns half a turn about y for the north front or a quarter for an end wall.
+#
+# Each unit is bound four times over, once per material and once for the hole it needs, because a
+# paint rule has to name a shape of its own and the manifest wants the holes on their own. They are
+# placed as four parallel unions at the bottom of the file.
+
+# --- the piano nobile aedicule ------------------------------------------------------------------
+#
+#   5.310  apron foot, lapped over the keystone below
+#   5.625  console foot
+#   6.075  console head
+#   6.120  sill course
+#   6.300  sill top, opening foot
+#   6.750  7.200  7.650  8.100   the glazing bar lines: five lights of M, exactly
+#   8.550  opening head
+#   8.730  architrave head
+#   8.865  frieze head
+#   9.045  cornice head
+#   9.495  pediment apex — 0.405 clear of the main entablature at 9.90
+#
+# The opening is 1.35 x 2.25 (3 M x 5 M) and the lights are 0.45 square. That is not decoration:
+# a pane exactly one module across is what makes the bar grid line up with the flutes of the column
+# in front of it when the two are seen together.
+
+let windows_pn_sill  = box -0.90 6.12  -0.225  0.90 6.30  0.09 round=0.015
+let windows_pn_silu  = box -0.90 5.985 -0.09   0.90 6.165 0.09 round=0.015
+let windows_pn_silm  = ovolo -0.90 6.165 -0.225   0.90 5.985 -0.045 run=x
+
+# The consoles under it: a block with a quarter-round curling back to the wall, one under each jamb.
+# Narrow (0.135, 0.3 M) and bold (0.225 out, M/2) rather than wide and shallow, because at this
+# size a bracket either casts its own shadow or it is a lump.
+let windows_pn_conh  = box 0.6525 5.895 -0.225   0.7875 6.075 0.09  round=0.012
+let windows_pn_conc  = ovolo 0.6525 5.895 -0.225   0.7875 5.625 0.0  run=x
+let windows_pn_conb  = box 0.6525 5.625 -0.045  0.7875 5.895 0.09  round=0.012
+let windows_pn_cons  = mirror { union { windows_pn_conh windows_pn_conc windows_pn_conb } } axis=x
+
+# The apron: the sunk panel between the consoles. It reaches down over the keystone of the window
+# below, and that lap is what joins the piano nobile to the ground storey — the two sill courses
+# are rings, and this is the rung between them.
+let windows_pn_aprn  = difference {
+    box -0.27 5.31 -0.045  0.27 6.075 0.09 round=0.012
+    box -0.18 5.40 -0.10   0.18 5.895 0.02
+}
+
+# The architrave: two fasciae, the outer stepping 0.0675 forward of the inner, which is the only
+# thing that stops an aedicule reading as a hole cut in a slab. The inner one laps 0.045 over the
+# opening as the rebate the sash sits in.
+let windows_pn_arcin = difference {
+    box -0.7425 6.21 -0.1125  0.7425 8.6625 0.09 round=0.012
+    box -0.63   6.16 -1       0.63   8.505  1
+}
+let windows_pn_arcot = difference {
+    box -0.81   6.21 -0.18    0.81   8.73   0.09 round=0.012
+    box -0.6975 6.16 -1       0.6975 8.6175 1
+}
+let windows_pn_arch  = union { windows_pn_arcin windows_pn_arcot }
+
+# The frieze stands BACK of the architrave, not flush with it. A flush one is a wall.
+let windows_pn_frz   = box -0.7875 8.685 -0.09  0.7875 8.865 0.09 round=0.012
+let windows_pn_bedb  = box -0.90 8.82  -0.135  0.90 8.955 0.09 round=0.012
+let windows_pn_bed   = ovolo -0.90 8.955 -0.315   0.90 8.82 -0.135 run=x
+let windows_pn_cor   = box -0.90 8.955 -0.315  0.90 9.045 0.09 round=0.012
+
+let windows_pn_body = union {
+    windows_pn_sill windows_pn_silu windows_pn_silm
+    windows_pn_cons windows_pn_aprn
+    windows_pn_arch windows_pn_frz windows_pn_bedb windows_pn_bed windows_pn_cor
+}
+
+# THE TRIANGULAR PEDIMENT. The rake is 1 in 2: half-span 0.90, rise 0.45, apex 9.495. A half space
+# folded in x is the gable, and the two offsets below are that line and the same line 0.135 lower,
+# each divided by the length of the normal (sqrt 1.25) because `plane` takes its offset along a
+# unit normal: 9.495 / 1.118034 = 8.4925862, and 9.360 / 1.118034 = 8.3718385.
+let windows_pt_gable = mirror { plane 0.5 1 0 at=8.4925862 } axis=x
+let windows_pt_soff  = mirror { plane 0.5 1 0 at=8.3718385 } axis=x
+let windows_pt_mass  = intersection { box -0.90 8.955 -0.315  0.90 9.60 0.09  windows_pt_gable }
+let windows_pt_in    = intersection { box -0.92 8.94  -0.335  0.92 9.62 0.11  windows_pt_soff }
+let windows_pt_rake  = difference { windows_pt_mass windows_pt_in }
+let windows_pt_tymp  = intersection { windows_pt_in  box -0.90 8.955 -0.135  0.90 9.60 0.09 }
+let windows_pt_ped   = union { windows_pt_rake windows_pt_tymp }
+
+# THE SEGMENTAL PEDIMENT. The same span and the same rise, struck as an arc: a chord of 1.80 with a
+# rise of 0.45 is a circle of radius 1.125 (2.5 M) centred 1.125 below the crown, at 8.37.
+let windows_ps_out   = cylinder 0 8.37 -0.1125 r=1.125 h=0.405 axis=z
+let windows_ps_in    = cylinder 0 8.37 -0.1125 r=0.99  h=0.485 axis=z
+let windows_ps_box   = box -0.90 8.955 -0.315  0.90 9.60 0.09
+let windows_ps_rake  = difference { intersection { windows_ps_out windows_ps_box } windows_ps_in }
+let windows_ps_tymp  = intersection { windows_ps_in windows_ps_box
+                                      box -0.90 8.955 -0.135  0.90 9.60 0.09 }
+let windows_ps_ped   = union { windows_ps_rake windows_ps_tymp }
+
+let windows_pt_stone = union { windows_pn_body windows_pt_ped }
+let windows_ps_stone = union { windows_pn_body windows_ps_ped }
+
+# THE SASH. A frame 0.09 wide set 0.045 back from the face, the pane 0.225 back from it, and the
+# bars standing 0.06 proud of the pane and sunk 0.0225 into it so they are one solid with it.
+let windows_pn_frame = difference {
+    box -0.675 6.30 0.045  0.675 8.55 0.27  round=0.008
+    box -0.585 6.39 -1     0.585 8.46 1
+}
+let windows_pn_barv  = mirror { box 0.21 6.345 0.165  0.24 8.505 0.2475 } axis=x
+let windows_pn_barh1 = box -0.63 6.735 0.165  0.63 6.765 0.2475
+let windows_pn_barh2 = box -0.63 7.185 0.165  0.63 7.215 0.2475
+let windows_pn_barh3 = box -0.63 7.635 0.165  0.63 7.665 0.2475
+let windows_pn_barh4 = box -0.63 8.085 0.165  0.63 8.115 0.2475
+let windows_pn_metal = union {
+    windows_pn_frame windows_pn_barv
+    windows_pn_barh1 windows_pn_barh2 windows_pn_barh3 windows_pn_barh4
+}
+let windows_pn_glass = box -0.63 6.345 0.225  0.63 8.505 0.27
+let windows_pn_cut   = box -0.675 6.30 -0.18  0.675 8.55 1.80
+
+# --- the ground storey, round-headed --------------------------------------------------------
+#
+#   2.385  under-sill block foot
+#   2.520  sill course
+#   2.700  sill top, opening foot
+#   3.150  3.600   bar lines: three lights of M
+#   4.050  springing — the impost
+#   4.725  crown of the arch (springing + 0.675, the half of the opening)
+#   5.400  head of the keystone, on the string course line
+#
+# The archivolt is a band 0.225 (M/2) wide carried right round jamb and arch, and the keystone is
+# cut off underneath by the same arc, so its soffit is flush with the archivolt's — which is what a
+# keystone does and what tells it from a block stuck on.
+
+let windows_gr_sill  = box -0.90 2.52  -0.225  0.90 2.70  0.09 round=0.015
+let windows_gr_silu  = box -0.90 2.385 -0.09   0.90 2.565 0.09 round=0.015
+let windows_gr_silm  = ovolo -0.90 2.565 -0.225   0.90 2.385 -0.045 run=x
+
+let windows_ga_out = union {
+    box -0.855 2.61 -0.135  0.855 4.05 0.09
+    cylinder 0 4.05 -0.0225 r=0.855 h=0.225 axis=z
+}
+let windows_ga_in = union {
+    box -0.63 2.56 -1  0.63 4.05 1
+    cylinder 0 4.05 0.75 r=0.63 h=2.10 axis=z
+}
+let windows_ga_ring = difference { windows_ga_out windows_ga_in }
+let windows_ga_imp  = mirror { box 0.63 3.96 -0.18  0.99 4.14 0.09 round=0.012 } axis=x
+
+# The keystone taper. Half-width 0.18 at 4.32 and 0.225 at 5.40 is the line x = y/24 through the
+# origin, which is why the offset is zero and there is no arithmetic to get wrong.
+let windows_key_side = mirror { plane 1 -0.0416667 0 at=0 } axis=x
+let windows_ga_kmass = intersection { box -0.27 4.32 -0.18  0.27 5.40 0.09  windows_key_side }
+let windows_ga_key   = difference { windows_ga_kmass windows_ga_in }
+
+let windows_ga_stone = union {
+    windows_gr_sill windows_gr_silu windows_gr_silm
+    windows_ga_ring windows_ga_imp windows_ga_key
+}
+
+# The sash, and the fanlight over it. The rays are struck at the origin and carried to the centre of
+# the arch, because `rotate` turns about the origin and nowhere else. Three of them, folded in x,
+# are five at thirty degrees apart with the middle one upright.
+let windows_ga_frame = difference {
+    union { box -0.675 2.70 0.045  0.675 4.05 0.27
+            cylinder 0 4.05 0.1575 r=0.675 h=0.225 axis=z }
+    union { box -0.585 2.79 -1  0.585 4.05 1
+            cylinder 0 4.05 0.75 r=0.585 h=2.10 axis=z }
+}
+let windows_ga_barv  = mirror { box 0.21 2.745 0.165  0.24 4.08 0.2475 } axis=x
+let windows_ga_barh1 = box -0.63 3.135 0.165  0.63 3.165 0.2475
+let windows_ga_barh2 = box -0.63 3.585 0.165  0.63 3.615 0.2475
+let windows_ga_barsp = box -0.63 4.035 0.165  0.63 4.065 0.2475
+let windows_ga_ray   = box 0 -0.015 0.165  0.63 0.015 0.2475
+let windows_ga_ray1  = rotate { windows_ga_ray } z=0.0833333
+let windows_ga_ray2  = rotate { windows_ga_ray } z=0.1666667
+let windows_ga_ray3  = rotate { windows_ga_ray } z=0.25
+#
+# THE BOX ROUND THE RAYS IS LOAD-BEARING AND MUST NOT BE TIDIED AWAY. `rotate` is deliberately
+# given no bounding box by the field — a box that is wrong by a little loses voxels — so anything
+# with a rotate in it reports infinite bounds, and `metric_slack(Repeat)` answers infinity for a
+# child whose extent it cannot measure. Infinity there means no box in the clip can ever settle,
+# and the sampler walks every voxel of the whole 582-million-cell array. With the rays written
+# bare, part_windows cost 705,143,256 field evaluations and 386 seconds at metre 32. Intersecting
+# them with a box they already fit inside changes not one voxel and costs 5.4 seconds.
+let windows_ga_rays  = intersection {
+    translate { mirror { union { windows_ga_ray1 windows_ga_ray2 windows_ga_ray3 } } axis=x }
+              0 4.05 0
+    box -0.63 4.02 0.16  0.63 4.71 0.26
+}
+let windows_ga_arc   = intersection {
+    torus 0 4.05 0.2295 ring=0.315 tube=0.018 axis=z
+    box -0.63 4.05 0.16  0.63 4.80 0.26
+}
+let windows_ga_metal = union {
+    windows_ga_frame windows_ga_barv windows_ga_barh1 windows_ga_barh2 windows_ga_barsp
+    windows_ga_rays windows_ga_arc
+}
+let windows_ga_glass = union {
+    box -0.63 2.745 0.225  0.63 4.05 0.27
+    cylinder 0 4.05 0.2475 r=0.63 h=0.045 axis=z
+}
+let windows_ga_cut = union {
+    box -0.675 2.70 -0.18  0.675 4.05 1.80
+    cylinder 0 4.05 0.81 r=0.675 h=1.98 axis=z
+}
+
+# --- the ground storey, square-headed ---------------------------------------------------------
+#
+# The wings and the end walls. A lugged architrave — the band widens into ears at the head, which is
+# the mark of a square window in a rusticated storey — a cap over it, and the same keystone.
+
+let windows_gs_band = difference {
+    union { box -0.855 2.61  -0.135  0.855 4.725 0.09
+            box -1.08  4.365 -0.135  1.08  4.725 0.09 }
+    box -0.63 2.56 -1  0.63 4.50 1
+}
+let windows_gs_cap  = box -1.08 4.68 -0.18  1.08 4.905 0.09 round=0.015
+let windows_gs_key  = intersection { box -0.27 4.50 -0.225  0.27 5.40 0.09  windows_key_side }
+let windows_gs_stone = union {
+    windows_gr_sill windows_gr_silu windows_gr_silm
+    windows_gs_band windows_gs_cap windows_gs_key
+}
+
+let windows_gs_frame = difference {
+    box -0.675 2.70 0.045  0.675 4.50 0.27 round=0.008
+    box -0.585 2.79 -1     0.585 4.41 1
+}
+let windows_gs_barv  = mirror { box 0.21 2.745 0.165  0.24 4.455 0.2475 } axis=x
+let windows_gs_barh1 = box -0.63 3.135 0.165  0.63 3.165 0.2475
+let windows_gs_barh2 = box -0.63 3.585 0.165  0.63 3.615 0.2475
+let windows_gs_barh3 = box -0.63 4.035 0.165  0.63 4.065 0.2475
+let windows_gs_metal = union {
+    windows_gs_frame windows_gs_barv windows_gs_barh1 windows_gs_barh2 windows_gs_barh3
+}
+let windows_gs_glass = box -0.63 2.745 0.225  0.63 4.455 0.27
+let windows_gs_cut   = box -0.675 2.70 -0.18  0.675 4.50 1.80
+
+# ================================================================================================
+# WHERE THEY GO
+# ================================================================================================
+#
+# The same five placements four times over, once for each material and once for the holes. Written
+# out rather than folded together because a paint rule has to name a shape that is only the thing
+# it paints, and because the four unions share every subtree under them — the field is a graph, so
+# a unit named four times is one unit.
+#
+# A front is built on its +x half and folded; the end wall is built about z = 0 and placed at both
+# +-16 by hand, turned a quarter turn each way, which keeps a tight box on each rather than one
+# loose one spanning the building.
+
+let windows_stone_hs = union {
+    translate { repeat { windows_ga_stone } x=2.70 nx=1 } 5.40 0 0
+    translate { windows_gs_stone } 10.80 0 0
+    translate { windows_gs_stone } 13.50 0 0
+    translate { repeat { windows_pt_stone } x=5.40 nx=1 } 8.10 0 0
+    translate { windows_ps_stone } 5.40 0 0
+    translate { windows_ps_stone } 10.80 0 0
+}
+let windows_stone_e = union {
+    repeat { windows_gs_stone } x=2.70 nx=2
+    repeat { windows_pt_stone } x=5.40 nx=1
+    mirror { translate { windows_ps_stone } 2.70 0 0 } axis=x
+}
+# Every turned placement is caught in a box it already fits inside, for the reason written over the
+# fanlight rays: a rotation has no bounds, and a union cannot cull a child whose box is everywhere,
+# so without these the whole building walks into all sixty windows on every evaluation. The boxes
+# are generous — the geometry stands well clear of every face of them — so they clip nothing.
+let windows_stone = union {
+    windows_bands
+    translate { mirror { windows_stone_hs } axis=x } 0 0 -7.5
+    intersection { translate { rotate { mirror { windows_stone_hs } axis=x } y=0.5 } 0 0 7.5
+                   box -14.85 2.20 7.30   14.85 9.70 7.90 }
+    intersection { translate { rotate { windows_stone_e } y=-0.25 }  16 0 0
+                   box  15.80 2.20 -6.70   16.40 9.70 6.70 }
+    intersection { translate { rotate { windows_stone_e } y=0.25 }  -16 0 0
+                   box -16.40 2.20 -6.70  -15.80 9.70 6.70 }
+}
+
+let windows_metal_hs = union {
+    translate { repeat { windows_ga_metal } x=2.70 nx=1 } 5.40 0 0
+    translate { windows_gs_metal } 10.80 0 0
+    translate { windows_gs_metal } 13.50 0 0
+    translate { repeat { windows_pn_metal } x=2.70 nx=2 } 8.10 0 0
+}
+let windows_metal_e = union {
+    repeat { windows_gs_metal } x=2.70 nx=2
+    repeat { windows_pn_metal } x=2.70 nx=2
+}
+let windows_metal = union {
+    translate { mirror { windows_metal_hs } axis=x } 0 0 -7.5
+    intersection { translate { rotate { mirror { windows_metal_hs } axis=x } y=0.5 } 0 0 7.5
+                   box -14.85 2.60 7.15   14.85 8.65 7.55 }
+    intersection { translate { rotate { windows_metal_e } y=-0.25 }  16 0 0
+                   box  15.65 2.60 -6.70   16.05 8.65 6.70 }
+    intersection { translate { rotate { windows_metal_e } y=0.25 }  -16 0 0
+                   box -16.05 2.60 -6.70  -15.65 8.65 6.70 }
+}
+
+let windows_glass_hs = union {
+    translate { repeat { windows_ga_glass } x=2.70 nx=1 } 5.40 0 0
+    translate { windows_gs_glass } 10.80 0 0
+    translate { windows_gs_glass } 13.50 0 0
+    translate { repeat { windows_pn_glass } x=2.70 nx=2 } 8.10 0 0
+}
+let windows_glass_e = union {
+    repeat { windows_gs_glass } x=2.70 nx=2
+    repeat { windows_pn_glass } x=2.70 nx=2
+}
+let windows_glass = union {
+    translate { mirror { windows_glass_hs } axis=x } 0 0 -7.5
+    intersection { translate { rotate { mirror { windows_glass_hs } axis=x } y=0.5 } 0 0 7.5
+                   box -14.85 2.60 7.15   14.85 8.65 7.55 }
+    intersection { translate { rotate { windows_glass_e } y=-0.25 }  16 0 0
+                   box  15.65 2.60 -6.70   16.05 8.65 6.70 }
+    intersection { translate { rotate { windows_glass_e } y=0.25 }  -16 0 0
+                   box -16.05 2.60 -6.70  -15.65 8.65 6.70 }
+}
+
+let windows_cut_hs = union {
+    translate { repeat { windows_ga_cut } x=2.70 nx=1 } 5.40 0 0
+    translate { windows_gs_cut } 10.80 0 0
+    translate { windows_gs_cut } 13.50 0 0
+    translate { repeat { windows_pn_cut } x=2.70 nx=2 } 8.10 0 0
+}
+let windows_cut_e = union {
+    repeat { windows_gs_cut } x=2.70 nx=2
+    repeat { windows_pn_cut } x=2.70 nx=2
+}
+let windows_cuts = union {
+    translate { mirror { windows_cut_hs } axis=x } 0 0 -7.5
+    intersection { translate { rotate { mirror { windows_cut_hs } axis=x } y=0.5 } 0 0 7.5
+                   box -14.85 2.60 5.60   14.85 8.65 7.80 }
+    intersection { translate { rotate { windows_cut_e } y=-0.25 }  16 0 0
+                   box  14.10 2.60 -6.70   16.30 8.65 6.70 }
+    intersection { translate { rotate { windows_cut_e } y=0.25 }  -16 0 0
+                   box -16.30 2.60 -6.70  -14.10 8.65 6.70 }
+}
+
+let part_windows = union { windows_stone windows_metal windows_glass }
+
+# What the manifest takes away. The hole is the opening MINUS everything this file put in it, so the
+# sash, the bars and the pane survive being cut out of the wall they sit in, and so does the 0.045
+# the architrave laps over the reveal. Subtracting the whole part rather than a list of the pieces
+# that happen to be inside the hole is not laziness: it cannot go stale when a piece is added.
+let void_windows = difference { windows_cuts part_windows }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Five materials on three shapes, the two storeys told apart by a box at the string course line —
+# which is a shape of this file's own, not a bare coordinate. The ground storey is granite and oak,
+# the piano nobile marble and bronze: the hierarchy of a classical front said in material, and five
+# of the contract's list in one place, including the only glass in the building.
+#
+# `below=0.02` everywhere, never 0, because the manifest displaces the whole building by 12 mm at
+# the end and a test at zero leaves a pale rind over every outward face.
+
+let windows_lowstone = intersection { windows_stone box -17 -1 -17  17 5.40 17 }
+let windows_lowmetal = intersection { windows_metal box -17 -1 -17  17 5.40 17 }
+
+paint marble  where=windows_stone    below=0.02
+paint granite where=windows_lowstone below=0.02
+paint bronze  where=windows_metal    below=0.02
+paint oak     where=windows_lowmetal below=0.02
+paint glass   where=windows_glass    below=0.02

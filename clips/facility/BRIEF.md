@@ -133,6 +133,13 @@ let name = stairs x0 y0 z0  x1 y1 z1  run=0.32 rise=0.18
 let name = plane  nx ny nz  at=0.0                    # the half space behind it
 let name = cube   cx cy cz r=1        # also tetra, octa, dodeca, icosa
 
+let name = spiral cx cy cz  r=0.36 tighten=0.55 tube=0.045 turns=2.5 axis=z
+                                      # a logarithmic spiral swept as a tube — the Ionic volute.
+                                      # `tighten` is what the radius is multiplied by over one
+                                      # whole turn, so 0.55 means each turn is a little over half
+                                      # the one outside it. It starts at radius r along the first
+                                      # cross-axis and winds from there.
+
 let name = union        { a b c }     # smooth=0.1 rounds the joins
 let name = difference   { a b c }     # a minus everything after it
 let name = intersection { a b }
@@ -149,6 +156,32 @@ let name = offset    { a } by=-0.05                   # shrinks or grows without
 let name = displace  { a pattern } amount=0.02
 let name = twist     { a } turns=0.25 axis=y
 let name = bend      { a } turns=0.1 axis=y
+let name = revolve   { profile } axis=y               # also: revolve cx cy cz { profile } axis=y
+                                      # turns a section about an axis. The section is asked at
+                                      # (radius, height), so its first two numbers are a RADIUS
+                                      # and a height, measured from the axis. Exact — a circle
+                                      # revolved about its own centre is a sphere to the last
+                                      # decimal — so a base, a baluster, an urn or a dome is one
+                                      # profile drawn once rather than a stack of cylinders.
+
+# The mouldings. Sections, not solids of their own: put them inside a `revolve` for anything that
+# goes round a column, or give them six numbers to run one straight along a cornice.
+#
+# Two opposite corners like a box, and THE ORDER OF THE CORNERS IS THE ORIENTATION: the first is
+# in the stone, the second is in the air. Swap them and the curve turns over — there is no flip
+# key because there does not need to be. Four numbers is (across, up) twice, with the run set to
+# a metre either side of zero, which is what a revolve wants; six is a full box, and `run=` says
+# which axis the moulding travels along (z by default, so the section is drawn in x and y).
+
+let name = fillet  p0 q0  p1 q1                       # a plain square band
+let name = ovolo   p0 q0  p1 q1                       # a convex quarter round
+let name = cavetto p0 q0  p1 q1                       # a concave quarter hollow
+let name = bead    p0 q0  p1 q1                       # a half round: the order's "torus"
+let name = astragal p0 q0 p1 q1                       # the same thing, small, by its own name
+let name = scotia  p0 q0  p1 q1                       # the deep hollow, deepest above the middle
+let name = cyma    p0 q0  p1 q1                       # the S: convex at the first corner's end
+let name = cyma_reversa p0 q0 p1 q1                   # the same S turned over
+let name = ovolo  x0 y0 z0  x1 y1 z1  run=z           # six numbers: a straight length of it
 
 let p = fbm size=0.1 octaves=3 seed=7                 # also ridged, noise, cells, rasp
 let p = stripes axis=y period=0.6 duty=0.5
@@ -161,23 +194,35 @@ let p = distance cx cy cz                             # radial
 paint marble where=some_shape below=0                 # where that shape is inside
 paint moss   where=some_pattern above=0.55            # where a pattern is high
 paint lead   where=roof below=0 facing=y at=0.6       # only on up-facing surfaces
+
+weather desert 0.14 scale=0.8 seed=9 on=my_walls      # desert, overgrown, cracks, burnt, sea
 ```
 
 `repeat` needs the shape to fit inside one period, and `nx` counts copies **either side** of the
 original, so `nx=2` gives five. Rotations are in turns: 0.25 is a quarter turn.
+
+**`weather` needs `on=`.** Without it, weathering works on the whole clip: it will bleach the
+lawn, scour the volutes and sand the steps along with whatever you meant it for, because the coats
+it adds are keyed on a value rather than on a place and they go on after everything you painted.
+That is why the last facility shipped with none. With `on=<one of your own bindings>` both halves
+are confined — the deformation is multiplied by an inside-ness mask of that shape, and every coat
+it adds is pushed out of range everywhere the shape is not — so you can weather your own part and
+nobody else's. Name a shape of yours, never somebody else's.
 
 ## Making it Ionic
 
 The order is the point. A few things that separate an Ionic column from a cylinder:
 
 - **The base is Attic**: a square plinth, a big lower torus, a hollow scotia, a smaller upper
-  torus, and a fillet. Build it as a stack of `torus` and `cylinder`, not as one shape.
+  torus, and a fillet. Draw it as a section and `revolve` it — four mouldings, in radii, in four
+  lines. Stacked cylinders were the old advice and are no longer it: a stacked scotia is a
+  staircase and a stacked torus is a drum, and both cost more lines than the real thing.
 - **The shaft tapers** — the top is five-sixths of the bottom — and it is **fluted**: 24 hollows
   with flat fillets between them. `around { }` a small cylinder subtracted from the shaft is the
   way to do it.
 - **The capital has volutes**: two scrolls on the front and back, joined by a cushion on the
-  sides, over an egg-and-dart echinus. A scroll can be built from three or four `torus` rings of
-  falling radius, each nudged along a spiral.
+  sides, over an egg-and-dart echinus. A volute **is** a logarithmic spiral, so it is a `spiral`
+  and not a stack of rings; the echinus is an `ovolo` revolved about the shaft.
 - **The entablature is three bands, not one**: an architrave of three fasciae each stepping
   forward of the one below, then a plain frieze, then a cornice with **dentils** — a row of small
   blocks — and a projecting corona above them.
