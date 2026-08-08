@@ -390,7 +390,24 @@ public:
     //
     // With the parts listed separately, a box can ask which of them it is actually near — a
     // question its bounding box answers for nothing — and allow only for those.
-    void union_children(u32 at, std::vector<u32>& out) const;
+    // One piece of a shape, and what has been done to it on the way down.
+    //
+    // `extra` is the allowance owed by displacements that were peeled off above this node. A
+    // displacement distributes over a union — displacing a union by a pattern is the same shape
+    // as displacing each of its parts by that pattern, because the same value is added to all of
+    // them — so a union inside a displace can still be taken apart, as long as each piece carries
+    // the allowance the displace would have charged.
+    //
+    // That distinction is worth the extra field. The facility rings its site with a displaced
+    // hedge; undistributed, that is ONE part whose box is the whole site, so every box in the
+    // building is "near a displaced thing" and is charged nine centimetres of slack for a hedge
+    // it is thirty metres from. Distributed, the hedges are their own small boxes and the
+    // building pays nothing for them.
+    struct Part {
+        u32 node = 0;
+        f64 extra = 0.0;
+    };
+    void union_children(u32 at, std::vector<Part>& out) const;
 
     // A box each node is known to be contained in, so a union can skip the children that cannot
     // possibly be the nearest thing.

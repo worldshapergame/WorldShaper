@@ -139,7 +139,8 @@ struct SampleResult {
     // five centimetres has asked for something expensive without any way of knowing.
     f64 slack = 0.0;             // the worst case, over the whole field
     f64 prune_slack = 0.0;       // the worst case for settling a box
-    f64 best_part_slack = 0.0;   // the least any one part needs
+    f64 best_part_slack = 0.0;   // the MOST any one part needs; zero when nothing moves
+    f64 worst_part_reach = 0.0;  // and how much of the clip that part's box spans, 0 to 1
     usize parts = 0;             // how many parts could be told apart; 0 means none could
 };
 

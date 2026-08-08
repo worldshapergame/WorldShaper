@@ -946,8 +946,46 @@ f64 Field::eval(u32 at, Vec3 p) const {
                              static_cast<u32>(a[7]));
 
         case Op::Union: {
-            f64 d = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) {
+            // Nearest box first, and this is the difference between a cull that works and one
+            // that is merely correct.
+            //
+            // The test below can only reject a child once the running answer is already small,
+            // and the running answer starts at whatever the FIRST child happens to say. In
+            // declaration order that is the first part the author wrote, which for a building is
+            // the ground — so a point up in the dome evaluates the entire site before it has a
+            // number small enough to reject anything with, and then rejects everything.
+            //
+            // Sorting by how far the point is from each child's box costs a handful of
+            // subtractions per child and no recursion at all, and it means the first child
+            // evaluated is the one most likely to give the smallest answer. Everything else is
+            // then rejected on its box.
+            //
+            // Measured on the facility, which is 3474 nodes where the old one was 126: an
+            // evaluation cost 3.4 microseconds against the old building's 312 nanoseconds, and
+            // almost all of the difference was walking subtrees that the very next comparison
+            // would have thrown away.
+            u32 order[4] = {0, 1, 2, 3};
+            if (!bounds_.empty() && n.children > 1) {
+                f64 away[4];
+                for (u32 i = 0; i < n.children; ++i) {
+                    away[i] = squared_distance_to(bounds_[n.child[i]], p);
+                }
+                // Four children at most, so an insertion sort is the whole of it.
+                for (u32 i = 1; i < n.children; ++i) {
+                    const u32 key = order[i];
+                    const f64 key_away = away[key];
+                    u32 j = i;
+                    while (j > 0 && away[order[j - 1]] > key_away) {
+                        order[j] = order[j - 1];
+                        --j;
+                    }
+                    order[j] = key;
+                }
+            }
+
+            f64 d = eval(n.child[order[0]], p);
+            for (u32 k = 1; k < n.children; ++k) {
+                const u32 i = order[k];
                 // If the point is already nearer to something than it could possibly be to
                 // anything inside this child's box, the child cannot change the answer and does
                 // not need evaluating. On a clip made of many separate parts this is nearly all
@@ -1724,7 +1762,7 @@ u32 Field::undisplaced(u32 at, f64& amplitude) const {
     return node;
 }
 
-void Field::union_children(u32 at, std::vector<u32>& out) const {
+void Field::union_children(u32 at, std::vector<Part>& out) const {
     out.clear();
     if (at >= nodes_.size()) return;
 
@@ -1735,24 +1773,68 @@ void Field::union_children(u32 at, std::vector<u32>& out) const {
     // the building, so a box anywhere in the building counts as near the ground and is charged
     // the ground's displacement. Which is how a five-centimetre allowance meant for a lawn ended
     // up deciding how fast every wall in the building sampled.
-    std::vector<u32> pending{at};
+    std::vector<Part> pending{Part{at, 0.0}};
     while (!pending.empty() && out.size() < 256) {
-        const u32 node = pending.back();
+        const Part here = pending.back();
         pending.pop_back();
+        const u32 node = here.node;
         if (node >= nodes_.size()) continue;
         const Node& n = nodes_[node];
-        if (n.op != Op::Union && n.op != Op::SmoothUnion) {
-            out.push_back(node);
+
+        // A displacement distributes over what is under it. Peel it off, charge its amplitude to
+        // everything below, and carry on taking the shape apart — twice the amplitude, because a
+        // reading may be that far out and the point asked about may be that far in.
+        if (n.op == Op::Displace) {
+            const f64 moves = displacement_reach(*this, n);
+            if (moves < 1e29) {
+                // Twice, because a reading may be that far out and the point being asked about
+                // may be that far in — the same doubling every skip in this file allows for.
+                pending.push_back(Part{n.child[0], here.extra + moves * 2.0});
+                continue;
+            }
+            // A displacement nobody can bound stays whole; metric_slack will say so too.
+        }
+
+        // Which combinations may be taken apart, and which may not, and it turns on one question:
+        // can a child whose box is FAR from the box being settled still change the answer there?
+        //
+        // A union takes the minimum, so a far child answers something large and positive and
+        // cannot win it. A difference is the first child minus the rest, so a far subtracted
+        // child answers large-and-positive too, is negated, and cannot win the maximum. Both are
+        // safe to flatten: a part that is nowhere near this box cannot affect it, so this box
+        // need not be charged that part's slack.
+        //
+        // An intersection is not. It takes the maximum, so a far child answers large and positive
+        // and that is exactly what a maximum keeps — a distant child dominates the result
+        // everywhere. It stays whole.
+        //
+        // Stopping at a difference is what this cost before it was written down. A manifest that
+        // ends `difference { built ... }` reported ONE part, so the sampler charged every box in
+        // the building the worst slack of anything in it, almost nothing settled, and a building
+        // that had taken nine seconds took eight minutes.
+        const bool flatten = n.op == Op::Union || n.op == Op::SmoothUnion ||
+                             n.op == Op::Difference || n.op == Op::SmoothDifference;
+        if (!flatten) {
+            out.push_back(here);
             continue;
         }
-        for (u32 i = 0; i < n.children; ++i) pending.push_back(n.child[i]);
+        for (u32 i = 0; i < n.children; ++i) pending.push_back(Part{n.child[i], here.extra});
     }
-    // A union too wide to enumerate is better reported as one part than as a truncated list that
-    // silently leaves some of the shape unaccounted for.
-    if (!pending.empty()) {
-        out.clear();
-        out.push_back(at);
-    }
+    // Too wide to finish taking apart. What is left goes in whole.
+    //
+    // It used to throw the entire decomposition away and report the root as one part, on the
+    // reasoning that a truncated list silently leaves some of the shape unaccounted for. The
+    // reasoning is right and the remedy was wrong: an unflattened node is still a *part*, with an
+    // honest box and an honest slack, it is merely a coarser one. Keeping it accounts for
+    // everything and costs only precision.
+    //
+    // Collapsing instead cost eight minutes of build time and hid the cause completely. The
+    // facility flattens to two hundred and seventeen parts, and the six voids the manifest
+    // subtracts push it past the limit — so a building whose parts were all perfectly separable
+    // reported ONE, every box in it was charged the worst slack in the whole clip, and almost
+    // nothing settled. The number in the report said "1 parts" and read like a fact about the
+    // building rather than a limit being hit.
+    for (const Part& left : pending) out.push_back(left);
 }
 
 f64 Field::metric_slack(u32 at) const {

@@ -76,6 +76,15 @@ struct Options {
     bool no_update_check = (WS_DEBUG != 0);
     bool no_clip_cache = false;   // always rebuild the clip, never read or write the cache
     std::string clip_part;        // build only this let name, for looking at one piece
+
+    // A smaller box to sample, overriding the clip's own.
+    //
+    // Sampling cost is per voxel and per field evaluation, so a representative slice at FULL
+    // resolution measures the thing that actually matters, in seconds rather than minutes.
+    // Measuring at a coarser --clip-metre instead changes the very thing under test — how often
+    // a box can settle depends on how large a voxel is — so it answers a different question,
+    // confidently and wrongly.
+    std::string clip_bounds;
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
     bool path_trace = false;   // start in the reference path tracer
     u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
@@ -218,6 +227,8 @@ Options parse_options(int argc, char** argv) {
             options.no_clip_cache = true;
         } else if (arg == "--clip-part") {
             if (i + 1 < argc) options.clip_part = argv[++i];
+        } else if (arg == "--clip-bounds") {
+            if (i + 1 < argc) options.clip_bounds = argv[++i];
         } else if (arg == "--clip-at") {
             if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
         } else if (arg == "--material") {
@@ -3220,6 +3231,18 @@ int run_clip_tool(const Options& options) {
 
     if (options.clip_metre > 0) script.settings.voxels_per_metre = options.clip_metre;
 
+    // A slice of the box instead of all of it, at full resolution, so the cost of sampling can
+    // be measured in seconds. Six numbers, in metres, the same two opposite corners `bounds`
+    // takes.
+    if (!options.clip_bounds.empty()) {
+        i64 corners[6]{0, 0, 0, 0, 0, 0};
+        parse_numbers(options.clip_bounds, corners, 6);
+        script.settings.low = {static_cast<f64>(corners[0]), static_cast<f64>(corners[1]),
+                               static_cast<f64>(corners[2])};
+        script.settings.high = {static_cast<f64>(corners[3]), static_cast<f64>(corners[4]),
+                                static_cast<f64>(corners[5])};
+    }
+
     // Measuring one named piece rather than the whole building. What a camera should be looking
     // at is almost never the whole clip — it is a portico, or a room — and framing needs that
     // piece's extent, not the extent of the site it stands on.
@@ -3285,6 +3308,18 @@ int run_clip_tool(const Options& options) {
         std::printf("  %-16s %.4f\n", script.field.parameter_name(i),
                     script.field.parameter_value(i));
     }
+    // What the sampler had to allow for, which is the single number that decides how much of the
+    // box it can settle in bulk and how much it has to ask about voxel by voxel. Printed here
+    // because this is the tool anybody optimising a clip will be running, and without it the cost
+    // is a mystery with no handle on it.
+    std::printf("slack         %.4f m worst, %.4f m to settle a box, %.4f m for the worst of "
+                "%zu parts\n",
+                built.slack, built.prune_slack, built.best_part_slack, built.parts);
+    std::printf("asked         %llu voxels individually, %llu settled in bulk (%.1f%% settled)\n",
+                static_cast<unsigned long long>(built.voxels_asked),
+                static_cast<unsigned long long>(built.voxels_settled),
+                100.0 * static_cast<f64>(built.voxels_settled) /
+                    static_cast<f64>(std::max<u64>(1, built.voxels_asked + built.voxels_settled)));
     std::printf("cost          parse %.1f ms, sample %.1f ms, %llu field evaluations\n",
                 ns_to_ms(parsed - begin), ns_to_ms(sampled - parsed),
                 static_cast<unsigned long long>(built.evaluations));

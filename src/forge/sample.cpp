@@ -852,15 +852,38 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     // when every part can be bounded and measured — one part that cannot is one part that could
     // be anywhere, and then the worst case is the only honest answer.
     {
-        std::vector<u32> parts;
+        std::vector<Field::Part> parts;
         field.union_children(prune_root, parts);
         descent.parts_usable = !parts.empty();
-        for (u32 part : parts) {
-            // A part nothing can be said about is kept rather than abandoning the whole scheme:
-            // it makes boxes near that part undecidable, which is correct, and leaves every box
-            // elsewhere free to settle on what its own neighbours need.
-            descent.part_box.push_back(field.bounds_of(part));
-            descent.part_slack.push_back(field.metric_slack(part));
+        for (const Field::Part& piece : parts) {
+            const u32 part = piece.node;
+            // Only the parts that ask for something. A part with no slack contributes nothing to
+            // the maximum this list is scanned for, so keeping it means testing its box against
+            // every box in the descent to learn that it changes nothing.
+            //
+            // It is most of them. A building is displaced in one or two places — a lawn given a
+            // grain, a wall given a weathering — and is otherwise made of exact shapes. The
+            // facility flattens to two hundred and seventeen parts of which three have any slack
+            // at all, so this turns a scan of two hundred and seventeen boxes per box into a scan
+            // of three.
+            //
+            // A part nothing can be said about — infinite slack — is kept, and must be: it makes
+            // boxes near it undecidable, which is correct, and leaves every box elsewhere free to
+            // settle on what its own neighbours need.
+            const f64 inner = field.metric_slack(part);
+            const f64 part_slack =
+                (inner >= Field::kInfiniteSlack) ? inner : inner + piece.extra;
+            if (part_slack <= 0.0) continue;
+            // Grown by what the peeled displacement can move it, so the box still contains the
+            // shape after the displacement it is now being charged for.
+            Field::Aabb box = field.bounds_of(part);
+            if (!box.infinite() && piece.extra > 0.0) {
+                const f64 by = piece.extra * 0.5;
+                box.low = Vec3{box.low.x - by, box.low.y - by, box.low.z - by};
+                box.high = Vec3{box.high.x + by, box.high.y + by, box.high.z + by};
+            }
+            descent.part_box.push_back(box);
+            descent.part_slack.push_back(part_slack);
         }
     }
     descent.paint = &widened;
@@ -878,8 +901,25 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     result.slack = slack;
     result.prune_slack = prune_slack;
     result.parts = descent.parts_usable ? descent.part_slack.size() : 0;
-    result.best_part_slack = Field::kInfiniteSlack;
-    for (f64 s : descent.part_slack) result.best_part_slack = std::min(result.best_part_slack, s);
+
+    // The worst part, and how much of the clip it reaches over — which together are the whole
+    // story of why a build is slow. A part with a large slack and a small box costs nothing but
+    // the boxes beside it; the same slack on a part whose box spans the clip charges every box in
+    // the building for it, and the two are indistinguishable from the slack alone.
+    result.best_part_slack = 0.0;
+    result.worst_part_reach = 0.0;
+    const f64 whole = std::max(1e-9, (settings.high.x - settings.low.x) *
+                                         (settings.high.y - settings.low.y) *
+                                         (settings.high.z - settings.low.z));
+    for (usize i = 0; i < descent.part_slack.size(); ++i) {
+        if (descent.part_slack[i] <= result.best_part_slack) continue;
+        result.best_part_slack = descent.part_slack[i];
+        const Field::Aabb& b = descent.part_box[i];
+        result.worst_part_reach =
+            b.infinite() ? 1.0
+                         : std::min(1.0, ((b.high.x - b.low.x) * (b.high.y - b.low.y) *
+                                          (b.high.z - b.low.z)) / whole);
+    }
 
     // The top of the tree is cut into pieces first so there is something to spread across the
     // cores. Sixty-four voxels — two metres — is small enough that a clip of any size has more
