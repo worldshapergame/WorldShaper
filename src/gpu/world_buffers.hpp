@@ -29,6 +29,10 @@ struct WorldBufferStats {
     // True when the world occupancy grid did not fit this frame. Residency has to be told,
     // or it clears its dirty flag over an update that never arrived.
     bool coarse_incomplete = false;     // did not fit this frame; retried next
+    // Brick data that did not fit. When this is set the chunk records and grid cells are HELD BACK
+    // rather than sent, because a grid cell is a pointer and sending it without what it points at
+    // is what draws a chunk as somebody else's geometry.
+    bool chunks_incomplete = false;
     u64 total_uploaded = 0;
 };
 
@@ -90,6 +94,11 @@ private:
     // Appends `size` bytes from `source` to the staging ring, returning false when the
     // ring is full for this frame.
     bool stage(const void* source, u64 size, u64 destination, std::vector<Region>& into);
+
+    // Records and grid cells whose brick data did not fit in an earlier frame. Carried forward and
+    // sent once it has, so the two never separate.
+    std::vector<u32> held_records_;
+    std::vector<u32> held_cells_;
     void flush(VkCommandBuffer cmd, VkBuffer destination, const std::vector<Region>& regions);
 
     Device* device_ = nullptr;

@@ -250,6 +250,7 @@ void WorldBuffers::upload(VkCommandBuffer cmd, const ResidencyManager& residency
     stats_.raw_regions = static_cast<u32>(batch.slots.size() * 2 + batch.payload.size());
 
     stats_.coarse_incomplete = false;
+    stats_.chunks_incomplete = false;
 
     header_regions_.clear();
     occupancy_regions_.clear();
@@ -301,11 +302,13 @@ void WorldBuffers::upload(VkCommandBuffer cmd, const ResidencyManager& residency
     for (u32 slot : sorted_slots_) {
         if (!stage(&headers[slot], sizeof(GpuBrickHeader),
                    static_cast<u64>(slot) * sizeof(GpuBrickHeader), header_regions_)) {
+            stats_.chunks_incomplete = true;
             break;
         }
         if (!stage(occupancy.data() + static_cast<usize>(slot) * kBrickWords,
                    kBrickWords * sizeof(u64),
                    static_cast<u64>(slot) * kBrickWords * sizeof(u64), occupancy_regions_)) {
+            stats_.chunks_incomplete = true;
             break;
         }
     }
@@ -318,6 +321,7 @@ void WorldBuffers::upload(VkCommandBuffer cmd, const ResidencyManager& residency
 
     for (const UploadRange& range : ranges) {
         if (!stage(payload.data() + range.offset, range.size, range.offset, payload_regions_)) {
+            stats_.chunks_incomplete = true;
             break;
         }
     }
@@ -330,25 +334,68 @@ void WorldBuffers::upload(VkCommandBuffer cmd, const ResidencyManager& residency
     const std::vector<u32>& prefixes = residency.prefixes();
     const std::vector<u32>& grid = residency.grid();
 
+    // A record and a grid cell are POINTERS to the brick data staged above, and this is the one
+    // place in the upload where sending something without what it refers to is worse than not
+    // sending it at all.
+    //
+    // Both loops used to discard what stage() returned. So after a large edit the payload filled the
+    // frame's staging buffer and its loop broke part way — while these, being a few bytes each,
+    // still fitted and went. The GPU grid then pointed at a record whose bricks had never arrived,
+    // and the marcher drew whatever those slots happened to hold: one frame of foreign geometry,
+    // every time a chunk changed, which is exactly the flicker.
+    //
+    // Held back together instead, and offered again next frame. The GPU keeps pointing at the
+    // previous, complete version of the chunk for one more frame — which is the whole point. It is
+    // the same discipline the thumbnail cache uses in defer_last_batch, and the same reason.
     std::vector<u32> sorted_records = batch.records;
+    sorted_records.insert(sorted_records.end(), held_records_.begin(), held_records_.end());
     std::sort(sorted_records.begin(), sorted_records.end());
-    for (u32 record : sorted_records) {
-        stage(&records[record], sizeof(GpuChunkRecord),
-              static_cast<u64>(record) * sizeof(GpuChunkRecord), record_regions_);
-        stage(masks.data() + static_cast<usize>(record) * kChunkMaskWords,
-              kChunkMaskWords * sizeof(u64),
-              static_cast<u64>(record) * kChunkMaskWords * sizeof(u64), mask_regions_);
-        stage(prefixes.data() + static_cast<usize>(record) * kChunkMaskWords,
-              kChunkMaskWords * sizeof(u32),
-              static_cast<u64>(record) * kChunkMaskWords * sizeof(u32), prefix_regions_);
-    }
+    sorted_records.erase(std::unique(sorted_records.begin(), sorted_records.end()),
+                         sorted_records.end());
 
     std::vector<u32> sorted_cells = batch.grid_cells;
+    sorted_cells.insert(sorted_cells.end(), held_cells_.begin(), held_cells_.end());
     std::sort(sorted_cells.begin(), sorted_cells.end());
     sorted_cells.erase(std::unique(sorted_cells.begin(), sorted_cells.end()),
                        sorted_cells.end());
-    for (u32 cell : sorted_cells) {
-        stage(&grid[cell], sizeof(u32), static_cast<u64>(cell) * sizeof(u32), grid_regions_);
+
+    held_records_.clear();
+    held_cells_.clear();
+
+    if (stats_.chunks_incomplete) {
+        // The bricks did not all arrive, so nothing may be made to point at them yet.
+        held_records_ = std::move(sorted_records);
+        held_cells_ = std::move(sorted_cells);
+    } else {
+        for (u32 record : sorted_records) {
+            bool sent = stage(&records[record], sizeof(GpuChunkRecord),
+                              static_cast<u64>(record) * sizeof(GpuChunkRecord), record_regions_);
+            sent = stage(masks.data() + static_cast<usize>(record) * kChunkMaskWords,
+                         kChunkMaskWords * sizeof(u64),
+                         static_cast<u64>(record) * kChunkMaskWords * sizeof(u64), mask_regions_) &&
+                   sent;
+            sent = stage(prefixes.data() + static_cast<usize>(record) * kChunkMaskWords,
+                         kChunkMaskWords * sizeof(u32),
+                         static_cast<u64>(record) * kChunkMaskWords * sizeof(u32),
+                         prefix_regions_) &&
+                   sent;
+            // Its own three pieces have to travel together for the same reason.
+            if (!sent) {
+                held_records_.push_back(record);
+                stats_.chunks_incomplete = true;
+            }
+        }
+        if (stats_.chunks_incomplete) {
+            held_cells_ = std::move(sorted_cells);
+        } else {
+            for (u32 cell : sorted_cells) {
+                if (!stage(&grid[cell], sizeof(u32), static_cast<u64>(cell) * sizeof(u32),
+                           grid_regions_)) {
+                    held_cells_.push_back(cell);
+                    stats_.chunks_incomplete = true;
+                }
+            }
+        }
     }
 
     flush(cmd, headers_.buffer, header_regions_);
