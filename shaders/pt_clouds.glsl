@@ -48,8 +48,9 @@
 // # A note on the units, because they cost an hour
 //
 // `--cam` takes METRES. Everything inside these shaders is in VOXELS, at thirty-two to the metre,
-// relative to the camera's own chunk. `world_height_metres` is the only place the two meet and it
-// is correct.
+// relative to the camera's own chunk. `world_position` is where the two meet, and it converts all
+// THREE axes — height alone was converted once, which pinned the whole sky to the player
+// horizontally while leaving it correct vertically.
 //
 // The previous commit message claims that looking down from three thousand metres shows no cloud
 // and calls it an undiagnosed fault. It is not a fault. The test was written as `--cam
@@ -119,7 +120,14 @@ const float kSkyFill = 0.5;
 const float kShadowFloor = 0.20;
 
 // How far a sky ray is worth marching, in metres.
-const float kCloudFarMetres = 90000.0;
+// Forty-five kilometres, not ninety. Aerial perspective has taken cloud most of the way to the sky
+// colour by then — see kAirVisibility — so what is beyond it costs steps and shows nothing. Cutting
+// at a FIXED distance also means every ray stops at the same place, which is what keeps the
+// sampling rate from varying between neighbouring pixels.
+const float kCloudFarMetres = 45000.0;
+
+// Over what distance the erosion detail fades out, in metres.
+const float kDetailFadeMetres = 9000.0;
 
 // The Earth's radius, in metres, and it is here for the horizon.
 //
@@ -141,15 +149,38 @@ const float kEarthRadius = 6371000.0;
 // cloud twenty kilometres off is paler and bluer than the same cloud overhead, and eventually it
 // is the sky. Without it every cloud is as saturated at the horizon as at the zenith, which reads
 // as a wall rather than as distance.
-const float kAirVisibility = 38000.0;
-
-// --- the world's own height --------------------------------------------------------------------
+// Eighteen kilometres, and it is doing two jobs.
 //
-// Everything in these shaders is in voxels relative to the CAMERA'S CHUNK, which moves as the
-// player walks. Cloud decks are at absolute altitudes and must not move with the camera. Getting
-// this wrong is not subtle — the weather follows the player up a staircase.
-float world_height_metres(vec3 p) {
-    return (p.y + float(push.camera_chunk.y) * float(kChunkEdge)) / kVoxelsPerMetre;
+// The first is aerial perspective for its own sake. The second is hiding the far edge of the
+// march: cloud is cut off at a fixed distance so that every ray stops in the same place, and if
+// the air has not taken it most of the way to the sky colour by then, that cut is a visible line
+// of clouds sliced off in mid-air. At eighteen kilometres of visibility a cloud at the
+// forty-five-kilometre limit is down to eight per cent of itself, which nothing can see going.
+const float kAirVisibility = 18000.0;
+
+// --- the world's own position ------------------------------------------------------------------
+//
+// Everything else in these shaders works in voxels relative to the CAMERA'S CHUNK, which moves as
+// the player walks. That is the right space for geometry — it keeps the numbers small near the
+// eye — and it is the wrong space for weather, which has to stay where it is while the player
+// moves through it.
+//
+// The height was already converted, because a deck at two kilometres obviously cannot be measured
+// from a camera that is itself at two kilometres. The horizontal axes were NOT, and the result is
+// the fault this exists to fix: the local x and z reset by a chunk every time the player crosses
+// a boundary, so the sampling position never leaves one eight-metre chunk however far anybody
+// walks. The whole sky is pinned to the camera and travels with it — and it did not travel
+// vertically, because that axis had the correction, which is what made the report so precise.
+//
+// So the march runs in absolute world voxels on all three axes. The numbers are larger, and the
+// integer hashing underneath does not care: that is exactly why it was changed away from a sine.
+vec3 world_position(vec3 local) {
+    return local + vec3(push.camera_chunk.xyz) * float(kChunkEdge);
+}
+
+// The height of an ABSOLUTE position, in metres.
+float world_height_metres(vec3 world) {
+    return world.y / kVoxelsPerMetre;
 }
 
 // --- noise ---------------------------------------------------------------------------------
@@ -233,10 +264,14 @@ float worley(vec3 p) {
     float nearest = 1.0;
     for (int i = 0; i < 8; ++i) {
         vec3 neighbour = vec3(float(i & 1), float((i >> 1) & 1), float((i >> 2) & 1)) * towards;
-        vec3 feature = neighbour + 0.25 + cloud_hash3(cell + neighbour) * 0.5;
+        vec3 feature = neighbour + 0.18 + cloud_hash3(cell + neighbour) * 0.64;
         nearest = min(nearest, length(feature - f));
     }
-    return 1.0 - clamp(nearest, 0.0, 1.0);
+    // Normalised by how far the nearest feature can actually GET. Confining features to the middle
+    // of their cells is what makes eight neighbours enough, and it also means the nearest is never
+    // far: the raw distance barely passes two thirds, so the output sat in the top third of its
+    // range and the carving it drives never reached full strength.
+    return 1.0 - clamp(nearest * (1.0 / 0.72), 0.0, 1.0);
 }
 
 // Two octaves rather than three. The third is a fifth of the amplitude and a third of the cost of
@@ -343,7 +378,11 @@ Weather weather_at(vec3 p) {
     // distribution leaves islands, not clouds. Set it a little below the average and whole
     // contiguous regions clear it, which is what a cumulus field is.
     float asked = clamp(push.sky_cloud.x, 0.0, 1.0);
-    w.coverage = clamp(asked * 0.50 + 0.08 + (broad - 0.5) * 0.34 + (patchy - 0.5) * 0.14,
+    // Follows the noise: `shape` is remap(perlin, cells - 1, 1, 0, 1), so when `cells` can reach
+    // nought its lower bound reaches minus one and the shape's average rises from about two thirds
+    // to three quarters. The threshold is 1 - coverage, so the same number would pass most of the
+    // sky. This has to be re-derived whenever the noise changes.
+    w.coverage = clamp(asked * 0.40 + 0.04 + (broad - 0.5) * 0.30 + (patchy - 0.5) * 0.12,
                        0.0, 1.0);
     // Towers where the coverage is already high, which is what actually happens: a cumulonimbus
     // grows out of the middle of a crowded field of cumulus, not out of a clear sky.
@@ -409,7 +448,7 @@ vec3 wind_offset(float height_m) {
 // octaves. Their job is to know roughly how much cloud is in the way, and the fine structure of an
 // edge two hundred metres away changes that by nothing an eye could find.
 
-float low_deck_density(vec3 p, float height_m, bool detail) {
+float low_deck_density(vec3 p, float height_m, float detail) {
     float h = clamp((height_m - kLowBase) / (kLowTop - kLowBase), 0.0, 1.0);
     vec3 q = p - wind_offset(height_m);
 
@@ -451,8 +490,8 @@ float low_deck_density(vec3 p, float height_m, bool detail) {
     // without extruding it: two clouds at the same place have different tops, because `shape` is
     // different at their tops and not merely scaled.
     vec3 base_p = q * (1.0 / metres(850.0));
-    float perlin = perlin_fbm(base_p, detail ? 3 : 2);
-    float cells = detail ? worley_fbm(base_p * 2.4, 2.1) : worley(base_p * 2.4);
+    float perlin = perlin_fbm(base_p, (detail > 0.0) ? 3 : 2);
+    float cells = (detail > 0.0) ? worley_fbm(base_p * 2.4, 2.1) : worley(base_p * 2.4);
     float shape = remap(perlin, cells - 1.0, 1.0, 0.0, 1.0);
 
     // Coverage carves the SHAPE, and the profile tapers the result. That order is the whole of it.
@@ -469,7 +508,7 @@ float low_deck_density(vec3 p, float height_m, bool detail) {
     float density = remap(shape, 1.0 - w.coverage, 1.0, 0.0, 1.0) * profile;
     if (density <= 0.0) return 0.0;
 
-    if (detail) {
+    if (detail > 0.0) {
         // Erosion, and it is STRONGER AT THE BOTTOM. The base of a cumulus is cut off flat and
         // hard at the condensation level while the top is still convecting into dry air and comes
         // apart into wisps — so the high-frequency detail is subtracted where the cloud is thin
@@ -484,7 +523,7 @@ float low_deck_density(vec3 p, float height_m, bool detail) {
         // wisp before it was ever drawn, and what reached the screen was the handful of peaks that
         // had enough density to survive being cut by ninety per cent. Erosion is meant to be the
         // ragged rim on a solid thing, not a filter that only the strongest tenth passes.
-        density = remap(density, wispy * 0.45 * (1.0 - density), 1.0, 0.0, 1.0);
+        density = remap(density, wispy * 0.45 * (1.0 - density) * detail, 1.0, 0.0, 1.0);
     }
 
     // And more mass higher up. A cumulus is heaviest where it has risen furthest, which is what
@@ -492,7 +531,7 @@ float low_deck_density(vec3 p, float height_m, bool detail) {
     return clamp(density, 0.0, 1.0) * mix(0.55, 1.3, h) * 1.1;
 }
 
-float mid_deck_density(vec3 p, float height_m, bool detail) {
+float mid_deck_density(vec3 p, float height_m, float detail) {
     float h = clamp((height_m - kMidBase) / (kMidTop - kMidBase), 0.0, 1.0);
     vec3 q = p - wind_offset(height_m);
     Weather w = weather_at(q * 1.7);
@@ -502,14 +541,14 @@ float mid_deck_density(vec3 p, float height_m, bool detail) {
     // Flatter and in rows: the horizontal scale is squashed across the wind, which is what puts
     // altocumulus into the bands and mackerel patterns a middle deck actually forms.
     vec3 base_p = q * vec3(1.0, 2.2, 0.55) * (1.0 / metres(520.0));
-    float perlin = perlin_fbm(base_p, detail ? 3 : 2);
-    float cells = detail ? worley_fbm(base_p * 2.0, 2.0) : worley(base_p * 2.0);
+    float perlin = perlin_fbm(base_p, (detail > 0.0) ? 3 : 2);
+    float cells = (detail > 0.0) ? worley_fbm(base_p * 2.0, 2.0) : worley(base_p * 2.0);
     float shape = remap(perlin, cells - 1.0, 1.0, 0.0, 1.0);
     float profile = remap(h, 0.0, 0.25, 0.0, 1.0) * remap(h, 0.45, 0.9, 1.0, 0.0);
     float density = remap(shape, 1.0 - coverage, 1.0, 0.0, 1.0) * profile;
-    if (detail && density > 0.0) {
+    if (detail > 0.0 && density > 0.0) {
         float fine = worley_fbm(q * (1.0 / metres(90.0)), 2.0);
-        density = remap(density, fine * 0.45, 1.0, 0.0, 1.0);
+        density = remap(density, fine * 0.45 * detail, 1.0, 0.0, 1.0);
     }
     return clamp(density, 0.0, 1.0) * 0.45;
 }
@@ -532,7 +571,7 @@ float high_deck_density(vec3 p, float height_m) {
     return clamp(remap(shape, 1.0 - coverage, 1.0, 0.0, 1.0) * profile, 0.0, 1.0) * 0.12;
 }
 
-float cloud_density(vec3 p, float height_m, bool detail) {
+float cloud_density(vec3 p, float height_m, float detail) {
     if (height_m < kLowBase || height_m > kHighTop) return 0.0;
     if (height_m <= kLowTop) return low_deck_density(p, height_m, detail);
     if (height_m >= kMidBase && height_m <= kMidTop) return mid_deck_density(p, height_m, detail);
@@ -571,7 +610,7 @@ float light_transmittance(vec3 p, float height_m, vec3 to_sun) {
     for (int i = 0; i < kSteps; ++i) {
         travelled += step_m;
         optical += cloud_density(p + to_sun * metres(travelled),
-                                 height_m + to_sun.y * travelled, false) * step_m;
+                                 height_m + to_sun.y * travelled, 0.0) * step_m;
         step_m *= 1.8;
     }
     return exp(-optical * kExtinction * kLightExtinction);
@@ -609,9 +648,13 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
         if (leave_m <= enter_m) return scattered;
     }
 
-    const int kMaxSteps = 64;
-    const float kCoarse = 300.0;    // metres, striding through clear air
-    const float kFine = 40.0;       // and creeping through cloud
+    // Enough that the coarse schedule reaches well past anything worth marching, with room left
+    // over for creeping. Striding alone covers a hundred kilometres in these steps, and the far
+    // distance is forty-five — so no ray runs out of budget before it runs out of cloud, which is
+    // the condition that stops the sampling rate varying from pixel to pixel.
+    const int kMaxSteps = 72;
+    const float kCoarse = 350.0;    // metres, striding through clear air
+    const float kFine = 55.0;       // and creeping through cloud
     const int kEmptyBeforeStriding = 6;
 
     float cos_angle = dot(dir, trace.sun.xyz);
@@ -622,37 +665,47 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
     vec3 air_colour = sky_radiance(dir);
 
     float travelled = enter_m;
-    // The furthest point that has been INTEGRATED. The strider is allowed to step back to look
-    // more closely at an edge it overshot, but never back past this: anything before it has
-    // already contributed to `scattered`, and walking it again adds the same cloud to the picture
-    // a second time — in front of itself, since the second pass is composited later. It showed up
-    // as clouds appearing through nearer clouds, which is exactly what re-integrating a region
-    // that is already behind you looks like.
+    // The furthest point that has been INTEGRATED. The strider may step back to look more closely
+    // at an edge it overshot, but never back past this: anything before it has already contributed
+    // to `scattered`, and walking it again adds the same cloud to the picture a second time.
     float integrated_to = enter_m;
+    // Where the PREVIOUS sample was taken, which is where to step back TO. It is one stride behind
+    // and it was clear air, so nothing between it and here has been integrated.
+    float last_sample = enter_m;
     bool creeping = false;
     int empty_run = 0;
-
-    // The step is never allowed to be so small that the budget runs out before the span does.
-    //
-    // THIS IS THE BUG THAT MADE THE HAIR. A fixed step count is a hard cutoff in the middle of the
-    // volume: a ray that meets a lot of cloud early spends all sixty-four steps in the first few
-    // kilometres and then simply stops, with transmittance still high — so the rest of that cloud
-    // is not drawn and the sky behind shows through at full strength. Whether a ray runs out
-    // depends on how much cloud it happened to cross, so one pixel finishes and its neighbour does
-    // not, and the boundary between them is a thin bright thread of sky lying across a cloud.
-    //
-    // A floor under the step turns "stop early" into "get coarser", which is wrong in a way that
-    // is spread evenly and invisible, rather than wrong in a way that draws a line.
-    float floor_step_m = (leave_m - enter_m) / float(kMaxSteps);
 
     for (int i = 0; i < kMaxSteps && travelled < leave_m; ++i) {
         if (transmittance < 0.01) break;
 
-        float step_m = max(creeping ? kFine : kCoarse, floor_step_m);
-        // Coarser the further out. A cloud twenty kilometres away is a few pixels across and does
-        // not deserve the resolution one overhead does.
-        step_m *= 1.0 + travelled * (1.0 / 12000.0);
+        // The step is a function of DISTANCE TRAVELLED and of nothing else.
+        //
+        // That single property is what both faults come down to, and each previous version broke
+        // it in a different direction.
+        //
+        // A floor of span/budget made it depend on where the ray LEAVES the deck — and `leave_m`
+        // jumps across the horizon, because a ray tilted a hair downward exits through the bottom
+        // a few kilometres away while one tilted a hair upward exits through the top tens of
+        // kilometres away. The step jumped with it, the two halves of the sky were integrated at
+        // different resolutions, and the seam between them was a horizontal line across the sky.
+        //
+        // Growing by the ITERATION INDEX made it depend on how many steps had been spent, which
+        // creeping consumes at a rate that varies per ray. Forty metres of fine step becomes four
+        // hundred once forty iterations have gone, so a ray that met cloud early sampled the rest
+        // of its length coarsely and its neighbour did not — which is the hair, exactly as before.
+        //
+        // Distance is the only quantity that is the same for every ray in the frame at the same
+        // point in space. Near the eye the steps are short because detail is visible there; far
+        // away they are long because it is not; and two neighbouring pixels always agree.
+        //
+        // The growth rate is a budget argument rather than taste. Striding has to reach the far
+        // distance in as few steps as it can, because every step it does not spend is a step left
+        // for CREEPING, and creeping is what resolves an interior. At this rate the strides cover
+        // forty-five kilometres in about thirty-seven, leaving half the budget for cloud — without
+        // which a ray looking up through a tall cloud exhausts its steps and the top is cut flat.
+        float step_m = (creeping ? kFine : kCoarse) * (1.0 + travelled * (1.0 / 6000.0));
 
+        last_sample = travelled;
         vec3 at = origin + dir * metres(travelled);
         // Curving away with distance. See kEarthRadius: this is what puts an end to the deck
         // instead of letting it pile up against the horizon line.
@@ -660,7 +713,7 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
                   travelled * travelled / (2.0 * kEarthRadius);
 
         // The cheap density first, and the expensive one only where there is something to erode.
-        float coarse = cloud_density(at, h, false);
+        float coarse = cloud_density(at, h, 0.0);
         if (coarse <= 0.0) {
             if (creeping) {
                 ++empty_run;
@@ -679,13 +732,36 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
             // `travelled - step_m` is not the previous sample's position — it can land further
             // back than that, inside cloud this march has already added, which then gets added
             // again on the way through.
+            //
+            // Back to the previous SAMPLE, not back by the current step. Those are different
+            // numbers because the step grows with distance, and using the step meant landing
+            // somewhere the march had never looked — sometimes inside cloud it had already
+            // integrated, which drew that cloud twice, and sometimes not far enough back at all.
+            //
+            // Clamped by what has been integrated as well, which matters for the SECOND cloud
+            // along a ray and after: without the clamp the strider could reverse into cloud it had
+            // already added. With only the clamp and not the previous sample — which is what was
+            // here — it could not reverse at all once anything had been integrated, so every cloud
+            // after the first had its face sliced off flat wherever the stride happened to land.
+            // At three hundred and fifty metres a stride that is a hard edge on a cloud, and it
+            // was reported as clouds cut off at their borders.
             creeping = true;
             empty_run = 0;
-            travelled = max(travelled - step_m, integrated_to);
+            travelled = max(last_sample, integrated_to);
             continue;
         }
 
-        float density = cloud_density(at, h, true);
+        // Detail FADED with distance rather than switched off at one.
+        //
+        // The erosion octaves are the expensive half of the density and they carve features a
+        // hundred metres across. Twenty kilometres away that is well under a pixel and behind most
+        // of the haze as well, so it is computed and then averaged out of existence. Faded to
+        // nothing over the near few kilometres it costs nothing anybody can see and takes the
+        // creeping steps — which is where the frame goes — down to a fraction of the price.
+        //
+        // Faded and not switched, because a switch at a fixed distance is a ring on the sky.
+        float detail = clamp(1.0 - travelled * (1.0 / kDetailFadeMetres), 0.0, 1.0);
+        float density = cloud_density(at, h, detail);
         travelled += step_m;
 
         // The empty run is counted from the DETAILED density and not the coarse one, and that
@@ -777,7 +853,7 @@ float cloud_shadow(vec3 p, float height_m) {
     for (int i = 0; i < kSteps; ++i) {
         float travelled = enter_m + step_m * (float(i) + 0.5);
         optical += cloud_density(p + to_sun * metres(travelled),
-                                 height_m + to_sun.y * travelled, false) * step_m;
+                                 height_m + to_sun.y * travelled, 0.0) * step_m;
     }
     return mix(kShadowFloor, 1.0, exp(-optical * kExtinction));
 }

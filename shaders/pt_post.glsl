@@ -511,7 +511,10 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
     // roof and no more. Same call, same place, and the special case disappears.
     if (push.sky_cloud.x > 0.0) {
         float through = 1.0;
-        vec3 cloud = cloud_march(push.origin.xyz, eye_dir, world_height_metres(push.origin.xyz),
+        // In ABSOLUTE world voxels, not the camera's chunk-local space — see world_position. In
+        // local space the sky travels with the player.
+        vec3 from = world_position(push.origin.xyz);
+        vec3 cloud = cloud_march(from, eye_dir, world_height_metres(from),
                                  primary_t / kVoxelsPerMetre, through);
         // One non-finite sample spreads into a box the size of the bloom kernel and stays there,
         // a mean that has had a NaN added to it being a NaN for ever.

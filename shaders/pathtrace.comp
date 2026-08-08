@@ -586,7 +586,8 @@ vec3 sun_light(vec3 normal, vec3 view, Material m, float visibility, vec3 point)
     // `visibility` is cached per face over hundreds of frames, and cloud shadows MOVE. Cached,
     // a cloud shadow settles into a permanent grey over the whole courtyard instead of sweeping
     // across it — which is the difference between weather and a stain.
-    visibility *= cloud_shadow(point, world_height_metres(point));
+    vec3 shade_at = world_position(point);
+    visibility *= cloud_shadow(shade_at, world_height_metres(shade_at));
     if (visibility <= 0.0) return vec3(0.0);
     // Every lobe of it lives in pt_material.glsl. What a surface does with light is the
     // material's business; the sun is only one direction to ask it about, and asking here rather
