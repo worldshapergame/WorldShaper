@@ -435,199 +435,12 @@ layout(push_constant) uniform Trace {
     uvec4 quality;
 } trace;
 
-const float kPi = 3.14159265359;
-
+#include "pt_sampling.glsl"
 // ---------------------------------------------------------------------------------------
-// Sampling
-//
-// One stream per pixel per sample, hashed rather than stored. A stored state would need a
-// buffer the size of the screen and would serialise nothing useful.
-uint pcg(inout uint state) {
-    state = state * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
+#include "pt_sky.glsl"
 
-float rand(inout uint state) { return float(pcg(state)) * (1.0 / 4294967296.0); }
-
-// Cosine-weighted hemisphere around n. Cosine-weighted because the diffuse BRDF is divided by
-// exactly that cosine, so the two cancel and the estimator is just the albedo ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â the lowest
-// variance a diffuse bounce can have without knowing where the light is.
-// ---- stratification across the pixels of a face ---------------------------------------
-//
-// A face's answer is the pooled work of every pixel standing on it — often hundreds of them,
-// each sending one ray per frame. Drawn independently those rays land where chance puts them:
-// three in one part of the hemisphere, none in the next. The face is paying for a hundred
-// samples and getting the coverage of far fewer.
-//
-// Handing each pixel a different cell of the hemisphere fixes that, and costs nothing. The cell
-// comes from the pixel's own position, so neighbouring pixels take neighbouring cells and the
-// pixels covering a face between them sweep the whole set. This is the ordinary variance
-// reduction of stratified sampling, except that the strata are shared out across *pixels*
-// rather than across one pixel's samples over time — which is the arrangement that suits a
-// cache keyed to faces, because the pooling is what does the averaging.
-//
-// The assignment walks with the frame, so a single pixel still sees every cell in turn. That
-// matters for the small faces: one covered by four pixels gets four cells this frame and four
-// others next, rather than the same four for ever.
-const uint kStrata = 4u;
-
-vec2 stratified_pair(ivec2 pixel, uint frame, uint salt, inout uint state) {
-    uint shift = hash_u32(frame * 0x9E3779B9u + salt);
-    // Halved coordinates, because not every pixel traces every frame. The pixels that do are
-    // chosen by (3x + 5y + frame) modulo the refine stride, which at stride two is a parity
-    // condition on x + y — and a cell index taken straight from x and y is a function of that
-    // same parity, so half the cells were unreachable in any given frame. Shifting down by one
-    // breaks the correlation: among the pixels that do trace, both halved coordinates still run
-    // through every value.
-    uint i = ((uint(pixel.x) >> 1) + shift) % kStrata;
-    uint j = ((uint(pixel.y) >> 1) + (shift >> 8)) % kStrata;
-    // Jittered inside the cell, so it stays an unbiased draw from the whole square rather than
-    // a fixed lattice with its own pattern.
-    return vec2((float(i) + rand(state)) / float(kStrata),
-                (float(j) + rand(state)) / float(kStrata));
-}
-
-vec3 cosine_hemisphere_at(vec3 n, vec2 u) {
-    float r = sqrt(u.x);
-    float phi = 2.0 * kPi * u.y;
-
-    vec3 up = (abs(n.z) < 0.999) ? vec3(0, 0, 1) : vec3(1, 0, 0);
-    vec3 tangent = normalize(cross(up, n));
-    vec3 bitangent = cross(n, tangent);
-    return normalize(tangent * (r * cos(phi)) + bitangent * (r * sin(phi)) +
-                     n * sqrt(max(0.0, 1.0 - u.x)));
-}
-
-vec3 cosine_hemisphere(vec3 n, inout uint state) {
-    return cosine_hemisphere_at(n, vec2(rand(state), rand(state)));
-}
-
-// GGX half-vector sample, for the specular lobe.
-vec3 ggx_half(vec3 n, float roughness, inout uint state) {
-    float a = max(roughness * roughness, 1e-3);
-    float u1 = rand(state);
-    float u2 = rand(state);
-    float cos_theta = sqrt((1.0 - u1) / (1.0 + (a * a - 1.0) * u1));
-    float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
-    float phi = 2.0 * kPi * u2;
-
-    vec3 up = (abs(n.z) < 0.999) ? vec3(0, 0, 1) : vec3(1, 0, 0);
-    vec3 tangent = normalize(cross(up, n));
-    vec3 bitangent = cross(n, tangent);
-    return normalize(tangent * (sin_theta * cos(phi)) + bitangent * (sin_theta * sin(phi)) +
-                     n * cos_theta);
-}
-
-float ggx_smith(float n_dot_v, float n_dot_l, float roughness) {
-    float a = max(roughness * roughness, 1e-3);
-    float k = a * 0.5;
-    float gv = n_dot_v / (n_dot_v * (1.0 - k) + k);
-    float gl = n_dot_l / (n_dot_l * (1.0 - k) + k);
-    return gv * gl;
-}
-
-// ---------------------------------------------------------------------------------------
-// Light and materials
-
-vec3 sky_radiance(vec3 dir) {
-    float up = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 horizon = vec3(0.62, 0.68, 0.78);
-    vec3 zenith = vec3(0.18, 0.32, 0.62);
-    vec3 ground = vec3(0.16, 0.15, 0.14);
-    // Scaled well below the sun. Those colours were written to be looked at directly, and
-    // used unchanged as *radiance* they light the whole hemisphere at nearly the brightness of
-    // the sun itself ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â every surface gets the same flat fill from every direction, shadows
-    // stop reading, and the result is the grey wash a first attempt at this always produces.
-    // Real daylight has the sun an order of magnitude above the sky it shares the frame with.
-    vec3 base = ((dir.y < 0.0) ? mix(ground, horizon, up * 2.0)
-                               : mix(horizon, zenith, up * 2.0 - 1.0)) * 0.25;
-    // The sun's own disc, so a mirror reflects something rather than a flat gradient.
-    if (dot(dir, trace.sun.xyz) > trace.sun.w) return base + trace.sun_colour.rgb;
-    return base;
-}
-
-struct Material {
-    vec3 albedo;
-    float roughness;
-    float metallic;
-    vec3 emission;
-
-    // What a ray can get through, and what happens to it on the way.
-    //
-    // All three were stored in the voxel record from the beginning and read by nothing, so a
-    // clip could declare glass and get paint. `opacity` is how much of a ray the surface stops,
-    // `index` is what bends it, and `absorb` is how much colour a metre of the stuff takes out
-    // of what passes through — which is the difference between glass and green glass, and
-    // between a puddle and deep water.
-    float opacity;
-    float index;      // refractive index: 1.0 is vacuum
-    vec3 absorb;      // Beer-Lambert coefficient per metre
-};
-
-Material material_of(uint type_id) {
-    Material m;
-    m.albedo = vec3(0.5);
-    m.roughness = 0.5;
-    m.metallic = 0.0;
-    m.emission = vec3(0.0);
-    m.opacity = 1.0;
-    m.index = 1.0;
-    m.absorb = vec3(0.0);
-
-    // Clamped, both of them, because a single out-of-range index here does not produce a
-    // wrong colour â€” it produces a page fault that takes the device down and the whole
-    // process with it. A hit above level 0 carries a filtered colour and no type at all, and
-    // its type_id field is whatever happened to be in the register; every caller is supposed
-    // to check the level first, and one that forgets should get a wrong pixel rather than a
-    // crash report. This cost a device loss: the driver reported four faulting addresses and
-    // the checkpoint named the path tracer, and it was one unguarded call.
-    uint type_count = uint(types.items.length());
-    uint visual_id = types.items[min(type_id, type_count - 1u)].x;
-    uint visual_count = uint(visuals.items.length());
-    uvec4 v = visuals.items[min(visual_id, visual_count - 1u)];
-
-    // Byte layout of VisualRecord (world/voxel_type.hpp): rgb + opacity, then roughness,
-    // metallic, ior, emissive, then absorption and translucency, then the emissive tint.
-    m.albedo = vec3(float(v.x & 0xFFu), float((v.x >> 8u) & 0xFFu),
-                    float((v.x >> 16u) & 0xFFu)) / 255.0;
-    m.roughness = float(v.y & 0xFFu) / 255.0;
-    m.metallic = float((v.y >> 8u) & 0xFFu) / 255.0;
-    m.opacity = float((v.x >> 24u) & 0xFFu) / 255.0;
-    // The record stores the index as an offset from vacuum so a byte can span the useful range:
-    // 1.0 to about 3.0, which covers water at 1.33, glass at 1.5 and diamond at 2.4.
-    m.index = 1.0 + float((v.y >> 16u) & 0xFFu) / 128.0;
-    // Per metre, and scaled so a byte reaches far enough to make a thick pane visibly green
-    // without a thin one being black. Eight is about the strongest useful.
-    m.absorb = vec3(float(v.z & 0xFFu), float((v.z >> 8u) & 0xFFu),
-                    float((v.z >> 16u) & 0xFFu)) * (8.0 / 255.0);
-
-    float emissive = float((v.y >> 24u) & 0xFFu) / 255.0;
-    if (emissive > 0.0) {
-        uint tint = v.w & 0xFFFFu;   // RGB565
-        vec3 colour = vec3(float((tint >> 11u) & 0x1Fu) / 31.0,
-                           float((tint >> 5u) & 0x3Fu) / 63.0, float(tint & 0x1Fu) / 31.0);
-        // Squared so the byte spans a useful range: a torch and a furnace are not one step
-        // apart on a linear scale.
-        m.emission = colour * (emissive * emissive * 64.0);
-    }
-    return m;
-}
-
-// Albedo is all a coarse hit gives, so treat it as a rough dielectric. Only reachable when a
-// ray leaves the streamed region entirely; primary and bounce rays both run at level 0.
-Material material_from_colour(uint packed) {
-    Material m;
-    m.albedo = vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
-                    float((packed >> 16u) & 0xFFu)) / 255.0;
-    m.roughness = 0.8;
-    m.metallic = 0.0;
-    m.emission = vec3(0.0);
-    m.opacity = 1.0;
-    m.index = 1.0;
-    m.absorb = vec3(0.0);
-    return m;
-}
+#include "pt_material.glsl"
+#include "pt_normals.glsl"
 
 bool occluded(vec3 origin, vec3 dir) {
     // Full detail, and no feedback: a shadow ray must not drag streaming towards wherever it
@@ -1566,52 +1379,8 @@ vec3 why_dark(Material m, FaceLight light) {
 // camera converges smoothly, short enough that the picture is of the world as it is now.
 const float kAccumWindow = 1024.0;
 
-// What the primary ray picked up, and lost, before it reached the surface it shades.
-//
-// A ray that passes through glass is shaded at whatever is *behind* the glass, and everything
-// below this point in the shader is written as though it were shading what the eye sees
-// directly. Rather than thread a tint through every one of the dozen places that writes a
-// pixel, the glass leaves its mark here: what it added on the way (its own reflection) and what
-// fraction of the light behind it survives (transmission, times absorption over the distance
-// travelled inside). write_pixel applies both, once, for all of them.
-vec3 g_prefix = vec3(0.0);
-vec3 g_throughput = vec3(1.0);
-
-void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary_t, float aspect) {
-    vec3 radiance = g_prefix + g_throughput * radiance_in;
-    vec4 total = (sample_index == 0u) ? vec4(0.0) : imageLoad(accum, pixel);
-    if (total.w >= kAccumWindow) {
-        total *= (kAccumWindow - 1.0) / kAccumWindow;
-    }
-    // Geometry arriving or leaving resets this outright, on the CPU side, by zeroing the
-    // sample index. Halving it instead was tried, and it is the better-looking option Ã¢â‚¬â€ the
-    // room scene's speckle went from 7.3 to 4.7, because during streaming chunks arrive on
-    // almost every frame and a reset means the average never gets past one sample.
-    //
-    // It is not the correct option. Halving leaves a residue that nothing clears once
-    // streaming stops, and a sealed box with no lights in it settled at a mean of 2.9 instead
-    // of zero. A room with no way into it has to be black, so the reset stays and the noise
-    // during streaming is the price.
-    total.rgb += radiance;
-    total.w += 1.0;
-    imageStore(accum, pixel, total);
-
-    vec3 mean = total.rgb / max(total.w, 1.0);
-
-    // Reinhard with a shoulder, and gamma. Deliberately plain: the point is to see what the
-    // material does, not what a grading curve does to it. The physical post stack is Stage 9.
-    vec3 mapped = pow(clamp(mean / (mean + vec3(1.0)), 0.0, 1.0), vec3(1.0 / 2.2));
-
-    // The tools, over the top, exactly as the real-time pipeline draws them. After tone mapping
-    // and outside the accumulation, because a preview is interface rather than light: it must
-    // not be averaged in, must not converge, and must not be dimmed by an exposure curve.
-    // Unjittered, so an outline is a line rather than a smeared band.
-    vec2 uv = (vec2(pixel) + 0.5) / vec2(push.resolution) * 2.0 - 1.0;
-    vec3 straight = normalize(push.forward.xyz + push.right.xyz * uv.x * push.lens.x * aspect -
-                              push.up.xyz * uv.y * push.lens.x);
-    mapped = draw_preview(mapped, push.origin.xyz, straight, primary_t);
-
-    imageStore(out_colour, pixel, vec4(mapped, 1.0));
+#include "pt_media.glsl"
+#include "pt_post.glsl"
 }
 
 void main() {
@@ -1741,8 +1510,13 @@ void main() {
         radiance = sky_radiance(dir);
     } else {
         primary_t = hit.t;
-        vec3 normal = vec3(hit.normal);
         vec3 point = origin + dir * hit.t;
+        // Shaded by the shape the voxels approximate rather than by the face that was hit — see
+        // pt_normals.glsl for why those are not the same thing, and why a polished sphere in a
+        // voxel world reflects in exactly six directions until they are told apart.
+        vec3 normal = shading_normal(
+            ivec3(floor(point - vec3(hit.normal) * 0.5)) + push.camera_chunk.xyz * kChunkEdge,
+            hit.normal, point, hit.level);
         vec3 from = point + normal * surface_offset(hit.level, hit.t);
         Material m = (hit.level == 0) ? material_of(hit.type_id)
                                       : material_from_colour(hit.colour);
@@ -2317,5 +2091,8 @@ void main() {
         radiance += sun_light(normal, dir, m, visibility) +
                     m.albedo * (1.0 - m.metallic) * here.indirect + reflection;
     }
+    // Whatever the air between here and there did to it. Clear until pt_media.glsl says
+    // otherwise, which is the common case and has to cost nothing.
+    radiance = apply_media(radiance, push.origin.xyz, dir, primary_t);
     write_pixel(pixel, sample_index, clamp_finite(radiance), primary_t, aspect);
 }
