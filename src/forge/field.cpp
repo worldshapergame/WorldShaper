@@ -712,6 +712,15 @@ u32 Field::offset(u32 child, f64 by) {
 }
 
 u32 Field::displace(u32 child, u32 pattern, f64 amount) {
+    // A displacement of nothing is the child, and saying so here removes the PATTERN from the tree.
+    //
+    // Op::Displace evaluates its pattern and multiplies by the amount, so an amount of zero still
+    // pays for the noise in full at every sample and then throws it away. Not hypothetical: the
+    // sub-voxel guard in clip_script.cpp sets exactly this amount to zero, so the facility's
+    // `grain_fine` — several octaves of fbm — was being evaluated at every one of a hundred million
+    // voxels to be multiplied by nought.
+    if (amount == 0.0) return child;
+
     Node n;
     n.op = Op::Displace;
     n.child[0] = child;

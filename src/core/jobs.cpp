@@ -28,7 +28,10 @@ struct JobSystem::Impl {
 JobSystem::JobSystem(u32 worker_count) : impl_(std::make_unique<Impl>()) {
     if (worker_count == 0) {
         const u32 hardware = std::thread::hardware_concurrency();
-        worker_count = (hardware > 3) ? hardware - 2 : 1;
+        // One held back, not two. The reserved core is for the thread that submitted the work,
+        // which on a clip build sits waiting rather than competing; leaving a second one idle gave
+        // eight workers on a ten core machine and twenty per cent of the machine to nobody.
+        worker_count = (hardware > 2) ? hardware - 1 : 1;
     }
     worker_count_ = worker_count;
 

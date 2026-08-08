@@ -1385,12 +1385,17 @@ void Application::build_world() {
                 MatterReason::PlayerPlace, 1, &jobs, types_.type_count());
             const u64 pasted_at = now_ns();
             if (stamped.chunks_left_empty) world_.compact();
+            // The two ns figures are summed across worker threads, so they exceed the wall clock
+            // on a parallel build. What they are for is the RATIO: how much of the sampling is
+            // actually inside the field, and how much is everything around it.
             WS_LOG_INFO("clip", "parse {:.0f} ms, sample {:.0f} ms ({} shape + {} paint, "
-                                "{} voxels asked, {} settled in bulk), "
+                                "{} voxels asked, {} settled in bulk; {:.0f} ms shape + {:.0f} ms "
+                                "paint across all threads), "
                                 "variation {:.0f} ms, paste {:.0f} ms, compact {:.0f} ms",
                         ns_to_ms(parsed_at - start), ns_to_ms(sampled_at - parsed_at),
                         built.shape_evaluations, built.paint_evaluations, built.voxels_asked,
-                        built.voxels_settled, ns_to_ms(varied_at - sampled_at),
+                        built.voxels_settled, ns_to_ms(built.shape_ns), ns_to_ms(built.paint_ns),
+                        ns_to_ms(varied_at - sampled_at),
                         ns_to_ms(pasted_at - varied_at), ns_to_ms(now_ns() - pasted_at));
             WS_LOG_INFO("clip", "slack {:.4f} m worst, {:.4f} m to settle a box, {:.4f} m for the "
                                 "easiest of {} parts",
