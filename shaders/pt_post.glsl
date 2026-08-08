@@ -498,44 +498,51 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
     vec3 radiance = apply_media(g_prefix + g_throughput * radiance_in, push.origin.xyz, eye_dir,
                                 primary_t);
 
-    // Cloud, over EVERYTHING and not only over the sky.
+    // Cloud, read from the quarter-resolution pass rather than marched here.
     //
-    // It was composited in the sky branch, which meant it was drawn only on rays that hit nothing.
-    // That is a backdrop, not a volume: fly above the deck and look down and there is no cloud
-    // between you and the ground, because every one of those rays hit the ground and took the
-    // other path. Standing under it and looking up was the one case that worked.
+    // shaders/clouds.comp marched one ray per four-by-four block; this interpolates between the
+    // four nearest of those. Bilinear and not nearest, or the blocks are visible as squares — the
+    // field is smooth, so interpolating it is not an approximation of the answer, it IS the answer
+    // at the resolution the field carries.
     //
-    // Here it is applied exactly the way the air already is, a few lines above — integrated over
-    // the distance to whatever the ray actually reached. A ray that hit nothing carries the far
-    // plane and gets the whole sky's worth; a ray that hit a roof gets the cloud in front of the
-    // roof and no more. Same call, same place, and the special case disappears.
+    // The half-texel offset is the usual one: sample n covers full-resolution pixels 4n to 4n+3,
+    // so its centre is at 4n + 1.5, and the weights have to be measured from there.
     if (push.sky_cloud.x > 0.0) {
-        float through = 1.0;
-        // In ABSOLUTE world voxels, not the camera's chunk-local space — see world_position. In
-        // local space the sky travels with the player.
-        vec3 from = world_position(push.origin.xyz);
-        vec3 cloud = cloud_march(from, eye_dir, world_height_metres(from),
-                                 primary_t / kVoxelsPerMetre, through);
-        // One non-finite sample spreads into a box the size of the bloom kernel and stays there,
-        // a mean that has had a NaN added to it being a NaN for ever.
-        if (any(isnan(cloud)) || any(isinf(cloud))) cloud = vec3(0.0);
-        if (isnan(through) || isinf(through)) through = 1.0;
-        radiance = cloud + through * radiance;
+        // Where the cloud in this direction BEGINS, which decides whether it is in front of what
+        // the ray hit. Arithmetic on the slab, no marching: a wall five metres away must not have
+        // a deck at six hundred drawn over it, and the cloud buffer knows nothing about depth.
+        float eye_height = world_height_metres(world_position(push.origin.xyz));
+        float begins_m = 0.0;
+        bool crossed = true;
+        if (abs(eye_dir.y) < 1e-4) {
+            crossed = eye_height >= kLowBase && eye_height <= kHighTop;
+        } else {
+            float to_base = (kLowBase - eye_height) / eye_dir.y;
+            float to_roof = (kHighTop - eye_height) / eye_dir.y;
+            begins_m = max(min(to_base, to_roof), 0.0);
+            crossed = max(to_base, to_roof) > 0.0;
+        }
+
+        if (crossed && primary_t / kVoxelsPerMetre > begins_m) {
+            vec2 at = (vec2(pixel) - 1.5) / float(kCloudScale);
+            ivec2 limit = ivec2(imageSize(in_cloud)) - 1;
+            ivec2 base = ivec2(floor(at));
+            vec2 f = at - vec2(base);
+
+            vec4 c00 = imageLoad(in_cloud, clamp(base + ivec2(0, 0), ivec2(0), limit));
+            vec4 c10 = imageLoad(in_cloud, clamp(base + ivec2(1, 0), ivec2(0), limit));
+            vec4 c01 = imageLoad(in_cloud, clamp(base + ivec2(0, 1), ivec2(0), limit));
+            vec4 c11 = imageLoad(in_cloud, clamp(base + ivec2(1, 1), ivec2(0), limit));
+            vec4 cloud = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+
+            radiance = cloud.rgb + cloud.a * radiance;
+        }
     }
+
     vec4 total = (sample_index == 0u) ? vec4(0.0) : imageLoad(accum, pixel);
     if (total.w >= kAccumWindow) {
         total *= (kAccumWindow - 1.0) / kAccumWindow;
     }
-    // Geometry arriving or leaving resets this outright, on the CPU side, by zeroing the
-    // sample index. Halving it instead was tried, and it is the better-looking option Ã¢â‚¬â€ the
-    // room scene's speckle went from 7.3 to 4.7, because during streaming chunks arrive on
-    // almost every frame and a reset means the average never gets past one sample.
-    //
-    // It is not the correct option. Halving leaves a residue that nothing clears once
-    // streaming stops, and a sealed box with no lights in it settled at a mean of 2.9 instead
-    // of zero. A room with no way into it has to be black, so the reset stays and the noise
-    // during streaming is the price.
-    //
     // The outlier test goes here, before the sum and not after it, because the sum is what it
     // exists to protect: a spike that gets in is in for the length of the window.
     total.rgb += reject_outlier(pixel, radiance, total);

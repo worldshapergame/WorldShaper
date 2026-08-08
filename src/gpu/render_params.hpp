@@ -208,6 +208,15 @@ inline constexpr u32 kFrameStatsSlots = 2;
 // high dynamic range in the first place.
 inline constexpr u32 kFrameStatsBinding = 19;
 
+// Where the quarter-resolution cloud volume lives. Written by shaders/clouds.comp and read by the
+// path tracer, which share one descriptor set layout because the cloud pass needs the parameter
+// block and the sun and nothing else.
+inline constexpr u32 kCloudBinding = 20;
+
+// How many full-resolution pixels a cloud sample covers, in each axis. Must match kCloudScale in
+// shaders/pt_clouds.glsl.
+inline constexpr u32 kCloudScale = 4;
+
 // The fixed-point conventions, spelled out here so the shader and anything that reads the
 // buffer back cannot disagree about them.
 inline constexpr f32 kLogLuminanceBias = 16.0f;    // log2 range is [-16, +16] before biasing

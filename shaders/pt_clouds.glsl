@@ -126,6 +126,11 @@ const float kShadowFloor = 0.20;
 // sampling rate from varying between neighbouring pixels.
 const float kCloudFarMetres = 45000.0;
 
+// How many full-resolution pixels wide a cloud sample is. See the head of shaders/clouds.comp:
+// four by four is sixteen times fewer marches, and cloud is the one thing on screen with no detail
+// at the pixel level to lose.
+const int kCloudScale = 4;
+
 // Over what distance the erosion detail fades out, in metres.
 const float kDetailFadeMetres = 9000.0;
 

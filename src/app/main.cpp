@@ -767,6 +767,10 @@ private:
     // The reference path tracer. A separate pipeline that shares only the world, so with the
     // mode off it costs exactly nothing — no branch in the marcher, no extra binding.
     ComputePipeline pathtrace_;
+    // The cloud volume, marched once per four-by-four block. See shaders/clouds.comp.
+    ComputePipeline clouds_;
+    GpuImage cloud_image_;
+    bool cloud_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
     VkDescriptorSetLayout pathtrace_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet pathtrace_set_ = VK_NULL_HANDLE;
     GpuImage accum_image_;
@@ -965,6 +969,14 @@ bool Application::create_render_target(u32 width, u32 height) {
     // exactly what this mode exists to show.
     accum_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
                                         "path trace accumulation");
+    // The cloud volume, at a quarter of the render in each axis: one march per sixteen pixels.
+    // Rounded UP, so the last partial block still has a sample and the right edge of the screen is
+    // not reading a clamped neighbour.
+    cloud_image_ = create_storage_image(device_, (width + kCloudScale - 1) / kCloudScale,
+                                        (height + kCloudScale - 1) / kCloudScale,
+                                        VK_FORMAT_R16G16B16A16_SFLOAT, "cloud volume");
+    cloud_ready_ = false;
+
     trace_samples_ = 0;
     accum_ready_ = false;   // a new image, so it needs its one transition out of UNDEFINED
 
@@ -984,7 +996,11 @@ bool Application::create_render_target(u32 width, u32 height) {
     accum_info.imageView = accum_image_.view;
     accum_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[6]{};
+    VkDescriptorImageInfo cloud_info{};
+    cloud_info.imageView = cloud_image_.view;
+    cloud_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkWriteDescriptorSet writes[7]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -1008,7 +1024,10 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[5].dstSet = pathtrace_set_;
     writes[5].dstBinding = 1;
     writes[5].pImageInfo = &colour_info;
-    vkUpdateDescriptorSets(device_.handle(), 6, writes, 0, nullptr);
+    writes[6].dstSet = pathtrace_set_;
+    writes[6].dstBinding = kCloudBinding;
+    writes[6].pImageInfo = &cloud_info;
+    vkUpdateDescriptorSets(device_.handle(), 7, writes, 0, nullptr);
     return true;
 }
 
@@ -2568,6 +2587,43 @@ void Application::record_frame(f32 time_seconds) {
         vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(TracePush), &trace);
 
+        // The cloud volume first, at a quarter of the resolution in each axis, into the buffer the
+        // tracer reads. One march per sixteen pixels: see the head of shaders/clouds.comp for why
+        // cloud can afford that and nothing else in the picture can.
+        if (clouds_.pipeline() != VK_NULL_HANDLE) {
+            profiler_.begin_pass(cmd, "cloud", 0.55);
+            image_barrier(cmd, cloud_image_.image,
+                          cloud_ready_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_2_SHADER_WRITE_BIT);
+            cloud_ready_ = true;
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.pipeline());
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.layout(), 0, 1,
+                                    &pathtrace_set_, 1, &trace_offset);
+            vkCmdPushConstants(cmd, clouds_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(TracePush), &trace);
+            const u32 cloud_w = (render_extent.width + kCloudScale - 1) / kCloudScale;
+            const u32 cloud_h = (render_extent.height + kCloudScale - 1) / kCloudScale;
+            vkCmdDispatch(cmd, (cloud_w + 7) / 8, (cloud_h + 7) / 8, 1);
+            profiler_.end_pass(cmd);
+
+            // Written by one dispatch and read by the next, so they have to be told apart.
+            VkMemoryBarrier2 wrote_cloud{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            wrote_cloud.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            wrote_cloud.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            wrote_cloud.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            wrote_cloud.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            VkDependencyInfo cloud_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            cloud_dependency.memoryBarrierCount = 1;
+            cloud_dependency.pMemoryBarriers = &wrote_cloud;
+            vkCmdPipelineBarrier2(cmd, &cloud_dependency);
+
+            // The tracer's own pipeline back, since the cloud pass bound its own over it.
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.pipeline());
+        }
+
         vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
         profiler_.end_pass(cmd);
         ++trace_samples_;
@@ -2983,16 +3039,19 @@ int Application::run(const Options& options) {
     // includes the same traversal, so the binding numbers come with it — then the parameter
     // block at 13 and the type tables at 14 and 15.
     {
-        // Twenty: the two images, the world, the parameter block, the type tables, the clip,
-        // the face cache, the light list at 18, and the frame statistics at 19.
-        constexpr u32 kTraceBindings = kFrameStatsBinding + 1;
+        // Twenty-one: the two images, the world, the parameter block, the type tables, the clip,
+        // the face cache, the light list at 18, the frame statistics at 19, and the cloud buffer
+        // at 20 — which the cloud pass writes and this one reads. They share this layout whole,
+        // because the cloud pass needs the parameter block and the sun and nothing else, and a set
+        // of its own would be the same set with holes in it.
+        constexpr u32 kTraceBindings = kCloudBinding + 1;
         VkDescriptorSetLayoutBinding trace_bindings[kTraceBindings]{};
         for (u32 i = 0; i < kTraceBindings; ++i) {
             trace_bindings[i].binding = i;
             trace_bindings[i].descriptorType =
-                (i < 2)     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                : (i == 13) ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                            : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                (i < 2 || i == kCloudBinding) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                : (i == 13)                   ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                              : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             trace_bindings[i].descriptorCount = 1;
             trace_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
@@ -3055,6 +3114,16 @@ int Application::run(const Options& options) {
         const std::filesystem::path trace_spirv = shaders / "pathtrace.comp.spv";
         const std::filesystem::path trace_source =
             std::filesystem::path(WS_SHADER_SOURCE_DIR) / "pathtrace.comp";
+        // The cloud volume, on the tracer's own set and push constants.
+        const std::filesystem::path cloud_spirv = shaders / "clouds.comp.spv";
+        const std::filesystem::path cloud_source =
+            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "clouds.comp";
+        if (!clouds_.create(device_, cloud_source, cloud_spirv, pathtrace_layout_,
+                            sizeof(TracePush))) {
+            // Not fatal. A sky with no cloud in it is a worse picture and a working one.
+            WS_LOG_ERROR("app", "no clouds this run: {}", clouds_.last_error());
+        }
+
         if (!pathtrace_.create(device_, trace_source, trace_spirv, pathtrace_layout_,
                                sizeof(TracePush))) {
             WS_LOG_FATAL("app", "could not create the path tracing pipeline: {}",
@@ -3496,6 +3565,11 @@ int Application::run(const Options& options) {
     visibility_.destroy();
     resolve_.destroy();
     pathtrace_.destroy();
+    // And the cloud pass. Every pipeline has to be torn down HERE, while the device is still
+    // alive: a ComputePipeline left to its own destructor runs after ~Application has taken the
+    // device with it, and destroying a pipeline against a dead device is an access violation in
+    // the driver with this file nowhere in the stack.
+    clouds_.destroy();
     destroy_render_target();
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device_.handle(), descriptor_pool_, nullptr);
