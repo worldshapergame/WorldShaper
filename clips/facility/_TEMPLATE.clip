@@ -20,9 +20,9 @@
 #   - one part named part_<name>; every other binding starts with <name>_
 #   - symmetric about x = 0 unless there is a reason not to be
 #   - nothing floats; overlap what you stand on by 0.05 m
-#   - paint only where your own shapes are, and always elow=0.02, never elow=0 -- the
-#     building is displaced by 12 mm of grain at the end and a test at zero misses the voxels
-#     that displacement created, leaving a pale rind over your part
+#   - paint only where your own shapes are, and always "below=0.02", never "below=0" -- the
+#     building is displaced by 12 mm of grain at the end, and a test at zero misses the voxels
+#     that displacement created, leaving a pale rind of the wrong colour over your part
 #   - risers 0.18, runs 0.32, head height 2.10, doors 2.40
 #   - every stone edge gets a small round
 #
