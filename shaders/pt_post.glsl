@@ -487,6 +487,77 @@ vec3 motion_blurred(ivec2 pixel, vec3 mean, vec2 velocity) {
     return sum / weight;
 }
 
+// The cloud, filtered where it is an EDGE and left exactly alone everywhere else.
+//
+// # What is being removed
+//
+// The cloud pass marches one pixel of every four-by-four block each frame and carries the other
+// fifteen forward by reprojection. That reprojection uses a single representative depth for the
+// whole ray, and a cloud is a volume rather than a surface, so it cannot be exact -- neighbouring
+// pixels end up holding answers that differ by a little, for ever. In the flat interior of a cloud
+// and in open sky that difference is invisible, because there is nothing there for it to differ
+// about. On a silhouette it is the whole signal, and it shows as a stipple crawling along the edge.
+//
+// # Why this is not the filter that was removed
+//
+// A bound that pulled every pixel towards its block flattened the whole image to block resolution
+// and was reported, correctly, as the clouds looking low resolution. The lesson from that is not
+// that filtering is wrong; it is that a filter which cannot tell an edge from an interior will
+// always pay for the edge by softening the interior.
+//
+// This one is told apart by the TRANSMITTANCE spread across the neighbourhood. Where nine pixels
+// agree on how much light gets through, they are all inside the same cloud or all looking at the
+// same sky, and the pixel is returned untouched -- not nearly untouched, bit for bit unchanged.
+// Where they disagree there is a silhouette crossing this pixel, and only there does it blend.
+//
+// # Two stages, and the first costs nothing
+//
+// The despeckle comes first: hold the centre inside the range of its four orthogonal neighbours. A
+// pixel that is outside the range of everything around it is an outlier by definition, which is
+// exactly what the one marched pixel in sixteen looks like when it disagrees with its carried
+// neighbours. An ordinary edge survives untouched, because at an edge the centre sits between the
+// two sides rather than outside both. It removes the isolated case with no blurring at all.
+//
+// Then the edge blend, for the rest. Nine taps of a buffer this pass has already touched.
+vec4 cloud_filtered(ivec2 pixel, int which) {
+    ivec2 last = ivec2(push.resolution.xy) - 1;
+
+    vec4 centre = imageLoad(in_cloud[which], pixel);
+    vec4 up = imageLoad(in_cloud[which], clamp(pixel + ivec2( 0, -1), ivec2(0), last));
+    vec4 down = imageLoad(in_cloud[which], clamp(pixel + ivec2( 0,  1), ivec2(0), last));
+    vec4 left = imageLoad(in_cloud[which], clamp(pixel + ivec2(-1,  0), ivec2(0), last));
+    vec4 right = imageLoad(in_cloud[which], clamp(pixel + ivec2( 1,  0), ivec2(0), last));
+
+    // Seeded from real taps and never from a sentinel: clamp() with its bounds the wrong way round
+    // is UNDEFINED, and a sentinel that survives into a half-float buffer saturates to infinity and
+    // stays there. That has cost this renderer a frame once already.
+    vec4 lo = min(min(up, down), min(left, right));
+    vec4 hi = max(max(up, down), max(left, right));
+    vec4 kept = clamp(centre, lo, hi);
+
+    float spread = max(hi.a, centre.a) - min(lo.a, centre.a);
+    // Below the low end nine pixels agree and there is nothing to fix; above the high end the edge
+    // is fully formed. Smoothstepped between, so the filter fades in across a silhouette instead of
+    // switching on along a contour of its own.
+    float edge = smoothstep(0.015, 0.30, spread);
+    if (edge <= 0.0) return kept;
+
+    vec4 corners = imageLoad(in_cloud[which], clamp(pixel + ivec2(-1, -1), ivec2(0), last))
+                 + imageLoad(in_cloud[which], clamp(pixel + ivec2( 1, -1), ivec2(0), last))
+                 + imageLoad(in_cloud[which], clamp(pixel + ivec2(-1,  1), ivec2(0), last))
+                 + imageLoad(in_cloud[which], clamp(pixel + ivec2( 1,  1), ivec2(0), last));
+
+    // The corners at half weight. A flat box over nine taps is a wider blur than an edge needs and
+    // it rounds off corners of cloud that are genuinely sharp; weighting by distance keeps the
+    // filter close to one pixel across, which is the width of the artefact.
+    vec4 average = (kept * 4.0 + (up + down + left + right) * 2.0 + corners) * (1.0 / 16.0);
+
+    // Not all the way to the average even at a full edge. This is meant to take the stipple off a
+    // silhouette, not to replace the silhouette with a gradient.
+    const float kMostOfTheWay = 0.75;
+    return mix(kept, average, edge * kMostOfTheWay);
+}
+
 void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary_t, float aspect) {
     // The air between the eye and the first surface, applied here for the same reason the glass
     // tint is applied here: main returns early three times before its own end -- a summary hit,
@@ -521,7 +592,7 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
         }
 
         if (crossed && primary_t / kVoxelsPerMetre > begins_m) {
-            vec4 cloud = imageLoad(in_cloud[push.motion.z > 0.5 ? 1 : 0], pixel);
+            vec4 cloud = cloud_filtered(pixel, push.motion.z > 0.5 ? 1 : 0);
             radiance = cloud.rgb + cloud.a * radiance;
         }
     }
