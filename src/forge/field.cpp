@@ -350,6 +350,70 @@ f64 sd_stairs(Vec3 p, Vec3 half, f64 run, f64 rise, u32 run_axis, u32 rise_axis)
     return std::max(box, v - top);
 }
 
+// How many straight pieces a spiral of this many turns is cut into.
+//
+// Twenty-four to the turn, which puts the chord of a piece at about a fortieth of the radius, so
+// the gap between the chord and the arc is under a thousandth of the radius — a tenth of a voxel
+// on a volute the size of a dinner plate, at the finest resolution this engine samples. Capped,
+// because the cost is linear in it and a spiral of forty turns is a decoration nobody is looking
+// at closely.
+u32 spiral_pieces(f64 turns) {
+    const f64 wanted = std::abs(turns) * 24.0;
+    if (wanted < 4.0) return 4u;
+    if (wanted > 320.0) return 320u;
+    return static_cast<u32>(wanted + 0.5);
+}
+
+// The distance to a logarithmic spiral swept as a round tube.
+//
+// Walked as a chain of straight pieces rather than solved: the spiral r = a·k^θ has no closed
+// form for the nearest point, and every approximation of one either over-states the distance
+// somewhere — which lets a sampler skip over the shape — or is slower than this. A chain of
+// capsules has an exact distance, so what is returned is the true distance to the thing that
+// actually gets built, and the field can be trusted to settle boxes near it.
+//
+// The pieces are stepped round by one complex multiply each rather than by a fresh cosine, so a
+// spiral of a hundred pieces costs one pair of trigonometric calls and a hundred multiplies.
+f64 sd_spiral(Vec3 p, f64 start_r, f64 per_turn, f64 tube, f64 turns, u32 axis) {
+    if (start_r <= 0.0 || turns <= 0.0) return 1e30;
+    u32 u = 0, v = 0;
+    other_axes(axis, u, v);
+    const f64 px = axis_of(p, u);
+    const f64 py = axis_of(p, v);
+    const f64 along = axis_of(p, axis);
+
+    const u32 pieces = spiral_pieces(turns);
+    const f64 step = kTau * turns / static_cast<f64>(pieces);
+    const f64 c = std::cos(step), s = std::sin(step);
+    // The radius is multiplied by `per_turn` over a whole turn, so by this much over one piece.
+    const f64 grow = std::pow((per_turn > 0.0) ? per_turn : 1.0, turns / static_cast<f64>(pieces));
+
+    f64 dirx = 1.0, diry = 0.0;
+    f64 radius = start_r;
+    f64 ax = radius, ay = 0.0;
+    f64 best = 1e30;
+    for (u32 i = 0; i < pieces; ++i) {
+        const f64 ndirx = dirx * c - diry * s;
+        const f64 ndiry = dirx * s + diry * c;
+        radius *= grow;
+        const f64 bx = ndirx * radius, by = ndiry * radius;
+
+        // Point to segment, in the plane; the height off the plane is carried through as the
+        // third component, which is what makes the sweep a tube rather than a ribbon.
+        const f64 ex = bx - ax, ey = by - ay;
+        const f64 wx = px - ax, wy = py - ay;
+        const f64 denom = ex * ex + ey * ey;
+        const f64 t = (denom > 0.0) ? clamp((wx * ex + wy * ey) / denom, 0.0, 1.0) : 0.0;
+        const f64 dx = wx - ex * t, dy = wy - ey * t;
+        const f64 d = std::sqrt(dx * dx + dy * dy + along * along);
+        if (d < best) best = d;
+
+        dirx = ndirx; diry = ndiry;
+        ax = bx; ay = by;
+    }
+    return best - tube;
+}
+
 }  // namespace
 
 f64 length(Vec3 v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
@@ -524,6 +588,25 @@ u32 Field::stairs(Vec3 centre, Vec3 half, f64 run, f64 rise) {
     n.a[0] = centre.x; n.a[1] = centre.y; n.a[2] = centre.z;
     n.a[3] = half.x;   n.a[4] = half.y;   n.a[5] = half.z;
     n.a[6] = run;      n.a[7] = rise;
+    return push(n);
+}
+
+u32 Field::revolve(u32 profile, Vec3 centre, u32 axis) {
+    Node n;
+    n.op = Op::Revolve;
+    n.child[0] = profile;
+    n.children = 1;
+    n.a[0] = centre.x; n.a[1] = centre.y; n.a[2] = centre.z;
+    n.a[3] = static_cast<f64>(axis);
+    return push(n);
+}
+
+u32 Field::spiral(Vec3 centre, f64 radius, f64 tighten, f64 tube, f64 turns, u32 axis) {
+    Node n;
+    n.op = Op::Spiral;
+    n.a[0] = centre.x; n.a[1] = centre.y; n.a[2] = centre.z;
+    n.a[3] = radius; n.a[4] = tighten; n.a[5] = tube; n.a[6] = turns;
+    n.a[7] = static_cast<f64>(axis);
     return push(n);
 }
 
@@ -840,6 +923,27 @@ f64 Field::eval(u32 at, Vec3 p) const {
         case Op::Stairs:
             return sd_stairs(p - Vec3{a[0], a[1], a[2]}, {a[3], a[4], a[5]}, a[6], a[7],
                              /*run*/ 2u, /*rise*/ 1u);
+
+        case Op::Revolve: {
+            // The point folded into the profile's half plane: how far it is from the axis, how
+            // far along the axis it is, and nothing else. That fold is exactly what revolving
+            // means, and it is why the answer is a real distance and not a bound — the nearest
+            // point of a surface of revolution is always at the asking point's own angle, so the
+            // three-dimensional distance and the profile's own two-dimensional distance are the
+            // same number.
+            const u32 axis = static_cast<u32>(a[3]);
+            u32 u = 0, v = 0;
+            other_axes(axis, u, v);
+            const Vec3 q = p - Vec3{a[0], a[1], a[2]};
+            const f64 r = std::hypot(axis_of(q, u), axis_of(q, v));
+            Vec3 flat{0, 0, 0};
+            flat = with_axis(flat, u, r);
+            flat = with_axis(flat, axis, axis_of(q, axis));
+            return eval(n.child[0], flat);
+        }
+        case Op::Spiral:
+            return sd_spiral(p - Vec3{a[0], a[1], a[2]}, a[3], a[4], a[5], a[6],
+                             static_cast<u32>(a[7]));
 
         case Op::Union: {
             f64 d = eval(n.child[0], p);
@@ -1296,6 +1400,37 @@ void Field::build_bounds() {
             case Op::Wedge:
             case Op::Stairs: box = around({a[0], a[1], a[2]}, {a[3], a[4], a[5]}); break;
 
+            case Op::Revolve: {
+                // As far out as the profile reaches from the axis, all the way round, and as far
+                // along the axis as the profile is tall. The profile's third dimension says
+                // nothing: it is only ever asked at zero.
+                const Aabb child = bounds_of(n.child[0]);
+                if (child.infinite()) { box = everywhere(); break; }
+                const u32 axis = static_cast<u32>(a[3]);
+                u32 u = 0, v = 0;
+                other_axes(axis, u, v);
+                const f64 reach = std::max(std::abs(axis_of(child.low, u)),
+                                           std::abs(axis_of(child.high, u)));
+                Vec3 half{reach, reach, reach};
+                const f64 lo = axis_of(child.low, axis);
+                const f64 hi = axis_of(child.high, axis);
+                half = with_axis(half, axis, (hi - lo) * 0.5);
+                Vec3 centre{a[0], a[1], a[2]};
+                centre = with_axis(centre, axis, axis_of(centre, axis) + (hi + lo) * 0.5);
+                box = around(centre, half);
+                break;
+            }
+            case Op::Spiral: {
+                // The widest the curve ever gets, which is its first turn when it tightens and
+                // its last when it opens out.
+                const f64 ends = std::max(1.0, std::pow((a[4] > 0.0) ? a[4] : 1.0, a[6]));
+                const f64 reach = a[3] * ends + a[5];
+                Vec3 half{reach, reach, reach};
+                half = with_axis(half, static_cast<u32>(a[7]), a[5]);
+                box = around({a[0], a[1], a[2]}, half);
+                break;
+            }
+
             case Op::Union:
             case Op::SmoothUnion: {
                 box = bounds_of(n.child[0]);
@@ -1366,47 +1501,201 @@ void Field::build_bounds() {
                 break;
             }
 
+            // Scaling gets no box, and it is worth saying why, because the box is easy to work out
+            // and wrong to use.
+            //
+            // A union culls a child when the point is further from the child's box than the
+            // running answer — which is only sound if the child never *reports* less than its own
+            // box distance. Uneven scaling reports the child's distance times the smallest factor,
+            // so a cylinder stretched to twice its width along x answers half of what the truth is
+            // out along x, while its box is honestly twice as wide. The cull then believes the
+            // shape is further away than the shape itself says it is, and the surface moves.
+            //
+            // It cost an afternoon and was found only because the check that boxes change no
+            // answer was run over a scaled shape. An infinite box culls nothing and hides nothing;
+            // a scaled shape is nearly always inside an intersection with something square, and
+            // that intersection has a box of its own that *is* sound.
+
             case Op::Shell: box = grown(bounds_of(n.child[0]), a[0]); break;
             case Op::Round: box = grown(bounds_of(n.child[0]), a[0]); break;
             case Op::Offset: box = grown(bounds_of(n.child[0]), std::abs(a[0])); break;
-            case Op::Displace: box = grown(bounds_of(n.child[0]), std::abs(a[0])); break;
+            case Op::Displace: {
+                // Grown by as far as the displacement can actually push the surface, which is the
+                // amount times the pattern's own reach. Assuming a pattern of unit size was wrong
+                // in both directions: too tight for a pattern that swings wider than one, which
+                // clips the shape's own bounding box and deletes what falls outside, and too
+                // generous for the ordinary `multiply { mask amount }`, which then charged the
+                // whole clip for a displacement of a few millimetres.
+                f64 lo = 0.0, hi = 0.0;
+                if (n.children < 2 || !value_range(n.child[1], lo, hi)) {
+                    // Nothing is known about how far it moves, so nothing can be said about where
+                    // the shape ends up. An honest infinity culls nothing and hides nothing.
+                    box = everywhere();
+                    break;
+                }
+                box = grown(bounds_of(n.child[0]),
+                            std::abs(a[0]) * std::max(std::abs(lo), std::abs(hi)));
+                break;
+            }
             default: box = everywhere(); break;
         }
         bounds_[i] = box;
     }
 }
 
-f64 Field::skip_slack() const {
-    // The patterns whose range is known to be within [-1, 1]. Anything else displacing a shape
-    // means the sampler cannot know how far it is safe to skip.
-    const auto bounded = [](Op op) {
-        switch (op) {
-            case Op::Sine:
-            case Op::Waves:
-            case Op::Noise:
-            case Op::Fbm:
-            case Op::Ridged:
-            case Op::Rasp:
-            case Op::Checker:
-            case Op::Stripes:
-            case Op::Bricks:
-            case Op::Constant:
-            case Op::Parameter:
-            case Op::Step:
-            case Op::Smoothstep:
-                return true;
-            default:
-                return false;
+bool Field::value_range(u32 at, f64& low, f64& high) const {
+    if (at >= nodes_.size()) return false;
+    const Node& n = nodes_[at];
+    const f64* a = n.a;
+
+    // Every child's range, or a refusal. Written once because almost every case wants it.
+    f64 lo[4];
+    f64 hi[4];
+    const auto children = [&]() {
+        for (u32 i = 0; i < n.children && i < 4; ++i) {
+            if (!value_range(n.child[i], lo[i], hi[i])) return false;
         }
+        return n.children > 0;
+    };
+    const auto span = [&](f64 l, f64 h) {
+        low = std::min(l, h);
+        high = std::max(l, h);
+        return true;
     };
 
+    switch (n.op) {
+        case Op::Constant: return span(a[0], a[0]);
+        case Op::Parameter: {
+            const usize slot = static_cast<usize>(a[0]);
+            const f64 v = (slot < parameters_.size()) ? parameters_[slot] : 0.0;
+            return span(v, v);
+        }
+
+        // The waves and the grains, all of which are written to land in [-1, 1].
+        case Op::Sine:
+        case Op::Waves:
+        case Op::Noise:
+        case Op::Fbm:
+        case Op::Ridged:
+        case Op::Checker:
+        case Op::Stripes:
+        case Op::Facing:
+            return span(-1.0, 1.0);
+
+        // A brick pattern is how far into a joint the point is, as a fraction of a brick: never
+        // more than half a brick inside one, and never further out of a joint than the joint is
+        // wide. Which is a real bound rather than the assumed one, and it matters — a wall
+        // displaced by its own mortar with a wide joint was being charged for a unit swing it
+        // could not make.
+        case Op::Bricks: {
+            const f64 across = (a[0] != 0.0) ? std::abs(a[0]) : 1.0;
+            const f64 up = (a[1] != 0.0) ? std::abs(a[1]) : 1.0;
+            const f64 joint = std::abs(a[3]) * 0.5;
+            return span(-0.5, std::max(joint / across, joint / up));
+        }
+
+        // Rasp is a depth cut into a surface: never positive, never deeper than it was asked for.
+        case Op::Rasp: return span(-std::abs(a[1]), 0.0);
+
+        // How much of a small sphere is solid — a fraction, by construction.
+        case Op::Occlusion: return span(0.0, 1.0);
+
+        // A distance to the nearest of one scattered point per cell, and the gap between the two
+        // nearest. Both are distances in metres and both are bounded by the search neighbourhood,
+        // which is one cell either way in each direction.
+        case Op::Cells:
+        case Op::CellEdge: return span(0.0, 3.0 * std::abs(a[0]));
+
+        case Op::Step:
+        case Op::Smoothstep: return span(0.0, 1.0);
+        case Op::Clamp: return span(a[0], a[1]);
+        case Op::Remap: return span(a[2], a[3]);
+
+        case Op::Add: {
+            if (!children()) return false;
+            f64 l = 0.0, h = 0.0;
+            for (u32 i = 0; i < n.children; ++i) { l += lo[i]; h += hi[i]; }
+            return span(l, h);
+        }
+        case Op::Multiply: {
+            if (!children()) return false;
+            f64 l = lo[0], h = hi[0];
+            for (u32 i = 1; i < n.children; ++i) {
+                // Four corners, because either factor may straddle zero and the product's extreme
+                // can be any of them.
+                const f64 c[4] = {l * lo[i], l * hi[i], h * lo[i], h * hi[i]};
+                l = std::min(std::min(c[0], c[1]), std::min(c[2], c[3]));
+                h = std::max(std::max(c[0], c[1]), std::max(c[2], c[3]));
+            }
+            return span(l, h);
+        }
+        case Op::Min: {
+            if (!children()) return false;
+            f64 l = lo[0], h = hi[0];
+            for (u32 i = 1; i < n.children; ++i) { l = std::min(l, lo[i]); h = std::min(h, hi[i]); }
+            return span(l, h);
+        }
+        case Op::Max: {
+            if (!children()) return false;
+            f64 l = lo[0], h = hi[0];
+            for (u32 i = 1; i < n.children; ++i) { l = std::max(l, lo[i]); h = std::max(h, hi[i]); }
+            return span(l, h);
+        }
+        case Op::Blend: {
+            if (n.children < 2 || !children()) return false;
+            const f64 t = clamp(a[0], 0.0, 1.0);
+            return span(lo[0] * (1.0 - t) + lo[1] * t, hi[0] * (1.0 - t) + hi[1] * t);
+        }
+        case Op::Negate: {
+            if (!children()) return false;
+            return span(-lo[0], -hi[0]);
+        }
+        case Op::Abs: {
+            if (!children()) return false;
+            const f64 reach = std::max(std::abs(lo[0]), std::abs(hi[0]));
+            const f64 nearest = (lo[0] <= 0.0 && hi[0] >= 0.0)
+                                    ? 0.0
+                                    : std::min(std::abs(lo[0]), std::abs(hi[0]));
+            return span(nearest, reach);
+        }
+        case Op::Power: {
+            if (!children()) return false;
+            const f64 e = a[0];
+            if (e < 0.0) return false;   // unbounded as the value approaches zero
+            const f64 reach = std::pow(std::max(std::abs(lo[0]), std::abs(hi[0])), e);
+            if (lo[0] >= 0.0) return span(std::pow(lo[0], e), reach);
+            if (hi[0] <= 0.0) return span(-reach, -std::pow(std::abs(hi[0]), e));
+            return span(-reach, reach);
+        }
+
+        default:
+            // A coordinate, a radius, a solid's own distance, a curvature: all perfectly good to
+            // displace by, and none of them says how far it can go. Refusing is the whole point —
+            // guessing here is how voxels disappear.
+            return false;
+    }
+}
+
+namespace {
+
+// How far a displacement can move a surface: the amount it was given, times the largest value the
+// pattern can reach. Infinite when the pattern will not say.
+f64 displacement_reach(const Field& f, const Node& n) {
+    if (n.children < 2) return 1e30;
+    f64 lo = 0.0, hi = 0.0;
+    if (!f.value_range(n.child[1], lo, hi)) return 1e30;
+    return std::abs(n.a[0]) * std::max(std::abs(lo), std::abs(hi));
+}
+
+}  // namespace
+
+f64 Field::skip_slack() const {
     f64 slack = 0.0;
     for (const Node& n : nodes_) {
         if (n.op != Op::Displace) continue;
-        if (n.children < 2) continue;
-        const Node& pattern = nodes_[n.child[1]];
-        if (!bounded(pattern.op)) return 1e30;
-        slack += std::abs(n.a[0]);
+        const f64 reach = displacement_reach(*this, n);
+        if (reach >= 1e30) return 1e30;
+        slack += reach;
     }
     // Twice the amplitude, and the factor of two is not caution — it is the arithmetic.
     //
@@ -1421,41 +1710,15 @@ f64 Field::skip_slack() const {
     return slack * 2.0;
 }
 
-namespace {
-
-// The patterns whose range is known to be within [-1, 1]. Anything else displacing a shape means
-// the sampler cannot know how far it is safe to skip.
-bool bounded_pattern(Op op) {
-    switch (op) {
-        case Op::Sine:
-        case Op::Waves:
-        case Op::Noise:
-        case Op::Fbm:
-        case Op::Ridged:
-        case Op::Rasp:
-        case Op::Checker:
-        case Op::Stripes:
-        case Op::Bricks:
-        case Op::Constant:
-        case Op::Parameter:
-        case Op::Step:
-        case Op::Smoothstep:
-            return true;
-        default:
-            return false;
-    }
-}
-
-}  // namespace
-
 u32 Field::undisplaced(u32 at, f64& amplitude) const {
     amplitude = 0.0;
     u32 node = at;
     while (node < nodes_.size()) {
         const Node& n = nodes_[node];
         if (n.op != Op::Displace || n.children < 2) break;
-        if (!bounded_pattern(nodes_[n.child[1]].op)) break;
-        amplitude += std::abs(n.a[0]);
+        const f64 reach = displacement_reach(*this, n);
+        if (reach >= 1e30) break;
+        amplitude += reach;
         node = n.child[0];
     }
     return node;
@@ -1495,8 +1758,6 @@ void Field::union_children(u32 at, std::vector<u32>& out) const {
 f64 Field::metric_slack(u32 at) const {
     if (at >= nodes_.size()) return kInfiniteSlack;
     const Node& n = nodes_[at];
-
-    const auto bounded = [](Op op) { return bounded_pattern(op); };
 
     const auto worst_child = [&](u32 count) {
         f64 slack = 0.0;
@@ -1538,6 +1799,23 @@ f64 Field::metric_slack(u32 at) const {
         case Op::Stairs:
             return 0.0;
 
+        // A spiral is walked as a chain of capsules and the answer is the least of their exact
+        // distances, so it is a real distance to a real shape: no allowance at all.
+        case Op::Spiral:
+            return 0.0;
+
+        // Revolving moves the point before asking, and the move — (x, y, z) to (radius, height) —
+        // never separates two points by more than they were separated to begin with, because the
+        // radius is a one-Lipschitz function of the two coordinates it collapses. So the profile's
+        // own honesty carries through unchanged.
+        //
+        // It also never over-states. The profile is asked in the whole plane while only the half
+        // with a positive radius is swept, so when a profile crosses its own axis the answer is
+        // the distance to a shape slightly larger than the one that is built — smaller than the
+        // truth, which is the direction that costs time rather than voxels.
+        case Op::Revolve:
+            return worst_child(1);
+
         // Combining by min, max or a blend of the two keeps the gradient bounded by its
         // steepest input, so the slack is the worst child's.
         case Op::Union:
@@ -1553,6 +1831,13 @@ f64 Field::metric_slack(u32 at) const {
         case Op::Translate:
         case Op::Rotate:
         case Op::Mirror:
+            return worst_child(1);
+
+        // Scaling divides the point and multiplies the answer back by the *smallest* of the
+        // factors, which is exactly the arithmetic that keeps the result from ever over-stating
+        // the distance however unevenly the shape is stretched. So it says as much about its
+        // neighbourhood as its child does.
+        case Op::Scale:
             return worst_child(1);
 
         // Repetition does not, and this is worth being precise about because it looks like it
@@ -1600,12 +1885,12 @@ f64 Field::metric_slack(u32 at) const {
             return worst_child(1);
 
         case Op::Displace: {
-            if (n.children < 2) return kInfiniteSlack;
-            if (!bounded(nodes_[n.child[1]].op)) return kInfiniteSlack;
+            const f64 reach = displacement_reach(*this, n);
+            if (reach >= kInfiniteSlack) return kInfiniteSlack;
             const f64 base = metric_slack(n.child[0]);
             if (base >= kInfiniteSlack) return kInfiniteSlack;
             // Twice the amplitude, for the reason spelled out in skip_slack.
-            return base + std::abs(n.a[0]) * 2.0;
+            return base + reach * 2.0;
         }
 
         default:

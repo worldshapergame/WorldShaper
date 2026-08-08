@@ -86,6 +86,137 @@ u32 axis_from(const std::string& s) {
     return 3;
 }
 
+// --- the mouldings ---------------------------------------------------------------------------
+//
+// The classical orders are not made of shapes, they are made of *sections*: a dozen curves, drawn
+// once each in a rectangle, repeated at every scale of the building and either run straight along
+// a cornice or turned about an axis to make a base, a bead, a baluster or a dome. So they are
+// built here, out of the field operations that already exist, rather than added as new kinds of
+// node — there is nothing a cyma can do that an intersection of a box and two ellipses cannot,
+// and one fewer node type is one fewer thing that can be wrong about a distance.
+//
+// Every one of them is given as two opposite corners, exactly like `box`, and the *order of the
+// corners is the orientation*: the first corner is in the stone, the second is in the air. Swap
+// them and the curve turns over. That is the whole of the interface, and it is why there is no
+// `flip=` key: an ovolo that swells toward the top and one that swells toward the bottom are the
+// same four numbers written in a different order.
+
+// A point built from the moulding's own three directions: across the face, up it, and along the
+// run. Which world axes those are is the `run=` key's business and nothing else's.
+Vec3 in_frame(u32 proj, u32 high, u32 run, f64 p, f64 q, f64 r) {
+    f64 v[3] = {0, 0, 0};
+    v[proj] = p;
+    v[high] = q;
+    v[run] = r;
+    return Vec3{v[0], v[1], v[2]};
+}
+
+// An elliptical cylinder lying along the run: the only curve any of these need.
+//
+// Built as a round cylinder stretched, and stretched up from the *smaller* radius rather than
+// down from a unit one. `scale` multiplies the distance it returns by the smallest of its
+// factors, so scaling a one-metre cylinder down to a five-centimetre bead would report every
+// distance near it at a twentieth of the truth — correct, and slow enough that the sampler would
+// crawl round every moulding in the building. Scaling up from the smaller radius makes both
+// factors at least one and the distance exact.
+u32 elliptic_run(Field& f, u32 proj, u32 high, u32 run, f64 cp, f64 cq, f64 rp, f64 rq, f64 cr,
+                 f64 half_run) {
+    rp = std::abs(rp);
+    rq = std::abs(rq);
+    if (rp <= 0.0 || rq <= 0.0) return f.constant(1e30);
+    const f64 base = std::min(rp, rq);
+    const f64 sp = rp / base;
+    const f64 sq = rq / base;
+    const u32 round = f.cylinder(in_frame(proj, high, run, cp / sp, cq / sq, cr), base, half_run,
+                                 run);
+    if (sp == 1.0 && sq == 1.0) return round;
+    f64 s[3] = {1.0, 1.0, 1.0};
+    s[proj] = sp;
+    s[high] = sq;
+    return f.scale(round, {s[0], s[1], s[2]});
+}
+
+// One moulding, as a solid section between two corners.
+//
+//   fillet         a plain square band; the thing that separates two curves
+//   ovolo          a convex quarter round, full at the first corner's end
+//   cavetto        a concave quarter hollow, full at the first corner's end
+//   bead/astragal  a half round on a flat back — the moulding the orders call a torus
+//   scotia         a deep hollow of two arcs, deepest above the middle, as it is drawn
+//   cyma           the S: convex at the first corner's end, hollow at the second's
+//   cyma_reversa   the same S turned over
+u32 build_moulding(Field& f, const std::string& kind, f64 p0, f64 q0, f64 p1, f64 q1, f64 r0,
+                   f64 r1, u32 proj, u32 high, u32 run) {
+    const f64 w = p1 - p0;      // outward, away from the face the moulding is stuck to
+    const f64 h = q1 - q0;      // along the moulding's height, away from the solid corner
+    const f64 rw = std::abs(w);
+    const f64 rh = std::abs(h);
+    const f64 pm = p0 + w * 0.5;
+    const f64 qm = q0 + h * 0.5;
+    const f64 sh = (h < 0.0) ? -1.0 : 1.0;
+    const f64 cr = (r0 + r1) * 0.5;
+    const f64 half_run = std::abs(r1 - r0) * 0.5;
+
+    const u32 rect = f.box(in_frame(proj, high, run, pm, qm, cr),
+                           in_frame(proj, high, run, rw * 0.5, rh * 0.5, half_run), 0.0);
+    if (kind == "fillet") return rect;
+
+    // The half of the section on one side of a line across it. `sign` of +1 keeps the side the
+    // coordinate is smaller on, so passing the section's own sense of "toward the first corner"
+    // makes the same expression work whichever way round the corners were written.
+    const auto beyond_high = [&](f64 at, f64 sign) {
+        return f.plane(in_frame(proj, high, run, 0.0, sign, 0.0), sign * at);
+    };
+    const auto disc = [&](f64 cp, f64 cq, f64 rp, f64 rq) {
+        return elliptic_run(f, proj, high, run, cp, cq, rp, rq, cr, half_run);
+    };
+
+    if (kind == "ovolo") {
+        return f.intersect({rect, disc(p0, q0, rw, rh)});
+    }
+    if (kind == "cavetto") {
+        return f.subtract({rect, disc(p1, q1, rw, rh)});
+    }
+    if (kind == "bead" || kind == "astragal") {
+        return f.intersect({rect, disc(p0, qm, rw, rh * 0.5)});
+    }
+    if (kind == "scotia") {
+        // Two arcs meeting at the deepest point, which sits above the middle — the lower sweep is
+        // the longer one, and that asymmetry is what tells a scotia from a plain hollow at a
+        // glance. Both arcs reach the back of the section, so the deepest point is at the first
+        // corner's face and the core the moulding is cut into has to stand at least there.
+        const f64 deep = q0 + h * 0.6;
+        const u32 lower = f.intersect({disc(p1, deep, rw, rh * 0.6), beyond_high(deep, sh)});
+        const u32 upper = f.intersect({disc(p1, deep, rw, rh * 0.4), beyond_high(deep, -sh)});
+        return f.subtract({rect, lower, upper});
+    }
+    if (kind == "cyma" || kind == "cyma_reversa") {
+        // The S, drawn the way a draughtsman draws it: two arcs of the section's half-width, one
+        // centred on the front face and one on the back, both at mid height. That puts the tangent
+        // flat where the curve meets the members above and below — so a cyma lies down on a fillet
+        // without a kink — and upright where the two arcs meet, which is the steep middle that
+        // makes the profile read as an S and not as a bevel.
+        //
+        // Built with the arcs on the wrong axis first, which gave a curve flat in the middle and
+        // steep at the ends: a perfectly smooth S, and the wrong one, and only visible by asking
+        // where the section's face is a fifth of the way up.
+        const bool reversed = (kind == "cyma_reversa");
+        const f64 to_swell = reversed ? -sh : sh;   // toward the end the curve is full at
+        const u32 outer = disc(p1, qm, rw * 0.5, rh * 0.5);
+        const u32 inner = disc(p0, qm, rw * 0.5, rh * 0.5);
+        const u32 swelling =
+            f.intersect({f.subtract({rect, outer}), beyond_high(qm, to_swell)});
+        const u32 hollowing = f.intersect({rect, inner, beyond_high(qm, -to_swell)});
+        return f.unite({swelling, hollowing});
+    }
+    return 0;
+}
+
+bool is_moulding(const std::string& s) {
+    return s == "fillet" || s == "ovolo" || s == "cavetto" || s == "bead" || s == "astragal" ||
+           s == "scotia" || s == "cyma" || s == "cyma_reversa";
+}
+
 // --- the parser -------------------------------------------------------------------------
 
 class Parser {
@@ -350,6 +481,41 @@ bool Parser::call(u32& out) {
         return true;
     }
 
+    if (head == "spiral") {
+        out = f.spiral({arg(0, 0), arg(1, 0), arg(2, 0)}, keys.number("r", 1.0),
+                       keys.number("tighten", 0.7), keys.number("tube", 0.08),
+                       keys.number("turns", 2.5), axis_from(keys.word("axis", "z")) % 3u);
+        return true;
+    }
+
+    // --- the mouldings, as sections ------------------------------------------------------------
+    //
+    // Two opposite corners like a box, first in the stone and second in the air, and a `run=` that
+    // says which way the moulding travels. With four numbers the run is the default axis from one
+    // metre back to one metre forward, which is more than any profile needs and is thrown away by
+    // the `revolve` that usually follows; with six it is a length of straight cornice.
+    if (is_moulding(head)) {
+        const u32 run = axis_from(keys.word("run", "z")) % 3u;
+        // Across the face, up it, and along it. Height is y unless the moulding runs up y, in
+        // which case there is no y left and the section lies flat.
+        const u32 proj = (run == 0) ? 2u : 0u;
+        const u32 high = (run == 1) ? 2u : 1u;
+        f64 p0 = 0, q0 = 0, p1 = 0, q1 = 0, r0 = -1.0, r1 = 1.0;
+        if (args.size() >= 6) {
+            const f64 low[3] = {arg(0, 0), arg(1, 0), arg(2, 0)};
+            const f64 high_[3] = {arg(3, 0), arg(4, 0), arg(5, 0)};
+            p0 = low[proj];  q0 = low[high];  r0 = low[run];
+            p1 = high_[proj]; q1 = high_[high]; r1 = high_[run];
+        } else if (args.size() >= 4) {
+            p0 = arg(0, 0); q0 = arg(1, 0); p1 = arg(2, 0); q1 = arg(3, 0);
+        } else {
+            fail(head + " needs two corners: back-and-bottom first, front-and-top second");
+            return false;
+        }
+        out = build_moulding(f, head, p0, q0, p1, q1, r0, r1, proj, high, run);
+        return true;
+    }
+
     // --- combining ---------------------------------------------------------------------------
     if (head == "union" || head == "difference" || head == "intersection" || head == "add" ||
         head == "multiply" || head == "min" || head == "max") {
@@ -374,7 +540,7 @@ bool Parser::call(u32& out) {
     // --- one-child operations ------------------------------------------------------------------
     if (head == "translate" || head == "rotate" || head == "scale" || head == "mirror" ||
         head == "repeat" || head == "around" || head == "shell" || head == "round" ||
-        head == "offset" || head == "twist" || head == "bend" || head == "abs" ||
+        head == "revolve" || head == "offset" || head == "twist" || head == "bend" || head == "abs" ||
         head == "negate" || head == "step" || head == "smoothstep" || head == "clamp" ||
         head == "remap" || head == "power" || head == "displace" || head == "blend") {
         std::vector<u32> parts = block();
@@ -415,6 +581,12 @@ bool Parser::call(u32& out) {
             out = f.shell(child, keys.number("thickness", arg(0, 0.1)));
         else if (head == "round")
             out = f.round_off(child, keys.number("by", arg(0, 0.05)));
+        else if (head == "revolve")
+            // The three numbers, when they are given, are where the axis stands — so a base is
+            // drawn once from its own axis outward and then placed under whichever column it
+            // belongs to, without a translate round every one.
+            out = f.revolve(child, {arg(0, 0), arg(1, 0), arg(2, 0)},
+                            axis_from(keys.word("axis", "y")) % 3u);
         else if (head == "offset")
             out = f.offset(child, keys.number("by", arg(0, 0.0)));
         else if (head == "twist")
@@ -634,6 +806,16 @@ void Parser::statement() {
         request.scale = keys.number("scale", 1.0);
         request.seed = static_cast<u32>(keys.number("seed", 1.0));
         request.level = keys.number("level", 0.0);
+        const std::string on = keys.word("on", "");
+        if (!on.empty()) {
+            auto bound = bindings_.find(on);
+            if (bound == bindings_.end()) {
+                fail("weather on=" + on + " does not name anything");
+                return;
+            }
+            request.scope = bound->second;
+            request.has_scope = true;
+        }
         if (kind == "desert") request.kind = Weather::Desert;
         else if (kind == "overgrown") request.kind = Weather::Overgrown;
         else if (kind == "cracks") request.kind = Weather::Cracks;
@@ -732,6 +914,32 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
         const f64 s = (request.scale > 0.0) ? request.scale : 1.0;
         const u32 seed = request.seed;
 
+        // --- the scope ------------------------------------------------------------------------
+        //
+        // Two masks, because the deformation and the paint need opposite senses of the same
+        // question, and both are answered from the named shape's own distance.
+        //
+        // `inside` is one on and within the shape's surface and falls to zero a few centimetres
+        // outside it. On, not half — the surface being weathered *is* the shape's surface, and a
+        // mask that reached a half there would weather the podium's face at half strength and its
+        // interior at full, which is exactly backwards.
+        //
+        // `outside` is the complement, and it is used to push a coat's test clear out of its own
+        // range where the shape is not. Every coat below is a "this value or higher" rule, so
+        // subtracting a number larger than anything in the clip disables it as surely as an
+        // intersection would and needs no new machinery in the sampler to read.
+        const f64 band = 0.06 * s;
+        u32 inside = f.constant(1.0);
+        u32 elsewhere = f.constant(0.0);
+        if (request.has_scope) {
+            inside = f.smoothstep(f.negate(request.scope), -band, 0.0);
+            elsewhere = f.smoothstep(request.scope, 0.0, band);
+        }
+        const u32 banish = f.multiply({elsewhere, f.constant(-1e9)});
+        const auto only_here = [&](u32 test) {
+            return request.has_scope ? f.add({test, banish}) : test;
+        };
+
         // The three questions every kind asks of the shape.
         const u32 shape = script.solid;
         const u32 cavity = f.occlusion(shape, 0.22 * s);          // 0 exposed, 1 buried
@@ -745,7 +953,8 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
                 // the arrises off. Both follow the shape, so a sill collects and its nose does
                 // not — which is the whole reason for doing this from geometry.
                 const u32 grit = f.fbm(0.09 * s, 3u, 0.55, 2.3, seed + 3u);
-                const u32 scour = f.multiply({f.smoothstep(edge, 0.2, 1.2), f.constant(a)});
+                const u32 scour =
+                    f.multiply({f.smoothstep(edge, 0.2, 1.2), f.constant(a), inside});
                 script.solid = f.displace(script.solid, scour, 0.05 * s);
 
                 const u32 sand = make_material(types, script, "sand", 198, 176, 132, 245);
@@ -753,8 +962,8 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
 
                 PaintRule sun_bleach;
                 sun_bleach.type = bleach;
-                sun_bleach.test = f.add({f.multiply({up, f.constant(0.6)}),
-                                         f.multiply({grit, f.constant(0.4)})});
+                sun_bleach.test = only_here(f.add({f.multiply({up, f.constant(0.6)}),
+                                                   f.multiply({grit, f.constant(0.4)})}));
                 sun_bleach.low = 0.55 - 0.35 * a;
                 script.paint.push_back(sun_bleach);
 
@@ -762,10 +971,11 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
                 drift.type = sand;
                 // Up-facing, plus low down, plus in the hollows: three ways sand arrives, added
                 // rather than chosen between, because a low up-facing hollow gets the most.
-                drift.test = f.add({f.multiply({up, f.constant(0.5)}),
-                                    f.multiply({cavity, f.constant(0.5)}),
-                                    f.smoothstep(f.negate(height), -request.level - 1.5 * s,
-                                                 -request.level)});
+                drift.test = only_here(f.add({f.multiply({up, f.constant(0.5)}),
+                                              f.multiply({cavity, f.constant(0.5)}),
+                                              f.smoothstep(f.negate(height),
+                                                           -request.level - 1.5 * s,
+                                                           -request.level)}));
                 drift.low = 1.15 - 0.75 * a;
                 script.paint.push_back(drift);
                 break;
@@ -779,21 +989,22 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
                                          f.multiply({clumps, f.constant(0.4)})});
                 script.solid =
                     f.displace(script.solid, f.multiply({f.smoothstep(where, 0.35, 0.95),
-                                                         f.constant(-a)}),
+                                                         f.constant(-a), inside}),
                                0.045 * s);
 
                 const u32 moss = make_material(types, script, "moss", 74, 108, 54, 250);
                 const u32 lichen = make_material(types, script, "lichen", 138, 148, 108, 248);
+                const u32 growing = only_here(where);
 
                 PaintRule pale;
                 pale.type = lichen;
-                pale.test = where;
+                pale.test = growing;
                 pale.low = 0.55 - 0.35 * a;
                 script.paint.push_back(pale);
 
                 PaintRule green;
                 green.type = moss;
-                green.test = where;
+                green.test = growing;
                 green.low = 0.85 - 0.55 * a;
                 script.paint.push_back(green);
                 break;
@@ -812,14 +1023,15 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
                 // adding to how far away it says it is, so a *positive* value on the seams eats
                 // into the solid — which is what a crack is. Negated, the seams stood proud of
                 // the face instead, and the block came out bigger than it started.
-                script.solid = f.displace(script.solid, opened, 0.09 * s * a);
+                script.solid = f.displace(script.solid, f.multiply({opened, inside}),
+                                          0.09 * s * a);
 
                 const u32 dark = make_material(types, script, "fissure", 66, 62, 58, 250);
-                PaintRule inside;
-                inside.type = dark;
-                inside.test = opened;
-                inside.low = 0.35;
-                script.paint.push_back(inside);
+                PaintRule fissures;
+                fissures.type = dark;
+                fissures.test = only_here(opened);
+                fissures.low = 0.35;
+                script.paint.push_back(fissures);
                 break;
             }
             case Weather::Burnt: {
@@ -827,7 +1039,11 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
                 // undersides, and the backs of hollows. So the deformation is a rounding of the
                 // arrises and the paint follows the down-facing and the cavity.
                 const u32 soot_grain = f.fbm(0.14 * s, 4u, 0.6, 2.4, seed + 41u);
-                script.solid = f.round_off(script.solid, 0.02 * s * a);
+                // Written as a displacement by the scope mask rather than as a `round`, because a
+                // round takes the same slice off everything in the clip and there is no version of
+                // it that only softens one building's arrises. Unscoped the mask is the constant
+                // one and this is exactly the round it replaces.
+                script.solid = f.displace(script.solid, inside, -0.02 * s * a);
 
                 const u32 char_ = make_material(types, script, "charred", 44, 40, 38, 252);
                 const u32 soot = make_material(types, script, "soot", 28, 26, 25, 254);
@@ -835,20 +1051,21 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
 
                 PaintRule light;
                 light.type = scorch;
-                light.test = f.add({soot_grain, f.multiply({cavity, f.constant(0.5)})});
+                light.test = only_here(f.add({soot_grain, f.multiply({cavity, f.constant(0.5)})}));
                 light.low = 0.5 - 0.45 * a;
                 script.paint.push_back(light);
 
                 PaintRule mid;
                 mid.type = char_;
-                mid.test = f.add({f.multiply({cavity, f.constant(0.7)}),
-                                  f.multiply({soot_grain, f.constant(0.5)})});
+                mid.test = only_here(f.add({f.multiply({cavity, f.constant(0.7)}),
+                                            f.multiply({soot_grain, f.constant(0.5)})}));
                 mid.low = 0.75 - 0.55 * a;
                 script.paint.push_back(mid);
 
                 PaintRule under;
                 under.type = soot;
-                under.test = f.add({f.negate(up), f.multiply({cavity, f.constant(0.8)})});
+                under.test =
+                    only_here(f.add({f.negate(up), f.multiply({cavity, f.constant(0.8)})}));
                 under.low = 1.05 - 0.75 * a;
                 script.paint.push_back(under);
                 break;
@@ -863,8 +1080,8 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
                                                -request.level + 0.9 * s);
 
                 // Barnacles are added matter, not removed: they stand proud of the surface.
-                const u32 growth =
-                    f.multiply({below, f.smoothstep(lumps, 0.045 * s, 0.0), f.constant(-a)});
+                const u32 growth = f.multiply(
+                    {below, f.smoothstep(lumps, 0.045 * s, 0.0), f.constant(-a), inside});
                 script.solid = f.displace(script.solid, growth, 0.05 * s);
 
                 const u32 salt = make_material(types, script, "salt", 206, 204, 196, 250);
@@ -873,21 +1090,21 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
 
                 PaintRule dried;
                 dried.type = salt;
-                dried.test = f.add({f.multiply({f.negate(below), f.constant(0.7)}),
-                                    f.multiply({crust, f.constant(0.5)})});
+                dried.test = only_here(f.add({f.multiply({f.negate(below), f.constant(0.7)}),
+                                              f.multiply({crust, f.constant(0.5)})}));
                 dried.low = 0.75 - 0.5 * a;
                 script.paint.push_back(dried);
 
                 PaintRule shells;
                 shells.type = barnacle;
-                shells.test = f.multiply({below, f.smoothstep(lumps, 0.05 * s, 0.0)});
+                shells.test = only_here(f.multiply({below, f.smoothstep(lumps, 0.05 * s, 0.0)}));
                 shells.low = 0.55 - 0.4 * a;
                 script.paint.push_back(shells);
 
                 PaintRule green;
                 green.type = weed;
-                green.test = f.multiply({below, f.add({cavity, f.multiply({crust,
-                                                                           f.constant(0.4)})})});
+                green.test = only_here(
+                    f.multiply({below, f.add({cavity, f.multiply({crust, f.constant(0.4)})})}));
                 green.low = 0.7 - 0.45 * a;
                 script.paint.push_back(green);
                 break;

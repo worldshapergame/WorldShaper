@@ -91,6 +91,19 @@ enum class Op : u8 {
     Wedge,         // a ramp: centre a[0..2], half extent a[3..5], rise along a[6] from a[7]
     Stairs,        // centre a[0..2], half extent a[3..5], step run a[6], step rise a[7]
 
+    // --- swept: a curve or a section made into a solid -----------------------------------
+    //
+    // A classical building is almost entirely surfaces of revolution and one spiral. A base, a
+    // baluster, an urn, a dome, and every moulding that runs round a column is one profile drawn
+    // once and turned about an axis; the Ionic capital is a logarithmic spiral. Faked out of
+    // stacked cylinders those come out as staircases of rings, and the fake costs more nodes than
+    // the real thing does.
+    Revolve,       // child 0 asked at (radius, height) instead of (x, y, z): centre a[0..2],
+                   // axis a[3]. The profile is drawn in the plane of the first cross-axis and
+                   // the axis itself, at the third coordinate zero
+    Spiral,        // a logarithmic spiral swept as a tube: centre a[0..2], starting radius a[3],
+                   // radius multiplier per turn a[4], tube radius a[5], turns a[6], axis a[7]
+
     // --- combining ---------------------------------------------------------------------
     Union,         // min over children
     Intersection,  // max over children
@@ -224,6 +237,30 @@ public:
     u32 wedge(Vec3 centre, Vec3 half, u32 rise_axis, u32 run_axis);
     u32 stairs(Vec3 centre, Vec3 half, f64 run, f64 rise);
 
+    // --- swept ---------------------------------------------------------------------------
+    //
+    // Turn a profile about an axis. The profile is any expression; it is asked at (radius from
+    // the axis, distance along it, 0), so a shape drawn in a plane becomes the solid that plane
+    // sweeps out. Exact: the nearest point of a surface of revolution to any point is always at
+    // that point's own angle, so the three-dimensional distance is the profile's own distance in
+    // its plane, and nothing is approximated.
+    //
+    // This is the operation the orders are made of. An Attic base is a rectangle, two half-rounds
+    // and a hollow drawn once and revolved; a dome is an arc; a baluster is a silhouette. Every
+    // one of them built out of stacked cylinders instead is a stack of visible steps, more nodes,
+    // and a shape that cannot be re-proportioned by moving one number.
+    u32 revolve(u32 profile, Vec3 centre, u32 axis = 1);
+
+    // A logarithmic spiral swept as a tube — the Ionic volute, and the only curve in the orders
+    // that is not an arc or a straight line.
+    //
+    // `tighten` is what the radius is multiplied by over one whole turn, which is the way the
+    // shape is actually specified by anyone drawing one: 0.7 means each turn is seven tenths of
+    // the one outside it. The curve is chopped into segments and swept as a chain of capsules, so
+    // the distance returned is the true distance to the thing that is built rather than an
+    // approximation of the distance to an ideal spiral nobody voxelises.
+    u32 spiral(Vec3 centre, f64 radius, f64 tighten, f64 tube, f64 turns, u32 axis = 2);
+
     // --- combining ----------------------------------------------------------------------
     u32 unite(const std::vector<u32>& parts);
     u32 intersect(const std::vector<u32>& parts);
@@ -311,6 +348,23 @@ public:
     // is which turns fifteen evaluations per voxel into fifteen per block for most of a clip.
     static constexpr f64 kInfiniteSlack = 1e30;
     f64 metric_slack(u32 at) const;
+
+    // The range of values an expression can take, when that can be worked out.
+    //
+    // Only ever asked about *patterns* — the second child of a displacement — and the answer
+    // decides how much a displaced surface can move. It used to be a list of the ops whose output
+    // happens to lie in [-1, 1], which is right for a bare noise and wrong for everything built
+    // out of one: `multiply { edge amount }` is a perfectly ordinary way to say "only where this
+    // is an arris, and only this much", and the list answered "unknown" to it. Unknown means
+    // infinite slack, infinite slack means no box in the clip can ever settle, and a clip that
+    // cannot settle a box samples every voxel of its bounding volume through the whole
+    // expression. That is why weathering was too slow to ship: not the weathering, the arithmetic
+    // in front of it.
+    //
+    // So it is an interval walk instead. Conservative everywhere — a wider range than the truth
+    // is safe, a narrower one is a hole in a wall — and false when a subexpression says nothing,
+    // which is exactly the old answer for the cases the old answer was right about.
+    bool value_range(u32 at, f64& low, f64& high) const;
 
     // The shape underneath any displacement, and how far the displacement can move its surface.
     //

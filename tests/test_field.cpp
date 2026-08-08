@@ -12,8 +12,12 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <string>
 
+#include "forge/clip_script.hpp"
 #include "forge/field.hpp"
+#include "world/tags.hpp"
+#include "world/voxel_type.hpp"
 
 using namespace ws;
 using namespace ws::forge;
@@ -26,6 +30,30 @@ constexpr f64 kLoose = 1e-6;
 f64 at(const Field& f, u32 node, f64 x, f64 y, f64 z) {
     return f.eval(node, Vec3{x, y, z});
 }
+
+// The mouldings are compositions of the operations above rather than nodes of their own, so they
+// are checked here with the rest of the vocabulary — but they are written in the clip language,
+// which means going through the parser to get at them.
+struct Sections {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    Script script;
+
+    explicit Sections(const std::string& body) {
+        script = parse_clip_script("material stone rgb=1,2,3\n" + body + "\npaint stone\n", types,
+                                   tags);
+    }
+    u32 shape(const char* name) const {
+        u32 node = 0;
+        REQUIRE(script.part(name, node));
+        return node;
+    }
+    // Is the section solid at this point of its own plane? The run is z, so z of zero is the
+    // middle of it.
+    bool solid_at(const char* name, f64 across, f64 up) const {
+        return script.field.eval(shape(name), Vec3{across, up, 0.0}) < 0.0;
+    }
+};
 
 }  // namespace
 
@@ -434,13 +462,47 @@ TEST_CASE("the slack a displacement adds is what stops the sampler skipping too 
     CHECK(f.metric_slack(rippled) == doctest::Approx(0.5));
 
     // Displacing by something whose range is not known turns skipping off entirely rather than
-    // guessing at it, because a jump that is too long leaves holes nobody would notice.
+    // guessing at it, because a jump that is too long leaves holes nobody would notice. A raw
+    // coordinate is the plainest example: it grows without limit, so no amount of allowance is
+    // enough.
     Field g;
     const u32 base = g.sphere({0, 0, 0}, 1.0);
-    const u32 unbounded = g.cells(0.5, 1u);   // a distance, not a bounded pattern
+    const u32 unbounded = g.coordinate(1);
     const u32 lumpy = g.displace(base, unbounded, 0.1);
     CHECK(g.skip_slack() > 1e20);
     CHECK(g.metric_slack(lumpy) > 1e20);
+}
+
+TEST_CASE("a displacement is charged what its pattern can actually reach") {
+    // The allowance used to be a list of the ops that happen to land in [-1, 1], which answered
+    // "unknown" to every pattern built by arithmetic — and unknown means infinite slack, which
+    // means no box in the clip can be settled and every voxel is asked through the whole
+    // expression. `multiply { mask amount }` is the ordinary way to write "only here, and only
+    // this much", and it was the shape of every deformation weathering produces.
+    Field f;
+    const u32 wall = f.plane({0, 1, 0}, 0.0);
+    const u32 grain = f.fbm(0.3, 3, 0.5, 2.0, 5u);
+
+    // A tenth of the noise, so a tenth of the allowance.
+    const u32 gentle = f.multiply({grain, f.constant(0.1)});
+    const u32 softened = f.displace(wall, gentle, 0.2);
+    CHECK(f.metric_slack(softened) == doctest::Approx(0.04));   // 0.2 x 0.1, twice over
+
+    // A mask that can only ever be between zero and one costs what it says.
+    Field g;
+    const u32 slab = g.plane({0, 1, 0}, 0.0);
+    const u32 ball = g.sphere({0, 0, 0}, 1.0);
+    const u32 mask = g.smoothstep(g.negate(ball), -0.05, 0.0);
+    const u32 scoped = g.displace(slab, g.multiply({mask, g.constant(0.5)}), 0.08);
+    CHECK(g.metric_slack(scoped) == doctest::Approx(0.08));     // 0.08 x 0.5, twice over
+
+    // And the range really is a range, not a magnitude: a pattern that swings wider than one is
+    // charged more, where the old rule quietly charged it the same and grew the bounding box by
+    // too little.
+    Field h;
+    const u32 floor_ = h.plane({0, 1, 0}, 0.0);
+    const u32 big = h.multiply({h.sine(0, 1.0, 0.0), h.constant(4.0)});
+    CHECK(h.metric_slack(h.displace(floor_, big, 0.1)) == doctest::Approx(0.8));
 }
 
 TEST_CASE("an expression that is not a distance says nothing about its neighbourhood") {
@@ -486,4 +548,276 @@ TEST_CASE("scale keeps the field usable as a distance") {
         const f64 d = at(f, wide, x, 0, 0);
         CHECK(d <= std::abs(x - 2.0) + kLoose);
     }
+}
+
+// --- revolving -------------------------------------------------------------------------------
+//
+// The operation the classical orders are made of, so these are checked against shapes whose exact
+// distance is already known from another direction: revolving a disc about an axis through its
+// centre is a sphere, revolving it about an axis beside it is a torus. If the two disagree by
+// anything at all the sweep is not the sweep it claims to be.
+
+TEST_CASE("revolving a circle about its own centre is a sphere, exactly") {
+    Field f;
+    const u32 disc = f.sphere({0, 0, 0}, 1.5);
+    const u32 swept = f.revolve(disc, {0, 0, 0}, 1);
+    const u32 ball = f.sphere({0, 0, 0}, 1.5);
+    for (f64 z = -3.0; z <= 3.0; z += 0.37) {
+        for (f64 y = -3.0; y <= 3.0; y += 0.41) {
+            for (f64 x = -3.0; x <= 3.0; x += 0.43) {
+                CHECK(at(f, swept, x, y, z) == doctest::Approx(at(f, ball, x, y, z)));
+            }
+        }
+    }
+}
+
+TEST_CASE("revolving a circle beside the axis is a torus, exactly") {
+    Field f;
+    const u32 section = f.sphere({2.0, 0, 0}, 0.5);
+    const u32 swept = f.revolve(section, {0, 0, 0}, 1);
+    const u32 ring = f.torus({0, 0, 0}, 2.0, 0.5, 1);
+    for (f64 z = -3.0; z <= 3.0; z += 0.37) {
+        for (f64 y = -1.5; y <= 1.5; y += 0.29) {
+            for (f64 x = -3.0; x <= 3.0; x += 0.43) {
+                CHECK(at(f, swept, x, y, z) == doctest::Approx(at(f, ring, x, y, z)));
+            }
+        }
+    }
+}
+
+TEST_CASE("a revolved profile is placed where its axis is put, and stays a distance") {
+    Field f;
+    // A section from 0.30 to 0.45 out and 0 to 0.20 up: a plain fillet, revolved into a ring.
+    const u32 section = f.box({0.375, 0.10, 0}, {0.075, 0.10, 1.0}, 0.0);
+    const u32 ring = f.revolve(section, {5.0, 1.8, -2.0}, 1);
+
+    // On the axis, inside the height of the band, is the hole in the middle.
+    CHECK(at(f, ring, 5.0, 1.9, -2.0) == doctest::Approx(0.30));
+    // Out at the middle of the band, all the way round.
+    CHECK(at(f, ring, 5.375, 1.9, -2.0) == doctest::Approx(-0.075));
+    CHECK(at(f, ring, 5.0, 1.9, -2.0 + 0.375) == doctest::Approx(-0.075));
+    CHECK(at(f, ring, 5.0 - 0.375, 1.9, -2.0) == doctest::Approx(-0.075));
+    // Above the band: the distance up to it.
+    CHECK(at(f, ring, 5.375, 2.3, -2.0) == doctest::Approx(0.30));
+
+    // It says as much about its neighbourhood as the profile does, which is what lets a whole
+    // block of voxels inside a column base be settled from one reading.
+    CHECK(f.metric_slack(ring) == doctest::Approx(0.0));
+
+    f.build_bounds();
+    const Field::Aabb box = f.bounds_of(ring);
+    CHECK(!box.infinite());
+    CHECK(box.low.x == doctest::Approx(5.0 - 0.45));
+    CHECK(box.high.z == doctest::Approx(-2.0 + 0.45));
+    CHECK(box.low.y == doctest::Approx(1.8));
+    CHECK(box.high.y == doctest::Approx(2.0));
+}
+
+// --- the volute ------------------------------------------------------------------------------
+
+TEST_CASE("a spiral is a real distance to the tube it sweeps") {
+    Field f;
+    const u32 scroll = f.spiral({0, 0, 0}, 1.0, 0.6, 0.1, 2.0, 2);   // in the x-y plane
+
+    // It starts where it was told to, at radius one along +x.
+    CHECK(at(f, scroll, 1.0, 0, 0) == doctest::Approx(-0.1).epsilon(0.02));
+    // Half a turn in, the radius has fallen by the square root of the per-turn ratio.
+    const f64 half = std::sqrt(0.6);
+    CHECK(at(f, scroll, -half, 0, 0) == doctest::Approx(-0.1).epsilon(0.05));
+    // A whole turn in, it is six tenths of where it began — and the point on the way out at
+    // radius one is on the tube again, because the curve passed through there too.
+    CHECK(at(f, scroll, 0.6, 0, 0) == doctest::Approx(-0.1).epsilon(0.05));
+
+    // Off the plane of the curve by more than the tube: outside, by the amount expected.
+    CHECK(at(f, scroll, 1.0, 0, 0.4) == doctest::Approx(0.3).epsilon(0.02));
+    // Well outside the whole thing.
+    CHECK(at(f, scroll, 4.0, 0, 0) == doctest::Approx(2.9).epsilon(0.02));
+
+    // Never over-stated anywhere: a march that believed a distance longer than the truth would
+    // step through the scroll and delete it.
+    CHECK(f.metric_slack(scroll) == doctest::Approx(0.0));
+    for (f64 y = -1.6; y <= 1.6; y += 0.11) {
+        for (f64 x = -1.6; x <= 1.6; x += 0.13) {
+            const f64 d = at(f, scroll, x, y, 0.0);
+            const f64 moved = at(f, scroll, x + 0.05, y, 0.0);
+            CHECK(std::abs(moved - d) <= 0.05 + kLoose);   // one-Lipschitz, as a distance must be
+        }
+    }
+
+    f.build_bounds();
+    const Field::Aabb box = f.bounds_of(scroll);
+    CHECK(!box.infinite());
+    CHECK(box.high.x == doctest::Approx(1.1));
+    CHECK(box.high.z == doctest::Approx(0.1));
+}
+
+TEST_CASE("the boxes round a revolve, a spiral and a scaled shape cull nothing they should keep") {
+    // The same demand as for every other box: a bound that is wrong by a little produces a clip
+    // with pieces missing, and the pieces are missing quietly. So every answer is taken before the
+    // boxes exist and demanded again after.
+    Field f;
+    const u32 section = f.box({0.6, 0.2, 0}, {0.2, 0.2, 2.0}, 0.0);
+    const u32 ring = f.revolve(section, {1.0, 0, 1.0}, 1);
+    const u32 scroll = f.spiral({-1.0, 0.5, 0}, 0.6, 0.6, 0.07, 2.0, 2);
+    const u32 squashed = f.scale(f.cylinder({0.0, 0.0, 0.0}, 0.3, 0.5, 2), {2.0, 1.0, 1.0});
+    const u32 all = f.unite({ring, scroll, squashed});
+
+    std::vector<f64> before;
+    for (f64 z = -1.5; z <= 2.5; z += 0.23) {
+        for (f64 y = -1.0; y <= 1.5; y += 0.19) {
+            for (f64 x = -2.5; x <= 2.5; x += 0.21) {
+                before.push_back(f.eval(all, {x, y, z}));
+            }
+        }
+    }
+    f.build_bounds();
+    usize seen = 0;
+    for (f64 z = -1.5; z <= 2.5; z += 0.23) {
+        for (f64 y = -1.0; y <= 1.5; y += 0.19) {
+            for (f64 x = -2.5; x <= 2.5; x += 0.21) {
+                CHECK(f.eval(all, {x, y, z}) == doctest::Approx(before[seen++]));
+            }
+        }
+    }
+    CHECK(seen == before.size());
+}
+
+// --- the mouldings ---------------------------------------------------------------------------
+//
+// Each one is checked at the places its own definition pins down: which corner is stone, which is
+// air, and where the curve crosses. A moulding that is merely the right size and the wrong curve
+// is the difference between a building and a drawing of one, and no measurement of a clip catches
+// it — only asking the section itself does.
+
+TEST_CASE("a fillet is the whole rectangle and nothing outside it") {
+    Sections s("let band = fillet 0.30 0  0.45 0.10");
+    CHECK(s.solid_at("band", 0.32, 0.02));
+    CHECK(s.solid_at("band", 0.44, 0.09));
+    CHECK(!s.solid_at("band", 0.46, 0.05));
+    CHECK(!s.solid_at("band", 0.38, 0.12));
+}
+
+TEST_CASE("an ovolo swells and a cavetto hollows, between the same two corners") {
+    // The two quarter rounds. Both run from the front of one end to the back of the other; the
+    // ovolo keeps the stone inside the arc and the cavetto outside it, so between the same corners
+    // the ovolo is the fatter of the two everywhere off the diagonal.
+    Sections s(
+        "let out = ovolo   0 0  0.2 0.2\n"
+        "let in_ = cavetto 0 0  0.2 0.2\n");
+
+    // The corner the numbers start at is stone in both; the far corner is air in both.
+    CHECK(s.solid_at("out", 0.01, 0.01));
+    CHECK(s.solid_at("in_", 0.01, 0.01));
+    CHECK(!s.solid_at("out", 0.19, 0.19));
+    CHECK(!s.solid_at("in_", 0.19, 0.19));
+
+    // Halfway along the diagonal is the point that tells them apart: inside the ovolo's arc,
+    // outside the cavetto's.
+    CHECK(s.solid_at("out", 0.10, 0.10));
+    CHECK(!s.solid_at("in_", 0.10, 0.10));
+
+    // The ovolo is tangent to the ends: full projection along the bottom, none at the top.
+    CHECK(s.solid_at("out", 0.19, 0.01));
+    CHECK(!s.solid_at("out", 0.19, 0.15));
+}
+
+TEST_CASE("swapping the corners turns a moulding over") {
+    // The whole of the interface. An ovolo that swells toward the top and one that swells toward
+    // the bottom are the same four numbers in a different order, which is why there is no flip.
+    Sections s(
+        "let up   = ovolo 0 0    0.2 0.2\n"
+        "let down = ovolo 0 0.2  0.2 0\n");
+    CHECK(s.solid_at("up", 0.19, 0.01));
+    CHECK(!s.solid_at("up", 0.19, 0.19));
+    CHECK(s.solid_at("down", 0.19, 0.19));
+    CHECK(!s.solid_at("down", 0.19, 0.01));
+}
+
+TEST_CASE("a bead is a half round standing off a flat back") {
+    Sections s("let torus_ = bead 0 0  0.10 0.20");
+    // The flat back, at mid height, and the crown of the round.
+    CHECK(s.solid_at("torus_", 0.005, 0.10));
+    CHECK(s.solid_at("torus_", 0.095, 0.10));
+    // The corners of the rectangle are cut away by the round — that is what makes it a bead and
+    // not a fillet.
+    CHECK(!s.solid_at("torus_", 0.09, 0.19));
+    CHECK(!s.solid_at("torus_", 0.09, 0.01));
+    // And it really is round: at a quarter of the way up, the face has come in.
+    CHECK(!s.solid_at("torus_", 0.099, 0.02));
+}
+
+TEST_CASE("a scotia is a deep hollow, and its deepest point is above the middle") {
+    // The asymmetry is the whole character of the moulding: the lower sweep is the longer one,
+    // which is why a scotia reads as a scotia and not as a groove.
+    Sections s("let hollow = scotia 0 0  0.20 0.40");
+
+    // Full at both ends, cut right back to the first corner's face where it is deepest.
+    CHECK(s.solid_at("hollow", 0.10, 0.01));
+    CHECK(s.solid_at("hollow", 0.10, 0.39));
+    CHECK(!s.solid_at("hollow", 0.15, 0.24));
+    CHECK(!s.solid_at("hollow", 0.02, 0.24));
+
+    // Equally far above and below the deepest point, the stone left behind is thicker above.
+    CHECK(!s.solid_at("hollow", 0.05, 0.12));
+    CHECK(s.solid_at("hollow", 0.05, 0.36));
+}
+
+TEST_CASE("a cyma is an S, and the reverse one is the same S turned over") {
+    Sections s(
+        "let recta   = cyma         0 0  0.2 0.4\n"
+        "let reversa = cyma_reversa 0 0  0.2 0.4\n");
+
+    // Nearly the full projection at the end it swells at, nothing like it at the end it dies at.
+    CHECK(s.solid_at("recta", 0.15, 0.02));
+    CHECK(!s.solid_at("recta", 0.15, 0.38));
+    CHECK(!s.solid_at("reversa", 0.15, 0.02));
+    CHECK(s.solid_at("reversa", 0.15, 0.38));
+
+    // Both cross the middle of the section at half its width, from either side of it, which is
+    // where the two arcs meet and the curvature turns over.
+    CHECK(s.solid_at("recta", 0.09, 0.19));
+    CHECK(!s.solid_at("recta", 0.11, 0.19));
+    CHECK(s.solid_at("recta", 0.09, 0.21));
+    CHECK(!s.solid_at("recta", 0.11, 0.21));
+    CHECK(s.solid_at("reversa", 0.09, 0.19));
+    CHECK(!s.solid_at("reversa", 0.11, 0.21));
+
+    // The convex half bulges past the halfway line and the hollow half falls short of it, which
+    // is what makes it an S rather than a bevel.
+    CHECK(s.solid_at("recta", 0.11, 0.10));      // convex, below
+    CHECK(!s.solid_at("recta", 0.09, 0.30));     // hollow, above
+    CHECK(s.solid_at("reversa", 0.11, 0.30));
+    CHECK(!s.solid_at("reversa", 0.09, 0.10));
+}
+
+TEST_CASE("a moulding runs the way it is told to, and revolves into a ring") {
+    // Both of the two things a section is ever for: run straight along a cornice, or turned about
+    // an axis into a base. The same four numbers do each.
+    Sections s(
+        "let along_z = ovolo 0.30 1.00 -4.00   0.45 1.15 4.00\n"
+        "let along_x = ovolo -4.00 1.00 0.30   4.00 1.15 0.45 run=x\n"
+        "let ring    = revolve { ovolo 0.30 1.00  0.45 1.15 } axis=y\n");
+
+    const Field& f = s.script.field;
+    // The z-running one is stone from end to end along z and stops at its own faces.
+    CHECK(f.eval(s.shape("along_z"), Vec3{0.31, 1.01, 3.9}) < 0.0);
+    CHECK(f.eval(s.shape("along_z"), Vec3{0.31, 1.01, 4.5}) > 0.0);
+    // The x-running one is the same section, read across z instead.
+    CHECK(f.eval(s.shape("along_x"), Vec3{3.9, 1.01, 0.31}) < 0.0);
+    CHECK(f.eval(s.shape("along_x"), Vec3{4.5, 1.01, 0.31}) > 0.0);
+
+    // The revolved one is the same section all the way round and hollow up the middle.
+    CHECK(f.eval(s.shape("ring"), Vec3{0.31, 1.01, 0.0}) < 0.0);
+    CHECK(f.eval(s.shape("ring"), Vec3{0.0, 1.01, -0.31}) < 0.0);
+    CHECK(f.eval(s.shape("ring"), Vec3{0.0, 1.05, 0.0}) > 0.0);
+}
+
+TEST_CASE("a spiral that opens outward is bounded by where it ends, not where it starts") {
+    Field f;
+    const u32 out = f.spiral({0, 0, 0}, 0.5, 2.0, 0.05, 2.0, 1);   // doubles every turn
+    f.build_bounds();
+    const Field::Aabb box = f.bounds_of(out);
+    CHECK(box.high.x == doctest::Approx(0.5 * 4.0 + 0.05));
+    // And the far end really is out there.
+    CHECK(at(f, out, 2.0, 0, 0) == doctest::Approx(-0.05).epsilon(0.05));
 }

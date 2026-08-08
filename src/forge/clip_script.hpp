@@ -27,8 +27,12 @@
 //   let all   = union { slab post }
 //   let all   = displace { all grain } amount=0.02
 //
+//   let ring  = revolve { bead 0.15 0.9  0.24 1.05 } axis=y    a section turned about an axis
+//   let curl  = spiral 0 2 0 r=0.3 tighten=0.6 tube=0.04 turns=2.5 axis=z
+//
 //   paint stone
 //   paint moss  where=grain above=0.55 facing=y at=0.6
+//   weather overgrown 0.4 on=post          only where that shape is; see WeatherRequest::scope
 //
 //   solid  all                   which expression is the matter
 //   region all                   optional: which cells belong to the clip at all
@@ -100,6 +104,22 @@ struct WeatherRequest {
     f64 scale = 1.0;    // the size of its features, in metres
     u32 seed = 1;
     f64 level = 0.0;    // the datum it works from: the ground for sand, the tide for sea
+
+    // Optional: a named shape the weathering is confined to. Without one it works on the whole
+    // clip, which is only ever right when the whole clip is one material standing in one place.
+    //
+    // It was not optional in practice and pretending it was cost the feature. `weather desert` on
+    // a building in a garden bleached the lawn as readily as the stone, because the coats it adds
+    // go on after the author's and paint by a *value* rather than by a place — and the deformation
+    // scoured the grass blades along with the arrises. The building went out without any
+    // weathering at all rather than with that, which left the one system written specifically for
+    // a stone building outdoors untested on the only stone building there is.
+    //
+    // Scoped, both halves are confined: the displacement is multiplied by how far inside the named
+    // shape the point is, and every coat's test is pushed out of its own range wherever the shape
+    // is not. So `weather desert 0.2 on=podium` weathers the podium and nothing that touches it.
+    u32 scope = 0;
+    bool has_scope = false;
 };
 
 struct Script {
