@@ -119,4 +119,74 @@ static_assert(sizeof(FeedbackEntry) == 16, "FeedbackEntry must match the GLSL st
 // slows convergence rather than breaking it.
 inline constexpr u32 kFeedbackCapacity = 131072;
 
+// What the frame turned out to look like, added up on the GPU while it is drawn.
+//
+// This is for automatic exposure. A brightness the tracer can be exposed for cannot be known
+// before the frame is traced — it is the frame — so the only honest source is the frame
+// before it, which is a sixtieth of a second stale and nobody can tell. The shader adds its
+// pixels' log luminance up here as it writes them, and reads the previous frame's total back
+// to choose the multiplier it tone maps with.
+//
+// Log luminance rather than luminance because exposure is a stop, not a scale: a single
+// window in a dark room drags a linear mean far more than it drags what the eye adapts to.
+//
+// Fixed point because atomicAdd on a float is an extension not every driver has, and the
+// accumulation has to work on the Steam Deck's AMD part as well as this desk's card.
+struct FrameStatistics {
+    // The sum of one value per *workgroup*: that group's mean of
+    // clamp(log2(luminance) + kLogLuminanceBias, 0, 2 * kLogLuminanceBias) * kLogLuminanceUnit.
+    //
+    // Per workgroup and not per pixel, because per pixel overflows. A pixel contributes at
+    // most 32 * 256 = 8192, and a 4K frame has 8.3M of them: 6.8e10 against the 4.29e9 a u32
+    // holds. One 8x8 group's *mean* is bounded by the same 8192, and a 4K frame has 129,600
+    // groups, so the total tops out near 1.06e9 — a quarter of the range, with room for a
+    // display twice the size again.
+    u32 log_luminance = 0;
+    // How many groups went into that sum, so the mean is log_luminance / groups. Zero means
+    // nothing was accumulated and whatever exposure was in use should be kept.
+    u32 groups = 0;
+    // The multiplier the shader settled on, times kExposureUnit. Written by one invocation,
+    // read back the next frame as the value to move away from — which is what makes the
+    // adaptation gradual instead of a cut. See the note on clearing below.
+    u32 exposure = 0;
+    // Where the lens is focused, in 1/16 of a voxel, as measured by the centre pixel of the
+    // previous frame — the same previous-frame discipline `exposure` is read under, and for the
+    // same reason: a frame cannot know its own depth before it is traced. Zero means nothing has
+    // been measured yet, which a reader must take as focus at infinity rather than at nothing.
+    u32 focus = 0;
+};
+static_assert(sizeof(FrameStatistics) == 16, "FrameStatistics must match the GLSL uvec4");
+
+// Two slots, and this is the whole point of the arrangement.
+//
+//   [0] the frame being drawn. Zeroed just before the trace dispatch, added to with atomics.
+//   [1] the frame before it: finished, complete, and written by nobody while it is read.
+//
+// The zeroing is preceded by a copy of slot 0 into slot 1, so slot 1 is always exactly what
+// slot 0 finished as. One slot cannot do both jobs: a shader reading the words it is also
+// adding to sees however much of the frame happened to have run, which depends on scheduling
+// — so the same scene would expose differently twice in a row, and differently again on
+// another card. That is the sort of fault that gets called flickering and blamed on the
+// tracer.
+//
+// Cleared every frame rather than decayed: a sum left to accumulate across frames is divided
+// by a count that no longer means anything, and while the camera is still the path tracer
+// keeps refining the same pixels, so an undecayed sum would drift for a reason that has
+// nothing to do with brightness. What carries between frames is the *exposure* in slot 1, not
+// the luminance total — the shader blends towards the new measurement rather than jumping to
+// it, which is where the eye's slowness lives. A time constant near half a second is what
+// this was built for; the number is the shader's to choose.
+inline constexpr u32 kFrameStatsSlots = 2;
+
+// Where the tracer's descriptor set binds it. The set runs 0..18 already; this is the next
+// one. It is bound to the path tracing pipeline only, because that is the pass that produces
+// high dynamic range in the first place.
+inline constexpr u32 kFrameStatsBinding = 19;
+
+// The fixed-point conventions, spelled out here so the shader and anything that reads the
+// buffer back cannot disagree about them.
+inline constexpr f32 kLogLuminanceBias = 16.0f;    // log2 range is [-16, +16] before biasing
+inline constexpr f32 kLogLuminanceUnit = 256.0f;   // and 1/256 of a stop is finer than sight
+inline constexpr f32 kExposureUnit = 65536.0f;
+
 }  // namespace ws
