@@ -22,9 +22,12 @@ foreach(entry IN LISTS clip_files)
     configure_file("${SRC}/${entry}" "${DST}/${entry}" COPYONLY)
 endforeach()
 
-# And clear any cache already sitting beside the executable from an earlier build of this tree, so
-# that fixing this does not require deleting them by hand once.
-file(GLOB_RECURSE stale "${DST}/*.clip.world" "${DST}/*.clip.load")
-if(stale)
-    file(REMOVE ${stale})
-endif()
+# A cache already sitting beside the executable is LEFT ALONE, and the first version of this file
+# deleted it — which was a one-time cleanup written as if it ran once, when it runs on every build.
+#
+# The effect was that every rebuild wiped the runtime cache and the next launch resampled the
+# facility from cold. Reported as having to sit through a cold build again for no visible reason,
+# and that was the reason.
+#
+# Not copying the caches in is sufficient on its own: a world built beside the executable belongs to
+# the executable and is keyed on the clip and the compiler, so it invalidates itself when it should.

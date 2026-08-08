@@ -387,6 +387,52 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
     return report;
 }
 
+// Does a feature THINNER THAN A VOXEL pass close by this point?
+//
+// The sampler asks one question per voxel — is the field negative at its centre — and that question
+// cannot see anything narrower than the spacing between centres. A window mullion half a voxel wide
+// is not thinned or aliased by it; it is absent, because no centre ever lands inside it. The glass
+// behind it is a broad shape that does cover centres, so it takes the cell and the frame looks
+// eaten. Reported exactly that way: vertical bars of window frames disappearing into the glass.
+//
+// The obvious fix is to sample several points inside each cell and call it solid if any is inside.
+// That does rescue thin features and it also FATTENS every surface in the world: a flat wall lying
+// on the grid has its boundary cells' centres half a voxel outside, with corners a quarter of a
+// voxel in, so every wall grows by a voxel. Not acceptable in a building made of flat walls.
+//
+// So the test asks about thickness rather than about coverage. Walk from here to just inside the
+// surface, then keep going one voxel further along the same line. A wall is still solid down there
+// and nothing happens. A mullion has ended, and only then is the cell promoted.
+//
+// The cost is paid by a shell of cells — those outside the shape but within a cell-diagonal of it —
+// and by nothing else. Interior and open air are untouched.
+bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64 voxel) {
+    // Which way is out. An SDF's gradient points away from the surface, and central differences over
+    // a quarter of a voxel are steady enough for a direction even where the field is not smooth.
+    const f64 h = voxel * 0.25;
+    Vec3 away{field.eval(root, {p.x + h, p.y, p.z}) - field.eval(root, {p.x - h, p.y, p.z}),
+              field.eval(root, {p.x, p.y + h, p.z}) - field.eval(root, {p.x, p.y - h, p.z}),
+              field.eval(root, {p.x, p.y, p.z + h}) - field.eval(root, {p.x, p.y, p.z - h})};
+    const f64 length = std::sqrt(away.x * away.x + away.y * away.y + away.z * away.z);
+    if (length < 1.0e-12) return false;
+    away.x /= length;
+    away.y /= length;
+    away.z /= length;
+
+    // Just inside the surface. If there is nothing solid that way, the field was near zero here for
+    // some other reason and there is no feature to rescue.
+    const f64 reach = outside_by + voxel * 0.05;
+    const Vec3 within{p.x - away.x * reach, p.y - away.y * reach, p.z - away.z * reach};
+    if (field.eval(root, within) > 0.0) return false;
+
+    // And a whole voxel further in. Still solid means a wall, and a wall does not need rescuing —
+    // this is what keeps the flat faces of the building exactly where they were. Out the far side
+    // means the whole feature is thinner than the grid can hold, and it is kept.
+    const Vec3 beyond{within.x - away.x * voxel, within.y - away.y * voxel,
+                      within.z - away.z * voxel};
+    return field.eval(root, beyond) > 0.0;
+}
+
 namespace {
 
 // Everything the descent needs, gathered once so the recursion carries a pointer instead of a
@@ -537,6 +583,7 @@ struct Tally {
     u64 shape_ns = 0;
 };
 
+
 void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_covered,
              const u8* parent_state, bool inherited, Tally& local);
 
@@ -639,7 +686,17 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
     ++local.shape;
     if (single) ++local.singles;
 
-    if (dc > reach || (single && dc > 0.0)) {
+    // A single voxel whose centre is outside the shape is normally empty, and THAT is the test that
+    // loses anything narrower than a voxel: a mullion half a voxel wide never covers a centre, so no
+    // centre ever reports it and it is not thinned but deleted outright.
+    //
+    // Asked only of leaf voxels that are outside but within half a cell diagonal — the furthest a
+    // surface can be from a centre and still cross the cell. Everything else is untouched, so this
+    // costs a shell of cells around the surface and nothing anywhere else.
+    const bool rescued = single && dc > 0.0 && dc < d.voxel * 0.8660254 &&
+                         thin_feature_here(*d.field, d.root, middle, dc, d.voxel);
+
+    if (!rescued && (dc > reach || (single && dc > 0.0))) {
         // Empty. The cells still have to be marked as part of the clip: empty *inside the clip*
         // means "this cell is air and stamping should clear whatever is there", where a cell
         // outside the clip is none of its business. Skipping the mark as well as the evaluation
@@ -665,7 +722,15 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
                 for (i32 x = low[0]; x < high[0]; ++x) {
                     const f64 px = (static_cast<f64>(d.lo[0] + x) + d.centre_shift) * d.voxel;
                     ++local.shape;
-                    if (d.field->eval(settings.bounds, {px, py, pz}) <= 0.0) {
+                    const f64 here = d.field->eval(settings.bounds, {px, py, pz});
+                    if (here <= 0.0) {
+                        clip.inside[row + x] = 1;
+                    } else if (here < d.voxel * 0.8660254 &&
+                               thin_feature_here(*d.field, settings.bounds, {px, py, pz}, here,
+                                                 d.voxel)) {
+                        // Half a cell diagonal is the furthest a surface can be from a centre and
+                        // still pass through the cell at all, so outside that there is nothing here
+                        // to lose and nothing is asked.
                         clip.inside[row + x] = 1;
                     }
                 }

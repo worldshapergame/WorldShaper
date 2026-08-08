@@ -232,6 +232,12 @@ struct VariationReport {
     }
 };
 
+// Whether a feature narrower than a voxel passes through this point, so that centre sampling does
+// not delete it. Exposed because the sampler and its brute-force reference in the tests must apply
+// the SAME rule -- the test compares the two, and a rule implemented in only one of them would make
+// the comparison meaningless rather than strict.
+bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64 voxel);
+
 VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& field,
                                 const Variation& variation, const SampleSettings& settings,
                                 const SampleResult& placed, JobSystem* jobs = nullptr);

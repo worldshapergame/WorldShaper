@@ -49,7 +49,14 @@ Clip brute_force(const Field& field, u32 root, const std::vector<PaintRule>& pai
                 const usize index = clip.index(x, y, z);
                 if (settings.has_bounds && field.eval(settings.bounds, p) > 0.0) continue;
                 clip.inside[index] = 1;
-                if (field.eval(root, p) > 0.0) continue;
+                // The same rule the real sampler uses, from the same function: a centre outside the
+                // shape is empty UNLESS something thinner than a voxel passes through the cell.
+                const f64 here = field.eval(root, p);
+                if (here > 0.0 &&
+                    !(here < voxel * 0.8660254 &&
+                      thin_feature_here(field, root, p, here, voxel))) {
+                    continue;
+                }
 
                 VoxelTypeId type = kAir;
                 for (const PaintRule& rule : paint) {
