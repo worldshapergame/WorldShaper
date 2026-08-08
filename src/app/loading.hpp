@@ -55,12 +55,27 @@ const char* stage_name(LoadStage stage);
 //
 // Kept beside the clip's cache and keyed the same way. A first run with no history falls back to
 // nominal weights that are roughly right for a large clip, and corrects itself as it goes.
+// Two shapes, kept apart, because a load is one of two entirely different things.
+//
+// A cold build spends nearly all of itself sampling. A cache hit does no sampling whatsoever and
+// spends itself decoding bricks. Recording one set of times for both means every cache hit teaches
+// the next cold build that sampling is free — and a stage weighted at nothing cannot move the bar
+// however long it runs. That is not a hypothetical: it pinned the bar at eight per cent for the
+// whole of a hundred-and-forty-second build, because the run before it had come from the cache.
 struct LoadHistory {
-    f64 seconds[static_cast<usize>(LoadStage::Count)]{};
-    bool known = false;
+    static constexpr usize kBuilt = 0;
+    static constexpr usize kCached = 1;
+    static constexpr usize kShapes = 2;
+
+    f64 seconds[kShapes][static_cast<usize>(LoadStage::Count)]{};
+    bool known[kShapes]{};
 
     static LoadHistory read(const std::string& path);
     void write(const std::string& path) const;
+
+    // Which shape a set of times describes, judged by whether any sampling happened. Written down
+    // rather than passed in, so a run always files itself under what it actually did.
+    static usize shape_of(const f64* seconds);
 };
 
 // The live state of a load, written by the build thread and read by the drawing.
@@ -105,8 +120,10 @@ public:
     };
     Snapshot look() const;
 
-    // What actually happened, for the next run to weight itself by.
-    LoadHistory history() const;
+    // What actually happened, filed under the shape this run turned out to be and keeping what is
+    // already known about the other shape — so a cache hit never erases what a cold build
+    // measured, which is precisely the record the next cold build needs.
+    LoadHistory history(const LoadHistory& previous_runs) const;
 
 private:
     f64 weight_before(LoadStage stage) const;
@@ -122,6 +139,9 @@ private:
     //
     // Touched only by `look`, which only the drawing thread calls, so these are plain values with
     // no atomics: the build thread never sees them.
+    mutable u32 seen_stage_ = 0xFFFFFFFFu;   // which stage the drawing last saw, and since when
+    mutable u64 seen_stage_ns_ = 0;
+
     mutable u64 rate_old_ns_ = 0;
     mutable f64 rate_old_fraction_ = 0.0;
     mutable u64 rate_new_ns_ = 0;

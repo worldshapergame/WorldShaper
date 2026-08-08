@@ -64,7 +64,15 @@ struct FaceEntry {
     uvec4 sum;        // xyz irradiance in fixed point, w the sun's visibility
 };
 
-layout(std430, binding = 17) buffer FaceCache { FaceEntry items[]; } faces;
+// `coherent`, and it is not decoration.
+//
+// Every field of an entry except the one taken with an atomic is read and written plainly:
+// `key_hi` to confirm a match, `count` and `sum` to read a face's accumulated light. Without
+// this qualifier those reads may be served from a core's own cache indefinitely, so an invocation
+// can match a key another invocation has already replaced and then read the previous occupant's
+// light — a face lit by a surface somewhere else in the building, which does not wash out because
+// a cache does not wash out.
+layout(std430, binding = 17) coherent buffer FaceCache { FaceEntry items[]; } faces;
 
 // Where the lamps are, so a face can ask one for light instead of waiting to be hit by it.
 //
@@ -362,8 +370,10 @@ void face_key_node(ivec3 node, ivec3 normal, uint level, uint kind, out uint lo,
     h = hash_u32(h ^ kind);
     lo = hash_u32(h ^ face);
     hi = hash_u32(lo ^ 0x9E3779B9u);
-    // Zero is the "never claimed" marker, so the key must never be zero.
+    // Zero means something in both halves and neither may be produced by accident: in `key_lo` it
+    // is "never claimed", and in `key_hi` it is "claimed but not yet emptied" — see face_slot.
     if (lo == 0u) lo = 1u;
+    if (hi == 0u) hi = 1u;
 }
 
 // The slot this face lives in, or 0xFFFFFFFF when the table is too crowded here to place it.
@@ -387,6 +397,13 @@ uint face_slot(uint lo, uint hi, bool claim, uint frame) {
             if (!claim) return 0xFFFFFFFFu;
             uint previous = atomicCompSwap(faces.items[slot].key_lo, 0u, lo);
             if (previous == 0u) {
+                // Same order as the eviction below: empty first, publish second. A slot reached
+                // this way has never been claimed and so is already empty, but that is a property
+                // of how the buffer starts rather than of anything here, and it stops being true
+                // the moment somebody adds a way to release a slot.
+                faces.items[slot].count = 0u;
+                faces.items[slot].sum = uvec4(0u);
+                memoryBarrierBuffer();
                 faces.items[slot].key_hi = hi;
                 faces.items[slot].last_frame = frame;
                 return slot;
@@ -415,11 +432,25 @@ uint face_slot(uint lo, uint hi, bool claim, uint frame) {
     // "Cold" is deliberately several seconds: a face just off screen must survive turning
     // round, which is the entire reason for caching in world space.
     if (coldest != 0xFFFFFFFFu && (frame - coldest_frame) > kFaceColdFrames) {
+        // Emptied BEFORE the key is finished, never after.
+        //
+        // The obvious order — take the slot, write the key, clear the sums — has a window between
+        // the key being complete and the sums being gone, and in that window any other invocation
+        // looking for this face matches it and reads the LAST occupant's light. A thousand pixels
+        // stand on a face in one dispatch, so the window is not theoretical: it is a face of the
+        // vestibule wearing the radiance of a lamp somewhere else in the building, and a cache
+        // does not wash out, so it stays and more appear while you stand still.
+        //
+        // So `key_hi` goes to nought first, which no real key can be and nothing can match. Only
+        // once the entry is genuinely empty is the key completed and the slot offered to anyone.
         uint previous = atomicExchange(faces.items[coldest].key_lo, lo);
-        if (previous != lo) {
-            faces.items[coldest].key_hi = hi;
+        if (previous != lo || faces.items[coldest].key_hi != hi) {
+            faces.items[coldest].key_hi = 0u;
+            memoryBarrierBuffer();
             faces.items[coldest].count = 0u;
             faces.items[coldest].sum = uvec4(0u);
+            memoryBarrierBuffer();
+            faces.items[coldest].key_hi = hi;
         }
         faces.items[coldest].last_frame = frame;
         return coldest;

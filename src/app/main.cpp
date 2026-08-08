@@ -3145,7 +3145,7 @@ int Application::run(const Options& options) {
     // reports as "it says a hundred and then hangs" — so the bar's last drawn state is the high
     // nineties and the next thing on the screen is the world.
     progress_.finish();
-    progress_.history().write(loading_cache_path());
+    progress_.history(load_history_).write(loading_cache_path());
 
     // The screen holds a full-resolution image and startup is the only thing that needs it.
     loading_screen_.destroy();

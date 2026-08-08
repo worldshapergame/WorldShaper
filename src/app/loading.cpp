@@ -68,20 +68,31 @@ const char* stage_name(LoadStage stage) {
     }
 }
 
+usize LoadHistory::shape_of(const f64* seconds) {
+    f64 total = 0.0;
+    for (usize i = 0; i < static_cast<usize>(LoadStage::Count); ++i) total += seconds[i];
+    if (total <= 0.0) return kBuilt;
+    return (seconds[static_cast<usize>(LoadStage::Sampling)] < total * 0.05) ? kCached : kBuilt;
+}
+
 LoadHistory LoadHistory::read(const std::string& path) {
     LoadHistory out;
     std::ifstream file(path, std::ios::binary);
     if (!file) return out;
-    f64 values[static_cast<usize>(LoadStage::Count)]{};
-    if (!file.read(reinterpret_cast<char*>(values), sizeof(values))) return out;
-    f64 total = 0.0;
-    for (f64 v : values) {
-        if (!(v >= 0.0) || v > 3600.0) return out;   // nonsense, or from another machine entirely
-        total += v;
+    for (usize shape = 0; shape < kShapes; ++shape) {
+        f64 values[static_cast<usize>(LoadStage::Count)]{};
+        if (!file.read(reinterpret_cast<char*>(values), sizeof(values))) break;
+        f64 total = 0.0;
+        bool sane = true;
+        for (f64 v : values) {
+            // Nonsense, or from another machine entirely.
+            if (!(v >= 0.0) || v > 7200.0) { sane = false; break; }
+            total += v;
+        }
+        if (!sane || total <= 0.0) continue;
+        std::memcpy(out.seconds[shape], values, sizeof(values));
+        out.known[shape] = true;
     }
-    if (total <= 0.0) return out;
-    std::memcpy(out.seconds, values, sizeof(values));
-    out.known = true;
     return out;
 }
 
@@ -92,22 +103,23 @@ void LoadHistory::write(const std::string& path) const {
 }
 
 bool LoadProgress::likely_cached(const LoadHistory& history) {
-    if (!history.known) return false;
-    f64 total = 0.0;
-    for (usize i = 0; i < static_cast<usize>(LoadStage::Count); ++i) total += history.seconds[i];
-    if (total <= 0.0) return false;
-    return history.seconds[static_cast<usize>(LoadStage::Sampling)] < total * 0.05;
+    // Whichever shape was seen most recently is the better guess for the next run, and when only
+    // one has ever been seen it is the only guess available.
+    if (history.known[LoadHistory::kCached] && !history.known[LoadHistory::kBuilt]) return true;
+    return false;
 }
 
 void LoadProgress::begin(const LoadHistory& history, bool from_cache) {
+    const usize shape = from_cache ? LoadHistory::kCached : LoadHistory::kBuilt;
     const f64* fallback = from_cache ? kFromCache : kNominal;
+    const bool known = history.known[shape];
     total_weight_ = 0.0;
     for (usize i = 0; i < static_cast<usize>(LoadStage::Count); ++i) {
         // A stage that took no time last run still gets its nominal floor, because "it was
         // instant last time" and "it will be instant this time" are different claims — the cache
         // may have been hot then and cold now.
-        const f64 measured = history.known ? history.seconds[i] : 0.0;
-        weights_[i] = history.known ? (measured + fallback[i] * 0.05) : fallback[i];
+        const f64 measured = known ? history.seconds[shape][i] : 0.0;
+        weights_[i] = known ? (measured + fallback[i] * 0.05) : fallback[i];
         total_weight_ += weights_[i];
         stage_began_ns_[i] = 0;
         stage_done_ns_[i].store(0, std::memory_order_relaxed);
@@ -115,6 +127,8 @@ void LoadProgress::begin(const LoadHistory& history, bool from_cache) {
     if (total_weight_ <= 0.0) total_weight_ = 1.0;
 
     began_ns_ = now_ns();
+    seen_stage_ = 0xFFFFFFFFu;
+    seen_stage_ns_ = began_ns_;
     rate_old_ns_ = rate_new_ns_ = 0;
     rate_old_fraction_ = rate_new_fraction_ = 0.0;
     shown_left_ = -1.0;
@@ -190,7 +204,37 @@ LoadProgress::Snapshot LoadProgress::look() const {
     out.expected = expected_.load(std::memory_order_relaxed);
 
     const f64 inside = from_bits(within_bits_.load(std::memory_order_relaxed));
-    out.fraction = (weight_before(out.stage) + weight_of(out.stage) * inside) / total_weight_;
+
+    // A stage that is taking a long time is worth a long stretch of the bar, whatever the last
+    // run said.
+    //
+    // The weights come from history and history can be about a different KIND of load. Guessing
+    // which kind this is has to happen before the cache has been asked, so it is sometimes wrong,
+    // and being wrong used to mean the bar could not move: a cold build weighted from a cache hit
+    // finds itself in a sampling stage worth nought, and no amount of sampling moves a stage worth
+    // nought. It sat at eight per cent for a hundred and forty seconds.
+    //
+    // So a stage that has already eaten a given share of the wall clock is given at least that
+    // share of the bar. It is self-correcting, it needs nothing from the build thread, and it can
+    // only ever let the bar move — a stage that finishes on time keeps exactly the weight it had.
+    //
+    // All of this is drawing-thread state, so `look` may write it: the build thread never reads
+    // any of it and there is no lock between them.
+    const u64 now = now_ns();
+    if (index != seen_stage_) {
+        seen_stage_ = index;
+        seen_stage_ns_ = now;
+    }
+    const f64 spent_all = static_cast<f64>(now - began_ns_) * 1e-9;
+    const f64 spent_here = static_cast<f64>(now - seen_stage_ns_) * 1e-9;
+
+    f64 weight_here = weight_of(out.stage);
+    if (spent_all > 0.25) {
+        weight_here = std::max(weight_here, total_weight_ * (spent_here / spent_all));
+    }
+    const f64 total = total_weight_ - weight_of(out.stage) + weight_here;
+
+    out.fraction = (weight_before(out.stage) + weight_here * inside) / std::max(total, 1e-9);
     if (out.fraction < 0.0) out.fraction = 0.0;
     if (out.fraction > 0.999) out.fraction = 0.999;   // a hundred means done, and it is not
 
@@ -251,16 +295,23 @@ LoadProgress::Snapshot LoadProgress::look() const {
     return out;
 }
 
-LoadHistory LoadProgress::history() const {
-    LoadHistory out;
+LoadHistory LoadProgress::history(const LoadHistory& previous_runs) const {
+    // What this run did, filed under the shape it turned out to be, keeping whatever is known
+    // about the other. A cache hit must not erase what the last cold build measured — that is the
+    // whole reason there are two.
+    f64 measured[static_cast<usize>(LoadStage::Count)]{};
     u64 previous = began_ns_;
     for (u32 i = 0; i < static_cast<u32>(LoadStage::Count); ++i) {
         const u64 done = stage_done_ns_[i].load(std::memory_order_relaxed);
         const u64 began = (stage_began_ns_[i] != 0) ? stage_began_ns_[i] : previous;
-        out.seconds[i] = (done > began) ? static_cast<f64>(done - began) * 1e-9 : 0.0;
+        measured[i] = (done > began) ? static_cast<f64>(done - began) * 1e-9 : 0.0;
         previous = (done != 0) ? done : previous;
     }
-    out.known = true;
+
+    LoadHistory out = previous_runs;
+    const usize shape = LoadHistory::shape_of(measured);
+    std::memcpy(out.seconds[shape], measured, sizeof(measured));
+    out.known[shape] = true;
     return out;
 }
 
