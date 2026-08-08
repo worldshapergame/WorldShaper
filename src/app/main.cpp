@@ -1247,9 +1247,28 @@ void Application::build_world() {
         // height in metres. Extinction is what the fog takes out of a beam; the albedo is how
         // much of that it puts back rather than absorbing, and splitting them that way is what
         // lets smoke and mist be told apart with one number rather than four.
-        if (!options_.fog.empty()) {
-            f64 authored[5] = {0.0, 0.9, 0.0, 0.0, 0.0};
-            parse_reals(options_.fog, authored, 5);
+        {
+            // The air is NOT empty by default any more.
+            //
+            // It was, and that is why none of the fog and haze work could be seen without a flag:
+            // every scene was a vacuum unless --fog said otherwise, so the honest answer to "why
+            // can I not see the haze" was that there was none in the world.
+            //
+            // Clean air is not a vacuum either. These numbers are a real atmosphere rather than a
+            // taste: Koschmieder's law says extinction = 3.912 / visibility, and the World
+            // Meteorological Organization's own bands put HAZE at two to five kilometres of
+            // visibility and a clear day at over ten. Eight kilometres is the top of haze and the
+            // bottom of clear -- a good day with air in it, which is what most days are and what no
+            // photograph of a landscape is ever without.
+            //
+            // Over a two hundred metre courtyard that is about five per cent, which is a tint you
+            // would not name but would notice the absence of. Over the kilometres of a horizon view
+            // it is the difference between distance and a flat backdrop.
+            //
+            // g of 0.80 because aerosol is strongly forward-scattering; a scale height of 400 m
+            // because haze sits in the boundary layer and thins out above it.
+            f64 authored[5] = {3.912 / 8000.0, 0.90, 0.80, 400.0, 0.0};
+            if (!options_.fog.empty()) parse_reals(options_.fog, authored, 5);
             const f64 per = static_cast<f64>(script.settings.voxels_per_metre);
             const f64 extinct = std::max(authored[0], 0.0) / per;
             const f64 albedo = std::clamp(authored[1], 0.0, 1.0);
