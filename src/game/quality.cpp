@@ -11,21 +11,19 @@ namespace {
 // judgement about what a player notices and not a curve.
 //
 // Reading up the table: the top rung is everything at full. Coming down, sample counts and the
-// refine stride go first — they cost noise while moving and nothing when still. Bounce depth
-// next; Russian roulette already ends most paths long before the limit, so lowering it only
-// touches the few that would have gone deepest. Detail bias after that, which pulls distance
-// detail in slightly. Resolution only at the bottom two rungs, and only then because a machine
-// that has run out of everything else has run out.
+// refine stride go first — they cost noise while moving and nothing when still. Detail bias
+// after that, which pulls distance detail in slightly. Resolution only at the bottom three
+// rungs, and only then because a machine that has run out of everything else has run out.
 constexpr QualityKnobs kLadder[kQualityLevels] = {
-    // scale, detail bias, refine stride, bounces, shadow target
-    {0.50f, 1.60f, 16u,  4u, 24u},   // 0  last resort
-    {0.65f, 1.40f, 12u,  6u, 32u},   // 1
-    {0.80f, 1.25f, 10u,  8u, 40u},   // 2
-    {1.00f, 1.15f,  8u, 12u, 48u},   // 3  first rung that renders at full resolution
-    {1.00f, 1.05f,  6u, 20u, 64u},   // 4
-    {1.00f, 1.00f,  5u, 32u, 80u},   // 5
-    {1.00f, 1.00f,  4u, 48u, 96u},   // 6
-    {1.00f, 1.00f,  2u, 64u, 128u},  // 7  everything, and more samples than the default
+    // scale, detail bias, refine stride, shadow target
+    {0.50f, 1.60f, 16u, 24u},   // 0  last resort
+    {0.65f, 1.40f, 12u, 32u},   // 1
+    {0.80f, 1.25f, 10u, 40u},   // 2
+    {1.00f, 1.15f,  8u, 48u},   // 3  first rung that renders at full resolution
+    {1.00f, 1.05f,  6u, 64u},   // 4
+    {1.00f, 1.00f,  5u, 80u},   // 5
+    {1.00f, 1.00f,  4u, 96u},   // 6
+    {1.00f, 1.00f,  2u, 128u},  // 7  everything, and more samples than the default
 };
 
 // How long a run of frames must agree before the level moves. About a third of a second down,

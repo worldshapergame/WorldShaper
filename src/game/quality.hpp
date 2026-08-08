@@ -30,11 +30,18 @@ struct QualityKnobs {
     // Path tracer: one pixel in this many may trace past its primary ray in a frame.
     u32 refine_stride = 4;
 
-    // Path tracer: how deep a path may go before Russian roulette is overruled.
-    u32 bounce_limit = 64;
-
     // Path tracer: how many shadow samples a face gathers before pixels stop tracing for it.
     u32 shadow_target = 96;
+
+    // There is no bounce-depth knob here, and there cannot be one. A path in this renderer
+    // does not end by running out of depth: the far end of it reads the light already cached
+    // on the face it lands on, which that face gathered the same way a frame earlier. So
+    // light gains a bounce per frame and keeps it, and depth is a property of how long the
+    // camera has been still rather than a number anybody sets.
+    //
+    // A `bounce_limit` was carried here for a while and copied into the tracer's push
+    // constants every frame. The shader never read it, and could not have: there is no loop
+    // for it to bound. Its absence is the design, not an omission.
 };
 
 // The ladder, from the least the game will ever look like to the most.

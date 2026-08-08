@@ -27,7 +27,6 @@ TEST_CASE("the ladder only ever gets cheaper going down") {
         CHECK(lower.resolution_scale <= upper.resolution_scale);
         CHECK(lower.detail_bias >= upper.detail_bias);        // higher bias = less detail
         CHECK(lower.refine_stride >= upper.refine_stride);    // longer stride = fewer rays
-        CHECK(lower.bounce_limit <= upper.bounce_limit);
         CHECK(lower.shadow_target <= upper.shadow_target);
     }
 }
