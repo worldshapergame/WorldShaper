@@ -1314,10 +1314,29 @@ void Application::start_refinement() {
             if (facing < 0.0) keen *= 0.05;
         }
 
-        if (best == refine_regions_.size() || keen > keenest) {
-            best = i;
-            keenest = keen;
+        // And whether anything is in the way.
+        //
+        // Facing the camera is not the same as being seen. A room behind a wall is squarely in
+        // front of the player and scores as though it were on screen, which on a building of a
+        // hundred rooms is most of the work spent on geometry nobody can look at. One ray through
+        // the world answers it — the world the ray crosses is the coarse one, and a blocky wall
+        // occludes exactly as well as a sharp one for this purpose.
+        //
+        // Asked last, and only of a box that is already the front runner, because a raycast is far
+        // dearer than the arithmetic above and most boxes are eliminated by it.
+        if (best != refine_regions_.size() && keen <= keenest) continue;
+
+        if (reach > 1e-6) {
+            const f64 v = static_cast<f64>(kVoxelsPerMetre);
+            const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z,
+                                           reach * v);
+            // Something solid, and not merely the box's own front face — anything within its own
+            // extent is the thing itself arriving, not an obstruction.
+            if (blocked.hit && blocked.distance < (reach - across) * v) continue;
         }
+
+        best = i;
+        keenest = keen;
     }
     if (best == refine_regions_.size()) return;   // every box is sharp
 
