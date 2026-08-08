@@ -4,6 +4,8 @@
 
 #include <doctest/doctest.h>
 
+#include <cmath>
+
 #include "world/light_list.hpp"
 #include "world/ledger.hpp"
 #include "world/op.hpp"
@@ -35,6 +37,18 @@ void fill(World& world, i64 x0, i64 y0, i64 z0, i64 x1, i64 y1, i64 z1, VoxelTyp
     MatterLedger ledger;
     apply_op(world, Op::fill_box(1, 1, x0, y0, z0, x1, y1, z1, type, MatterReason::Generation),
              ledger);
+}
+
+// The sphere the shader will draw round a light, from the only field it has to go on. Written
+// out here rather than shared with the builder on purpose: if the two formulas ever drift the
+// tests below should notice, and they cannot notice a constant they were handed.
+f64 shader_radius(const LightSource& light) {
+    return 0.87 * std::cbrt(static_cast<f64>(light.voxels));
+}
+
+// How far the furthest corner of a box of these dimensions is from its middle.
+f64 half_diagonal(f64 nx, f64 ny, f64 nz) {
+    return 0.5 * std::sqrt(nx * nx + ny * ny + nz * nz);
 }
 
 }  // namespace
@@ -164,4 +178,106 @@ TEST_CASE("the same world twice gives the same list") {
         CHECK(a[i].y == b[i].y);
         CHECK(a[i].z == b[i].z);
     }
+}
+
+TEST_CASE("a fitting wider than one cluster cell is still one light") {
+    // This is the whole reason a building fits under the cap. A sconce is a few hundred voxels
+    // and a cluster cell is four across, so grouping by cell alone gave a dozen lights per
+    // sconce and a hall of forty of them overflowed a list of a thousand on fittings alone.
+    VoxelTypeTable types;
+    World world;
+    fill(world, 0, 0, 0, 9, 5, 4, make_lamp(types, 200));   // 10 x 6 x 5, twelve cells
+
+    const std::vector<LightSource> lights = build_light_list(world, types, 0, 0, 0);
+    REQUIRE(lights.size() == 1);
+    // The middle of the fitting, not the corner the scan happened to start from.
+    CHECK(lights[0].x == 4);
+    CHECK(lights[0].y == 2);
+    CHECK(lights[0].z == 2);
+}
+
+TEST_CASE("a merged fitting's sphere still covers every voxel it stands for") {
+    // Direct sampling owns emitters outright: light outside the cone the shader draws round a
+    // light is owned by nobody and goes out. So a merged entry has to claim a sphere big enough
+    // for the box it replaced, which for anything longer than it is wide means claiming more
+    // voxels than are really there.
+    VoxelTypeTable types;
+    World world;
+    fill(world, 0, 0, 0, 9, 5, 4, make_lamp(types, 200));   // 300 voxels in a 10 x 6 x 5 box
+
+    const std::vector<LightSource> lights = build_light_list(world, types, 0, 0, 0);
+    REQUIRE(lights.size() == 1);
+    CHECK(shader_radius(lights[0]) >= half_diagonal(10.0, 6.0, 5.0));
+    CHECK(lights[0].voxels > 300);
+}
+
+TEST_CASE("a lamp that really is a cube claims exactly its own voxels") {
+    // The raising above must not creep in where it is not needed: 0.87 * cbrt(n) is the sphere
+    // round a solid cube of n voxels, so a solid cube is already covered and reports its count.
+    VoxelTypeTable types;
+    World world;
+    fill(world, 0, 0, 0, 3, 3, 3, make_lamp(types, 200));
+
+    const std::vector<LightSource> lights = build_light_list(world, types, 0, 0, 0);
+    REQUIRE(lights.size() == 1);
+    CHECK(lights[0].voxels == 64);
+    CHECK(shader_radius(lights[0]) >= half_diagonal(4.0, 4.0, 4.0));
+}
+
+TEST_CASE("a run one voxel wide is left in pieces rather than merged into a balloon") {
+    // Merging is only free for a blob. A glowing strip merged end to end would be a handful of
+    // voxels inside a sphere standing for hundreds, and the tracer would aim nearly every ray
+    // at empty air — unbiased, and far noisier than leaving the strip alone.
+    VoxelTypeTable types;
+    World world;
+    fill(world, 0, 0, 0, 199, 0, 0, make_lamp(types, 200));
+
+    const std::vector<LightSource> lights = build_light_list(world, types, 0, 0, 0);
+    CHECK(lights.size() == 50);   // one per cluster cell, none of them joined
+    for (const LightSource& light : lights) {
+        // Each still covers its own four voxels, and nothing like the length of the run.
+        CHECK(shader_radius(light) >= half_diagonal(4.0, 1.0, 1.0));
+        CHECK(shader_radius(light) < 4.0);
+    }
+}
+
+TEST_CASE("the cap is spent on what delivers most light, not on what is nearest") {
+    // A dim indicator close by is worth less than a bright lamp across the room, and ordering
+    // by distance alone would have handed the slot to the indicator.
+    VoxelTypeTable types;
+    World world;
+    fill(world, 20, 0, 0, 20, 0, 0, make_lamp(types, 40));
+    fill(world, 60, 0, 0, 60, 0, 0, make_lamp(types, 200));
+
+    const std::vector<LightSource> lights = build_light_list(world, types, 0, 0, 0);
+    REQUIRE(lights.size() == 2);
+    CHECK(lights[0].x == 60);
+    CHECK(lights[1].x == 20);
+}
+
+TEST_CASE("a scene past the cap keeps the strongest and drops the rest") {
+    VoxelTypeTable types;
+    World world;
+    const VoxelTypeId lamp = make_lamp(types, 200);
+    // Eight voxels apart, so no two share a cluster cell and none of them touch: 1331 separate
+    // fittings, which no amount of merging can bring under a cap of 1024.
+    for (i64 z = 0; z < 11; ++z)
+        for (i64 y = 0; y < 11; ++y)
+            for (i64 x = 0; x < 11; ++x) fill(world, x * 8, y * 8, z * 8, x * 8, y * 8, z * 8, lamp);
+
+    const std::vector<LightSource> lights = build_light_list(world, types, 0, 0, 0);
+    // Exactly the cap, and that is deliberate: it is the only signal the shader has for "this
+    // list is not all of them". A list one short would look complete, and every dropped lamp
+    // would then be owned by nobody and go out. See kMaxLights.
+    REQUIRE(lights.size() == kMaxLights);
+
+    // The lamp over the camera survives; the one in the far corner does not.
+    bool kept_nearest = false;
+    bool kept_furthest = false;
+    for (const LightSource& light : lights) {
+        if (light.x == 0 && light.y == 0 && light.z == 0) kept_nearest = true;
+        if (light.x == 80 && light.y == 80 && light.z == 80) kept_furthest = true;
+    }
+    CHECK(kept_nearest);
+    CHECK_FALSE(kept_furthest);
 }

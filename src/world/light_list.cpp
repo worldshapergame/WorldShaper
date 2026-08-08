@@ -1,9 +1,13 @@
 #include "world/light_list.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <numeric>
 #include <unordered_map>
 
 #include "core/hash.hpp"
+#include "core/log.hpp"
 #include "world/chunk.hpp"
 #include "world/world.hpp"
 
@@ -26,6 +30,61 @@ struct ClusterKeyHash {
     }
 };
 
+// Emissive voxels and the box they occupy. The box is carried rather than a centre of mass
+// because what the shader needs from this is a sphere that covers the fitting, and a centre of
+// mass says nothing about how far the fitting reaches.
+//
+// One type serves both passes: the fine scan adds voxels to it and the fitting pass adds whole
+// cells to it, and both are addition, so a fitting is the sum of its cells with no second
+// representation to keep in step.
+struct Cluster {
+    i64 min_x = 0, min_y = 0, min_z = 0;
+    i64 max_x = 0, max_y = 0, max_z = 0;
+    f32 red = 0.0f, green = 0.0f, blue = 0.0f;
+    u32 voxels = 0;
+
+    void add(i64 x, i64 y, i64 z, f32 r, f32 g, f32 b) {
+        if (voxels == 0) {
+            min_x = max_x = x;
+            min_y = max_y = y;
+            min_z = max_z = z;
+        } else {
+            min_x = std::min(min_x, x);
+            max_x = std::max(max_x, x);
+            min_y = std::min(min_y, y);
+            max_y = std::max(max_y, y);
+            min_z = std::min(min_z, z);
+            max_z = std::max(max_z, z);
+        }
+        red += r;
+        green += g;
+        blue += b;
+        ++voxels;
+    }
+
+    void absorb(const Cluster& other) {
+        if (other.voxels == 0) return;
+        if (voxels == 0) {
+            *this = other;
+            return;
+        }
+        min_x = std::min(min_x, other.min_x);
+        max_x = std::max(max_x, other.max_x);
+        min_y = std::min(min_y, other.min_y);
+        max_y = std::max(max_y, other.max_y);
+        min_z = std::min(min_z, other.min_z);
+        max_z = std::max(max_z, other.max_z);
+        red += other.red;
+        green += other.green;
+        blue += other.blue;
+        voxels += other.voxels;
+    }
+
+    i64 span_x() const { return max_x - min_x + 1; }
+    i64 span_y() const { return max_y - min_y + 1; }
+    i64 span_z() const { return max_z - min_z + 1; }
+};
+
 // Radiance a voxel gives off, from its visual record. Matches material_of() in pathtrace.comp
 // exactly: the same squared scale and the same RGB565 tint. Two places computing this
 // differently would light the scene one way and aim the rays another.
@@ -38,18 +97,72 @@ void emitted_radiance(const VisualRecord& visual, f32& red, f32& green, f32& blu
     blue = static_cast<f32>(tint & 0x1F) / 31.0f * strength;
 }
 
+// The figure to put in LightSource::voxels, which is the only way this has of telling the
+// shader how big a fitting is: it reads back `radius = 0.87 * cbrt(voxels)`.
+//
+// For a solid cube the two agree to the digit — 0.87 * cbrt(s^3) is 0.87s, and the half
+// diagonal of a cube of side s is 0.866s — so a lamp that really is a cube reports its own
+// count and nothing changes. Merging is what makes them differ: join a sconce's dozen cells
+// into one entry and the box is longer than it is wide, and the sphere for the raw count would
+// leave the ends of the fitting outside the cone the shader draws. Light outside that cone is
+// owned by nobody, so it goes out, and a sconce would be lit at its middle and dark at its tips.
+u32 covering_voxels(const Cluster& cluster) {
+    const f64 nx = static_cast<f64>(cluster.span_x());
+    const f64 ny = static_cast<f64>(cluster.span_y());
+    const f64 nz = static_cast<f64>(cluster.span_z());
+    const f64 radius = 0.5 * std::sqrt(nx * nx + ny * ny + nz * nz);
+    const f64 edge = radius / 0.87;
+    const f64 needed = std::ceil(edge * edge * edge);
+    // kLightFittingVoxels keeps this far under a u32 — a metre cube is about 32000 — but the
+    // cast is only safe because of that, so it is stated rather than assumed.
+    const f64 capped = std::min(needed, 1.0e9);
+    return std::max(cluster.voxels, static_cast<u32>(capped));
+}
+
+// What a fitting would deliver at the camera with nothing in the way: its radiance times the
+// solid angle its sphere covers. This is the shader's own per-surface estimate with the cosine
+// term left out, there being no normal here to take it against — and the cosine is not what
+// decides whether a lamp deserves a slot in the list anyway. Distance is floored at one voxel
+// so a lamp the camera is standing inside does not divide by nothing.
+f64 contribution(const LightSource& light, i64 centre_x, i64 centre_y, i64 centre_z) {
+    const f64 dx = static_cast<f64>(static_cast<i64>(light.x) - centre_x);
+    const f64 dy = static_cast<f64>(static_cast<i64>(light.y) - centre_y);
+    const f64 dz = static_cast<f64>(static_cast<i64>(light.z) - centre_z);
+    const f64 distance_sq = std::max(dx * dx + dy * dy + dz * dz, 1.0);
+    const f64 radius = 0.87 * std::cbrt(static_cast<f64>(std::max(light.voxels, 1u)));
+    // The same weights as face_luminance() in pathtrace.comp, so the ranking here agrees with
+    // the importance the shader will put on the same lamp.
+    const f64 luminance = 0.2126 * static_cast<f64>(light.red) +
+                          0.7152 * static_cast<f64>(light.green) +
+                          0.0722 * static_cast<f64>(light.blue);
+    return luminance * radius * radius / distance_sq;
+}
+
+// Say it once, not once a frame.
+//
+// The list is rebuilt on every edit, so a scene that has outgrown the cap would otherwise write
+// this line every time anything is placed and bury the rest of the log. Remembering the last
+// number reported means a scene that grows further still says so, and one that comes back under
+// the cap and overflows again later says so again.
+void note_overflow(usize dropped) {
+    static std::atomic<usize> reported{0};
+    if (reported.exchange(dropped) == dropped || dropped == 0) return;
+    WS_LOG_WARN("light",
+                "{} fittings past the cap of {} were dropped; the list is truncated, so the "
+                "tracer will not aim at any of them and every lamp goes back to the bounce",
+                dropped, kMaxLights);
+}
+
 }  // namespace
 
 std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTable& types,
                                           i64 centre_x, i64 centre_y, i64 centre_z) {
-    // Accumulated per cluster, then averaged. A fitting made of eight voxels is one light with
-    // the colour they share, not eight lights fighting for the same shadow ray.
-    struct Accumulated {
-        i64 sum_x = 0, sum_y = 0, sum_z = 0;
-        f32 red = 0.0f, green = 0.0f, blue = 0.0f;
-        u32 voxels = 0;
-    };
-    std::unordered_map<ClusterKey, Accumulated, ClusterKeyHash> clusters;
+    // The fine grid first. It is not the answer — a sconce is bigger than one cell and would
+    // come out as a dozen lights — but it is what makes the scan cheap, and it reduces a solid
+    // emissive wall to something the fitting pass below can afford to walk.
+    std::unordered_map<ClusterKey, u32, ClusterKeyHash> cell_of;
+    std::vector<ClusterKey> cell_keys;
+    std::vector<Cluster> cells;
 
     world.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
         if (chunk.empty()) return;
@@ -93,16 +206,15 @@ std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTab
                                 const ClusterKey key{floor_div(x, kLightClusterVoxels),
                                                      floor_div(y, kLightClusterVoxels),
                                                      floor_div(z, kLightClusterVoxels)};
-                                Accumulated& into = clusters[key];
+                                const auto [at, fresh] =
+                                    cell_of.try_emplace(key, static_cast<u32>(cells.size()));
+                                if (fresh) {
+                                    cell_keys.push_back(key);
+                                    cells.emplace_back();
+                                }
                                 f32 r = 0.0f, g = 0.0f, b = 0.0f;
                                 emitted_radiance(visual, r, g, b);
-                                into.sum_x += x;
-                                into.sum_y += y;
-                                into.sum_z += z;
-                                into.red += r;
-                                into.green += g;
-                                into.blue += b;
-                                ++into.voxels;
+                                cells[at->second].add(x, y, z, r, g, b);
                             }
                         }
                     }
@@ -111,36 +223,122 @@ std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTab
         }
     });
 
+    // Cells joined into fittings, and this is the part that decides whether a building fits
+    // under the cap at all. A wall sconce is a few hundred voxels across a dozen cells; a hall
+    // of forty of them is five hundred entries by cell and forty by fitting. Ranking and
+    // dropping can only choose among what is left after this, and there is nothing to choose
+    // between if this has already brought the count down to what a room actually holds.
+    //
+    // Face adjacency, not corner: it means a fitting whose voxels touch face to face comes out
+    // as one light, which is a rule that can be stated, and it will not chain two fittings
+    // together because they happen to pass near each other on a diagonal.
+    std::vector<u32> order(cells.size());
+    std::iota(order.begin(), order.end(), 0u);
+    // Deterministic, because the map's iteration order is not something to build a render on
+    // and because the growth below depends on which cell is reached first.
+    std::sort(order.begin(), order.end(), [&](u32 a, u32 b) {
+        const ClusterKey& ka = cell_keys[a];
+        const ClusterKey& kb = cell_keys[b];
+        if (ka.x != kb.x) return ka.x < kb.x;
+        if (ka.y != kb.y) return ka.y < kb.y;
+        return ka.z < kb.z;
+    });
+
+    static constexpr i64 kFaces[6][3] = {{-1, 0, 0}, {1, 0, 0},  {0, -1, 0},
+                                         {0, 1, 0},  {0, 0, -1}, {0, 0, 1}};
+
+    std::vector<bool> taken(cells.size(), false);
+    std::vector<u32> frontier;
     std::vector<LightSource> lights;
-    lights.reserve(clusters.size());
-    for (const auto& [key, acc] : clusters) {
-        if (acc.voxels == 0) continue;
+
+    for (const u32 seed : order) {
+        if (taken[seed]) continue;
+        taken[seed] = true;
+        Cluster fitting = cells[seed];
+        frontier.clear();
+        frontier.push_back(seed);
+
+        for (usize head = 0; head < frontier.size(); ++head) {
+            const ClusterKey at = cell_keys[frontier[head]];
+            for (const auto& step : kFaces) {
+                const auto found =
+                    cell_of.find(ClusterKey{at.x + step[0], at.y + step[1], at.z + step[2]});
+                if (found == cell_of.end()) continue;
+                const u32 next = found->second;
+                if (taken[next]) continue;
+
+                Cluster grown = fitting;
+                grown.absorb(cells[next]);
+                // Two refusals, and they guard different things. The size limit keeps the
+                // sphere small enough that the shader can still own what is inside it (see
+                // kLightFittingVoxels); the slack keeps the sphere from being mostly empty (see
+                // kLightMergeSlack). A merge that fails either leaves the neighbour to start a
+                // fitting of its own — it is not lost, only kept separate.
+                if (grown.span_x() > kLightFittingVoxels ||
+                    grown.span_y() > kLightFittingVoxels ||
+                    grown.span_z() > kLightFittingVoxels)
+                    continue;
+                if (static_cast<u64>(covering_voxels(grown)) >
+                    static_cast<u64>(kLightMergeSlack) * grown.voxels)
+                    continue;
+
+                taken[next] = true;
+                fitting = grown;
+                frontier.push_back(next);
+            }
+        }
+
         LightSource light;
-        light.x = static_cast<i32>(acc.sum_x / static_cast<i64>(acc.voxels));
-        light.y = static_cast<i32>(acc.sum_y / static_cast<i64>(acc.voxels));
-        light.z = static_cast<i32>(acc.sum_z / static_cast<i64>(acc.voxels));
-        light.red = acc.red / static_cast<f32>(acc.voxels);
-        light.green = acc.green / static_cast<f32>(acc.voxels);
-        light.blue = acc.blue / static_cast<f32>(acc.voxels);
-        light.voxels = acc.voxels;
+        // The middle of the box, not the centre of mass: coverage is measured from here, and a
+        // lopsided fitting would pull a mass centre towards its bright end and leave the other
+        // end reaching further than the sphere does.
+        light.x = static_cast<i32>(floor_div(fitting.min_x + fitting.max_x, 2));
+        light.y = static_cast<i32>(floor_div(fitting.min_y + fitting.max_y, 2));
+        light.z = static_cast<i32>(floor_div(fitting.min_z + fitting.max_z, 2));
+        // Mean radiance over the voxels that are really there, never over the inflated figure
+        // below — the sphere may be drawn larger than the fitting, but the fitting is not
+        // brighter or dimmer for it.
+        const f32 count = static_cast<f32>(fitting.voxels);
+        light.red = fitting.red / count;
+        light.green = fitting.green / count;
+        light.blue = fitting.blue / count;
+        light.voxels = covering_voxels(fitting);
         lights.push_back(light);
     }
 
-    // Nearest first, because the list is capped and a lamp on the far side of the world lights
-    // nothing that is on screen.
-    std::sort(lights.begin(), lights.end(), [&](const LightSource& a, const LightSource& b) {
-        const i64 ax = a.x - centre_x, ay = a.y - centre_y, az = a.z - centre_z;
-        const i64 bx = b.x - centre_x, by = b.y - centre_y, bz = b.z - centre_z;
-        const i64 da = ax * ax + ay * ay + az * az;
-        const i64 db = bx * bx + by * by + bz * bz;
-        if (da != db) return da < db;
+    // Strongest first, not nearest first. Distance alone spends the cap on whatever happens to
+    // be close, and a dim indicator two metres away is worth less than the chandelier across
+    // the room; radiance over distance squared is what the shader will decide with when it
+    // weighs the same lamp, so it is what this decides with too.
+    struct Ranked {
+        f64 score;
+        LightSource light;
+    };
+    std::vector<Ranked> ranked;
+    ranked.reserve(lights.size());
+    for (const LightSource& light : lights) {
+        ranked.push_back(Ranked{contribution(light, centre_x, centre_y, centre_z), light});
+    }
+    std::sort(ranked.begin(), ranked.end(), [](const Ranked& a, const Ranked& b) {
+        if (a.score != b.score) return a.score > b.score;
         // A stable tie-break, so the same world always produces the same list and a
         // measurement taken twice is the same measurement.
-        if (a.x != b.x) return a.x < b.x;
-        if (a.y != b.y) return a.y < b.y;
-        return a.z < b.z;
+        if (a.light.x != b.light.x) return a.light.x < b.light.x;
+        if (a.light.y != b.light.y) return a.light.y < b.light.y;
+        return a.light.z < b.light.z;
     });
-    if (lights.size() > kMaxLights) lights.resize(kMaxLights);
+
+    lights.clear();
+    for (const Ranked& entry : ranked) lights.push_back(entry.light);
+
+    const usize dropped = (lights.size() > kMaxLights) ? lights.size() - kMaxLights : 0;
+    // Truncate to exactly the cap, which is the shader's signal for "this list is not all of
+    // them". Stopping one short would look complete to it, and it would then hand every dropped
+    // lamp to nobody: direct sampling owns emitters outright, so the ones past the end would
+    // simply go out. Losing direct sampling for the whole scene is the honest failure, and the
+    // warning above is how anyone finds out it happened.
+    if (dropped > 0) lights.resize(kMaxLights);
+    note_overflow(dropped);
     return lights;
 }
 
