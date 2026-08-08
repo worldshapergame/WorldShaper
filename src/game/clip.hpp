@@ -195,8 +195,19 @@ struct PasteStats {
 // `type_count` is how many voxel types exist, if the caller happens to know — it sizes a per-
 // worker tally and saves a pass over the clip to find the largest id in it. Zero means "work it
 // out", which is always correct and costs one extra read of a possibly very large array.
+// `scale` blows the clip up on the way in: each of its cells fills scale x scale x scale world
+// voxels. A power of two, so the division is a shift.
+//
+// It exists so that a clip sampled COARSE can still occupy its full size in the world. Sampling is
+// the expensive half of loading a large clip and it goes as the cube of the resolution, so a build
+// at an eighth of the detail is some five hundred times cheaper — but `voxels_per_metre` decides
+// how big a metre is, not how finely it is cut, so sampling coarse on its own produces a building
+// eight times too small rather than a blocky one of the right size. Scaling on paste is what turns
+// the one into the other, and it is what lets a world be shown coarse and then sharpened in place.
+//
+// One is the ordinary case and costs nothing: the shift is zero and every loop below is what it was.
 PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 ox, i64 oy,
                       i64 oz, PasteMode mode, MatterReason reason, u32 player,
-                      JobSystem* jobs = nullptr, usize type_count = 0);
+                      JobSystem* jobs = nullptr, usize type_count = 0, u32 scale = 1);
 
 }  // namespace ws

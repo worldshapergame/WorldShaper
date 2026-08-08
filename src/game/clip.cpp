@@ -565,12 +565,21 @@ struct LedgerDelta {
 
 PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 ox, i64 oy,
                       i64 oz, PasteMode mode, MatterReason reason, u32 player, JobSystem* jobs,
-                      usize type_count) {
+                      usize type_count, u32 scale) {
     PasteStats stats;
     if (clip.empty()) return stats;
 
+    // How many world voxels one clip cell covers, as a shift. Anything that is not a power of two
+    // is rounded down to one, because a non-shift would put a division in the innermost loop of the
+    // one function in the engine that writes voxels.
+    u32 shift = 0;
+    while ((1u << (shift + 1)) <= scale) ++shift;
+    if ((1u << shift) != scale) shift = 0;
+
     const i64 lo[3] = {ox, oy, oz};
-    const i64 hi[3] = {ox + clip.size[0] - 1, oy + clip.size[1] - 1, oz + clip.size[2] - 1};
+    const i64 hi[3] = {ox + (static_cast<i64>(clip.size[0]) << shift) - 1,
+                       oy + (static_cast<i64>(clip.size[1]) << shift) - 1,
+                       oz + (static_cast<i64>(clip.size[2]) << shift) - 1};
 
     const WriteMask mask = (mode == PasteMode::IntoAir) ? WriteMask::IntoAir : WriteMask::All;
     const bool clears = (mode == PasteMode::Replace);   // the clip's empty parts erase
@@ -604,9 +613,12 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
                     const i64 c1[3] = {std::min(hi[0], base[0] + 255) - ox,
                                        std::min(hi[1], base[1] + 255) - oy,
                                        std::min(hi[2], base[2] + 255) - oz};
-                    for (i64 z = c0[2] >> 3; z <= (c1[2] >> 3) && !any; ++z) {
-                        for (i64 y = c0[1] >> 3; y <= (c1[1] >> 3) && !any; ++y) {
-                            for (i64 x = c0[0] >> 3; x <= (c1[0] >> 3) && !any; ++x) {
+                    // The mask is one byte per eight-cubed block OF THE CLIP, so a world offset
+                    // becomes a clip offset (>> shift) before it becomes a block (>> 3).
+                    const u32 block = shift + 3;
+                    for (i64 z = c0[2] >> block; z <= (c1[2] >> block) && !any; ++z) {
+                        for (i64 y = c0[1] >> block; y <= (c1[1] >> block) && !any; ++y) {
+                            for (i64 x = c0[0] >> block; x <= (c1[0] >> block) && !any; ++x) {
                                 any = clip.coarse[clip.coarse_index(
                                           static_cast<i32>(x), static_cast<i32>(y),
                                           static_cast<i32>(z))] != 0;
@@ -702,15 +714,19 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
                                     wants_all = false;
                                     continue;
                                 }
-                                const usize row = clip.index(static_cast<i32>(origin[0] - ox),
-                                                             static_cast<i32>(wy - oy),
-                                                             static_cast<i32>(wz - oz));
+                                // The row start for this clip line. With a scale the eight world
+                                // voxels of a brick row no longer map one-to-one onto eight clip
+                                // cells — at a scale of eight they are all the same cell — so the
+                                // column is worked out per voxel below rather than added on.
+                                const usize row = clip.index(0, static_cast<i32>((wy - oy) >> shift),
+                                                             static_cast<i32>((wz - oz) >> shift));
                                 for (u32 lx = 0; lx < 8u; ++lx) {
                                     const i64 wx = origin[0] + static_cast<i64>(lx);
                                     VoxelTypeId value = kAir;
                                     bool has_opinion = false;
                                     if (wx >= lo[0] && wx <= hi[0]) {
-                                        const usize cell = row + static_cast<usize>(lx);
+                                        const usize cell =
+                                            row + static_cast<usize>((wx - ox) >> shift);
                                         if (clip.inside[cell] != 0) {
                                             value = clip.voxels[cell];
                                             has_opinion = clears || value != kAir;

@@ -109,6 +109,9 @@ struct Options {
     bool clip_symmetry = false;
     bool clip_align = false;
     i64 clip_at[3]{0, 0, 0};                // where to stamp it, in voxels
+    // Sample at a fraction of the authored detail and blow it back up on the way in, so the world
+    // is the right size and merely blocky. A power of two; 1 is the ordinary full-detail build.
+    u32 clip_coarse = 1;
     i32 clip_metre = 0;                     // override the file's resolution, for quick previews
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
@@ -264,6 +267,8 @@ Options parse_options(int argc, char** argv) {
             options.crash_test = argv[++i];
         } else if (arg == "--hollow" && i + 1 < argc) {
             options.hollow = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--clip-coarse" && i + 1 < argc) {
+            options.clip_coarse = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--pathtrace") {
             options.path_trace = true;
         } else if (arg == "--no-update-check") {
@@ -1241,6 +1246,25 @@ void Application::build_world() {
         }
         if (options_.clip_metre > 0) script.settings.voxels_per_metre = options_.clip_metre;
 
+        // Coarse sampling, scaled back up when it is pasted.
+        //
+        // Sampling is the expensive half of loading and it goes as the CUBE of the resolution, so
+        // an eighth of the detail is around five hundred times less work. What it is not is a
+        // smaller building: voxels_per_metre decides how big a metre is, so dividing it alone would
+        // shrink the whole thing. The scale on paste is what puts the size back.
+        u32 coarse = (options_.clip_coarse > 0) ? options_.clip_coarse : 1u;
+        {
+            u32 shift = 0;
+            while ((1u << (shift + 1)) <= coarse) ++shift;
+            coarse = 1u << shift;
+        }
+        if (coarse > 1) {
+            const i32 asked = script.settings.voxels_per_metre;
+            script.settings.voxels_per_metre = std::max<i32>(1, asked / static_cast<i32>(coarse));
+            WS_LOG_INFO("clip", "coarse build: sampling at metre {} and scaling {}x on paste",
+                        script.settings.voxels_per_metre, coarse);
+        }
+
         // The air, in the shader's units, now that the clip has said how big a metre is.
         //
         // Authored as extinction per metre, a single-scattering albedo, an asymmetry and a scale
@@ -1379,10 +1403,12 @@ void Application::build_world() {
             }
             progress_.enter(LoadStage::Stamping);
             const PasteStats stamped = paste_clip(
-                world_, ledger_, built.clip, built.origin_voxel[0] + options_.clip_at[0],
-                built.origin_voxel[1] + options_.clip_at[1],
-                built.origin_voxel[2] + options_.clip_at[2], PasteMode::SolidOnly,
-                MatterReason::PlayerPlace, 1, &jobs, types_.type_count());
+                world_, ledger_, built.clip,
+                built.origin_voxel[0] * static_cast<i64>(coarse) + options_.clip_at[0],
+                built.origin_voxel[1] * static_cast<i64>(coarse) + options_.clip_at[1],
+                built.origin_voxel[2] * static_cast<i64>(coarse) + options_.clip_at[2],
+                PasteMode::SolidOnly, MatterReason::PlayerPlace, 1, &jobs, types_.type_count(),
+                coarse);
             const u64 pasted_at = now_ns();
             if (stamped.chunks_left_empty) world_.compact();
             // The two ns figures are summed across worker threads, so they exceed the wall clock
