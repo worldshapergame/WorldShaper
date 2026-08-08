@@ -176,19 +176,28 @@ bool Swapchain::recreate(u32 width, u32 height) {
     return build(width, height);
 }
 
+void Swapchain::wait_for_slot() {
+    if (swapchain_ == VK_NULL_HANDLE) return;
+    FrameContext& frame = frames_[frame_index_];
+    if (frame.timeline_value == 0 || frame.waited) return;
+
+    VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    wait.semaphoreCount = 1;
+    wait.pSemaphores = &timeline_;
+    wait.pValues = &frame.timeline_value;
+    WS_VK(vkWaitSemaphores(device_->handle(), &wait, UINT64_MAX));
+    frame.waited = true;
+}
+
 bool Swapchain::begin_frame() {
     if (needs_recreate_ || swapchain_ == VK_NULL_HANDLE) return false;
 
-    FrameContext& frame = frames_[frame_index_];
+    // Idempotent: the loop normally does this at the end of the previous iteration, so that the
+    // waiting happens before the input is read. Kept here as well because a caller that has not
+    // done it must still be correct, and because a swapchain rebuild resets the slots.
+    wait_for_slot();
 
-    // Wait until this slot's previous submission has finished on the GPU.
-    if (frame.timeline_value > 0) {
-        VkSemaphoreWaitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-        wait.semaphoreCount = 1;
-        wait.pSemaphores = &timeline_;
-        wait.pValues = &frame.timeline_value;
-        WS_VK(vkWaitSemaphores(device_->handle(), &wait, UINT64_MAX));
-    }
+    FrameContext& frame = frames_[frame_index_];
 
     const VkResult acquired =
         vkAcquireNextImageKHR(device_->handle(), swapchain_, UINT64_MAX,
@@ -218,6 +227,8 @@ void Swapchain::end_frame() {
 
     ++timeline_counter_;
     frame.timeline_value = timeline_counter_;
+    // Submitted, so this slot must be waited for again before it is reused.
+    frame.waited = false;
 
     VkSemaphoreSubmitInfo wait{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
     wait.semaphore = frame.image_available;

@@ -330,6 +330,20 @@ void print_help() {
 // Per-dispatch parameters for the path tracer. Push constants rather than another field on
 // the shared block: the tracer is the only thing that reads them, and the shared block is read
 // by two other shaders that would have to be kept in step for no reason.
+// How much of a frame the shutter is open for.
+//
+// A half is the film convention — a 180-degree shutter — and it is what an eye raised on film
+// expects. It is also the setting that does the job this was asked for: a frame rate that reads as
+// choppy is one where each frame is a sharp, still picture and the eye is handed a series of
+// unrelated stills. A streak between them is what tells the eye the two frames are the same scene
+// moving, and that reads as fluid at a frame rate where the sharp version does not.
+constexpr f32 kShutterFraction = 0.5f;
+
+// The longest streak, in pixels. A bound on cost rather than on looks: a fast spin can put a
+// point most of the way across the screen in a frame, and there is no picture in a streak that
+// long — only taps.
+constexpr f32 kLongestStreak = 24.0f;
+
 struct TracePush {
     f32 sun[4]{};          // xyz towards the sun, w cos of its angular radius
     f32 sun_colour[4]{};
@@ -803,6 +817,14 @@ private:
     u64 benchmark_until_ = 0;
     f64 benchmark_total_ms_ = 0.0;
     u32 benchmark_frames_ = 0;
+    // The worst frame WITHIN the measured window, which is not what FrameStats::max_ms reports.
+    //
+    // The rolling window is two hundred and forty frames and the benchmark is a hundred and eighty
+    // of them, so the first frame — three hundred milliseconds of driver warm-up, every time — is
+    // still inside it when the summary is printed. Reported as "worst", it turns a perfectly
+    // steady run into evidence of a stutter, and this measurement was read that way once before
+    // anyone checked which frame it was.
+    f64 benchmark_worst_ms_ = 0.0;
     // Long enough for shaders to finish compiling and the first chunks to arrive: timing those
     // measures the loading, not the machine. Then a second or so of actual frames.
     static constexpr u64 kBenchmarkWarmupFrames = 90;
@@ -819,6 +841,14 @@ private:
     u32 hollow_ = 0;
     f32 trace_camera_[6]{};
     f32 trace_forward_[3]{};
+
+    // Last frame's camera, for the motion blur. See the fill in record_frame.
+    f64 prev_origin_[3]{};
+    f32 prev_forward_[3]{0.0f, 0.0f, 1.0f};
+    f32 prev_right_[3]{1.0f, 0.0f, 0.0f};
+    f32 prev_up_[3]{0.0f, 1.0f, 0.0f};
+    i64 prev_camera_chunk_[3]{};
+    bool motion_blur_ = true;
     bool accum_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
     GpuImage visibility_image_;
     GpuImage render_target_;
@@ -1777,6 +1807,7 @@ void Application::update_quality() {
         // the pipeline is cold. Timing those measures the loading screen, not the machine.
         if (frame_counter_ > kBenchmarkWarmupFrames) {
             benchmark_total_ms_ += stats_.last_ms();
+            benchmark_worst_ms_ = std::max(benchmark_worst_ms_, stats_.last_ms());
             ++benchmark_frames_;
         }
         if (frame_counter_ >= benchmark_until_ && benchmark_frames_ > 0) {
@@ -1784,10 +1815,21 @@ void Application::update_quality() {
             const u32 level = level_for_frame_time(average_ms, quality_.target_fps());
             quality_.set_level(level);
             benchmark_pending_ = false;
+            // The DISTRIBUTION, not only the mean, because the mean is the one number that
+            // cannot show the fault people actually report.
+            //
+            // "It says eighty frames a second and it does not feel like sixty" is a statement
+            // about the worst frames, not the average one: at 12 ms average with a 99th of 25 and
+            // a worst of 50, one frame in a hundred is four times as long as its neighbours, and
+            // the eye reads a single long frame as a stutter no matter how many short ones
+            // surround it. Averaging is what hides that, and this measurement existed only as an
+            // average until somebody said the game felt wrong while the counter said it was fine.
             WS_LOG_INFO("quality",
-                        "benchmark: {:.2f} ms a frame at full detail, target {:.0f} fps "
-                        "-> starting at level {} of {}",
-                        average_ms, quality_.target_fps(), level, kQualityLevels - 1);
+                        "benchmark: {:.2f} ms a frame at full detail (50th {:.2f}, 95th {:.2f}, "
+                        "99th {:.2f}, worst {:.2f}), target {:.0f} fps -> starting at level {} of {}",
+                        average_ms, stats_.percentile_ms(0.50), stats_.percentile_ms(0.95),
+                        stats_.percentile_ms(0.99), benchmark_worst_ms_,
+                        quality_.target_fps(), level, kQualityLevels - 1);
             save_settings();
         }
         return;   // nothing is adjusted while the measurement is being taken
@@ -2165,6 +2207,41 @@ void Application::record_frame(f32 time_seconds) {
     params.camera_chunk[0] = static_cast<i32>(camera_.chunk_x());
     params.camera_chunk[1] = static_cast<i32>(camera_.chunk_y());
     params.camera_chunk[2] = static_cast<i32>(camera_.chunk_z());
+
+    // Where the camera was last frame, for the motion blur. Carried in the same space as `origin`,
+    // which is relative to the camera's own chunk — so when the player crosses a chunk boundary
+    // that space shifts under the stored value and the previous position is suddenly wrong by a
+    // chunk. Corrected by the same offset the rest of this function uses, so a step across a
+    // boundary does not smear the whole screen for one frame.
+    {
+        const i64 chunk_now[3] = {camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            const f64 shift =
+                static_cast<f64>(prev_camera_chunk_[axis] - chunk_now[axis]) * kChunkEdge;
+            params.prev_origin[axis] = static_cast<f32>(prev_origin_[axis] + shift);
+            params.prev_forward[axis] = prev_forward_[axis];
+            params.prev_right[axis] = prev_right_[axis];
+            params.prev_up[axis] = prev_up_[axis];
+        }
+
+        // Only ever a fraction of a frame's travel, so a frame that took a hundred milliseconds
+        // does not paint a hundred milliseconds of streak. The shutter is what it is; a hitch is
+        // not a longer exposure, it is the same exposure arriving late.
+        params.motion[0] = motion_blur_ ? kShutterFraction : 0.0f;
+        params.motion[1] = kLongestStreak;
+
+        // And remember this frame's camera for the next one. After the fill, so a frame always
+        // blurs against the frame before it rather than against itself.
+        prev_origin_[0] = camera_.local_x();
+        prev_origin_[1] = camera_.local_y();
+        prev_origin_[2] = camera_.local_z();
+        for (u32 axis = 0; axis < 3; ++axis) {
+            prev_forward_[axis] = params.forward[axis];
+            prev_right_[axis] = params.right[axis];
+            prev_up_[axis] = params.up[axis];
+            prev_camera_chunk_[axis] = chunk_now[axis];
+        }
+    }
 
     // The edited region, moved into the camera's own space. Done here in 64-bit and handed over
     // as a small offset, so the shader never has to know how far from the origin the world has
@@ -3120,6 +3197,7 @@ int Application::run(const Options& options) {
         benchmark_pending_ = true;
         benchmark_total_ms_ = 0.0;
         benchmark_frames_ = 0;
+        benchmark_worst_ms_ = 0.0;
         benchmark_until_ = frame_counter_ + kBenchmarkWarmupFrames + kBenchmarkFrames;
         quality_.set_level(kQualityLevels - 1);   // measured at full detail or not at all
     }
@@ -3343,6 +3421,20 @@ int Application::run(const Options& options) {
 
         record_frame(static_cast<f32>(ns_to_ms(frame_start - start_ns) * 0.001));
         swapchain_.end_frame();
+
+        // Wait for the next slot HERE, rather than inside the next begin_frame.
+        //
+        // Both are the same wait for the same length of time and neither changes the frame rate.
+        // What changes is where the input is read relative to it. Waiting inside begin_frame means
+        // the loop reads the mouse, spends up to a whole frame blocked on the card, and only then
+        // draws from a camera that is by then a frame old. Waiting here means the block is over
+        // before the mouse is read, so the image is drawn from where the player is looking rather
+        // than from where they were looking.
+        //
+        // It is invisible in every measurement in this file — the same work happens in the same
+        // order on the GPU and the frame time is identical — and it is the difference between a
+        // frame rate and how a frame rate feels.
+        swapchain_.wait_for_slot();
 
         // Deliberate fault at the same moment a scripted screenshot would be taken, so the
         // report it produces is a real in-game one: camera, device and all.

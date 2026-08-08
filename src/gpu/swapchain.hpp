@@ -18,6 +18,9 @@ struct FrameContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkSemaphore image_available = VK_NULL_HANDLE;
     u64 timeline_value = 0;
+    // Whether this slot has already been waited for this time round, so the wait can be moved
+    // ahead of the input without being paid twice.
+    bool waited = false;
 };
 
 class Swapchain {
@@ -35,6 +38,18 @@ public:
     // Waits for the frame slot to be free and begins its command buffer.
     // Returns false when the swapchain is out of date and the caller should skip the
     // frame (it will be recreated on the next call).
+    // Wait for this slot's previous submission to finish, without acquiring anything.
+    //
+    // Called at the END of the frame loop, so the CPU does its waiting before it reads the mouse
+    // rather than after. It is the same wait either way and the frame rate does not change; what
+    // changes is how old the camera is when the image is drawn from it.
+    //
+    // Read input, spend a frame's worth of time blocked, then render is a whole frame of latency
+    // nobody asked for, and it is invisible in every measurement here: the frame time is identical
+    // because the same work happens in the same order on the GPU. It shows up only as the game
+    // feeling heavier than its counter says, which is exactly how it was reported.
+    void wait_for_slot();
+
     bool begin_frame();
 
     // Ends the command buffer, submits, and presents.

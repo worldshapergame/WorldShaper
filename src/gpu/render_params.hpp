@@ -99,8 +99,26 @@ struct RenderParams {
     // edit_min[3] is 1 while the region is live and 0 when it is not.
     i32 edit_min[4];
     i32 edit_max[4];
+
+    // Where the camera was LAST frame, so a pixel can work out how far what it is looking at has
+    // moved across the screen since. Same space and same units as origin/forward/right/up above.
+    //
+    // The whole of motion blur is this: a point's world position is known from the ray and the
+    // distance to what it hit, projecting it through the previous camera says where it used to be
+    // on screen, and the difference is how fast it is travelling in pixels. Nothing has to be
+    // stored per pixel and no extra pass has to run.
+    f32 prev_origin[4];
+    f32 prev_forward[4];
+    f32 prev_right[4];
+    f32 prev_up[4];
+
+    // x: how much of a frame the shutter is open for, as a fraction — 0 turns blur off entirely,
+    // 0.5 is a 180-degree shutter, which is what a film camera does and what the eye is used to.
+    // y: the longest streak allowed, in pixels, so a fast turn cannot cost an unbounded number of
+    // taps. z and w spare.
+    f32 motion[4];
 };
-static_assert(sizeof(RenderParams) == 1520, "RenderParams must match the GLSL block");
+static_assert(sizeof(RenderParams) == 1520 + 80, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

@@ -415,6 +415,78 @@ vec3 eye_ray(ivec2 pixel, float aspect) {
                      push.up.xyz * uv.y * push.lens.x);
 }
 
+
+// --- motion blur -------------------------------------------------------------------------------
+//
+// How fast what this pixel is looking at is moving across the screen, in pixels a frame.
+//
+// The ray and the distance to what it hit give the point's position in the world; projecting that
+// through where the camera was last frame says where it appeared then; the difference is the
+// velocity. Nothing is stored per pixel, no buffer is kept between frames, and no pass is added —
+// the previous camera is five vec4s in a block that was already there.
+//
+// It is a CAMERA blur and not a per-object one, which for this game is the whole of it: nothing in
+// a voxel world moves except the player's own view, and the view is exactly what a shutter would
+// smear. A wall you turn past streaks, a wall you walk towards barely does, and a wall you stand
+// still in front of does not at all — because the velocity IS the speed, so "speed based" needs no
+// separate term.
+vec2 screen_velocity(vec3 world_point, ivec2 pixel, float aspect) {
+    vec3 relative = world_point - push.prev_origin.xyz;
+    float ahead = dot(relative, push.prev_forward.xyz);
+    // Behind the old camera, or so close to its plane that the projection blows up. A point that
+    // was not on screen last frame has no velocity worth trusting, and inventing one streaks the
+    // edge of the screen every time the player turns.
+    if (ahead < 1e-3) return vec2(0.0);
+
+    float across = dot(relative, push.prev_right.xyz);
+    float upward = dot(relative, push.prev_up.xyz);
+    vec2 ndc = vec2(across / (ahead * push.lens.x * aspect), -upward / (ahead * push.lens.x));
+    vec2 was = (ndc * 0.5 + 0.5) * vec2(push.resolution.xy);
+    return (vec2(pixel) + 0.5) - was;
+}
+
+// The accumulated mean at a pixel, which is what a tap of the blur reads.
+vec3 accum_mean(ivec2 at) {
+    vec4 total = imageLoad(accum, at);
+    return total.rgb / max(total.w, 1.0);
+}
+
+// Smeared along the direction it is travelling.
+//
+// Taps are spread over the streak and averaged evenly, which is what a shutter open for a fixed
+// fraction of the frame actually does. The tap COUNT follows the length so a short streak costs
+// almost nothing and a long one is still bounded: the cost of this is proportional to how fast
+// the player is turning, and a player who is standing still pays for one compare.
+vec3 motion_blurred(ivec2 pixel, vec3 mean, vec2 velocity) {
+    float shutter = push.motion.x;
+    if (shutter <= 0.0) return mean;
+
+    vec2 streak = velocity * shutter;
+    float length_px = length(streak);
+    if (length_px < 0.75) return mean;   // less than a pixel is not a blur, it is a rounding error
+
+    float longest = max(push.motion.y, 1.0);
+    if (length_px > longest) {
+        streak *= longest / length_px;
+        length_px = longest;
+    }
+
+    int taps = int(min(length_px, 15.0)) + 1;
+    ivec2 limit = ivec2(push.resolution.xy) - 1;
+    vec3 sum = mean;
+    float weight = 1.0;
+    for (int i = 1; i <= taps; ++i) {
+        // Backwards along the streak: the smear trails where the pixel came FROM, which is what a
+        // shutter records. Forwards as well would smear into places the surface has not been and
+        // reads as a glow ahead of everything.
+        float where = float(i) / float(taps);
+        ivec2 at = clamp(pixel - ivec2(streak * where + 0.5), ivec2(0), limit);
+        sum += accum_mean(at);
+        weight += 1.0;
+    }
+    return sum / weight;
+}
+
 void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary_t, float aspect) {
     // The air between the eye and the first surface, applied here for the same reason the glass
     // tint is applied here: main returns early three times before its own end -- a summary hit,
@@ -446,6 +518,15 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
     imageStore(accum, pixel, total);
 
     vec3 mean = total.rgb / max(total.w, 1.0);
+
+    // Blurred before exposure and tone mapping, so the streak is an average of LIGHT rather than
+    // of pixels that have already been through a curve. Averaging tone-mapped values darkens a
+    // streak past a bright window, because the curve is concave and the mean of the mapped values
+    // is below the mapped mean.
+    if (push.motion.x > 0.0 && primary_t > 0.0) {
+        vec3 world_point = push.origin.xyz + eye_dir * primary_t;
+        mean = motion_blurred(pixel, mean, screen_velocity(world_point, pixel, aspect));
+    }
 
     bool plain = (push.resolution.z == 10u);
     float exposure = frame_exposure();

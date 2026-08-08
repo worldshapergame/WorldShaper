@@ -31,3 +31,10 @@
     // chunk. edit_min.w is 1 while it is live.
     ivec4 edit_min;
     ivec4 edit_max;
+
+    // Where the camera was last frame, and how long the shutter is open. See RenderParams.
+    vec4 prev_origin;
+    vec4 prev_forward;
+    vec4 prev_right;
+    vec4 prev_up;
+    vec4 motion;          // x shutter as a fraction of a frame, y longest streak in pixels
