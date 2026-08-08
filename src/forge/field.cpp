@@ -946,6 +946,13 @@ f64 Field::eval(u32 at, Vec3 p) const {
                              static_cast<u32>(a[7]));
 
         case Op::Union: {
+            // A union wide enough to have earned a hierarchy is answered by it. See the comment
+            // on Accelerator: what is being replaced is not the union's arithmetic but the
+            // assumption that the way an author grouped a building is a useful way to search it.
+            if (!accelerator_of_.empty() && accelerator_of_[at] != kNoAccelerator) {
+                return eval_accelerated(accelerators_[accelerator_of_[at]], p);
+            }
+
             // Nearest box first, and this is the difference between a cull that works and one
             // that is merely correct.
             //
@@ -1379,6 +1386,107 @@ Field::Aabb Field::bounds_of(u32 node) const {
     return everywhere();
 }
 
+// Everything a plain union finally reaches. A nested union is walked through; anything else is a
+// leaf, however large — a carved wall is one leaf, and the right one, because its box is tight
+// around the wall rather than around the layer the wall was filed in.
+//
+// SmoothUnion is deliberately not walked through. Its answer depends on every child at once, so
+// it cannot be reordered or skipped, and it is a leaf like any other shape.
+void Field::flatten_union(u32 at, std::vector<u32>& leaves) const {
+    if (at >= nodes_.size()) return;
+    const Node& n = nodes_[at];
+    if (n.op != Op::Union) {
+        leaves.push_back(at);
+        return;
+    }
+    for (u32 i = 0; i < n.children; ++i) flatten_union(n.child[i], leaves);
+}
+
+// Split on the longest axis of the range's own bounds, at the median. Not the best heuristic
+// there is, and the best heuristic is not what this needed: the win is going from "every layer
+// that overlaps this point" to "the few things actually near it", and a median split gets that.
+u32 Field::build_bvh(Accelerator& bvh, std::vector<u32>& work, usize begin, usize end) const {
+    const u32 self = static_cast<u32>(bvh.nodes.size());
+    bvh.nodes.push_back(BvhNode{});
+
+    Aabb box = bounds_[work[begin]];
+    for (usize i = begin + 1; i < end; ++i) box = merged(box, bounds_[work[i]]);
+
+    const usize count = end - begin;
+    // A handful is cheaper to test one by one than to descend into, and an infinite box cannot be
+    // split usefully — everything in it would sort the same way.
+    if (count <= 4 || box.infinite()) {
+        bvh.nodes[self].box = box;
+        bvh.nodes[self].left = static_cast<u32>(bvh.order.size());
+        bvh.nodes[self].count = static_cast<u32>(count);
+        for (usize i = begin; i < end; ++i) bvh.order.push_back(work[i]);
+        return self;
+    }
+
+    const f64 span[3] = {box.high.x - box.low.x, box.high.y - box.low.y, box.high.z - box.low.z};
+    const u32 axis = (span[0] > span[1] && span[0] > span[2]) ? 0u : ((span[1] > span[2]) ? 1u : 2u);
+    const usize middle = begin + count / 2;
+    std::nth_element(work.begin() + static_cast<isize>(begin),
+                     work.begin() + static_cast<isize>(middle),
+                     work.begin() + static_cast<isize>(end), [&](u32 a, u32 b) {
+                         const Aabb& ba = bounds_[a];
+                         const Aabb& bb = bounds_[b];
+                         return axis_of(ba.low, axis) + axis_of(ba.high, axis) <
+                                axis_of(bb.low, axis) + axis_of(bb.high, axis);
+                     });
+
+    const u32 left = build_bvh(bvh, work, begin, middle);
+    const u32 right = build_bvh(bvh, work, middle, end);
+    bvh.nodes[self].box = box;
+    bvh.nodes[self].left = left;
+    bvh.nodes[self].right = right;
+    bvh.nodes[self].count = 0;
+    return self;
+}
+
+// The minimum over everything in the hierarchy, visiting the nearer box first so the running
+// answer gets small early and the rest is thrown away on its box.
+//
+// The rejection test is the one the union already used, and it has to be exactly as careful: a
+// point INSIDE a box has a box distance of zero, and zero is not a lower bound on what that
+// subtree will say, because a shape you are inside reports a negative distance.
+f64 Field::eval_accelerated(const Accelerator& bvh, Vec3 p) const {
+    f64 d = 1e30;
+    u32 stack[64];
+    u32 top = 0;
+    stack[top++] = 0;
+    while (top > 0) {
+        const BvhNode& node = bvh.nodes[stack[--top]];
+        const f64 away = squared_distance_to(node.box, p);
+        if (away > 0.0 && (d < 0.0 || d * d <= away)) continue;
+
+        if (node.count > 0) {
+            for (u32 i = 0; i < node.count; ++i) {
+                const u32 leaf = bvh.order[node.left + i];
+                const f64 leaf_away = squared_distance_to(bounds_[leaf], p);
+                if (leaf_away > 0.0 && (d < 0.0 || d * d <= leaf_away)) continue;
+                d = std::min(d, eval(leaf, p));
+            }
+            continue;
+        }
+
+        // The farther child goes on the stack first, so the nearer one is popped and evaluated
+        // first and gives the other something to be rejected against.
+        const f64 la = squared_distance_to(bvh.nodes[node.left].box, p);
+        const f64 ra = squared_distance_to(bvh.nodes[node.right].box, p);
+        if (top + 2 <= 64) {
+            if (la <= ra) {
+                stack[top++] = node.right;
+                stack[top++] = node.left;
+            } else {
+                stack[top++] = node.left;
+                stack[top++] = node.right;
+            }
+        }
+    }
+    return d;
+}
+
 void Field::build_bounds() {
     bounds_.assign(nodes_.size(), everywhere());
     // Children always have a lower index than their parent — every builder pushes after its
@@ -1578,6 +1686,41 @@ void Field::build_bounds() {
             default: box = everywhere(); break;
         }
         bounds_[i] = box;
+    }
+
+    // Now the boxes exist, so the hierarchy over them can be built.
+    //
+    // Only the OUTERMOST union of a chain gets one: flattening reaches everything below it, so an
+    // accelerator on a nested union would be built, stored, and never consulted. A union is
+    // outermost when nothing that would flatten through it points at it, which — since every
+    // child has a lower index than its parent — one backward pass settles.
+    accelerator_of_.assign(nodes_.size(), kNoAccelerator);
+    accelerators_.clear();
+
+    std::vector<u8> swallowed(nodes_.size(), 0);
+    for (usize i = 0; i < nodes_.size(); ++i) {
+        const Node& n = nodes_[i];
+        if (n.op != Op::Union) continue;
+        for (u32 c = 0; c < n.children; ++c) {
+            if (n.child[c] < nodes_.size() && nodes_[n.child[c]].op == Op::Union) {
+                swallowed[n.child[c]] = 1;
+            }
+        }
+    }
+
+    std::vector<u32> leaves;
+    for (usize i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i].op != Op::Union || swallowed[i] != 0) continue;
+        leaves.clear();
+        flatten_union(static_cast<u32>(i), leaves);
+        if (leaves.size() < kAccelerateFrom) continue;
+
+        Accelerator bvh;
+        bvh.nodes.reserve(leaves.size() * 2);
+        bvh.order.reserve(leaves.size());
+        build_bvh(bvh, leaves, 0, leaves.size());
+        accelerator_of_[i] = static_cast<u32>(accelerators_.size());
+        accelerators_.push_back(std::move(bvh));
     }
 }
 

@@ -430,6 +430,16 @@ public:
     };
     Aabb bounds_of(u32 node) const;
 
+    // How many unions were worth a hierarchy, and how many leaves those hierarchies cover.
+    // Reported by the clip tool, because whether the accelerator engaged at all is the first
+    // question anybody optimising a slow clip will have.
+    usize accelerator_count() const { return accelerators_.size(); }
+    usize accelerated_leaves() const {
+        usize total = 0;
+        for (const Accelerator& a : accelerators_) total += a.order.size();
+        return total;
+    }
+
     // The surface normal, by central differences. Used for painting by facing — "moss on the
     // top, soot under the arch" — and for nothing else, so its cost is paid only where a rule
     // asks for it.
@@ -442,10 +452,58 @@ private:
     u32 push(const Node& n);
     u32 combine(Op op, const std::vector<u32>& parts, f64 blend);
 
+    // A tree over WHERE things are, built to replace the tree over how they were written.
+    //
+    // A union asks every child that the point could be nearest to. Written as a handful of parts
+    // that is a handful of questions; written as a building it is not, because the parts of a
+    // building are LAYERS and not regions. Walls, windows, entablature, roof — every one of their
+    // bounding boxes spans the whole block, so a point in a wall is inside a dozen of them and a
+    // dozen subtrees really are candidates. No ordering and no rejection changes that, because
+    // they are all genuinely possible answers.
+    //
+    // Measured: the facility is 3474 nodes where the previous building was 126, and an evaluation
+    // cost 3.4 microseconds against 312 nanoseconds. Settling was fine; the cost was walking the
+    // tree.
+    //
+    // So the union is flattened to its leaves and a bounding hierarchy is built over THOSE. A
+    // leaf is whatever is under a union that is not itself a union — a carved wall, a turned
+    // baluster, a primitive — and its box is tight around it rather than around the layer it was
+    // filed in. The hierarchy is then walked nearest-box-first, and a subtree whose box is
+    // further away than the running answer is skipped whole.
+    //
+    // The point of it is not the constant factor. It is that the cost of evaluating a clip stops
+    // depending on how the author chose to group it, which is what a language that lets twenty
+    // people write one building has to be able to promise.
+    struct BvhNode {
+        Aabb box;
+        u32 left = 0;    // internal: the first child. leaf: the first index into `order`
+        u32 right = 0;   // internal: the second child
+        u32 count = 0;   // 0 for an internal node
+    };
+    struct Accelerator {
+        std::vector<BvhNode> nodes;
+        std::vector<u32> order;   // field node indices, grouped by leaf
+    };
+
+    void flatten_union(u32 at, std::vector<u32>& leaves) const;
+    u32 build_bvh(Accelerator& bvh, std::vector<u32>& work, usize begin, usize end) const;
+    f64 eval_accelerated(const Accelerator& bvh, Vec3 p) const;
+
     std::vector<Node> nodes_;
     std::vector<f64> parameters_;
     std::vector<std::string> names_;
     std::vector<Aabb> bounds_;   // empty until build_bounds(); never required for correctness
+
+    // One per node, and almost all of them empty: only a union wide enough to be worth it gets
+    // an accelerator, and only the outermost union of a chain, because flattening reaches
+    // everything below it anyway.
+    std::vector<u32> accelerator_of_;   // node -> index into accelerators_, or kNoAccelerator
+    std::vector<Accelerator> accelerators_;
+    static constexpr u32 kNoAccelerator = 0xFFFFFFFFu;
+
+    // Below this a linear scan is cheaper than a traversal, and the boxes of a handful of parts
+    // rarely overlap enough to matter.
+    static constexpr usize kAccelerateFrom = 12;
 };
 
 }  // namespace forge

@@ -804,6 +804,27 @@ void Parser::statement() {
             }
             rule.test = bound->second;
         }
+        // `on=<shape>` says WHERE, as distinct from `where=`, which says what.
+        //
+        // For a rule keyed on a shape the two are the same thing and this is unnecessary. For one
+        // keyed on a pattern it is the difference between a rule that can be settled for a region
+        // and one that has to be asked at every voxel in the clip — because a pattern is true or
+        // false at a point and says nothing about its neighbourhood, while a shape has a box.
+        //
+        //   paint moss where=grain above=0.55 on=north_wall
+        //
+        // reads as "moss where the grain is high, on the north wall", and costs the sampler
+        // nothing anywhere else in the building.
+        const std::string on = keys.word("on", "");
+        if (!on.empty()) {
+            auto placed = bindings_.find(on);
+            if (placed == bindings_.end()) {
+                fail("paint on=" + on + " does not name anything");
+                return;
+            }
+            rule.place = placed->second;
+            rule.has_place = true;
+        }
         if (keys.has("above")) rule.low = keys.number("above", -1e30);
         if (keys.has("below")) rule.high = keys.number("below", 1e30);
         if (keys.has("facing")) {
@@ -927,6 +948,10 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
     Field& f = script.field;
 
     for (const WeatherRequest& request : script.weather) {
+        // Where this request's coats begin, so the scope can be stamped onto all of them at the
+        // end without every one of the dozen push_backs below having to remember to.
+        const usize first_coat = script.paint.size();
+
         const f64 a = std::clamp(request.amount, 0.0, 1.0);
         if (a <= 0.0) continue;
         const f64 s = (request.scale > 0.0) ? request.scale : 1.0;
@@ -1128,6 +1153,23 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
                 break;
             }
             default: break;
+        }
+
+        // Every coat this request just added is confined to the shape the request named, so say
+        // so. The scoping above already makes each coat's TEST false outside that shape, which is
+        // correct and is invisible to the sampler: a weathering test is a curvature or an
+        // occlusion or a noise, none of which can be settled for a region, so without this the
+        // coat is asked at every solid voxel in the clip to discover it is out of range at all
+        // but a few of them.
+        //
+        // Measured on the facility: six such coats, confined by their authors to the steps, a
+        // cornice wash and two strips of the north wall — and eight hundred and forty million of
+        // the building's nine hundred and twelve million field evaluations.
+        if (request.has_scope) {
+            for (usize i = first_coat; i < script.paint.size(); ++i) {
+                script.paint[i].place = request.scope;
+                script.paint[i].has_place = true;
+            }
         }
     }
 }

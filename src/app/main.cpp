@@ -3302,8 +3302,9 @@ int run_clip_tool(const Options& options) {
     std::printf("parts        ");
     for (const auto& entry : script.parts) std::printf(" %s", entry.first.c_str());
     std::printf("\n");
-    std::printf("field         %zu nodes, %zu parameters\n", script.field.size(),
-                script.field.parameter_count());
+    std::printf("field         %zu nodes, %zu parameters, %zu hierarchies over %zu leaves\n",
+                script.field.size(), script.field.parameter_count(),
+                script.field.accelerator_count(), script.field.accelerated_leaves());
     for (usize i = 0; i < script.field.parameter_count(); ++i) {
         std::printf("  %-16s %.4f\n", script.field.parameter_name(i),
                     script.field.parameter_value(i));
@@ -3320,6 +3321,10 @@ int run_clip_tool(const Options& options) {
                 static_cast<unsigned long long>(built.voxels_settled),
                 100.0 * static_cast<f64>(built.voxels_settled) /
                     static_cast<f64>(std::max<u64>(1, built.voxels_asked + built.voxels_settled)));
+    std::printf("evals         %llu shape + %llu paint (%zu paint rules, %zu per-voxel, %zu placed)\n",
+                static_cast<unsigned long long>(built.shape_evaluations),
+                static_cast<unsigned long long>(built.paint_evaluations), built.rules_total,
+                built.rules_per_voxel, built.rules_placed);
     std::printf("cost          parse %.1f ms, sample %.1f ms, %llu field evaluations\n",
                 ns_to_ms(parsed - begin), ns_to_ms(sampled - parsed),
                 static_cast<unsigned long long>(built.evaluations));

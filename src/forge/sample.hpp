@@ -56,6 +56,23 @@ struct PaintRule {
     // ask", which is the default.
     u32 facing_axis = 3;
     f64 facing_min = 0.5;   // dot product with the positive axis direction; negative for down
+
+    // Optional: a shape saying WHERE this rule may apply, as distinct from `test`, which says
+    // what it applies to.
+    //
+    // The two are different questions and separating them is worth a field. A test can be a
+    // pattern — a noise, a curvature, how much sky a face can see — and a pattern is true or
+    // false at a point with no way to settle it for a region, so a rule keyed on one is asked at
+    // every voxel there is. A place is a shape, and a shape has a bounding box, so a region that
+    // lies outside it settles the rule to "no" for nothing.
+    //
+    // The facility measured it: six of its hundred and thirty-three rules were pattern-keyed
+    // weathering, and those six were eight hundred and forty million of its nine hundred and
+    // twelve million field evaluations — ninety-two per cent of the build. All six were already
+    // confined to thin bands of the building by `weather ... on=`; the sampler simply had no way
+    // to know it.
+    u32 place = 0;
+    bool has_place = false;
 };
 
 // Where to sample, how finely, and what to fill with.
@@ -142,6 +159,13 @@ struct SampleResult {
     f64 best_part_slack = 0.0;   // the MOST any one part needs; zero when nothing moves
     f64 worst_part_reach = 0.0;  // and how much of the clip that part's box spans, 0 to 1
     usize parts = 0;             // how many parts could be told apart; 0 means none could
+
+    // Paint rules that can never be settled for a box and so are asked at every solid voxel:
+    // the ones keyed on a pattern rather than on a shape. They are the floor on what painting
+    // costs, and the number an author can actually do something about.
+    usize rules_total = 0;
+    usize rules_per_voxel = 0;
+    usize rules_placed = 0;      // how many carry an on= place the sampler can cull on
 };
 
 // Fill a clip from a field.

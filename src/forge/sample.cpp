@@ -409,6 +409,18 @@ struct Descent {
     const SampleSettings* settings = nullptr;
     Clip* clip = nullptr;
     const std::vector<f64>* rule_slack = nullptr;
+    // Where each rule could possibly apply, when that can be said at all.
+    //
+    // A rule keyed on a shape and accepted below a threshold applies only inside that shape, so
+    // it applies only inside that shape's bounding box — and a box of the descent that lies
+    // wholly outside it can settle the rule to "no" for nothing, without asking the field.
+    //
+    // This is the same trick the union cull plays, and it matters here for the same reason it
+    // mattered there, only more so: the facility carries a hundred and thirty-three paint rules,
+    // one or two from each of twenty authors, and paint was eighty-six per cent of every field
+    // evaluation in the building. Almost none of those rules can apply at any given place, and
+    // almost all of them were being asked.
+    const std::vector<Field::Aabb>* rule_box = nullptr;
     i64 lo[3]{0, 0, 0};
     i32 size[3]{0, 0, 0};
     f64 voxel = 0.0;
@@ -641,6 +653,13 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
             state[i] = was;
             continue;
         }
+        // Nowhere near the only place this rule could apply, so it does not, and no evaluation is
+        // needed to know it. Free, and the difference between asking a hundred and thirty-three
+        // rules at every box and asking the two or three that could possibly be true here.
+        if (away_from((*d.rule_box)[i], middle) > radius) {
+            state[i] = 0;
+            continue;
+        }
         if ((*d.rule_slack)[i] >= Field::kInfiniteSlack) {
             state[i] = 2;
             every_rule_known = false;
@@ -807,13 +826,57 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     // a union is not, because there is no one number for it — and a rule widened by an unbounded
     // amount is a rule that paints the entire clip.
     std::vector<f64> rule_slack(paint.size(), Field::kInfiniteSlack);
+    std::vector<Field::Aabb> rule_box(paint.size());
     std::vector<PaintRule> widened = paint;
     for (usize i = 0; i < paint.size(); ++i) {
+        // A rule that names its place is placed, WHATEVER its test is, and this has to come before
+        // anything else gives up on the rule.
+        //
+        // It is the whole point of the field existing. A weathering coat keyed on a curvature or
+        // an occlusion cannot be settled for a region by any cleverness about its test — and does
+        // not need to be, because it was confined to a named shape when it was written. Placing it
+        // below the "this test says nothing, give up" branch put it after a `continue` taken by
+        // exactly the rules it was written for, and changed nothing at all.
+        if (paint[i].has_place) {
+            const Field::Aabb where = field.bounds_of(paint[i].place);
+            if (!where.infinite()) {
+                // Grown by the whole-clip displacement, because that is what can carry a voxel out
+                // of the shape it belongs to.
+                const f64 reach = amplitude;
+                rule_box[i].low = Vec3{where.low.x - reach, where.low.y - reach,
+                                       where.low.z - reach};
+                rule_box[i].high = Vec3{where.high.x + reach, where.high.y + reach,
+                                        where.high.z + reach};
+            }
+        }
+
         const f64 metric = field.metric_slack(paint[i].test);
         if (paint[i].facing_axis >= 3) rule_slack[i] = metric;   // a normal is a per-voxel question
         if (metric >= Field::kInfiniteSlack) continue;
         widened[i].low -= amplitude;
         widened[i].high += amplitude;
+        if (paint[i].has_place) continue;   // already placed, and exactly
+
+        // Where this rule could possibly say yes.
+        //
+        // Only a rule that is bounded ABOVE can be placed. `where=<shape> below=0.02` accepts a
+        // small distance, so it accepts only inside that shape or just outside it, and the
+        // shape's box grown by the threshold contains every point it could ever paint.
+        //
+        // A rule bounded below instead — `above=0.5` on a pattern, "where the grain is high" —
+        // is the complement of a shape and has no box at all: it can be true anywhere the shape
+        // is not, which is most of the world. Those keep the infinite box they start with and
+        // are settled the old way, by asking.
+        if (widened[i].high < 1e29 && widened[i].low <= -1e29) {
+            const Field::Aabb inner = field.bounds_of(paint[i].test);
+            if (!inner.infinite()) {
+                const f64 reach = std::max(0.0, widened[i].high) + metric;
+                rule_box[i].low = Vec3{inner.low.x - reach, inner.low.y - reach,
+                                       inner.low.z - reach};
+                rule_box[i].high = Vec3{inner.high.x + reach, inner.high.y + reach,
+                                        inner.high.z + reach};
+            }
+        }
     }
 
     // Asked of a box, and then of its halves, and then of theirs.
@@ -890,6 +953,7 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     descent.settings = &settings;
     descent.clip = &clip;
     descent.rule_slack = &rule_slack;
+    descent.rule_box = &rule_box;
     descent.voxel = voxel;
     descent.centre_shift = centre_shift;
     descent.slack = slack;
@@ -898,6 +962,11 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
         descent.size[axis] = size[axis];
     }
 
+    result.rules_total = paint.size();
+    for (const PaintRule& r : paint) { if (r.has_place) ++result.rules_placed; }
+    for (usize i = 0; i < paint.size(); ++i) {
+        if (rule_slack[i] >= Field::kInfiniteSlack && rule_box[i].infinite()) ++result.rules_per_voxel;
+    }
     result.slack = slack;
     result.prune_slack = prune_slack;
     result.parts = descent.parts_usable ? descent.part_slack.size() : 0;
