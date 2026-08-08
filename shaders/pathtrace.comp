@@ -703,10 +703,23 @@ void contribute(uint slot, vec3 value, uint window) {
     // or a NaN from a degenerate direction. The clamp costs three instructions and removes the
     // whole class.
     //
-    // The ceiling is the accumulator's, not the renderer's. The sum is a u32 holding value times
-    // kFixedScale, and the window halves it at `window` samples, so anything under about a thousand
-    // can never overflow. Sixty-four is far above any radiance in the scene and far below that.
-    const float kFaceSampleMax = 64.0;
+    // The ceiling is chosen against the SCENE, not against the accumulator.
+    //
+    // Sixty-four was picked so the sum could not overflow, which it comfortably could not — but
+    // nothing in this scene is anywhere near it. The sun's own colour is about three, so a face
+    // sample of sixty-four is twenty times brighter than the brightest honest surface, and in a
+    // room with no lights it is tens of thousands of times the true answer. That is what a firefly
+    // looks like when it lands in a cache entry: not an infinity, just a number far larger than
+    // anything real, averaged into a face and held there.
+    //
+    // Eight still sits well above every legitimate surface, and cuts what a freak sample can do by a
+    // factor of eight.
+    //
+    // Absolute, deliberately. A ceiling derived from the face's own mean was tried and taken out: it
+    // forms a loop — the mean cannot rise past the ceiling and the ceiling is a multiple of the mean
+    // — so a face that once read dark refuses the samples that would have brightened it. A constant
+    // cannot do that to a face, whatever the face currently believes.
+    const float kFaceSampleMax = 8.0;
     vec3 safe = clamp(value, vec3(0.0), vec3(kFaceSampleMax));
     if (any(isnan(value)) || any(isinf(value))) safe = vec3(0.0);
 
@@ -847,7 +860,8 @@ FaceLight read_face(uint slot) {
     // clamped to 64 going in, so a mean above that is arithmetic having gone wrong rather than
     // a bright surface Ã¢â‚¬â€ and a wrong entry in a cache does not fade, it persists and spreads.
     // Visibility lives in its own entry now; this one holds irradiance only.
-    light.indirect = min(vec3(sum.xyz) * inv, vec3(64.0));
+    // The same ceiling the samples went in under; a mean cannot honestly exceed it.
+    light.indirect = min(vec3(sum.xyz) * inv, vec3(8.0));
     light.count = count;
 
     // How far the mean is likely to be out, as a fraction of itself.
