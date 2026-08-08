@@ -808,6 +808,20 @@ private:
     i64 refine_at_[3]{0, 0, 0};
     std::string refine_cache_path_;
     u64 refine_cache_key_ = 0;
+
+    // The clip cut into boxes, each refined to full detail on its own and nearest first.
+    //
+    // Refining the whole world a rung at a time is the wrong shape for this. Every rung is eight
+    // times the last, so the final one is minutes, and until it lands EVERYTHING is coarse — the
+    // wall you are standing at included, however long you look at it. Sampling the box you are
+    // standing in instead is a second, and it is the only part of the world anybody can see.
+    struct RefineRegion {
+        forge::Vec3 low;
+        forge::Vec3 high;
+        bool done = false;
+    };
+    std::vector<RefineRegion> refine_regions_;
+    usize refine_region_ = 0;   // the one being sampled right now
     void start_refinement();
     void pump_refinement();
 
@@ -1252,11 +1266,36 @@ void Application::draw_loading() {
 // doing: every rung before the last is nearly free next to it, and the player sees the world from
 // the first one.
 void Application::start_refinement() {
-    if (refine_running_ || refine_script_ == nullptr || refine_scale_ <= 1) return;
+    if (refine_running_ || refine_script_ == nullptr) return;
 
-    const u32 next = refine_scale_ / 2;
-    refine_script_->settings.voxels_per_metre =
-        std::max<i32>(1, refine_authored_ / static_cast<i32>(next));
+    // Nearest first, measured from where the camera is now rather than from where it was when the
+    // list was made. Somebody who walks across the building while it sharpens should have the far
+    // side come good as they arrive, not have the near side finished behind them.
+    const f64 cx = camera_.metres_x();
+    const f64 cy = camera_.metres_y();
+    const f64 cz = camera_.metres_z();
+
+    usize best = refine_regions_.size();
+    f64 nearest = 0.0;
+    for (usize i = 0; i < refine_regions_.size(); ++i) {
+        const RefineRegion& box = refine_regions_[i];
+        if (box.done) continue;
+        // Distance to the box, nought inside it, so the one you are standing in always wins.
+        const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
+        const f64 dy = std::max({box.low.y - cy, 0.0, cy - box.high.y});
+        const f64 dz = std::max({box.low.z - cz, 0.0, cz - box.high.z});
+        const f64 away = dx * dx + dy * dy + dz * dz;
+        if (best == refine_regions_.size() || away < nearest) {
+            best = i;
+            nearest = away;
+        }
+    }
+    if (best == refine_regions_.size()) return;   // every box is sharp
+
+    refine_region_ = best;
+    refine_script_->settings.voxels_per_metre = refine_authored_;
+    refine_script_->settings.low = refine_regions_[best].low;
+    refine_script_->settings.high = refine_regions_[best].high;
 
     if (refine_jobs_ == nullptr) {
         // Fewer workers than the main system, and deliberately. This runs while somebody is
@@ -1267,17 +1306,16 @@ void Application::start_refinement() {
 
     refine_ready_.store(false, std::memory_order_release);
     refine_running_ = true;
-    refine_thread_ = std::thread([this, next] {
+    refine_thread_ = std::thread([this] {
         auto built = std::make_unique<forge::SampleResult>(forge::sample(
             refine_script_->field, refine_script_->solid, refine_script_->paint,
             refine_script_->settings, refine_jobs_.get(), {}));
         refine_result_ = std::move(built);
-        WS_LOG_INFO("clip", "refined to scale {} in the background", next);
         refine_ready_.store(true, std::memory_order_release);
     });
 }
 
-// Take delivery of a finished rung, if one is ready, and put it in the world.
+// Take delivery of a finished box, if one is ready, and put it in the world.
 void Application::pump_refinement() {
     if (!refine_running_) {
         start_refinement();
@@ -1289,85 +1327,57 @@ void Application::pump_refinement() {
     refine_running_ = false;
     if (refine_result_ == nullptr) return;
 
-    const u32 next = refine_scale_ / 2;
     const u64 began = now_ns();
 
-    // Varied ONCE, at the rung that keeps it.
-    //
-    // Variation gives every voxel its own version of its material, so it interns something close to
-    // one type per voxel — a million of them on this building. Run on every rung it interns a
-    // million MORE each time, because the types the previous rung made are still referenced by
-    // nothing and released by nobody. Three rungs in, the table hit two million and overran the GPU
-    // buffer it is uploaded through, which is an assert and a crash report rather than a slow frame.
-    //
-    // Nothing is lost by waiting. A coarse rung is blocky, and no-two-voxels-alike shading on a
-    // blocky world is a variation nobody can see.
-    if (next == 1) {
-        forge::apply_variation(refine_result_->clip, types_, refine_script_->field,
-                               refine_script_->variation, refine_script_->settings,
-                               *refine_result_, refine_jobs_.get());
-    }
+    // Varied, because this box arrives at its final detail and keeps it. Only the coarse build that
+    // the player entered on is left flat, and that one is replaced entirely.
+    forge::apply_variation(refine_result_->clip, types_, refine_script_->field,
+                           refine_script_->variation, refine_script_->settings, *refine_result_,
+                           refine_jobs_.get());
 
-    const PasteStats stamped = paste_clip(world_, ledger_, refine_result_->clip,
-               refine_result_->origin_voxel[0] * static_cast<i64>(next) + refine_at_[0],
-               refine_result_->origin_voxel[1] * static_cast<i64>(next) + refine_at_[1],
-               refine_result_->origin_voxel[2] * static_cast<i64>(next) + refine_at_[2],
-               // REPLACE, not SolidOnly. A rung supersedes the one before it, so the clip has to
-               // land whole and its empty parts have to clear what the coarser pass left there.
-               // Stamped instead of replaced, each pass only ever ADDS: the blocky overshoot of the
-               // coarse build survives outside the finer surface and the world grows every rung
-               // rather than sharpening. It read as eighty-four chunks where the full build has
-               // seventy-four.
-               //
-               // Clearing the player's edits along with it is correct, because they are put back
-               // immediately below and put back at the new detail.
-               // With the workers. Passing nullptr here ran the paste on ONE core, and it is the
-               // same paste the initial build does across all of them in a second and a half —
-               // twenty-two seconds of frozen frame for want of an argument.
-               PasteMode::Replace, MatterReason::PlayerPlace, 1, refine_jobs_.get(),
-               types_.type_count(), next);
-
-    // Replace writes air wherever the clip is empty, and a chunk that is asked for and then filled
-    // with nothing still exists. Without this the count climbs every rung — a hundred and twenty
-    // chunks against the seventy-four the finished world has — and every one of them is streamed,
-    // uploaded and marched for the sake of holding no matter.
+    // REPLACE, so the box supersedes the coarse voxels standing in for it. Stamped instead, the
+    // blocky overshoot survives outside the finer surface and the world only ever grows.
+    const PasteStats stamped = paste_clip(
+        world_, ledger_, refine_result_->clip, refine_result_->origin_voxel[0] + refine_at_[0],
+        refine_result_->origin_voxel[1] + refine_at_[1],
+        refine_result_->origin_voxel[2] + refine_at_[2], PasteMode::Replace,
+        MatterReason::PlayerPlace, 1, refine_jobs_.get(), types_.type_count(), 1);
     if (stamped.chunks_left_empty) world_.compact();
 
-    // Everything the player did to the coarse world, done again to the fine one.
-    //
-    // An op is a SHAPE — FillBox carries two corners in world voxels, not a list of the voxels it
-    // happened to change — so replaying it against finer geometry re-cuts the same volume at the
-    // new detail. A chisel stroke that took out a blocky lump when the world was coarse takes out
-    // exactly the region it described, now with an edge on it. The cut re-measures itself; nothing
-    // here has to understand what it meant.
+    // Everything the player did, done again. An op is a SHAPE — FillBox carries two corners in
+    // world voxels, not the voxels it happened to change — so replaying it against finer geometry
+    // re-cuts the same volume at the new detail. The cut re-measures itself.
     const std::vector<Op>& done = op_log_.ops();
     if (!done.empty()) apply_ops(world_, done, ledger_);
 
-    refine_scale_ = next;
-    const WorldStats now = world_.stats();
-    WS_LOG_INFO("clip", "world sharpened to scale {} in {:.0f} ms: {} chunks, {} solid voxels, "
-                        "{} edits replayed",
-                refine_scale_, ns_to_ms(now_ns() - began), now.chunks, now.solid_voxels,
-                done.size());
-
+    refine_regions_[refine_region_].done = true;
     refine_result_.reset();
 
-    // The finished world, kept now that it IS the finished world.
-    if (refine_scale_ == 1 && !refine_cache_path_.empty()) {
-        WorldCache cache;
-        cache.tags = &tags_;
-        cache.properties = &properties_;
-        cache.types = &types_;
-        cache.world = &world_;
-        cache.ledger = &ledger_;
-        cache.materials = materials_;
-        write_world_cache(refine_cache_path_, refine_cache_key_, cache);
-        WS_LOG_INFO("clip", "kept the finished world; the next launch reads it back");
-        refine_cache_path_.clear();
+    usize left = 0;
+    for (const RefineRegion& box : refine_regions_) {
+        if (!box.done) ++left;
+    }
+    WS_LOG_INFO("clip", "region sharpened in {:.0f} ms, {} left", ns_to_ms(now_ns() - began), left);
 
-        // The script owned the field, and nothing needs it once the ladder is done.
+    if (left == 0) {
+        const WorldStats now = world_.stats();
+        WS_LOG_INFO("clip", "world fully sharpened: {} chunks, {} solid voxels", now.chunks,
+                    now.solid_voxels);
+        if (!refine_cache_path_.empty()) {
+            WorldCache cache;
+            cache.tags = &tags_;
+            cache.properties = &properties_;
+            cache.types = &types_;
+            cache.world = &world_;
+            cache.ledger = &ledger_;
+            cache.materials = materials_;
+            write_world_cache(refine_cache_path_, refine_cache_key_, cache);
+            WS_LOG_INFO("clip", "kept the finished world; the next launch reads it back");
+            refine_cache_path_.clear();
+        }
         refine_script_.reset();
         refine_jobs_.reset();
+        return;
     }
 
     start_refinement();
@@ -1591,6 +1601,34 @@ void Application::build_world() {
                 refine_at_[1] = options_.clip_at[1];
                 refine_at_[2] = options_.clip_at[2];
                 refine_script_ = std::make_unique<forge::Script>(std::move(script));
+
+                // Boxes of about four metres. Small enough that one is a second of sampling rather
+                // than a minute, large enough that the per-box overhead — a field walk, a paste, a
+                // compaction — is not most of the work.
+                const forge::Vec3 lo = refine_script_->settings.low;
+                const forge::Vec3 hi = refine_script_->settings.high;
+                const f64 want = 4.0;
+                const auto steps = [&](f64 a, f64 b) {
+                    return std::max<i32>(1, static_cast<i32>(std::ceil((b - a) / want)));
+                };
+                const i32 nx = steps(lo.x, hi.x);
+                const i32 ny = steps(lo.y, hi.y);
+                const i32 nz = steps(lo.z, hi.z);
+                for (i32 z = 0; z < nz; ++z) {
+                    for (i32 y = 0; y < ny; ++y) {
+                        for (i32 x = 0; x < nx; ++x) {
+                            RefineRegion box;
+                            box.low = {lo.x + (hi.x - lo.x) * x / nx,
+                                       lo.y + (hi.y - lo.y) * y / ny,
+                                       lo.z + (hi.z - lo.z) * z / nz};
+                            box.high = {lo.x + (hi.x - lo.x) * (x + 1) / nx,
+                                        lo.y + (hi.y - lo.y) * (y + 1) / ny,
+                                        lo.z + (hi.z - lo.z) * (z + 1) / nz};
+                            refine_regions_.push_back(box);
+                        }
+                    }
+                }
+                WS_LOG_INFO("clip", "{} regions to sharpen, nearest first", refine_regions_.size());
             }
             // The two ns figures are summed across worker threads, so they exceed the wall clock
             // on a parallel build. What they are for is the RATIO: how much of the sampling is
