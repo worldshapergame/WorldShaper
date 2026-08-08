@@ -110,8 +110,16 @@ struct Options {
     bool clip_align = false;
     i64 clip_at[3]{0, 0, 0};                // where to stamp it, in voxels
     // Sample at a fraction of the authored detail and blow it back up on the way in, so the world
-    // is the right size and merely blocky. A power of two; 1 is the ordinary full-detail build.
-    u32 clip_coarse = 1;
+    // is the right size and merely blocky, then sharpen it in the background while it is walked
+    // around in. A power of two; 1 is the old behaviour of waiting for the whole thing.
+    //
+    // Four rather than eight. Eight enters the world in a second and a half against five, and both
+    // are inside anybody's patience — but a quarter-detail build is markedly closer to the real
+    // one. At an eighth, thin things that ought to be openings fill in: the frames of the secondary
+    // doors come back solid white, and the second-storey window surrounds lose their profile. That
+    // is not a fault to be fixed, it is what sampling below the size of a feature MEANS, and the
+    // answer is to start above it.
+    u32 clip_coarse = 4;
     i32 clip_metre = 0;                     // override the file's resolution, for quick previews
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
@@ -798,6 +806,8 @@ private:
     u32 refine_scale_ = 1;      // what the world is at now; 1 is the clip's own detail
     i32 refine_authored_ = 0;   // voxels per metre the clip asked for
     i64 refine_at_[3]{0, 0, 0};
+    std::string refine_cache_path_;
+    u64 refine_cache_key_ = 0;
     void start_refinement();
     void pump_refinement();
 
@@ -1341,6 +1351,25 @@ void Application::pump_refinement() {
                 done.size());
 
     refine_result_.reset();
+
+    // The finished world, kept now that it IS the finished world.
+    if (refine_scale_ == 1 && !refine_cache_path_.empty()) {
+        WorldCache cache;
+        cache.tags = &tags_;
+        cache.properties = &properties_;
+        cache.types = &types_;
+        cache.world = &world_;
+        cache.ledger = &ledger_;
+        cache.materials = materials_;
+        write_world_cache(refine_cache_path_, refine_cache_key_, cache);
+        WS_LOG_INFO("clip", "kept the finished world; the next launch reads it back");
+        refine_cache_path_.clear();
+
+        // The script owned the field, and nothing needs it once the ladder is done.
+        refine_script_.reset();
+        refine_jobs_.reset();
+    }
+
     start_refinement();
 }
 
@@ -1552,6 +1581,8 @@ void Application::build_world() {
             // Hold on to everything the ladder needs. The script owns the field, which the
             // background sampler reads and nothing else touches once parsing is done.
             if (coarse > 1) {
+                refine_cache_path_ = options_.no_clip_cache ? std::string() : cache_path;
+                refine_cache_key_ = key;
                 refine_authored_ = (options_.clip_metre > 0) ? options_.clip_metre
                                                              : script.settings.voxels_per_metre *
                                                                    static_cast<i32>(coarse);
@@ -1584,8 +1615,12 @@ void Application::build_world() {
             WS_LOG_INFO("world", "'{}' built in {:.0f} ms: {} chunks, {} solid voxels", path,
                         ns_to_ms(now_ns() - start), clip_stats.chunks, clip_stats.solid_voxels);
 
-            // Kept, so the next run does not do any of that again.
-            if (!options_.no_clip_cache) {
+            // Kept, so the next run does not do any of that again — but NOT while it is still
+            // arriving. A coarse build is a stage on the way to the real world, and writing it here
+            // would cache the blocky one for ever: every launch after the first would load it in
+            // half a second, find nothing left to refine, and the building would never come good
+            // again. Deferred to the last rung; see pump_refinement.
+            if (!options_.no_clip_cache && coarse <= 1) {
                 progress_.enter(LoadStage::Caching);
                 WorldCache cache;
                 cache.tags = &tags_;
