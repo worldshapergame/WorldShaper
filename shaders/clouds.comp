@@ -138,12 +138,29 @@ vec3 ray_through(vec2 pixel, float aspect) {
 // cloud along that ray, and it does not need to be: what matters is that near and far parts of the
 // sky move by amounts that differ correctly, and a single representative depth per ray gets that.
 vec3 where_it_was(vec3 dir, float aspect, float eye_height) {
-    // Where the ray crosses the middle of the deck, in metres along it.
-    float middle = (kLowBase + kLowTop) * 0.5;
-    float distance_m = kCloudFarMetres;
-    if (abs(dir.y) > 1e-4) {
-        float to_middle = (middle - eye_height) / dir.y;
-        if (to_middle > 0.0) distance_m = min(to_middle, kCloudFarMetres);
+    // How far along this ray to put the point, and it is the middle of the ray's own span through
+    // the cumulus deck rather than a fixed plane at the deck's mid-height.
+    //
+    // A fixed plane is right only when the eye is well below the deck. Fly up into it and the plane
+    // is BEHIND the camera for every upward ray, the intersection comes out negative, and the whole
+    // upper half of the screen fell back to the far distance -- reprojected as though at infinity,
+    // which is the one case translation cannot be ignored in. That is the warp that shows up when
+    // you move near a cloud, and it gets worse the closer you are, which is how it was reported.
+    //
+    // Spanning the deck instead is correct from anywhere. From below, the span runs from the base to
+    // the top and its middle is the body of the cloud. From inside, the span starts at the eye and
+    // the middle is a few hundred metres away, which is where the cloud actually is.
+    float distance_m;
+    if (abs(dir.y) < 1e-4) {
+        distance_m = (eye_height >= kLowBase && eye_height <= kLowTop) ? kCloudFarMetres * 0.02
+                                                                      : kCloudFarMetres;
+    } else {
+        float to_base = (kLowBase - eye_height) / dir.y;
+        float to_top = (kLowTop - eye_height) / dir.y;
+        float enter = max(min(to_base, to_top), 0.0);
+        float leave = max(to_base, to_top);
+        distance_m = leave <= 0.0 ? kCloudFarMetres
+                                  : clamp((enter + leave) * 0.5, 1.0, kCloudFarMetres);
     }
 
     vec3 here = push.origin.xyz + dir * metres(distance_m);
@@ -273,29 +290,23 @@ void resolve_pass() {
     vec4 carried = on_screen ? read_history(reading, was.xy)
                              : marched_between(vec2(pixel));
 
-    // Held to what is true NOW, by the marches this frame actually did.
+    // Bounded, and the bound is SMOOTH rather than block-shaped.
     //
-    // Both faults people see while moving come from carried values never being checked against
-    // anything. A pixel updated this frame holds the right answer; its neighbours hold one from up
-    // to fifteen frames ago, reprojected by a rotation that ignores translation. So the marched
-    // pixels disagree with the carried ones, and since the marched ones sit on a four-by-four
-    // lattice that disagreement IS a dither pattern. Left to run for fifteen frames the same error
-    // is a smear.
+    // The version of this that shipped first clamped each carried value into the min and max of the
+    // four nearest marches. It worked, and it could only ever work at the resolution of the thing it
+    // compared against — and the marches sit on a four-by-four lattice, so it knew nothing finer
+    // than a block. Every pixel was pulled towards what its block said and the full-resolution
+    // history was flattened back to block resolution. Reported as "clouds look low res", and then
+    // exactly as "some optimisation technique is lowering the resolution of the clouds".
     //
-    // Clamping the carried value into the range of the nearby marches fixes both, because both are
-    // the same fault: a stale value is pulled to the current answer, so it cannot smear; and a
-    // carried value next to a marched one is pulled into its range, so the lattice stops showing.
-    // Where nothing has changed the range is tight and the clamp does nothing at all.
+    // Removing it outright restored the sharpness and brought back a fine stipple over the whole
+    // sky, because a bound was genuinely needed: one representative depth per ray cannot reproject a
+    // VOLUME exactly, so neighbouring pixels carry slightly different answers for ever.
     //
-    // Four taps, at block resolution, from a buffer a sixteenth the size that every one of these
-    // invocations has just read anyway.
-    // Seeded from a real tap, never from a sentinel.
-    //
-    // Starting at plus and minus a billion and folding the taps in looks equivalent and is not:
-    // `clamp(x, lo, hi)` with lo above hi is UNDEFINED, and any path that leaves the sentinels in
-    // place — a frame before the marches have been written, a block index that clamps oddly —
-    // writes about a billion into a half-float history, which saturates to infinity and stays
-    // there for ever. The frame went from 11.6 ms to 65 with the arithmetic otherwise unchanged.
+    // So: centre the bound on the bilinear reading of the marches, which varies smoothly from pixel
+    // to pixel, and take only its WIDTH from the block lattice. An outlier is still caught, because
+    // the width is honest about how much the neighbourhood disagrees. Nothing is quantised, because
+    // the centre never is.
     ivec2 block = pixel >> 2;
     ivec2 blocks = (ivec2(push.resolution.xy) + 3) / 4 - 1;
     vec4 lo = imageLoad(cloud_marched, clamp(block, ivec2(0), blocks));
@@ -306,18 +317,12 @@ void resolve_pass() {
         lo = min(lo, near);
         hi = max(hi, near);
     }
-    // Widened GENEROUSLY, because this is a guard against a stale value and not a filter.
-    //
-    // The range it clamps to is measured from marches on a four-by-four lattice, so it knows
-    // nothing finer than a block. Held tightly, every pixel is pulled towards what its block says
-    // and the full-resolution history is flattened back to block resolution — which is the
-    // quarter-resolution softness this whole approach exists to avoid, arriving by the back door.
-    // It was reported as the clouds looking low resolution, and that is exactly what it was.
-    //
-    // At sixty per cent of the range either side it still catches a value that has drifted
-    // somewhere its neighbourhood never went, and leaves anything merely detailed alone.
-    vec4 slack = (hi - lo) * 0.6 + vec4(0.05);
-    carried = clamp(carried, lo - slack, hi + slack);
+    // Seeded from a real tap, never from a sentinel: `clamp(x, lo, hi)` with lo above hi is
+    // UNDEFINED, and a sentinel left in place writes about a billion into a half-float history,
+    // which saturates to infinity and stays there. That cost 65 ms once already.
+    vec4 centre = marched_between(vec2(pixel));
+    vec4 spread = (hi - lo) * 1.25 + vec4(0.06);
+    carried = clamp(carried, centre - spread, centre + spread);
 
     imageStore(cloud_history[writing], pixel, carried);
 }
