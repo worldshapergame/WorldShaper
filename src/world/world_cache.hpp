@@ -69,6 +69,9 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
 
 // Returns false — quietly, and without touching anything — when the file is missing, is from
 // another version, or was built from different source. A cache miss is not an error.
+// Whether the cached world on disk was built for this key, read from its header alone.
+bool world_cache_matches(const std::string& path, u64 key);
+
 bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSystem* jobs);
 
 }  // namespace ws

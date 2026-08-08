@@ -1302,6 +1302,26 @@ void Application::build_world() {
             // miss it cost nothing to have tried. Splitting it would mean deciding which stage it
             // belonged to BEFORE knowing whether it succeeded, and putting the bar back afterwards
             // is how a bar starts going backwards.
+            // A cached world that does not match this key is dead: the clip changed, or the code
+            // that builds it did. Deleting it here rather than waiting for the rebuild to overwrite
+            // it matters because these files are HUGE -- the facility is six hundred megabytes -- and
+            // a build that is interrupted, or a clip that is renamed or removed, leaves the old one
+            // on disk for ever with a key nothing will ever ask for again.
+            //
+            // The key already covers everything it should. It is hashed from the fully spliced
+            // source, so editing any INCLUDED file counts, and from the newest modification time
+            // across src/forge and src/world, so changing the compiler counts too.
+            std::error_code stale;
+            if (!std::filesystem::exists(cache_path, stale)) {
+                // nothing to clear
+            } else if (!world_cache_matches(cache_path, key)) {
+                std::filesystem::remove(cache_path, stale);
+                if (!stale) {
+                    WS_LOG_INFO("world", "'{}' changed since its cache was built; discarded it",
+                                path);
+                }
+            }
+
             if (read_world_cache(cache_path, key, cache, &jobs)) {
                 progress_.enter(LoadStage::Uploading);
                 materials_ = cache.materials;

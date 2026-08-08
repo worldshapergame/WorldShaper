@@ -301,6 +301,23 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
     return true;
 }
 
+// Does the file on disk belong to this key, without reading the file.
+//
+// Sixteen bytes rather than six hundred megabytes. The caller uses it to decide whether a cached
+// world is dead and should be deleted, and reading a third of a gigabyte off a disk to answer that
+// would cost more than the rebuild it is trying to avoid announcing.
+bool world_cache_matches(const std::string& path, u64 key) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return false;
+    u32 magic = 0, version = 0;
+    u64 stored = 0;
+    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    file.read(reinterpret_cast<char*>(&version), sizeof(version));
+    file.read(reinterpret_cast<char*>(&stored), sizeof(stored));
+    if (!file) return false;
+    return magic == kMagic && version == kVersion && stored == key;
+}
+
 bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSystem* jobs) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file) return false;

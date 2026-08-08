@@ -237,10 +237,12 @@ add_custom_target(ws_shaders ALL DEPENDS ${WS_SPV_FILES})
 add_dependencies(WorldShaper ws_shaders)
 
 # The clips are content, and the facility is the scene now, so they have to travel with the
-# executable the way the compiled shaders do.
+# executable the way the compiled shaders do. Their built WORLDS do not: see cmake/copy_clips.cmake.
 add_custom_command(TARGET WorldShaper POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/clips" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/clips")
+    COMMAND ${CMAKE_COMMAND}
+            -DSRC="${CMAKE_CURRENT_SOURCE_DIR}/clips"
+            -DDST="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/clips"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_clips.cmake")
 
 # Record where glslc lives so runtime hot reload can find it without a PATH lookup.
 target_compile_definitions(ws_gpu PUBLIC WS_GLSLC_PATH="${Vulkan_GLSLC_EXECUTABLE}")
