@@ -50,6 +50,14 @@
 #   cutters. A groove is the hardest thin matter there is: a sampler stepping by its own reported
 #   distance can walk straight across the mouth of one. DO NOT WIDEN THEM.
 #
+#   THE RUSTICATION. Both faces of both cheek walls are channelled to the podium's own numbers —
+#   0.045 wide (M/10) and 0.090 deep (M/5), courses of 0.45, blocks of 1.35 in running bond — and
+#   on the podium's own course lines, so the two read as one wall. One and a half voxels across at
+#   metre 32, and a channel is worse than a fin: it is a surface that folds back on itself inside
+#   one sample step, so a sampler that steps by its own distance can cross the mouth of one without
+#   ever seeing it. Below metre 24 they do not show at all, and that is the resolution, not a
+#   fault. DO NOT WIDEN THEM EITHER.
+#
 #   THE ROTATED FRAME. The raking coping and the wall under it are one straight section built
 #   about the origin and turned by -0.08154932 turns about x — atan(0.18/0.32), the stair's own
 #   slope. A rotation is an isometry so the field stays exact and keeps a box; this is the only
@@ -69,8 +77,10 @@
 #
 # THE MODULE. D = 0.90, M = 0.45. Every number below is a multiple or a simple fraction of one of
 # those, or of the stair's own two contract numbers, the riser 0.18 (0.4 M) and the run 0.32.
-# Three numbers are constructions rather than dimensions and are named where they occur: the rake
-# angle 0.08154932 turns, and the -0.45..4.05 clipping frames, which touch nothing.
+# The only exceptions are constructions rather than dimensions, and each is named where it occurs:
+# the rake angle 0.08154932 turns (= atan(0.5625) / tau), the +-3.60 and -2.97 lengths of the
+# section that is turned and then trimmed, and the 8.10 / 9.90 / -0.45 / -0.50 / 4.05 clipping
+# frames, which are only knives and are clear of everything they cut by at least 0.45.
 #
 # WHERE THIS PART MEETS ITS NEIGHBOURS
 #
@@ -220,11 +230,52 @@ let steps_cope_zone = box 8.10 -0.45 -14.74   9.90 4.05 -12.41
 let steps_wall_zone = box 8.10 -0.18 -15.22   9.90 4.05 -12.41
 
 let steps_coping_e = intersection { steps_cope_laid steps_cope_zone }
-let steps_wall_e   = intersection { steps_wall_laid steps_wall_zone }
+let steps_wall_cut = intersection { steps_wall_laid steps_wall_zone }
+
+# RUSTICATION. The outer face of a cheek wall is 2.30 m long and up to 2.80 m tall with nothing on
+# it, which at that size reads as a poured retaining wall rather than as masonry — and it stands
+# directly in front of the podium's rusticated die, which does not. So both faces of both cheeks
+# are channelled in the podium's own idiom and to the podium's own numbers:
+#
+#   channel   0.045 wide (M/10), 0.090 deep (M/5)   — the podium's rustication joint exactly
+#   course    0.45 (M) tall, blocks 1.35 (3 M) long — three to one, the podium's block
+#   bond      running: every other course is moved half a block along
+#
+# THE COURSE LINES LAND ON THE PODIUM'S. Its die is channelled at y = 0.45, 0.90 and 1.35; mine
+# continue the same set up to 2.70, so the coursing of a cheek wall and of the podium behind it are
+# one wall seen twice, not two walls that nearly agree.
+#
+# LEVEL courses, not raking ones. A raking parapet is built of level beds with the coping raking
+# over them; courses drawn parallel to the coping read as a ramp of stone rather than as a wall,
+# and that is the single thing that most makes a stair look extruded.
+#
+# At metre 32 the channel is one and a half voxels across and just under three deep, which is the
+# hardest kind of thin matter there is — a surface that folds back on itself inside one sample
+# step. DO NOT WIDEN IT. Below metre 24 it will not show at all, and that is the sampler's
+# resolution rather than a fault in the wall.
+#
+# The whole thing stops at z = -14.74 so it never reaches the pedestal, which is a dressed block
+# and has no courses; 0.09 into a 0.675 wall leaves 0.495 of it, so nothing is cut through.
+
+let steps_chan_h  = box 0.2475 -0.0225 -4.00    0.50 0.0225 4.00
+let steps_chan_v  = box 0.2475  0.0000 -0.0225  0.50 0.4500 0.0225
+
+let steps_beds    = repeat { steps_chan_h } y=0.45 ny=8
+let steps_perps_a = repeat { repeat { steps_chan_v } z=1.35 nz=3 } y=0.90 ny=4
+let steps_perps_b = translate { steps_perps_a } 0 0.45 0.675
+
+let steps_rust_sec  = union { steps_beds steps_perps_a steps_perps_b }
+let steps_rust_zone = box 8.10 -0.50 -14.74   9.90 4.05 -12.00
+let steps_rustic    = intersection { translate { mirror { steps_rust_sec } axis=x } 9.00 0.45 -12.60
+                                     steps_rust_zone }
+
+let steps_wall_e = difference { steps_wall_cut steps_rustic }
 
 # --- the pedestal -------------------------------------------------------------------------------
 #
-# 0.90 (D) across and 0.96 (three runs) deep, standing on the bottom three treads, top at 1.80.
+# 0.90 (D) across and 0.96 (three runs) deep, top at 1.80 — the podium's own datum, and the height
+# the raking coping arrives at, so the two meet flush and the walkability check sees no rise there
+# at all. The bottom three treads run into it from behind and are entirely inside it.
 # Drawn about its own centre so that the mouldings can be mitred, then carried to (9.00, -15.22).
 #
 #   -0.180 .. 0.2250   plinth        M/2 of it above ground, one riser below
@@ -239,6 +290,13 @@ let steps_wall_e   = intersection { steps_wall_laid steps_wall_zone }
 # x, each unioned with a core column so that the band includes the middle rather than only its own
 # rim. Intersect two bands that each say "|across| <= f(height)" and what is left is a rectangle
 # that grows with height — which is exactly what a moulding returning round four corners is.
+#
+# THE CORE COLUMNS ARE NOT OPTIONAL AND THEY FAIL SILENTLY. A moulding is only the band between its
+# two corners; on its own it says "0.3375 <= |x| <= f(y)", with a hole up the middle. Intersect two
+# of those and all you get is the four corners. Drop one core — I had `steps_bed_cz` written with
+# the same number twice, so it was a box of zero height and therefore nothing — and the mitre
+# quietly becomes two bars on two faces with the other two faces left as a plain overhang. It costs
+# no components, no floating voxels and no error, and it is only visible on a contact sheet.
 
 let steps_ped_plinth = box -0.45  -0.18 -0.48    0.45  0.2250 0.48 round=0.015
 let steps_ped_die    = box -0.3375 0.3375 -0.3675   0.3375 1.3500 0.3675 round=0.015
@@ -254,7 +312,7 @@ let steps_ped_base = intersection { union { steps_base_x steps_base_cx }
 let steps_bed_x = mirror { ovolo 0.3375 1.4850 -0.60   0.45 1.3500 0.60 run=z } axis=x
 let steps_bed_z = mirror { ovolo -0.60 1.4850 0.3675   0.60 1.3500 0.48 run=x } axis=z
 let steps_bed_cx = box -0.3375 1.3500 -0.60    0.3375 1.4850 0.60
-let steps_bed_cz = box -0.60   1.3500 -0.3675  0.60   1.3500 0.3675
+let steps_bed_cz = box -0.60   1.3500 -0.3675  0.60   1.4850 0.3675
 let steps_ped_bed = intersection { union { steps_bed_x steps_bed_cx }
                                    union { steps_bed_z steps_bed_cz } }
 

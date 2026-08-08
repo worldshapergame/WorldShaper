@@ -1,10 +1,391 @@
-# parapet - the balustrade above the cornice, dies and corner pedestals
+# parapet — the balustrade above the main cornice, 11.90 to 13.00, round the whole block except
+#           where the pediment stands.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# It runs the north front, both flanks and the two returns of the south front, stopping either
+# side of the portico so the pediment has its own sky. A moulded plinth, a close rank of turned
+# balusters, a moulded handrail; a solid die over every pilaster below; and at the four angles of
+# the block and at the two ends beside the pediment, a pedestal with a bronze urn on it.
 #
-# This file must define exactly one part named `part_parapet`. Every other name it binds must
-# start with `parapet_` so nothing collides with another fragment.
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD: THE SILHOUETTE. 274 turned shapes with nothing behind them.
+#
+# Every other piece of thin matter in this building is seen against more building. A flute is a
+# groove in a shaft, a dentil is a block under a corona, a pilaster is relief on a wall — all of
+# them have stone behind them, and stone behind a thin feature does half the work of reading it,
+# because the sampler only has to find one surface and the shading only has to separate two
+# neighbouring depths.
+#
+# A baluster has SKY behind it. It is 0.70 m tall and its neck is 0.063 m across — TWO VOXELS at
+# the contract's metre 32 — and there are 274 of them in a row, 74 m of them, along the top edge
+# of the building where the eye goes first and where every one of them is outlined against the
+# brightest thing in the frame. (60 of the 274 stand inside a die or a pedestal and are buried;
+# 214 stand free against sky. Burying them costs nothing and is what keeps the grid one grid.)
+# That is a different test from the flutes':
+#
+#   THE SAMPLER   a turned profile is a revolve, so the surface moves in and out by 0.018 m over
+#                 0.14 m of height at the waist. The distance field is exact there — it is one
+#                 `revolve` of one section — so if a baluster comes back with a straight neck,
+#                 or with its waist filled in, the sampler stepped further than the feature is
+#                 wide and nothing about the geometry can be blamed. This is the cleanest
+#                 thin-matter test in the building precisely because there is nothing else in
+#                 the way of it.
+#
+#   THE EDGE      273 shapes, each with two silhouette edges against sky, at a pitch of 0.27 m.
+#                 That is 546 high-contrast edges along one horizontal line. An anti-aliaser that
+#                 undersamples turns the whole rank into a grey fringe; a denoiser that decides
+#                 neighbouring pixels are the same surface turns it into a solid wall. Either
+#                 failure is unmistakable from 30 m away, which is the point of putting it at
+#                 the top of the building rather than somewhere it has to be hunted for.
+#
+#   THE GAP       0.09 m of air between two baluster plinths — under three voxels — and 0.207 m
+#                 between two necks. The rank has to read as separate stones with light coming
+#                 through it, not as a pierced band.
+#
+# The second load is METAL AGAINST SKY: six bronze urns, 1.35 m tall, standing clear of everything
+# on the corner pedestals, each one a revolved profile with a domed lid and a 0.048 m finial stem.
+# Bronze is rough 110 with metal 190, so an urn is a curved specular body with the sky as its only
+# environment — no wall to bounce off, no neighbour to reflect. If the metal model only works with
+# something to reflect, this is where it shows.
+#
+# DO NOT WIDEN THE BALUSTER OR OPEN THE SPACING. The baluster is the order's own `ionic_baluster`
+# and its 0.063 m neck is named in the load note at the top of _order.clip. The 0.27 m pitch is
+# 0.6 M and it is the closest spacing that still leaves 0.09 M of daylight between two plinths.
+# A comfortable balustrade tests nothing; this one is a measurement.
+#
+# NO WEATHERING IN THIS FILE, and for once that is not caution but arithmetic. `weather` displaces
+# a surface, and the smallest coat worth writing is a good fraction of the 0.063 m neck it would be
+# eating. The manifest's 12 mm of grain and its `variation` line give this part its
+# no-two-voxels-alike surface without touching the thin matter. If this balustrade is ever to be
+# worn, wear the plinth course and leave the balusters alone: `weather cracks 0.008 on=parapet_ring`.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45. Everything below is a multiple or a simple fraction of one of
+# them, with three exceptions, all of them named where they occur and all of them forced by the
+# contract rather than chosen:
+#
+#   16.00, 7.50   the block outline, which the contract itself says is not on the module
+#   11.90, 13.00  entab_top and parapet_top. Their difference is 1.10, which is not a multiple of
+#                 0.45, so ONE member has to absorb the remainder and it is the plinth. The rail
+#                 is 0.15 (M/3) and the baluster is the order's own 0.70; the plinth is what is
+#                 left, 0.35. Every subdivision inside those three is a module fraction.
+#   0.012         the arris round, per the brief's rule, and 0.05 the bedding overlap
+#
+# WHERE IT SITS AGAINST ITS NEIGHBOURS — all of it taken from the contract and nothing from
+# anybody's file:
+#
+#   11.90         entab_top: the top of the main cornice, which is the floor this stands on. The
+#                 plinth is drawn from 11.85 so it is bedded 0.05 into it, per the brief's rule 4.
+#   13.00         parapet_top: the top of the rail, exactly. The urns stand above it, as urns do.
+#   x = +-16.00   the block outline. The BALUSTER AXIS stands on it, so the balustrade is centred
+#   z = +-7.50    on the wall below and the plinth oversails 0.18 (0.4 M) either side of it. The
+#                 cornice top at 11.90 is an annulus 15.10 to 16.60 and 6.60 to 8.10, so all
+#                 0.36 m of this ring lands on solid stone with 0.42 to spare outside it and 0.72
+#                 of flat roof inside — which is where the roof's gutter goes, and is not my
+#                 business beyond leaving room for it.
+#   x = +-7.65    portico_x. The south returns stop clear of this line: the nearest thing this
+#                 part puts on the south front is a pedestal base at x = +-7.74, which leaves the
+#                 whole portico, its flanks and its angles to the pediment and the roof. See the
+#                 note at the end about what I deliberately did not build.
+#   the pilaster axes   x = +-1.35 .. +-14.85 on the north, x = +-9.45, +-12.15, +-14.85 on the
+#                 south returns, z = +-1.35, +-4.05, +-6.75 on the flanks. A die stands on every
+#                 one of them. They are the contract's own 2.70 bay and I take them from it, not
+#                 from pilasters.clip.
+#
+# HOW THE RING IS PUT TOGETHER, because a balustrade turning a corner is the same problem the
+# cornice below it has. Union four moulded runs and the corner comes out square at full projection
+# on both elevations — a lump. The mitre a mason cuts is the INTERSECTION of the two half solids,
+# "everything on the building's side of the profile at z = -7.50" AND "…at x = 16.00", which
+# traces the profile both ways at every height with no corner geometry at all. So the section
+# below is a half solid — the mouldings plus a deep box behind them — four of those are
+# intersected, and the middle is taken out with one box to leave a ring 0.36 thick with four free
+# mitres. The plinth and the rail are two bands of it and the air between them is where the
+# balusters are; that is why the deep box is in two pieces and not one.
 
-let parapet_placeholder = sphere 0 -1.30 0 r=0.25
-let part_parapet = parapet_placeholder
+include "_contract.clip"
+
+# ================================================================================================
+# THE SECTION — 11.85 to 13.00, drawn once, running along x with its back on the wall line and
+#               projecting to -z
+# ================================================================================================
+#
+# Projections are measured from the block outline, which the baluster axis stands on:
+#
+#   0.18   (0.4 M)   the face of the plinth and of the rail
+#   0.09   (0.2 M)   the face the balusters stand against — half the order's 0.18 baluster plinth
+#  -0.18            the back of the ring, so it is 0.36 (0.8 D) thick and centred on the wall
+#
+# Heights:
+#   11.850 - 12.1375  plinth die, plain, out to 0.18. The bottom 0.05 is bedded in the cornice.
+#   12.1375- 12.250   plinth cap, a cyma of M/4, receding 0.18 to 0.09
+#   12.250 - 12.850   OPEN — the balusters and 0.60 m of sky
+#   12.850 - 12.9625  rail cyma, M/4, swelling 0.09 back out to 0.18
+#   12.9625- 13.000   rail capping fillet, M/12, at 0.18 — the top of the building at 13.00
+#
+# The two cymas are the same M/4 curve turned over, which is what makes a balustrade read as one
+# member squeezed in the middle rather than as two unrelated mouldings.
+#
+# THE CORNER ORDER IS THE ORIENTATION, AND FOR A CYMA IT IS THE CROSSED DIAGONAL, WHICH IS NOT
+# WHAT IT LOOKS LIKE. `cyma p0 q0 p1 q1` stands at the SECOND corner's projection at the FIRST
+# corner's height, and has receded to the first's projection by the second's height; the curve is
+# convex at the first corner's end. So the plinth cap — full at the bottom, falling back going up —
+# is written (back, bottom) then (front, top), and the rail — full at the top — is the same four
+# numbers with the two heights swapped. `cyma_reversa` is not the same thing said differently: it
+# takes the OTHER diagonal, standing at the first corner's projection at the first corner's height.
+# Written the wrong way round a cyma comes out as a flat plane with the curve hidden behind it,
+# which passes every measurement and is obvious on a contact sheet. Worked out from
+# `build_moulding` in src/forge/clip_script.cpp and then checked by eye; see requests/parapet.md.
+let parapet_sec_plinth = fillet -20 11.850   0      20 12.1375 -0.18  run=x
+let parapet_sec_pcap   = cyma   -20 12.1375 -0.09   20 12.250  -0.18  run=x
+let parapet_sec_rcyma  = cyma   -20 12.9625 -0.09   20 12.850  -0.18  run=x
+let parapet_sec_rtop   = fillet -20 12.9625  0      20 13.000  -0.18  run=x
+
+# The stone behind the mouldings, in two bands so that the space between the plinth and the rail
+# stays open when the four half solids are intersected. A moulding is only the band between its
+# own two corners; without these the section is four floating ribbons and the corner mitre has
+# nothing to cut.
+let parapet_sec_dplin = box -20 11.850 -0.09   20 12.250 40
+let parapet_sec_drail = box -20 12.850 -0.09   20 13.000 40
+
+let parapet_face = union {
+    parapet_sec_plinth parapet_sec_pcap parapet_sec_rcyma parapet_sec_rtop
+    parapet_sec_dplin parapet_sec_drail
+}
+
+# ================================================================================================
+# THE RING — four half solids mitred, hollowed, and cut open in front of the pediment
+# ================================================================================================
+#
+#   rotate y=0.5   a face projecting -z projects +z: the north front
+#   rotate y=0.75  it projects +x: the east flank, folded in x for the west
+let parapet_south = translate { parapet_face } 0 0 -7.50
+let parapet_north = translate { rotate { parapet_face } y=0.5  } 0 0 7.50
+let parapet_east  = translate { rotate { parapet_face } y=0.75 } 16.00 0 0
+let parapet_ew    = mirror { parapet_east } axis=x
+
+# The core taken out: the inside of the ring, 0.18 in from the wall line on all four sides, drawn
+# taller than the ring at both ends so the cut is clean through.
+let parapet_core = box -15.82 11.0 -7.32   15.82 13.5 7.32
+
+# The opening in front of the pediment. The two ends of it are the vertical joints a mason would
+# leave and they are the west faces of the two terminal pedestals, so nothing here is a free edge.
+let parapet_gap = box -7.83 11.0 -20   7.83 13.5 -7.00
+
+let parapet_ring_raw = difference {
+    intersection { parapet_south parapet_north parapet_ew }
+    parapet_core parapet_gap
+}
+
+# Every arris rounded 0.012, and shrunk by the same amount first so that the finished faces land
+# exactly on 0.18 and 13.00 rather than 12 mm outside them. The thinnest member of this solid is
+# the rail band at 0.15 tall and 0.36 thick, so the inward offset has a great deal of room.
+let parapet_ring = round { offset { parapet_ring_raw } by=-0.012 } by=0.012
+
+# ================================================================================================
+# THE BALUSTERS — the order's own, at a pitch of 0.27 (0.6 M)
+# ================================================================================================
+#
+# `ionic_baluster` is 0.70 tall on an 0.18 square plinth, standing on its own y = 0. It goes at
+# 12.20, which beds it 0.05 into the plinth below and 0.05 into the rail above: 12.25 - 0.05 and
+# 12.85 + 0.05, and the order's 0.70 is exactly the 0.60 of daylight plus those two overlaps.
+# That is why the baluster is 0.70 and not a module number, and _order.clip says so.
+#
+# THE GRID is x = 0.135 + 0.27 k, and the half-pitch offset is the whole of the arithmetic. The
+# pilaster axes are at 1.35 + 2.70 n, and 1.35 is exactly half way between two of these positions,
+# so a die 0.45 (M) wide centred on a pilaster swallows the two balusters inside it whole and
+# leaves 0.09 of daylight to the next one either side — the same 0.09 there is between any two
+# balusters anywhere on the building. One grid, one gap, thirty dies, and no arithmetic at any of
+# them. Move the pitch off 0.27 or the die off 0.45 and that stops being true.
+#
+# `repeat` is safe here where a polar repeat would not be: an 0.18 shape inside a 0.27 period fits
+# in its own cell, so the field returns a true distance and the sampler can still settle boxes.
+# The seed sits at the origin of the repeat and the whole row is translated afterwards, because a
+# copy straddling a cell boundary makes the expression infinitely slack. See _order.clip.
+#
+# nx=58 gives copies from -15.525 to 15.795 and nx=26 from -6.885 to 7.155; each row is then cut
+# to a gap centre — 15.66 and 7.02 — which drops the odd one at the far end and leaves the row
+# exactly symmetric about the centre line without a mirror.
+#
+# WHERE THE 0.09 IS NOT 0.09, and why it cannot be. The grid is a module grid and the block is not:
+# 16.00 and 7.50 are the contract's own two off-module numbers and it says so. So the last joint
+# before a corner pedestal is whatever the block leaves, and there is no arrangement of a 0.27
+# pitch that makes it 0.09 at both ends of both axes:
+#
+#   the fronts   last baluster at 15.525, pedestal face at 15.73   0.115 — reads as 0.09
+#   the flanks   last baluster at 6.885,  pedestal face at 7.23    0.255 — visibly wider
+#   the terminal pedestals beside the pediment                     0.045 — visibly tighter
+#
+# All three fall against a pedestal, which is the one stone in a balustrade a mason cuts to fit and
+# the one joint an eye expects to be different. The alternative was to anchor the grid on the
+# corners instead of on the centre line, which fixes the flanks and puts a 0.045 joint against all
+# thirty dies instead — thirty faults to cure two.
+let parapet_bal_rowx = translate { repeat { ionic_baluster } x=0.27 nx=58 } 0.135 12.20 0
+let parapet_bal_rowz = rotate { translate { repeat { ionic_baluster } x=0.27 nx=26 }
+                                0.135 12.20 0 } y=0.25
+
+# The north front: unbroken from corner to corner, 116 of them, and symmetric about x = 0 by
+# construction, so it stays outside the fold at the end.
+let parapet_bal_north = intersection {
+    translate { parapet_bal_rowx } 0 0 7.50
+    box -15.66 12.0 7.30   15.66 13.0 7.70
+}
+
+# The flank: 52 of them, from the corner pedestal to the corner pedestal.
+let parapet_bal_east = intersection {
+    translate { parapet_bal_rowz } 16.00 0 0
+    box 15.80 12.0 -7.02   16.20 13.0 7.02
+}
+
+# The south return: from the terminal pedestal beside the pediment out to the angle, 27 of them.
+let parapet_bal_south = intersection {
+    translate { parapet_bal_rowx } 0 0 -7.50
+    box 8.37 12.0 -7.70   15.66 13.0 -7.30
+}
+
+# ================================================================================================
+# THE DIES — one solid panel over every pilaster
+# ================================================================================================
+#
+# 0.45 (M) along the run and 0.27 (0.6 M) across, which is 0.045 (M/10) in from both faces of the
+# ring and 0.045 proud of the balusters on both sides. It runs the full height, so the plinth and
+# the rail pass across it as they should — a die interrupts the balusters, never the mouldings.
+#
+# Each face carries a sunk panel, 0.36 (0.8 D) by 0.45 (M), 0.045 (M/10) deep, with 0.045 of
+# margin at the sides and 0.075 (M/6) top and bottom of the 0.60 the die shows between the
+# mouldings. Both faces, because a die is seen from the roof as well as from the ground. It is
+# the one piece of ordinary shadow in this part — 1.4 voxels of recess on a flat face, next to
+# 274 pieces of geometry that are all silhouette — and it is there so that the dies read as
+# panelled stones and not as the gaps in the balustrade where the mason ran out of balusters.
+let parapet_die_n_raw = box -0.225 11.85  7.365   0.225 13.00  7.635 round=0.012
+let parapet_die_s_raw = box -0.225 11.85 -7.635   0.225 13.00 -7.365 round=0.012
+let parapet_die_e_raw = box 15.865 11.85 -0.225  16.135 13.00  0.225 round=0.012
+
+let parapet_pan_n = union {
+    box -0.18 12.325  7.590   0.18 12.775  7.70  round=0.012
+    box -0.18 12.325  7.30    0.18 12.775  7.410 round=0.012
+}
+let parapet_pan_s = union {
+    box -0.18 12.325 -7.70    0.18 12.775 -7.590 round=0.012
+    box -0.18 12.325 -7.410   0.18 12.775 -7.30  round=0.012
+}
+let parapet_pan_e = union {
+    box 16.090 12.325 -0.18  16.20  12.775 0.18 round=0.012
+    box 15.80  12.325 -0.18  15.910 12.775 0.18 round=0.012
+}
+
+let parapet_die_n = difference { parapet_die_n_raw parapet_pan_n }
+let parapet_die_s = difference { parapet_die_s_raw parapet_pan_s }
+let parapet_die_e = difference { parapet_die_e_raw parapet_pan_e }
+
+let parapet_dies_north = union {
+    translate { parapet_die_n }  1.35 0 0
+    translate { parapet_die_n }  4.05 0 0
+    translate { parapet_die_n }  6.75 0 0
+    translate { parapet_die_n }  9.45 0 0
+    translate { parapet_die_n } 12.15 0 0
+    translate { parapet_die_n } 14.85 0 0
+}
+
+let parapet_dies_south = union {
+    translate { parapet_die_s }  9.45 0 0
+    translate { parapet_die_s } 12.15 0 0
+    translate { parapet_die_s } 14.85 0 0
+}
+
+let parapet_dies_east = union {
+    translate { parapet_die_e } 0 0  1.35
+    translate { parapet_die_e } 0 0  4.05
+    translate { parapet_die_e } 0 0  6.75
+    translate { parapet_die_e } 0 0 -1.35
+    translate { parapet_die_e } 0 0 -4.05
+    translate { parapet_die_e } 0 0 -6.75
+}
+
+# ================================================================================================
+# THE PEDESTALS AND THEIR URNS — six of them
+# ================================================================================================
+#
+# A dado 0.54 (1.2 M) square between a base and a cap of 0.72 (1.6 M), so the pedestal breaks
+# forward of the balustrade by 0.09 and its base and cap by 0.18 — the same two numbers the ring
+# itself is built on. It is exactly as tall as the rail and no taller: 13.00 is parapet_top and
+# the contract means it. What stands above that line is the urn, which is ornament and is
+# measured from the cap it sits on, not from the level.
+#
+# The cap is 0.72 square and the urn's plinth is 0.36, so there is 0.18 of stone showing all round
+# the foot of every urn.
+#
+# All four faces carry the same sunk panel the dies do — 0.36 by 0.45, 0.045 deep, 0.09 of margin
+# at the sides — drawn once on the +x face and once on the +z face and folded both ways, which is
+# what makes a pedestal the same stone whichever angle of the building it stands on.
+let parapet_ped_dado = box -0.27 11.85 -0.27   0.27 13.00 0.27 round=0.012
+let parapet_ped_base = box -0.36 11.85 -0.36   0.36 11.99 0.36 round=0.012
+let parapet_ped_cap  = box -0.36 12.91 -0.36   0.36 13.00 0.36 round=0.012
+
+let parapet_ped_pan_x = box  0.225 12.325 -0.18   0.36 12.775 0.18  round=0.012
+let parapet_ped_pan_z = box -0.18  12.325  0.225  0.18 12.775 0.36  round=0.012
+let parapet_ped_panels = mirror {
+    mirror { union { parapet_ped_pan_x parapet_ped_pan_z } } axis=x
+} axis=z
+
+let parapet_ped = difference {
+    union { parapet_ped_dado parapet_ped_base parapet_ped_cap }
+    parapet_ped_panels
+}
+
+# Four at the angles of the block, on the outline corner itself, and one at each end of the south
+# returns beside the pediment. The terminal one stands on x = 8.10, which is a gap centre of the
+# baluster grid, so its faces fall in daylight and not through a baluster; its base reaches to
+# 7.74, which is 0.09 clear of portico_x and the nearest this part comes to anybody else's work.
+let parapet_peds = union {
+    translate { parapet_ped } 16.00 0  7.50
+    translate { parapet_ped } 16.00 0 -7.50
+    translate { parapet_ped }  8.10 0 -7.50
+}
+
+# The urns, bedded 0.05 into the caps they stand on. `urn` is 1.35 tall, so they finish at 14.30 —
+# well under drum_top at 15.60, and far enough out in plan that nothing of the dome is near them.
+let parapet_urns = union {
+    translate { urn } 16.00 12.95  7.50
+    translate { urn } 16.00 12.95 -7.50
+    translate { urn }  8.10 12.95 -7.50
+}
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+#
+# Everything asymmetric is built on the +x half and folded once, so the two halves of the building
+# can never drift apart. The ring and the north row are symmetric by construction and stay outside
+# the fold.
+let parapet_half = union {
+    parapet_dies_north parapet_dies_south parapet_dies_east
+    parapet_bal_east parapet_bal_south
+    parapet_peds
+}
+let parapet_folded = mirror { parapet_half } axis=x
+let parapet_urns_all = mirror { parapet_urns } axis=x
+
+let part_parapet = union {
+    parapet_ring parapet_bal_north parapet_folded parapet_urns_all
+}
+
+# This part removes nothing from anybody, so the manifest names no `void_parapet`.
+
+# --- paint ---------------------------------------------------------------------------------------
+#
+# Marble for the balustrade, which is what the entablature it stands on is and what the order asks
+# for: below 11.90 the order is marble on a limestone wall, and the balustrade above it is the same
+# stone carried to the top of the building, which is what makes a skyline read as belonging to the
+# front underneath it. Marble is also the translucent material in this building — translucent 110 —
+# and a 0.063 m neck with the sun behind it is the thinnest thing subsurface transport is asked
+# for anywhere in the scene.
+#
+# Bronze for the six urns, last, because it goes on top of the marble rule. Nothing else on the
+# skyline is metal, and an urn is the only body in the building that is specular, curved, and has
+# the sky as its whole environment.
+#
+# below=0.02 on both and never below=0: the manifest displaces the finished building by 12 mm of
+# grain at the very end, and a voxel that exists only because the grain pushed the surface outward
+# sits OUTSIDE the shape its rule names. At below=0 those voxels match nothing, fall back to the
+# base coat, and leave a pale limestone rind over every baluster in the rank.
+paint marble where=part_parapet     below=0.02
+paint bronze where=parapet_urns_all below=0.02

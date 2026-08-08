@@ -2821,8 +2821,16 @@ int Application::run(const Options& options) {
 
     // The test scene spans about 64 m. Start at one corner of it, above the ground slab,
     // looking back toward the origin so the towers, arch and lattice are all in frame.
-    camera_.set_position_metres(-22.0, 5.0, -22.0);
-    camera_.set_look(45.0, -8.0);
+    // On the approach, off the axis, looking up at the portico.
+    //
+    // Where a building is first seen from is a decision somebody makes, and for a building with a
+    // front it is not a corner of the bounding box. The facility faces south — down negative z —
+    // so this stands out on the lawn a little to the west of the centre line, at the height of
+    // somebody's eyes, and looks back at the steps and the columns above them. Three quarters
+    // rather than square on, because a portico read head-on is a row of verticals and read at an
+    // angle is a building.
+    camera_.set_position_metres(-9.0, 2.6, -25.0);
+    camera_.set_look(62.0, 4.0);
     if (!options_.camera.empty()) {
         f64 values[5]{-22.0, 5.0, -22.0, 45.0, -8.0};
         const char* cursor = options_.camera.c_str();

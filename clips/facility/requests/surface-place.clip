@@ -1,0 +1,30 @@
+# The surface fragment, photographed on the real geometry. NOT part of the building.
+#
+# clips/facility.clip with only the fragments the weather zones actually touch — the site, the
+# podium, the great steps, the walls — so that the weathered stone can be looked at at a useful
+# metre. A weathered build of all nineteen fragments could not be finished: see
+# clips/facility/requests/surface.md section 2 for what it costs and why.
+#
+#   .\build\bin\WorldShaper.exe --clip-file clips\facility\requests\surface-place.clip --clip-metre 8
+#   tools\views.ps1 -Clip clips\facility\requests\surface-place.clip -Metre 8 `
+#       -Focus "-5.0,0.0,-16.2, 5.0,1.9,-12.4" -Out renders\surface-steps2 -Views ring
+#   tools\views.ps1 -Clip clips\facility\requests\surface-place.clip -Metre 8 `
+#       -Focus "-8.0,1.0,6.0, 8.0,6.4,9.2" -Out renders\surface-north -Views ring
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../site.clip"
+include "../podium.clip"
+include "../steps.clip"
+include "../walls.clip"
+include "../surface.clip"
+
+let built = union { part_site part_podium part_steps part_walls part_surface }
+let all = displace { built grain_fine } amount=0.012
+
+variation colour=0.030 rough=0.070 seed=17
+
+solid all

@@ -27,8 +27,18 @@
 #                 metre 32. A one-voxel dark line on a flat pale field, with no geometry under it
 #                 to help a denoiser guess where it goes, is the hardest thing on this wall
 #   one voxel     the manifest's `variation colour=0.030 rough=0.070`, which is the whole point:
-#                 four materials on the outer face means four base records for it to perturb, and
-#                 the measured answer is in the report line `variation ... distinct records`
+#                 five base materials on this part means five base records for it to perturb, and
+#                 the measured answer is the report line `variation ... distinct records`
+#
+# MEASURED, `--clip-part part_walls` at the contract's metre 32: 27,340,220 voxels, 2244 m² of
+# surface, 1,000,008 distinct visual records, largest identical group 588. On a path trace the
+# plane reads as granular stone and not as flat grey, which was the question asked. Two caveats,
+# both written up with their arithmetic in clips/facility/requests/walls.md: that million is the
+# whole clip's default variation budget, spent by this one fragment, and it is also very nearly
+# the arithmetic ceiling — colour=0.030 can only reach sixteen values of an eight-bit channel, so
+# ONE base material can never produce more than 16*16*16*36 = 147,456 distinct records however
+# many voxels it covers. The four extra materials this file paints are most of why the number is
+# a million and not two hundred thousand.
 #
 # DO NOT CUT THE JOINTS INTO THE STONE. The moment they are geometry this stops being a test of
 # the surface path and becomes another relief wall like everything else in the building. They are
@@ -36,8 +46,8 @@
 # panels and no band courses: the flatness is the load.
 #
 # The rusticated storey below is the other half of the bargain — 0.09 wide by 0.135 deep channels
-# on a 0.60 course, about 350 of them round the building, which is where the sampler has to settle
-# a great many small boxes cut out of one very large one.
+# on a 0.60 course, over four hundred of them round the building, which is where the sampler has
+# to settle a great many small boxes cut out of one very large one.
 # ------------------------------------------------------------------------------------------------
 #
 # THE MODULE. D = 0.90, M = 0.45. Every number below is one of those or a simple fraction of one.
@@ -52,7 +62,14 @@
 #                 that two blocks make one bay of 2.70.
 #   1.75          1.80 less the 0.05 the brief requires every part to bury into what it stands on.
 #                 An overlap, not a dimension.
-#   0.045, 0.135  0.1 M and 0.3 M — the quoin projection and the channel depth.
+#   0.09, 0.135   0.2 M and 0.3 M — the width and the depth of a channel, and the same two numbers
+#                 again for the joint between two quoin stones and how far a quoin stands proud.
+#   0.51          0.60 less that 0.09 joint: the height of one quoin stone on a 0.60 course.
+#   0.03          M/15, the painted mortar joint. The same number as the flat fillet between two
+#                 flutes on a column, and for the same reason: one voxel at metre 32.
+#   0.10, 0.20    not dimensions and never seen: the slack on a cutter that has to reach past the
+#                 face it cuts, and the margin on a paint zone that has to reach past the surface
+#                 it paints. Anything the eye can measure is above; these are tolerances.
 
 include "_contract.clip"
 
@@ -211,7 +228,13 @@ let part_walls = difference { walls_mass walls_channels }
 # Zones first, all of them shapes and all of them mine. A paint rule keyed on a shape is settled
 # for a whole block at once by the sampler; one keyed on a pattern has to be asked per voxel,
 # everywhere in the clip, so the pattern rules below are kept to four and all four hang off
-# `walls_ring`, which is two boxes, rather than off the assembled part, which is two hundred.
+# `walls_ring`, which is two boxes, rather than off the assembled part, which is a hundred.
+#
+# Measured at metre 16, by commenting rules out one group at a time:
+#   the three shape rules   2,004,676 field evaluations   0.6 per solid voxel — they settle
+#   the four pattern rules 13,161,088 field evaluations   4.0 per solid voxel — one each, per voxel
+# and the four pattern rules are what take the surface from 671,352 distinct records to 787,779.
+# That is the trade, stated so the next person can decide it again rather than discover it.
 
 let walls_lining = intersection { part_walls  box -15.30 1.55 -6.80   15.30 12.10 6.80 }
 let walls_rustic = intersection { part_walls  box -16.40 1.55 -7.90   16.40 5.40 7.90 }

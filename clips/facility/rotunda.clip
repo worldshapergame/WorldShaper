@@ -1,14 +1,698 @@
-# rotunda - the rotunda under the dome: floor, niches, coffered inner dome
+# rotunda — the room under the dome: a radiating marble floor, a giant Ionic order, four niches
+#           on the diagonals with gilt urns in them, and the coffered inner dome over it all.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# The room the whole building is arranged around. Centred on the origin, inner radius 4.80 by the
+# contract, floor at 1.80 (podium_top), and open all the way to the dome's intrados at 15.60 and
+# the oculus at 17.75. Nothing in it is lit by anything except the oculus overhead and the drum's
+# sixteen windows, which is the point.
 #
-# This file must define exactly one part named `part_rotunda`. Every other name it binds must
-# start with `rotunda_` so nothing collides with another fragment.
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD: every indirect-light term in the renderer, in one room.
+#
+# There is no direct light in here at all. Every photon that lands on a surface below 15.60 has
+# bounced at least once, and most of them twice. So this room is not a test of shading — it is a
+# test of whether light arrives at all, and of whether what arrives is the right COLOUR.
+#
+#   THE COFFERS — 120 of them, in five diminishing rings of twenty-four, cut into the dome's
+#   intrados by `void_rotunda`. Each is a small deep recess with three moulded steps: 0.075 (M/6),
+#   0.150 (M/3) and 0.225 (M/2) deep, and the tangential step between one course and the next is
+#   0.0225 — SUB-VOXEL at the contract's metre 32. The whole of a coffer's appearance is a soft
+#   gradient from a bright lip to a dark pan, with two 0.0225 ledges in it. If ambient occlusion
+#   is wrong, a coffer reads as a flat dark square; if the sampler loses the ledges, it reads as a
+#   dimple. The rings run from 1.004 m wide at the springing to 0.309 m at the top — 10 voxels
+#   across at full detail — so the same feature is asked at four scales up one surface.
+#
+#   THE FLOOR — porphyry, lapis, verde and two whites, laid as a radiating pattern about the
+#   centre. It is directly under the oculus, it is the ONLY strongly coloured large surface in the
+#   building, and the vault above it is white plaster. That is a colour-bleeding rig: if the second
+#   bounce carries colour, this room's vault goes warm on the south side where the shaft lands and
+#   cool where it does not, and the white marble of the order picks up red from the floor at its
+#   foot. If the vault comes back neutral white, the bounce is carrying luminance and not spectrum.
+#
+#   THE SHAFT — the oculus is 1.80 m across (2 D) and 15.95 m above the floor. It is bound into
+#   `void_rotunda` as well as the dome's own cut, so that nothing added to this building later can
+#   close it by accident. The floor pattern is set out concentrically on purpose: a hard-edged
+#   ellipse of sun crossing a radiating pattern is how you see whether the shaft has an edge.
+#
+#   THE NICHES — four semidomed hollows 1.35 m wide and 0.675 m deep, lined in green marble, with
+#   a gilt urn standing on a porphyry pedestal in each. A hemisphere lit only by bounce is the
+#   cleanest ambient-occlusion gradient there is, and a near-polished metal standing inside one,
+#   with a coloured lining behind it, is the hardest thing in the room to get the colour of.
+#
+# DO NOT WIDEN THE COFFERS OR SHALLOW THEM OUT. 0.0225 is M/20 and it is meant to be under a voxel;
+# 0.225 of depth in a 0.309 opening at the top ring is meant to be nearly black. If the coffers
+# come back as mud the sampler is what is wrong, not the coffers. And DO NOT put a light in here.
+#
+# MEASURED, `--clip-part part_rotunda` at the contract's metre 32: 11,974,584 voxels, 365.44 m³,
+# 1382.66 m² of surface, 873,787 distinct visual records, largest identical group 122, ONE
+# component, and 88,205,341 field evaluations. `--clip-part rotunda_coffers` at the same metre:
+# 6.88 m³ of stone taken out of the dome and 182.98 m² of surface put back in its place — twenty-
+# seven times as much surface as matter — in EXACTLY 120 components. That count is the check worth
+# repeating whenever anything here is touched: five rings of twenty-four, none merged into its
+# neighbour and none lost. It only comes out at 120 at full detail; at metre 12 it reports 152,
+# because the 0.0225 lips are a third of a voxel there and shed rings of their own.
+#
+# THE FIGURE TO COMPARE AGAINST IS THE EVALUATION COUNT AND NOT THE WALL CLOCK. Sampling this part
+# at metre 8 took anywhere between 179 ms and 1300 ms over one session depending on how many other
+# people were building at the time, for an evaluation count that never moved by a tenth of a per
+# cent. I nearly filed a sampler bug against `offset` on the strength of the former; the write-up
+# is in clips/facility/requests/rotunda.md and the short version is: interleave, or do not quote.
+#
+# AT METRE 16 THIS PART REPORTS FIVE COMPONENTS AND THAT IS THE ORDER'S URN, NOT A FLOATING PIECE
+# OF MINE. The neck of `urn`'s finial is 0.048 across — one and a half voxels at metre 32, where it
+# holds, and three quarters of one at metre 16, where it does not, so each of the four gilt balls
+# comes away. `--clip-part rotunda_urns` gives 4 components at metre 32 and 8 at metre 16, which is
+# the whole of the difference. It is a sub-voxel feature behaving like a sub-voxel feature, it is
+# in a shape this file does not own, and the fix is not to fatten it here.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45, and every dimension below is one of those or a simple fraction.
+# Everything vertical above 15.60 is counted in M/9 = 0.05, which is the sub-module the top of this
+# building is already built in (see dome.clip). The numbers that are not module multiples, and why:
+#
+#   4.80          the contract's rotunda inner radius. The contract says so.
+#   15.60, 2.15   drum_top, and the intrados rise: 2.60 of dome less M of crown thickness. Both
+#                 come from the contract and from dome.clip's published intrados, which is the one
+#                 surface this file and that one have to agree about. It is stated in that file's
+#                 header as "intrados 4.80 wide, 2.15 high" and it is derived, not invented.
+#   1.75, 4.85,   how far a member reaches into what it stands on. Tolerances, never seen, all of
+#   5.10, 12.20   them at least the 0.05 the brief asks for.
+#   3.51 .. 1.80  the radii the upper coffer rings are bounded on. Every one is a multiple of
+#                 M/10 = 0.045; they are chosen so the five rings come out evenly spaced ALONG THE
+#                 SURFACE, which is what the eye measures, and the arithmetic is in the table below.
+#
+# WHERE IT MEETS ITS NEIGHBOURS, and nothing else it needs to know:
+#
+#   below   the podium, whose top is 1.80. The paving is bedded 0.135 into it.
+#   above   the drum, whose core is the same 4.80 inner face from 11.25 up. This wall runs to
+#           12.30, so the two lap by 1.05 whatever the drum turns out to be.
+#   over    the dome, whose intrados is 4.80 wide and 2.15 high on the springing at 15.60. The
+#           coffers are cut out of it by `void_rotunda`, which the manifest takes away after
+#           everything is assembled — which is exactly what dome.clip says it is leaving room for.
+#
+# WHAT IS DELIBERATELY NOT HERE:
+#
+#   NO DOORWAY, AND THAT IS THE POINT OF THE FOUR BAYS. This part cuts no hole into anybody else's
+#   ground. The four bays on the axes are recessed arches, 2.70 wide (6 M) and 4.05 to the crown,
+#   and every one of them is drawn BLIND — a doorway-shaped recess in my own wall and nothing more.
+#   Whoever builds a room against one of them punches through with their own `void_<part>`, which
+#   the manifest takes away after this part is assembled, and changes not a line of this file.
+#
+#   It worked, and it was worth checking rather than assuming. The vestibule and the halls were
+#   both still placeholders when this file was written; by the time it was first photographed they
+#   were not, and the south bay now has a bronze door standing in it and the east and west bays
+#   open into vaulted halls, none of which required anybody to read anything of mine. The north bay
+#   is still blind and looks exactly as intended: a shallow arched panel, waiting.
+#
+#   NO DENTILS on the interior entablature. The cornice is `entab_profile` revolved, and its dentil
+#   band lands at radius 4.51 — a 28.3 m circumference, which is 210 blocks at the order's 0.135
+#   pitch. `around { } count=210` would take the sampler's skip away from the WHOLE CLIP (see
+#   _order.clip), 210 is not a multiple of four so the quadrant-and-two-folds trick cannot express
+#   it, and 210 explicit rotations is not a thing anybody should write. The band is left plain and
+#   the missing language feature is written up in clips/facility/requests/rotunda.md.
 
-let rotunda_placeholder = sphere 0 -1.30 0 r=0.25
-let part_rotunda = rotunda_placeholder
+include "_contract.clip"
 
-# What this part removes from the building. Taken away in the manifest after everything is
-# assembled, so nothing added later can be eaten by it. Must always be bound, even if empty.
-let void_rotunda = sphere 0 -1.30 0 r=0.02
+# ================================================================================================
+# THE SHELL OF THE ROOM — one section, turned
+# ================================================================================================
+#
+# 0.90 thick (D), which is the same wall the dome springs from, from 1.75 (bedded 0.05 into the
+# podium) up to 12.30, where the drum takes over. Everything else in this file is cut out of it or
+# stood against it, so the whole part is one component by construction.
+#
+# IT STOPS AT 12.30 ON PURPOSE. The drum's sixteen windows splay through the wall between 12.7875
+# and 14.8125 and they are cut inside drum.clip, not by the manifest — so any stone this file put
+# in that band would plug all sixteen of them and this room would go black. Nothing here goes above
+# 12.30 except the attic below, which stops at 12.75, under the lowest window sill.
+
+let rotunda_wall_s = box 4.80 1.75 -1   5.70 12.30 1  round=0.012
+let rotunda_wall   = revolve { rotunda_wall_s } axis=y
+
+# THE PAVING. 0.135 (0.3 M) thick, bedded into the podium, out to 5.10 so that the floor of a bay
+# recess is paved too. Its top is the contract's podium_top, which is the floor of the building.
+let rotunda_floor = cylinder 0 1.7325 0  r=5.10 h=0.135 axis=y
+
+# THE ATTIC, and it is here to close a hole that is not otherwise closed by anybody.
+#
+# roof.clip leaves a SQUARE well 12.00 x 12.00 for the drum to stand in and says so in capitals: a
+# round drum in a square hole leaves the four corners open — 31 m² of sky straight down into the
+# block — and that a square attic pedestal under the drum is the classical answer and the one the
+# roof is drawn for. This is that pedestal. It is 12.10 square (±6.05, lapping the roof's kerb by
+# 0.05), it runs from 12.20 — clear of the drum's copper apron, which tops out at 12.15 — to 12.75,
+# which is under the lowest drum window sill at 12.7875, and it is bored to the room's own 4.80.
+#
+# It is invisible: the parapet stands at 13.00 and nothing here reaches it.
+let rotunda_attic = difference {
+    box -6.05 12.20 -6.05   6.05 12.75 6.05  round=0.02
+    cylinder 0 12.475 0  r=4.80 h=1.00 axis=y
+}
+
+# ================================================================================================
+# THE FOUR BAYS ON THE AXES — recessed arches, 2.70 wide, 0.225 deep
+# ================================================================================================
+#
+# Springing 4.50, crown 5.85 on a 1.35 (3 M) radius, sill on the floor: 2.70 wide (6 M), 2.70 clear
+# to the springing and 4.05 to the crown. The brief's door head is 2.40 and this clears it across
+# the whole width, so a doorway fits one without anything here moving.
+#
+# The back of the recess is a CYLINDER concentric with the wall, not a plane, so
+# the recess is 0.225 deep at the middle and 0.225 deep at the jambs; a flat back on a curved wall
+# is 0.42 deep in the corners and reads as a wedge.
+let rotunda_bay_body  = box 4.10 1.80 -1.35   5.30 4.50 1.35
+let rotunda_bay_head  = cylinder 4.70 4.50 0  r=1.35 h=1.20 axis=x
+let rotunda_bay_depth = cylinder 0 3.80 0  r=5.025 h=4.40 axis=y
+let rotunda_bay_one   = intersection {
+    union { rotunda_bay_body rotunda_bay_head }
+    rotunda_bay_depth
+}
+
+# ================================================================================================
+# THE FOUR NICHES ON THE DIAGONALS
+# ================================================================================================
+#
+# Semicircular in plan on a 0.675 (1.5 M) radius struck on the wall face, so the opening is 1.35
+# wide (3 M) and the hollow is 0.675 deep, leaving 0.225 of wall behind it. Sill 2.70 (D above the
+# floor), springing 5.40, and a hemispherical head on the same radius crowning at 6.075.
+#
+# The cutter is a whole cylinder and a whole sphere and it is NOT clipped to the wall face. It does
+# not need to be: the half of it that stands in the room has no stone in it to remove, and clipping
+# it against a plane at x = 4.80 would leave a 0.05 lip of wall standing across the jambs, because
+# the wall face is a cylinder of radius 4.80 and a plane is not.
+let rotunda_niche_cut_one = union {
+    cylinder 4.80 4.05 0  r=0.675 h=2.70 axis=y
+    sphere   4.80 5.40 0  r=0.675
+}
+
+# THE ARCHITRAVE ROUND IT. The shell between a cutter 0.270 (0.6 M) larger and the cutter itself,
+# taken where it crosses a ring at the wall face: that is a band 0.27 wide standing 0.135 proud,
+# following the jambs up and round the arch and returning across the sill as its base moulding,
+# and it needs no arithmetic of its own to do it. A flat plate would have stood 0.135 proud at the
+# middle and 0.029 at the jambs, which is where the first pass of this went; and at 0.18 wide it
+# was two voxels of white marble against a white marble wall and might as well not have been cut.
+let rotunda_niche_big = union {
+    cylinder 4.80 3.915 0  r=0.945 h=2.97 axis=y
+    sphere   4.80 5.40  0  r=0.945
+}
+let rotunda_niche_face = revolve { box 4.665 2.30 -1   4.95 6.50 1  round=0.010 } axis=y
+let rotunda_niche_dress_one = intersection {
+    difference { rotunda_niche_big rotunda_niche_cut_one }
+    rotunda_niche_face
+}
+
+# THE PEDESTAL, 1.35 (3 M) tall: plinth M/2, die 2 M, cap M/2. It stands on the niche floor and is
+# bedded 0.05 into it, and it is unioned back on AFTER the niche is cut, which is the only order
+# that works — the cutter would eat it otherwise.
+let rotunda_ped_plinth = box 4.635 2.65  -0.315   5.265 2.925 0.315  round=0.012
+let rotunda_ped_die    = box 4.680 2.925 -0.270   5.220 3.825 0.270  round=0.012
+let rotunda_ped_cap    = box 4.635 3.825 -0.315   5.265 4.050 0.315  round=0.012
+let rotunda_ped_one    = union { rotunda_ped_plinth rotunda_ped_die rotunda_ped_cap }
+
+# THE URN. The order's own, 1.35 tall, standing 4.05 to 5.40 — so its lip is exactly on the
+# springing of the niche head and the hemisphere is its canopy.
+let rotunda_urn_one = translate { urn } 4.95 4.05 0
+
+# ================================================================================================
+# THE SUNK PANELS over the bays and the niches
+# ================================================================================================
+#
+# 1.80 (4 M) tall, between 6.75 (15 M) and 8.55 (19 M) — above every arch head and below the
+# architrave, filling the one stretch of this room that has nothing else in it. Cut back to a
+# cylinder for the same reason the bays are.
+#
+# TWO STEPS AND NOT ONE. A panel sunk a single 0.09 into a white wall in a room with no direct
+# light in it is a panel nobody can see; what makes a sunk panel read is the shadow in the rebate
+# round it, so there is a 0.09 (0.2 M) margin taken back 0.135 and the field inside it taken back
+# 0.225. That is the same 0.135/0.225 pair the coffers use, for the same reason.
+let rotunda_panel_dep_a = cylinder 0 7.65 0  r=4.935 h=2.40 axis=y
+let rotunda_panel_dep_b = cylinder 0 7.65 0  r=5.025 h=2.40 axis=y
+let rotunda_panel_b_one = union {
+    intersection { box 4.60 6.66 -1.44   5.10 8.64 1.44  round=0.012   rotunda_panel_dep_a }
+    intersection { box 4.60 6.75 -1.35   5.10 8.55 1.35  round=0.012   rotunda_panel_dep_b }
+}
+let rotunda_panel_n_one = union {
+    intersection { box 4.60 6.66 -0.765  5.10 8.64 0.765 round=0.012   rotunda_panel_dep_a }
+    intersection { box 4.60 6.75 -0.675  5.10 8.55 0.675 round=0.012   rotunda_panel_dep_b }
+}
+
+# ================================================================================================
+# SETTING THEM OUT — eight bays, and why every angle is negative
+# ================================================================================================
+#
+# Four bays on the axes and four niches on the diagonals, with a column of the order on each of the
+# eight boundaries between them, at ±22.5° and ±67.5°.
+#
+# Laid out as explicit `rotate` nodes over one quadrant and mirrored in x and then in z, and NEVER
+# as `around { } count=8`. `metric_slack(Op::PolarRepeat)` is infinite, the sampler takes the
+# minimum slack over the whole expression, and infinite slack anywhere means not one voxel of the
+# clip's bounds can be skipped ANYWHERE — _order.clip measured that substitution on a single column
+# at a factor of 950 in field evaluations. Rotations are isometries and are exact.
+#
+# THE ANGLES ARE NEGATIVE AND THAT IS NOT A TYPO. `mirror` folds a coordinate to its POSITIVE side,
+# so whatever lies on the negative side of a fold is not copied, it is thrown away; and
+# `rotate { } y=+turns` carries +x toward -z. Write the quadrant with positive angles, as it reads
+# naturally, and every member lands on -z and is silently deleted by the second mirror. Measured
+# twice already, in drum.clip and in dome.clip, and written here a third time because it costs an
+# afternoon every time somebody meets it.
+#
+# AND EVERY FAN IS WRAPPED IN AN INTERSECTION WITH A BOX. `build_bounds` gives `Op::Rotate` no
+# bounding box at all, so a union of rotated things reports infinite bounds and nothing upstream —
+# including the sampler's own settling — can measure it. A box it already fits inside hands the
+# bounds back and changes not one voxel. The boxes below are bounds, not cutters; nothing touches
+# their faces.
+
+let rotunda_box_bay   = box -5.15 1.70  -5.15   5.15 5.95  5.15
+let rotunda_box_niche = box -5.90 2.55  -5.90   5.90 6.20  5.90
+let rotunda_box_dress = box -5.00 2.25  -5.00   5.00 6.55  5.00
+let rotunda_box_ped   = box -5.40 2.60  -5.40   5.40 5.50  5.40
+let rotunda_box_col   = box -5.80 1.70  -5.80   5.80 10.00 5.80
+let rotunda_box_panel = box -5.10 6.60  -5.10   5.10 8.70  5.10
+
+# The four bays: the one on +x, and the same turned a quarter so it lands on +z.
+let rotunda_bay_two = rotate { rotunda_bay_one } y=-0.25
+let rotunda_bays = intersection {
+    mirror { mirror { union { rotunda_bay_one rotunda_bay_two } } axis=x } axis=z
+    rotunda_box_bay
+}
+
+# The four niches, on the diagonals: one member at 45°, folded twice.
+let rotunda_niche_r = rotate { rotunda_niche_cut_one } y=-0.125
+let rotunda_niches = intersection {
+    mirror { mirror { rotunda_niche_r } axis=x } axis=z
+    rotunda_box_niche
+}
+
+let rotunda_dress_r = rotate { rotunda_niche_dress_one } y=-0.125
+let rotunda_dressings = intersection {
+    mirror { mirror { rotunda_dress_r } axis=x } axis=z
+    rotunda_box_dress
+}
+
+let rotunda_ped_r = rotate { rotunda_ped_one } y=-0.125
+let rotunda_pedestals = intersection {
+    mirror { mirror { rotunda_ped_r } axis=x } axis=z
+    rotunda_box_ped
+}
+
+let rotunda_urn_r = rotate { rotunda_urn_one } y=-0.125
+let rotunda_urns = intersection {
+    mirror { mirror { rotunda_urn_r } axis=x } axis=z
+    rotunda_box_ped
+}
+
+# The panels: the wide ones over the four bays, the narrow ones over the four niches.
+let rotunda_panel_b_two = rotate { rotunda_panel_b_one } y=-0.25
+let rotunda_panel_n_r   = rotate { rotunda_panel_n_one } y=-0.125
+let rotunda_panels = intersection {
+    mirror { mirror { union { rotunda_panel_b_one rotunda_panel_b_two rotunda_panel_n_r } } axis=x } axis=z
+    rotunda_box_panel
+}
+
+# ================================================================================================
+# THE GIANT ORDER — eight engaged Ionic columns, 1.80 to 9.90
+# ================================================================================================
+#
+# The order's own `ionic_column`, 8.10 tall (9 D), standing on the floor at the contract's
+# column_foot and topping out at its column_head — the same two levels as the six columns of the
+# portico outside, which is what makes the inside of this building the same building as the
+# outside. The axes stand at radius 4.95, so a third of each shaft is engaged in the wall and the
+# other two thirds stand clear of it: the column is held along its whole height and cannot float,
+# and the flutes on the free side still catch the light coming down the oculus edge-on.
+let rotunda_col_one = translate { ionic_column } 4.95 1.80 0
+let rotunda_col_a   = rotate { rotunda_col_one } y=-0.0625
+let rotunda_col_b   = rotate { rotunda_col_one } y=-0.1875
+let rotunda_columns = intersection {
+    mirror { mirror { union { rotunda_col_a rotunda_col_b } } axis=x } axis=z
+    rotunda_box_col
+}
+
+# ================================================================================================
+# THE ENTABLATURE — 9.90 to 11.90, the contract's 2.00, turned
+# ================================================================================================
+#
+# `entab_profile` is drawn as a section in (projection, height) with the wall at x = 0 and the
+# projection running OUT along +x, which is what an outside wall wants. An inside wall wants it the
+# other way about, so it is turned half a turn about y — which maps x to -x and leaves the section
+# in its own plane — and set down at radius 4.85, 0.05 inside the wall face so there is no hairline
+# for the manifest's grain to open. It then projects INWARD to 4.13.
+#
+# The intersection is not decoration: `rotate` carries no bounding box, and a `revolve` of something
+# with infinite bounds is a shape the sampler cannot settle anywhere in the clip.
+let rotunda_entab_sec = intersection {
+    translate { rotate { entab_profile } y=0.5 } 4.85 9.90 0
+    box 4.05 9.85 -1.10   4.90 11.95 1.10
+}
+let rotunda_entab = revolve { rotunda_entab_sec } axis=y
+
+# ================================================================================================
+# THE INNER DOME — five diminishing rings of twenty-four coffers
+# ================================================================================================
+#
+# The intrados is dome.clip's: an ellipsoid 4.80 wide and 2.15 high standing on the springing at
+# 15.60, both of which come from the contract by way of that file's published header. The coffers
+# are cut out of the 0.90 m of shell behind it (0.45 at the crown) by `void_rotunda`, which the
+# manifest takes away after the whole building is assembled — so they cut the dome without this
+# file and that one sharing a single binding.
+#
+# A COFFER IS NOT MODELLED AND PLACED. It is what is left when three nested surfaces are banded and
+# the ribs are put back, which is the same construction the flutes of a column are cut by and it is
+# the only one that follows a doubly curved surface without an arithmetic per coffer:
+#
+#   THE STEPS      three ellipsoids concentric with the intrados, each 0.075 (M/6) larger in both
+#                  semi-axes, so the recess is 0.075, 0.150 and 0.225 deep and the depth is the
+#                  same at the springing as at the crown.
+#   THE RINGS      the two lower ones bounded in HEIGHT, the three upper ones bounded in RADIUS,
+#                  and that is not inconsistency, it is conditioning: near the springing the
+#                  surface is nearly vertical and a horizontal plane cuts it crisply while a
+#                  cylinder cuts it tangentially, and near the crown it is exactly the other way
+#                  round. Each step's band is inset 0.045 (M/10) from the one outside it.
+#   THE RIBS       twenty-four slabs through the axis, 0.315 (0.7 M) thick at the pan and shrunk by
+#                  `offset` to 0.270 and 0.225 for the two courses above it. A slab through the
+#                  axis is the same thickness at every radius, so the ribs stay constant and the
+#                  COFFERS diminish on their own as the rings close in. One fan of seven rotations
+#                  does all three courses; that is what `offset` is for.
+#
+# The set-out, measured along the surface from the springing — which is what the eye measures, not
+# height and not radius:
+#
+#   ring   bound            arc height   opening        rib below it
+#   1      y 15.85 .. 16.45     0.707     1.004 x 0.707     0.253
+#   2      y 16.60 .. 16.95     0.622     0.840 x 0.622     0.219
+#   3      r  3.51 ..  3.06     0.541     0.643 x 0.541     0.265
+#   4      r  2.79 ..  2.34     0.468     0.463 x 0.468     0.222
+#   5      r  2.16 ..  1.80     0.367     0.309 x 0.367     0.185
+#
+# and the top of ring 5 stands at radius 1.80, which is 0.63 clear of the 1.17 inner edge of the
+# dome's bronze oculus ring — so no coffer is ever cut in half by the hole.
+#
+# RINGS 4 AND 5 HAVE TWO COURSES AND NOT THREE. At 0.309 of opening a third course would leave a
+# pan 0.219 wide and 0.225 deep, which is a drilled hole and not a coffer. Diminishing the depth
+# with the width is also what the shell wants, since it thins to M at the crown.
+
+let rotunda_int   = ellipsoid 0 15.60 0  rx=4.800 ry=2.150 rz=4.800
+let rotunda_int_a = ellipsoid 0 15.60 0  rx=4.875 ry=2.225 rz=4.875
+let rotunda_int_b = ellipsoid 0 15.60 0  rx=4.950 ry=2.300 rz=4.950
+let rotunda_int_c = ellipsoid 0 15.60 0  rx=5.025 ry=2.375 rz=5.025
+
+let rotunda_shell_a = difference { rotunda_int_a rotunda_int }
+let rotunda_shell_b = difference { rotunda_int_b rotunda_int }
+let rotunda_shell_c = difference { rotunda_int_c rotunda_int }
+
+# The twenty-four ribs. Negative angles, quadrant, folded twice — see the note above. The fan is
+# boxed because `rotate` reports no bounds, and then shrunk twice rather than rebuilt twice.
+let rotunda_cof_fin = box 0.30 15.55 -0.1575   5.20 18.10 0.1575  round=0.010
+let rotunda_cof_b   = rotate { rotunda_cof_fin } y=-0.0416667
+let rotunda_cof_c   = rotate { rotunda_cof_fin } y=-0.0833333
+let rotunda_cof_d   = rotate { rotunda_cof_fin } y=-0.125
+let rotunda_cof_e   = rotate { rotunda_cof_fin } y=-0.1666667
+let rotunda_cof_f   = rotate { rotunda_cof_fin } y=-0.2083333
+let rotunda_cof_g   = rotate { rotunda_cof_fin } y=-0.25
+let rotunda_cof_quad = union {
+    rotunda_cof_fin rotunda_cof_b rotunda_cof_c rotunda_cof_d
+    rotunda_cof_e rotunda_cof_f rotunda_cof_g
+}
+let rotunda_rib_c = intersection {
+    mirror { mirror { rotunda_cof_quad } axis=x } axis=z
+    box -5.25 15.50 -5.25   5.25 18.15 5.25
+}
+let rotunda_rib_b = offset { rotunda_rib_c } by=0.0225
+let rotunda_rib_a = offset { rotunda_rib_c } by=0.045
+
+# The bands. Two rings bounded in height, three bounded in radius, each course inset 0.045.
+let rotunda_bnd_1a = box -5.10 15.850 -5.10   5.10 16.450 5.10
+let rotunda_bnd_1b = box -5.10 15.895 -5.10   5.10 16.405 5.10
+let rotunda_bnd_1c = box -5.10 15.940 -5.10   5.10 16.360 5.10
+
+let rotunda_bnd_2a = box -5.10 16.600 -5.10   5.10 16.950 5.10
+let rotunda_bnd_2b = box -5.10 16.645 -5.10   5.10 16.905 5.10
+let rotunda_bnd_2c = box -5.10 16.690 -5.10   5.10 16.860 5.10
+
+let rotunda_bnd_3a = difference { cylinder 0 16.9 0 r=3.510 h=3.0 axis=y   cylinder 0 16.9 0 r=3.060 h=3.2 axis=y }
+let rotunda_bnd_3b = difference { cylinder 0 16.9 0 r=3.465 h=3.0 axis=y   cylinder 0 16.9 0 r=3.105 h=3.2 axis=y }
+let rotunda_bnd_3c = difference { cylinder 0 16.9 0 r=3.420 h=3.0 axis=y   cylinder 0 16.9 0 r=3.150 h=3.2 axis=y }
+
+let rotunda_bnd_4a = difference { cylinder 0 16.9 0 r=2.790 h=3.0 axis=y   cylinder 0 16.9 0 r=2.340 h=3.2 axis=y }
+let rotunda_bnd_4b = difference { cylinder 0 16.9 0 r=2.745 h=3.0 axis=y   cylinder 0 16.9 0 r=2.385 h=3.2 axis=y }
+
+let rotunda_bnd_5a = difference { cylinder 0 16.9 0 r=2.160 h=3.0 axis=y   cylinder 0 16.9 0 r=1.800 h=3.2 axis=y }
+let rotunda_bnd_5b = difference { cylinder 0 16.9 0 r=2.115 h=3.0 axis=y   cylinder 0 16.9 0 r=1.845 h=3.2 axis=y }
+
+# One course of one ring: the shell of that depth, cut to the band, with the ribs taken out.
+let rotunda_cof_1a = difference { intersection { rotunda_shell_a rotunda_bnd_1a } rotunda_rib_a }
+let rotunda_cof_1b = difference { intersection { rotunda_shell_b rotunda_bnd_1b } rotunda_rib_b }
+let rotunda_cof_1c = difference { intersection { rotunda_shell_c rotunda_bnd_1c } rotunda_rib_c }
+
+let rotunda_cof_2a = difference { intersection { rotunda_shell_a rotunda_bnd_2a } rotunda_rib_a }
+let rotunda_cof_2b = difference { intersection { rotunda_shell_b rotunda_bnd_2b } rotunda_rib_b }
+let rotunda_cof_2c = difference { intersection { rotunda_shell_c rotunda_bnd_2c } rotunda_rib_c }
+
+let rotunda_cof_3a = difference { intersection { rotunda_shell_a rotunda_bnd_3a } rotunda_rib_a }
+let rotunda_cof_3b = difference { intersection { rotunda_shell_b rotunda_bnd_3b } rotunda_rib_b }
+let rotunda_cof_3c = difference { intersection { rotunda_shell_c rotunda_bnd_3c } rotunda_rib_c }
+
+let rotunda_cof_4a = difference { intersection { rotunda_shell_a rotunda_bnd_4a } rotunda_rib_a }
+let rotunda_cof_4b = difference { intersection { rotunda_shell_b rotunda_bnd_4b } rotunda_rib_b }
+
+let rotunda_cof_5a = difference { intersection { rotunda_shell_a rotunda_bnd_5a } rotunda_rib_a }
+let rotunda_cof_5b = difference { intersection { rotunda_shell_b rotunda_bnd_5b } rotunda_rib_b }
+
+let rotunda_coffers = intersection {
+    union {
+        rotunda_cof_1a rotunda_cof_1b rotunda_cof_1c
+        rotunda_cof_2a rotunda_cof_2b rotunda_cof_2c
+        rotunda_cof_3a rotunda_cof_3b rotunda_cof_3c
+        rotunda_cof_4a rotunda_cof_4b
+        rotunda_cof_5a rotunda_cof_5b
+    }
+    box -5.10 15.60 -5.10   5.10 18.05 5.10
+}
+
+# ================================================================================================
+# THE OCULUS — 1.80 m (2 D) across, and it stays open
+# ================================================================================================
+#
+# dome.clip cuts this hole itself. It is bound here as well, and taken away by the manifest after
+# everything in the building is assembled, so that nothing added to this scene later can close the
+# one aperture the whole interior is lit through. The brief for this part asks for exactly that.
+#
+# IT IS CLIPPED AT 18.65 AND THAT IS LOAD-BEARING. The splay is a cone that comes to a point at
+# y = 20.00, which is above the lantern; unclipped it would swallow the lantern's neck and its
+# gilt ball, which are 0.045 and 0.09 across and sit on the axis at 19.40 and 19.51. Below 18.65
+# there is nothing on the axis but hole.
+let rotunda_oc_bore  = cylinder 0 17.875 0  r=0.90 h=1.55 axis=y
+let rotunda_oc_splay = cone     0 17.300 0  r=1.35 h=2.70 axis=y
+let rotunda_oculus   = intersection {
+    union { rotunda_oc_bore rotunda_oc_splay }
+    box -1.40 17.05 -1.40   1.40 18.65 1.40
+}
+
+# ================================================================================================
+# ASSEMBLY
+# ================================================================================================
+#
+# The stone first, then everything cut out of it, and only then the three things that stand INSIDE
+# what was cut and must not be eaten by it: the pedestals, the urns and the architraves round the
+# niches. Everything hangs off the wall, which runs unbroken from 1.75 to 12.30, so this is one
+# component and there is nothing in it that can come adrift.
+let rotunda_mass = union { rotunda_wall rotunda_floor rotunda_attic }
+let rotunda_cut  = difference {
+    union { rotunda_mass rotunda_entab rotunda_columns }
+    rotunda_bays rotunda_niches rotunda_panels
+}
+
+let part_rotunda = union {
+    rotunda_cut
+    rotunda_dressings
+    rotunda_pedestals
+    rotunda_urns
+}
+
+# What this part removes from the rest of the building: the coffers, which are cut out of the
+# dome's shell, and the oculus, which must stay open. Nothing else — the bays, the niches and the
+# panels are cut out of my own stone above, inside this file, because a niche is not a room and
+# there is nothing else in this building for one to hollow.
+let void_rotunda = union { rotunda_coffers rotunda_oculus }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Every rule keys on a shape bound in this file and every one tests below=0.02 and not below=0,
+# because the manifest displaces the whole building by 12 mm of grain at the end and a voxel that
+# exists only because the grain pushed the surface out lies OUTSIDE the shape that made it. At
+# below=0 those voxels match nothing, fall back to the base coat, and leave a pale limestone rind
+# over a marble room.
+#
+# Order matters — a later coat covers an earlier one — and the order here is: the room, then the
+# floor from the rim inwards, then the hollows, then what stands in them.
+
+paint marble where=rotunda_cut below=0.02
+paint marble where=rotunda_entab below=0.02
+paint marble where=rotunda_columns below=0.02
+paint limestone where=rotunda_attic below=0.02
+
+# THE FRIEZE, IN PORPHYRY, AND IT IS THERE FOR THE VAULT AND NOT FOR ITSELF.
+#
+# `entab_profile`'s frieze is the plain band between 0.65 and 1.25 of its own height, which lands
+# at 10.55 to 11.15 with its face at 4.71. Seventeen square metres of dark red, running right round
+# the room, four and a half metres below the springing and with nothing between it and the white
+# plaster of the dome. The floor is the larger coloured surface and it is the one the shaft lands
+# on, but it is fifteen metres from the vault and half of it is white; this band is the one that
+# will show first if the second bounce carries colour, and it is the one to look at.
+#
+# The zone is a ring of my own at the frieze's exact height and projection. Nothing else in this
+# building is at radius 4.68 to 4.90 between 10.55 and 11.15 — the columns stop at 9.90 — so it
+# cannot reach anybody's work but mine.
+let rotunda_frieze_zone = revolve { box 4.68 10.55 -1   4.90 11.15 1 } axis=y
+paint porphyry where=rotunda_frieze_zone below=0.02
+
+# THE FLOOR. This is the colour in the building. It is directly under the oculus, it is the only
+# large strongly coloured surface anywhere in the scene, and the vault over it is white — so what
+# it is really for is to be looked for on the vault rather than on itself.
+#
+# Every zone is a slice of the paving and nothing else, so no rule can reach the wall standing on
+# it: they are all 0.135 tall and they all stop at 1.80.
+#
+# THE DISC IN THE MIDDLE IS WHITE AND THAT IS THE WHOLE POINT OF THE PATTERN. The oculus is 1.80
+# across and it is on this axis; when the sun is high the shaft lands inside r = 0.90, so the one
+# place in the building that ever sees direct light is the one place laid in plain white marble.
+# Everything coloured is arranged around it, close enough to be lit by the splash and to throw its
+# colour back up at the vault. A dark porphyry roundel here — which is what the first pass had —
+# swallows the shaft, and then there is no bounce to carry any colour anywhere.
+let rotunda_fl_disc    = cylinder 0 1.7325 0  r=0.900 h=0.14 axis=y
+let rotunda_fl_ring_in = difference { cylinder 0 1.7325 0 r=1.035 h=0.14 axis=y
+                                      cylinder 0 1.7325 0 r=0.900 h=0.16 axis=y }
+let rotunda_fl_star    = difference { cylinder 0 1.7325 0 r=1.350 h=0.14 axis=y
+                                      cylinder 0 1.7325 0 r=1.035 h=0.16 axis=y }
+let rotunda_fl_field   = difference { cylinder 0 1.7325 0 r=3.600 h=0.14 axis=y
+                                      cylinder 0 1.7325 0 r=1.350 h=0.16 axis=y }
+let rotunda_fl_ring_out= difference { cylinder 0 1.7325 0 r=3.735 h=0.14 axis=y
+                                      cylinder 0 1.7325 0 r=3.600 h=0.16 axis=y }
+let rotunda_fl_outer   = difference { cylinder 0 1.7325 0 r=4.500 h=0.14 axis=y
+                                      cylinder 0 1.7325 0 r=3.735 h=0.16 axis=y }
+let rotunda_fl_border  = difference { cylinder 0 1.7325 0 r=5.100 h=0.14 axis=y
+                                      cylinder 0 1.7325 0 r=4.500 h=0.16 axis=y }
+
+# THE RADIATION. Twenty-four bands of porphyry on the twenty-four lines the coffers above are set
+# out on, so the floor and the vault are the same figure at opposite ends of the room and standing
+# under the oculus you can see that they are; and twenty-four of verde in the outer field, in the
+# middles between them, where there is room for them.
+#
+# Bands of constant width, not wedges, because a band through the axis is the same width at every
+# radius and the FIELD between two of them widens on its own, which is what radiating actually
+# looks like. THE TWO SETS ARE IN DIFFERENT ANNULI ON PURPOSE. Forty-eight bands in one field is
+# fifty-seven per cent of the pavement at its inner edge, and the first pass of this floor came
+# back as a fairground awning — red, white and blue stripes with no ground left between them for
+# the eye to rest on. Colour in a room like this works by being surrounded; a coloured floor that
+# is more colour than ground stops being a coloured floor and becomes a carpet.
+#
+# Same quadrant-and-two-folds as everything else here, same negative angles, same bounding shape.
+let rotunda_spoke_a = box 1.34 1.66 -0.0675   3.61 1.81 0.0675
+let rotunda_sa_b = rotate { rotunda_spoke_a } y=-0.0416667
+let rotunda_sa_c = rotate { rotunda_spoke_a } y=-0.0833333
+let rotunda_sa_d = rotate { rotunda_spoke_a } y=-0.125
+let rotunda_sa_e = rotate { rotunda_spoke_a } y=-0.1666667
+let rotunda_sa_f = rotate { rotunda_spoke_a } y=-0.2083333
+let rotunda_sa_g = rotate { rotunda_spoke_a } y=-0.25
+let rotunda_spokes_a = intersection {
+    mirror { mirror { union { rotunda_spoke_a rotunda_sa_b rotunda_sa_c rotunda_sa_d
+                              rotunda_sa_e rotunda_sa_f rotunda_sa_g } } axis=x } axis=z
+    rotunda_fl_field
+}
+
+let rotunda_spoke_b = box 3.72 1.66 -0.045   4.51 1.81 0.045
+let rotunda_sb_a = rotate { rotunda_spoke_b } y=-0.0208333
+let rotunda_sb_b = rotate { rotunda_spoke_b } y=-0.0625
+let rotunda_sb_c = rotate { rotunda_spoke_b } y=-0.1041667
+let rotunda_sb_d = rotate { rotunda_spoke_b } y=-0.1458333
+let rotunda_sb_e = rotate { rotunda_spoke_b } y=-0.1875
+let rotunda_sb_f = rotate { rotunda_spoke_b } y=-0.2291667
+let rotunda_spokes_b = intersection {
+    mirror { mirror { union { rotunda_sb_a rotunda_sb_b rotunda_sb_c
+                              rotunda_sb_d rotunda_sb_e rotunda_sb_f } } axis=x } axis=z
+    rotunda_fl_outer
+}
+
+paint slate      where=rotunda_fl_border   below=0.02
+paint marble     where=rotunda_fl_outer    below=0.02
+paint verde      where=rotunda_spokes_b    below=0.02
+paint lapis      where=rotunda_fl_ring_out below=0.02
+paint marble_hot where=rotunda_fl_field    below=0.02
+paint porphyry   where=rotunda_spokes_a    below=0.02
+paint porphyry   where=rotunda_fl_star     below=0.02
+paint verde      where=rotunda_fl_ring_in  below=0.02
+paint marble     where=rotunda_fl_disc     below=0.02
+
+# THE HOLLOWS, AND WHY THESE TWO RULES ARE KEYED ON A GROWN COPY OF A VOID AND NOT ON THE VOID.
+#
+# The coffers are plaster, like the vault they are cut into — dome.clip's own lining rule only
+# reaches 0.09 behind the intrados, which is the first course of a coffer and not the other two, so
+# without this rule the pan of every coffer in the building comes back the colour of the dome's
+# copper. The niches are lined in green marble, which is the second reason there is any colour in
+# this room at all and the thing a gilt urn is seen against.
+#
+# BUT A SURFACE MADE BY A SUBTRACTION LIES OUTSIDE THE THING THAT SUBTRACTED IT. Every voxel of a
+# niche's lining is a voxel the cutter did NOT contain — it is the first one it missed — so its
+# centre stands up to half a voxel outside, which is 0.0156 at the contract's metre 32 and 0.042
+# at the metre 12 anybody previews at. `below=0.02` catches the first and misses the second, and
+# the niches came back grey with a green ring round the mouth, which is exactly the half of the
+# lining that happened to fall inside. The brief's 0.02 is right and is not the thing to change;
+# what is wrong is keying a paint rule on a HOLE. Both rules below therefore name a zone that
+# CONTAINS the stone to be painted rather than the air that was taken out of it — a band a couple
+# of module fractions thick, lying behind the surface, buried where nothing can see it. The
+# architrave and the urns are painted after these and win back the 0.27 of wall face round each
+# niche mouth that the niche zone reaches out onto.
+#
+# The obvious way to write that is `offset { rotunda_coffers } by=-0.045` — grow the hole. These
+# zones are NOT written that way, but only because they are cheaper drawn from scratch, and NOT
+# for the reason an earlier version of this comment gave. That version claimed `offset` cost
+# fifteen times the sample time by throwing away its child's bounding box, with numbers. The
+# numbers were wrong: five other agents were building at the same time and I had compared two runs
+# minutes apart. Measured properly — the three variants written alternately in one session, four
+# rounds each, medians — they are the same shape at the same price:
+#
+#   the zones drawn from scratch (this)      749 ms    1,728,878 field evaluations
+#   offset { the void }                      784 ms    1,725,873
+#   intersection { offset { the void } box } 751 ms    1,725,873
+#
+# So: `offset` of a bounded shape is fine, and if you are going to quote a timing on a machine
+# somebody else is also using, interleave the variants or do not quote it.
+#
+# What the zones ARE drawn from, and why it is still the better way to say it: a coffer can never
+# be deeper than 0.225, so the shell from the intrados out to 0.30 (2M/3) contains every coffer
+# surface in the dome and costs two ellipsoids instead of thirteen banded shells and a rib fan;
+# and the niche's own 0.945 cutter — the one the architrave is struck from — already contains the
+# whole of the lining and 0.27 of the wall face round the mouth, which the architrave rule below
+# paints back to marble. Both reach into stone that nothing can see.
+let rotunda_int_d = ellipsoid 0 15.60 0  rx=5.100 ry=2.450 rz=5.100
+let rotunda_cof_zone = intersection {
+    difference { rotunda_int_d rotunda_int }
+    box -5.15 15.60 -5.15   5.15 18.10 5.15
+}
+
+let rotunda_nz_r = rotate { rotunda_niche_big } y=-0.125
+let rotunda_niche_zone = intersection {
+    mirror { mirror { rotunda_nz_r } axis=x } axis=z
+    box -5.60 2.35 -5.60   5.60 6.40 5.60
+}
+
+paint plaster where=rotunda_cof_zone   below=0.02
+paint verde   where=rotunda_niche_zone below=0.02
+
+# WHAT STANDS IN THEM. Last, so nothing above reaches them.
+paint marble   where=rotunda_dressings below=0.02
+paint porphyry where=rotunda_pedestals below=0.02
+paint gilt     where=rotunda_urns      below=0.02
+
+# GILT AND NOT BRONZE, and the reason is the light and not the taste. Bronze is 112,88,52 at
+# roughness 110; against a verde lining at 62,92,74 in a room with no direct light in it, the urn
+# came back as a brown smudge on a green ground and there was nothing in it for a renderer to be
+# right or wrong about. Gilt is 204,164,84 at roughness 64 and metal 225 — a near-polished metal
+# standing in a hemisphere that is lit ONLY by what bounced off a floor twelve metres away. What
+# it reflects is the room, and whether it reflects the room is the question. It is also the only
+# gilt below the roof: everywhere else in this building it is on a finial against the sky.
+
+# NO WEATHERING. This is an interior, it has never been rained on, and the manifest already spends
+# 12 mm of grain on the whole building. A second displacement on this part would eat the 0.0225
+# steps in the coffers, which are half of what this room exists to carry. Deliberate, and written
+# down so the next person does not read the absence as an oversight.

@@ -1,10 +1,676 @@
-# fittings - sconces, chandelier, urns, benches - the lit and the small
+# fittings — the lit and the small: bronze sconces, standing torchères, the corona lucis under the
+#            dome, benches, and statues on their plinths.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# ================================================================================================
+# WHAT THIS PART PUTS UNDER LOAD — do not "tidy" any of it away.
 #
-# This file must define exactly one part named `part_fittings`. Every other name it binds must
-# start with `fittings_` so nothing collides with another fragment.
+# EVERY EMISSIVE SURFACE IN THE BUILDING IS IN THIS FILE. `lamp` (emit=200) and `sconce`
+# (emit=150) are declared in the contract and no other fragment paints either of them; I checked
+# every paint rule in every file before writing this line. So whatever the renderer does with a
+# light that is part of the geometry rather than part of the sky, it does it here or nowhere.
+#
+# Four different questions are asked of it, hardest last:
+#
+#   1. A SMALL BRIGHT BODY IN A LARGE DARK ROOM. A sconce bowl is a hemisphere of radius 0.1125 —
+#      about 0.08 m2 of emitting surface — and there are four of them in a hall whose surface is
+#      143 m2. That ratio is the whole difficulty: a path tracer that finds its lights by hoping a
+#      bounce lands on one will never converge here, and one that samples them directly will. The
+#      bowls are deliberately SMALL. A big soft area light makes a room easy and tests nothing.
+#
+#   2. A HALL WITH NO OTHER LIGHT AT ALL. halls.clip built two closed rooms with no window in
+#      either, one arch into a rotunda that is itself lit only by an oculus, and it says in its own
+#      header that everything seen past the first bay arrives from a sconce or from nothing. The
+#      eight sconces in this file are that "or from nothing". Take them out and both halls go
+#      black; there is no second light source anywhere in either room and there must not be one.
+#
+#   3. AN EMISSIVE UNDER A ROOF, AGAINST A SURFACE THE SUN NEVER REACHES. The portico is the
+#      deepest exterior shadow in the building — portico.clip's own load — and every surface in it
+#      except the front of the floor is lit by bounce only. Four sconces and two torchères stand in
+#      that shadow, so the portico's coffers, its gilt rosettes and six fluted marble shafts get a
+#      warm direct term from below at the same time as a cold indirect one from outside. Two light
+#      transports of very different colour and hardness on the same fluted shaft, in one frame.
+#
+#   4. A LIGHT HANGING IN THE BIGGEST HOLLOW THERE IS. The corona lucis hangs on four bronze rods
+#      0.09 m across (M/5 — under three voxels at the contract's metre 32) and 7.80 m long, from
+#      the soffit of the dome down to a hoop 3.60 m across carrying sixteen lamps. It is the only
+#      thing in this building that is thin in one axis and enormous in another, it hangs in free
+#      air with nothing behind it for eight metres, and it is lit by its own sixteen lights and by
+#      the shaft through the oculus and by nothing else.
+#
+# The secondary loads, all of them riding on geometry that had to exist anyway:
+#
+#   THIN METAL. The sconce arm is 0.060 across (M/15, 1.92 voxels at metre 32) and its stay is
+#   0.045 (M/10, 1.44), and both are diagonal, which is the worst case for a sampler stepping by
+#   its own reported distance. The chandelier's cross arms are 0.045 and 1.80 m long; its four
+#   hanging rods are 0.09 (M/5) and 7.80 m. The volutes on the sconce consoles and the bench ends
+#   are swept spirals with a 0.045 tube. DO NOT FATTEN ANY OF THEM: a sconce with a comfortable
+#   0.09 arm tests nothing, and these are the only pieces of thin BRONZE in the scene — every other
+#   thin thing in this building is stone, and a brushed metal at rough=110 answers a sampler quite
+#   differently from limestone. Why the arm is 0.060 and the stay 0.045 is set out where they are
+#   drawn; the short version is that the arm is load-bearing and the stay is the control.
+#
+#   MATERIALS NOTHING ELSE USES. `lamp`, `sconce` and `walnut` are painted here and nowhere else.
+#   Walnut is 72,50,34 — by a long way the darkest albedo in the building — and eight benches of it
+#   sit on a terracotta floor under a plaster vault lit only by warm emissives. A dark matte
+#   dielectric at the bottom of the light budget is the case that shows whether the indirect path
+#   carries any energy at all or merely looks like it does.
+#
+#   MARBLE FIGURES. Marble is translucent=110 in the contract, and a statue is the one place in
+#   this building where a thick curved body of it stands in raking light from one side with air
+#   behind it. If subsurface transport works, an arm reads warm on its shadow side.
+#
+# NO WEATHERING IN THIS FILE, and for the reason parapet.clip and portico.clip give: every coat
+# displaces the surface, and the smallest amount worth writing is most of the 0.036 m stay it would
+# be eating. The manifest's 12 mm of grain and its `variation` line give these fittings a
+# no-two-voxels-alike surface without touching the thin matter.
+#
+# WHERE THERE IS DELIBERATELY NO LIGHT:
+#   THE VESTIBULE. vestibule.clip is built as the widest dynamic range in the building and says in
+#   capitals that a sconce would delete the point of it. There is none, and there must never be.
+#   THE STEPS' PEDESTALS. steps.clip explains at length why it stands nothing on them: an ornament
+#   that overhangs its own foot sets the building's worst rise and buries the stair. Its pedestals
+#   stay empty, and the urns the brief asked for on them are on the site's gate piers already.
+#   THE PARAPET. parapet.clip stands its own six bronze urns on its own six pedestals. Adding more
+#   would be two fragments owning one skyline.
+# ================================================================================================
+#
+# THE MODULE. D = 0.90, M = 0.45, and every number below is a multiple of M or of M/20 = 0.0225.
+# Written out, because a fitting is small and it is where the module is easiest to lose:
+#
+#   0.0180  M/25   the finest tube: a swept volute and a lamp rim
+#   0.0225  M/20   the arm and cross-arm radius, the sunk-panel step
+#   0.0450  M/10   the plate's projection, the hanging rod radius, the flame stem
+#   0.0675  M/6.7  = 3 x M/20, the console boss and the volute radius
+#   0.0900  M/5    the rod across, the knop, the neck
+#   0.1125  M/4    the sconce bowl radius, and the whole sconce's projection is 0.225 = M/2
+#   0.1350  0.3 M  the console plate half-width
+#   0.1800  0.4 M  the pendant globe, the plinth's first step
+#   0.2700  0.6 M  the torchère bowl radius, the statue's hem
+#   0.4500  M      the bench depth
+#   0.9000  D      the plinth in plan, the bench end to end is 2 D
+#   1.3500  3 M    a plinth's height
+#   1.8000  4 M    a figure's height, the corona's radius, the bench's length
+#
+# THE ONE HUMAN NUMBER. The brief asks for the sconces at 2.40 m, and 2.40 is not a multiple of
+# 0.45. It cannot be and it should not be: it is the same number as the brief's clear height
+# through a door, and it is in the building for the same reason the riser is 0.18 and the run is
+# 0.32 — because a person is that size. Every flame on a plain wall in this file is 2.40 m above
+# the floor it lights and not a module fraction anywhere.
+#
+# WHERE THE HALLS MAKE THAT IMPOSSIBLE, AND WHAT I DID INSTEAD. A hall wall is not plain. Its
+# impost cornice runs from 4.05 to 4.50 and projects 0.27 (0.6 M) into the room, which is solid
+# stone from the wall face outward: a bracket cannot pass through it and there is nothing above it
+# but vault. So the hall sconces hang in the clear band the room leaves — 2.70 (the dado cap) to
+# 4.05 (the cornice soffit), 1.35 m of it — HUNG AS HIGH IN THAT BAND AS THEY WILL GO. The sconce
+# is 0.8775 tall and 0.18 of that is above the flame, so the highest the flame can stand is
+# 4.05 - 0.045 - 0.18 = 3.825, which is 8.5 M and 2.025 m above the floor. Not the brief's 2.40,
+# and there is no arrangement of a bracket in a 1.35 m band under a projecting cornice that gets
+# there; 0.375 m of it is simply not in the room.
+#
+# And NOTHING IN THIS FILE PROJECTS FURTHER FROM A HALL WALL THAN THAT WALL'S OWN CORNICE ALREADY
+# DOES. The sconce's widest point is 0.225 from the face, against the corona's 0.27 above it, so a
+# person walking the hall meets the room's cornice before they meet my sconce and the fitting takes
+# away no reach the room did not already spend. That is the whole of why the sconce is drawn as
+# narrow as it is.
+#
+# (halls.clip raised its springing one module after reading this file, for the same head-height
+# reason, and its request notes that the change gave these sconces 0.34 m more room rather than
+# less. The flame moved from 3.60 to 3.825 to take it.)
+#
+# WHERE THIS PART MEETS ITS NEIGHBOURS — every one of these taken from the contract or from a
+# fragment's own published face, and every one of them buried by at least 0.05 per rule 4:
+#
+#   the portico wall     z = -7.50, the contract's block outline. Sconce plates are sunk to -7.41,
+#                        statue plinths to -7.41. doors.clip's plinth band runs out to z = -7.68
+#                        between x = +-6.75 and my plinths stand through it and past it.
+#   the portico floor    y = 1.80, the podium's terrace. Everything standing on it is founded at
+#                        1.75, which is 0.05 in.
+#   the hall side walls  |z| = 2.025, the room face halls.clip cuts. Sconce plates are sunk to
+#                        2.115 and benches to 2.115, both through the dado's 1.980 face.
+#   the hall east wall   x = 13.50. The statue plinth is sunk to 13.545.
+#   the dome soffit      the rods stop at y = 17.745 on a radius of 1.80, where the dome's intrados
+#                        stands at 17.593 and its extrados at 18.066: 0.152 into the shell, and
+#                        0.32 clear of the outside of it.
+#
+# THIS PART REMOVES NOTHING FROM ANYBODY. There is no `void_fittings` and the manifest does not ask
+# for one — a fitting is added matter by definition. See the note at the very bottom about the one
+# thing the manifest has to do for this file to appear in the building at all.
 
-let fittings_placeholder = sphere 0 -1.30 0 r=0.25
-let part_fittings = fittings_placeholder
+include "_contract.clip"
+
+# ================================================================================================
+# THE SCONCE — one bronze bracket with an alabaster bowl, drawn once at the origin
+# ================================================================================================
+#
+# THE LOCAL FRAME. The wall face is z = 0 and the sconce projects to +z; y = 0 IS THE MIDDLE OF THE
+# FLAME, so a caller writes `translate { fittings_sconce } x <floor + 2.40> <wall>` and the height
+# the brief asks for is the number in the line. It is sunk to z = -0.09 (M/5) so the plate is
+# certainly in the wall whichever way the manifest's grain moves the face.
+#
+# It is 0.918 m tall, 0.27 wide (0.6 M) and projects exactly 0.225 (M/2) — see the head-height note
+# in the header for why that last number is not negotiable.
+#
+# The console. A back plate and a face plate, the face 0.0225 (M/20 — two thirds of a voxel at the
+# contract's metre 32) proud of the back, so the border round the plate is a genuine sub-voxel step
+# and not a moulding. A boss on the face, and a volute swept under it: the volute is a `spiral`,
+# because a scroll is a logarithmic spiral and stacking rings to make one is what the order's own
+# note tells everybody not to do.
+let fittings_sc_back  = box -0.1350 -0.6975 -0.0900   0.1350 -0.2250 0.0225 round=0.0135
+let fittings_sc_face  = box -0.0900 -0.6525 -0.0900   0.0900 -0.2475 0.0450 round=0.0180
+let fittings_sc_cap   = box -0.1350 -0.2250 -0.0900   0.1350 -0.1575 0.0675 round=0.0135
+let fittings_sc_boss  = ellipsoid 0 -0.4275 0.0450  rx=0.0563 ry=0.0563 rz=0.0563
+let fittings_sc_drop  = ellipsoid 0 -0.7425 -0.0225 rx=0.0563 ry=0.0900 rz=0.0450
+let fittings_sc_scrl  = spiral 0 -0.5850 0.0225  r=0.0675 tighten=0.45 tube=0.0225 turns=1.5 axis=x
+
+# The arm and its stay. THE ARM IS 0.060 ACROSS (M/15) AND THE STAY 0.045 (M/10), and the
+# difference between those two numbers is the whole of what this pair is for.
+#
+# The arm is the only thing holding the lamp on, so it has to survive the grid: at 0.045 it did not.
+# Measured, at the contract's metre 32: with a 0.045 arm one sconce reported TWO components and 162
+# voxels of lamp floating free, because a 1.44-voxel tube laid on a slope sheds face-contact between
+# consecutive layers and the sampler is not wrong to say so. 0.060 is 1.92 voxels — the same order as
+# the parapet's 0.063 baluster neck, which _order.clip calls the second-thinnest matter in the
+# building — and at that width it holds.
+#
+# The stay stays at 0.045, one and a half voxels, BECAUSE IT IS ALLOWED TO FAIL. It is attached to
+# the plate at one end and to the arm at the other, so a hole in the middle of it costs a component
+# nothing and shows exactly what the grid did to it. That is the measurement the arm can no longer
+# make, kept on the same fitting so the two can be compared in one frame. Do not widen it.
+let fittings_sc_arm   = capsule 0 -0.3600 0.0225   0 -0.1350 0.1125  r=0.0300
+let fittings_sc_stay  = capsule 0 -0.5400 0.0225   0 -0.2475 0.0900  r=0.0225
+
+# The lamp itself, on the axis x = 0, z = 0.1125. Stem, knop, bowl, rim, flame. The bowl is the
+# lower half of a sphere of radius 0.1125 — a real cup with a rounded pan, not a disc — and it is
+# the emitting surface. Everything from the rim down is metal and everything from the rim up glows.
+let fittings_sc_stem  = cylinder 0 -0.1575 0.1125  r=0.0300 h=0.0900 axis=y
+let fittings_sc_knop  = sphere   0 -0.1125 0.1125  r=0.0450
+let fittings_sc_bowl  = intersection {
+    ellipsoid 0 0.0225 0.1125  rx=0.1125 ry=0.1125 rz=0.1125
+    box -0.1125 -0.0900 0.0000   0.1125 0.0225 0.2250
+}
+# THE RIM IS A TORUS AND ITS TUBE IS 0.05625 (M/8) AND NOT LESS. At 0.036 across it stood 0.018
+# proud of the bowl on a section a little over half a voxel wide, and the sampler shed one and two
+# voxel crumbs off the outside of it — four floating pieces per sconce, on the copies whose grid
+# phase happened to be wrong and not on the others, which is exactly how a thin ring fails. It is a
+# ring that has to close round a curve, so unlike the stay it cannot be allowed to break.
+let fittings_sc_rim   = torus     0 0.0225 0.1125  ring=0.1125 tube=0.0281 axis=y
+let fittings_sc_flame = ellipsoid 0 0.0675 0.1125  rx=0.0450 ry=0.1125 rz=0.0450
+
+let fittings_sc_metal = union {
+    fittings_sc_back fittings_sc_face fittings_sc_cap fittings_sc_boss
+    fittings_sc_drop fittings_sc_scrl
+    fittings_sc_arm fittings_sc_stay fittings_sc_stem fittings_sc_knop fittings_sc_rim
+}
+let fittings_sc_glow  = union { fittings_sc_bowl fittings_sc_flame }
+let fittings_sconce   = union { fittings_sc_metal fittings_sc_glow }
+
+# The same thing turned to face -z, which is the way this building faces and the way both hall
+# walls on +z face. A half turn about y, so nothing has to be drawn twice.
+let fittings_sconce_s = rotate { fittings_sconce } y=0.5
+
+# ================================================================================================
+# THE TORCHÈRE — a standing bronze candelabrum on a stone pedestal, 2.61 m over its floor
+# ================================================================================================
+#
+# THE LOCAL FRAME. y = 0 is the floor and the axis is the origin in x and z.
+#
+# THE PEDESTAL IS STEPPED SO THAT IT CANNOT SET THE BUILDING'S WORST RISE. `measure` counts a rise
+# as a fault when it is more than 0.1875 m and not more than 0.75 m at the contract's metre 32;
+# below that it is a step and above it a wall. So the plinth is 0.18 tall — one riser, and under
+# the cutoff — and everything above it is 1.17 m, which is over it. steps.clip found this the hard
+# way and its note is the reason this pedestal is shaped like a pedestal and not like a pot stand.
+let fittings_to_plinth = box -0.3600 -0.0500 -0.3600   0.3600 0.1800 0.3600 round=0.0135
+let fittings_to_die    = box -0.2700  0.1800 -0.2700   0.2700 1.1700 0.2700 round=0.0120
+let fittings_to_cap    = box -0.3600  1.1700 -0.3600   0.3600 1.3500 0.3600 round=0.0135
+
+# A sunk panel on all four faces of the die, 0.0225 deep — two thirds of a voxel, the same step the
+# sconce plate has, and the only relief on an otherwise plain block.
+let fittings_to_pan_x  = box  0.2475 0.4500 -0.1800   0.4000 0.9000 0.1800 round=0.0110
+let fittings_to_pan_z  = box -0.1800 0.4500  0.2475   0.1800 0.9000 0.4000 round=0.0110
+let fittings_to_panels = mirror { mirror { union { fittings_to_pan_x fittings_to_pan_z } } axis=x } axis=z
+let fittings_to_ped    = difference {
+    union { fittings_to_plinth fittings_to_die fittings_to_cap }
+    fittings_to_panels
+}
+
+# The bronze standard. A 0.09 shaft (M/5) 2.43 m tall carrying a bowl 0.54 across — three voxels of
+# metal holding up a brazier, which is what a torchère is and what makes it worth building.
+let fittings_to_foot  = box -0.1800 1.3500 -0.1800   0.1800 1.4850 0.1800 round=0.0120
+let fittings_to_tor   = torus    0 1.4850 0  ring=0.1125 tube=0.0450 axis=y
+let fittings_to_shaft = cylinder 0 2.7000 0  r=0.0450 h=2.4300 axis=y
+let fittings_to_knop  = sphere   0 2.7000 0  r=0.0900
+let fittings_to_neck  = torus    0 3.8250 0  ring=0.0900 tube=0.0225 axis=y
+let fittings_to_bowl  = intersection {
+    ellipsoid 0 4.0500 0  rx=0.2700 ry=0.2250 rz=0.2700
+    box -0.2700 3.8250 -0.2700   0.2700 4.0500 0.2700
+}
+let fittings_to_rim   = torus     0 4.0500 0  ring=0.2700 tube=0.0225 axis=y
+let fittings_to_fire  = ellipsoid 0 4.1400 0  rx=0.1800 ry=0.1350 rz=0.1800
+let fittings_to_tong  = ellipsoid 0 4.2750 0  rx=0.0900 ry=0.1350 rz=0.0900
+
+let fittings_to_metal = union {
+    fittings_to_foot fittings_to_tor fittings_to_shaft fittings_to_knop
+    fittings_to_neck fittings_to_bowl fittings_to_rim
+}
+let fittings_to_fires = union { fittings_to_fire fittings_to_tong }
+let fittings_torchere = union { fittings_to_ped fittings_to_metal fittings_to_fires }
+
+# ================================================================================================
+# THE CORONA LUCIS — the chandelier in the rotunda, hung from the soffit of the dome
+# ================================================================================================
+#
+# Drawn where it hangs, on the centre line, because there is only one of it.
+#
+#   17.745   the top of the rods, 0.152 inside the dome's intrados on a radius of 1.80
+#    9.900   the hoop, which is column_head — the contract's own level, the line the whole order
+#            outside is capped by, carried through to the one thing hanging inside
+#    9.225   the bottom of the pendant, 7.42 m clear over the rotunda floor at 1.80
+#
+# FOUR RODS AND NOT A CHAIN. A chain is a hundred torus links and every one of them is a hole the
+# sampler has to find; four 0.09 rods say the same thing about thin metal over a long run and cost
+# four capsules. They are VERTICAL on purpose — a diagonal member 0.09 across and eight metres long
+# walks the voxel grid at an angle and comes apart into separate components long before the
+# geometry is wrong, which measures the sampler and nothing else.
+#
+# THE FOUR ARE FOUR ROTATIONS OF ONE AND NOT `around { } count=4`. A polar fold reports a distance
+# larger than the truth near a sector boundary, so the field has to declare it infinitely slack,
+# and infinite slack anywhere means the sampler cannot skip a single voxel of the bounds ANYWHERE
+# in the clip. _order.clip measured that at 950x on one column. Rotations are isometries: exact,
+# and each carries a box. The same argument is why the sixteen lamps are a quadrant of four turned
+# three times rather than a polar repeat, and going round the whole circle by rotation also makes
+# the set symmetric about x = 0 without depending on which way a positive turn about y goes.
+let fittings_ch_rod   = capsule 1.8000 9.9900 0   1.8000 17.7000 0  r=0.0450
+let fittings_ch_rods  = union {
+    fittings_ch_rod
+    rotate { fittings_ch_rod } y=0.25
+    rotate { fittings_ch_rod } y=0.50
+    rotate { fittings_ch_rod } y=0.75
+}
+
+# The hoop: one section in (radius, height) turned about the axis. A band 0.045 thick between two
+# fillets that stand 0.0225 proud of it — the same sub-voxel step the sconce plate has, 3.60 m
+# across and seen from below against a coffered dome.
+let fittings_ch_band  = box 1.7775 9.9000 -1   1.8225 10.2600 1
+let fittings_ch_fil_l = box 1.7550 9.9000 -1   1.8450  9.9675 1
+let fittings_ch_fil_u = box 1.7550 10.1925 -1  1.8450 10.2600 1
+let fittings_ch_sec   = union { fittings_ch_band fittings_ch_fil_l fittings_ch_fil_u }
+let fittings_ch_hoop  = revolve { fittings_ch_sec } axis=y
+
+# The cross arms, the hub and the pendant. 0.045 across and 1.80 long, which is the thinnest thing
+# in this file that has to span a distance.
+let fittings_ch_arm   = capsule 1.8000 10.0800 0   0 10.0800 0  r=0.0225
+let fittings_ch_arms  = union {
+    fittings_ch_arm
+    rotate { fittings_ch_arm } y=0.25
+    rotate { fittings_ch_arm } y=0.50
+    rotate { fittings_ch_arm } y=0.75
+}
+let fittings_ch_hub   = sphere  0 10.0800 0  r=0.0900
+let fittings_ch_stem  = capsule 0 10.0800 0   0 9.6975 0  r=0.0225
+let fittings_ch_pknop = sphere  0 9.6975 0  r=0.0900
+let fittings_ch_globe = sphere  0 9.5175 0  r=0.1800
+let fittings_ch_drop  = capsule 0 9.3825 0   0 9.3150 0  r=0.0225
+let fittings_ch_tip   = sphere  0 9.2925 0  r=0.0450
+
+# ONE LAMP, standing on the hoop at a radius of 1.80. A cup of the same radius as the sconce's, so
+# the whole building's lights are one size, and a flame over it.
+#
+# THE SOCKET IS NOT DECORATION. The cup is the lower half of a sphere, so it comes to a POINT at
+# its bottom, and a point sitting on a 0.045 hoop is a joint the grid can take apart: sixteen lamps
+# at sixteen different phases of the same grid, and only the ones that happened to land well stayed
+# on. The stub is a 0.09 cylinder driven 0.1125 down into the hoop, which is a real socket and joins
+# at every phase. The flame likewise starts BELOW the cup's rim and not on it — two surfaces meeting
+# on one plane and nowhere else is not a join, and the component count is what says so.
+let fittings_ch_stub  = cylinder 1.8000 10.2150 0  r=0.0450 h=0.1350 axis=y
+let fittings_ch_cup   = intersection {
+    ellipsoid 1.8000 10.3275 0  rx=0.1125 ry=0.1125 rz=0.1125
+    box 1.6875 10.2150 -0.1125   1.9125 10.3275 0.1125
+}
+let fittings_ch_fl    = ellipsoid 1.8000 10.3725 0  rx=0.0675 ry=0.1125 rz=0.0675
+
+let fittings_ch_lamp  = union { fittings_ch_stub fittings_ch_cup fittings_ch_fl }
+let fittings_ch_quad  = union {
+    fittings_ch_lamp
+    rotate { fittings_ch_lamp } y=0.0625
+    rotate { fittings_ch_lamp } y=0.1250
+    rotate { fittings_ch_lamp } y=0.1875
+}
+let fittings_ch_lamps = union {
+    fittings_ch_quad
+    rotate { fittings_ch_quad } y=0.25
+    rotate { fittings_ch_quad } y=0.50
+    rotate { fittings_ch_quad } y=0.75
+}
+
+let fittings_ch_glowq = union {
+    fittings_ch_fl
+    rotate { fittings_ch_fl } y=0.0625
+    rotate { fittings_ch_fl } y=0.1250
+    rotate { fittings_ch_fl } y=0.1875
+}
+let fittings_ch_fires = union {
+    fittings_ch_glowq
+    rotate { fittings_ch_glowq } y=0.25
+    rotate { fittings_ch_glowq } y=0.50
+    rotate { fittings_ch_glowq } y=0.75
+    fittings_ch_globe
+}
+
+let fittings_ch_metal = union {
+    fittings_ch_rods fittings_ch_hoop fittings_ch_arms fittings_ch_hub
+    fittings_ch_stem fittings_ch_pknop fittings_ch_drop fittings_ch_tip
+}
+let fittings_chandelier = union { fittings_ch_metal fittings_ch_lamps fittings_ch_globe }
+
+# ================================================================================================
+# THE BENCH — 1.80 m of walnut on a marble sub-base, against a wall
+# ================================================================================================
+#
+# THE LOCAL FRAME. The wall face is z = 0, the bench projects to +z, y = 0 is the floor.
+#
+# THE TWO STEPS ARE 0.18 EACH AND THAT IS THE WHOLE OF THE SECTION. Floor to plinth is 0.18 and
+# plinth to seat is 0.18 — one riser each, both under the 0.1875 that `measure` counts as a fault —
+# and THE SEAT DOES NOT OVERHANG THE PLINTH, in either axis. A seat at the ordinary 0.45 on a
+# hollow underframe puts a single 0.45 m rise round the whole bench and that, not the great steps,
+# becomes the building's reported worst rise. A stone bench 0.36 high with a plinth under it is
+# what a public hall has anyway, and it is the only section that costs the walkability check
+# nothing.
+let fittings_bn_plinth = box -0.9000 -0.0500 -0.0900   0.9000 0.1800 0.4500 round=0.0120
+let fittings_bn_body   = box -0.8550  0.1800 -0.0900   0.8550 0.3150 0.4050 round=0.0120
+let fittings_bn_seat   = box -0.8550  0.3150 -0.0900   0.8550 0.3600 0.4050 round=0.0100
+
+# A sunk panel in the front of the body, 0.0225 deep, and a swept volute standing 0.045 proud of
+# each end. The volute is the only ornament on the bench and it is a 0.045 tube.
+let fittings_bn_pan    = box -0.6300 0.2025 0.3825   0.6300 0.2925 0.4600 round=0.0110
+let fittings_bn_scroll = spiral 0.8775 0.2475 0.1800  r=0.0900 tighten=0.45 tube=0.0225 turns=1.5 axis=x
+
+let fittings_bn_stone  = union {
+    difference { union { fittings_bn_plinth fittings_bn_body } fittings_bn_pan }
+    mirror { fittings_bn_scroll } axis=x
+}
+let fittings_bench = union { fittings_bn_stone fittings_bn_seat }
+let fittings_bench_s = rotate { fittings_bench } y=0.5
+
+# ================================================================================================
+# THE STATUE AND ITS PLINTH — a draped figure 1.80 m (4 M) on a plinth 1.35 m (3 M)
+# ================================================================================================
+#
+# THE LOCAL FRAME. The wall face is z = 0, the plinth projects to +z, y = 0 is the floor, and the
+# figure faces +z, out into the room.
+#
+# The plinth is 0.90 (D) square in plan and steps 0.18 out of the floor before it becomes a wall,
+# for the same reason the torchère's does: 0.18 is a riser and 1.17 is a wall, and nothing in
+# between is allowed anywhere in this building.
+let fittings_pl_base = box -0.4500 -0.0500 -0.0900   0.4500 0.1800 0.8100 round=0.0135
+let fittings_pl_die  = box -0.3600  0.1800 -0.0900   0.3600 1.1700 0.7200 round=0.0120
+let fittings_pl_cap  = box -0.4500  1.1700 -0.0900   0.4500 1.3500 0.8100 round=0.0135
+let fittings_pl_pan  = box -0.1800  0.4500  0.6525   0.1800 0.9000 0.7600 round=0.0110
+let fittings_plinth  = difference {
+    union { fittings_pl_base fittings_pl_die fittings_pl_cap }
+    fittings_pl_pan
+}
+
+# THE FIGURE. Its axis is z = 0.36, the middle of the plinth, and it stands from 1.35 to 3.13.
+#
+# THE ROBE IS WIDEST AT ITS FOOT AND NOWHERE ELSE, AND THAT IS A WALKABILITY DECISION, not a
+# stylistic one. `measure` compares the top of the matter in neighbouring columns and calls the
+# difference a rise; at the contract's metre 32 it counts one as a fault when it is more than
+# 0.1875 m and treats anything over 0.75 m as a wall. So a figure with a flat-topped flare at its
+# hem puts a step of exactly that flare's height right round itself, and — worse — a hand hanging
+# free 0.73 m above that flat top lands squarely inside the counted band. The first pass here had
+# both, and it reported the maximum countable rise, 0.75 m, for the whole part.
+#
+# What fixes it is drapery that behaves like drapery: two cones, the outer one short and splayed so
+# the skirt is concave, both struck from y = 1.30 — below the plinth top, so the figure is certainly
+# one solid with the stone under it — and NOTHING anywhere on the figure wider than the 0.284 the
+# robe measures where it leaves the cap. The hanging arm ends INSIDE the robe, the way a real one
+# disappears into the cloth, so there is no free hand over a flat surface at all. The forward arm is
+# the exception and it is allowed: everything under it is more than 0.85 m below, which is a wall.
+#
+# The main cone's slope is 5.85 to 1 — 1.71 m of rise (3.8 M) for 0.2925 of radius (0.65 M) — which
+# is 0.183 m of top-of-matter between neighbouring columns, just under the 0.1875 that counts. That
+# is the only reason those two numbers are what they are.
+let fittings_st_robe = intersection {
+    union {
+        cone 0 1.3000 0.3600  r=0.3600 h=2.0250 axis=y
+        cone 0 1.3000 0.3600  r=0.3825 h=0.5625 axis=y
+    }
+    box -0.3825 1.3000 -0.0225   0.3825 2.3400 0.7425
+}
+let fittings_st_torso = ellipsoid 0 2.5650 0.3600  rx=0.1800 ry=0.2925 rz=0.1125
+let fittings_st_shldr = capsule -0.1800 2.7450 0.3600   0.1800 2.7450 0.3600  r=0.1035
+let fittings_st_neck  = capsule 0 2.7900 0.3600   0 2.8800 0.3600  r=0.0540
+let fittings_st_head  = ellipsoid 0 3.0150 0.3600  rx=0.1125 ry=0.1575 rz=0.1260
+let fittings_st_armd  = capsule -0.2250 2.6550 0.3600  -0.1350 2.1150 0.4275  r=0.0675
+let fittings_st_armu  = capsule  0.2250 2.6550 0.3600   0.2475 2.2500 0.4275  r=0.0675
+let fittings_st_fore  = capsule  0.2475 2.2500 0.4275   0.1350 2.3400 0.6975  r=0.0563
+
+# Three folds of drapery, laid on the robe's own surface so they stand 0.0225 proud of it — a
+# sub-voxel ridge on a curved surface, which is the same question a coffer's moulding asks and is
+# asked here on a body instead of on a ceiling.
+let fittings_st_fold_c = capsule 0       1.3500 0.6975   0       2.2500 0.5400  r=0.0225
+let fittings_st_fold_e = capsule  0.3375 1.3500 0.3600    0.1800 2.2500 0.3600  r=0.0225
+let fittings_st_fold_w = capsule -0.3375 1.3500 0.3600   -0.1800 2.2500 0.3600  r=0.0225
+
+let fittings_figure = union {
+    fittings_st_robe
+    fittings_st_torso fittings_st_shldr fittings_st_neck fittings_st_head
+    fittings_st_armd fittings_st_armu fittings_st_fore
+    fittings_st_fold_c fittings_st_fold_e fittings_st_fold_w
+}
+
+let fittings_statue   = union { fittings_plinth fittings_figure }
+let fittings_statue_s = rotate { fittings_statue } y=0.5
+let fittings_statue_w = rotate { fittings_statue } y=0.75
+
+# ================================================================================================
+# PLACING — the portico
+# ================================================================================================
+#
+# The south wall of the main block, z = -7.50, between the great door's dressing (which stops at
+# x = +-2.025) and the antae (which start at x = +-6.05). Everything is built on +x and folded
+# once at the end, so the two halves of the elevation cannot drift apart.
+#
+#   x = +-2.70 (6 M) and +-5.40 (12 M)   the sconces, flame on 4.20 = 1.80 + 2.40
+#   x = +-4.05 (9 M)                     a statue, on the axis of the middle column of the portico
+#   x = +-2.25 (5 M), z = -8.85          a torchère, 1.35 (3 M) in front of the wall
+#
+# So this wall reads, from the great door outwards: torchère standing free on the floor, sconce,
+# statue lit from both sides by the two sconces beside it, sconce, anta. THE THREE FLAMES ON EACH
+# SIDE ARE ALL ON ONE LEVEL — both sconce bowls on 4.20 and the torchère's brazier centred on 4.14,
+# four and a half centimetres apart, under a voxel and a half at metre 32. That is what a colonnade
+# wants, and it is also the only way to put `sconce` at emit=150 and `lamp` at emit=200 side by side
+# at the same height in the same shadow, where the difference between them is the material and
+# nothing else.
+let fittings_po_sconce_a = translate { fittings_sconce_s } 2.7000 4.2000 -7.5000
+let fittings_po_sconce_b = translate { fittings_sconce_s } 5.4000 4.2000 -7.5000
+let fittings_po_statue   = translate { fittings_statue_s } 4.0500 1.8000 -7.5000
+let fittings_po_torchere = translate { fittings_torchere } 2.2500 1.8000 -8.8500
+
+let fittings_portico_half = union {
+    fittings_po_sconce_a fittings_po_sconce_b fittings_po_statue fittings_po_torchere
+}
+let fittings_portico = mirror { fittings_portico_half } axis=x
+
+# ================================================================================================
+# PLACING — the halls
+# ================================================================================================
+#
+# halls.clip builds two closed rooms, x 5.40 .. 13.50 in the clear, |z| <= 2.025, floor 1.80, dado
+# cap 2.70, impost cornice soffit 4.05, two square bays centred on x = 7.425 and 11.475. The east
+# hall is drawn here and folded to the west, exactly as that file does with its own geometry.
+#
+# FOUR SCONCES TO A HALL, one on each side wall at each bay centre, flame on 3.825 (8.5 M), which
+# is as high as the band between the dado cap and the cornice will carry it. That is the whole
+# lighting of the room and there is nothing else in it: see the head-height note in this file's
+# header for why the flame is on 3.825 here and on 4.20 in the portico.
+#
+# FOUR BENCHES TO A HALL, under the sconces, so the one thing to sit on is the one place that is
+# lit. A bench is 1.80 long and the responds at the bay ends are 0.45 wide on x = 5.40, 9.45 and
+# 13.50, so a bench centred on a bay centre has 0.90 of clear wall at each end of it.
+#
+# ONE STATUE TO A HALL, at the east end, in front of the blind arched panel halls.clip put there —
+# "the far wall of a room eight metres long and the one thing at the end of it", in its own words.
+# Its plinth is sunk to x = 13.545, through the dado, and the figure faces west down the hall.
+let fittings_ha_sconce_n1 = translate { fittings_sconce_s } 7.4250 3.8250  2.0250
+let fittings_ha_sconce_n2 = translate { fittings_sconce_s } 11.4750 3.8250  2.0250
+let fittings_ha_sconce_s1 = translate { fittings_sconce   } 7.4250 3.8250 -2.0250
+let fittings_ha_sconce_s2 = translate { fittings_sconce   } 11.4750 3.8250 -2.0250
+
+let fittings_ha_bench_n1  = translate { fittings_bench_s } 7.4250 1.8000  2.0250
+let fittings_ha_bench_n2  = translate { fittings_bench_s } 11.4750 1.8000  2.0250
+let fittings_ha_bench_s1  = translate { fittings_bench   } 7.4250 1.8000 -2.0250
+let fittings_ha_bench_s2  = translate { fittings_bench   } 11.4750 1.8000 -2.0250
+
+let fittings_ha_statue    = translate { fittings_statue_w } 13.5450 1.8000 0
+
+let fittings_halls_half = union {
+    fittings_ha_sconce_n1 fittings_ha_sconce_n2 fittings_ha_sconce_s1 fittings_ha_sconce_s2
+    fittings_ha_bench_n1 fittings_ha_bench_n2 fittings_ha_bench_s1 fittings_ha_bench_s2
+    fittings_ha_statue
+}
+let fittings_halls = mirror { fittings_halls_half } axis=x
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let part_fittings = union { fittings_portico fittings_halls fittings_chandelier }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Every rule keys on one of this file's own shapes and every one says below=0.02, never below=0:
+# the manifest displaces the whole building by 12 mm of grain at the end, and a voxel that exists
+# only because the grain pushed the surface outward sits OUTSIDE the shape its rule names. At
+# below=0 those voxels match nothing, fall back to the base coat and leave a pale limestone rind
+# over every bronze arm in the building.
+#
+# The order is stone, then metal, then gilt, then the two emissives last of all, because a later
+# coat covers an earlier one and the light is the thing that must not be covered by anything.
+
+# --- the stone -----------------------------------------------------------------------------------
+#
+# Granite for the plinths and pedestals, which is what steps.clip stands its own dressed blocks on
+# and what a base under a white figure should be; marble for the figures themselves. Marble is the
+# translucent material in this building (translucent=110) and a 0.09 m marble wrist with light
+# behind it is the thinnest thing subsurface transport is asked for anywhere indoors.
+# A PAINT KEY HAS TO BE TURNED THE SAME WAY THE STONE IS. The plinth is square in plan but not in
+# section — it runs z = -0.09 to 0.81 about its own wall face — so the copy under the portico statue
+# has to carry the same `rotate y=0.5` the statue does. Written without it the zone landed 1.50 m
+# north of the plinth, which is INSIDE walls.clip's south wall: the plinth came out in the base
+# coat and a 0.90 x 1.40 patch of somebody else's wall came out granite. Nothing measured it and
+# nothing errored. This is the failure BRIEF.md's rule 5 is about, arrived at from the other end.
+let fittings_bases = union {
+    mirror { union { translate { rotate { fittings_plinth } y=0.5  } 4.0500 1.8000 -7.5000
+                     translate { rotate { fittings_plinth } y=0.75 } 13.5450 1.8000 0 } } axis=x
+    mirror { translate { fittings_to_ped } 2.2500 1.8000 -8.8500 } axis=x
+}
+paint granite where=fittings_bases below=0.02
+
+let fittings_figures = mirror {
+    union { translate { rotate { fittings_figure } y=0.5  } 4.0500 1.8000 -7.5000
+            translate { rotate { fittings_figure } y=0.75 } 13.5450 1.8000 0 }
+} axis=x
+paint marble where=fittings_figures below=0.02
+
+# The bench, in two stones: a marble sub-base and a walnut seat. Walnut is 72,50,34 and nothing
+# else in the building uses it — the darkest albedo in the scene, eight times over, in the one room
+# whose only light is an emissive.
+let fittings_bn_stones = mirror { union {
+    translate { rotate { fittings_bn_stone } y=0.5 } 7.4250 1.8000  2.0250
+    translate { rotate { fittings_bn_stone } y=0.5 } 11.4750 1.8000  2.0250
+    translate { fittings_bn_stone } 7.4250 1.8000 -2.0250
+    translate { fittings_bn_stone } 11.4750 1.8000 -2.0250
+} } axis=x
+paint marble where=fittings_bn_stones below=0.02
+
+let fittings_seats = mirror { union {
+    translate { rotate { fittings_bn_seat } y=0.5 } 7.4250 1.8000  2.0250
+    translate { rotate { fittings_bn_seat } y=0.5 } 11.4750 1.8000  2.0250
+    translate { fittings_bn_seat } 7.4250 1.8000 -2.0250
+    translate { fittings_bn_seat } 11.4750 1.8000 -2.0250
+} } axis=x
+paint walnut where=fittings_seats below=0.02
+
+# --- the metal -----------------------------------------------------------------------------------
+#
+# Bronze on everything that is not stone and not alight. rough=110 metal=190 brush=2: a brushed
+# metal, which is the one specular response in this scene that is neither the parapet's sky-lit
+# urns nor the dome's copper, and here it is lit almost entirely by the thing it is holding up.
+let fittings_sconce_metal = mirror { union {
+    translate { rotate { fittings_sc_metal } y=0.5 } 2.7000 4.2000 -7.5000
+    translate { rotate { fittings_sc_metal } y=0.5 } 5.4000 4.2000 -7.5000
+    translate { rotate { fittings_sc_metal } y=0.5 } 7.4250 3.8250  2.0250
+    translate { rotate { fittings_sc_metal } y=0.5 } 11.4750 3.8250  2.0250
+    translate { fittings_sc_metal } 7.4250 3.8250 -2.0250
+    translate { fittings_sc_metal } 11.4750 3.8250 -2.0250
+} } axis=x
+paint bronze where=fittings_sconce_metal below=0.02
+
+let fittings_torch_metal = mirror { translate { fittings_to_metal } 2.2500 1.8000 -8.8500 } axis=x
+paint bronze where=fittings_torch_metal below=0.02
+
+paint bronze where=fittings_ch_metal below=0.02
+
+# The cups the flames stand in, on the corona, are gilt rather than bronze: sixteen sharp specular
+# metal reflectors immediately under sixteen emitters is the case an importance sampler is worst
+# at, and gilt at rough=64 metal=225 is the sharpest specular in the contract.
+let fittings_ch_cups = difference { fittings_ch_lamps fittings_ch_fires }
+paint gilt where=fittings_ch_cups below=0.02
+
+# --- and the light, last of all --------------------------------------------------------------------
+#
+# `sconce` (emit=150) is the warm bowl of a wall bracket and `lamp` (emit=200) is an open flame:
+# two emissive strengths a stop apart in the same frame, so they can be compared rather than
+# guessed at. Nothing else in the building paints either of them.
+let fittings_glows = mirror { union {
+    translate { rotate { fittings_sc_glow } y=0.5 } 2.7000 4.2000 -7.5000
+    translate { rotate { fittings_sc_glow } y=0.5 } 5.4000 4.2000 -7.5000
+    translate { rotate { fittings_sc_glow } y=0.5 } 7.4250 3.8250  2.0250
+    translate { rotate { fittings_sc_glow } y=0.5 } 11.4750 3.8250  2.0250
+    translate { fittings_sc_glow } 7.4250 3.8250 -2.0250
+    translate { fittings_sc_glow } 11.4750 3.8250 -2.0250
+} } axis=x
+paint sconce where=fittings_glows below=0.02
+
+let fittings_fires = mirror { translate { fittings_to_fires } 2.2500 1.8000 -8.8500 } axis=x
+paint lamp where=fittings_fires below=0.02
+paint lamp where=fittings_ch_fires below=0.02
+
+# ================================================================================================
+# THE ONE THING THIS FILE CANNOT DO FOR ITSELF — read this before wondering where the lights went
+# ================================================================================================
+#
+# The manifest assembles `built = union { shell inside }`, with `part_fittings` inside it, and THEN
+# subtracts every room's void from the lot:
+#
+#     let hollowed = difference { built  void_doors void_windows void_vestibule
+#                                        void_rotunda void_halls void_stair }
+#
+# A room's void is the air of that room less its own stone — halls.clip and vestibule.clip both
+# write it that way, correctly, so that another fragment cannot leave a wall standing in their
+# room. But a fitting IS a thing standing in somebody's room, and it is subtracted with everything
+# else. The manifest's own comment above that line says the voids come last so that "nothing put in
+# afterwards can be eaten by a room being carved", which is the intention; the code does not do it,
+# because `inside` is inside `built`.
+#
+# MEASURED, so nobody has to take it on trust. Built at metre 10 and photographed from inside the
+# east hall (renders\fit-hall-place\contact-sheet.png): the four sconces are reduced to the 0.09 m
+# of backplate that is buried in the wall — a flat dark rectangle with no bracket, no bowl and no
+# light — and the four benches, which bury the same 0.09 and project 0.45 into the room, are gone
+# altogether. `--clip-part part_fittings` reports all 27 fittings whole and one piece each.
+#
+# The fix is one line in clips/facility.clip and it is not mine to make:
+#
+#     let furnished = union { hollowed part_fittings }        # and displace `furnished`
+#
+# with `part_fittings` taken out of the `inside` union. Written up with the measurement in
+# clips/facility/requests/fittings.md. Until it is made, the four sconces, two torchères and two
+# statues under the PORTICO are the part of this file that survives, because a portico is outdoors
+# and nobody voids it — which is also why the largest single share of the emissive load was put
+# there rather than indoors, and it is there today: renders\fit-pt\portico-front.png is a path
+# trace of four of them alight on the south wall. The corona under the dome survives too, but only
+# because rotunda.clip is still a placeholder; the day it exposes a real `void_rotunda` over the
+# drum, everything between the hoop at 9.90 and the dome's springing at 15.15 goes with it.

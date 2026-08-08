@@ -1,0 +1,80 @@
+# A bench test for the surface fragment. Not part of the building.
+#
+# One piece of moulded stone with a stair against it, standing on grass, with a pool at its foot
+# and a bronze on top of it — the four things the last facility's weathering ruined. The two
+# weather statements are the ones in clips/facility/surface.clip, at the same amounts and scales,
+# so what this shows is what the building will get.
+
+metre 32
+bounds -4.5 -0.5 -4.5   4.5 4.0 4.5
+
+material limestone  rgb=208,203,190 rough=205
+material granite    rgb=126,124,120 rough=225
+material marble     rgb=228,225,217 rough=140 translucent=110
+material bronze     rgb=112,88,52   rough=110 metal=190 brush=2
+material lawn       rgb=94,124,66   rough=248
+material gravel     rgb=178,172,158 rough=250
+material water      rgb=68,108,132  rough=24  opacity=110 ior=1.33
+
+let grain_fine = fbm size=0.07 octaves=3 seed=23
+
+# --- the ground, and a pool in it --------------------------------------------------------------
+let ground = box -4.5 -0.5 -4.5   4.5 0.0 4.5
+let pool_rim = box -4.05 -0.45 -4.05   -2.25 0.135 -1.35 round=0.015
+let pool_pan = box -3.825 -0.135 -3.825  -2.475 0.585 -1.575 round=0.015
+let pool_stone = difference { pool_rim pool_pan }
+let pool_water = box -3.870 -0.225 -3.870  -2.430 0.000 -1.530
+
+# A gravel apron under the stair, because the facility has one: the southern approach there is
+# gravel out to the podium's face, so no lawn is inside the sun zone. Without it this bench would
+# test something the building never does.
+let apron = box -2.70 -0.45 -4.50   2.70 0.00 -1.35
+
+# --- the stone: a podium die with a moulded cornice, and a flight against its south face --------
+let die     = box -1.80 0.00 -1.80   1.80 1.35 1.80 round=0.012
+let bed     = ovolo  1.80 1.3500 -2.10   1.9125 1.2375 2.10 run=z
+let bed_w   = ovolo -1.80 1.3500 -2.10  -1.9125 1.2375 2.10 run=z
+let bed_n   = ovolo -2.10 1.3500  1.80   2.10 1.2375 1.9125 run=x
+let bed_s   = ovolo -2.10 1.3500 -1.80   2.10 1.2375 -1.9125 run=x
+let fillet_ring = box -1.9125 1.3500 -1.9125   1.9125 1.4400 1.9125 round=0.010
+let corona  = box -2.0250 1.4400 -2.0250   2.0250 1.6650 2.0250 round=0.012
+let crown_e = cyma   2.0250 1.6650  2.1375 1.8000 run=z
+let crown_w = cyma  -2.0250 1.6650 -2.1375 1.8000 run=z
+let crown_ring = box -2.1375 1.6650 -2.1375   2.1375 1.8000 2.1375 round=0.010
+let cornice = union { bed bed_w bed_n bed_s fillet_ring corona crown_ring }
+
+# Ten risers of 0.18 and ten runs of 0.32, against the south face.
+let flight = stairs -1.35 0.00 -4.20   1.35 1.80 -1.35 run=0.32 rise=0.18
+let block = union { die cornice flight }
+
+# --- a bronze on top ----------------------------------------------------------------------------
+let urn_body = ellipsoid 0 2.25 0 rx=0.36 ry=0.45 rz=0.36
+let urn_foot = cylinder 0 1.90 0 r=0.18 h=0.45 axis=y
+let urn_neck = cylinder 0 2.655 0 r=0.18 h=0.27 axis=y
+let bronze_urn = union { urn_foot urn_body urn_neck }
+
+let built = union { ground pool_stone pool_water block bronze_urn }
+let all = displace { built grain_fine } amount=0.012
+
+paint lawn      where=ground     below=0.02
+paint gravel    where=apron      below=0.02
+paint granite   where=pool_stone below=0.02
+paint water     where=pool_water below=0.02
+paint limestone where=block      below=0.02
+paint granite   where=flight     below=0.02
+paint marble    where=cornice    below=0.02
+paint bronze    where=bronze_urn below=0.02
+
+variation colour=0.030 rough=0.070 seed=17
+solid all
+
+# --- the zones, and the weather they take ------------------------------------------------------
+#
+# Boxes, exactly as in the building: the sun on the stair and the south face, the damp on the
+# north face and up under the cornice's hollow. Neither box contains the grass, the water or the
+# bronze, and that is the whole thing being tested.
+let sun_zone  = box -1.80 -0.45 -4.50   1.80 1.80 -1.35
+let damp_zone = box -2.25 0.45  1.35   2.25 1.80  2.25
+
+weather desert    0.18 scale=1.00 level=-0.45 seed=83 on=sun_zone
+weather overgrown 0.18 scale=0.90 seed=89 on=damp_zone

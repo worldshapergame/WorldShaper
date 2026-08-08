@@ -1,14 +1,457 @@
-# halls - the side halls east and west and their vaults
+# halls — the two side halls east and west of the rotunda, and the groin vaults over them.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# ================================================================================================
+# WHAT THIS PART PUTS UNDER LOAD — do not "tidy" any of it away.
 #
-# This file must define exactly one part named `part_halls`. Every other name it binds must
-# start with `halls_` so nothing collides with another fragment.
+# 1. THE GROIN VAULT: the hardest surface in this building to sample without a seam.
+#
+#    Each hall is two square bays of 4.05 vaulted as a true groin vault — one barrel running the
+#    length of the hall and one across each bay, of the SAME radius, so both crowns land on 6.525
+#    and the groins run corner to centre, straight in plan, as a real groin vault's do. The air is
+#    the UNION of the barrels and not their intersection; the intersection is a cloister vault and
+#    springs along all four sides, and it took a contact sheet to see the difference.
+#
+#    What that costs a sampler is the sixteen groin creases (four to a bay, two bays, two halls)
+#    and the eight horizontal ridges. A groin is the line where two cylinders of equal radius meet,
+#    and the dihedral between them OPENS TOWARDS THE CROWN: at the springing the two webs meet at
+#    ninety degrees and by the crown they are all but tangent. A distance field has no trouble with
+#    the first and every trouble with the last, because within one voxel of a nearly-tangent crease
+#    the nearest surface swaps from one web to the other and the gradient turns over. That is where
+#    a mesher puts a notch, a sampler puts a stair and a denoiser puts a smear, and it is four
+#    metres of it per bay running diagonally across the voxel grid at no useful angle to anything.
+#
+#    The union is written `smooth=0.02` on purpose. It is the small round the brief asks of every
+#    stone arris, applied to the one arris here that cannot be given a `round=` key — and 0.02 is
+#    two thirds of a voxel at the contract's metre 32, so the fillet along a groin is a SUB-VOXEL
+#    curved feature and not a comfortable one. DO NOT WIDEN IT to make the groins look cleaner. If
+#    a groin comes back notched, that is the sampler, which is the question being asked.
+#
+# 2. A CLOSED ROOM WHERE EMISSIVES ARE THE ONLY LIGHT.
+#
+#    Neither hall has a window. The only opening in either is the arch into the rotunda: 2.25 wide
+#    and 3.825 tall at the far end of a room 4.05 x 8.10 x 4.725, at the bottom of a reveal 0.45
+#    deep, and the rotunda beyond it is itself lit only by an oculus. The opening is about 8 m2 of
+#    the room's 160 m2 of surface and it faces the wrong way for anything but bounce. Everything a
+#    viewer sees in here past the first bay arrives from a sconce or from nothing.
+#
+#    fittings.clip owns the sconces and has hung four to a hall, on the side walls at the two bay
+#    centres, with a bench under each; nothing in this file depends on them existing, and if they
+#    ever go away these rooms go black, which is the correct behaviour for a room with no window.
+#    DO NOT PUT A WINDOW IN HERE to make it easier to look at — the whole point is that it is not.
+#
+# 3. BOUNCE OFF A COLOURED FLOOR ONTO A WHITE VAULT — the contract's own words, and this is the
+#    only place in the building it can be asked. The floor is TERRACOTTA (168,98,72, rough=220),
+#    32 m2 of it between the two halls, with a LAPIS line (44,64,116) and lapis lozenges. Both are
+#    materials NOTHING ELSE IN THE BUILDING USES; I checked every fragment's paint rules before
+#    choosing them. The vault over it is plaster at 226,222,212. Warm light from a sconce, one
+#    bounce off a saturated warm floor, onto a white curved ceiling, with a dark blue band in the
+#    same frame to show whether the bounce is coloured or merely bright. If the vault comes back
+#    neutral grey, the indirect path is not carrying colour.
+#
+# 4. WALKABLE, which is the other half of what the brief asked for. Head height is 2.25 m under the
+#    soffit of the impost cornice — the lowest thing in the room, and the number the whole section
+#    was re-cut for — 2.70 at the wall face, 4.725 at the crown, and 2.70 through the arch: the
+#    brief's 2.10 and 2.40 with room to spare, everywhere, including hard against a wall. There is
+#    a continuous 3.69 m wide floor from the rotunda to the far wall with nothing to step over.
+#    These rooms are what make the rotunda a place rather than a facade.
+# ================================================================================================
+#
+# THE MODULE. D = 0.90, M = 0.45, and every number below is a multiple of M or of M/2, M/4, M/10.
+# Written out so nobody has to work backwards:
+#
+#    4.95   block west face        11 M          1.75   block foot, 0.05 into the podium
+#    5.40   room west wall face    12 M          1.80   floor           podium_top
+#    9.45   the transverse arch    21 M          2.70   dado top        1.80 + 2 M
+#   13.50   room east wall face    30 M          3.60   sconce axis     1.80 + 4 M (fittings')
+#   13.95   block east face        31 M          4.05   impost foot     1.80 + 5 M
+#   +-2.025 room side wall faces    4.5 M        4.50   springing       1.80 + 6 M
+#   +-2.925 block side faces        6.5 M        4.50   arch impost     the same line
+#    7.425  west bay centre        16.5 M        5.625  arch crown      4.50 + 2.5 M
+#   11.475  east bay centre        25.5 M        6.525  vault crown     4.50 + 4.5 M
+#                                                6.975  block top       6.525 + M
+#
+#   2.025   the vault radius, 4.5 M, and it is HALF THE HALL'S WIDTH and HALF A BAY'S LENGTH at
+#           once. That equality is the whole design: it is what makes the bay square, what makes
+#           both barrels the same radius, what puts both crowns on one level, and what makes the
+#           groins straight in plan. Change the width or the bay and you lose all four together.
+#
+# WHY THE HALL STOPS AT 13.95 AND NOT AT THE BRIEF'S 15.10. Because windows.clip cuts the ground
+# storey of the end wall at z = 0 and +-2.70 and its openings are punched 1.80 m in from x = 16.00
+# — to x = 14.20, which is 0.90 PAST the inner face of a 0.90 wall. A hall reaching 15.10 has three
+# windows in its east end and cannot be the closed room the load above is made of. So the hall ends
+# at 13.95, clear of that cut by 0.25, and the strip x 13.95 .. 15.10 is left empty and lit by those
+# three windows — which is a 1.15 x 5.85 m room-shaped hole with daylight in it, ready for whoever
+# adds the next fragment. Checked against windows.clip's `windows_gs_cut` rather than assumed.
+#
+# WHY BOTH HALLS ARE CLOSED AND NOT ONE OF THEM. The brief asks for one hall lit only by sconces;
+# the BRIEF's rule 3 asks for symmetry about x = 0 and does not qualify it. A window on one side
+# and not the other is the one thing that would make this building look wrong from the air. Both
+# halls closed satisfies the load twice and the symmetry exactly, and it costs nothing: the second
+# hall is the control — same room, same sconces, same vault, and any difference between the two in
+# a render is the renderer's noise and not the building's.
+#
+# WHAT I LEFT FOR SOMEBODY ELSE. The strips z 2.925 .. 6.60 north and south of each hall, and the
+# strip x 13.95 .. 15.10 beyond its east end, are untouched. So is everything above 6.975. Nothing
+# in this file reaches into the rotunda except one arch void, which is punched from x = 4.05 —
+# 0.75 inside the contract's inner radius of 4.80 — so it goes through a rotunda wall of any
+# thickness up to 1.35 without this file knowing what that wall is.
+#
+# MEASURED, `--clip-part part_halls` at the contract's metre 32: 8,274,164 voxels, 252.51 m3,
+# 943.47 m2 of surface, 528,270 distinct visual records, largest identical group 101, sampled in
+# 11.5 s from 58,333,053 field evaluations — 7.0 field evaluations to a solid voxel, against 7.9
+# for part_rotunda at metre 16, so the vault and its smooth union are not costing the sampler
+# anything out of the ordinary. Nothing in this file is infinitely slack; there is no `around`,
+# and the one `rotate` (a floor lozenge) is caught in a box of its own so it keeps a bound.
+#
+# TWO COMPONENTS, AND THAT IS THE RIGHT ANSWER. They are the two halls. `--clip-part halls_mass`
+# — one hall — reports ONE component, all of it joined, and `walkable` reports worst rise 0.00 m
+# over 108,284 standable columns: the floor is dead flat from the arch to the far wall. The two
+# halls are joined to each other, and to the building, through the rotunda's wall, which is not
+# mine to build. Whole clip at metre 8: largest component 1,935,345 of 1,936,226 voxels, and none
+# of the 881 that are adrift are in this fragment.
+#
+# Things I got wrong and had to be told by a picture, all of them written where they happened: the
+# vault was an intersection and came out a cloister vault; the impost cornice was half a module and
+# vanished; it was then at head height; the lunette panels were one and a half voxels deep and did
+# not exist; the floor's blue was the wide band and the room looked like a swimming bath.
+#
+# Four things that are somebody else's — two flat mouldings elsewhere in the building, the `smooth=`
+# key, and a way tools/views.ps1 loses a contact sheet — are in clips/facility/requests/halls.md.
 
-let halls_placeholder = sphere 0 -1.30 0 r=0.25
-let part_halls = halls_placeholder
+include "_contract.clip"
 
-# What this part removes from the building. Taken away in the manifest after everything is
-# assembled, so nothing added later can be eaten by it. Must always be bound, even if empty.
-let void_halls = sphere 0 -1.30 0 r=0.02
+# ================================================================================================
+# THE BLOCK — one solid mass, 4.95 .. 13.95 by 6.975, that the room is cut out of
+# ================================================================================================
+#
+# Walls and vault are one piece of stone with a hole in it, which is what a vaulted room is and
+# what makes this part certainly one component per hall. It stands 0.05 into the podium at 1.75
+# and is filled over the haunches to a flat 6.975 — the level a floor would be laid on if anybody
+# ever builds above these rooms.
+#
+# The side walls come out 0.90 (D), the same as the outer wall of the block; the west wall 0.45 (M)
+# because the rotunda's own wall stands behind it; the east wall 0.45 (M) because the strip beyond
+# it is somebody else's room and not solid.
+
+let halls_block = box 4.95 1.75 -2.925   13.95 6.975 2.925 round=0.015
+
+# ================================================================================================
+# THE AIR — a box to the springing, and a groin vault over it
+# ================================================================================================
+#
+# `halls_room` is the clear room from the floor to the springing line: 8.10 x 4.05 x 2.25.
+#
+# Over it, three cylinders. `halls_barrel` runs the length of the hall with its axis on the springing
+# line at z = 0, so its section is the semicircle that spans the hall's 4.05 width and rises 2.025
+# to the crown. `halls_cross_w` and `halls_cross_e` run ACROSS the hall, one to a bay, with their
+# axes on the same springing line at the bay centres, so each spans its bay's 4.05 length and rises
+# to the same crown. Every one of them has radius 2.025, and h is the FULL length: 8.10 along the
+# hall, 4.05 across it.
+#
+# THEIR UNION IS THE VAULT AND THEIR INTERSECTION IS NOT. Take the ceiling height above springing
+# as a function of position: the union gives max(barrel, cross), which is 2.025 along both crown
+# lines, zero at the four corners of each bay, and equal on the diagonals — the groin. The
+# intersection gives min, which is zero along all four SIDES of the bay: that is a cloister vault,
+# it springs from four lines instead of four points, and it has no groins in it at all. The first
+# pass here was the intersection and the contact sheet showed a room with no arches in it.
+let halls_room     = box 5.40 1.80 -2.025   13.50 4.50 2.025
+
+let halls_barrel   = cylinder  9.450 4.50 0  r=2.025 h=8.10 axis=x
+let halls_cross_w  = cylinder  7.425 4.50 0  r=2.025 h=4.05 axis=z
+let halls_cross_e  = cylinder 11.475 4.50 0  r=2.025 h=4.05 axis=z
+
+# Clipped to the room in plan and to the springing below. It reaches down to 4.05 so that it is
+# certainly one solid with the box under it rather than two shapes touching on a plane.
+let halls_vault_box = box 5.40 4.05 -2.025   13.50 6.60 2.025
+# The key goes BEFORE the block on a union, and after it on a one-child operation. `union { a b }
+# smooth=0.02` parses as a union and then a statement called `smooth`, and the error it gives is
+# "unknown statement 'smooth'" three lines further on. BRIEF.md's grammar shows it the other way.
+let halls_webs  = union smooth=0.02 { halls_barrel halls_cross_w halls_cross_e }
+let halls_vault = intersection { halls_webs halls_vault_box }
+
+let halls_air = union { halls_room halls_vault }
+
+# ================================================================================================
+# THE ARCH INTO THE ROTUNDA — the only opening in either hall
+# ================================================================================================
+#
+# 2.25 wide (5 M), the impost at 4.50 (6 M above the floor, so the clear height at the jamb is 2.70
+# and the brief's 2.40 for a doorway is met at the jamb and not merely on the centre line), a
+# semicircular head of 1.125 crowning at 5.625.
+#
+# It is punched from x = 4.05, which is 0.75 inside the contract's rotunda radius of 4.80, so it
+# goes clean through whatever the rotunda builds there and this file never has to know. It runs to
+# 5.45, which is 0.05 past my own west face, so the reveal is cut past its own rounding.
+let halls_arch_jamb = box 4.05 1.80 -1.125   5.45 4.50 1.125
+let halls_arch_head = cylinder 4.75 4.50 0  r=1.125 h=1.40 axis=x
+let halls_arch_void = union { halls_arch_jamb halls_arch_head }
+
+# ================================================================================================
+# THE SUNK PANELS — one under each wall arch, one in the east tympanum
+# ================================================================================================
+#
+# Over the impost cornice each side wall carries a semicircular wall arch, 4.05 across and 2.025
+# high, one to a bay: that is the end of the cross barrel, and the flat wall under it is the
+# lunette. A panel is sunk into it 0.09 (M/5) inside a margin of 0.225, which is the same radius
+# struck 0.225 smaller and a floor 0.225 above the springing.
+#
+# 0.09 and not 0.045. The first pass sank them one and a half voxels and they did not exist: in a
+# room whose only light is a sconce below them there is no grazing sun to find a shallow arris,
+# and a panel that only a raking light can see is a panel nobody will ever see here. The sub-voxel
+# work in this fragment is in the dado, where a lamp is level with it.
+#
+# The east wall carries the end of the long barrel in the same way, and gets the same panel.
+let halls_lun_face = box 5.40 4.725 2.025   13.50 6.60 2.115
+let halls_lun_w = intersection { cylinder  7.425 4.50 0 r=1.80 h=6 axis=z  halls_lun_face }
+let halls_lun_e = intersection { cylinder 11.475 4.50 0 r=1.80 h=6 axis=z  halls_lun_face }
+let halls_lunettes = mirror { union { halls_lun_w halls_lun_e } } axis=z
+
+let halls_tymp = intersection {
+    cylinder 13.50 4.50 0 r=1.80 h=0.30 axis=x
+    box 13.50 4.725 -2.025   13.590 6.60 2.025
+}
+
+# An arched panel in the east wall under the cornice, 1.35 across (3 M) and 0.09 (M/5) deep, from
+# the dado top at 2.70 to a head springing at 3.375 and crowning at 4.05 — under the impost, so the
+# cornice runs unbroken over it. It is the far wall of a room eight metres long and the one thing
+# standing at the end of it; requests/halls.md says what could go in front of it.
+let halls_blind = intersection {
+    union { box 13.50 2.70 -0.675  13.59 3.375 0.675
+            cylinder 13.545 3.375 0 r=0.675 h=0.09 axis=x }
+    box 13.50 2.70 -0.675   13.59 4.05 0.675
+}
+
+let halls_cuts  = union { halls_air halls_arch_void halls_lunettes halls_tymp halls_blind }
+let halls_shell = difference { halls_block halls_cuts }
+
+# ================================================================================================
+# THE DADO — 1.80 to 2.70, two modules, round all four walls
+# ================================================================================================
+#
+# The body and the cap are FRAMES — the difference of two boxes — so one shape lines all four walls
+# and every mitre is free. Only the ovolo between them has to be written as runs, because a
+# moulding is a straight length by definition.
+#
+#   1.750 - 2.565   body    0.045 proud (M/10)
+#   2.565 - 2.655   ovolo   swelling from the body's face to 0.135 (0.3 M)
+#   2.655 - 2.700   cap     0.135 proud
+#
+# The run key is not optional and it is not cosmetic: with `run=x` the section is read in (z, y),
+# with the default `run=z` it is read in (x, y). A moulding written 8 m long across its own
+# projection is a flat slab, and it does not warn.
+let halls_dado_body = difference {
+    box 5.355 1.75 -2.070   13.545 2.565 2.070
+    box 5.445 1.70 -1.980   13.455 2.60  1.980
+}
+let halls_dado_cap = difference {
+    box 5.265 2.655 -2.160   13.635 2.70 2.160
+    box 5.535 2.60  -1.890   13.365 2.75 1.890
+}
+let halls_dado_ov_n = ovolo  5.400 2.565  1.980   13.500 2.655  1.890 run=x
+let halls_dado_ov_w = ovolo  5.445 2.565 -2.025    5.535 2.655  2.025
+let halls_dado_ov_e = ovolo 13.455 2.565 -2.025   13.365 2.655  2.025
+let halls_dado = union {
+    halls_dado_body halls_dado_cap
+    mirror { halls_dado_ov_n } axis=z
+    halls_dado_ov_w halls_dado_ov_e
+}
+
+# THE SUNK PANELS IN IT, AND THE ONE SUB-VOXEL FEATURE IN THIS ROOM.
+#
+# Five panels to a hall — two to each side wall, between the responds, and one on the east wall —
+# 0.405 tall (0.9 M) from 2.025 to 2.430, sunk 0.0225 INTO A FACE THAT IS ONLY 0.045 PROUD. That
+# is under a voxel deep at the contract's metre 32 and it leaves the same again of dado standing
+# behind it: a step of two thirds of a voxel, in the darkest coloured surface in the building,
+# lit by a sconce whose flame stands 1.44 m above the middle of it and 0.25 m out from the wall —
+# which is to say by a light raking across it at about ten degrees. That is the whole test: a step
+# of two thirds of a voxel in shadow
+# is invisible, and a sub-voxel step under a raking lamp either draws a line or it does not.
+#
+# DO NOT DEEPEN THESE. The lunette panels above them are 0.09 for exactly the opposite reason,
+# and the pair of them in one room is the comparison.
+let halls_dado_pan_n = union {
+    box  6.075 2.025 1.980    9.000 2.430 2.0025
+    box  9.900 2.025 1.980   12.825 2.430 2.0025
+}
+let halls_dado_pan_e = box 13.455 2.025 -1.350   13.4775 2.430 1.350
+let halls_dado_pans = union { mirror { halls_dado_pan_n } axis=z  halls_dado_pan_e }
+
+# ================================================================================================
+# THE IMPOST CORNICE — 4.05 to 4.50, one module, and the line the vault springs from
+# ================================================================================================
+#
+#   4.05 - 4.23   cyma reversa   from the wall face out to 0.18 (0.4 M)
+#   4.23 - 4.50   corona         0.27 proud (0.6 M), a plain bold band with a flat soffit
+#
+# It projects further than anything else in the room, which is the classical order of things: the
+# corona is the last member before the vault and the shadow under it is what draws the springing
+# line right round a room that has no other horizontal above head height. A whole module tall and
+# not half of one, which the first pass tried: at 0.225 the cornice read as two scratches on the
+# wall from the middle of the floor, and this is the only string in a room 8 m long.
+#
+# ITS SOFFIT IS AT 4.05, WHICH IS 2.25 ABOVE THE FLOOR, AND THAT IS WHY THE VAULT SPRINGS AT 4.50
+# AND NOT AT 4.05. The first pass sprang the vault at 4.05 and put this cornice under it from 3.60,
+# which is 1.80 above the floor — a bold 0.27 projection at exactly the height of somebody's head,
+# and 0.30 under the brief's 2.10. Raising the springing by one module fixed it, and cost nothing
+# except 0.45 of stone above: the crown went to 6.525 and the block top to 6.975, both still module
+# multiples, and the room went from squat to properly proportioned at the same time.
+let halls_imp_bed_n = cyma_reversa  5.400 4.050  2.025   13.500 4.230  1.845 run=x
+let halls_imp_bed_w = cyma_reversa  5.400 4.050 -2.025    5.580 4.230  2.025
+let halls_imp_bed_e = cyma_reversa 13.500 4.050 -2.025   13.320 4.230  2.025
+let halls_imp_corona = difference {
+    box 5.310 4.23 -2.115   13.590 4.50 2.115
+    box 5.670 4.17 -1.755   13.230 4.55 1.755
+}
+let halls_impost = union {
+    mirror { halls_imp_bed_n } axis=z
+    halls_imp_bed_w halls_imp_bed_e
+    halls_imp_corona
+}
+
+# ================================================================================================
+# THE RESPONDS — 0.45 wide (M), 0.18 proud (0.4 M), at the ends of each bay
+# ================================================================================================
+#
+# Three to a wall: one at each end of the room and one under the transverse arch at 9.45. They
+# stand proud of the dado cap by 0.045 and are capped by the impost cornice, which projects past
+# them by the same. Built on +z and folded.
+let halls_resp_one = box  5.400 1.75 1.845    5.850 4.50 2.070 round=0.012
+let halls_resp_two = box  9.225 1.75 1.845    9.675 4.50 2.070 round=0.012
+let halls_resp_thr = box 13.050 1.75 1.845   13.500 4.50 2.070 round=0.012
+
+# THERE WERE SIX SCONCE CORBELS HERE AND THEY ARE GONE ON PURPOSE. This file grew a corbel on each
+# respond, at the bay ENDS, for fittings.clip to stand a light on. fittings.clip had already read
+# this room and hung its four sconces at the bay CENTRES with benches under them, which is the
+# better answer — a light in the middle of a bay lights the bay, and a light on the pier between
+# two lights the wall. Six empty corbels beside four lit sconces is a scheme with two ideas in it,
+# so the corbels went and the sconces stayed. The wall between the dado cap at 2.70 and the impost
+# soffit at 4.05 is left plain, which is what that fragment wants of it.
+
+let halls_responds = mirror {
+    union { halls_resp_one halls_resp_two halls_resp_thr }
+} axis=z
+
+# ================================================================================================
+# THE TRANSVERSE ARCH — a band 0.45 wide standing 0.135 below the vault at 9.45
+# ================================================================================================
+#
+# The one rib in the room, on the line where the two bays meet, springing off the middle respond.
+# It is the vault's own cylinder less a cylinder 0.135 smaller, caught in the 0.45 band, and then
+# grown 0.012 by `round` so that its two arrises are turned rather than sharp — which is why the
+# numbers below are each 0.012 short of the ones the arch actually has.
+let halls_rib_core = intersection {
+    difference {
+        cylinder 9.45 4.50 0 r=2.013 h=0.426 axis=x
+        cylinder 9.45 4.50 0 r=1.902 h=0.60  axis=x
+    }
+    box 9.237 4.50 -2.013   9.663 6.60 2.013
+}
+let halls_rib = round { halls_rib_core } by=0.012
+
+# ================================================================================================
+# THE ARCHIVOLT — the dressing round the arch into the rotunda
+# ================================================================================================
+#
+# A band 0.225 (M/2) wide carried right round jamb and arch and standing 0.18 (0.4 M) proud, which
+# is further out than the dado cap, so the dado can run behind it without being cut. Two small
+# impost blocks mark where the arch springs.
+let halls_arv_out = union {
+    box 5.40 1.75 -1.350   5.58 4.50 1.350
+    cylinder 5.49 4.50 0 r=1.350 h=0.18 axis=x
+}
+let halls_arv_in = union {
+    box 5.35 1.70 -1.125   5.63 4.50 1.125
+    cylinder 5.49 4.50 0 r=1.125 h=0.30 axis=x
+}
+let halls_arv_band = difference { halls_arv_out halls_arv_in }
+let halls_arv_imp  = mirror { box 5.40 4.365 1.125   5.625 4.50 1.485 round=0.010 } axis=z
+let halls_archivolt = union { halls_arv_band halls_arv_imp }
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+#
+# Everything that stands IN the air is cut by the arch void before it is added, so no cornice and
+# no dado crosses the opening. The archivolt is not in that cut: it is the dressing of the opening
+# and it stops exactly on the reveal.
+let halls_trim = difference {
+    union { halls_dado halls_impost halls_responds halls_rib }
+    halls_arch_void halls_dado_pans
+}
+
+let halls_mass = union { halls_shell halls_trim halls_archivolt }
+
+let part_halls = mirror { halls_mass } axis=x
+
+# What this part removes from the building: the air of the room, and the arch through the rotunda's
+# wall, less every stone I put back in either. Written as a difference against my own mass for the
+# reason vestibule.clip gives — it takes away anything another fragment leaves standing in my room
+# while it cannot touch a stone of mine, and it cannot go stale when a member is added.
+let void_halls = mirror { difference { union { halls_air halls_arch_void } halls_mass } } axis=x
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Later coats cover earlier ones. Shell first, then the floor built up from its field to its inlay,
+# then the stone standing on the floor. `below=0.02` on every rule and never 0: the manifest
+# displaces the whole building by 12 mm of grain at the end, and a test at zero misses the voxels
+# the displacement made and leaves a rind of the base coat over the part.
+#
+# Every zone below is one of my own shapes folded to both halls, so the west hall is painted by the
+# same rules as the east and cannot drift.
+
+let halls_face = mirror { halls_shell } axis=x
+paint plaster where=halls_face below=0.02
+
+# The sunk panels, grown enough to catch the voxels that line them rather than the air in them.
+# Stucco rather than plaster: eighteen values warmer and thirty rougher, which is the whole of what
+# separates a sunk panel from the field it is sunk in when neither has an edge the sampler can hold.
+let halls_panel_face = mirror { round { union { halls_lunettes halls_tymp halls_blind } } by=0.03 } axis=x
+paint stucco where=halls_panel_face below=0.02
+
+# --- the floor ------------------------------------------------------------------------------------
+#
+# Thin slabs from 1.70 to 1.86, straddling the floor plane so they catch its surface and nothing
+# under it. Terracotta field, a marble border 0.45 wide (M), a lapis fillet 0.225 (M/2) inside it,
+# and five lapis lozenges on the centre line at 1.35 (3 M) apart with a diagonal of 0.90 (D).
+#
+# TERRACOTTA AND LAPIS ARE USED NOWHERE ELSE IN THIS BUILDING. That is deliberate and it is half of
+# what this fragment is for: see load 3 at the top. The wide band is the white one and the blue is
+# a line and five lozenges — the first pass had the blue as the 0.45 border and the room came back
+# looking like a municipal swimming bath. Lapis at 44,64,116 is the darkest thing in the palette
+# and it is a drawn line in a floor, not a field.
+let halls_fl_zone_e = box 5.40 1.70 -2.025   13.50 1.86 2.025
+let halls_fl_zone   = mirror { halls_fl_zone_e } axis=x
+paint terracotta where=halls_fl_zone below=0.02
+
+let halls_fl_field  = box 5.85 1.60 -1.575   13.05 1.96 1.575
+let halls_fl_border = mirror { difference { halls_fl_zone_e halls_fl_field } } axis=x
+paint marble where=halls_fl_border below=0.02
+
+let halls_fl_inner  = box 6.075 1.60 -1.350   12.825 1.96 1.350
+let halls_fl_fillet = mirror { difference { halls_fl_field halls_fl_inner } } axis=x
+paint lapis where=halls_fl_fillet below=0.02
+
+let halls_fl_loz_one = intersection {
+    rotate { box -0.318 1.70 -0.318   0.318 1.86 0.318 } y=0.125
+    box -0.46 1.70 -0.46   0.46 1.86 0.46
+}
+let halls_fl_loz = mirror {
+    translate { repeat { halls_fl_loz_one } x=1.35 nx=2 } 9.45 0 0
+} axis=x
+paint lapis where=halls_fl_loz below=0.02
+
+# The threshold, in granite, because it is the one piece of floor in these rooms a foot lands on
+# every time and the one that has light on it from the rotunda.
+let halls_thresh = mirror {
+    intersection { halls_mass  box 4.90 1.70 -1.125   5.50 1.86 1.125 }
+} axis=x
+paint granite where=halls_thresh below=0.02
+
+# --- the stone standing on it -----------------------------------------------------------------------
+let halls_stone = mirror { union { halls_impost halls_responds halls_rib halls_archivolt } } axis=x
+paint marble where=halls_stone below=0.02
+
+let halls_dado_face = mirror { halls_dado } axis=x
+paint porphyry where=halls_dado_face below=0.02

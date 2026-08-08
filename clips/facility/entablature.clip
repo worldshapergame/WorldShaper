@@ -1,10 +1,411 @@
-# entablature - architrave, frieze and dentilled cornice around the whole building
+# entablature — architrave, frieze and dentilled cornice, 9.90 to 11.90, round the whole building
+#                and broken forward across the portico.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# The line the building is capped by. It runs the full 94 m perimeter of the main block on the
+# contract's own outline, and on the south front it BREAKS FORWARD over the portico — out to the
+# columns, across all six of them, and back to the wall on each flank — with a further small
+# ressaut over each column axis. Below it the wall, the pilasters and the portico's columns all
+# stop dead at 9.90; above it the parapet, the pediment and the roof all start at 11.90.
 #
-# This file must define exactly one part named `part_entablature`. Every other name it binds must
-# start with `entablature_` so nothing collides with another fragment.
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD: THE DENTIL BAND. 913 blocks of high-frequency matter.
+#
+# A dentil is 0.090 m (M/5) wide and the gap between two of them is 0.045 m (M/10) — ONE AND A HALF
+# VOXELS at the contract's metre 32 — and the gap is 0.12 m deep, so what is between two dentils is
+# not a joint, it is a hole with a black floor. There are 913 of them in this part:
+#
+#   237 x 2   north and south fronts, x = 0 +- 0.135 n out to +-15.93
+#   111 x 2   east and west elevations, z = 0 +- 0.135 n out to +-7.425
+#   113       the portico front, on its own plane 4.10 m south of the wall
+#    31 x 2   the portico flanks, running north into the main cornice
+#     7 x 6   the six ressauts, one over each column of the portico
+#
+# About 750 of those can be seen. The other 163 are the south run passing behind the portico's own
+# mass and the recessed portico front passing behind each ressaut, and they are left there on
+# purpose: a `repeat` is ONE node whether or not a copy of it ends up buried, and cutting the runs
+# short would cost a difference against a box on every sample to save geometry that is already
+# free. The visible count is the one the load claim below is made on.
+#
+# That is the single best test in this building of whether high-frequency geometry survives the
+# whole pipeline, and it tests three different things at three different stages:
+#
+#   THE SAMPLER   a 0.045 m gap between two 0.090 m blocks is a surface that reverses twice inside
+#                 four voxels. A field that cannot settle a box smaller than the gap has to ask
+#                 every voxel of a 94 m run, and one that skips too far closes the gap and returns
+#                 a plain band. Every dentil here is a rigid translate of one rounded box inside a
+#                 `repeat` whose period is half again its width, so the field is exact and boxed
+#                 and the sampler has every chance; if it still comes back as a smear the sampler
+#                 is what is wrong.
+#
+#   THE SHADOW    the band faces outward under a corona that projects 0.60 m — 0.26 m further than
+#                 the dentils do — so the whole band is in the corona's own shadow all day and the
+#                 only light in the holes between the blocks is bounced. Hard black slots on a lit
+#                 face, 913 of them in a row, is the highest-contrast edge in the scene.
+#
+#   THE DENOISER  this is the one that matters. A denoiser works by deciding that neighbouring
+#                 pixels belong to the same surface. A dentil band is 913 alternations of "lit
+#                 block / black hole" at one and a half voxels' pitch, and there is no scale at
+#                 which a denoiser can average two of them together and be right. If this band
+#                 comes back as a grey stripe the denoiser is throwing away real signal, and the
+#                 length of the run is what makes it impossible to miss: it is 94 m long, it is at
+#                 eye level from the top of the steps, and it is on every elevation.
+#
+# The second load is a SUB-VOXEL RELIEF WITH A MATERIAL EDGE, on the portico frieze: bronze swags
+# and paterae standing 0.0225 m proud of the marble — 0.7 of a voxel. Geometry that shallow is at
+# the limit of what a surface can carry at all, and putting a metal on it means the renderer has to
+# separate two materials across a step it can barely resolve. Either the swags read as bronze
+# ornament applied to a stone frieze or they read as a stain on it, and which one decides whether
+# sub-voxel relief is worth anything in this engine.
+#
+# DO NOT WIDEN THE DENTIL GAP AND DO NOT DEEPEN THE RELIEF. 0.045 and 0.0225 are M/10 and M/20;
+# they are the order's own numbers and they are chosen to be hard. A comfortable dentil band is a
+# decoration; this one is a measurement.
+#
+# NO WEATHERING IN THIS FILE, for the same reason portico.clip and pilasters.clip carry none: every
+# weathering coat displaces the surface, and the smallest coat worth writing is a good fraction of
+# the 0.045 m gap it would be closing and several times the 0.0225 m relief it would be sanding
+# off. The manifest's 12 mm of grain and its `variation` line give this part its no-two-voxels-alike
+# surface without touching the thin matter. If this cornice is ever to be weathered, weather the
+# corona's washed top and nothing else: `weather cracks 0.008 on=entablature_wash`.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45. The section is the order's own and is divided in twentieths of
+# its 2.00 m height, which is how an entablature is divided; every number below is one of those, a
+# module fraction, or a contract dimension. The ones that are neither are named where they occur.
+#
+# WHERE IT SITS AGAINST ITS NEIGHBOURS — it takes all of this from the contract and nothing from
+# anybody's file:
+#
+#   9.90, 11.90        column_head and entab_top: the bottom and the top, 2.00 m apart
+#   x = +-16.00        the block outline. walls.clip puts its face there for both storeys
+#   z = +-7.50         the same, north and south
+#   x = +-7.65         portico_x: the flanks of the portico, and the edge of its coffered soffit
+#   z = -11.60         the portico front's reference plane. The column axes are at z = -11.15 and
+#                      a column is D across at its foot, so this is the plane the shafts' own lower
+#                      diameter stands on — which is where an architrave face belongs. It is also
+#                      the portico line at -12.50 plus D, so the crowning cyma at -12.32 lands 0.18
+#                      inside it and nothing of mine crosses the line the steps begin at.
+#   +-1.35 +-4.05 +-6.75   the six column axes, and therefore the six ressauts
+#
+# HOW IT IS PUT TOGETHER, because it is not the obvious way and the obvious way is wrong.
+#
+# A cornice returning round a corner is not two runs unioned. Union each run out to the other's
+# widest member and the corner block comes out square at 0.72 all the way down — the crown's
+# projection carried down over the corona, a fat lump on both elevations. The mitre a mason cuts is
+# the INTERSECTION of the two: "solid within f(y) of z = 7.50" AND "solid within f(y) of x = 16.00"
+# is exactly the corner block whose two faces trace the profile both ways, at every height, with no
+# arithmetic anywhere. So each face here is not a run but a HALF SOLID — the moulded run plus a
+# deep box behind it, so the shape is everything on the building's side of the profile surface —
+# and the whole ring is the intersection of four of them with the middle taken out. Four corners,
+# four mitres, no corner geometry at all.
+#
+# The dentils are added afterwards and not carved out of that, for the same reason: two dentil
+# combs intersected at a corner leave a chequerboard, and what belongs at the corner of a dentil
+# band is one solid corner block. So the band is a plain 0.22 plate in the section, the dentils are
+# unioned onto it face by face, and each corner gets the block it should have.
 
-let entablature_placeholder = sphere 0 -1.30 0 r=0.25
-let part_entablature = entablature_placeholder
+include "_contract.clip"
+
+# ================================================================================================
+# THE SECTION — 2.00 m, drawn once, run along x with its back on z = 0 and projecting to -z
+# ================================================================================================
+#
+#   0.00 - 0.65   ARCHITRAVE  three fasciae stepping forward 0.06, 0.10, 0.14, and a crowning
+#                             cyma reversa oversailing them to 0.20
+#   0.65 - 1.25   FRIEZE      plain, back at the top fascia's own 0.14, so the architrave's crown
+#                             throws a shadow across the whole length of it
+#   1.25 - 2.00   CORNICE     bed mould 0.14 to 0.22, the dentil band, its capping fillet at 0.34,
+#                             an ovolo swelling to 0.42, the corona out to 0.60 with a flat soffit,
+#                             and the crowning cyma to 0.72
+#
+# 0.72 (1.6 M) of projection under 0.75 of cornice: the classical rule, and the reason the shadow
+# under a corona is as black as it is.
+#
+# EVERY MEMBER CARRIES `run=x`, AND THAT IS NOT DECORATION. A moulding's two corners are read as
+# (across the face, up it) in the frame `run=` chooses; with the default `run=z` the "across the
+# face" axis is x, so a member written to run 34 m along x has its curve struck across those 34 m
+# and degenerates into a half box. The profile still steps in the right places, which is why it can
+# survive a contact sheet, but every curve in it is gone. See requests/entablature.md.
+#
+# The plain members are carried up BEHIND the curved ones — the third fascia to 0.65, the frieze to
+# 1.32, the dentil cap to 1.62, the corona to 2.00 — so that each moulding is cut into a core that
+# already stands at its own back, which is what a moulding is. Nothing here is a separate backing
+# ribbon and nothing can open a gap.
+#
+# THE CROWN IS TWO MEMBERS AND NOT ONE, and that is not a stylistic choice either. `cyma` and
+# `cyma_reversa` both put the convex half at the end with the FULL projection, so the S they draw
+# is always widest where it bulges. That is a cyma reversa, which is what the architrave crown and
+# the bed mould below want and get. It is not a cyma RECTA — convex at the narrow foot, hollow at
+# the wide head — which is what crowns a cornice, and there is no way to ask for one. So the crown
+# here is struck as the two quarter-arcs a cyma recta actually is: an ovolo from 0.60 to 0.66 over
+# the lower half, a cavetto from 0.66 to 0.72 over the upper, meeting at 1.925 with the tangent
+# upright. This is the top edge of the whole building against the sky, 94 m of it, and it is worth
+# three lines. See requests/entablature.md.
+# THE PLAIN MEMBERS ARE BOXES AND NOT `fillet`S, and the reason is the brief's last rule. A fillet
+# is a box — `build_moulding` returns its own `rect` and nothing else for that kind — but it builds
+# it with `f.box(centre, half, 0.0)`, so the arris is dead sharp and there is no key to ask
+# otherwise. Sharp arrises read as extruded, and the fasciae, the dentil plate, its cap and above
+# all the corona's soffit are the arrises on this building that catch the most light. Written as
+# boxes they take `round=0.010`, they occupy exactly the same six numbers, and the profile is
+# unchanged. The four curved members have to stay mouldings, and they have no round; a `round=` key
+# on the moulding kinds is asked for in requests/entablature.md.
+let entablature_fasc_one = box -17 0.00  0      17 0.18  -0.06  round=0.010
+let entablature_fasc_two = box -17 0.18  0      17 0.39  -0.10  round=0.010
+let entablature_fasc_thr = box -17 0.39  0      17 0.65  -0.14  round=0.010
+let entablature_arch_cr  = cyma_reversa -17 0.60 -0.14  17 0.65 -0.20  run=x
+let entablature_frieze   = box -17 0.65  0      17 1.32  -0.14  round=0.010
+let entablature_bedmould = cyma_reversa -17 1.25 -0.14  17 1.32 -0.22  run=x
+let entablature_dplate   = box -17 1.32  0      17 1.50  -0.22  round=0.010
+let entablature_dcap     = box -17 1.50  0      17 1.62  -0.34  round=0.010
+let entablature_ovolo    = ovolo  -17 1.62  -0.34  17 1.545 -0.42  run=x
+let entablature_corona   = box -17 1.62  0      17 2.00  -0.60  round=0.010
+let entablature_crown_lo = ovolo   -17 1.925 -0.60  17 1.85  -0.66 run=x
+let entablature_crown_bk = box -17 1.92  0      17 2.00  -0.66  round=0.010
+let entablature_crown_up = cavetto -17 2.00  -0.66  17 1.925 -0.72 run=x
+
+# The half solid. Everything on the building's side of the profile surface: the run, plus a box
+# 40 m deep behind it so that four of these intersected leave the ring and its four mitres. The
+# box is what makes this a solid to be intersected rather than a ribbon to be unioned, and it is
+# also what carries the profile's own top and bottom, 9.90 and 11.90, into the answer.
+let entablature_deep = box -17 0 0   17 2.00 40
+
+let entablature_face = union {
+    entablature_fasc_one entablature_fasc_two entablature_fasc_thr entablature_arch_cr
+    entablature_frieze entablature_bedmould
+    entablature_dplate entablature_dcap entablature_ovolo entablature_corona
+    entablature_crown_lo entablature_crown_bk entablature_crown_up
+    entablature_deep
+}
+
+# ================================================================================================
+# ONE DENTIL — 0.090 wide, 0.180 tall, front face at 0.34, on a pitch of 0.135
+# ================================================================================================
+#
+# The order's own `dentil_band`, given 0.05 of tail on the back. The order draws it 0.12 deep so
+# that its back lands exactly on the 0.22 plate it stands on, and an exact landing is a butt joint;
+# the brief asks for 0.05 of overlap everywhere because the manifest displaces the finished
+# building by 12 mm and a joint that only touches can be opened by it. So this one runs from 0.17
+# to 0.34: the visible 0.12 in front of the plate, and 0.05 bedded into it.
+#
+# Drawn at its own height in the section's frame, so it travels with the face it belongs to.
+let entablature_dentil = box -0.045 1.32 -0.34   0.045 1.50 -0.17  round=0.008
+
+# The rows. `repeat` is safe here where a polar repeat would not be — a 0.090 block inside a 0.135
+# period fits in its own cell, so the field returns a true distance and can still settle boxes —
+# and the seed sits at x = 0 in every one of them, because a copy straddling a cell boundary makes
+# the whole expression infinitely slack. See the note in _order.clip.
+#
+# Each count is chosen so the last dentil stops clear of the corner and leaves exactly one 0.045
+# gap before the corner block:
+#
+#   nx=118  centres to +-15.93, last block ends at 15.975, corner block starts at 16.02
+#   nx=55   centres to +-7.425, last block ends at 7.47,   corner block starts at 7.515
+#   nx=56   centres to +-7.56,  last block ends at 7.605,  corner block starts at 7.65
+#   nx=15   the portico flank, 31 blocks about z = -9.585; the first is buried in the corner block
+#           and the last few run into the main cornice at the re-entrant angle, which is the mitre
+#   nx=3    seven blocks filling a ressaut exactly: 7 x 0.09 + 6 x 0.045 = 0.90 = D
+let entablature_dent_ns    = repeat { entablature_dentil } x=0.135 nx=118
+let entablature_dent_ew    = repeat { entablature_dentil } x=0.135 nx=55
+let entablature_dent_pf    = repeat { entablature_dentil } x=0.135 nx=56
+let entablature_dent_pk    = translate { repeat { entablature_dentil } x=0.135 nx=15 } -9.585 0 0
+let entablature_dent_break = repeat { entablature_dentil } x=0.135 nx=3
+
+# ================================================================================================
+# THE MAIN BLOCK — the ring on x = +-16.00 and z = +-7.50
+# ================================================================================================
+#
+# Four half solids intersected. The east one is folded rather than drawn twice, which is what keeps
+# the two halves of the building from ever drifting apart: `mirror` folds x to its absolute value,
+# so one shape built on +x is the same shape on -x by construction.
+#
+#   rotate y=0.5   a face projecting -z projects +z: the north front
+#   rotate y=0.75  it projects +x: the east elevation
+let entablature_south = translate { entablature_face } 0 9.90 -7.50
+let entablature_north = translate { rotate { entablature_face } y=0.5 }  0 9.90 7.50
+let entablature_east  = translate { rotate { entablature_face } y=0.75 } 16.00 9.90 0
+let entablature_ew    = mirror { entablature_east } axis=x
+
+# The core taken out. The wall below is 0.90 thick with its inner face on +-15.10 and +-6.60, and
+# this ring continues it: the entablature is the top 2.00 m of that wall plus everything the
+# mouldings hang outside it. It is drawn 0.05 taller than the ring at both ends so the cut is clean
+# through, and the two share the same volume from 9.90 to 11.90, which is the surest join there is.
+let entablature_core = box -15.10 9.85 -6.60   15.10 11.95 6.60
+let entablature_ring = difference {
+    intersection { entablature_south entablature_north entablature_ew }
+    entablature_core
+}
+
+# The dentils of the four fronts, each on its own plate: 7.72 north, -7.72 south, 16.22 east.
+let entablature_dn_north = translate { rotate { entablature_dent_ns } y=0.5 }  0 9.90 7.50
+let entablature_dn_south = translate { entablature_dent_ns } 0 9.90 -7.50
+let entablature_dn_east  = translate { rotate { entablature_dent_ew } y=0.75 } 16.00 9.90 0
+let entablature_dn_main  = union {
+    entablature_dn_north entablature_dn_south mirror { entablature_dn_east } axis=x
+}
+
+# The corner blocks. What belongs at the mitre of a dentil band is one solid block, not two combs
+# crossing, so the band is carried round the angle as a single stone 0.32 by 0.325 in plan, from
+# the last gap on one face to the last gap on the other. Built at the north-east angle and folded
+# twice — on the positive side of both axes, because a fold shows whatever the child has there and
+# a block drawn on the negative side would simply not be in the building.
+let entablature_corner  = box 16.02 11.22 7.515   16.34 11.40 7.84  round=0.008
+let entablature_corners = mirror { mirror { entablature_corner } axis=x } axis=z
+
+# ================================================================================================
+# THE PORTICO — the break forward, 4.10 m out to the columns and back
+# ================================================================================================
+#
+# The front is a half solid on z = -11.60 and the two flanks are one on x = +-7.65, folded. There
+# is no north face: this mass runs into the main block and is cut off 0.05 inside its wall, where
+# it is buried in the ring above and the wall below.
+#
+# The result is solid, and that is deliberate. Between the portico's coffered ceiling at 10.80 and
+# the top of the cornice at 11.90 there is a metre of stone that nothing can see into and that the
+# pediment above has to stand on; hollowing it would buy a little memory and cost the pediment its
+# bearing. Below 10.80 it is the same volume portico.clip's soffit slab already occupies, which is
+# what makes the two certainly one piece.
+let entablature_pfront  = translate { entablature_face } 0 9.90 -11.60
+let entablature_pflank  = translate { rotate { entablature_face } y=0.75 } 7.65 9.90 0
+let entablature_pback   = box -20 9.90 -20   20 11.90 -7.45
+let entablature_pbody   = intersection {
+    entablature_pfront  mirror { entablature_pflank } axis=x  entablature_pback
+}
+
+let entablature_dn_pfront = translate { entablature_dent_pf } 0 9.90 -11.60
+let entablature_dn_pflank = translate { rotate { entablature_dent_pk } y=0.75 } 7.65 9.90 0
+let entablature_pcorner   = box 7.65 11.22 -11.94   7.99 11.40 -11.565  round=0.008
+let entablature_dn_portico = union {
+    entablature_dn_pfront
+    mirror { union { entablature_dn_pflank entablature_pcorner } } axis=x
+}
+
+# THE RESSAUTS — the entablature broken forward over each of the six columns.
+#
+# 0.135 (0.3 M) of projection over a width of 0.90 (D), so each block stands on its own column and
+# is exactly as wide as the shaft is at its foot. The whole section steps out together, architrave
+# to crown, which is what a break forward is; the cut faces at the ends of the block are the
+# vertical joints a mason would leave and they are rounded like every other arris in the building.
+#
+# It is a second half solid moved 0.135 south and cut to a box. The box reaches back to z = -11.00,
+# well inside the mass behind, so the two are one solid at every height and there is no seam for
+# the manifest's grain to find. 0.135 was 0.09 first, and 0.09 is not a break: it is 2.9 voxels at
+# the contract's metre 32, it disappeared entirely at 16, and on the elevation the whole portico
+# front came back as one flat band. 0.135 is 4.3 voxels, it is more than twice what the lowest
+# fascia projects, and it carries the crowning cyma out to z = -12.455 — which is 0.045 clear of
+# the portico line at -12.50, so nothing of mine reaches the ground the steps begin at.
+#
+# Seven dentils fill each ressaut exactly. The column axes are at multiples of 1.35 and the dentil
+# pitch is 0.135, so a dentil sits dead on every column axis and three more each side reach the
+# joint without being cut: 7 x 0.09 + 6 x 0.045 = 0.90.
+let entablature_bfront = translate { entablature_face } 0 9.90 -11.735
+let entablature_bbox   = box -0.45 9.85 -12.60   0.45 11.95 -11.00  round=0.012
+let entablature_bunit  = union {
+    intersection { entablature_bfront entablature_bbox }
+    translate { entablature_dent_break } 0 9.90 -11.735
+}
+
+let entablature_breaks_e = union {
+    translate { entablature_bunit } 1.35 0 0
+    translate { entablature_bunit } 4.05 0 0
+    translate { entablature_bunit } 6.75 0 0
+}
+let entablature_breaks = mirror { entablature_breaks_e } axis=x
+
+# ================================================================================================
+# THE PORTICO FRIEZE — bronze swags and paterae, 0.0225 m proud
+# ================================================================================================
+#
+# The frieze is plain for 94 m, as an Ionic frieze is — no triglyphs, nothing to break it — and
+# then across the portico, and only there, it carries the ornament: a patera on the face of every
+# ressaut and a swag looping between them. That is the classical arrangement, the sculptured
+# frieze over the columns and the plain one everywhere else, and it is also the only place on this
+# building where anyone stands close enough for 0.7 of a voxel of relief to be worth carving.
+#
+# THE SWAG is a circular arc, struck the way a mason strikes one: half span 1.35 (3 M), droop 0.45
+# (M), which gives a radius of exactly 2.25 (5 M) — (1.35^2 + 0.45^2) / (2 x 0.45). The centre at
+# y = 12.875 is a construction and not a dimension; it is 1.80 above the swag's ends, which is
+# where a 2.25 circle through those three points has to have its centre. The ends sit M/2 above
+# the middle of the frieze and the lowest point M/2 below it, so the whole loop is centred in the
+# frieze with 0.0525 of plain stone above and below.
+#
+# The tube is 0.0225 (M/20) and its axis lies IN the frieze face, so exactly half of it stands
+# proud: 0.0225 of relief, 0.7 of a voxel at the contract's metre 32. Five swags on centres 0,
+# +-2.70, +-5.40 span the whole colonnade from the outer column to the outer column; each runs
+# 1.35 either side into the ressaut beside it, where it is buried, so it reads as passing behind
+# the break rather than stopping at it.
+let entablature_swag_arc = torus 0 12.875 -11.74  ring=2.25 tube=0.0225 axis=z
+let entablature_swag_cut = box -1.35 10.55 -11.80   1.35 11.08 -11.70
+let entablature_swag     = intersection { entablature_swag_arc entablature_swag_cut }
+let entablature_swags    = mirror {
+    union {
+        entablature_swag
+        translate { entablature_swag } 2.70 0 0
+        translate { entablature_swag } 5.40 0 0
+    }
+} axis=x
+
+# THE PATERA — a disc 0.36 across (0.8 D) with a domed boss 0.135 across (0.3 M) on it, on the
+# face of each ressaut, which is 0.135 further out than the frieze behind it. The disc stands
+# 0.0225 proud and the boss another 0.0225 on top of that, so the deepest thing here is 0.045 —
+# still well inside the 0.22 the bed mould above projects, and nothing of it crosses a moulding.
+let entablature_pat_disc = cylinder 0 10.85 -11.875   r=0.18   h=0.045 axis=z
+let entablature_pat_boss = cylinder 0 10.85 -11.8975  r=0.0675 h=0.045 axis=z
+let entablature_patera   = union { entablature_pat_disc entablature_pat_boss }
+let entablature_paterae  = mirror {
+    union {
+        translate { entablature_patera } 1.35 0 0
+        translate { entablature_patera } 4.05 0 0
+        translate { entablature_patera } 6.75 0 0
+    }
+} axis=x
+
+let entablature_relief = union { entablature_swags entablature_paterae }
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let part_entablature = union {
+    entablature_ring entablature_dn_main entablature_corners
+    entablature_pbody entablature_dn_portico entablature_breaks
+    entablature_relief
+}
+
+# This part removes nothing from anybody, so the manifest names no `void_entablature`.
+
+# --- paint -----------------------------------------------------------------------------------
+#
+# Marble, which is what the order asks for and what the portico's columns, the antae and the
+# eighteen pilasters already are: below 9.90 the order is marble standing on a limestone wall, and
+# above it the entablature is the same marble carried across the whole front, which is the thing
+# that makes an order an order rather than a row of columns.
+#
+# The frieze is marble_hot — 232,228,214 at rough 120 against marble's 228,225,217 at rough 140,
+# both translucent 110. Four values and twenty of roughness apart: the same stone from a warmer
+# bed, which is what a frieze course out of one quarry run actually is, and NOT a decorative band.
+# It is here because nothing else in this building uses it and because two nearly identical
+# translucent marbles either side of one hard horizontal line is a question worth asking a
+# renderer: if the frieze reads as a different colour the subsurface term is too strong, and if the
+# line between them vanishes it is not there at all.
+#
+# Bronze on the swags and paterae, last, because it goes on top of the marble it is applied to.
+#
+# below=0.02 on every rule and never below=0: the manifest displaces the whole building by 12 mm of
+# grain at the very end, and a voxel that exists only because the grain pushed the surface outward
+# lies OUTSIDE the shape its rule names. At below=0 those voxels match nothing, fall back to the
+# base coat, and leave a pale limestone rind over every cornice in the building.
+let entablature_friezeband = intersection {
+    part_entablature  box -17 10.55 -13   17 11.15 8.5
+}
+# Bound but not painted and not weathered: the corona and the crowning cyma, which is the only
+# part of this cornice the rain ever reaches. It is here so that the one weathering coat this part
+# could ever safely take has a shape to be scoped to — `weather cracks 0.008 on=entablature_wash`
+# — without anybody having to work out which members are the washed ones. See the header for why
+# it is not switched on: 0.008 is a quarter of a voxel and the dentil gap is one and a half.
+let entablature_wash = intersection {
+    part_entablature  box -17 11.52 -13   17 11.90 8.5
+}
+
+paint marble     where=part_entablature       below=0.02
+paint marble_hot where=entablature_friezeband below=0.02
+paint bronze     where=entablature_relief     below=0.02

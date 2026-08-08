@@ -13,8 +13,9 @@
 #   the shaft face            0.1350  (0.3 M)   4.3 voxels
 #   the flute floor           0.0900  (0.2 M)   2.9 voxels — a flute is 0.045 deep, 1.4 voxels
 #   the volute face plate     0.1575            sunk 0.0225 behind the band that winds on it
-#   the volute band           0.027 across, standing 0.0225 proud of that plate — 0.7 voxel
-#   the volute channel        0.0315            ONE VOXEL of air between two turns of the scroll
+#   the volute band           0.045 across, standing 0.0225 proud of that plate — 0.7 voxel of
+#                                               relief on a 1.4-voxel band
+#   the volute channel        0.0338            ONE VOXEL of air between two turns of the scroll
 #   the fillet between flutes 0.0300  (M/15)    ONE VOXEL, the same number the columns use
 #   the necking astragal      0.0225 across and 0.0225 tall — 0.7 voxel, both ways
 #   the plinth band           0.045 proud and 0.095 tall, unbroken for 94 m round the block
@@ -25,9 +26,10 @@
 # behind it, nothing but a 20-to-45 millimetre step in a surface that is otherwise dead flat, lit
 # by the same sun as the flat part. If the sampler smears those steps together the elevation goes
 # blank; if the shading cannot separate a face at 0.135 from a face at 0.180 the whole order reads
-# as wallpaper rather than as stone standing off a wall. There are eighteen of them, ninety metres
-# apart end to end, and they are the only relief on 380 m² of ashlar that walls.clip deliberately
-# left flat.
+# as wallpaper rather than as stone standing off a wall. There are THIRTY of them round a 94 m
+# perimeter, and they are the only relief on the 380 m² of ashlar that walls.clip deliberately left
+# flat. Measured at metre 32: 12.70 m³ of stone carrying 248.5 m² of surface — twenty square metres
+# of face for every cubic metre of matter, which is what shallow relief means as a number.
 #
 # The second load is a MATERIAL edge at that same scale: polished marble (rough 140) against rough
 # granite (rough 225) across the 0.045 step where a base torus rises off its plinth, and against
@@ -60,7 +62,7 @@
 #
 # THE PLINTH BAND is the one continuous member: 0.045 proud (0.1 M) and 0.095 tall, an unbroken
 # ring on the block outline at 5.80 to 5.895, bedded 0.09 into the wall. It is the continued plinth
-# of this order and it is what makes eighteen separate pilasters one piece of stone. Its projection
+# of this order and it is what makes thirty separate pilasters one piece of stone. Its projection
 # is 0.045 ON PURPOSE, and it is the only number here chosen by looking at another fragment: it is
 # shallower than the portico's antae are fluted (their flute floor stands 0.1425 proud), so it
 # passes behind them invisibly instead of banding them, and it is exactly flush with the aprons and
@@ -75,6 +77,16 @@
 # 0.0225 m astragal; a coat heavy enough to see would eat it, and the manifest's 12 mm of grain is
 # already half the relief of the volute band. If this part ever needs wearing, wear the plinths and
 # leave the order alone: `weather cracks 0.01 on=pilasters_plinths`.
+#
+# THE NUMBERS THAT ARE NOT DIMENSIONS. Everything below is a multiple or a simple fraction of
+# M = 0.45 except these, and every one of them is a construction or an overlap rather than a size:
+#
+#   16.00, 7.50        the contract's block outline, which is not on the module and says so
+#   0.05, 0.09         how far a member is bedded into what it stands on, per the brief's rule 4
+#   0.20               how far the flute cutter reaches PAST the shaft face — a cut, not a depth
+#   0.30 tighten, 1.75 turns    the volute's construction; the sizes it produces are in the table
+#   5.74, 5.955, 7.410, 15.910  the inner box that hollows the plinth band into a ring
+#   16.30, 16.09, 7.80, 7.59    the collar that separates the two paint coats, and nothing else
 
 include "_contract.clip"
 
@@ -226,7 +238,9 @@ let pilasters_min_south = rotate { pilasters_minor } y=0.5
 let pilasters_min_east  = rotate { pilasters_minor } y=0.25
 
 # The returns of the south front: three bays each side, on the column grid continued outward past
-# the portico. The first of them stands 2.25 clear of the portico's east anta.
+# the portico. The first of them is one whole bay outboard of the portico's east anta — 9.45 against
+# 6.75 — which leaves 1.69 m of plain wall between the two, and that gap is the junction between the
+# giant order and the minor one.
 let pilasters_south = union {
     translate { pilasters_min_south }  9.45 5.85 -7.5
     translate { pilasters_min_south } 12.15 5.85 -7.5
@@ -247,6 +261,12 @@ let pilasters_north = union {
 # The east elevation: six bays over the 15 m depth of the block, on the same 2.70 spacing measured
 # from z = 0, which leaves five window bays between them and half a bay at each angle for the
 # wall's quoins.
+#
+# The outermost of the six stands 0.75 from the angle and so overlaps the quoins, which run 0.90 in
+# from it. That was looked at on a contact sheet and left: the quoin projects 0.045 and this
+# pilaster 0.135, so the quoin is simply swallowed for the 0.44 m they share and reappears beyond —
+# a quoined arris with a pilaster hard against it, which is what a corner of this kind looks like.
+# Moving it in to 5.40 would put it off the bay and leave the last window unanswered at the angle.
 let pilasters_east = union {
     translate { pilasters_min_east } 16 5.85 -6.75
     translate { pilasters_min_east } 16 5.85 -4.05
@@ -268,24 +288,41 @@ let pilasters_orders = mirror {
 
 let part_pilasters = union { pilasters_orders pilasters_band }
 
-# The plinths, as one shape, so they can be a different stone from what stands on them: a slice of
-# this part's own geometry taken between 5.75 and 5.9175. Nothing else of this part is in that
-# slice — the base core starts at 5.8725 and is buried inside the plinth block until 5.9175, where
-# the lower torus springs — so the slice is exactly the plinth band and the eighteen plinth blocks.
+# The plinth blocks, as one shape, so they can be a different stone from what stands on them: the
+# slice of this part's own geometry between 5.75 and 5.9175 that also stands more than 0.09 proud
+# of the wall. Thirty blocks; nothing else of this part is in that slice, because the base core
+# starts at 5.8725 and is buried inside its own plinth until 5.9175, where the lower torus springs.
+#
+# The depth test is not tidiness, it is the fix for a fault the contact sheet found. Take the whole
+# slice and the shape includes the plinth BAND, whose 0.045 of relief is exactly the plane the
+# windows' aprons and console feet stand on — and windows.clip is included after this file, so its
+# `paint marble where=windows_stone` lands on the band wherever an apron coincides with it. A
+# granite band came back as a DASHED LINE: granite, marble, granite, marble, three times between
+# every pair of pilasters, which took a coat of lapis to see and is the sort of fault a measurement
+# never finds. `pilasters_deep` is the collar between 0.09 and 0.30 proud; intersecting with it
+# leaves the blocks, which no window comes within 0.20 m of, and drops the band, which is 0.045
+# clear of the collar — comfortably past the rules' own 0.02.
+let pilasters_deep_out = box -16.30 5.70 -7.80   16.30 6.00 7.80
+let pilasters_deep_in  = box -16.09 5.60 -7.59   16.09 6.10 7.59
+let pilasters_deep     = difference { pilasters_deep_out pilasters_deep_in }
+
 let pilasters_plinths = intersection {
     part_pilasters  box -17.0 5.75 -8.0   17.0 5.9175 8.0
 }
+let pilasters_plinth_blocks = intersection { pilasters_plinths pilasters_deep }
 
-# Marble for the order, matching the portico's columns and antae, and granite for the plinths it
-# stands on: a polished stone at rough 140 against a hard dark one at rough 225, meeting across the
-# 0.045 step where the lower torus rises off its plinth. That edge is the shading half of this
-# part's load and it is 1.4 voxels tall.
+# Marble for the order, which is what the portico's columns and antae are, so the whole order in
+# this building is one stone; granite for the thirty plinth blocks it stands on. A polished stone
+# at rough 140 against a hard dark one at rough 225, meeting across the 0.045 step where the lower
+# torus rises off its plinth — 1.4 voxels tall, and the shading half of this part's load. The other
+# half is the same marble against the wall's own limestone across the 0.135 step at the side of
+# every shaft, which is 94 metres of it.
 #
 # below=0.02, not below=0, on both. The manifest displaces everything by 12 mm of grain at the very
 # end, and a voxel that only exists because the grain pushed the surface outward sits OUTSIDE the
 # shape its rule names. At below=0 those voxels match no rule, fall back to the base coat, and
 # leave a pale limestone rind over every pilaster in the building.
-paint marble  where=part_pilasters     below=0.02
-paint lapis where=pilasters_plinths  below=0.02
+paint marble  where=part_pilasters          below=0.02
+paint granite where=pilasters_plinth_blocks below=0.02
 
 # This part removes no matter, so there is no `void_pilasters` and the manifest names none.

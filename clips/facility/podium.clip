@@ -6,52 +6,77 @@
 # there is no gap here to hang over.
 #
 # ------------------------------------------------------------------------------------------------
-# WHAT THIS FILE PUTS UNDER LOAD — two things, and they pull in opposite directions on purpose.
+# WHAT THIS FILE PUTS UNDER LOAD — two things, and they pull against each other on purpose.
 #
-# 1. THE LARGEST SOLID MASS IN THE BUILDING. 33.30 x 21.15 x 2.25 m of stone, about 1560 cubic
-#    metres, roughly 51 million voxels at the contract's metre 32. Almost all of it is interior:
-#    one material, no variation reachable, nothing to look at. That is the point. It is the
-#    storage layer's cheapest case — the uniform brick — and it is the only thing in this scene
-#    that produces it in bulk. If uniform bricks ever stop being uniform, or stop being cheap,
-#    this part is where the memory figure will say so first, and it will say so loudly.
+# 1. THE LARGEST SOLID MASS IN THE BUILDING. 33.30 x 21.15 x 2.25 m, 1555.25 cubic metres,
+#    50,962,476 voxels at the contract's metre 32, in ONE component. Almost all of it is
+#    interior: one material, nothing to look at. That is the point. It is the storage layer's
+#    cheapest case — the uniform brick, eight bytes of payload against two kilobytes for a brick
+#    where every voxel differs (see the budget note at src/app/main.cpp:2460) — and it is the only
+#    thing in this scene that produces it in bulk. If uniform bricks ever stop being uniform, or
+#    stop being cheap, this is the part whose memory figure will say so first, and loudest.
 #
-#    THEREFORE THIS PART IS NOT WEATHERED, and that is deliberate, not an oversight. `weather`
+#    IT DOES NOT ACTUALLY GET UNIFORM BRICKS TODAY, AND THAT IS NOT THIS FILE'S DOING.
+#    `apply_variation` in src/forge/sample.cpp walks EVERY non-air voxel, interior included, and
+#    mints a per-voxel perturbed type unless `variation.by` evaluates to zero there. The manifest
+#    ends with `variation colour=0.030 rough=0.070 seed=17` and no `by=`, so all fifty million
+#    voxels in here are hashed apart and not one brick in the facility can take Form::Uniform.
+#    The one-line fix is a `by=` that is zero away from the surface, and it belongs in
+#    clips/facility.clip, not here; it is written up in clips/facility/requests/podium.md. What
+#    this part can do is provide the large single-material volume for it to work on, and it does.
+#
+#    THEREFORE THIS PART IS NOT WEATHERED, and that is a decision, not an oversight. `weather`
 #    displaces and recolours by geometry, and coating the largest mass in the building would turn
 #    the one clean uniform-storage case in the scene into millions of per-voxel exceptions. The
 #    walls, the steps and the site are outdoor stone too and are better placed to carry the
-#    weathering share. If you want the podium weathered, scope it to `podium_zone_base` — the
-#    bottom 0.45 m only — and leave the mass alone.
+#    weathering share. If the podium must be weathered, scope it to `podium_zone_base` and expect
+#    to explain what the scene tests instead.
 #
-# 2. DEEP NARROW GROOVES, about 1200 metres of them, cut into that mass.
+#    It is also why the whole base is ONE material. See the paint section at the bottom.
 #
-#      rustication joints   0.045 m wide (M/10) and 0.090 m deep (M/5)
-#      terrace paving joints 0.0375 m wide (M/12) and 0.045 m deep (M/10)
+# 2. DEEP NARROW GROOVES — about twelve hundred metres of them — cut into that mass.
+#
+#      rustication joints     0.045 m wide (M/10) and 0.090 m deep (M/5)
+#      terrace paving joints  0.0375 m wide (M/12) and 0.045 m deep (M/10)
 #
 #    At metre 32 a voxel is 0.03125 m. So a rustication channel is ONE AND A HALF voxels across
-#    and just under three deep, and a paving joint is ONE AND HALF A TENTH across and one and a
-#    half deep. A groove is the hardest case of thin matter there is: unlike a fin, it is a
-#    surface that folds back on itself inside a single sample step, so a sampler that steps by its
-#    reported distance can walk straight over the mouth of one and never know it was there. If the
+#    and just under three deep, and a paving joint is ONE AND A FIFTH across and one and a half
+#    deep. A groove is the hardest kind of thin matter there is: unlike a fin, it is a surface
+#    that folds back on itself inside a single sample step, so a sampler that steps by its own
+#    reported distance can walk clean over the mouth of one and never learn it was there. If the
 #    contact sheet shows the rustication as a smudge or the paving as nothing at all, the SAMPLER
 #    is what is wrong, not the grooves.
 #
-#    DO NOT WIDEN THEM. 0.045 and 0.0375 are M/10 and M/12; they are module fractions and they are
-#    at the limit on purpose. A podium with comfortable 0.10 m channels tests nothing.
+#    DO NOT WIDEN THEM. 0.045 and 0.0375 are M/10 and M/12, they are module fractions, and they
+#    are at the limit on purpose. A podium with comfortable 0.10 m channels tests nothing.
 #
-# The third thing, which is free: the mitres. The whole block is the INTERSECTION of two extruded
-# profiles, one drawn in (x, y) and run along z, one drawn in (z, y) and run along x. That is what
-# makes every moulding turn the four corners as a true mitre rather than as the fat square corner
-# a union of four straight runs gives you. It also means the field is an intersection of two
-# ten-band unions over fifty million voxels, which is a fair test of box culling on its own.
+#    They do survive, today, and here is the measurement to check it against. At metre 32:
+#
+#      podium_mass   (before the grooves are cut)  51,064,994 voxels   1701.96 m2 of surface
+#      podium_stone  (after)                       50,962,476 voxels   1853.05 m2 of surface
+#
+#    So the grooves take out 102,518 voxels — 3.13 cubic metres of stone — and put back 151.09
+#    square metres of surface, which is nine per cent more surface on the part for a third of one
+#    per cent less matter. That ratio IS the load. If a change to the sampler makes those two
+#    surface figures converge, the grooves have started dissolving, whatever the picture looks
+#    like.
+#
+# The third load, which comes free with getting the corners right: the whole block is the
+# INTERSECTION of two extruded profiles, one drawn in (x, y) and run along z, one drawn in (z, y)
+# and run along x. That is what makes every moulding turn all four corners as a true mitre rather
+# than as the fat square corner a union of four straight runs gives. It also means fifty million
+# voxels are answered by an intersection of two eight-band unions, which is a fair test of box
+# culling by itself: at metre 32 it costs 244,498,309 field evaluations of a 582,393,600 cell
+# box, so 58% of the box is still being settled whole without ever asking the field.
 # ------------------------------------------------------------------------------------------------
 #
-# THE MODULE. M = 0.45, D = 0.90. Every number below is a multiple of M or of M/12 = 0.0375:
+# THE MODULE. M = 0.45, D = 0.90. Every number below is a multiple of M or of M/4 = 0.1125:
 #
-#   16.65 = 37 M     16.425 = 36.5 M     16.20 = 36 M          the three faces, east and west
-#   13.05 = 29 M     12.825 = 28.5 M     12.60 = 28 M          the same three, south
-#    8.10 = 18 M      7.875 = 17.5 M      7.65 = 17 M          the same three, north
+#   16.65 = 37 M      16.5375 = 36.75 M    16.425 = 36.5 M     the three faces, east and west
+#   13.05 = 29 M      12.9375 = 28.75 M    12.825 = 28.5 M     the same three, south
+#    8.10 = 18 M       7.9875 = 17.75 M     7.875 = 17.5 M     the same three, north
 #
-# The main block is x -16.00..16.00 and z -7.50..7.50 by the contract and those are not module
+# The main block is x -16.00..16.00 and z -7.50..7.50 by the contract, and those are not module
 # numbers, so the terrace ledge round it comes out 0.65 at the sides, 0.60 north and 0.55 south of
 # the portico front. The podium is dimensioned by the module and the block sits on it; the other
 # way round would have put a number in this file that nothing could be derived from.
@@ -59,17 +84,17 @@
 # WHERE YOUR PART MEETS MINE
 #
 #   the terrace floor        y = 1.80 everywhere on top. Stand anything on it and sink it 0.05.
-#   the south face           z = -13.05 (plinth and corona), z = -12.60 (the rusticated die)
-#   the north face           z =  8.10 / 7.65
-#   the east and west faces  x = +-16.65 / +-16.20
+#   the south face           z = -13.05 (plinth and corona), z = -12.825 (the rusticated die)
+#   the north face           z =  8.10 / 7.875
+#   the east and west faces  x = +-16.65 / +-16.425
 #   the underside            y = -0.45, buried, for the site to bring its ground up to.
 #
 #   THE GREAT STEPS: the top tread must land flush at y = 1.80 on or north of z = -13.05. Ten
 #   risers of 0.18 and ten runs of 0.32 is 3.20 m, so the flight runs z = -16.25 (ground) to
 #   z = -13.05 (top nosing). That is 0.55 m further south than the contract's steps zone; the
 #   alternative is that the last two risers are buried in this slab and the stair arrives at a
-#   0.36 m wall. The slab is 0.55 m deeper than the contract asked for because the brief for this
-#   part says it must reach z = -13, and it does.
+#   0.36 m wall. This slab is 0.55 m deeper than the contract's plan because the brief for this
+#   part says it must cover z = -13, and it does.
 
 include "_contract.clip"
 
@@ -78,148 +103,137 @@ include "_contract.clip"
 # ================================================================================================
 #
 #   -0.4500 .. 0.0000   footing, buried, at the plinth face          M
-#    0.0000 .. 0.2250   plinth                                       M/2
-#    0.2250 .. 0.3375   ovolo, plinth face in to the middle face     M/4
-#    0.3375 .. 0.4500   cyma, middle face in to the die face         M/4
-#    0.4500 .. 1.3500   the die — rusticated, two courses of 0.45    2M
-#    1.3500 .. 1.4625   ovolo bed mould, die face out to the middle  M/4
-#    1.4625 .. 1.5000   fillet                                       M/12
-#    1.5000 .. 1.8000   corona, back out to the plinth face          2M/3
+#    0.0000 .. 0.2250   plinth course                                M/2      face 16.65
+#    0.2250 .. 0.4500   cyma, plinth face back to the die face       M/2      16.65 -> 16.425
+#    0.4500 .. 1.3500   the die — rusticated, two courses of 0.45    2M       face 16.425
+#    1.3500 .. 1.4625   ovolo bed mould, die face out again          M/4      16.425 -> 16.5375
+#    1.4625 .. 1.5000   fillet                                       M/12     face 16.5375
+#    1.5000 .. 1.8000   corona, back out to the plinth face          2M/3     face 16.65
 #
-# Sum above ground: 0.225 + 0.1125 + 0.1125 + 0.90 + 0.1125 + 0.0375 + 0.30 = 1.80 exactly.
+# Sum above ground: 0.225 + 0.225 + 0.90 + 0.1125 + 0.0375 + 0.30 = 1.80 exactly.
 #
-# The corona overhangs the fillet by 0.225 with a flat soffit, which is where the black line under
-# the top of a podium comes from; the plinth and the corona are flush at 16.65 and the die is
-# recessed 0.45 between them, which is what makes the rusticated band read as sunk rather than as
-# a change of colour.
+# EVERY CURVED MEMBER IS SQUARE IN SECTION — the cyma is 0.225 out over 0.225 up, the ovolo is
+# 0.1125 over 0.1125 — AND THAT IS THE WHOLE REASON THE PROFILE IS SHAPED THIS WAY.
 #
-# THE BASE IS TWO MOULDINGS AND NOT ONE, and that is the whole of what the first three contact
-# sheets were for. The plinth stands 0.45 proud of the die, and the first attempt took all of it
-# back in one 0.1125-high band — four across for one up. A moulding that flat is a shelf: the
-# curve lies down so nearly flat that voxels turn it into four terraces, and it read on the sheet
-# as exactly the stack of cylinders the brief tells you not to build. Split into an ovolo of
-# 0.225 and a cyma of 0.225, each two across for one up — the same proportion as the bed mould
-# above, which was the one that looked right — and it reads as carved. Do not merge them back.
+# The first two attempts put the die 0.45 in from the plinth: once as a single 0.1125-high cyma
+# (four across for one up) and once as two 0.1125-high mouldings (two across for one up). Both
+# read on the contact sheet as a little flight of stairs. A voxel grid renders a surface that
+# moves further sideways than upward as a run of terraces — at metre 32 a two-to-one curve is
+# seven steps two voxels wide each, and the eye reads seven steps. At one to one the terraces are
+# one voxel each way and the eye reads a curve. So the projection was cut to 0.225 and the
+# mouldings were given their own height back. DO NOT DEEPEN A MOULDING HERE WITHOUT MAKING IT
+# TALLER BY THE SAME AMOUNT.
+#
+# The corona still overhangs, by 0.1125, and its soffit is FLAT — horizontal surfaces voxelize
+# exactly, so an undercut costs nothing in terracing and buys the black line under the top of a
+# podium, which is the one shadow this part contributes to the scene.
 #
 # A moulding is only the band between its two corners and the stone behind it is mine, so the die
-# box below runs from 0.3375 up to 1.4625 — through both moulding bands — and each moulding sits
-# outside it. FIRST CORNER IN THE STONE, SECOND IN THE AIR: that is the whole of the orientation,
-# and it is why the bed mould reads (die face, top) then (fillet face, bottom).
+# box runs from 0.225 up to 1.4625 — through both moulding bands — and each moulding sits outside
+# it. FIRST CORNER IN THE STONE, SECOND IN THE AIR: that is the whole of the orientation, and it
+# is why the bed mould reads (die face, top) then (fillet face, bottom).
 #
 # `run=` IS NOT OPTIONAL HERE. It defaults to z, and with the default a moulding written along x
-# has its section drawn across the full 33 m of the run and its curve carved in the wrong plane —
-# it still fills its box, so it still looks like a fillet, and nothing tells you.
+# has its section drawn across the whole 33 m of the run and its curve struck in the wrong plane.
+# It still fills its own box, so it still looks like a plain fillet, and nothing tells you.
 
-# --- the profile drawn in (x, y), run along the full depth ------------------------------------
+# --- the profile drawn in (x, y), run along the full depth -------------------------------------
 
 let podium_plinth   = box -16.65 -0.45 -13.05   16.65 0.225 8.10 round=0.015
 let podium_corona   = box -16.65  1.50 -13.05   16.65 1.80  8.10 round=0.018
 
-let podium_x_low    = box -16.425 0.225  -13.05  16.425 0.3375 8.10 round=0.010
-let podium_x_die    = box -16.20  0.3375 -13.05  16.20  1.4625 8.10 round=0.012
-let podium_x_fillet = box -16.425 1.4625 -13.05  16.425 1.50   8.10 round=0.010
-let podium_x_wash_e = ovolo  16.425 0.225  -13.05   16.65  0.3375 8.10 run=z
-let podium_x_wash_w = ovolo -16.425 0.225  -13.05  -16.65  0.3375 8.10 run=z
-let podium_x_cyma_e = cyma   16.20  0.3375 -13.05   16.425 0.45   8.10 run=z
-let podium_x_cyma_w = cyma  -16.20  0.3375 -13.05  -16.425 0.45   8.10 run=z
-let podium_x_bed_e  = ovolo  16.20  1.4625 -13.05   16.425 1.35   8.10 run=z
-let podium_x_bed_w  = ovolo -16.20  1.4625 -13.05  -16.425 1.35   8.10 run=z
+let podium_x_die    = box -16.425  0.225  -13.05  16.425  1.4625 8.10 round=0.012
+let podium_x_fillet = box -16.5375 1.4625 -13.05  16.5375 1.50   8.10 round=0.010
+let podium_x_cyma_e = cyma   16.425 0.225  -13.05   16.65   0.45 8.10 run=z
+let podium_x_cyma_w = cyma  -16.425 0.225  -13.05  -16.65   0.45 8.10 run=z
+let podium_x_bed_e  = ovolo  16.425 1.4625 -13.05   16.5375 1.35 8.10 run=z
+let podium_x_bed_w  = ovolo -16.425 1.4625 -13.05  -16.5375 1.35 8.10 run=z
 
 # THE ORDER OF A UNION IS A SPEED, not a taste. A union evaluates its children in turn and skips
-# any whose bounding box is further away than the answer it already has, so the three bands that
-# carry nearly all the surface — corona, die, plinth — go first and the eight small mouldings go
-# last. Written bottom-to-top, as the section reads, this same profile cost 33.6 million field
-# evaluations at metre 16; written biggest-first it costs about half that, because a voxel of the
-# sky above the terrace now meets the corona on the first try instead of on the eleventh.
+# any whose bounding box is further off than the answer it already holds, so the three bands that
+# carry nearly all the surface — corona, die, plinth — are named first and the four small
+# mouldings last.
 let podium_profile_x = union {
     podium_corona
     podium_x_die
     podium_plinth
-    podium_x_low
     podium_x_fillet
-    podium_x_wash_e podium_x_wash_w
     podium_x_cyma_e podium_x_cyma_w
     podium_x_bed_e  podium_x_bed_w
 }
 
 # --- the same profile drawn in (z, y), run along the full width --------------------------------
 
-let podium_z_low    = box -16.65 0.225  -12.825  16.65 0.3375 7.875 round=0.010
-let podium_z_die    = box -16.65 0.3375 -12.60   16.65 1.4625 7.65  round=0.012
-let podium_z_fillet = box -16.65 1.4625 -12.825  16.65 1.50   7.875 round=0.010
-let podium_z_wash_s = ovolo -16.65 0.225  -12.825  16.65 0.3375 -13.05 run=x
-let podium_z_wash_n = ovolo -16.65 0.225    7.875  16.65 0.3375  8.10  run=x
-let podium_z_cyma_s = cyma  -16.65 0.3375 -12.60   16.65 0.45   -12.825 run=x
-let podium_z_cyma_n = cyma  -16.65 0.3375   7.65   16.65 0.45     7.875 run=x
-let podium_z_bed_s  = ovolo -16.65 1.4625 -12.60   16.65 1.35   -12.825 run=x
-let podium_z_bed_n  = ovolo -16.65 1.4625   7.65   16.65 1.35     7.875 run=x
+let podium_z_die    = box -16.65 0.225  -12.825  16.65 1.4625 7.875 round=0.012
+let podium_z_fillet = box -16.65 1.4625 -12.9375 16.65 1.50   7.9875 round=0.010
+let podium_z_cyma_s = cyma  -16.65 0.225  -12.825  16.65 0.45 -13.05  run=x
+let podium_z_cyma_n = cyma  -16.65 0.225    7.875  16.65 0.45   8.10  run=x
+let podium_z_bed_s  = ovolo -16.65 1.4625 -12.825  16.65 1.35 -12.9375 run=x
+let podium_z_bed_n  = ovolo -16.65 1.4625   7.875  16.65 1.35   7.9875 run=x
 
 let podium_profile_z = union {
     podium_corona
     podium_z_die
     podium_plinth
-    podium_z_low
     podium_z_fillet
-    podium_z_wash_s podium_z_wash_n
     podium_z_cyma_s podium_z_cyma_n
     podium_z_bed_s  podium_z_bed_n
 }
 
 # The mitre. Both profiles are solid right across the middle, so away from an edge the
-# intersection is just the other one's profile; at a corner it is the smaller of the two, which is
-# exactly what a mitred return is.
+# intersection is simply the other one's profile; at a corner it is the smaller of the two, which
+# is exactly what a mitred return is.
 let podium_mass = intersection { podium_profile_x podium_profile_z }
 
 # ================================================================================================
 # THE RUSTICATION — 0.045 wide, 0.090 deep, two courses of 0.45, laid in running bond
 # ================================================================================================
 #
-# The die is 0.90 tall, so two courses of M; the blocks are 1.35 long (3 M), three to one, and the
-# die is a whole number of them BOTH WAYS by construction:
+# The die is 0.90 tall, so two courses of M, with one channel between them at 0.90. The blocks are
+# 1.35 long (3 M), three to one, and the stone at each corner is a different length from the rest
+# — 1.575 and 0.90 on the east and west faces, 0.90 and 1.575 on the south and north — because
+# THE PATTERN IS SET BY THE MODULE AND STOPPED SHORT OF THE ARRIS, not fitted to the length of the
+# face. A joint cut exactly on a corner takes a nick out of the arris from both sides; a joint a
+# block short of it leaves a long corner stone, which is what a quoin is anyway. In every case the
+# two courses' end stones differ by half a block, which is what running bond means.
 #
-#   32.40 across  =  24 blocks of 1.35        20.25 deep  =  15 blocks of 1.35
-#
-# which is why the die is 36 M half-width and 28 M / 17 M in z rather than anything nearer the
-# walls it carries. The joints therefore land exactly on all four arrises and there is no half
-# block at a corner in the lower course; the upper course is offset half a block, so it has a
-# half block at each corner, which is what running bond is.
-#
-# The channel is one slab repeated along its face and then cut down to a face zone, so one repeat
-# serves the south face and the north face together. The joint slabs are limited repeats of a
-# child far smaller than the period, which is exact and carries a box; nothing here needs
-# `around`, and see clips/facility/requests/order.md for what `around` would cost.
+# One slab repeated along its face and then cut down to a face zone, so a single repeat serves the
+# south face and the north face together. These are limited repeats of a child far smaller than
+# the period, which is exact and carries a bounding box; nothing here needs `around`, and see
+# clips/facility/requests/order.md for what `around` would cost the whole clip.
 
-let podium_joint_x   = box -0.0225 -1 -20   0.0225 3 20
-let podium_joint_z   = box -20 -1 -0.0225   20 3 0.0225
+let podium_joint_x = box -0.0225 -1 -20   0.0225 3 20
+let podium_joint_z = box -20 -1 -0.0225   20 3 0.0225
 
-# Lower course: joints every 1.35 from the centre line, out to 14.85, leaving a full block to the
-# corner at 16.20. Upper course: the same, moved half a block, mirrored so both halves agree.
-let podium_vj_low_x  = repeat { podium_joint_x } x=1.35 nx=11
-let podium_vj_up_x   = mirror { translate { repeat { podium_joint_x } x=1.35 nx=11 } 0.675 0 0 } axis=x
+# Lower course: joints every 1.35 out from the centre line, stopping at 14.85. Upper course: the
+# same, moved half a block and mirrored, so both halves of the building agree.
+let podium_vj_low_x = repeat { podium_joint_x } x=1.35 nx=11
+let podium_vj_up_x  = mirror { translate { repeat { podium_joint_x } x=1.35 nx=11 } 0.675 0 0 } axis=x
 
-# In z the die runs -12.60..7.65, so the joints sit at 0.90 + 1.35k; the two that would land on
-# the corner arrises are cut off by the face zone below.
-let podium_vj_low_z  = translate { repeat { podium_joint_z } z=1.35 nz=10 } 0 0 0.90
-let podium_vj_up_z   = translate { repeat { podium_joint_z } z=1.35 nz=10 } 0 0 1.575
+# In z the die runs -12.825..7.875, which is not a whole number of blocks, so the phase is chosen
+# to leave the same end stone at both ends: 0.225 + 1.35k for the lower course and 0.90 + 1.35k
+# for the upper. The face zone below cuts off the copies that would land on or near an arris.
+let podium_vj_low_z = translate { repeat { podium_joint_z } z=1.35 nz=9 } 0 0 0.225
+let podium_vj_up_z  = translate { repeat { podium_joint_z } z=1.35 nz=9 } 0 0 0.90
 
-# The face zones: 0.09 into the stone and 0.05 out into the air, so the channel has a mouth even
+# The face zones: 0.09 into the stone and 0.05 out into the air, so a channel still has a mouth
 # after the manifest's 12 mm of grain has pushed the surface outward.
-let podium_face_s_low = box -16.70 0.45   -12.65  16.70 0.9225 -12.51
-let podium_face_n_low = box -16.70 0.45     7.56  16.70 0.9225   7.70
-let podium_face_s_up  = box -16.70 0.8775 -12.65  16.70 1.35   -12.51
-let podium_face_n_up  = box -16.70 0.8775   7.56  16.70 1.35     7.70
-let podium_face_e_low = mirror { box 16.11 0.45   -12.555  16.25 0.9225 7.605 } axis=x
-let podium_face_e_up  = mirror { box 16.11 0.8775 -12.555  16.25 1.35   7.605 } axis=x
+let podium_face_s_low = box -16.50 0.45   -12.875  16.50 0.9225 -12.735
+let podium_face_n_low = box -16.50 0.45     7.785  16.50 0.9225   7.925
+let podium_face_s_up  = box -16.50 0.8775 -12.875  16.50 1.35   -12.735
+let podium_face_n_up  = box -16.50 0.8775   7.785  16.50 1.35     7.925
+let podium_face_e_low = mirror { box 16.335 0.45   -12.375  16.475 0.9225 7.425 } axis=x
+let podium_face_e_up  = mirror { box 16.335 0.8775 -12.375  16.475 1.35   7.425 } axis=x
 
 let podium_rust_v_low = intersection { podium_vj_low_x union { podium_face_s_low podium_face_n_low } }
 let podium_rust_v_up  = intersection { podium_vj_up_x  union { podium_face_s_up  podium_face_n_up  } }
 let podium_rust_v_elo = intersection { podium_vj_low_z podium_face_e_low }
 let podium_rust_v_eup = intersection { podium_vj_up_z  podium_face_e_up  }
 
-# The one horizontal channel, at 0.90, right round all four faces and round both corners.
-let podium_rust_h_s  = box -16.70 0.8775 -12.65  16.70 0.9225 -12.51
-let podium_rust_h_n  = box -16.70 0.8775   7.56  16.70 0.9225   7.70
-let podium_rust_h_e  = mirror { box 16.11 0.8775 -12.70  16.25 0.9225 7.75 } axis=x
+# The one horizontal channel, at 0.90, right round all four faces and round all four corners.
+let podium_rust_h_s = box -16.50 0.8775 -12.875  16.50 0.9225 -12.735
+let podium_rust_h_n = box -16.50 0.8775   7.785  16.50 0.9225   7.925
+let podium_rust_h_e = mirror { box 16.335 0.8775 -12.90  16.475 0.9225 7.95 } axis=x
 
 let podium_rustication = union {
     podium_rust_h_s podium_rust_h_n podium_rust_h_e
@@ -231,19 +245,20 @@ let podium_rustication = union {
 # THE TERRACE PAVING — 1.35 m slabs, joints 0.0375 wide and 0.045 deep
 # ================================================================================================
 #
-# The whole top is paved, not just the part outside the walls, because the part outside the walls
-# is not knowable from here and a joint under a wall costs nothing and is never seen.
+# The whole top is paved, not only the part outside the walls, because which part is outside the
+# walls is not knowable from this file and a joint under a wall costs nothing and is never seen.
 #
-# The grid is offset half a slab from the centre line in both directions, so that the six portico
-# columns — whose axes are at 1.35, 4.05 and 6.75, all odd multiples of the slab — each stand in
-# the middle of a slab rather than astride a joint. It leaves a plain margin course 1.125 (2.5 M)
-# wide all the way round, over the cornice, which is what a terrace edge wants.
+# The grid is offset half a slab from the centre line in x, so that the six portico columns —
+# whose axes stand at 1.35, 4.05 and 6.75, all odd multiples of the slab — each stand in the
+# middle of a stone rather than astride a joint. In z the phase is picked to match, and both
+# leave a plain margin course 1.125 (2.5 M) wide the whole way round, over the cornice, which is
+# what the edge of a terrace wants.
 let podium_pave_x = box -0.01875 1.755 -20   0.01875 1.82 20
 let podium_pave_z = box -20 1.755 -0.01875   20 1.82 0.01875
 
 let podium_paving = union {
     mirror { translate { repeat { podium_pave_x } x=1.35 nx=11 } 0.675 0 0 } axis=x
-    translate { repeat { podium_pave_z } z=1.35 nz=10 } 0 0 1.575
+    translate { repeat { podium_pave_z } z=1.35 nz=9 } 0 0 0.225
 }
 
 # ================================================================================================
@@ -263,21 +278,24 @@ let part_podium = podium_stone
 #
 # Every rule is keyed on a zone INTERSECTED WITH MY OWN STONE, so no rule can reach a voxel that
 # belongs to somebody else even where their geometry passes through the same coordinates. And
-# every rule is below=0.02, not below=0, because the manifest displaces the whole building by
+# every rule is below=0.02, never below=0, because the manifest displaces the whole building by
 # 12 mm at the end and a test at zero leaves a rind of the base coat over every outward face.
 #
-# A dark hard base, a pale cornice, a white floor: granite below, limestone at the top of the
-# cornice, marble where it is walked. Three materials on one piece of stone, meeting along lines
-# that are horizontal to within a voxel, which is a fair test of whether a paint rule's boundary
-# is where its shape says it is.
+# A dark hard base, a pale cornice, a white floor: granite up to the top of the die, limestone for
+# the cornice, marble where it is walked, with the cornice's own top left as a limestone margin
+# course round the marble. Three materials on one piece of stone, meeting along lines that are
+# horizontal to within a voxel — a fair test of whether a paint rule's boundary lands where its
+# shape says it does.
+#
+# Everything from the footing to the top of the die is ONE material and ONE zone on purpose:
+# 1293.4 of the 1555.3 cubic metres in this part, against 261.7 for the cornice and 73.1 for the
+# marble floor inside it. That 1293 is the uniform-brick case the first note at the top of this
+# file is about. Splitting it for the sake of variety would cost the scene the only large
+# single-material volume it has.
 
-# Everything from the footing to the top of the die is ONE material and one zone, on purpose: it
-# is 1440 of the 1530 cubic metres in this part, and it is the uniform-brick case the first note
-# at the top of this file is about. Splitting it into two coats for the sake of variety would cost
-# the scene the only large uniform volume it has.
 let podium_zone_base    = intersection { podium_stone  box -17 -0.50 -13.10  17 1.3500 8.15 }
 let podium_zone_cornice = intersection { podium_stone  box -17  1.3500 -13.10  17 1.9000 8.15 }
-let podium_zone_terrace = intersection { podium_stone  box -16.20 1.6875 -12.60  16.20 1.9000 7.65 }
+let podium_zone_terrace = intersection { podium_stone  box -15.525 1.6875 -11.925  15.525 1.9000 6.975 }
 
 paint granite   where=podium_zone_base    below=0.02
 paint limestone where=podium_zone_cornice below=0.02

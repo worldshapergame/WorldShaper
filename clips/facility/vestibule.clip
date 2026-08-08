@@ -1,14 +1,473 @@
-# vestibule - the entrance hall behind the door and its screen of columns
+# vestibule — the entrance hall behind the great door, and the screen of two columns into the
+# rotunda
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# ================================================================================================
+# WHAT THIS PART PUTS UNDER LOAD — do not "tidy" any of it away.
 #
-# This file must define exactly one part named `part_vestibule`. Every other name it binds must
-# start with `vestibule_` so nothing collides with another fragment.
+# THE WIDEST DYNAMIC RANGE IN THE BUILDING, ACROSS THREE METRES OF FLOOR.
+#
+# Outside the great door is a south-facing portico floor in full sun. Inside it is this room, and
+# the ONLY DIRECT LIGHT IN IT is that door: 2.70 wide, 4.50 tall, at the bottom of a 0.90 m reveal,
+# under five metres of portico roof that keeps the sun off the opening for most of the day. There
+# is no window and no lamp. The one other opening is the screen at the back, and what comes through
+# that is light that has already bounced off the rotunda — a different colour, a different
+# direction and two or three stops down.
+#
+# So this room is where the two lighting regimes of the building meet, three metres apart: a hard
+# sun patch on a polished floor at one end and a soft bounce off a lit hall at the other, with a
+# nearly black ceiling between them. From the sunlit threshold to the back of a coffer is about
+# four metres and something like twelve stops, and every one of them is in one frame. A path trace
+# from the middle of this floor is the noisiest frame the building can produce; that is the point.
+#
+# That is the whole reason this room is shaped the way it is, and four things are stacked inside
+# that gradient on purpose, in the order they get harder:
+#
+#   1. A POLISHED FLOOR THAT TAKES THE SUN PATCH. marble at rough=140 with a porphyry border and
+#      eleven squares of contrasting stone, and the joints between them are PAINTED lines 0.03 m
+#      wide — one voxel at the contract's metre 32, no geometry underneath to tell a denoiser
+#      where the line goes. Half of that pattern is in direct sun and half is in shadow, in the
+#      same square metre. This is the same trick walls.clip plays with its ashlar joints, put
+#      where the exposure is hardest instead of where it is easiest.
+#
+#   2. A SCREEN OF TWO COLUMNS ON THE EDGE OF THE LIGHT. The two shafts stand on x = +-1.35, which
+#      is exactly where the door's jambs are, so the edge of the beam coming through the door runs
+#      DOWN THE MIDDLE OF EACH SHAFT: half of a fluted column in direct sun and the other half in
+#      the room's own shadow, with the terminator crossing twelve flutes. A soft shadow edge on a
+#      curved fluted surface is the hardest shading problem in the building, and it is the reason
+#      the columns are on the jamb lines and not somewhere more comfortable.
+#
+#   3. DENTILS WITH A 0.03 m GAP, IN SHADOW. The screen's cornice carries 79 dentils 0.06 wide on
+#      a 0.09 pitch. One voxel of gap, four and a half metres up, lit only by light that has
+#      already bounced off the floor. If a denoiser is going to smear anything in this building it
+#      will smear these first, and unlike the entablature outside there is no sun on them to help.
+#
+#   4. COFFERS OVER THE WHOLE OF IT. Five hollows 0.225 deep, moulded in three steps 0.0225 wide —
+#      sub-voxel, exactly as the order intends them — with a boss left standing in each pan and
+#      gilded. A gilt boss at the back of a hollow in the darkest part of the room is the hardest
+#      thing in this fragment: a metal, so it needs a specular answer, at the bottom of the light
+#      budget, behind an edge the sampler cannot resolve.
+#
+# Two niches in the side walls carry the fifth: the SOFT GRADIENT the contract names, a half-domed
+# hollow whose only light is bounced twice.
+#
+# DO NOT ADD A LIGHT IN HERE. A sconce would make this room easy and it would delete the whole
+# point of it. fittings.clip owns lamps; the vestibule is the one interior that must stay dark.
+# ================================================================================================
+#
+# THE MODULE, and where every number came from.
+#
+#   0.45 = M, 0.90 = D. The room is 16 M wide in the clear, 11 M high in the clear, and the screen
+#   order is EXACTLY HALF THE GREAT ORDER: a column of 4.05 (9 M) with a diameter of 0.45 (M), so
+#   its own module is M/2 = 0.225 and everything on it is still a module fraction.
+#
+#   1.80    floor — podium_top, the contract's
+#   2.70    dado top             1.80 + 2 M
+#   5.85    screen column head   1.80 + 4.05, and the same line as the string course outside
+#   6.30    great door head      doors.clip's, and the contract's; my architrave sits on it
+#   6.75    ceiling soffit       5.85 + 0.90 (2 M) of entablature. See the note below.
+#   6.955   back of a coffer     the coffer is cut from 6.73, 0.02 under the soffit, and is
+#                                0.225 (M/2) deep, so 0.245 of the 0.45 slab is left over it
+#   7.20    top of the ceiling slab
+#
+#   x -3.60 .. 3.60   the clear room, 16 M
+#   x  3.60 .. 4.50   the side walls, 2 M thick, centred on the portico column axis at 4.05, their
+#                     outer face landing exactly on the jamb of the side door at 4.50
+#   z -6.60           the inner face of the south wall. walls.clip's, from the contract's 7.50 less
+#                     a 2 M wall. IT IS NOT A MODULE MULTIPLE and it cannot be — 7.50 is not — so
+#                     the room's depth is not either, and every number measured off it is marked.
+#   z -5.40 .. -4.95  the screen: two columns of D = 0.45 on the axis z = -5.175
+#
+# WHY THE CEILING IS AT 6.75 AND NOT AT 6.30. The brief said "about 6.30". 6.30 leaves 4.50 of
+# clear height, and 4.50 has to hold a column and its entablature: either the column loses its
+# entablature, or the column comes down to 3.60 and its diameter becomes 0.40, which is not a
+# module fraction of anything. 6.75 gives 4.95 = 11 M, which is 4.05 + 0.90 exactly — a column of
+# 9 M and an entablature of 2 M — and it leaves 0.45 of wall over the door head for the door's own
+# architrave, which 6.30 does not. One module of difference bought the whole interior order.
+#
+# WHY THE ROOM IS ONLY 1.20 DEEP IN THE CLEAR. Because that is all there is. The contract puts the
+# rotunda's inner radius at 4.80 on the origin and the block's inner face at z = -6.60, which
+# leaves 1.80 m between them on the centre line, and the screen takes 0.45 of it. EVERY PIECE OF
+# STONE IN THIS FILE STANDS OUTSIDE r = 4.80 — the nearest is the north face of the screen at
+# z = -4.95, with 0.15 to spare — so whatever the rotunda cuts for itself cannot eat any of it.
+# If you widen this room, widen it in x, and stop at 4.50 because the side door is there.
+#
+# WHAT I LEFT FOR SOMEBODY ELSE. The north face of the screen entablature is a plain plane at
+# z = -4.95. It is the rotunda's elevation, not mine, and mouldings run out from it would have
+# been cut in half by the rotunda's own circle. Whoever builds the rotunda should treat that face
+# as theirs.
+#
+# THE NUMBERS THAT ARE NOT DIMENSIONS. Everything the eye can measure above is a module multiple or
+# a module fraction (0.015 = M/30 is the finest, and it is the entablature's own sixtieth). These
+# are tolerances and are never seen:
+#
+#   1.70, 1.75, -6.65   0.05 and 0.10 buried in the floor or the south wall — the brief's overlap
+#   -4.725              where the floor runs out under the screen's plinths, which overhang it
+#   6.73, 6.80          0.02 under the ceiling soffit, 0.05 over it: a cut past an arris, and a join
+#   0.006               the capital's knit, a fifth of a voxel — see the screen, below
+#   0.02                every paint rule's `below=`, past the manifest's 12 mm of grain
 
-let vestibule_placeholder = sphere 0 -1.30 0 r=0.25
-let part_vestibule = vestibule_placeholder
+include "_contract.clip"
 
-# What this part removes from the building. Taken away in the manifest after everything is
-# assembled, so nothing added later can be eaten by it. Must always be bound, even if empty.
-let void_vestibule = sphere 0 -1.30 0 r=0.02
+# ================================================================================================
+# THE FLOOR — a slab under the room, its top on the podium's own 1.80
+# ================================================================================================
+#
+# The podium is already solid to 1.80 here, so this adds no visible matter: it exists so that the
+# part stands on something of its own, and so the pattern below has a shape of mine to key on. It
+# runs out to x = +-4.50 under the side walls and back to z = -4.725 under the screen's plinths,
+# which overhang the beam.
+let vestibule_floor = box -4.50 1.35 -6.65   4.50 1.80 -4.725
+
+# The threshold, through the 0.90 reveal of the great door and out to the wall face. doors.clip's
+# void opens the wall from -7.95, so this is the stone a foot lands on coming in.
+let vestibule_sill = box -1.35 1.35 -7.50   1.35 1.80 -6.60
+
+# ================================================================================================
+# THE SIDE WALLS — 2 M thick, with a niche in each
+# ================================================================================================
+#
+# From 1.75 (0.05 into the floor) to 7.20, the top of the ceiling slab. Their north end at -4.95
+# is the anta of the screen; their south end runs 0.05 into the wall walls.clip built.
+let vestibule_wall_e = box 3.60 1.75 -6.65   4.50 7.20 -4.95  round=0.015
+
+# THE NICHE. 0.60 across (4M/3), 0.30 deep (2M/3), from the dado top at 2.70 to 4.50, half round in
+# plan and half domed at the head — so it is a hollow with no flat surface in it anywhere and no
+# direct light on any of it. This is the contract's "soft gradient inside a niche", put in the one
+# room where there is no direct light to help it.
+#
+# Centred at z = -6.00, which is the middle of the 1.20 m of wall the room actually shows: the wall
+# runs to -4.95 but its last 0.45 is the anta. It is NOT on the coffer's centre line at -6.15, and
+# it should not be — the coffer is centred in the ceiling the cornice leaves and the niche in the
+# wall the anta leaves, and those are two different pieces of wall.
+let vestibule_niche_shaft = cylinder 3.60 3.45 -6.00  r=0.30 h=1.50 axis=y
+let vestibule_niche_head  = sphere   3.60 4.20 -6.00  r=0.30
+let vestibule_niche_e     = union { vestibule_niche_shaft vestibule_niche_head }
+
+let vestibule_wall_cut_e = difference { vestibule_wall_e vestibule_niche_e }
+let vestibule_walls      = mirror { vestibule_wall_cut_e } axis=x
+let vestibule_niches     = mirror { vestibule_niche_e } axis=x
+
+# ================================================================================================
+# THE SCREEN — two columns of the order at half size, on the axis z = -5.175
+# ================================================================================================
+#
+# `ionic_column` is 9 D tall and there is nowhere in this building's interior to stand one, so the
+# screen takes the same column at exactly half: 4.05 tall, 0.45 at the foot, its own module M/2.
+# Halving it and not redrawing it is deliberate — a redrawn column drifts away from the great order
+# the first time somebody changes a moulding, and this one cannot.
+#
+# It costs the flutes their comfortable size: the flat fillet between two of them comes down from
+# 0.030 to 0.015, and the volute's tube from 0.045 to 0.0225. That is HALF A VOXEL and A THIRD OF
+# ONE at the contract's metre 32, which is past the point the order's own note defends. It is
+# still the right answer here — the alternative is a screen of two smooth posts — and it is a
+# genuine question put to the sampler rather than a rounding error: this is the one place in the
+# building where the geometry is finer than the grid on purpose.
+#
+# `scale` is given no bounding box by the field, on purpose, because uneven scaling can report less
+# than its own box distance. That means a scaled column cannot be culled and every voxel of my
+# bounds would walk the whole column expression. Wrapping it in an intersection with a box of its
+# own puts the box back, soundly, because a box is square: 4.7 million field evaluations became
+# 0.9 million.
+let vestibule_col_body = intersection {
+    scale { ionic_column } x=0.5 y=0.5 z=0.5
+    box -0.40 -0.02 -0.40   0.40 4.07 0.40
+}
+
+# The shoe and the bed: the same argument portico.clip makes. The column's plinth is 0.675 square
+# and its abacus 0.54 by 0.36, so a block 0.60 square straddling the floor line and one 0.30 by
+# 0.24 straddling the architrave line are inside stone that is already there at both ends, and the
+# joins are certain rather than coincident planes.
+let vestibule_col_shoe = box -0.30 -0.05 -0.30   0.30 0.05 0.30  round=0.012
+let vestibule_col_bed  = box -0.15  4.03 -0.12   0.15 4.10 0.12
+
+# AND ONE MORE THING THE HALF SIZE COSTS. The volute's tube is 0.0225 across down here — under a
+# voxel — and at some phases of the grid it sheds a voxel off the outside of the scroll and the
+# part reports three components instead of one. The capital alone, and nothing else, is grown by
+# 0.006 — a fifth of a voxel, less than the manifest's own grain — which knits the scroll back
+# together without moving a surface the eye can measure. Do not grow the shaft with it: 0.006 on
+# the shaft would be 0.006 off every flute.
+let vestibule_col_knit = intersection {
+    round { vestibule_col_body } by=0.006
+    box -0.40 3.78 -0.40   0.40 4.07 0.40
+}
+
+let vestibule_col_unit = union {
+    vestibule_col_body vestibule_col_knit vestibule_col_shoe vestibule_col_bed
+}
+# ON x = +-1.35 AND NOWHERE ELSE. Three things land on that pair of numbers at once: the jambs of
+# the great door, the inner pair of portico columns outside, and the 2.70 (3 D) eustyle bay the
+# contract calls the spine of the elevation. So the screen's intercolumniation is the building's
+# own bay, the columns stand on the same two axes as the columns you walked between to get here,
+# and the door is framed by them exactly. It also puts each shaft half in the door's light and
+# half out of it, which is the load note's second item.
+let vestibule_col_east = translate { vestibule_col_unit } 1.35 1.80 -5.175
+let vestibule_columns  = mirror { vestibule_col_east } axis=x
+
+# THE ANTAE. The screen is in antis: the side walls end in a pier 0.45 (D of the small order) wide
+# and the entablature lands on it. A pilaster of the order would be 0.6875 across at this scale and
+# there is only 0.45 of wall to put it on, so the anta is the wall's own end, given the projection
+# and the cap the columns have and nothing else.
+let vestibule_anta_shaft = box 3.51 1.75 -5.40   3.60 5.805 -4.95 round=0.010
+let vestibule_anta_plinth= box 3.465 1.75 -5.40  3.60 1.935 -4.95 round=0.010
+let vestibule_anta_ovolo = ovolo 3.51 5.805 -5.40   3.465 5.715 -4.95 run=z
+let vestibule_anta_fil   = box 3.465 5.805 -5.40  3.60 5.85 -4.95 round=0.008
+let vestibule_anta_e     = union {
+    vestibule_anta_shaft vestibule_anta_plinth vestibule_anta_ovolo vestibule_anta_fil
+}
+let vestibule_antae = mirror { vestibule_anta_e } axis=x
+
+# ================================================================================================
+# THE ENTABLATURE OVER THE SCREEN — 0.90 m, which is 2 M and a quarter of the column
+# ================================================================================================
+#
+# Divided in sixtieths of itself (0.015 = M/30), the way the great entablature is divided in
+# twentieths of its own:
+#
+#   5.850 - 6.150   ARCHITRAVE   two fasciae of 0.12, the lower set back 0.045 behind the upper,
+#                                and a cyma reversa of 0.06 crowning them onto the frieze
+#   6.150 - 6.450   FRIEZE       plain, flush at z = -5.40
+#   6.450 - 6.750   CORNICE      bed mould, dentils, cap, ovolo, corona
+#
+# THE SMALLEST STEP IN IT IS 0.045, AND THAT IS A FLOOR, NOT A CHOICE. The first pass stepped the
+# architrave in three fasciae 0.03 apart and gave the cornice's ovolo 0.015 of projection, which is
+# what the proportions of the great order say at this size. Measured on its own at metre 32,
+# `vestibule_ent_ovolo` came back **0 components, 0 voxels**, and so did the architrave's crown: a
+# moulding is only the swell in FRONT of its core, so a member that projects one voxel is half a
+# voxel of solid and it misses every voxel centre it passes. A one-voxel FEATURE is the point of
+# this building; a one-voxel PROJECTION is a member of the order that is not there. The dentil gap
+# is still 0.030, because a gap is a hole and a hole one voxel wide is a hole.
+#
+# So the fasciae went from three to two to buy each step 0.045, and the corona was let out to 0.30
+# from the frieze — which then made the ceiling behind it 0.90 exactly, and the coffers fit.
+#
+# The core runs the full width x -4.50 .. 4.50 so that it is buried in the side walls at both ends
+# and the whole part is certainly one piece; the mouldings stop at the wall face, x = +-3.60.
+let vestibule_ent_f1    = box -4.50 5.85 -5.31   4.50 5.97 -4.95
+let vestibule_ent_f2    = box -4.50 5.97 -5.355  4.50 6.09 -4.95
+let vestibule_ent_fback = box -4.50 6.08 -5.355  4.50 6.15 -4.95
+let vestibule_ent_crown = cyma_reversa -3.60 6.09 -5.355   3.60 6.15 -5.40 run=x
+
+# The frieze, and everything above it that does not project: one block, 6.15 to 6.80. It runs
+# 0.05 past the ceiling soffit at 6.75 so the slab above certainly meets it.
+let vestibule_ent_core = box -4.50 6.15 -5.40   4.50 6.80 -4.95 round=0.012
+
+# The bed mould needs no backing of its own: a moulding stands on a core at its FIRST corner's
+# face, and the frieze block above is already at -5.40. A backing at -5.445 would have buried it
+# whole, which is what the first pass did.
+let vestibule_ent_bed   = cyma_reversa -3.60 6.45 -5.40   3.60 6.495 -5.475 run=x
+let vestibule_ent_dband = box -4.50 6.495 -5.475  4.50 6.585 -4.95
+
+# THE DENTILS. 0.06 wide (M/7.5) on a pitch of 0.09 (M/5), so the gap is 0.030 — M/15, the same
+# number as the flat fillet between two flutes on a column, and ONE VOXEL at metre 32. There are
+# 79 of them and every one of them is in shadow. Read the load note at the top of this file before
+# widening that gap; it is the reason this cornice exists.
+let vestibule_ent_dentil  = box -0.03 6.495 -5.55   0.03 6.585 -5.40 round=0.006
+let vestibule_ent_dentils = repeat { vestibule_ent_dentil } x=0.09 nx=39
+
+let vestibule_ent_dcap  = box -4.50 6.585 -5.595   4.50 6.615 -4.95 round=0.008
+# The ovolo's own core, standing at its first corner's face and no further out.
+let vestibule_ent_oback = box -4.50 6.615 -5.595   4.50 6.66  -4.95
+let vestibule_ent_ovolo = ovolo -3.60 6.66 -5.595   3.60 6.615 -5.64 run=x
+let vestibule_ent_corona= box -4.50 6.66 -5.70     4.50 6.75 -4.95 round=0.008
+
+let vestibule_entab = union {
+    vestibule_ent_f1 vestibule_ent_f2 vestibule_ent_fback vestibule_ent_crown
+    vestibule_ent_core
+    vestibule_ent_bed vestibule_ent_dband vestibule_ent_dentils
+    vestibule_ent_dcap vestibule_ent_oback vestibule_ent_ovolo vestibule_ent_corona
+}
+
+# ================================================================================================
+# THE CEILING — soffit on 6.75, five coffers in it
+# ================================================================================================
+#
+# A slab 0.45 (M) thick over the whole room and both walls, running 0.05 into the south wall.
+let vestibule_ceiling_slab = box -4.50 6.75 -6.65   4.50 7.20 -4.95 round=0.015
+
+# ONE COFFER, drawn as the hollow it is, from y = 0 upward. 0.90 (D) across and 0.45 (M) deep in z,
+# 0.225 (M/2) into the slab, stepping back in three courses 0.045 tall whose faces are 0.0225 wide.
+# 0.0225 is under a voxel at metre 32, and unlike the entablature's mouldings that is fine and
+# deliberate: this is a STEP IN A HOLLOW, not a projection off a face, so what it costs when the
+# grid misses it is a softer arris rather than a member that vanishes. It is the same sub-voxel
+# edge the order puts in `coffer_unit`, kept at the order's size rather than scaled with the room.
+#
+# It is not the order's own `coffer_unit`, which is 0.90 square, because the ceiling it hangs in is
+# 0.90 clear between the south wall at -6.60 and the corona at -5.70. So the coffer is 0.90 by 0.45
+# and the band round it is 0.45 (M) east and west and 0.225 (M/2) north and south: HALF the
+# coffer's own dimension on each axis, which is the classical 2:1 the order asks for, both ways.
+let vestibule_cof_a    = box -0.45   0.000 -0.225    0.45   0.045 0.225   round=0.012
+let vestibule_cof_b    = box -0.4275 0.045 -0.2025   0.4275 0.090 0.2025  round=0.012
+let vestibule_cof_c    = box -0.405  0.090 -0.180    0.405  0.135 0.180   round=0.012
+let vestibule_cof_pan  = box -0.36   0.130 -0.135    0.36   0.225 0.135   round=0.012
+let vestibule_cof_rose = box -0.09   0.150 -0.045    0.09   0.225 0.045   round=0.018
+
+let vestibule_coffer = difference {
+    union { vestibule_cof_a vestibule_cof_b vestibule_cof_c vestibule_cof_pan }
+    vestibule_cof_rose
+}
+
+# Five of them on a pitch of 1.35 (3 M), so the band between two is 0.45 (M) — the classical 2:1 —
+# and the outermost is 0.45 clear of the wall. The seed sits at x = 0 so that no copy straddles a
+# cell boundary, which would make the repeat infinitely slack and stop the sampler skipping.
+# Dropped 0.02 below the soffit so the opening is cut past the rounding of its own first arris.
+let vestibule_coffers = repeat { translate { vestibule_coffer } 0 6.73 -6.15 } x=1.35 nx=2
+
+# The bosses, named again so they can be gilded. They add no matter — they are what the coffer
+# leaves standing — and they hang 0.075 (M/6) below the back of the pan.
+let vestibule_ros_seed = box -0.09 6.880 -6.195   0.09 6.955 -6.105 round=0.018
+let vestibule_rosettes = repeat { vestibule_ros_seed } x=1.35 nx=2
+
+let vestibule_ceiling = difference { vestibule_ceiling_slab vestibule_coffers }
+
+# ================================================================================================
+# THE DADO — 0.90 (2 M) high, round the whole room
+# ================================================================================================
+#
+# Projecting 0.045 (M/10) from the wall, with an ovolo and a fillet capping it at 2.70. It starts
+# at 1.70, below the floor, so it is certainly joined to it.
+#
+# The body runs the FULL height of the dado including the ovolo's band, not up to the ovolo's foot.
+# A moulding is only the swell in front of its own first corner's face; drawn without a core behind
+# it, the ovolo was a ribbon floating 0.045 off the wall, which is what the component count found.
+let vestibule_dado_s      = box -3.60 1.70 -6.60   3.60 2.655 -6.555 round=0.010
+let vestibule_dado_s_ov   = ovolo -3.60 2.655 -6.555   3.60 2.565 -6.51 run=x
+let vestibule_dado_s_cap  = box -3.60 2.655 -6.60   3.60 2.70 -6.51 round=0.008
+
+let vestibule_dado_e      = box 3.555 1.70 -6.60   3.60 2.655 -5.40 round=0.010
+let vestibule_dado_e_ov   = ovolo 3.555 2.655 -6.60   3.51 2.565 -5.40 run=z
+let vestibule_dado_e_cap  = box 3.51 2.655 -6.60   3.60 2.70 -5.40 round=0.008
+let vestibule_dado_east   = union { vestibule_dado_e vestibule_dado_e_ov vestibule_dado_e_cap }
+
+let vestibule_dado = union {
+    vestibule_dado_s vestibule_dado_s_ov vestibule_dado_s_cap
+    mirror { vestibule_dado_east } axis=x
+}
+
+# ================================================================================================
+# THE DOOR ARCHITRAVE — the great door seen from inside
+# ================================================================================================
+#
+# 0.45 (M) wide, three fasciae each stepping 0.045 further out of the wall than the one nearer the
+# opening — the same rule and the same three steps doors.clip uses on the outside of this door —
+# and an astragal on the inner arris. It runs from the floor to 6.30, which is where doors.clip's
+# void stops, and its head fills 6.30 to 6.75, which is where my ceiling starts. That exact fit is
+# the reason the ceiling is at 6.75: at 6.30 there would have been no head at all.
+let vestibule_arch_j1 = box 1.35  1.70 -6.60   1.53 6.30 -6.51  round=0.010
+let vestibule_arch_j2 = box 1.53  1.70 -6.60   1.665 6.30 -6.465 round=0.010
+let vestibule_arch_j3 = box 1.665 1.70 -6.60   1.80 6.30 -6.42  round=0.010
+let vestibule_arch_jamb = union { vestibule_arch_j1 vestibule_arch_j2 vestibule_arch_j3 }
+
+let vestibule_arch_h1 = box -1.53 6.30  -6.60   1.53 6.48  -6.51  round=0.010
+let vestibule_arch_h2 = box -1.665 6.48 -6.60   1.665 6.615 -6.465 round=0.010
+let vestibule_arch_h3 = box -1.80 6.615 -6.60   1.80 6.75  -6.42  round=0.010
+
+# The astragal on the inner arris, drawn as a plate and rounded into a bead — doors.clip's trick,
+# and the reason it is here is that a 0.045 bead is one and a half voxels and it runs the whole
+# 4.50 m height of the opening, straight down the edge where the light changes fastest.
+let vestibule_arch_plate = union {
+    box 1.35 1.70  -6.5325   1.3725 6.3225 -6.5325
+    box 0    6.30  -6.5325   1.3725 6.3225 -6.5325
+}
+let vestibule_arch_bead = round { mirror { vestibule_arch_plate } axis=x } by=0.0225
+
+let vestibule_architrave = union {
+    mirror { vestibule_arch_jamb } axis=x
+    vestibule_arch_h1 vestibule_arch_h2 vestibule_arch_h3
+    vestibule_arch_bead
+}
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let vestibule_mass = union {
+    vestibule_floor vestibule_sill
+    vestibule_walls
+    vestibule_columns vestibule_antae vestibule_entab
+    vestibule_ceiling
+    vestibule_dado vestibule_architrave
+}
+
+let part_vestibule = vestibule_mass
+
+# What this part removes from the building: the air of the room itself, and nothing else. It is
+# the gross volume of the room less everything I built in it, so it takes away anything ANOTHER
+# fragment leaves standing in here — the rotunda's wall, most likely, which has every reason to
+# want the ground the screen stands on — while it cannot touch a stone of mine. The coffers and the
+# niches are not in it: they are cut out of my own slab and my own walls, above, so the manifest
+# never has to know they exist.
+let vestibule_air = box -3.60 1.80 -6.60   3.60 6.75 -4.95
+let void_vestibule = difference { vestibule_air vestibule_mass }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Order matters: a later coat covers an earlier one. Shell first, then the floor built up from its
+# field to its inlay, then the stone that stands on the floor, then gilt last of all because the
+# bosses are inside the ceiling. `below=0.02` on every rule and never 0 — the manifest displaces
+# the whole building by 12 mm at the end, and a test at zero misses the voxels that displacement
+# made and leaves a pale rind of the base coat over the part.
+
+# --- the shell -----------------------------------------------------------------------------------
+paint plaster where=vestibule_walls   below=0.02
+paint plaster where=vestibule_ceiling below=0.02
+
+# The inside of a coffer, grown enough to catch the voxels that line it rather than the air in it.
+let vestibule_cof_face = round { vestibule_coffers } by=0.05
+paint stucco where=vestibule_cof_face below=0.02
+
+# --- the floor -----------------------------------------------------------------------------------
+#
+# All the zones are thin slabs from 1.70 to 1.83, straddling the floor plane so they catch the
+# surface and nothing below it.
+#
+# The pattern is a field of nine squares of 0.75 (5M/3) — the largest square that divides the room
+# BOTH ways, since 6.75 is 9 of them and 0.75 is the depth left after a border — alternating white
+# marble and porphyry, each porphyry one carrying a marble lozenge. Round it a border 0.225 (M/2),
+# which widens to 0.75 at the north where the screen's plinths stand on it.
+#
+# THE JOINTS ARE PAINTED AND NOT CUT: 0.03 m wide — M/15, the same number as the fillet between two
+# flutes, ONE VOXEL at metre 32 — with no geometry underneath to tell a denoiser where the line
+# goes. Half of this pattern is in the sun through the door and half is in shadow, in the same
+# square metre, and that is the whole argument for putting it here rather than on a terrace.
+let vestibule_fl_zone = box -3.60 1.70 -6.60   3.60 1.83 -4.95
+paint marble where=vestibule_fl_zone below=0.02
+
+let vestibule_fl_field  = box -3.375 1.60 -6.375   3.375 1.93 -5.625
+let vestibule_fl_border = difference { vestibule_fl_zone vestibule_fl_field }
+paint porphyry where=vestibule_fl_border below=0.02
+
+let vestibule_fl_sq   = box -0.375 1.70 -6.375   0.375 1.83 -5.625
+let vestibule_fl_dark = mirror { translate { repeat { vestibule_fl_sq } x=1.50 nx=1 } 0.75 0 0 } axis=x
+paint porphyry where=vestibule_fl_dark below=0.02
+
+let vestibule_fl_diam = translate { rotate { box -0.21 1.70 -0.21   0.21 1.83 0.21 } y=0.125 } 0 0 -6.00
+let vestibule_fl_loz  = mirror { translate { repeat { vestibule_fl_diam } x=1.50 nx=1 } 0.75 0 0 } axis=x
+paint marble where=vestibule_fl_loz below=0.02
+
+let vestibule_fl_bar   = box -0.015 1.70 -6.375   0.015 1.83 -5.625
+let vestibule_fl_bars  = mirror { translate { repeat { vestibule_fl_bar } x=0.75 nx=4 } 0.375 0 0 } axis=x
+let vestibule_fl_rail_s= box -3.375 1.70 -6.390   3.375 1.83 -6.360
+let vestibule_fl_rail_n= box -3.375 1.70 -5.640   3.375 1.83 -5.610
+let vestibule_fl_lines = union { vestibule_fl_bars vestibule_fl_rail_s vestibule_fl_rail_n }
+paint verde where=vestibule_fl_lines below=0.02
+
+# The threshold, in something hard and dark, because it is the one piece of floor in this room the
+# sun lands on square and the one a foot lands on every time.
+let vestibule_fl_sill = box -1.35 1.70 -7.50   1.35 1.83 -6.60
+paint granite where=vestibule_fl_sill below=0.02
+
+# --- the stone that stands on it -----------------------------------------------------------------
+paint verde  where=vestibule_dado         below=0.02
+paint marble where=vestibule_columns      below=0.02
+paint marble where=vestibule_antae        below=0.02
+paint marble where=vestibule_entab        below=0.02
+paint marble where=vestibule_architrave   below=0.02
+
+# The niche linings, grown the same way the coffers are.
+let vestibule_niche_face = round { vestibule_niches } by=0.05
+paint marble where=vestibule_niche_face below=0.02
+
+# --- and the gilt, last --------------------------------------------------------------------------
+paint gilt where=vestibule_rosettes below=0.02

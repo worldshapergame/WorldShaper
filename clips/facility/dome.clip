@@ -1,10 +1,315 @@
-# dome - the dome, its ribs, oculus and lantern
+# dome - the dome over the rotunda: its shell, its ribs, its oculus and the lantern over it.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS FILE PUTS UNDER LOAD: the hole. Everything else here is in service of it.
 #
-# This file must define exactly one part named `part_dome`. Every other name it binds must
-# start with `dome_` so nothing collides with another fragment.
+# The one image this building exists to produce is a shaft of sunlight falling through the oculus
+# onto the rotunda floor. That is the hardest thing in the scene to render and the easiest thing in
+# the scene to destroy by accident, because it is not made of geometry that anybody can see — it is
+# made of geometry that is ABSENT, in a chain, all of it small:
+#
+#   the lantern lights   eight openings 0.45 m wide through a wall 0.135 m thick, and the ONLY
+#                        way daylight gets in at all. Seal them and the rotunda goes black.
+#   the well             a clear cylinder 1.80 m across and 1.61 m long, from the lantern floor
+#                        down through the plinth to the top of the funnel
+#   the funnel           the oculus splayed 1 in 2, 0.90 m radius at the top to 1.16 at the soffit
+#   the room below       nine and a half metres across and sixteen and a half deep, lit through an
+#                        aperture whose area is a fortieth of its floor. That ratio is the load:
+#                        every photon in the rotunda has come through one 2.5 m^2 hole, so a path
+#                        tracer that loses light here has nothing left to lose it from.
+#
+# DO NOT WIDEN THE LANTERN WALL AND DO NOT SHORTEN THE LANTERN LIGHTS. A ray that gets into the
+# rotunda has to cross a 0.135 m wall between the outer face of the lantern and the well, and it
+# drops tan(elevation) x 0.135 doing it. The lights are 0.72 m tall, so the lantern passes sun down
+# to a shadow drop of 0.72 — an elevation of 79 degrees — and stops. Thicken the wall to a
+# comfortable 0.30 and that ceiling falls to 67 degrees. The wall is thin because the light has to
+# get past it, and the same is true of every one of these numbers.
+#
+# WHERE THE SHAFT ACTUALLY LANDS, with this engine's sun. The sun is fixed at (0.4, 0.85, 0.3) in
+# src/app/main.cpp: 59.5 degrees of elevation, out of the east-north-east. At 59.5 degrees a ray
+# through the oculus travels 0.588 m sideways for every metre it falls, and it has 16.40 m to fall
+# from the oculus at 18.20 to the rotunda floor at 1.80 — so it moves 9.65 m sideways, and the
+# rotunda is 4.80. THE DISC OF LIGHT LANDS ON THE ROTUNDA WALL, about eight metres up, and tracks
+# down and across it as the day turns. That is not a fault in this part and it cannot be fixed from
+# this file: it is what a 9.6 m room lit from 16.4 m above it does, and it is exactly what the
+# Pantheon does for most of the year. For the disc to reach the floor the sun has to stand above
+# 74 degrees, which this renderer's sun never does. `-Sun <elevation>` is asked for in
+# clips/facility/requests/dome.md.
+#
+# The shaft ITSELF — the beam in the air — is the image, and it is real: photograph it with
+# `--fog 0.03,0.95,0.7,200,0` and it is there, leaning north-east up to the oculus.
+#
+# The second load is the SURFACES THE LIGHT LANDS ON, which is why the materials are split the way
+# they are: a 9.6 m concave plaster vault as the bounce surface, marble down the well where the
+# beam grazes, and three different metals - copper on the skin, bronze on the oculus ring, gilt on
+# the finial - so a path tracer is asked to tell polished, brushed and patinated apart in one frame
+# against the sky. The copper is the only copper in the building.
+#
+# The third is thin matter in the ordinary way: eight colonnettes 0.135 m across (four voxels at
+# the contract's metre 32) and twenty-four ribs 0.135 m wide standing 0.09 m proud of a curved
+# surface, which is the sampler's problem, not the modeller's.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45, and everything across is a multiple or a simple fraction of one
+# of them. Everything UP is counted in M/9 = 0.05, and that is not a licence, it is arithmetic:
+# the contract fixes parapet_top 13.00, drum_top 15.60, dome_top 18.20 and lantern_top 19.60, and
+# not one of those four is a whole number of modules while all four are whole numbers of M/9. So
+# M/9 is the sub-module the top of this building is already built in, and every course in the
+# lantern below is a multiple of it. The three heights that are not are named where they occur.
+#
+#   springing   15.60   drum_top: the dome starts where the drum stops
+#   crown       18.20   dome_top, the outside of the shell at the centre line
+#   finial      19.60   lantern_top
+#   rise         2.60   18.20 - 15.60. It is also the height of the drum, 15.60 - 13.00.
+#
+#   intrados    4.80 wide, 2.15 high   4.80 is the rotunda's inner radius, from the contract.
+#                                      2.15 is the rise less one module of crown thickness.
+#   extrados    5.70 wide, 2.60 high   5.70 is 4.80 + D: the dome springs on a wall one diameter
+#                                      thick, so the shell is D at the haunch and M at the crown,
+#                                      which is the way a masonry dome is built and the reason it
+#                                      does not need a chain.
+#
+# WHERE IT MEETS ITS NEIGHBOUR. The dome stands on an annulus of inner radius 4.80 and outer 5.70
+# at y = 15.60, and its stonework reaches DOWN to 15.45 so it laps the drum by 0.15 whatever the
+# drum turns out to be. Nothing in this file needs to know anything else about the drum, and
+# nothing in the drum needs to read this file: 4.80 and 15.60 are both in the contract.
+#
+# The intrados is left plain. The coffers belong to the rotunda, which owns the inner dome; there
+# is 0.90 m of shell at the haunch and 0.45 at the crown for its coffers to be cut out of, and its
+# void is taken away in the manifest after everything is assembled, so they will cut mine too.
+# THE ONE THING THAT MUST NOT HAPPEN is anything being built across the oculus. It is a hole.
 
-let dome_placeholder = sphere 0 -1.30 0 r=0.25
-let part_dome = dome_placeholder
+include "_contract.clip"
+
+# ================================================================================================
+# THE SHELL - two surfaces of revolution and the annulus between them
+# ================================================================================================
+#
+# Both are ellipsoids on the springing line, so both stand vertically where they meet the drum and
+# the wall below runs straight up into the dome without a kink. A sphere cannot do that at this
+# rise: a spherical cap 2.60 high on a 5.70 half-span leaves the surface at 63 degrees to the
+# vertical and the drum would appear to have been cut off.
+
+let dome_ext_cap   = ellipsoid 0 15.60 0  rx=5.70 ry=2.60 rz=5.70
+let dome_ext_skirt = cylinder  0 15.525 0 r=5.70 h=0.15 axis=y      # 15.45 .. 15.60, into the drum
+let dome_hull      = union { dome_ext_cap dome_ext_skirt }
+
+# The lower half of the ellipsoid is not a dome, it is a bowl. This is the knife.
+let dome_above     = box -6.30 15.45 -6.30   6.30 18.65 6.30
+let dome_outer     = intersection { dome_hull dome_above }
+
+let dome_int_cap   = ellipsoid 0 15.60 0  rx=4.80 ry=2.15 rz=4.80
+let dome_int_skirt = cylinder  0 15.375 0 r=4.80 h=0.45 axis=y      # 15.15 .. 15.60
+let dome_void      = union { dome_int_cap dome_int_skirt }
+
+# The roll at the foot, where the copper turns down over the drum's cornice. 0.18 (0.4 M) of tube
+# on a 5.70 ring, so it stands out to 5.88 and covers the joint the ribs die into.
+let dome_roll = torus 0 15.78 0 ring=5.70 tube=0.18 axis=y
+
+# ================================================================================================
+# THE RIBS - twenty-four, following the surface
+# ================================================================================================
+#
+# A rib is the extrados grown 0.135 (0.3 M) outward and then sliced to a 0.18 (0.4 M) fin, which is
+# the only construction that keeps it the same height all the way up: `offset` moves a surface
+# along its own normal, so a rib built this way stands 0.135 proud at the haunch, at the crown, and
+# everywhere between, and it never has to know the shape it is sitting on.
+#
+# TWENTY-FOUR AS SEVEN ROTATIONS MIRRORED TWICE, AND NOT AS `around { } count=24`. A polar fold
+# reports a distance larger than the truth near a sector boundary, so the field must declare it
+# infinitely slack, and infinite slack anywhere means the sampler cannot skip a single voxel of the
+# bounds anywhere in the clip. Rotations are isometries: these are exact and each carries a box.
+#
+# THE ROTATIONS ARE NEGATIVE AND THAT IS NOT A TYPO. A positive turn about y in this engine carries
+# +x toward -z. `mirror axis=z` asks its child at |z|, which is never negative, so a fin rotated
+# into -z is asked about at a place it does not exist and VANISHES WITHOUT AN ERROR. Everything
+# under a `mirror { mirror { } axis=x } axis=z` has to be built in the +x +z quadrant, which about
+# y means turning the other way. Measured, not guessed: two fins at y=+0.125 gave two components,
+# the same two at y=-0.125 gave six.
+#
+# `by=` IS NEGATIVE TO GROW THE SHAPE. `offset` ADDS its number to the distance, so a positive one
+# pushes the surface inward and SHRINKS. Measured, not guessed: a sphere of radius 1 offset by
+# +0.25 comes out 1.50 across and offset by -0.25 comes out 2.50. Written the intuitive way round
+# the ribs were carved *into* the shell instead of standing on it, and since they were then unioned
+# with the shell they simply disappeared — no error, no warning, a perfectly smooth dome.
+let dome_rib_out  = offset { dome_hull } by=-0.135
+let dome_rib_a    = box 0.90 15.45 -0.09   6.30 18.65 0.09
+let dome_rib_b    = rotate { dome_rib_a } y=-0.0416667
+let dome_rib_c    = rotate { dome_rib_a } y=-0.0833333
+let dome_rib_d    = rotate { dome_rib_a } y=-0.125
+let dome_rib_e    = rotate { dome_rib_a } y=-0.1666667
+let dome_rib_f    = rotate { dome_rib_a } y=-0.2083333
+let dome_rib_g    = rotate { dome_rib_a } y=-0.25
+let dome_rib_quad = union { dome_rib_a dome_rib_b dome_rib_c dome_rib_d
+                            dome_rib_e dome_rib_f dome_rib_g }
+let dome_rib_fan  = mirror { mirror { dome_rib_quad } axis=x } axis=z
+
+# Twenty-four ribs converging on a 1.80 m hole would be a mat, not a rib. They stop at 1.125
+# (2.5 M), under the lantern's plinth, which is 1.26 across, so the last 0.135 of each is buried.
+let dome_rib_hub  = cylinder 0 16.90 0 r=1.125 h=3.60 axis=y        # 15.10 .. 18.70
+let dome_ribs     = difference { intersection { dome_rib_out dome_rib_fan dome_above } dome_rib_hub }
+
+# ================================================================================================
+# THE OCULUS - 1.80 m (2 D) across, and it is a hole all the way through
+# ================================================================================================
+#
+# A straight bore of radius 0.90 (2 M), and under it a cone that splays the soffit open at exactly
+# one in two: radius 0.90 at 18.20, 1.125 (2.5 M) at 17.75, and it meets the intrados at about
+# 1.16. The splay is what lets a low sun in at all, and it is what makes the underside read as a
+# funnel of light rather than as a hole punched in a ceiling.
+#
+# The cone's numbers are all module: it stands on radius 1.35 (3 M) at y = 17.30 and comes to a
+# point 2.70 (6 M) above that, at y = 20.00, which puts it at 0.90 exactly as it crosses the crown.
+let dome_oc_bore  = cylinder 0 17.975 0 r=0.90 h=1.35 axis=y        # 17.30 .. 18.65
+let dome_oc_splay = cone     0 17.30 0 r=1.35 h=2.70 axis=y
+let dome_oculus   = union { dome_oc_bore dome_oc_splay }
+
+# The bronze ring round the mouth of it, on the inside, where it is seen. Half buried in the
+# soffit and hanging 0.06 below it: inner radius 1.17, which clears the splay's 1.16, so the ring
+# frames the light and never stands in it.
+let dome_rim = torus 0 17.70 0 ring=1.26 tube=0.09 axis=y
+
+# ================================================================================================
+# THE LANTERN - 18.20 to 19.60, and it is OPEN
+# ================================================================================================
+#
+# Every course a multiple of M/9 = 0.05:
+#
+#   17.90 - 18.25   plinth        r 1.26  (2.8 M)   mostly buried in the crown; emerges at 18.14
+#   18.25 - 19.20   drum          r 0.90 .. 1.035   the wall the eight lights are cut through
+#   19.20 - 19.25   architrave    r 1.125 (2.5 M)
+#   19.25 - 19.35   corona        r 1.17  (2.6 M)
+#   19.35 - 19.45   cupola        rx 1.125, ry 0.15
+#   19.60           the ball
+#
+# THERE IS NO STYLOBATE COURSE AND THAT IS ON PURPOSE. There was one, 0.10 tall, and it did two
+# bad things: it put a second 0.135-wide ledge in the light path at 18.35, which costs a quarter of
+# the sun that gets through the lantern at all, and it left the openings sitting in the middle of
+# the wall so the drum read as a tin with holes punched in it rather than as an arcade. The
+# arches now spring off the plinth, which is where an arcade this small springs from anyway.
+#
+# Nothing here oversails by more than 0.135 (0.3 M). The first pass gave it a 1.35 plinth and a
+# 1.26 corona, and a lantern 2.70 across and 1.40 tall is not a lantern, it is a cake tin: the
+# brim reads before the colonnade does and the whole thing looks like a lid somebody left on the
+# dome. The height is the contract's and cannot move, so the width had to.
+#
+# THE WALL IS 0.135 THICK (0.3 M) AND THAT IS A LIGHT DIMENSION, NOT A STRUCTURAL ONE. See the
+# note at the top of the file before touching it.
+#
+# The courses above the plinth each run 0.05 past their nominal line at both ends, into whichever
+# neighbour is wider there, so no two of them meet on a bare shared face. A shared face would have
+# held together as well — this is one union and `min` is continuous across it — but the manifest
+# displaces the whole building by 12 mm at the end and 0.05 of lap is cheaper than finding out.
+let dome_lan_plinth = cylinder 0 18.075 0 r=1.26  h=0.35 axis=y     # 17.90 .. 18.25
+let dome_lan_drum   = cylinder 0 18.725 0 r=1.035 h=1.05 axis=y     # 18.20 .. 19.25
+let dome_lan_arch   = cylinder 0 19.25  0 r=1.125 h=0.10 axis=y     # 19.20 .. 19.30
+let dome_lan_corona = cylinder 0 19.30  0 r=1.17  h=0.10 axis=y     # 19.25 .. 19.35
+
+# EIGHT COLONNETTES, engaged on the piers between the lights. The shaft is 0.135 across (0.3 M) -
+# four voxels at the contract's metre - and half of it is in the wall, which is what lets a
+# feature that thin be built at all without a mesher losing it: it is never a free-standing stick.
+# At +-22.5 and +-67.5 degrees, so the eight lights fall on the axes and you can see straight
+# through the lantern along the centre line of the building.
+let dome_col_base  = cylinder 1.035 18.25  0 r=0.09   h=0.10 axis=y # 18.20 .. 18.30
+let dome_col_shaft = cylinder 1.035 18.675 0 r=0.0675 h=0.85 axis=y # 18.25 .. 19.10
+let dome_col_cap   = cylinder 1.035 19.15  0 r=0.09   h=0.20 axis=y # 19.05 .. 19.25
+let dome_col_one   = union { dome_col_base dome_col_shaft dome_col_cap }
+let dome_col_a     = rotate { dome_col_one } y=-0.0625
+let dome_col_b     = rotate { dome_col_one } y=-0.1875
+let dome_cols      = mirror { mirror { union { dome_col_a dome_col_b } } axis=x } axis=z
+
+# THE EIGHT LIGHTS. 0.54 (1.2 M) wide, sill on the plinth at 18.25, round-headed on a 0.27 radius
+# springing at 18.80, so the crown stands at 19.07 and there is 0.13 of drum left over it. Two
+# thirds of the lantern's circumference is opening, and the openings are 0.82 of its 0.95. This is
+# the aperture the whole building is lit through.
+let dome_lig_body = box      0.72 18.25 -0.27   1.26 18.80 0.27
+let dome_lig_head = cylinder 0.99 18.80 0  r=0.27 h=0.54 axis=x
+let dome_lig_one  = union { dome_lig_body dome_lig_head }
+let dome_lig_a    = rotate { dome_lig_one } y=-0.125
+let dome_lig_b    = rotate { dome_lig_one } y=-0.25
+let dome_lights   = mirror { mirror { union { dome_lig_one dome_lig_a dome_lig_b } } axis=x } axis=z
+
+# The well: the shaft is 0.90 all the way from the top of the funnel to the cupola's soffit, with
+# no ledge anywhere in it, because a ledge at r = 0.90 is a shelf the high sun lands on instead of
+# the floor.
+let dome_lan_bore = cylinder 0 18.775 0 r=0.90 h=1.05 axis=y        # 18.25 .. 19.30
+
+# The rings get their arrises taken off together, which fillets where they meet each other as
+# well. The colonnettes are left out of it on purpose: a 0.012 round is 18% of a 0.0675 shaft and
+# would fatten the thinnest thing in this file by a fifth.
+let dome_lan_rings = round { union { dome_lan_plinth dome_lan_drum
+                                     dome_lan_arch dome_lan_corona } } by=0.012
+let dome_lan_solid = union { dome_lan_rings dome_cols }
+
+let dome_lan_cupola = intersection { ellipsoid 0 19.30 0 rx=1.125 ry=0.15 rz=1.125
+                                     box -1.15 19.30 -1.15   1.15 19.45 1.15 }
+let dome_lan_neck   = cylinder 0 19.475 0 r=0.045 h=0.15 axis=y     # 19.40 .. 19.55
+let dome_lan_ball   = sphere   0 19.51 0 r=0.09                     # tops out at 19.60 exactly
+
+# ================================================================================================
+# ASSEMBLY
+# ================================================================================================
+#
+# Everything solid, then everything hollow taken out of it in one go, and only then the three
+# pieces that must not be hollowed: the ring hanging below the soffit, and the cap on the lantern.
+let dome_mass = union { dome_outer dome_ribs dome_roll dome_lan_solid }
+
+let dome_hollow = union {
+    dome_void
+    dome_oculus
+    dome_lan_bore
+    round { dome_lights } by=0.010
+}
+
+let dome_body = difference { dome_mass dome_hollow }
+
+let part_dome = union { dome_body dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Every rule keys on a shape bound above in this file, and every one tests below=0.02 rather than
+# below=0, because the manifest displaces the whole building by 12 mm at the end and a voxel that
+# only exists because of that sits outside the shape that made it.
+
+# Copper over the whole mass first; everything after this is an exception to it.
+paint copper where=dome_mass below=0.02
+
+# The patina, mottled. A copper roof is not one green. These key on the dome's own surface pushed
+# about by the contract's shared grain, so the test only passes on voxels of MY shell - outside it
+# the distance is large and positive and no amount of noise brings it under the threshold - and
+# the pattern lands the same way on the drum's copper as on mine if the drum ever wants it.
+let dome_patina = displace { dome_outer grain_broad } amount=0.18
+let dome_bloom  = displace { dome_outer grain_fine  } amount=0.12
+paint verde  where=dome_patina below=-0.11
+paint bronze where=dome_bloom  below=-0.10
+
+# The lantern is stone, not metal - only its cap is sheeted.
+paint marble where=dome_lan_solid below=0.02
+
+# The vault. Plaster, because this is the surface the shaft bounces off onto everything else in
+# the rotunda, and it wants to be bright and matte rather than bright and shiny.
+let dome_lining = offset { dome_void } by=-0.09      # negative grows it: see the rib note above
+paint plaster where=dome_lining below=0.02
+
+# The well and the funnel, in marble, because that is where the beam grazes the wall on its way
+# down and a polished surface there is the difference between a shaft of light and a hole.
+let dome_well = cylinder 0 18.45 0 r=1.0125 h=1.70 axis=y           # 17.60 .. 19.30
+paint marble where=dome_well below=0.02
+
+# The metals that are seen against something: the ring against the light coming through it, the
+# ball against the sky.
+paint bronze where=dome_rim below=0.02
+paint copper where=dome_lan_cupola below=0.02
+paint gilt   where=dome_lan_neck below=0.02
+paint gilt   where=dome_lan_ball below=0.02
+
+# THE CEILING OF THE WELL, LAST OF ALL, and it has to be last. It is the underside of the corona,
+# and the cupola's paint reaches it — the cupola shape starts at 19.30 and the corona's soffit is
+# at 19.30, so a coat keyed on the cupola covers the one surface at the top of the shaft that has
+# to be bright. Looking up the oculus you saw a disc of green copper. This is a bright lid on a
+# 1.61 m light well: every ray that comes in a south light and does not go straight down leaves by
+# way of this, so it is the second most important 2.6 m2 in the building.
+let dome_soffit = cylinder 0 19.275 0 r=0.99 h=0.15 axis=y          # 19.20 .. 19.35
+paint marble where=dome_soffit below=0.02

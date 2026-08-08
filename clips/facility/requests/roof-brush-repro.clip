@@ -1,0 +1,13 @@
+metre 32
+bounds -6 -1 -6  6 3 6
+material lead   rgb=118,120,124 rough=170 metal=140 brush=2
+material lead_p rgb=118,120,124 rough=170 metal=140
+material stone  rgb=118,120,124 rough=170
+let deck = box -5 0 -5   5 0.5 5 round=0.02
+let band_a = box -5 0 -5   5 0.6 -1.7
+let band_b = box -5 0 -1.7  5 0.6 1.7
+paint stone   where=deck   below=0.02
+paint lead    where=band_a below=0.02
+paint lead_p  where=band_b below=0.02
+variation colour=0.030 rough=0.070 seed=17
+solid deck

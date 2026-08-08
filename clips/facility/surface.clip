@@ -1,0 +1,218 @@
+# surface — what a hundred years outdoors does to the stone.
+#
+# This fragment holds almost no geometry. What it holds is WEATHER: the statements that make a
+# stone building read as a stone building that has stood in the rain rather than as a drawing of
+# one delivered this morning. Sand and dust at the foot of the steps and in the hollows of the
+# mouldings; the sun bleaching the treads while the risers stay clean; the sharp arrises of a
+# cornice worn round while the hollow behind them keeps its edge; moss and lichen on the north
+# side, where the wall never dries.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS FILE PUTS UNDER LOAD: the weathering subsystem, and the three field operations that
+# exist only to serve it.
+#
+#   Weather::Desert       curvature-driven scour, and two coats keyed on facing and on height
+#   Weather::Overgrown    occlusion-driven growth, and two coats keyed on cavity and facing
+#   Op::Curvature         seven evaluations of the whole building per point. Desert's only input.
+#   Op::Occlusion         fourteen. Overgrown's only input.
+#   Op::Facing            six, through normal_at. All four coats read it.
+#   WeatherRequest::scope the `on=` half — the reason the last facility shipped with no weathering
+#                         at all, and the only part of this that is new
+#
+# Nothing else in the building weathers except one hairline coat on the site's boundary plinth
+# (`site.clip`, `weather cracks 0.10 on=site_weather_zone`), and cracks reads none of the three
+# operations above. Delete the two `weather` statements at the bottom of this file and
+# `Op::Curvature`, `Op::Occlusion` and `Op::Facing` are dead code again, along with
+# `WeatherRequest::scope`, and four of the five entries in `enum class Weather` have never been
+# run on anything. That is why this file exists and it is the whole of what it does.
+# DO NOT DELETE THE WEATHER STATEMENTS BECAUSE THE FILE LOOKS EMPTY.
+#
+# It is also the only place in the building where a material is invented rather than declared:
+# `apply_weather` calls `make_material` for `sand`, `bleached`, `moss` and `lichen`, none of which
+# is in `_contract.clip`. So this fragment adds four materials to the palette that nothing else
+# uses — four more rows in the voxel type table and four more BSDFs in a frame.
+#
+# READ clips/facility/requests/surface.md BEFORE SWITCHING THIS ON, BECAUSE IT IS NOT FREE.
+#
+# Every coat these two kinds add is unsettleable, so it is asked once per solid voxel of the WHOLE
+# clip, and each ask is twenty evaluations of the whole building's distance field. Measured: one
+# line costs a small clip 12x its sample time and the two together 114x; on real facility geometry
+# — site, podium, steps and walls at metre 8 — the pair costs 362 ms -> 237,303 ms, which is 656x.
+# The complete building with these two lines in it did not finish at metre 5 in forty-five minutes.
+#
+# That is a property of the two KINDS and not of the scope. `on=` is free, and it is the half of
+# this that works exactly as advertised: measured against a control with the same weather lines
+# and their zones moved into empty air, not one voxel of lawn, water or bronze changed and all
+# 93,950 weathered voxels came out of stone. The request file has the numbers, and the two engine
+# changes that would make the rest of it affordable.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. Every box below is a multiple or a simple fraction of M = 0.45, with three named
+# exceptions, all of them heights taken from the elevation rather than invented: 2.40 is the
+# walls' first rustication joint (podium_top plus one 0.60 course), 11.475 is 25.5 M and 5.40 and
+# 5.85 are 12 M and 13 M — see each zone.
+#
+# WHERE THE ZONES ARE AND WHY. The building faces south, at negative z. So:
+#
+#   the south and the top   sun, wind and dust. Desert.
+#   the north              shade and damp. Overgrown.
+#
+# A building weathers by which way it faces, so the fragment that weathers it is organised the
+# same way. And every boundary of every zone is put on an arris the elevation already has — a
+# bed mould's springing, a rustication joint, the top of a string course — because the mask has a
+# soft edge about 0.05 m wide and an edge that lands in the middle of a flat face reads as a line
+# somebody drew. `site.clip` learned this first and its note is worth reading.
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE PART — 0.225 m of granite that nobody will ever see
+# ================================================================================================
+#
+# The manifest's unions want a `part_<name>` from every fragment, and this fragment's output is
+# two statements rather than a shape. So this is a setting-out stone: a half-module cube buried in
+# the middle of the podium's mass on the centre line, granite on all six sides of it, adding
+# nothing to any surface in the building.
+#
+# Buried rather than merely small, on purpose. Anything on a surface would be one more object the
+# next person has to design around, and this fragment's whole claim is that it changes no
+# geometry: it changes what the geometry is made of.
+let surface_datum = box -0.1125 0.5625 -2.3625   0.1125 0.7875 -2.1375 round=0.015
+
+let part_surface = surface_datum
+
+# This fragment hollows nothing. Said out loud, as the template asks, so the manifest never has to
+# wonder whether a fragment carved something:
+# there is no void_surface.
+
+# Granite, because it is inside the podium's granite and a voxel of it that somehow reached air
+# should not announce itself. below=0.02 like every other rule in the building: the manifest
+# displaces everything by 12 mm of grain at the end, and a test at zero misses the voxels the
+# grain made.
+paint granite where=surface_datum below=0.02
+
+# ================================================================================================
+# THE ZONES — boxes, and the reason they are boxes
+# ================================================================================================
+#
+# `weather ... on=<shape>` evaluates the named shape once per voxel of the whole clip, because the
+# scope compiles into every coat's test and `metric_slack(Op::Smoothstep)` is infinite, so the
+# sampler can never settle it for a block. The site fragment measured 1,453 ms for a four-box
+# scope against 574,333 ms for a scope naming its own stonework — the same coat over the same
+# stone, two hundred and eleven times the cost.
+#
+# So every zone here is a box, or a difference of two boxes, and never `on=part_walls`.
+#
+# They are also written so that nothing can get them wrong by being generous. A weathering coat is
+# appended AFTER every fragment's paint and would sand a bronze urn or bleach a hedge as readily
+# as it dusts a step, so each zone is checked against its neighbours and the check is written down.
+
+# --- the sunny side: the great steps and the podium face they climb to -------------------------
+#
+# x to +-9.90 (22 M): the flight is +-9.45 and this is a module beyond its cheek walls.
+# z from -15.75 (35 M) to -12.60 (28 M): the bottom nosing, to a module INSIDE the podium's south
+# face at -12.825, so the far edge of the mask is buried in stone and cannot show.
+# y from -0.45 (-M) to 1.80 (podium_top): the terrace is the ceiling, which is a real arris.
+#
+# The floor is below the ground on purpose, so that the gravel forecourt takes the drift at the
+# foot of the flight, which is where sand actually ends up. The zone is gravel and not lawn:
+# site.clip paints the whole southern approach gravel from the boundary out to z = -13.05. The two
+# reflecting basins start at x = 11.70 and the site's bronze urns stand at x = +-10.575, both
+# well outside +-9.90.
+let surface_sun_steps = box -9.90 -0.45 -15.75   9.90 1.80 -12.60
+
+# --- the sunny side: the wash of the main cornice ----------------------------------------------
+#
+# The corona and the crowning cyma at the top of the entablature — the one band of the elevation
+# that the rain reaches and the sun stands on all day, which is what a mason calls the wash.
+#
+# A RING and not a box: 0.675 m (1.5 M) wide round the outside of the building, y from 11.475
+# (25.5 M, just under the corona's bottom arris at 11.52) to 12.15 (27 M, air).
+#
+# The ring is what keeps this off everything it must not touch, and every number in it is a
+# clearance:
+#   the lead roof deck    x +-15.85, z +-7.35   -> the inner box at +-16.20 and 7.65 excludes it
+#   the parapet and dies  out to about x 16.00  -> same
+#   the parapet's urns    y 12.25 and above     -> under the 12.15 ceiling
+#   the pediment corners  y 11.85 to 12.35 at z -12.1  -> inside the inner box in z, excluded
+#   the entablature's bronze swags and paterae, on the frieze at 10.55 to 11.15 -> below 11.475
+let surface_wash_out = box -16.875 11.475 -13.950   16.875 12.150  8.550
+let surface_wash_in  = box -16.200 11.250 -13.050   16.200 12.600  7.650
+let surface_wash     = difference { surface_wash_out surface_wash_in }
+
+let surface_sun = union { surface_sun_steps surface_wash }
+
+# --- the damp side: the foot of the north wall -------------------------------------------------
+#
+# North is +z and the north wall is the one that never dries. This box takes the podium's north
+# bed mould and corona and the first rusticated course of the wall above it.
+#
+# y from 1.35 (3 M) — the springing of the podium's bed mould, a real edge — to 2.40, which is the
+# walls' first horizontal rustication joint. 2.40 is not a module multiple and it is not invented
+# either: it is podium_top plus one 0.60 course, and it is the one line the elevation already has
+# at that height. The soft edge of the mask lands in a 0.09 m channel and disappears. It also
+# clears the ground-storey window sills, which start at 2.52, so no glass and no glazing bar is
+# in this zone.
+#
+# z from 6.75 (15 M) to 8.55 (19 M). The wall's outer face is at 7.50 and its INNER face at 6.60,
+# so the box lies entirely within the thickness of the wall and outward of it: nothing inside the
+# building is in it. That matters — moss belongs on a wall that can see the sky, and the rotunda
+# is two metres further in. The site's north hedge is below y = 0.27 and nowhere near.
+let surface_damp_foot = box -16.875 1.35 6.75   16.875 2.40 8.55
+
+# --- the damp side: the north string course ----------------------------------------------------
+#
+# The one projecting ledge on the north elevation, and the best thing in the building for this: a
+# bold corona with a flat soffit and an ovolo weathering above it, standing out to z = 7.68. An
+# up-facing ledge on a north wall is where growth starts and the hollow under its soffit is where
+# it stays.
+#
+# y 5.40 to 5.85 is 12 M to 13 M AND is exactly the corona's bottom arris and the ovolo's top, so
+# both edges of the mask land on edges that are carved. The piano nobile's sills are at 6.12 and
+# the ground storey's arched keystones top out at 5.40, so the zone touches stone and nothing else.
+let surface_damp_ledge = box -16.875 5.40 7.20   16.875 5.85 8.10
+
+let surface_damp = union { surface_damp_foot surface_damp_ledge }
+
+# ================================================================================================
+# THE WEATHER
+# ================================================================================================
+#
+# DESERT FIRST AND OVERGROWN SECOND, AND THAT IS NOT A STYLISTIC ORDERING. `apply_weather` re-reads
+# `script.solid` at the top of every request and every kind ends by displacing it, so the second
+# request occludes a field the first has already deepened. Written this way round the pair costs
+# 47.0 s on the bench clip; written the other way round, for identical output, it costs 84.8 s.
+# 1.8x, for swapping two lines. Do not swap them.
+#
+# LOW AMOUNTS. This is a public building that is looked after, not a ruin.
+#
+#   desert 0.18     The scour displaces at most 0.05 x scale x amount = 9 mm, and only where the
+#                   curvature says arris — about a third of a voxel at metre 32, which softens a
+#                   nosing without eating it. `level = -0.45` is the datum the sand drifts up from,
+#                   set a module BELOW the lawn so the drift dies out about a metre up the flight
+#                   instead of covering it: the height term is one at the level and zero 1.5 x
+#                   scale above it. The bleach coat's threshold is 0.55 - 0.35a = 0.487 against a
+#                   test of 0.6 x facing + 0.4 x grain, so it lands on up-facing surfaces where
+#                   the grain is over about -0.28 and NEVER on a vertical one, where the test
+#                   cannot reach 0.4 however long it stands there. Treads bleach, risers stay
+#                   clean. That is what rain does and it is the one part of this that is free.
+#
+#   overgrown 0.18  Swells the surface by at most 0.045 x scale x amount = 7 mm where growth takes
+#                   hold. Lichen's threshold is 0.55 - 0.35a = 0.487 and moss's is 0.85 - 0.55a =
+#                   0.751, against 0.55 x cavity + 0.35 x facing + 0.4 x clumps. A flat exposed
+#                   wall face has a cavity of about 0.5 and a facing of zero, so it reaches
+#                   0.275 + clumps: patchy lichen, and no moss at all, ever, at any amount below
+#                   about 0.9. A re-entrant corner with an up-facing ledge in it reaches 0.76
+#                   before the clumps are counted, so the moss goes exactly where the ledge meets
+#                   the wall and the soffit meets the corona. That is the whole argument for
+#                   driving this off occlusion instead of off a texture, and on the bench clip it
+#                   is the difference between a green band along a cornice and green paint.
+#
+# The four materials these lines invent — sand 198,176,132; bleached 208,202,188; moss 74,108,54;
+# lichen 138,148,108 — are made by `make_material` at the colours written into clip_script.cpp,
+# because _contract.clip does not declare them and this fragment deliberately does not either.
+# Four names belonging to the whole building should not be claimed by one fragment; the request
+# file asks for them to be added to the contract instead.
+
+weather desert    0.18 scale=1.00 level=-0.45 seed=83 on=surface_sun
+weather overgrown 0.18 scale=0.90 seed=89 on=surface_damp

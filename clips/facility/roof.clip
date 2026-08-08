@@ -1,10 +1,385 @@
-# roof - the roof planes behind the parapet, leadwork
+# roof — the lead flats behind the parapet: the lid on the whole building.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# One lead deck over the whole main block, laid in four level bays that step down away from the drum
+# to a parapet gutter running the entire perimeter, with rolls down the fall and an outlet gully in
+# the middle of each of the four sides. It lives between 11.85 and 12.15, and 12.15 is where a
+# balustrade of the order's own proportions tops its plinth out, so none of it is ever seen from the
+# ground and all of it is seen from the air.
 #
-# This file must define exactly one part named `part_roof`. Every other name it binds must
-# start with `roof_` so nothing collides with another fragment.
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD: it is the LID, and the lid is what makes an interior an interior.
+#
+# The rotunda, the vestibule, the halls, every coffer and niche in them, are lit by what comes down
+# the oculus and through sixteen drum windows of 1.05 m² apiece. That is the hardest indirect-light
+# problem in the building and a large part of why the building exists. ALL OF IT IS MEANINGLESS IF
+# THIS PART LEAKS. One hole in the roof and the interior is lit by a skylight nobody drew: the
+# bounce terms stop being bounce terms, the occlusion under a coffer fills in, the drum's splayed
+# reveals stop being the brightest surface in the room, and every measurement taken inside is a
+# measurement of the leak. A roof that is 99% closed is 0% useful.
+#
+# So the deck is SOLID — not a skin, not a shell — and it is continuous over the whole 30.20 x 13.20
+# opening the walls leave. It is lapped into both its neighbours rather than butted against them,
+# because the manifest displaces the finished building by 12 mm of grain at the very end and a joint
+# that only touches can be opened by it:
+#
+#   at the wall   the deck runs out to +-15.85 and +-7.35 — 0.75 past the wall's inner face at
+#                 +-15.10 and +-6.60, and 0.15 short of the block outline so it can never show on an
+#                 elevation — and its soffit is at 11.85, which is 0.05 below the wall head at 11.90.
+#                 It also laps 0.03 under parapet.clip's plinth, which stands on +-15.82 / +-7.32.
+#   at the drum   the deck's inner face is a cylinder of radius 5.80 and drum.clip's plinth is an
+#                 annulus from 5.30 to 5.85 standing to 12.15. They share 0.05 of radius over the
+#                 deck's whole depth, and the plinth's top is exactly the head of the fall, so the
+#                 stone and the lead make one continuous surface at 12.15 with no ledge in it.
+#
+# THE SECOND LOAD — the only large brushed metal in the scene, and it already found something.
+#
+# `lead` (rgb 118,120,124 rough=170 metal=140 brush=2) is used by nothing else in this building.
+# There are about 340 m² of it here, all of it level, which is the one place a brushed-metal lobe
+# either shows or does not: a rough anisotropic metal lit by the sun at a glancing angle and by the
+# whole sky everywhere else. Every other metal in this scene is small (a door, a swag, a rosette, a
+# glazing bar) or vertical or both. This is the sheet, and it is what a sheet is for.
+#
+# THE ANSWER IS THAT IT DOES NOT SHOW: `brush` COMES BACK AS GLITTER. Path-traced, this deck reads as
+# gravel or old snow — fixed white speckle two or three voxels across, over the whole 340 m². It is
+# not the manifest's `variation` (identical with the line and without it), it is not my paint (making
+# the base coat porphyry changed nothing, so every voxel really is lead), and it is not Monte Carlo
+# noise (identical at 72 frames and at 600). It is `brush`. A twelve-line clip with three bands of
+# the same colour and roughness — one `stone`, one `metal=140`, one `metal=140 brush=2` — comes back
+# with the first two smooth and only the brushed one speckled, from every angle, at any sample count.
+# Repro clip and images in clips/facility/requests/roof.md.
+#
+# I have left the material alone. `lead` is the contract's and the contract is not mine to edit, this
+# roof is the biggest thing in the building wearing it, and a finding this size is worth more than a
+# tidy render. At building scale and at ordinary angles it still reads as a grey lead roof; it is
+# close raking views that show the speckle. If the shading is not the thing that gets fixed, the
+# fallback is one line in the contract — a `lead_sheet` without `brush` — and that is a request, not
+# something a fragment should do for itself.
+#
+# THE THIRD LOAD — thin matter, three ways, on that metal.
+#
+#   the rolls    26 lead rolls, 0.09 m across (M/5) standing 0.045 m proud (M/10). They run down the
+#                fall and the drum cuts them off, so they are 8.55 m long on the centre line and
+#                12.2 m at the outside — 250 m of them. That is 1.4 voxels of relief at the
+#                contract's metre 32, on metal, with no geometry under it to help a denoiser guess
+#                where the line goes. A roll is either a bright line with a dark one beside it or it
+#                is nothing.
+#   the drips    six drip lines, 0.0375 m high (M/12) and 11.70 m long: 70 m of a step ONE AND A
+#                FIFTH VOXELS tall, across the fall, on level lead. A step that shallow is the
+#                smallest honest piece of geometry in this building — smaller than a coffer's
+#                moulding step, and unlike a coffer's it is out in the sun.
+#   the gullies  four outlet gratings, 20 slots between them, each 0.045 m wide (M/10) with 0.045 m
+#                of bar either side, cut through a 0.045 m plate into a sump. Bar and slot are the
+#                same width and both are one and a half voxels, at the bottom of a channel that is
+#                in the parapet's shadow all day.
+#
+# DO NOT THICKEN ANY OF THEM. 0.0375, 0.045 and 0.09 are M/12, M/10 and M/5 — the last two are the
+# numbers the entablature's dentils are built on — and they are chosen to be one to one and a half
+# voxels because that is the width at which a sampler either keeps a feature or smears it.
+#
+# NO SLATE, though the brief allows it, and NO COPPER. This roof falls 0.15 m in 8.55 — 1 in 57 —
+# because 0.15 m is all the height there is between drum.clip's plinth at 12.15 and a gutter that
+# still has to have 0.15 m of deck under it. Slate needs 1 in 3. Lead is what is laid at 1 in 57 and
+# lead is what is here, in bays between rolls, the way lead is actually laid. Copper is kept off it
+# for the reason a roofer would give: copper and lead in the same gutter eat each other. The one
+# piece of copper that touches this roof is drum.clip's own apron, and that is theirs, and it is a
+# flashing.
+#
+# NO WEATHERING, and this one is worth writing down because it was tried and measured. A single
+# `weather overgrown 0.10 on=<the gutter>` — moss in the channel, which is exactly what weathering
+# is for and exactly where it belongs — took this part from 110 ms to 17,646 ms at metre 8. A
+# hundred and sixty times, for one coat on one channel. The scoping works and it is not the scope
+# that costs: it is `occlusion`, `curvature` and `facing` being asked of the whole clip once per
+# solid voxel. Measured both ways and written up in clips/facility/requests/roof.md.
+# ------------------------------------------------------------------------------------------------
+#
+# WHY THE FALL IS TAKEN IN FOUR STEPS AND NOT AS A SLOPE. This is the thing worth reading in this
+# file, and it was found on a contact sheet.
+#
+# The first version was one plane tilted 1 in 57 from the drum to the gutter, which is what a roof
+# is. A voxel at the contract's metre 32 is 0.03125 m, so that plane loses a whole voxel of height
+# every 1.78 m and the sampler builds it as a flight of 1.78 m treads — it has no choice, and no
+# sampler ever will. On its own that is fine and nobody would look twice. What it does to the ROLLS
+# is not fine: a roll stands 0.045 m proud, one and two fifths of a voxel, so on the half of every
+# tread where the terrace has already rounded the surface up, the roll has nothing left to stand on
+# and disappears. Rendered at metre 32 the rolls came back as DASHES — a metre on, a metre off, all
+# the way down every one of the twenty-six. Not noise, not the denoiser: arithmetic.
+#
+# A slope shallower than one voxel per voxel is not a slope. It is a staircase the engine chose for
+# you, with the tread length picked by the arithmetic of the pitch. So this roof takes the fall in a
+# staircase IT chose: four level bays, each stepping 0.0375 (M/12) down to the next at a drip, which
+# is exactly how lead is laid over a long fall in the real trade and for a related reason — lead
+# sheet cannot run more than a couple of metres down a fall without creeping.
+#
+# Every surface on this roof is now exactly level, so every roll sits at one height for its whole
+# length and reads as one unbroken line; and the six drips are a deliberate, crisp, 1.2-voxel step
+# instead of an accidental, ragged, 1.0-voxel one. Same fall, same 0.15 m, same 1 in 57 over the
+# whole run. If you are ever tempted to smooth this back into a plane, render the plan at metre 32
+# first and count the dashes.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45. EVERY dimension below is a whole multiple or a simple fraction of
+# one of them; this part has no remainders anywhere. The numbers that come from somewhere else:
+#
+#   16.00, 7.50   the contract's block outline, which the contract itself says is not on the module.
+#   15.10, 6.60   the inner face of the wall — those less 0.90.
+#   5.85          the face of drum.clip's plinth. It is 13 M, and it is also exactly 7.05 - 1.20:
+#                 see THE PLAN below, because the whole layout hangs off that coincidence.
+#
+# THE LEVELS, all off the contract's entab_top = 11.90:
+#
+#   11.85     the soffit, everywhere            11.90 - 0.05: bedded into the wall head, and NOT ONE
+#                                               MILLIMETRE LOWER — see the note under this table
+#   11.90     entab_top, the wall head, and     the one line with nothing of mine on it, which is
+#             the line the paint is split on    why the paint is split there — see THE SURFACE
+#   11.91     the floor of an outlet sump       12.00 - 0.09 (M/5), and it sits on the wall head
+#   11.955    the underside of a grating        12.00 - 0.045 (M/10)
+#   12.00     the gutter sole                   11.85 + 0.15 (M/3), leaving M/3 of deck under it
+#   12.0375   bay four                          each bay is M/12 above the one outside it
+#   12.075    bay three
+#   12.1125   bay two
+#   12.15     bay one, at the drum, and the     27 M exactly. It is drum.clip's plinth top; it is
+#             top of the gutter's back          also 11.90 + 0.25, where parapet.clip's plinth die
+#                                               stops (11.85 - 12.1375) before its cyma sets back.
+#   13.00     parapet_top. NOTHING HERE COMES WITHIN 0.85 OF IT.
+#
+# WHY THE SOFFIT NEVER GOES BELOW 11.85. A thicker deck would make a better roof — 0.30 of fall
+# instead of 0.15 — and it would cost nothing but hanging the ceiling 0.20 lower, which is what a
+# cornice does anyway. It is not done, and the reason is the load at the top of this file. The
+# manifest subtracts void_vestibule, void_rotunda, void_halls and void_stair from the whole building
+# AFTER this part is assembled, and every one of those fragments is entitled to carve its ceiling up
+# to the wall head at 11.90. At a soffit of 11.85 the worst such cut takes 0.05 off the bottom of
+# this deck and leaves 0.10 of solid stone under the gutter. At a soffit of 11.70 the same cut takes
+# 0.20 and leaves nothing. A roof that is only light-tight until somebody else builds a room is not
+# light-tight.
+#
+# THE PLAN, from the middle out, as half widths. Symmetric about both axes.
+#
+#   0.00 .. 5.80    THE DRUM. No roof: drum.clip's plinth is an annulus 5.30 .. 5.85 standing from
+#                   11.25 to 12.15, so it closes this ground itself and laps this deck by 0.05.
+#   5.80 .. 8.05    bay one,   2.25 (5 M), level 12.15
+#   8.05 .. 10.30   bay two,   2.25 (5 M), level 12.1125
+#   10.30 .. 12.55  bay three, 2.25 (5 M), level 12.075
+#   12.55 .. 14.35  bay four,  1.80 (4 M), level 12.0375 — shorter, because it is the one that
+#                   discharges into the channel and a short last bay is what a roofer leaves
+#   14.35 .. 15.55  THE GUTTER, 1.20 wide (8M/3), sole 12.00, with a gully in the middle of each of
+#                   the four sides. Its outer 0.45 is over the wall head.
+#   15.55 .. 15.85  the gutter's back, top 12.15, standing on the wall head and lapped under the
+#                   parapet's plinth.
+#
+# and in z the same, except that there is no room for any of the bays: 5.85 .. 7.05 is all gutter,
+# and the deck runs level at 12.15 straight into it. 2.25 + 2.25 + 2.25 + 1.80 = 8.55 = 19 M.
+#
+# WHERE 1.20 COMES FROM, because everything else follows it. North and south of the drum the roof is
+# the strip between drum.clip's plinth at 5.85 and the wall, and it must all be channel. A gutter
+# has to get its outlet onto something solid, and the only solid thing up here is the wall head, so
+# the channel is carried 0.45 (M) past the wall's inner face at 6.60, to 7.05. That makes it
+# 7.05 - 5.85 = 1.20 wide (8M/3); the same width carried round the east and west puts its inner edge
+# on 15.55 - 1.20 = 14.35; and 14.35 - 5.80 = 8.55, which is 19 M on the nose. There is no remainder
+# in this file and there was no arithmetic done to make it so.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT drum.clip MAY WANT TO KNOW, AND IT IS ONE THING.
+#
+# Its comment says its foot stops at 11.25 so it is "buried in whatever the roof turns out to be",
+# and it puts a copper apron at 11.70 .. 12.15 to dress the joint. The roof turns out to land at
+# 12.15 — the top of its own plinth — and it cannot land lower: the gutter it drains to must have
+# deck under it, that deck sits on a wall head at 11.90, and 12.00 is as low as a gutter sole can
+# be. So the plinth is buried to its top and the apron is buried to its top, and what is left of the
+# apron is a 0.075 m ring of copper lying flush in the lead at the drum's foot — which is exactly
+# what an apron flashing is, and it does read: it comes out as a green ring round the well on the
+# plan. Its socle stands 0.15 clear above this roof and its congé 0.30, both untouched. That is a
+# good joint and nothing needs changing.
+#
+# But if drum.clip wants its copper to READ as a skirt rather than as a line, move the apron up to
+# 12.15 .. 12.60 and it will stand on this roof instead of under it. Nothing else in either file
+# moves. Written up in clips/facility/requests/roof.md.
+# ------------------------------------------------------------------------------------------------
 
-let roof_placeholder = sphere 0 -1.30 0 r=0.25
-let part_roof = roof_placeholder
+include "_contract.clip"
+
+# ================================================================================================
+# THE DECK — one solid slab, cut four ways
+# ================================================================================================
+#
+# Everything here is a subtraction from one box, because a roof is defined by what comes off the top
+# of it, and because a big box is the cheapest thing a sampler ever settles. The slab is drawn to
+# its highest level, 12.15, and the drum's well, the gutter, the three inner drips and the four
+# gullies are cut out of it.
+#
+# It reaches +-15.85 and +-7.35: 0.15 (M/3) short of the block outline, so that even with no parapet
+# at all it could not appear on an elevation, and far enough out that it lands under any parapet
+# that stands on this wall. It tops out at 12.15, which is where a balustrade of these proportions
+# tops its plinth out, so no baluster can ever stand in it.
+let roof_slab = box -15.85 11.85 -7.35   15.85 12.15 7.35  round=0.02
+
+# THE WELL. A cylinder of 5.80, cut clean through. drum.clip's plinth runs out to 5.85 from 11.25 to
+# 12.15, so the two share 0.05 of radius over the deck's whole depth, and the plinth's own top at
+# 12.15 is flush with the head of the fall: the roof and the drum make one continuous surface at
+# that level, with no ledge, no groove, and nothing for water or light to find.
+let roof_well = cylinder 0 12.30 0  r=5.80 h=1.60 axis=y
+
+# The rectangle everything inboard of the gutter is protected by. Its z half width is drum.clip's
+# own 5.85, which is what makes the gutter one width the whole way round.
+let roof_keep_field = box -14.35 11.95 -5.85   14.35 13.10 5.85  round=0.012
+
+# THE GUTTER — the channel, 1.20 wide (8M/3), cut 0.15 (M/3) down from the slab's top, from the
+# field's edge to 0.45 past the wall's inner face. A frame, so it turns all four corners with no
+# corner geometry and no mitre to get wrong.
+# Both boxes carry a round, and that is not decoration either: the cutter's arrises are the
+# finished work's arrises turned inside out, so rounding the outer box puts a fillet along the top
+# of the gutter's back and rounding the inner one chamfers the verge the lead turns down over. The
+# brief asks for a small round on every edge; on a subtraction you get it by rounding the knife.
+let roof_cut_gutter = difference {
+    box -15.55 12.00 -7.05   15.55 13.10 7.05  round=0.012
+    roof_keep_field
+}
+
+# THE DRIPS. Three boxes, each taking one more M/12 off everything outside its own drip line, which
+# leaves four level bays stepping down away from the drum. Read the note at the top of this file
+# before replacing them with a slope: they are the fall, and they are steps on purpose.
+#
+# Drawn once on +x and folded, which is what keeps the two halves of the building from ever
+# drifting: `mirror` folds x to its absolute value, so the west bays are the east bays by
+# construction rather than by a second set of numbers. Each is confined to |z| <= 5.85 as well as
+# x <= 14.35, because north and south of that the gutter has already taken the top down to 12.00 and
+# beyond 14.35 lies the gutter's back, which must stay at 12.15.
+let roof_drip_two = box 8.05  12.1125 -5.85   14.35 13.10 5.85  round=0.012
+let roof_drip_thr = box 10.30 12.0750 -5.85   14.35 13.10 5.85  round=0.012
+let roof_drip_fou = box 12.55 12.0375 -5.85   14.35 13.10 5.85  round=0.012
+let roof_drips = mirror { union { roof_drip_two roof_drip_thr roof_drip_fou } } axis=x
+
+# THE GULLIES — one in the middle of each of the four sides, where a downpipe belongs. 0.45 square
+# (M), sunk 0.09 (M/5) below the sole.
+#
+# THEY SIT IN THE OUTER HALF OF THE CHANNEL, OVER THE WALL HEAD, AND THAT IS THE WHOLE REASON THE
+# CHANNEL IS 1.20 WIDE. A sump sunk into the inboard half would leave 0.06 m of deck under it,
+# spanning the room; sunk here it has ten metres of masonry under it and a floor that cannot be
+# thinned by anybody's ceiling. An outlet is the one place a gutter is weakest and it belongs over a
+# wall.
+let roof_sump_e = box 15.10 11.91 -0.225   15.55 13.10 0.225  round=0.02
+let roof_sump_n = box -0.225 11.91 6.60    0.225 13.10 7.05   round=0.02
+let roof_sumps = union {
+    mirror { roof_sump_e } axis=x
+    mirror { roof_sump_n } axis=z
+}
+
+let roof_deck = difference {
+    roof_slab
+    roof_well roof_cut_gutter roof_drips roof_sumps
+}
+
+# ================================================================================================
+# THE ROLLS — 26 of them, 0.09 across, standing 0.045 proud, down the fall
+# ================================================================================================
+#
+# Lead comes in sheets and the joint between two sheets running down a fall is a roll: the sheet is
+# dressed over a timber batten and welted, which leaves a half round ridge. So it is a half round
+# ridge — a capsule of radius 0.045 (M/10) whose AXIS LIES IN THE ROOF SURFACE, so exactly half of
+# it stands proud and the other half is inside the deck and can never come adrift.
+#
+# One capsule to a bay, at that bay's own level, which is the whole reason the bays are level: a
+# roll that sits at one height for its whole length is one unbroken line, and a roll on a slope is
+# not. Each capsule starts 0.05 back inside the bay above it, so consecutive pieces overlap through
+# the drip and the roll steps down with the lead, which is what a roll does at a drip.
+#
+# NOTE FOR ANYONE TIDYING THIS: these were once ONE capsule turned by 0.002792 to lie on a sloping
+# plane, and that cost the building its sampler. `rotate` is deliberately given no bounding box
+# (field.cpp: a bound that is wrong by a little produces a clip with pieces missing), and `repeat`
+# declares INFINITE SLACK the moment its child has no finite box, because it cannot then know that a
+# copy fits inside its own cell. Infinite slack anywhere means no box of the bounds can be settled
+# ANYWHERE, so this bank of thirteen tubes went from 11,374 field evaluations to 91,501,146. Written
+# out as axis-aligned capsules it is exact, bounded, and eight thousand times cheaper. If you ever
+# do need a turned shape inside a repeat, intersect it with a box first — that is what gives it a
+# box back. Written up in clips/facility/requests/roof.md.
+#
+# Then the drum is subtracted from the whole bank, so each roll starts where the drum's circle
+# actually is: the one on the centre line begins at 5.80 and the outermost begins at 2.12, and their
+# ends together trace the curve of the drum. That is what a roofer's setting out would do, and it
+# costs one `difference`.
+#
+# 0.90 (D) between rolls, which is a bay of lead a roofer would actually lay. `repeat` is safe here
+# where a polar repeat would not be — 0.09 of shape inside a 0.90 period fits in its own cell, so
+# the field returns a true distance and the sampler can still settle boxes — and the seed sits at
+# z = 0 for the same reason. See the note in _order.clip about what a polar repeat costs.
+let roof_roll_one = union {
+    capsule 0     12.1500 0    8.05  12.1500 0   r=0.045
+    capsule 8.00  12.1125 0   10.30  12.1125 0   r=0.045
+    capsule 10.25 12.0750 0   12.55  12.0750 0   r=0.045
+    capsule 12.50 12.0375 0   14.35  12.0375 0   r=0.045
+}
+let roof_roll_bank = repeat { roof_roll_one } z=0.90 nz=6
+let roof_rolls_east = difference { roof_roll_bank roof_well }
+let roof_rolls = mirror { roof_rolls_east } axis=x
+
+# ================================================================================================
+# THE GRATINGS — a slotted plate over each gully
+# ================================================================================================
+#
+# Five slots 0.045 wide (M/10) on a 0.09 pitch (M/5), cut through a plate 0.045 thick that is flush
+# with the gutter sole and bedded 0.05 into it on all four sides. The bars between the slots are
+# 0.045 across — the same as the slots, and one and a half voxels at the contract's metre 32.
+#
+# It is one plate with holes in it and not a bundle of loose bars, and that is deliberate: a bar
+# 1.4 voxels thick spanning 0.35 m of nothing is a component waiting to fall off at any metre below
+# 32, and this part's whole claim is that it is one piece with no holes in it. Held by its own rim,
+# the thin matter is as thin as ever and cannot come adrift.
+let roof_grate_plate_e = box 15.05 11.955 -0.275   15.60 12.00 0.275  round=0.012
+let roof_grate_slot_e = box 15.15 11.90 -0.0225   15.50 12.05 0.0225
+let roof_grate_e = difference {
+    roof_grate_plate_e
+    repeat { roof_grate_slot_e } z=0.09 nz=2
+}
+
+let roof_grate_plate_n = box -0.275 11.955 6.55   0.275 12.00 7.10  round=0.012
+let roof_grate_slot_n = box -0.0225 11.90 6.65   0.0225 12.05 7.00
+let roof_grate_n = difference {
+    roof_grate_plate_n
+    repeat { roof_grate_slot_n } x=0.09 nx=2
+}
+
+let roof_grates = union {
+    mirror { roof_grate_e } axis=x
+    mirror { roof_grate_n } axis=z
+}
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let part_roof = union { roof_deck roof_rolls roof_grates }
+
+# This part removes nothing from anybody else. The well, the gutter and the gullies are all cut out
+# of my own slab, so the manifest never has to know they exist and there is no `void_roof`.
+
+# ================================================================================================
+# THE SURFACE
+# ================================================================================================
+#
+# Two zones, split at 11.90. Below it is the deck's underside — the ceiling of the whole main block
+# — which is plastered, like the lining walls.clip paints on the inside of its own ring. Above it is
+# every outward-facing surface this part has, and all of it is lead: the bays, the rolls, the drips,
+# the gutter, its back, and the floors of the four sumps.
+#
+# 11.90 is the only height that works and it is worth saying why, because the obvious 11.95 is
+# wrong. The two numbers it has to separate are the soffit at 11.85 and the FLOOR OF A SUMP at
+# 11.91 — the lowest outward-facing surface on this part, 0.09 down inside a gully — and there is
+# only 0.06 between them. At 11.95 the sump floors come out plastered: four pale squares at the
+# bottom of four bronze gratings, invisible from anywhere and wrong anyway. The wall head is at
+# 11.90, which is the natural line for the split and sits 0.05 clear of one and 0.01 clear of the
+# other; at the contract's metre 32 the nearest voxel centres are 11.866 below it and 11.926 above,
+# so both land on the right side with a voxel to spare.
+#
+# The gratings are bronze, which is what a gully grating is cast in, and it is the same bronze the
+# doors and the entablature's swags are: a second metal beside the lead, in shadow, at 0.045 across.
+#
+# below=0.02 on every rule and never below=0: the manifest displaces the whole building by 12 mm of
+# grain at the end, and a voxel that exists only because the grain pushed the surface outward lies
+# OUTSIDE the shape its rule names. At below=0 those voxels match nothing, fall back to the base
+# coat, and leave a pale limestone rind over a lead roof.
+let roof_ceiling = intersection { part_roof   box -16.20 11.50 -7.60   16.20 11.90 7.60 }
+let roof_leadwork = intersection { part_roof  box -16.20 11.90 -7.60   16.20 13.10 7.60 }
+
+paint limestone where=part_roof     below=0.02
+paint plaster   where=roof_ceiling  below=0.02
+paint lead      where=roof_leadwork below=0.02
+paint bronze    where=roof_grates   below=0.02

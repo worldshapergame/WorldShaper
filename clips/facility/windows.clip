@@ -5,17 +5,18 @@
 #
 #   the glazing bars   0.030 m square in section — ONE VOXEL at the contract's metre 32 — laid on a
 #                      0.45 m grid, six to a piano-nobile light, and struck radially in the fanlight
-#                      of every arched window on the ground storey. There are 60 windows; a little
-#                      over four hundred bars.
-#   the arc bar        a torus of tube 0.018 across the fanlight: a one-voxel feature that is CURVED,
-#                      which is a different problem for a mesher than a straight one.
-#   the glass          620 m of pane at 0.045 thick, `ior=1.5`, `opacity=64`. It is the only material
-#                      in the building with an index of refraction and the only vertical transparent
-#                      surface, so the path tracer's glass loop — Fresnel split, bent transmitted
-#                      ray, tinted throughput — is exercised here or nowhere. Ten of the sixty sit
-#                      behind the portico colonnade in deep shade, which is the hard case: a dark
-#                      interior seen through a pane that is mostly reflecting the sunlit column in
-#                      front of it.
+#                      of every arched window on the ground storey. Fifty-six windows, about three
+#                      hundred and sixty bars, and every light in the building is 0.45 square.
+#   the arc bar        a torus of tube 0.018 across each fanlight: a one-voxel feature that is
+#                      CURVED, which is a different problem for a mesher than a straight one.
+#   the glass          about 140 m2 of pane at 0.045 thick — one and a half voxels — `ior=1.5`,
+#                      `opacity=64`. It is the only material in the building with an index of
+#                      refraction and the only vertical transparent surface, so the path tracer's
+#                      glass loop (Fresnel split, bent transmitted ray, tinted throughput, which
+#                      pathtrace.comp does implement) is exercised here or nowhere. The four piano
+#                      nobile windows at x = +-2.70 and +-5.40 stand behind the portico colonnade
+#                      in its shade, which is the hard case: a dark room seen through a pane that
+#                      is mostly reflecting the sunlit column in front of it.
 #   the pair together  a one-voxel opaque bar against a transparent pane is the highest-contrast,
 #                      highest-frequency thing the denoiser will be handed. If the bars dissolve
 #                      into the glass, that is the renderer, not the bars.
@@ -318,22 +319,41 @@ let windows_gs_cut   = box -0.675 2.70 -0.18  0.675 4.50 1.80
 # WHERE THEY GO
 # ================================================================================================
 #
-# The same five placements four times over, once for each material and once for the holes. Written
-# out rather than folded together because a paint rule has to name a shape that is only the thing
-# it paints, and because the four unions share every subtree under them — the field is a graph, so
-# a unit named four times is one unit.
+# Fifty-six windows, placed four times over: once as stone, once as joinery, once as glass, and
+# once as the holes they need. Written out rather than folded together because a paint rule has to
+# name a shape that is only the thing it paints, and because the four unions share every subtree
+# under them — the field is a graph, so a unit named four times is one unit.
 #
 # A front is built on its +x half and folded; the end wall is built about z = 0 and placed at both
 # +-16 by hand, turned a quarter turn each way, which keeps a tight box on each rather than one
 # loose one spanning the building.
 
-let windows_stone_hs = union {
-    translate { repeat { windows_ga_stone } x=2.70 nx=1 } 5.40 0 0
-    translate { windows_gs_stone } 10.80 0 0
-    translate { windows_gs_stone } 13.50 0 0
+# THE SOUTH GROUND STOREY IS SHORT OF THREE BAYS AND THAT IS DELIBERATE. Inside the portico the
+# ground storey is the way in: the great door on the centre line and a side door in the bay at
+# x = +-5.40, with the doorcase running 4.05 wide over the first and from 3.96 to 6.84 over the
+# second. A window in either place is a window inside a doorcase. So on the SOUTH front the only
+# ground-storey opening within the portico is the arched one at x = +-8.10, and the piano nobile
+# above carries the full five bays — which is the right way round in any case, because a window
+# over a door is what a piano nobile is for. The north front has no doors and gets all five.
+#
+# Checked against doors.clip rather than assumed: doors_gd_void is x +-1.35 and doors_sd_void_e is
+# x 4.50 .. 6.30, both to y 4.95 or 6.30. Nothing else on any front is anybody else's.
+let windows_stone_pn = union {
     translate { repeat { windows_pt_stone } x=5.40 nx=1 } 8.10 0 0
     translate { windows_ps_stone } 5.40 0 0
     translate { windows_ps_stone } 10.80 0 0
+}
+let windows_stone_gw = union {
+    translate { windows_gs_stone } 10.80 0 0
+    translate { windows_gs_stone } 13.50 0 0
+}
+let windows_stone_hs = union {
+    windows_stone_pn windows_stone_gw
+    translate { windows_ga_stone } 8.10 0 0
+}
+let windows_stone_hn = union {
+    windows_stone_pn windows_stone_gw
+    translate { repeat { windows_ga_stone } x=2.70 nx=1 } 5.40 0 0
 }
 let windows_stone_e = union {
     repeat { windows_gs_stone } x=2.70 nx=2
@@ -342,12 +362,12 @@ let windows_stone_e = union {
 }
 # Every turned placement is caught in a box it already fits inside, for the reason written over the
 # fanlight rays: a rotation has no bounds, and a union cannot cull a child whose box is everywhere,
-# so without these the whole building walks into all sixty windows on every evaluation. The boxes
-# are generous — the geometry stands well clear of every face of them — so they clip nothing.
+# so without these every evaluation anywhere in the building walks into all fifty-six windows. The
+# boxes are generous — the geometry stands clear of every face of them — so they clip nothing.
 let windows_stone = union {
     windows_bands
     translate { mirror { windows_stone_hs } axis=x } 0 0 -7.5
-    intersection { translate { rotate { mirror { windows_stone_hs } axis=x } y=0.5 } 0 0 7.5
+    intersection { translate { rotate { mirror { windows_stone_hn } axis=x } y=0.5 } 0 0 7.5
                    box -14.85 2.20 7.30   14.85 9.70 7.90 }
     intersection { translate { rotate { windows_stone_e } y=-0.25 }  16 0 0
                    box  15.80 2.20 -6.70   16.40 9.70 6.70 }
@@ -355,11 +375,18 @@ let windows_stone = union {
                    box -16.40 2.20 -6.70  -15.80 9.70 6.70 }
 }
 
-let windows_metal_hs = union {
-    translate { repeat { windows_ga_metal } x=2.70 nx=1 } 5.40 0 0
+let windows_metal_gw = union {
     translate { windows_gs_metal } 10.80 0 0
     translate { windows_gs_metal } 13.50 0 0
-    translate { repeat { windows_pn_metal } x=2.70 nx=2 } 8.10 0 0
+}
+let windows_metal_pn = translate { repeat { windows_pn_metal } x=2.70 nx=2 } 8.10 0 0
+let windows_metal_hs = union {
+    windows_metal_pn windows_metal_gw
+    translate { windows_ga_metal } 8.10 0 0
+}
+let windows_metal_hn = union {
+    windows_metal_pn windows_metal_gw
+    translate { repeat { windows_ga_metal } x=2.70 nx=1 } 5.40 0 0
 }
 let windows_metal_e = union {
     repeat { windows_gs_metal } x=2.70 nx=2
@@ -367,7 +394,7 @@ let windows_metal_e = union {
 }
 let windows_metal = union {
     translate { mirror { windows_metal_hs } axis=x } 0 0 -7.5
-    intersection { translate { rotate { mirror { windows_metal_hs } axis=x } y=0.5 } 0 0 7.5
+    intersection { translate { rotate { mirror { windows_metal_hn } axis=x } y=0.5 } 0 0 7.5
                    box -14.85 2.60 7.15   14.85 8.65 7.55 }
     intersection { translate { rotate { windows_metal_e } y=-0.25 }  16 0 0
                    box  15.65 2.60 -6.70   16.05 8.65 6.70 }
@@ -375,11 +402,18 @@ let windows_metal = union {
                    box -16.05 2.60 -6.70  -15.65 8.65 6.70 }
 }
 
-let windows_glass_hs = union {
-    translate { repeat { windows_ga_glass } x=2.70 nx=1 } 5.40 0 0
+let windows_glass_gw = union {
     translate { windows_gs_glass } 10.80 0 0
     translate { windows_gs_glass } 13.50 0 0
-    translate { repeat { windows_pn_glass } x=2.70 nx=2 } 8.10 0 0
+}
+let windows_glass_pn = translate { repeat { windows_pn_glass } x=2.70 nx=2 } 8.10 0 0
+let windows_glass_hs = union {
+    windows_glass_pn windows_glass_gw
+    translate { windows_ga_glass } 8.10 0 0
+}
+let windows_glass_hn = union {
+    windows_glass_pn windows_glass_gw
+    translate { repeat { windows_ga_glass } x=2.70 nx=1 } 5.40 0 0
 }
 let windows_glass_e = union {
     repeat { windows_gs_glass } x=2.70 nx=2
@@ -387,7 +421,7 @@ let windows_glass_e = union {
 }
 let windows_glass = union {
     translate { mirror { windows_glass_hs } axis=x } 0 0 -7.5
-    intersection { translate { rotate { mirror { windows_glass_hs } axis=x } y=0.5 } 0 0 7.5
+    intersection { translate { rotate { mirror { windows_glass_hn } axis=x } y=0.5 } 0 0 7.5
                    box -14.85 2.60 7.15   14.85 8.65 7.55 }
     intersection { translate { rotate { windows_glass_e } y=-0.25 }  16 0 0
                    box  15.65 2.60 -6.70   16.05 8.65 6.70 }
@@ -395,11 +429,18 @@ let windows_glass = union {
                    box -16.05 2.60 -6.70  -15.65 8.65 6.70 }
 }
 
-let windows_cut_hs = union {
-    translate { repeat { windows_ga_cut } x=2.70 nx=1 } 5.40 0 0
+let windows_cut_gw = union {
     translate { windows_gs_cut } 10.80 0 0
     translate { windows_gs_cut } 13.50 0 0
-    translate { repeat { windows_pn_cut } x=2.70 nx=2 } 8.10 0 0
+}
+let windows_cut_pn = translate { repeat { windows_pn_cut } x=2.70 nx=2 } 8.10 0 0
+let windows_cut_hs = union {
+    windows_cut_pn windows_cut_gw
+    translate { windows_ga_cut } 8.10 0 0
+}
+let windows_cut_hn = union {
+    windows_cut_pn windows_cut_gw
+    translate { repeat { windows_ga_cut } x=2.70 nx=1 } 5.40 0 0
 }
 let windows_cut_e = union {
     repeat { windows_gs_cut } x=2.70 nx=2
@@ -407,7 +448,7 @@ let windows_cut_e = union {
 }
 let windows_cuts = union {
     translate { mirror { windows_cut_hs } axis=x } 0 0 -7.5
-    intersection { translate { rotate { mirror { windows_cut_hs } axis=x } y=0.5 } 0 0 7.5
+    intersection { translate { rotate { mirror { windows_cut_hn } axis=x } y=0.5 } 0 0 7.5
                    box -14.85 2.60 5.60   14.85 8.65 7.80 }
     intersection { translate { rotate { windows_cut_e } y=-0.25 }  16 0 0
                    box  14.10 2.60 -6.70   16.30 8.65 6.70 }

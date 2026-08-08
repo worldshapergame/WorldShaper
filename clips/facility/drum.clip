@@ -1,10 +1,404 @@
-# drum - the drum of the dome, its pilasters and windows
+# drum — the drum of the dome: its plinth, its sixteen pilasters, its sixteen round-headed
+#        windows, and the moulded cornice the dome springs from.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# A ring on the centre line, inner face on the rotunda's own 4.80 and outer face on 5.40 (12 M),
+# standing from 11.25 — well below the main cornice line at 11.90, so it is buried in whatever
+# the roof turns out to be — up to the contract's drum_top at 15.60.
 #
-# This file must define exactly one part named `part_drum`. Every other name it binds must
-# start with `drum_` so nothing collides with another fragment.
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD: light through a small opening into a deep hollow.
+#
+# The rotunda has no windows. It has an oculus straight overhead and it has THESE SIXTEEN, and
+# nothing else. Every photon that lands on the coffers, the niches and the floor below either came
+# down the oculus or came through one of these apertures, and the ones that came through here did
+# it the hard way:
+#
+#   the aperture   0.675 wide by 1.6875 tall (1.5 M by 3.75 M) — 1.05 m² of hole, sixteen of them,
+#                  lighting a room 9.60 m across. Small on purpose.
+#   the wall       0.60 m thick. At the contract's metre 32 that is NINETEEN VOXELS of reveal
+#                  between the outside air and the inside air, so nothing reaches the rotunda in a
+#                  straight line unless it is aimed almost dead at the hole.
+#   the splay      the opening is 0.675 wide at the outer face and 1.125 wide at the inner one,
+#                  and the inner sill is 0.1125 below the outer. A splayed reveal is not decoration:
+#                  it is the thing that turns a pencil of sun into a fan of bounce, and it is the
+#                  only reason a drum window lights a room at all rather than printing a bright
+#                  rectangle on the opposite wall. The reveal cheeks are the FIRST bounce and they
+#                  are the brightest surface in the building; if they come back grey the indirect
+#                  path is not working.
+#   the glass      a 0.03 m pane — ONE VOXEL at metre 32 — with an index of refraction, sixteen
+#                  times over. Thin translucent matter is a different problem from thin solid
+#                  matter and this is the only place in the building that poses it at height,
+#                  against the sky on one side and a dark hollow on the other.
+#   the bars       0.030 m (M/15) glazing bars, one voxel across, four transoms, a muntin and a
+#                  semicircular head bar to each light. 96 bars in the ring. They are read against
+#                  the brightest thing in the frame from outside and against the darkest from
+#                  inside, which is the worst case for a denoiser either way round.
+#
+# DO NOT WIDEN THE WINDOWS TO "LET MORE LIGHT IN". If the rotunda comes back black, the bounce is
+# what is wrong, not the apertures — a real drum of this diameter has exactly this much glass and
+# a real rotunda is legible under it. Every one of these numbers is a module fraction and moving
+# one of them breaks the sixteen-fold rhythm the pilasters are set out on.
+#
+# The second load is the sampler's, and it is the reason this file looks the way it does: sixteen
+# of everything, laid out as explicit `rotate` nodes over one quadrant and mirrored in x and then
+# in z, never as `around { } count=16`. See the note over THE SIXTEEN below — it is worth a factor
+# of about a thousand and it is invisible until you measure it.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45, and every number here is one of those or a simple fraction.
+# The ones that are not, and why:
+#
+#   4.80          the contract's rotunda inner radius. Not a module multiple; the contract says so.
+#   15.60         the contract's drum_top, the level the dome springs from. Everything vertical in
+#                 this file is measured down from it in module fractions.
+#   11.25         where the drum's foot stops. 0.65 below the main cornice at 11.90, which is an
+#                 OVERLAP and not a dimension: it was written before there was a roof, so that the
+#                 plinth would meet one wherever it landed. roof.clip has since landed its lead
+#                 deck at 12.15 — the plinth top — so the plinth is buried to its head, which is
+#                 what a plinth under a roof is for.
+#   5.30, 5.34,   how far a member reaches back into the stone it stands on. Tolerances. Never
+#   5.20, 5.58,   seen, and all of them at least the 0.045 the brief asks for.
+#   12.92
+#
+# THE VERTICAL SET-OUT, down from 15.60:
+#
+#   15.6000  drum_top, the springing        the dome sits on this ring
+#   15.5250  crowning cyma                  M/6
+#   15.3750  corona                         M/3   projects to 5.85 (13 M) — the deep shadow line
+#   15.3375  fillet                         M/12
+#   15.2250  bed mould, cyma reversa        M/4
+#   15.1500  head of the order              M/6 of plain wall under the cornice
+#   12.4500  foot of the order              2.70 = 6 M of pilaster: 9 diameters of 0.30, Ionic
+#   12.3000  congé off the socle            M/3, and the head of the copper upstand
+#   12.1500  socle                          M/3, and the roof deck, and the copper lip
+#   11.2500  plinth                         2 M, buried in the roof
+#
+# and the two courses that run right round between them: a sill course at 12.825 – 12.90 and an
+# impost course at 14.175 – 14.25, both projecting M/5, both cut through by the sixteen windows,
+# which is what turns a band into a set of imposts.
+#
+# A NOTE ON WHICH WAY A MOULDING FACES, because it cost me an afternoon and it is not written down
+# anywhere else. `cavetto p0 q0 p1 q1` scoops a disc centred on the SECOND corner out of the
+# section, so THE FIRST CORNER MUST BE THE ONE TOUCHING THE STONE BEHIND IT. Write a sill bracket
+# as `cavetto 5.49 12.825 5.40 12.75` — outer corner first, which reads more naturally — and the
+# hollow is centred on the wall face instead, which leaves a floating sliver ring hanging in the
+# air 0.07 out from the drum with a gap behind it. It builds, it reports one component at metre 8
+# because the sliver is too thin to appear, and it is wrong. `cyma` is full across the band at its
+# FIRST corner's height and empty at its second; `cyma_reversa` is the other way round.
 
-let drum_placeholder = sphere 0 -1.30 0 r=0.25
-let part_drum = drum_placeholder
+include "_contract.clip"
+
+# ================================================================================================
+# THE BODY — one section, turned
+# ================================================================================================
+#
+# The whole drum apart from its sixteen-fold ornament is a surface of revolution, so it is drawn
+# once as a section in (radius, height) and revolved. That is exact, it is one component, and it
+# costs six field walks rather than the forty boxes a stack of cylinders would have taken. It is
+# also the only way to get a cyma round a 34 m circumference without it being a polygon.
+#
+# Six separate revolves rather than one, purely so that each has a name to paint by: the core is
+# the building's limestone, the plinth is granite, everything moulded is marble, and the apron is
+# copper.
+
+# The core: inner face 4.80, outer face 5.40, foot to springing. Everything else bites into it.
+let drum_s_core = box 4.80 11.25 -1   5.40 15.60 1  round=0.012
+let drum_core   = revolve { drum_s_core } axis=y
+
+# The plinth and the socle. The plinth is 2 M tall and stands out to 5.85 (13 M) — the same line
+# the cornice corona comes out to, 3.45 m above it, which is what makes a drum look like one thing
+# and not like a cylinder with a hat on. The congé takes the socle face back to the wall face.
+let drum_s_plinth = box 5.30 11.25 -1   5.85  12.15 1  round=0.012
+let drum_s_socle  = box 5.30 12.15 -1   5.625 12.30 1  round=0.012
+let drum_s_conge  = cavetto 5.40 12.30   5.625 12.45
+let drum_socle    = revolve { union { drum_s_plinth drum_s_socle drum_s_conge } } axis=y
+
+# The two courses that run round: the sill the windows stand on and the impost the arches spring
+# from, each a fillet on a cavetto bracket, each projecting 0.09 (M/5) — less than the pilasters
+# project, so they die into a pilaster instead of crossing it.
+let drum_s_sill_br = cavetto 5.40 12.825   5.49 12.75
+let drum_s_sill    = box     5.34 12.825 -1   5.49 12.90 1  round=0.010
+let drum_s_imp_br  = cavetto 5.40 14.175   5.49 14.10
+let drum_s_imp     = box     5.34 14.175 -1   5.49 14.25 1  round=0.010
+let drum_bands = revolve {
+    union { drum_s_sill_br drum_s_sill drum_s_imp_br drum_s_imp }
+} axis=y
+
+# The cornice, 0.45 (M) tall, projecting 0.45 to 5.85. Bed mould, fillet, corona, crowning cyma.
+# The corona oversails the fillet under it by 0.225 (M/2) in one square step, so its soffit is a
+# 0.225 m annular ledge of nothing with 0.15 of stone standing on it — the blackest shadow on the
+# outside of this building, and the whole reason a cornice is cut in this order.
+#
+# The outermost 0.15 of it stays in daylight: dome.clip's shell is 5.70 at the springing, so the
+# corona's lip and the crowning cyma stand outside the dome and read against the sky. That is not
+# a coincidence, it is 13 M against 5.70, and neither file had to read the other to get it.
+let drum_s_bed    = cyma_reversa 5.40 15.225   5.625 15.3375
+let drum_s_fil    = box 5.34 15.3375 -1   5.625 15.375 1  round=0.008
+let drum_s_corona = box 5.34 15.375  -1   5.85  15.525 1  round=0.012
+let drum_s_crnbk  = box 5.34 15.515  -1   5.7375 15.60 1
+let drum_s_crown  = cyma_reversa 5.7375 15.525   5.85 15.60
+let drum_cornice = revolve {
+    union { drum_s_bed drum_s_fil drum_s_corona drum_s_crnbk drum_s_crown }
+} axis=y
+
+# The apron: the metal dressing over the joint between the roof and the drum. An apron flashing is
+# two pieces and it is worth building it as two, because that is what makes it read as metal and
+# not as a moulding — an UPSTAND dressed against the wall with its top edge tucked into a joint,
+# and a LIP turned out flat over the deck.
+#
+# It was at 11.70 – 12.15 in the first draft, against the plinth. roof.clip has since landed its
+# lead deck at exactly 12.15 — the plinth top, and it says in its own header that it cannot land
+# lower, because its gutter sole has to clear a wall head at 11.90 — which buried the whole thing.
+# So the upstand now stands ON that deck and is dressed against the socle above it, with its top
+# edge tucked under the congé, and the lip laps 0.045 out past the plinth face onto the lead. That
+# is the joint a roofer would build and it is the joint the two files now describe from both sides.
+#
+# It is here for the material as much as for the joint: verdigris copper against pale limestone is
+# a comparison the rest of the building does not offer, and this is at the top of the scene where
+# the sky lights it directly. The lip is 0.045 thick — one and a half voxels of metal.
+# AND IT IS TWO REVOLVED SECTIONS AND NOT A DIFFERENCE OF TWO CYLINDERS, WHICH IS WHAT IT WAS.
+#
+# `difference { a b }` is `max(a, -b)`, and that is a true distance only near the surface. Stand
+# deep inside the subtrahend and `-b` is a small positive number that has nothing to do with how
+# far away the ring is: with the ring written as a 5.895 cylinder less a 5.625 one, every point on
+# the INSIDE of the drum — eleven hundred millimetres from any copper — reported a distance of
+# exactly 0.0200, because `max(d - 0.0225, 0.0625 - d)` bottoms out at half the difference of the
+# two half-heights. `paint copper ... below=0.02` believed it, and painted a hairline ring of
+# verdigris right round the inside of the rotunda at the height of the apron. It is invisible from
+# outside, it survives every elevation, and the only thing that showed it was a path trace from
+# inside. A revolved section is an EXACT distance at every point in the world, so it cannot lie.
+#
+# The lesson generalises and is worth the paragraph: NEVER KEY A PAINT RULE ON A `difference`
+# WHOSE SUBTRAHEND IS LARGE. Revolve a section instead, or intersect, or paint the minuend.
+let drum_apron_up  = revolve { box 5.58  12.15 -1   5.67  12.30  1  round=0.008 } axis=y
+let drum_apron_lip = revolve { box 5.625 12.15 -1   5.895 12.195 1  round=0.008 } axis=y
+let drum_apron = union { drum_apron_up drum_apron_lip }
+
+let drum_body = union { drum_core drum_socle drum_bands drum_cornice drum_apron }
+
+# ================================================================================================
+# ONE PILASTER — the great order at one third, drawn on +x
+# ================================================================================================
+#
+# 0.30 wide (2M/3) and 2.70 tall (6 M), which is nine diameters: the Ionic column of _order.clip,
+# to the same rule, at exactly a third of its size. It is NOT `scale { ionic_pilaster } 0.3333`,
+# and that was a deliberate decision after trying it: at a third scale the flute fillets come out
+# 0.010 m and the volutes 0.0075 m, a third and a quarter of a voxel at full detail, so sixteen
+# copies of the real thing would have cost sixteen spirals and a repeat apiece to render mud. What
+# survives at this size is a shaft, an astragal, an echinus and an abacus, so that is what is cut.
+#
+# Back face at 5.30, which is 0.10 inside the wall at the widest member. The wall is round and this
+# is flat: over the 0.375 width of the abacus the drum's surface falls 0.003, which is a tenth of a
+# voxel, so no, it does not need to be curved.
+let drum_pil_plinth = box 5.30 12.45  -0.1875   5.625  12.525 0.1875  round=0.012
+let drum_pil_shaft  = box 5.30 12.515 -0.15     5.5125 15.1125 0.15   round=0.010
+let drum_pil_torus  = bead  5.5125 12.525 -0.15   5.625 12.60 0.15   run=z
+let drum_pil_astrag = bead  5.5125 15.00  -0.15   5.55  15.0375 0.15 run=z
+let drum_pil_ech    = ovolo 5.5125 15.1125 -0.15  5.625 15.0375 0.15 run=z
+let drum_pil_abacus = box 5.30 15.1125 -0.1875   5.625 15.15 0.1875  round=0.010
+
+let drum_pil = union {
+    drum_pil_plinth drum_pil_torus drum_pil_shaft
+    drum_pil_astrag drum_pil_ech drum_pil_abacus
+}
+
+# ================================================================================================
+# ONE WINDOW — the opening, drawn on +x
+# ================================================================================================
+#
+# Round-headed, semicircular, springing from the impost course at 14.25. Sill 12.90, springing
+# 14.25, crown 14.5875: 1.35 (3 M) of jamb and a 0.3375 (0.75 M) head over a 0.675 (1.5 M) light.
+#
+# TWO openings, not one, and the second is the whole point. The outer one is 0.675 wide and runs
+# from 5.10 out; the inner one is 1.125 wide (2.5 M), springs to a 0.5625 head, starts its sill
+# 0.1125 lower, and runs from 5.15 in. They overlap through 0.05 of wall so there is no plug left
+# between them. What that builds is a splayed reveal — narrow outside, wide inside, sloping sill —
+# and it is the difference between sixteen bright rectangles on the rotunda wall and a rotunda
+# that is lit.
+let drum_win_out  = box 5.10 12.90   -0.3375  5.60 14.25 0.3375
+let drum_win_outh = cylinder 5.35 14.25 0  r=0.3375 h=0.50 axis=x
+let drum_win_in   = box 4.50 12.7875 -0.5625  5.15 14.25 0.5625
+let drum_win_inh  = cylinder 4.825 14.25 0  r=0.5625 h=0.65 axis=x
+let drum_win = union { drum_win_out drum_win_outh drum_win_in drum_win_inh }
+
+# ================================================================================================
+# ONE WINDOW'S DRESSING — architrave and keystone, drawn on +x
+# ================================================================================================
+#
+# The architrave is a plate 0.09 (M/5) wide round the opening standing 0.045 (M/10) proud, and it
+# is cut to shape by the window itself: the opening is taken out of the whole building at the end
+# of this file, so what is left of this plate is two jambs and an arch ring, with no member across
+# the sill, which is how a window architrave is. The keystone is cut by the same subtraction, so
+# its intrados is the arch's own curve and it cannot hang into the light.
+let drum_dress_band = box 5.30 12.90 -0.4275   5.445 14.25 0.4275
+let drum_dress_arch = cylinder 5.3725 14.25 0  r=0.4275 h=0.145 axis=x
+let drum_dress_key  = box 5.30 14.4375 -0.09   5.5125 14.7375 0.09  round=0.010
+let drum_dress = union { drum_dress_band drum_dress_arch drum_dress_key }
+
+# ================================================================================================
+# ONE WINDOW'S GLAZING — bronze and glass, drawn on +x
+# ================================================================================================
+#
+# Set 0.15 (M/3) back from the outer face, in the middle of the reveal, so the frame is in shadow
+# from the architrave for most of the day and the pane is lit by sky and not by sun. The frame is
+# 0.09 wide and 0.045 deep and it beds 0.045 into the stone all the way round, which is the only
+# thing holding sixteen panes and ninety-six bars onto the building.
+#
+# THE BARS ARE 0.030 ACROSS. That is M/15 and it is ONE VOXEL at the contract's metre 32 — the same
+# number as the fillet between two flutes on a column, chosen to be the same number on purpose. Do
+# not fatten them; if they come back as noise the sampler is what is wrong.
+let drum_gl_out = union {
+    box 5.2275 12.855 -0.3825   5.2725 14.25 0.3825
+    cylinder 5.25 14.25 0  r=0.3825 h=0.045 axis=x
+}
+let drum_gl_in = union {
+    box 5.20 12.945 -0.2925   5.30 14.25 0.2925
+    cylinder 5.25 14.25 0  r=0.2925 h=0.10 axis=x
+}
+let drum_frame = difference { drum_gl_out drum_gl_in }
+
+let drum_bar_v  = box 5.2275 12.92   -0.015    5.2725 14.56  0.015
+let drum_bar_h1 = box 5.2275 13.2225 -0.2925   5.2725 13.2525 0.2925
+let drum_bar_h2 = box 5.2275 13.5600 -0.2925   5.2725 13.5900 0.2925
+let drum_bar_h3 = box 5.2275 13.8975 -0.2925   5.2725 13.9275 0.2925
+let drum_bar_h4 = box 5.2275 14.2350 -0.2925   5.2725 14.2650 0.2925
+let drum_bar_arc = intersection {
+    torus 5.25 14.25 0  ring=0.225 tube=0.015 axis=x
+    box 5.20 14.24 -0.30   5.30 14.55 0.30
+}
+let drum_metal_one = union {
+    drum_frame drum_bar_v drum_bar_h1 drum_bar_h2 drum_bar_h3 drum_bar_h4 drum_bar_arc
+}
+
+# The pane. 0.03 thick — one voxel — filling the whole opening, so its edge is buried in the frame
+# and in the reveal and it cannot come away.
+let drum_glass_one = union {
+    box 5.235 12.90 -0.3375   5.265 14.25 0.3375
+    cylinder 5.25 14.25 0  r=0.3375 h=0.03 axis=x
+}
+
+# ================================================================================================
+# THE SIXTEEN
+# ================================================================================================
+#
+# Sixteen pilasters at 22.5 degrees and sixteen windows in the middles between them, laid out as
+# explicit rotations over one quadrant and mirrored in x and then in z. FIVE members from 0 to a
+# quarter turn make sixteen pilasters (the ones on the axes fold onto themselves); FOUR members at
+# the odd thirty-seconds make sixteen windows.
+#
+# NOT `around { } count=16`. `metric_slack(Op::PolarRepeat)` is infinite, the sampler takes the
+# minimum slack over the whole expression, and infinite slack ANYWHERE means not one voxel of the
+# clip's bounds can be skipped ANYWHERE. _order.clip measured the same substitution on a column at
+# a factor of 950 in field evaluations. Rotations are isometries, so these are exact.
+#
+# THE ANGLES ARE NEGATIVE AND THAT IS NOT A TYPO. `mirror` folds a coordinate to its POSITIVE
+# side — a point at z = -3 is answered by asking the child at z = +3 — so whatever lies on the
+# negative side of the fold is not copied, it is THROWN AWAY. And `rotate { } y=+turns` carries
+# +x toward -z. Write the quadrant with positive angles, as it reads naturally, and every member
+# of it lands on -z and is silently deleted by the second mirror; what is left is the one member
+# that straddles z = 0, so sixteen pilasters build as two and sixteen windows build as none.
+# That is exactly what the first pass of this file did, it reported one component and a sensible
+# volume, and the only thing that said so was the contact sheet. Measure a quadrant's worldbox if
+# you are ever unsure: it must come back on +x AND +z.
+#
+# AND EVERY ONE OF THESE UNIONS IS WRAPPED IN AN INTERSECTION WITH A BOX. `build_bounds` gives
+# `Op::Rotate` no bounding box at all, so a union of rotated things reports infinite bounds, and
+# anything upstream that needs to measure it — a repeat, and in practice the sampler's own settling
+# — gives up. Intersecting with a box it already fits inside hands the bounds back and changes not
+# one voxel. windows.clip measured that one at a factor of 100 in sample time. The boxes below are
+# deliberately loose; they are bounds, not cutters, and nothing may touch their faces.
+let drum_box_pil   = box -5.70 12.40 -5.70   5.70 15.20 5.70
+let drum_box_win   = box -5.70 12.70 -5.70   5.70 14.85 5.70
+let drum_box_dress = box -5.60 12.85 -5.60   5.60 14.80 5.60
+let drum_box_glaze = box -5.35 12.80 -5.35   5.35 14.70 5.35
+
+let drum_pil_b = rotate { drum_pil } y=-0.0625
+let drum_pil_c = rotate { drum_pil } y=-0.125
+let drum_pil_d = rotate { drum_pil } y=-0.1875
+let drum_pil_e = rotate { drum_pil } y=-0.25
+let drum_pil_quad = union { drum_pil drum_pil_b drum_pil_c drum_pil_d drum_pil_e }
+let drum_pilasters = intersection {
+    mirror { mirror { drum_pil_quad } axis=x } axis=z
+    drum_box_pil
+}
+
+let drum_win_a = rotate { drum_win } y=-0.03125
+let drum_win_b = rotate { drum_win } y=-0.09375
+let drum_win_c = rotate { drum_win } y=-0.15625
+let drum_win_d = rotate { drum_win } y=-0.21875
+let drum_win_quad = union { drum_win_a drum_win_b drum_win_c drum_win_d }
+let drum_windows = intersection {
+    mirror { mirror { drum_win_quad } axis=x } axis=z
+    drum_box_win
+}
+
+let drum_dress_a = rotate { drum_dress } y=-0.03125
+let drum_dress_b = rotate { drum_dress } y=-0.09375
+let drum_dress_c = rotate { drum_dress } y=-0.15625
+let drum_dress_d = rotate { drum_dress } y=-0.21875
+let drum_dress_quad = union { drum_dress_a drum_dress_b drum_dress_c drum_dress_d }
+let drum_dressings = intersection {
+    mirror { mirror { drum_dress_quad } axis=x } axis=z
+    drum_box_dress
+}
+
+let drum_metal_a = rotate { drum_metal_one } y=-0.03125
+let drum_metal_b = rotate { drum_metal_one } y=-0.09375
+let drum_metal_c = rotate { drum_metal_one } y=-0.15625
+let drum_metal_d = rotate { drum_metal_one } y=-0.21875
+let drum_metal_quad = union { drum_metal_a drum_metal_b drum_metal_c drum_metal_d }
+let drum_metal = intersection {
+    mirror { mirror { drum_metal_quad } axis=x } axis=z
+    drum_box_glaze
+}
+
+let drum_glass_a = rotate { drum_glass_one } y=-0.03125
+let drum_glass_b = rotate { drum_glass_one } y=-0.09375
+let drum_glass_c = rotate { drum_glass_one } y=-0.15625
+let drum_glass_d = rotate { drum_glass_one } y=-0.21875
+let drum_glass_quad = union { drum_glass_a drum_glass_b drum_glass_c drum_glass_d }
+let drum_glass = intersection {
+    mirror { mirror { drum_glass_quad } axis=x } axis=z
+    drum_box_glaze
+}
+
+# ================================================================================================
+# ASSEMBLY
+# ================================================================================================
+#
+# The stone is cut by its own windows here, inside this part, and NOT exposed as a `void_drum` for
+# the manifest to take away. The manifest's `hollowed` difference does not name one, and it is not
+# mine to edit; more to the point a drum window is not a room and there is nothing else in the
+# building for it to hollow. Cutting it here keeps the fragment self-contained: somebody adding a
+# lantern or a second drum next month changes nothing in this file and nothing in the manifest's
+# difference list.
+let drum_stone = union { drum_body drum_pilasters drum_dressings }
+let drum_cut   = difference { drum_stone drum_windows }
+
+let part_drum = union { drum_cut drum_metal drum_glass }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Every rule keyed on one of this file's own shapes and every one at below=0.02, because the
+# manifest displaces the whole building by 12 mm of grain at the end and a test at zero misses the
+# voxels the grain made.
+#
+# Order matters — a later coat covers an earlier one. Stone first, then the metal apron, then the
+# glass, then the bronze over the glass where a bar crosses a pane.
+paint limestone where=drum_core below=0.02
+paint granite   where=drum_socle below=0.02
+paint marble    where=drum_bands below=0.02
+paint marble    where=drum_cornice below=0.02
+paint marble    where=drum_pilasters below=0.02
+paint marble    where=drum_dressings below=0.02
+paint copper    where=drum_apron below=0.02
+paint glass     where=drum_glass below=0.02
+paint bronze    where=drum_metal below=0.02
+
+# NO WEATHERING. `weather ... on=` is scoped properly now and a drum is the most exposed stone in
+# the building, but every coat it adds is a displacement, the manifest already spends 12 mm of
+# grain on everything, and the bars here are 0.030 across. A second displacement would eat them,
+# and they are half of what this part exists to carry. Deliberate, and written down so the next
+# person does not read the absence as an oversight.

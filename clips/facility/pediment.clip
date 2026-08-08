@@ -1,10 +1,276 @@
-# pediment - the south pediment: raking cornices, tympanum, acroteria
+# pediment — the south pediment over the portico: raking cornices, tympanum, acroteria.
 #
-# PLACEHOLDER. Replace everything below with the real part.
-# Read clips/facility/BRIEF.md first, then _contract.clip for every dimension.
+# The gable that finishes the south front. It stands on the top of the entablature at 11.90, spans
+# 16.20 (36 M) between x = -8.10 and 8.10, and its apex is at 13.70 — a rise of 1.80, which is
+# span / 9, the low classical pitch the contract asks for and never the steep one.
 #
-# This file must define exactly one part named `part_pediment`. Every other name it binds must
-# start with `pediment_` so nothing collides with another fragment.
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD: THE RAKING CORNICE AND ITS MITRE.
+#
+# This is the only sloped moulding in the building. Everything else that is moulded runs level or
+# turns about an axis; this one climbs at 1 in 4.5 for 8.10 m, twice, and at each lower corner it
+# has to meet a horizontal cornice of the same profile without opening a gap and without poking
+# through it. That join is the hardest thing in this building to get right, and it is hard for a
+# reason worth stating: the two mouldings run in the SAME direction in plan. They are not two runs
+# meeting at a plan corner, where a mitre is an intersection of two half solids and the field does
+# the work. They are one moulding level and one moulding tilted, and the mitre between them is a
+# vertical plane in ELEVATION. There is nothing to intersect. Either the two profiles are the same
+# curve at the same heights at that plane or there is a step, and at this pitch a step is 0.018 m —
+# half a voxel at the contract's metre 32, which is exactly the size of error that a contact sheet
+# will not show you and a path trace will, as a bright hairline along a cornice in shadow.
+#
+# THE DEVELOPMENT OF A RAKING MOULDING, which is what makes it exact.
+#
+# A raking cornice is NOT the horizontal cornice rotated. Rotate it and its profile is measured
+# perpendicular to the rake, so at the mitre the members land 0.75 / cos(theta) apart measured up
+# the wall instead of 0.75, and every one of them is 2.4% out. What a mason cuts, and what is the
+# horizontal profile SHEARED: at every x the section is the same section, translated straight up by
+# the rake's rise. Then the two profiles are identical at the mitre plane by construction, and the
+# join cannot open however the manifest's grain moves the surface.
+#
+# A shear is not in the language, so it is built out of the two operations that are:
+#
+#     shear = scale y by cos(theta), then rotate about z by theta
+#
+# which is an identity and not an approximation. Scaling y by cos(theta) and rotating by theta maps
+# a point to f((y cos t - x sin t) / cos t) = f(y - x tan t), and f(y - x tan t) is the definition of
+# a sheared profile. The two constants below are that arithmetic:
+#
+#     tan(theta) = 1.80 / 8.10 = 2/9        the pitch, and the only dimension in it
+#     theta      = 0.0348020 turns          atan(2/9); a construction, not a dimension
+#     cos(theta) = 9 / sqrt(85) = 0.9761871 a construction, not a dimension
+#
+# The visible result at each lower corner is a wedge of crowning cyma that starts at nothing at
+# x = 8.10 and grows to full section 3.15 m further in. FOR ITS FIRST 0.20 m THAT WEDGE IS UNDER
+# TWO VOXELS THICK, tapering to a knife edge exactly where it lies on top of an identical horizontal
+# moulding. If the sampler over-steps, the wedge dissolves and the rake appears to start half a
+# metre in from the corner; if the profiles disagree by a hair, a lit line appears under it in a
+# face that is otherwise in the corona's shadow all day. Both failures are only visible here.
+#
+# The second load is THREE BRONZE SILHOUETTES AGAINST THE SKY. The acroteria are the order's own
+# `acroterion`: a seven-leaf palmette 0.125 m deep, whose leaves are 0.056 m across — two voxels —
+# standing free with nothing behind them but sky at the three highest points of the south front.
+# Flat thin metal seen edge-on against a bright background is where a sampler's silhouette and a
+# denoiser's edge handling both show, and bronze is rough=110 metal=190, so it is also the only
+# specular metal in this building that is lit directly rather than by bounce.
+#
+# The third is a small one and it is in the worst light in the scene: a bronze wreath, 0.045 m tube
+# (M/10), standing 0.045 proud of the tympanum — a face that is 0.60 m behind the corona above it
+# and therefore in permanent shade behind a hard overhang.
+#
+# DO NOT ROUND THE RAKE OFF TO A NICER ANGLE and do not "simplify" the scale-then-rotate into a
+# plain rotate. The angle is atan(2/9) because the pitch is span/9; the scale is what makes the
+# mitre exact. Both are one line each and neither can be improved without breaking the join this
+# part exists to test.
+#
+# NO WEATHERING IN THIS FILE, for the same reason portico.clip and entablature.clip carry none: the
+# smallest coat worth writing displaces the surface by more than the raking cyma's own thickness
+# where it dies into the corner, which is the one feature this part is here to measure. The
+# manifest's 12 mm of grain and its `variation` line give it a no-two-voxels-alike surface without
+# touching it.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45.
+#
+#   16.20   the span                36 M
+#    1.80   the rise, span / 9       4 M
+#    8.10   the half span           18 M, and the column height, which is not a coincidence
+#    0.90   plinths and wall        D
+#    0.45   acroterion plinths      M
+#
+# THE PROJECTIONS OF THE CORNICE ARE THE MAIN CORNICE'S OWN AND ARE TAKEN UNCHANGED — 0.14, 0.22,
+# 0.34, 0.42, 0.60, 0.72, and the heights 0.07, 0.18, 0.12, 0.23, 0.15 that divide them. They are
+# twentieths of the entablature's 2.00 m, which is how an entablature is divided, and they are not
+# mine to re-proportion: a raking cornice whose members do not land on the horizontal cornice's own
+# members is not a raking cornice, it is a second cornice at an angle. That is the whole point of
+# the part.
+#
+# WHERE IT SITS AGAINST ITS NEIGHBOURS — all of it derived here, none of it read out of another
+# fragment's file:
+#
+#   y = 11.90        entab_top, the contract's own: the top of the cornice and the springing line
+#   y = 13.70        11.90 + 1.80
+#   z = -11.60       the portico's entablature reference plane: portico_z (-12.50) + D. The
+#                    architrave face of a portico stands a diameter inside the portico line, which
+#                    is the plane the columns' own lower diameter stands on. The tympanum is
+#                    recessed back onto it, and every projection below is measured from it.
+#   z = -11.74       that plane plus the 0.14 the frieze projects: the bottom edge of the bed
+#                    mould, standing 0.14 proud of the tympanum with a soffit under it
+#   z = -10.70       -11.60 plus D: the back of the gable wall
+#   z = -12.32       -11.60 less the 0.72 the crowning cyma projects: the outermost stone
+#   x = +-8.10       the span. The cornice below returns round the portico's flank and reaches
+#                    +-8.25 over its corona, so the pediment lands 0.15 inside the edge of the
+#                    stone it stands on and has bearing everywhere along its base.
+#   y = 11.85        everything here is bedded 0.05 into the cornice below, per the brief, so that
+#                    the manifest's 12 mm of grain cannot open the joint.
+#
+# THE TYMPANUM IS DELIBERATELY LEFT PLAIN. A pediment of this size wants a sculpture group and this
+# building is meant to grow: a group is its own fragment, its own file and three lines in the
+# manifest, and it needs nothing from this one but the two lines above that say where the face is
+# and how high the triangle stands. Do not carve one into this file.
 
-let pediment_placeholder = sphere 0 -1.30 0 r=0.25
-let part_pediment = pediment_placeholder
+include "_contract.clip"
+
+# ================================================================================================
+# THE RAKING CORNICE — the main cornice's section, sheared up the rake
+# ================================================================================================
+#
+# Drawn in a local frame whose origin is the APEX OF THE RAKE LINE and whose axes are the
+# building's: y = 0 is the top of the crowning cyma, y = -0.75 its bed mould's bottom edge, and z
+# is measured from the reference plane at -11.60 with the projection running out to -z. That is the
+# same section entablature.clip runs level, written from its own top down instead of from its
+# bottom up, so that the shear leaves the top on the rake line and hangs the rest below it.
+#
+#   0.00 .. -0.15   crowning cyma      0.60 out to 0.72
+#  -0.15 .. -0.38   corona             0.60, flat soffit
+#  -0.38 .. -0.455  ovolo              0.34 swelling to 0.42
+#  -0.38 .. -0.50   dentil cap fillet  0.34
+#  -0.50 .. -0.68   dentil plate       0.22
+#  -0.68 .. -0.75   bed mould          0.22 tucking back to 0.14
+#
+# THE DENTIL PLATE IS LEFT PLAIN, AND THAT IS NOT AN OMISSION. Dentils belong to the horizontal
+# cornice and are not carried up a rake — the band is the same band, seen where it has climbed, and
+# a rake of cut dentils is a nineteenth-century mistake. Keeping the PLATE, at the same height and
+# the same 0.22 projection, is what lets the profile stay identical at the mitre while the carving
+# stops at the corner where it should. There are 913 dentils on this building already.
+#
+# Every member carries `run=x`, without which its curve is struck across the length of the run and
+# every moulding in the file degenerates to a half box that still passes a contact sheet.
+let pediment_rk_crown  = cyma   -1  0.000 -0.60   12 -0.150 -0.72  run=x
+let pediment_rk_corona = fillet -1 -0.380  0      12  0.000 -0.60  run=x
+let pediment_rk_ovolo  = ovolo  -1 -0.380 -0.34   12 -0.455 -0.42  run=x
+let pediment_rk_dcap   = fillet -1 -0.500  0      12 -0.380 -0.34  run=x
+let pediment_rk_plate  = fillet -1 -0.680  0      12 -0.500 -0.22  run=x
+let pediment_rk_bed    = cyma   -1 -0.680 -0.14   12 -0.750 -0.22  run=x
+
+# The stone behind the mouldings. A moulding is only the band between its two corners; without this
+# the section is six floating ribbons. It runs from the tympanum's own face — the reference plane
+# itself, local 0 — back one diameter, so the raking cornice and the wall under it are one piece of
+# stone at every height and there is no seam for the grain to find.
+#
+# THE TYMPANUM IS RECESSED BEHIND THE BED MOULD, and the 0.14 that recesses it is the frieze's own
+# projection. A tympanum flush with the frieze is the commoner arrangement and it was the first one
+# built here; it is wrong for this building, because a pediment 1.80 m tall on a 16.20 m span is
+# very flat, and flush there is nothing to divide the raking cornice from the triangle under it but
+# a change of slope. Set the face back to the reference plane and the bed mould's bottom edge stands
+# 0.14 proud with a soffit under it, so a hard line runs the whole length of both rakes at every
+# hour of the day. It is also what the brief asked for in the word "recessed".
+let pediment_rk_back   = box    -1 -0.750  0      12  0.000  0.90
+
+let pediment_rk_sect = union {
+    pediment_rk_crown pediment_rk_corona pediment_rk_ovolo
+    pediment_rk_dcap pediment_rk_plate pediment_rk_bed
+    pediment_rk_back
+}
+
+# THE SHEAR. Scale y by cos(theta) about the rake line at y = 0, then rotate by theta about z. See
+# the note at the head of the file: the two together are exactly a vertical shear, so the section
+# measured VERTICALLY is the horizontal cornice's own 0.75 m at every point along the rake, and the
+# two profiles coincide at the mitre plane instead of merely meeting near it.
+#
+# The rotation is negative because the rake falls as x grows: this is the east half, and the west
+# half is the same shape folded, which is what keeps the two sides of the building from drifting.
+let pediment_rk_lean = rotate { scale { pediment_rk_sect } y=0.9761871 } z=-0.0348020
+let pediment_rk_set  = translate { pediment_rk_lean } 0 13.70 -11.60
+
+# Cut to the pediment. The box does three things: it stops the rake at the mitre plane x = 8.10, it
+# beds the whole run 0.05 into the cornice below at 11.85, and — because `scale` deliberately
+# carries no bounding box, uneven scaling being unsound to cull against — it gives the sheared
+# solid a square box again, which is the whole reason a moulding can be culled at all.
+let pediment_rk_cut  = box 0 11.85 -12.45   8.10 13.80 -10.70  round=0.012
+let pediment_rake_e  = intersection { pediment_rk_set pediment_rk_cut }
+let pediment_rakes   = mirror { pediment_rake_e } axis=x
+
+# ================================================================================================
+# THE TYMPANUM — the triangle behind it, its face recessed onto the reference plane
+# ================================================================================================
+#
+# The half space under the rake line, taken with the same rotation and no scale — a plane has no
+# profile to preserve — then cut to the span, to the springing line, and to a wall one diameter
+# thick whose face is the reference plane at -11.60. Recessed twice over: 0.14 behind the bed mould
+# that springs off it, and 0.60 behind the corona that hangs out to -12.20 above. That is the
+# deepest permanently shaded flat face on the outside of this building, 16.20 m of it, and it is
+# where the bronze wreath is put for exactly that reason.
+#
+# It reaches the whole way up to the rake line rather than stopping under the bed mould. Above that
+# line there is nothing; below it the cornice's own backing occupies the same stone, so the two are
+# one solid by sharing volume rather than by touching, which is the only joint that cannot open.
+let pediment_gable_e = rotate { box -30 -20 -30   30 0 30 } z=-0.0348020
+let pediment_gable   = mirror { translate { pediment_gable_e } 0 13.70 -11.60 } axis=x
+let pediment_tymp_bx = box -8.10 11.85 -11.60   8.10 13.80 -10.70  round=0.012
+let pediment_tympanum = intersection { pediment_gable pediment_tymp_bx }
+
+# ================================================================================================
+# THE ACROTERIA — apex and both lower corners
+# ================================================================================================
+#
+# The order's own `acroterion`: a seven-leaf palmette on a scrolled foot, 0.45 (M) tall and flat in
+# z, so it stands as a silhouette in the plane of the pediment, which is what an acroterion is.
+#
+# Each stands on a pedestal 0.45 (M) of visible height: a die 0.81 square, set back 0.045 (M/10) on
+# every face from a cap 0.90 (D) square. The corner pedestals are centred on x = +-7.65 — portico_x,
+# so the cap's outer face lands exactly on the span at 8.10 — and all three are centred on
+# z = -11.70, a module line, which leaves the crown's edge at -12.32 standing 0.17 clear in front of
+# the cap so the cornice reads past the pedestal instead of dying into it. The palmette is sunk 0.05
+# into its cap for the same reason everything else here is bedded 0.05.
+#
+# THE CORNER PEDESTAL DOES NOT BURY THE MITRE. Its front face is at -12.15 and the wedge of raking
+# cyma that dies into the horizontal cornice runs out to -12.32, so the join this part exists to
+# test is in front of the pedestal and below it, in clear view from the steps.
+let pediment_ped_die_e = box 7.245 11.850 -12.105   8.055 12.215 -11.295  round=0.012
+let pediment_ped_cap_e = box 7.200 12.215 -12.150   8.100 12.350 -11.250  round=0.012
+let pediment_acro_e    = translate { acroterion } 7.65 12.30 -11.70
+let pediment_corner_e  = union { pediment_ped_die_e pediment_ped_cap_e pediment_acro_e }
+let pediment_corners   = mirror { pediment_corner_e } axis=x
+
+# The apex pedestal has to swallow the ridge under it: the rake falls 0.09 across the die's own
+# half width of 0.405, so the die starts 0.15 below the apex — that fall plus the building's 0.05 of
+# bedding, rounded up to a module twelfth — and its whole underside is inside stone from end to end.
+let pediment_ped_die_a = box -0.405 13.550 -12.105   0.405 13.865 -11.295  round=0.012
+let pediment_ped_cap_a = box -0.450 13.865 -12.150   0.450 14.000 -11.250  round=0.012
+let pediment_acro_a    = translate { acroterion } 0 13.95 -11.70
+let pediment_apex      = union { pediment_ped_die_a pediment_ped_cap_a pediment_acro_a }
+
+# ================================================================================================
+# THE WREATH — the one ornament on the tympanum
+# ================================================================================================
+#
+# 0.81 (1.8 M) across the outside, tube 0.045 (M/10), its axis lying IN the tympanum's face so that
+# exactly half of it stands proud: 0.045 of relief, one and a half voxels, on the darkest flat face
+# on the building. Centred at 12.35, which is the springing plus M, it sits square in a triangle
+# that is 1.05 tall on the centre line.
+let pediment_wreath = torus 0 12.35 -11.60  ring=0.36 tube=0.045 axis=z
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let part_pediment = union {
+    pediment_tympanum pediment_rakes
+    pediment_corners pediment_apex
+    pediment_wreath
+}
+
+# This part removes nothing from anybody, so the manifest names no `void_pediment`.
+
+# --- paint -----------------------------------------------------------------------------------
+#
+# Marble, which is what the order asks for and what the entablature under it, the portico's columns
+# and the antae already are: the pediment is the top of that same order and it is the same stone.
+#
+# Bronze on the three acroteria and the wreath, which is what the order recommends for an
+# acroterion standing against the sky. The four of them are one material in two lights and that is
+# the point of putting the wreath in bronze as well as the palmettes: a rough specular metal in
+# open sun with nothing behind it but sky at 14.40 m, and the same metal at 12.35 m on a face that
+# has 0.60 m of corona over it and never sees the sun at all. Whether those read as the same
+# material is a fair question to ask a renderer, and this is the only place in the building where
+# it can be asked without changing anything else.
+#
+# below=0.02 on every rule and never below=0: the manifest displaces the whole building by 12 mm of
+# grain at the very end, and a voxel that exists only because the grain pushed the surface outward
+# lies OUTSIDE the shape its rule names. At below=0 those voxels match nothing, fall back to the
+# base coat, and leave a pale limestone rind over every raking cornice and every palmette here.
+let pediment_metal = union { pediment_acro_a mirror { pediment_acro_e } axis=x pediment_wreath }
+
+paint marble where=part_pediment  below=0.02
+paint bronze where=pediment_metal below=0.02
