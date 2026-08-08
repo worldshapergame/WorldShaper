@@ -2501,6 +2501,34 @@ void Application::record_frame(f32 time_seconds) {
 
     world_buffers_.upload_tables(cmd, types_);
     profiler_.add_bytes(world_buffers_.stats().staged_bytes);
+
+    // Everything above WROTE the buffers that everything below READS, and until now nothing said
+    // so.
+    //
+    // The uploads are vkCmdCopyBuffer into the brick payload, the occupancy words, the summary
+    // thumbnails and the type tables. The visibility pass and the tracer read exactly those. With no
+    // dependency between them the two are unordered: the GPU is entitled to start marching while
+    // the copies are still landing, and it does — so for one frame a chunk is read half in its old
+    // state and half in its new one, which draws as geometry that is neither.
+    //
+    // That is the flash of wrong shape when a voxel is chiselled or a region sharpens. It is not a
+    // stale summary and not a rebuild artefact; it is a read racing a write, and it showed up on
+    // every path that changes a chunk because every one of them ends in these copies.
+    //
+    // The clipboard's own upload a few hundred lines below has had this barrier all along, which is
+    // why pasting a clip never flickered and editing the world always did.
+    {
+        VkMemoryBarrier2 wrote_world{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        wrote_world.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        wrote_world.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        wrote_world.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        wrote_world.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &wrote_world;
+        vkCmdPipelineBarrier2(cmd, &dependency);
+    }
+
     profiler_.end_pass(cmd);
 
     {
