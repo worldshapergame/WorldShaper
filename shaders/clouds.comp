@@ -1,47 +1,54 @@
 #version 450
-// The cloud volume, marched once for every sixteen pixels.
+// The cloud volume, at full resolution, marched one sixteenth at a time.
 //
-// # Why a pass of its own
+// # Why not simply render it small
 //
-// Cloud costs what its march costs, and its march costs what its steps cost. Measured on the
-// facility's sky view: sixteen steps is 2.77 ms, thirty-two is 5.00, seventy-two is 6.09. Linear,
-// and then saturating as rays start finishing early. There is no arrangement of the inner loop
-// that changes that by an order of magnitude — reaching a tenth by cutting steps would mean about
-// five of them, which is not a cloud.
+// The first version of this pass marched at a quarter of the resolution in each axis and
+// interpolated on the way out. It hit the cost — 7.85 ms of cloud became 0.61 — and it is soft,
+// because a quarter-resolution buffer bilinearly upsampled IS a blur, and no amount of temporal
+// work changes what a single frame of it contains. Jittering the sample point lets a still camera
+// resolve that over a few dozen frames and does nothing at all while moving, which is exactly when
+// it matters.
 //
-// So the saving has to come from marching fewer PIXELS, and cloud is the one thing in the picture
-// that can afford it. A cumulus is a thousand metres across and its softest edge is tens of metres
-// wide; at a kilometre away that edge covers many pixels, so the field genuinely carries no
-// detail at the pixel level to lose. Everything else on screen does — which is exactly why this is
-// a separate pass rather than a lower resolution for the whole renderer.
+// # What this does instead
 //
-// One march per four-by-four block, bilinearly interpolated on the way out. Sixteen times fewer
-// marches, and the budget that frees is spent on more steps per march, so the clouds come out
-// BETTER as well as cheaper.
+// The buffer is full resolution and persistent. Each frame marches one pixel of every four-by-four
+// block — a different one each time, in Bayer order so successive frames land far apart — and
+// every other pixel is carried forward from where it was last frame. Sixteen frames rebuild the
+// whole image, and nothing is ever upsampled: every pixel holds a march that was done AT that
+// pixel, just not on this frame.
 //
-// # Why it cannot be done inside the path tracer
+// The cost is the same sixteenth of the marching. What changes is that the answer is sharp.
 //
-// The obvious version shares one march across a workgroup through `shared` memory and a barrier.
-// It is not available here: pathtrace.comp returns early from `main` in several places — a summary
-// hit, a pixel not refining this frame, each debug view — and a barrier that only some invocations
-// of a workgroup reach is undefined behaviour. A separate dispatch has no such problem because
-// every invocation of it does the same work.
+// # Why reprojection needs no depth here
+//
+// Carrying a pixel forward means knowing where what it looks at appeared last frame, and in general
+// that needs the distance to it. For cloud it does not. The deck starts six hundred metres away and
+// a player moves metres in a frame, so the parallax from walking is far under a pixel; what
+// actually moves the image is TURNING, and turning is a rotation, which can be undone with
+// directions alone.
+//
+// So a pixel's ray direction is projected through where the camera was last frame — the same five
+// vec4s the motion blur already carries — and that is where to read. Exact for any amount of
+// turning, and wrong by well under a pixel at any speed a person walks.
 //
 // # What it stores
 //
-// rgb is the light scattered towards the eye along the ray, already including the aerial
-// perspective. The alpha is the transmittance: what fraction of whatever is behind survives. The
-// consumer composites `cloud.rgb + cloud.a * behind`, which is the same arithmetic the march used
-// to do inline.
+// rgb is the light scattered towards the eye, aerial perspective included. Alpha is the
+// transmittance: what fraction of whatever is behind survives. The consumer composites
+// `cloud.rgb + cloud.a * behind`, which is the same arithmetic the march used to do inline.
 
 #extension GL_GOOGLE_include_directive : require
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// Binding 20 of the path tracer's own set, which this pass borrows whole: it needs the parameter
-// block and the sun, and both are already in it. Sharing the layout is why this costs one binding
-// and one dispatch rather than a set of its own.
-layout(binding = 20, rgba16f) uniform writeonly image2D out_cloud;
+// Two images at one binding, alternating: this frame reads what the last frame wrote and writes the
+// other. A descriptor array rather than two bindings, so nothing has to be rewritten per frame —
+// the parity arrives in a push constant and the shader picks.
+layout(binding = 20, rgba16f) uniform image2D cloud_history[2];
+// Where this frame's marches land, packed: one texel per four-by-four block, so the marching
+// dispatch is small and every invocation in it marches.
+layout(binding = 21, rgba16f) uniform image2D cloud_marched;
 
 layout(std140, binding = 13) uniform Params {
 #include "params.glsl"
@@ -50,7 +57,7 @@ layout(std140, binding = 13) uniform Params {
 layout(push_constant) uniform Trace {
     vec4 sun;
     vec4 sun_colour;
-    uvec4 control;
+    uvec4 control;      // x sample index, y HISTORY PARITY, z frame counter, w world changed
     uvec4 quality;
     vec4 fog;
     vec4 fog_shape;
@@ -59,8 +66,8 @@ layout(push_constant) uniform Trace {
 const float kPi = 3.14159265358979;
 const int kChunkEdge = 256;
 
-// The sky's own noise wants this. It is defined in pathtrace.comp rather than in a shared file,
-// and copying four lines is better than including the whole sampling header for them — that header
+// The sky's own noise wants this. It is defined in pathtrace.comp rather than in a shared file, and
+// copying four lines is better than including the whole sampling header for them — that header
 // brings a second definition of kPi and a dozen functions this pass never calls.
 uint hash_u32(uint x) {
     x ^= x >> 16; x *= 0x7feb352du;
@@ -72,43 +79,142 @@ uint hash_u32(uint x) {
 #include "pt_sky.glsl"
 #include "pt_clouds.glsl"
 
-void main() {
-    ivec2 low = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(out_cloud);
-    if (low.x >= size.x || low.y >= size.y) return;
+// Which pixel of a four-by-four block is marched on a given frame.
+//
+// Bayer order, so consecutive frames update pixels far apart and the image fills in evenly rather
+// than sweeping across it. A raster order leaves a visible edge crawling through the sky wherever
+// the weather is changing.
+const ivec2 kUpdateOrder[16] = ivec2[16](
+    ivec2(0, 0), ivec2(2, 2), ivec2(2, 0), ivec2(0, 2),
+    ivec2(1, 1), ivec2(3, 3), ivec2(3, 1), ivec2(1, 3),
+    ivec2(1, 0), ivec2(3, 2), ivec2(3, 0), ivec2(1, 2),
+    ivec2(0, 1), ivec2(2, 3), ivec2(2, 1), ivec2(0, 3));
 
-    // The full-resolution pixel this block stands for, JITTERED within the block each frame.
-    //
-    // A quarter-resolution sample cannot hold detail finer than four pixels, and near the horizon
-    // the deck is seen edge-on and genuinely does carry it — so a fixed sample point puts visible
-    // stair-steps along the skyline where a bilinear read cannot invent what was never sampled.
-    //
-    // Moving the sample point around inside its block each frame turns that into something the
-    // accumulator can dissolve: over a few dozen frames every part of the block gets marched, and
-    // the running mean converges on the answer a full-resolution march would have given. It is the
-    // same trade the path tracer already makes everywhere else — spread the error over time rather
-    // than over space — and it costs one addition.
-    //
-    // A golden-ratio pair rather than a hash, so successive frames land far apart instead of
-    // clumping, and the sequence covers the block evenly at any number of frames.
-    float n = float(trace.control.z);
-    vec2 jitter = vec2(fract(n * 0.61803399), fract(n * 0.38196601)) - 0.5;
-    vec2 full = (vec2(low) + 0.5 + jitter) * float(kCloudScale);
-    vec2 uv = full / vec2(push.resolution.xy) * 2.0 - 1.0;
+vec3 ray_through(vec2 pixel, float aspect) {
+    vec2 uv = (pixel + 0.5) / vec2(push.resolution.xy) * 2.0 - 1.0;
+    return normalize(push.forward.xyz +
+                     push.right.xyz * uv.x * push.lens.x * aspect -
+                     push.up.xyz * uv.y * push.lens.x);
+}
+
+// Where a direction appeared on screen LAST frame. z of nought means it was behind the camera and
+// there is nothing to carry forward.
+vec3 where_it_was(vec3 dir, float aspect) {
+    float ahead = dot(dir, push.prev_forward.xyz);
+    if (ahead <= 1e-4) return vec3(0.0, 0.0, 0.0);
+    float across = dot(dir, push.prev_right.xyz);
+    float upward = dot(dir, push.prev_up.xyz);
+    vec2 ndc = vec2(across / (ahead * push.lens.x * aspect), -upward / (ahead * push.lens.x));
+    return vec3((ndc * 0.5 + 0.5) * vec2(push.resolution.xy) - 0.5, 1.0);
+}
+
+// Four taps when the view has turned, one when it has not.
+//
+// Fifteen pixels in sixteen take this path every frame, so what it costs is very nearly what the
+// whole pass costs: four image loads here was 5.46 ms of a 7.85 ms budget, against 0.61 for the
+// marching it replaced. The marching was never the expensive part of a reprojected history.
+//
+// And most of the time the four are the same tap. A camera that has not turned since last frame
+// reprojects each pixel onto itself, so the weights are one and nought and the other three loads
+// are fetched, multiplied by zero and discarded. Asking first costs a compare.
+vec4 read_history(int which, vec2 at) {
+    ivec2 limit = ivec2(push.resolution.xy) - 1;
+    ivec2 base = ivec2(floor(at));
+    vec2 f = at - vec2(base);
+
+    if (f.x < 0.002 && f.y < 0.002) {
+        return imageLoad(cloud_history[which], clamp(base, ivec2(0), limit));
+    }
+
+    vec4 a = imageLoad(cloud_history[which], clamp(base + ivec2(0, 0), ivec2(0), limit));
+    vec4 b = imageLoad(cloud_history[which], clamp(base + ivec2(1, 0), ivec2(0), limit));
+    vec4 c = imageLoad(cloud_history[which], clamp(base + ivec2(0, 1), ivec2(0), limit));
+    vec4 d = imageLoad(cloud_history[which], clamp(base + ivec2(1, 1), ivec2(0), limit));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// The two halves, told apart by bit 1 of the parity word.
+//
+// # Why the marching is a dispatch of its own
+//
+// The obvious arrangement marches one pixel in sixteen inside the full-resolution pass and
+// reprojects the rest. It does a sixteenth of the marching and it does NOT cost a sixteenth,
+// because a GPU runs thirty-two lanes in lockstep: a warp holding one marching pixel and
+// thirty-one reprojecting ones takes as long as if all thirty-two had marched. With the update
+// pixels spread out — which they must be, or the image fills in in visible sweeps — nearly every
+// warp holds one.
+//
+// Measured: marching one in sixteen in place cost 4.23 ms, against 0.61 for the very same number
+// of rays when they were packed into a small dispatch where every lane marches. Divergence, and
+// nothing else.
+//
+// So the marching runs over a buffer a sixteenth the size, fully occupied, and the resolve reads
+// it. The resolve is cheap per pixel but it does touch all of them, which is the 1.26 ms that a
+// full-resolution history costs in this renderer however little each pixel does.
+
+void march_pass() {
+    ivec2 block = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 blocks = (ivec2(push.resolution.xy) + 3) / 4;
+    if (block.x >= blocks.x || block.y >= blocks.y) return;
+
+    // The pixel of this block that is this frame's turn. Every block updates the same offset on a
+    // given frame, so the whole image advances together rather than in patches.
+    ivec2 want = kUpdateOrder[trace.control.z & 15u];
+    ivec2 pixel = block * 4 + want;
+
     float aspect = float(push.resolution.x) / float(push.resolution.y);
-    vec3 dir = normalize(push.forward.xyz +
-                         push.right.xyz * uv.x * push.lens.x * aspect -
-                         push.up.xyz * uv.y * push.lens.x);
+    vec3 dir = ray_through(vec2(pixel), aspect);
 
-    vec3 from = world_position(push.origin.xyz);
-    float through = 1.0;
-    vec3 scattered = vec3(0.0);
+    vec4 result = vec4(0.0, 0.0, 0.0, 1.0);
     if (push.sky_cloud.x > 0.0) {
-        scattered = cloud_march(from, dir, world_height_metres(from), kCloudFarMetres, through);
-        // A mean that has had a NaN added to it is a NaN for ever, and this one is read by
-        // sixteen pixels rather than one.
+        vec3 from = world_position(push.origin.xyz);
+        float through = 1.0;
+        vec3 scattered = cloud_march(from, dir, world_height_metres(from), kCloudFarMetres,
+                                     through);
+        // A mean that has had a NaN in it is a NaN for ever, and this one is carried forward for
+        // sixteen frames rather than replaced on every one.
         if (any(isnan(scattered)) || any(isinf(scattered))) scattered = vec3(0.0);
         if (isnan(through) || isinf(through)) through = 1.0;
+        result = vec4(scattered, through);
     }
-    imageStore(out_cloud, low, vec4(scattered, through));
+    imageStore(cloud_marched, block, result);
+}
+
+void resolve_pass() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(push.resolution.x) || pixel.y >= int(push.resolution.y)) return;
+
+    int writing = int(trace.control.y & 1u);
+    int reading = 1 - writing;
+
+    if (push.sky_cloud.x <= 0.0) {
+        imageStore(cloud_history[writing], pixel, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    // This frame's own march, if this is the pixel that got one.
+    ivec2 want = kUpdateOrder[trace.control.z & 15u];
+    if ((pixel.x & 3) == want.x && (pixel.y & 3) == want.y) {
+        imageStore(cloud_history[writing], pixel, imageLoad(cloud_marched, pixel >> 2));
+        return;
+    }
+
+    // Otherwise carry forward what this pixel was looking at last frame. Where there is nothing to
+    // carry — the first frames, a resize, a pixel that has just come round the edge of the screen —
+    // the nearest marched block stands in. Not a march: this pass must stay free of them, or the
+    // divergence the packing exists to avoid comes straight back.
+    float aspect = float(push.resolution.x) / float(push.resolution.y);
+    vec3 dir = ray_through(vec2(pixel), aspect);
+    vec3 was = where_it_was(dir, aspect);
+    bool on_screen = was.z > 0.0 && was.x >= -1.0 && was.y >= -1.0 &&
+                     was.x <= float(push.resolution.x) && was.y <= float(push.resolution.y);
+
+    vec4 carried = on_screen ? read_history(reading, was.xy)
+                             : imageLoad(cloud_marched, pixel >> 2);
+    imageStore(cloud_history[writing], pixel, carried);
+}
+
+void main() {
+    if ((trace.control.y & 2u) != 0u) resolve_pass();
+    else march_pass();
 }

@@ -498,15 +498,12 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
     vec3 radiance = apply_media(g_prefix + g_throughput * radiance_in, push.origin.xyz, eye_dir,
                                 primary_t);
 
-    // Cloud, read from the quarter-resolution pass rather than marched here.
+    // Cloud, read from the full-resolution history the cloud pass keeps.
     //
-    // shaders/clouds.comp marched one ray per four-by-four block; this interpolates between the
-    // four nearest of those. Bilinear and not nearest, or the blocks are visible as squares — the
-    // field is smooth, so interpolating it is not an approximation of the answer, it IS the answer
-    // at the resolution the field carries.
-    //
-    // The half-texel offset is the usual one: sample n covers full-resolution pixels 4n to 4n+3,
-    // so its centre is at 4n + 1.5, and the weights have to be measured from there.
+    // One texel, its own, with no filtering and no upsampling: shaders/clouds.comp marched THIS
+    // pixel, on this frame or on one of the last fifteen, and carried it forward by reprojection
+    // in between. That is the whole point of the reprojected history over a small buffer — the
+    // cost is the same sixteenth of the marching and the answer is sharp.
     if (push.sky_cloud.x > 0.0) {
         // Where the cloud in this direction BEGINS, which decides whether it is in front of what
         // the ray hit. Arithmetic on the slab, no marching: a wall five metres away must not have
@@ -524,17 +521,7 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
         }
 
         if (crossed && primary_t / kVoxelsPerMetre > begins_m) {
-            vec2 at = (vec2(pixel) - 1.5) / float(kCloudScale);
-            ivec2 limit = ivec2(imageSize(in_cloud)) - 1;
-            ivec2 base = ivec2(floor(at));
-            vec2 f = at - vec2(base);
-
-            vec4 c00 = imageLoad(in_cloud, clamp(base + ivec2(0, 0), ivec2(0), limit));
-            vec4 c10 = imageLoad(in_cloud, clamp(base + ivec2(1, 0), ivec2(0), limit));
-            vec4 c01 = imageLoad(in_cloud, clamp(base + ivec2(0, 1), ivec2(0), limit));
-            vec4 c11 = imageLoad(in_cloud, clamp(base + ivec2(1, 1), ivec2(0), limit));
-            vec4 cloud = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
-
+            vec4 cloud = imageLoad(in_cloud[push.motion.z > 0.5 ? 1 : 0], pixel);
             radiance = cloud.rgb + cloud.a * radiance;
         }
     }

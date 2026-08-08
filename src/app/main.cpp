@@ -770,7 +770,10 @@ private:
     // The cloud volume, marched once per four-by-four block. See shaders/clouds.comp.
     ComputePipeline clouds_;
     GpuImage cloud_image_;
+    GpuImage cloud_image_prev_;
+    GpuImage cloud_marched_;
     bool cloud_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
+    u32 cloud_parity_ = 0;       // which of the two the cloud pass writes this frame
     VkDescriptorSetLayout pathtrace_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet pathtrace_set_ = VK_NULL_HANDLE;
     GpuImage accum_image_;
@@ -969,13 +972,21 @@ bool Application::create_render_target(u32 width, u32 height) {
     // exactly what this mode exists to show.
     accum_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
                                         "path trace accumulation");
-    // The cloud volume, at a quarter of the render in each axis: one march per sixteen pixels.
-    // Rounded UP, so the last partial block still has a sample and the right edge of the screen is
-    // not reading a clamped neighbour.
-    cloud_image_ = create_storage_image(device_, (width + kCloudScale - 1) / kCloudScale,
-                                        (height + kCloudScale - 1) / kCloudScale,
-                                        VK_FORMAT_R16G16B16A16_SFLOAT, "cloud volume");
+    // The cloud history, FULL resolution and two deep. The pass writes one and reads the other,
+    // alternating, so a frame can carry forward what the last one marched without reading the
+    // image it is writing. See shaders/clouds.comp.
+    cloud_image_ = create_storage_image(device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                        "cloud history a");
+    cloud_image_prev_ = create_storage_image(device_, width, height, VK_FORMAT_R16G16B16A16_SFLOAT,
+                                             "cloud history b");
+    // And where this frame's marches land, packed one per four-by-four block. Small on purpose:
+    // every invocation of the marching dispatch marches, so no warp is held up by lanes that are
+    // only reprojecting. See the head of shaders/clouds.comp.
+    cloud_marched_ = create_storage_image(device_, (width + kCloudScale - 1) / kCloudScale,
+                                          (height + kCloudScale - 1) / kCloudScale,
+                                          VK_FORMAT_R16G16B16A16_SFLOAT, "cloud marches");
     cloud_ready_ = false;
+    cloud_parity_ = 0;
 
     trace_samples_ = 0;
     accum_ready_ = false;   // a new image, so it needs its one transition out of UNDEFINED
@@ -996,11 +1007,13 @@ bool Application::create_render_target(u32 width, u32 height) {
     accum_info.imageView = accum_image_.view;
     accum_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkDescriptorImageInfo cloud_info{};
-    cloud_info.imageView = cloud_image_.view;
-    cloud_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorImageInfo cloud_info[2]{};
+    cloud_info[0].imageView = cloud_image_.view;
+    cloud_info[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    cloud_info[1].imageView = cloud_image_prev_.view;
+    cloud_info[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[7]{};
+    VkWriteDescriptorSet writes[8]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -1024,10 +1037,18 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[5].dstSet = pathtrace_set_;
     writes[5].dstBinding = 1;
     writes[5].pImageInfo = &colour_info;
+    VkDescriptorImageInfo marched_info{};
+    marched_info.imageView = cloud_marched_.view;
+    marched_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
     writes[6].dstSet = pathtrace_set_;
     writes[6].dstBinding = kCloudBinding;
-    writes[6].pImageInfo = &cloud_info;
-    vkUpdateDescriptorSets(device_.handle(), 7, writes, 0, nullptr);
+    writes[6].descriptorCount = 2;
+    writes[6].pImageInfo = cloud_info;
+    writes[7].dstSet = pathtrace_set_;
+    writes[7].dstBinding = kCloudMarchedBinding;
+    writes[7].pImageInfo = &marched_info;
+    vkUpdateDescriptorSets(device_.handle(), 8, writes, 0, nullptr);
     return true;
 }
 
@@ -2255,6 +2276,8 @@ void Application::record_frame(f32 time_seconds) {
         // not a longer exposure, it is the same exposure arriving late.
         params.motion[0] = motion_blur_ ? kShutterFraction : 0.0f;
         params.motion[1] = kLongestStreak;
+        // And which cloud history holds this frame's answer, for the tracer to read.
+        params.motion[2] = static_cast<f32>(cloud_parity_);
 
         // The weather. Coverage is what kind of day it is; the time is what moves the decks, and
         // moving the decks is what moves their shadows across the ground.
@@ -2576,6 +2599,9 @@ void Application::record_frame(f32 time_seconds) {
         trace.sun_colour[1] = 3.05f;
         trace.sun_colour[2] = 2.75f;
         trace.control[0] = trace_samples_;
+        // Which of the two histories the cloud pass writes this frame; it reads the other.
+        cloud_parity_ ^= 1u;
+        trace.control[1] = cloud_parity_;
         trace.control[2] = static_cast<u32>(frame_counter_);   // for cache eviction
         trace.quality[0] = quality_.knobs().refine_stride;
         trace.quality[1] = quality_.knobs().shadow_target;
@@ -2592,11 +2618,17 @@ void Application::record_frame(f32 time_seconds) {
         // cloud can afford that and nothing else in the picture can.
         if (clouds_.pipeline() != VK_NULL_HANDLE) {
             profiler_.begin_pass(cmd, "cloud", 0.55);
-            image_barrier(cmd, cloud_image_.image,
-                          cloud_ready_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                          VK_ACCESS_2_SHADER_READ_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                          VK_ACCESS_2_SHADER_WRITE_BIT);
+            const VkImageLayout was =
+                cloud_ready_ ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+            image_barrier(cmd, cloud_image_.image, was, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            image_barrier(cmd, cloud_image_prev_.image, was, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
+            image_barrier(cmd, cloud_marched_.image, was, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
             cloud_ready_ = true;
 
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.pipeline());
@@ -2604,9 +2636,28 @@ void Application::record_frame(f32 time_seconds) {
                                     &pathtrace_set_, 1, &trace_offset);
             vkCmdPushConstants(cmd, clouds_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                sizeof(TracePush), &trace);
-            const u32 cloud_w = (render_extent.width + kCloudScale - 1) / kCloudScale;
-            const u32 cloud_h = (render_extent.height + kCloudScale - 1) / kCloudScale;
-            vkCmdDispatch(cmd, (cloud_w + 7) / 8, (cloud_h + 7) / 8, 1);
+            // The packed march: one invocation per four-by-four block, all of them marching.
+            const u32 blocks_w = (render_extent.width + kCloudScale - 1) / kCloudScale;
+            const u32 blocks_h = (render_extent.height + kCloudScale - 1) / kCloudScale;
+            vkCmdDispatch(cmd, (blocks_w + 7) / 8, (blocks_h + 7) / 8, 1);
+
+            VkMemoryBarrier2 marched{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            marched.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            marched.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            marched.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            marched.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            VkDependencyInfo marched_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            marched_dependency.memoryBarrierCount = 1;
+            marched_dependency.pMemoryBarriers = &marched;
+            vkCmdPipelineBarrier2(cmd, &marched_dependency);
+
+            // And the resolve, over every pixel: this frame's marches where they landed, and last
+            // frame's answer reprojected everywhere else. Bit 1 of the parity word picks the half.
+            trace.control[1] |= 2u;
+            vkCmdPushConstants(cmd, clouds_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(TracePush), &trace);
+            vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
+            trace.control[1] &= ~2u;
             profiler_.end_pass(cmd);
 
             // Written by one dispatch and read by the next, so they have to be told apart.
@@ -3044,15 +3095,17 @@ int Application::run(const Options& options) {
         // at 20 — which the cloud pass writes and this one reads. They share this layout whole,
         // because the cloud pass needs the parameter block and the sun and nothing else, and a set
         // of its own would be the same set with holes in it.
-        constexpr u32 kTraceBindings = kCloudBinding + 1;
+        constexpr u32 kTraceBindings = kCloudMarchedBinding + 1;
         VkDescriptorSetLayoutBinding trace_bindings[kTraceBindings]{};
         for (u32 i = 0; i < kTraceBindings; ++i) {
             trace_bindings[i].binding = i;
             trace_bindings[i].descriptorType =
-                (i < 2 || i == kCloudBinding) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                (i < 2 || i >= kCloudBinding) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                 : (i == 13)                   ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
                                               : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            trace_bindings[i].descriptorCount = 1;
+            // Two at the cloud binding: the history is read and written alternately, so both are
+            // bound and the shader picks by parity rather than the descriptors being rewritten.
+            trace_bindings[i].descriptorCount = (i == kCloudBinding) ? 2 : 1;
             trace_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
         VkDescriptorSetLayoutCreateInfo trace_layout{

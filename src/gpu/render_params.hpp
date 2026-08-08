@@ -213,6 +213,10 @@ inline constexpr u32 kFrameStatsBinding = 19;
 // block and the sun and nothing else.
 inline constexpr u32 kCloudBinding = 20;
 
+// Where this frame's cloud marches land, packed one per block before they are resolved into the
+// full-resolution history.
+inline constexpr u32 kCloudMarchedBinding = 21;
+
 // How many full-resolution pixels a cloud sample covers, in each axis. Must match kCloudScale in
 // shaders/pt_clouds.glsl.
 inline constexpr u32 kCloudScale = 4;

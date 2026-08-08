@@ -18,9 +18,10 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 // materials this exists to show.
 layout(binding = 0, rgba32f) uniform image2D accum;
 layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
-// What shaders/clouds.comp marched, at a quarter resolution in each axis. rgb is what the cloud
-// scattered towards the eye, a is what fraction of whatever is behind it survives.
-layout(binding = 20, rgba16f) uniform readonly image2D in_cloud;
+// The cloud history shaders/clouds.comp keeps, full resolution and two deep — it writes one and
+// reads the other, alternating, and `push.motion.z` says which holds this frame's. rgb is what the
+// cloud scattered towards the eye, a is what fraction of whatever is behind it survives.
+layout(binding = 20, rgba16f) uniform readonly image2D in_cloud[2];
 
 // The marcher walks a shadow ray through glass itself, and needs to know what one voxel of a
 // material lets past. It cannot work that out: the type and visual tables below are in this
