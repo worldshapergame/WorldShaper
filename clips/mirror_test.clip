@@ -1,0 +1,65 @@
+# A scene for looking at reflections, and nothing else.
+#
+# The grid the reflection cache used to draw appeared on a polished surface seen at a shallow
+# angle, because that is the one view where the distance to the surface — and so the level its
+# radiance entries were keyed at — sweeps through several values across a single image. Straight
+# down at a mirror, everything is at one distance and there is nothing to see.
+#
+# So: a long polished floor, some coloured posts to reflect in it, a metal sphere for a mirror,
+# and a rough metal one beside it for the glossy case. Looked at from low down along the floor.
+
+metre 32
+bounds -8 -0.6 -14   8 5 6
+
+material floor_polish rgb=182,180,186 rough=18  metal=30
+material floor_satin  rgb=176,172,168 rough=90  metal=20
+material chrome       rgb=232,232,238 rough=8   metal=250
+material brushed      rgb=196,192,186 rough=110 metal=220
+material gold         rgb=214,168,72  rough=40  metal=240
+material post_red     rgb=176,52,48   rough=200
+material post_blue    rgb=48,72,168   rough=200
+material post_white   rgb=228,226,220 rough=210
+material kerb         rgb=104,102,100 rough=230
+
+# The floor: half of it near-mirror, half of it satin, so the two cases sit side by side in one
+# frame and can be compared rather than remembered.
+let mt_slab   = box -8 -0.6 -14   8 0 6 round=0.02
+let mt_left   = box -8 -0.6 -14   0 0.01 6
+let mt_right  = box  0 -0.6 -14   8 0.01 6
+
+# Posts to be reflected, at increasing distance, so the reflection stretches away down the
+# floor and passes through every level the cache might key at.
+let mt_post   = cylinder 0 1.2 0 r=0.22 h=2.4 axis=y
+let mt_row_a  = translate { mt_post } -3.2 0 -2.0
+let mt_row_b  = translate { mt_post }  3.2 0 -5.5
+let mt_row_c  = translate { mt_post } -3.2 0 -9.0
+let mt_row_d  = translate { mt_post }  3.2 0 -12.5
+let mt_posts  = union { mt_row_a mt_row_b mt_row_c mt_row_d }
+
+# A mirror and a glossy ball, the two ends of the roughness ramp.
+let mt_ball_a = sphere -1.6 0.9 -1.2 r=0.9
+let mt_ball_b = sphere  1.6 0.9 -1.2 r=0.9
+let mt_ball_c = sphere  0.0 0.7 -4.4 r=0.7
+
+let mt_kerb   = box -8 0 5.4   8 0.5 6 round=0.03
+
+let grain = fbm size=0.06 octaves=3 seed=11
+
+let mt_all = union { mt_slab mt_posts mt_ball_a mt_ball_b mt_ball_c mt_kerb }
+let mt_all = displace { mt_all grain } amount=0.004
+
+paint floor_satin
+paint floor_polish where=mt_left below=0
+paint floor_satin  where=mt_right below=0
+paint post_red     where=mt_row_a below=0
+paint post_blue    where=mt_row_b below=0
+paint post_white   where=mt_row_c below=0
+paint post_red     where=mt_row_d below=0
+paint chrome       where=mt_ball_a below=0
+paint brushed      where=mt_ball_b below=0
+paint gold         where=mt_ball_c below=0
+paint kerb         where=mt_kerb below=0
+
+variation colour=0.020 rough=0.040 seed=5
+
+solid mt_all

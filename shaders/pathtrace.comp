@@ -155,6 +155,40 @@ uint direction_bin(vec3 dir) {
 
 const float kRadianceMinRoughness = 0.25;
 
+// The level a radiance bin is keyed at — fixed, like the shadow's, and for the same reason.
+//
+// It was the level chosen from the pixel's footprint, which is a function of how far away the
+// camera is. That makes the *key* a function of where you are standing: walk toward a polished
+// floor and the footprint shrinks, the level drops, and every reflected pixel re-keys onto a
+// different node all at once. What that looks like is a grid of cubes sliding over the
+// reflection, appearing only while moving and settling the moment you stop — because standing
+// still the level stops changing and the frame average buries it.
+//
+// The same fault, with the same appearance, as the wedges the shadow drew before its level was
+// pinned. A cache keyed on the viewer is not a cache of the world.
+//
+// Three: eight voxels. Coarser than the shadow's zero because a radiance entry is one of
+// twenty-four bins rather than one number, and twenty-four entries per face at level zero is a
+// table that never stops thrashing. Coarse is affordable here in a way it was not for shadows,
+// because what is being blurred is a reflection that is *already* being blurred by roughness —
+// and anything sharp enough to mind now traces its own, below.
+const uint kRadianceLevel = 3u;
+
+// Where a reflection stops being read from the cache and starts being traced for the pixel.
+//
+// Below `kSpecularSharp` a reflection is nearly a mirror image: it has almost no lobe to average
+// over, so a cache bin covering a quarter of a cube face has nothing useful to say about it, and
+// the traced ray has almost no variance to be noisy about. Trace it.
+//
+// Above `kSpecularBlurry` the lobe is wide enough that the bin's blur is honest, and a traced
+// ray is a noisy sample of something a cache already knows well. Read it.
+//
+// Between, both, mixed by roughness — so there is no seam in the middle of a surface whose
+// roughness varies, which every surface in this world does, because no two voxels share a
+// material.
+const float kSpecularSharp = 0.18;
+const float kSpecularBlurry = 0.45;
+
 // How many samples a bin wants before pixels stop tracing it for themselves. Lower than the
 // diffuse target: a bin covers a narrow cone, so its samples agree with each other far more
 // than a whole hemisphere's do, and it settles sooner.
@@ -1314,20 +1348,42 @@ vec3 specular_weight(vec3 normal, vec3 view, Material m) {
     return f0 + (vec3(1.0) - f0) * pow(1.0 - n_dot_v, 5.0);
 }
 
+// What a surface sends back along one particular direction, straight from its bin.
+//
+// The lean form of the lookup, for the far end of a bounce, where the material's lobe has
+// already been decided by the ray that got there.
+FaceLight radiance_along(ivec3 voxel, ivec3 normal_i, vec3 dir, uint frame) {
+    uint lo, hi;
+    face_key(voxel, normal_i, kRadianceLevel, kFaceRadiance | (direction_bin(dir) << 4u), lo, hi);
+    return read_face(face_slot(lo, hi, false, frame));
+}
+
+// How much of this surface's reflection may come out of the cache at all.
+//
+// One at the blurry end, nought at the sharp end, and a ramp between. A mirror gets none of it:
+// what a cache holds is an average over a lobe, and a mirror has no lobe.
+float cache_share(Material m) {
+    return smoothstep(kSpecularSharp, kSpecularBlurry, m.roughness);
+}
+
 // Specular with no ray of its own: whatever earlier frames measured going the way this pixel
 // is looking. Zero when nothing has looked that way yet, which lasts a frame or two, and is
 // never an invention.
 vec3 specular_from_cache(ivec3 voxel, ivec3 normal_i, vec3 normal, vec3 dir, Material m,
-                         uint level, uint frame, inout uint state) {
+                         uint frame, inout uint state) {
     // Matched to the gate on the sampling side: a surface that never contributes a bin has no
     // bin to read, and looking anyway is a probe through a quarter of a gigabyte for nothing.
     if (m.metallic <= 0.1 && m.roughness >= 0.4) return vec3(0.0);
+
+    float share = cache_share(m);
+    if (share <= 0.0) return vec3(0.0);   // sharp enough to be traced instead
 
     vec3 spec_dir = reflect(dir, ggx_half(normal, m.roughness, state));
     if (dot(spec_dir, normal) <= 0.0) return vec3(0.0);
 
     uint lo, hi;
-    face_key(voxel, normal_i, level, kFaceRadiance | (direction_bin(spec_dir) << 4u), lo, hi);
+    face_key(voxel, normal_i, kRadianceLevel, kFaceRadiance | (direction_bin(spec_dir) << 4u),
+             lo, hi);
     FaceLight stored = read_face(face_slot(lo, hi, false, frame));
 
     // A bin with one sample in it is not an estimate, it is that sample — and a sample is
@@ -1336,7 +1392,7 @@ vec3 specular_from_cache(ivec3 voxel, ivec3 normal_i, vec3 normal, vec3 dir, Mat
     // the same way, as scattered stars across otherwise dark walls. A few samples cost a
     // fraction of a second of waiting and are worth more than the speck they prevent.
     if (!stored.known || stored.count < kRadianceMinSamples) return vec3(0.0);
-    return specular_weight(normal, -dir, m) * stored.indirect;
+    return specular_weight(normal, -dir, m) * stored.indirect * share;
 }
 
 // How many samples a face needs before the pixels standing on it stop tracing for it.
@@ -1579,6 +1635,27 @@ void main() {
         bool settled = own.known && own.count >= kErrorMinSamples && own.error < kErrorTarget;
         bool refine = (!settled || edited || (rand(state) < 0.02)) && turn;
 
+        // A sharp reflection is never settled, however many samples its face has.
+        //
+        // The stride and the settled test are both about the *face*: they ask whether this patch
+        // of world has been measured enough, and once it has, its pixels stop tracing and read
+        // the answer. That is right for everything that is a property of the world, and a
+        // reflection is not one — it changes when the eye moves and the face has no way to know
+        // that it did. So a mirror lit by a converged face reads a converged average of the
+        // twenty-four directions the world went in, and shows a smear that pops from block to
+        // block as the level changes underneath it.
+        //
+        // Sharply reflective surfaces therefore trace every frame, for every pixel, ignoring
+        // both the stride and the settled test. It is not a fourth march: the bounce that pixel
+        // was going to spend on the diffuse lobe is spent on the specular one instead, and on a
+        // metal the diffuse lobe is worth almost nothing — albedo times one minus metallic.
+        //
+        // Bounded by roughness rather than by a stride, which is what keeps it affordable: only
+        // the genuinely shiny qualify, and a world of stone has very little of it.
+        bool sharply_reflective =
+            (m.metallic > 0.1 || m.roughness < 0.30) && m.roughness < kSpecularBlurry;
+        if (sharply_reflective) refine = true;
+
         // The shadow entry: its own key, at a fixed level, decided on its own terms.
         //
         // It is claimed and refined separately from the indirect one because the two converge
@@ -1690,7 +1767,7 @@ void main() {
             // this stride the wait is a few frames.
             radiance += sun_light(normal, dir, m, visibility) +
                         m.albedo * (1.0 - m.metallic) * known.indirect +
-                        specular_from_cache(voxel, hit.normal, normal, dir, m, level,
+                        specular_from_cache(voxel, hit.normal, normal, dir, m,
                                             trace.control.z, state);
             radiance = clamp_finite(radiance);
             write_pixel(pixel, sample_index, radiance, primary_t, aspect);
@@ -1823,7 +1900,7 @@ void main() {
         uint rad_slot = 0xFFFFFFFFu;
         if (spec_bounce) {
             uint rad_lo, rad_hi;
-            face_key(voxel, hit.normal, level,
+            face_key(voxel, hit.normal, kRadianceLevel,
                      kFaceRadiance | (direction_bin(bounce_dir) << 4u), rad_lo, rad_hi);
             rad_slot = face_slot(rad_lo, rad_hi, true, trace.control.z);
         }
@@ -1889,6 +1966,36 @@ void main() {
                 if (far.known) {
                     incoming = emitted + sun_light(n2, bounce_dir, m2, far.visibility) +
                                m2.albedo * (1.0 - m2.metallic) * far.indirect;
+
+                    // A mirror at the far end reflects as well, and this is the whole of how a
+                    // hall of mirrors is built here.
+                    //
+                    // The term above is diffuse: albedo times one minus metallic, which for a
+                    // polished metal is nearly nothing. So a mirror facing a mirror came back
+                    // black, and two reflective surfaces in front of one another showed each
+                    // other an empty room.
+                    //
+                    // The reflection cannot be traced onward — that would be a fourth inlined
+                    // march and the device does not survive a fourth — so it is *read*, the same
+                    // way the diffuse term is: the far face's own bin, for the direction the
+                    // reflection continues in. What is in that bin was measured by whichever
+                    // pixels were looking that way in earlier frames, and it already contains
+                    // whatever *they* read from the surface beyond.
+                    //
+                    // So the depth is not two. Each frame carries the answer one reflection
+                    // further, and it stays, exactly as diffuse light gains a bounce per frame
+                    // and keeps it. Two mirrors facing each other converge on the infinite
+                    // series over a handful of frames rather than being cut off at a fixed
+                    // depth — and they converge rather than diverge because every step is
+                    // multiplied by a Fresnel weight below one.
+                    if (m2.metallic > 0.1 || m2.roughness < 0.4) {
+                        vec3 onward = reflect(bounce_dir, n2);
+                        FaceLight beyond =
+                            radiance_along(voxel2, second.normal, onward, trace.control.z);
+                        if (beyond.known && beyond.count >= kRadianceMinSamples) {
+                            incoming += specular_weight(n2, -bounce_dir, m2) * beyond.indirect;
+                        }
+                    }
                 } else {
                     // Nothing known there yet. Its own light is still a real measurement, so
                     // an emitter is seen immediately; the rest of what that surface reflects
@@ -1967,10 +2074,47 @@ void main() {
             imageStore(out_colour, pixel, vec4(why_dark(m, here), 1.0));
             return;
         }
+        // The reflection this pixel is about to show.
+        //
+        // If this pixel traced a specular ray of its own, that ray is the answer and it is used
+        // as one — not put in the cache and read back as an average over a lobe and a block of
+        // faces. A reflection is the one quantity in this shader that is a property of where the
+        // eye is, and a cache is a promise that something is a property of the world. Averaging
+        // a mirror over twenty-four directions and eight voxels is how a mirror becomes a grid.
+        //
+        // It still goes into the bin as well, above, because the pixels that did not get to
+        // trace this frame have to read something — and what they read is now only weighted in
+        // where roughness makes it honest.
+        vec3 reflection;
+        if (spec_bounce && measured) {
+            // Not divided by the chance of having taken this lobe, and that is worth being sure
+            // about. The division belongs to the *cache* contributions, where one ray stands in
+            // for all the rays that were not taken. Here the ray is not standing in for
+            // anything: it was traced, it is this pixel's reflection, and the diffuse term
+            // beside it comes from the face cache rather than from a ray this one displaced.
+            // Dividing anyway makes a barely-reflective surface blaze.
+            //
+            // Clamped harder than the cache contribution is, and for a reason the cache does not
+            // have: a bin averages forty-eight samples, so one that found the sun through a gap
+            // is a fiftieth of the answer. Used directly, it is the whole answer for that pixel
+            // in that frame, and a reflective surface accumulating one sample a frame shows it
+            // as a white speck that takes a hundred frames to wash out. Eight is well above
+            // anything a sky or a lit wall sends back and well below a specular glint.
+            vec3 traced = specular_weight(normal, -dir, m) * min(clamped, vec3(8.0));
+            // Mixed with the cache by the same ramp the cache is weighted by, so a surface whose
+            // roughness varies from voxel to voxel — which is every surface here — has no seam
+            // running through it where one term hands over to the other.
+            reflection = mix(traced,
+                             specular_from_cache(voxel, hit.normal, normal, dir, m,
+                                                 trace.control.z, state),
+                             cache_share(m));
+        } else {
+            reflection = specular_from_cache(voxel, hit.normal, normal, dir, m,
+                                             trace.control.z, state);
+        }
+
         radiance += sun_light(normal, dir, m, visibility) +
-                    m.albedo * (1.0 - m.metallic) * here.indirect +
-                    specular_from_cache(voxel, hit.normal, normal, dir, m, level,
-                                        trace.control.z, state);
+                    m.albedo * (1.0 - m.metallic) * here.indirect + reflection;
     }
     write_pixel(pixel, sample_index, clamp_finite(radiance), primary_t, aspect);
 }
