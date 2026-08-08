@@ -2453,9 +2453,27 @@ int Application::run(const Options& options) {
     // Sized from detected VRAM, and never resized afterwards
     // (documentation/03-voxel-data-model.md Â§8).
     const u64 vram = device_.caps().device_local_bytes;
-    const u64 vram_budget = (vram >= (8ull << 30))   ? (1ull << 30)
-                            : (vram >= (4ull << 30)) ? (384ull << 20)
-                                                     : (192ull << 20);
+
+    // A share of the card, rather than a step function that stops caring at eight gigabytes.
+    //
+    // It was 1 GB for anything with 8 GB or more, and that ceiling is what a sixteen-gigabyte
+    // card got: six per cent of it. The facility is 86 chunks and 460 MB of payload held 54 of
+    // them, so a third of the building could not be resident at once and residency spent every
+    // frame swapping which third — which is a world that flickers while you stand still.
+    //
+    // Half the card, less a fixed floor for everything that is not brick payload: the render
+    // targets, the face cache (256 MB), the type tables, the summary thumbnails, and whatever
+    // the compositor and the driver want. A card is not ours alone and a build that takes all
+    // of it is a build that stutters against everything else on the desktop.
+    //
+    // Small cards keep their old shares, because the reasoning that produced them was about
+    // fitting at all rather than about generosity.
+    const u64 reserved = 1536ull << 20;
+    const u64 vram_budget =
+        (vram >= (8ull << 30))
+            ? std::max<u64>(1ull << 30, (vram > reserved) ? (vram - reserved) / 2 : (1ull << 30))
+        : (vram >= (4ull << 30)) ? (384ull << 20)
+                                 : (192ull << 20);
 
     // A brick costs two separate things, and they have to be budgeted separately.
     //
