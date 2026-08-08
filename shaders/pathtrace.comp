@@ -629,13 +629,6 @@ struct FaceLight {
 // deciding at random that it had converged.
 const float kSquareScale = 256.0;
 
-// How much brighter than its own mean a sample may be before a face stops believing it, and how
-// much history it takes before a face is entitled to that opinion. Generous on both counts: the aim
-// is to catch a sample that is hundreds of times out, not to shave a surface that is genuinely
-// brightening.
-const uint kOutlierMinSamples = 24u;
-const float kOutlierRatio = 8.0;
-const float kOutlierFloor = 0.05;
 
 // A floor under the error estimate, so that a face reading pure black still has a tolerance and
 // does not refuse every neighbour by dividing by nothing.
@@ -717,32 +710,6 @@ void contribute(uint slot, vec3 value, uint window) {
     vec3 safe = clamp(value, vec3(0.0), vec3(kFaceSampleMax));
     if (any(isnan(value)) || any(isinf(value))) safe = vec3(0.0);
 
-    // And held to what this face already believes, which the screen accumulator has always done
-    // and this one never did.
-    //
-    // A clamp at sixty-four bounds the damage and does not prevent it: in a room with no lights in
-    // it the honest answer is a thousandth, so a face pinned even near the ceiling is tens of
-    // thousands of times too bright and reads as a brilliant saturated block. That is what survives
-    // in a sealed box, and it is what flashes after an edit, when a great many faces are re-sampled
-    // at once and only the unlucky ones show.
-    //
-    // The test is the one reject_outlier uses on the screen: compare against what is already known,
-    // not against an absolute. A face with a settled mean has earned the right to disbelieve a
-    // sample hundreds of times brighter than everything it has seen — that is a path that found a
-    // freak weight, not a surface that became a lamp. A face with barely any history has earned
-    // nothing and keeps whatever it is given, because rejecting early samples is how a picture
-    // starts dark and stays that way.
-    //
-    // Clamped rather than dropped, so the light is admitted at a believable rate instead of being
-    // refused. A face that really has brightened still gets there, over a few dozen samples instead
-    // of in one.
-    if (count >= kOutlierMinSamples) {
-        uvec4 known = faces.items[slot].sum;
-        vec3 mean = vec3(known.xyz) / (kFixedScale * float(count));
-        float ceiling = face_luminance(mean) * kOutlierRatio + kOutlierFloor;
-        float lit = face_luminance(safe);
-        if (lit > ceiling) safe *= ceiling / lit;
-    }
 
     atomicAdd(faces.items[slot].sum.x, uint(safe.r * kFixedScale));
     atomicAdd(faces.items[slot].sum.y, uint(safe.g * kFixedScale));
