@@ -1275,19 +1275,48 @@ void Application::start_refinement() {
     const f64 cy = camera_.metres_y();
     const f64 cz = camera_.metres_z();
 
+    // Where the camera is pointing, so that what is ON SCREEN is sharpened before what is behind
+    // the player. Distance alone spends the first minute on the room they have their back to.
+    const f64 cp = std::cos(camera_.pitch());
+    const f64 fx = std::cos(camera_.yaw()) * cp;
+    const f64 fy = std::sin(camera_.pitch());
+    const f64 fz = std::sin(camera_.yaw()) * cp;
+
     usize best = refine_regions_.size();
-    f64 nearest = 0.0;
+    f64 keenest = 0.0;
     for (usize i = 0; i < refine_regions_.size(); ++i) {
         const RefineRegion& box = refine_regions_[i];
         if (box.done) continue;
+
         // Distance to the box, nought inside it, so the one you are standing in always wins.
         const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
         const f64 dy = std::max({box.low.y - cy, 0.0, cy - box.high.y});
         const f64 dz = std::max({box.low.z - cz, 0.0, cz - box.high.z});
-        const f64 away = dx * dx + dy * dy + dz * dz;
-        if (best == refine_regions_.size() || away < nearest) {
+        const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+        // How big it is on screen: its size over its distance, which is the projected angle to
+        // within a constant and is the whole of the pixel criterion. A box that covers more of the
+        // view has more to gain from detail than one that covers less, whatever their distances.
+        const f64 across = std::max({box.high.x - box.low.x, box.high.y - box.low.y,
+                                     box.high.z - box.low.z});
+        f64 keen = across / std::max(away, 0.5);
+
+        // And whether it is in front. Not a frustum test — a box behind the player is not merely
+        // small on screen, it is absent, and no amount of nearness should buy it a turn ahead of
+        // something visible. Halved rather than refused, because turning round should find the
+        // world improved rather than untouched.
+        const f64 to_x = (box.low.x + box.high.x) * 0.5 - cx;
+        const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
+        const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
+        const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
+        if (reach > 1e-6) {
+            const f64 facing = (to_x * fx + to_y * fy + to_z * fz) / reach;
+            if (facing < 0.0) keen *= 0.05;
+        }
+
+        if (best == refine_regions_.size() || keen > keenest) {
             best = i;
-            nearest = away;
+            keenest = keen;
         }
     }
     if (best == refine_regions_.size()) return;   // every box is sharp
@@ -1628,7 +1657,8 @@ void Application::build_world() {
                         }
                     }
                 }
-                WS_LOG_INFO("clip", "{} regions to sharpen, nearest first", refine_regions_.size());
+                WS_LOG_INFO("clip", "{} regions to sharpen, biggest on screen first",
+                            refine_regions_.size());
             }
             // The two ns figures are summed across worker threads, so they exceed the wall clock
             // on a parallel build. What they are for is the RATIO: how much of the sampling is

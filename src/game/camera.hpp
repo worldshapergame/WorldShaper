@@ -106,6 +106,11 @@ public:
 
     f64 metres_x() const { return x_ / kVoxelsPerMetre; }
     f64 metres_y() const { return y_ / kVoxelsPerMetre; }
+    // Where it is looking. The refinement uses it to sharpen what is on screen before what is
+    // behind the player, which is the difference between detail arriving where it is wanted and
+    // detail arriving in a room nobody is in.
+    f64 yaw() const { return yaw_; }
+    f64 pitch() const { return pitch_; }
     f64 metres_z() const { return z_ / kVoxelsPerMetre; }
 
     void forward_vector(f32 out[3]) const {
