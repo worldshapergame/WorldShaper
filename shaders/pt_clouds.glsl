@@ -118,15 +118,38 @@ float world_height_metres(vec3 p) {
 //
 // Two kinds, and the difference between them is the difference between fog and cloud.
 
-vec3 cloud_hash3(vec3 cell) {
-    vec3 p = vec3(dot(cell, vec3(127.1, 311.7, 74.7)),
-                  dot(cell, vec3(269.5, 183.3, 246.1)),
-                  dot(cell, vec3(113.5, 271.9, 124.6)));
-    return fract(sin(p) * 43758.5453123);
+// Hashed as INTEGERS, and this is not a style preference.
+//
+// The obvious hash is `fract(sin(dot(cell, some_vector)) * 43758.5)`, and it works beautifully
+// near the origin and falls apart a long way from it. A sky ray runs to ninety kilometres — three
+// million voxels — so the detail noise is evaluated at cell coordinates in the hundreds and the
+// dot product reaches several hundred thousand. A 32-bit float carries about seven digits, so at
+// that magnitude there is almost no fractional precision left for the sine to work with: adjacent
+// cells hash to the SAME value, the noise stops varying, and what shows through instead is the
+// lattice it was built on — clouds cut off along flat, axis-aligned, right-angled edges.
+//
+// Integer mixing has no such range. The cell coordinate is exact as an int, the mixing is exact,
+// and the result is as good at three million voxels as at three.
+uint cloud_mix(uint h) {
+    h ^= h >> 16; h *= 0x7feb352du;
+    h ^= h >> 15; h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return h;
+}
+
+uint cloud_key(ivec3 cell) {
+    return cloud_mix(uint(cell.x) * 0x9E3779B9u ^ cloud_mix(uint(cell.y) * 0x85EBCA6Bu ^
+                                                            cloud_mix(uint(cell.z) * 0xC2B2AE35u)));
 }
 
 float cloud_hash1(vec3 cell) {
-    return fract(sin(dot(cell, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
+    return float(cloud_key(ivec3(cell)) >> 8) * (1.0 / 16777216.0);
+}
+
+vec3 cloud_hash3(vec3 cell) {
+    uint h = cloud_key(ivec3(cell));
+    return vec3(float(h & 0x3FFu), float((h >> 10) & 0x3FFu), float((h >> 20) & 0x3FFu)) *
+           (1.0 / 1023.0);
 }
 
 // Ordinary gradient-ish value noise: smooth, and on its own it makes fog.
@@ -201,8 +224,21 @@ float perlin_fbm(vec3 p, int octaves) {
 // billow to a shape and you get a blurrier shape. Remapping instead uses the second to carve the
 // first — the shape decides where there is cloud at all, and the billow decides what its surface
 // does — and that is what keeps a solid core with a bulging rim.
+// CLAMPED, and leaving that out is what made the sky a solid slab.
+//
+// Every use of this is a ramp: nought below here, one above there, and something in between. The
+// unclamped version keeps going. `remap(h, 0.0, 0.12, 0.0, 1.0)` is the flat base of a cumulus and
+// it reaches one at a height of 0.12 — and then eight and a third at the top of the deck, because
+// nothing stopped it. Multiplied by the other factor, which had run negative for the same reason,
+// the profile came out saturated at one across the whole deck instead of describing a shape.
+//
+// So the decks had no vertical structure at all: no flat base, no rounded top, no thinning at the
+// edges. Every one was a uniform slab, and a uniform slab with noise in it is exactly what the
+// renders looked like — an overcast with cells stamped on it rather than clouds with tops and
+// bottoms.
 float remap(float value, float from_low, float from_high, float to_low, float to_high) {
-    return to_low + (value - from_low) / max(from_high - from_low, 1e-5) * (to_high - to_low);
+    float t = clamp((value - from_low) / max(from_high - from_low, 1e-5), 0.0, 1.0);
+    return to_low + t * (to_high - to_low);
 }
 
 // --- the weather map -----------------------------------------------------------------------
@@ -240,8 +276,17 @@ Weather weather_at(vec3 p) {
     //
     // At the default setting this gives a threshold the shape clears in roughly a fifth of the
     // sky, which is a fair-weather day.
+    // Calibrated against what the base shape actually produces, which is arithmetic rather than
+    // taste. `shape` is remap(perlin, cells - 1, 1, 0, 1), so with both noises averaging a half it
+    // averages two thirds and reaches one only where a high Perlin meets a low cell. The coverage
+    // sets the threshold that has to be beaten, at 1 - coverage — so a coverage of 0.19 asks the
+    // shape to beat 0.81, which it almost never does, and a coverage of 0.5 asks it to beat 0.5,
+    // which it nearly always does. The useful range is narrow and sits around a third.
+    //
+    // At the default setting this centres the threshold near 0.7 and swings it either side with
+    // the weather map, so the sky has cloudy quarters and clear ones instead of a uniform dusting.
     float asked = clamp(push.sky_cloud.x, 0.0, 1.0);
-    w.coverage = clamp(asked * 0.55 - 0.06 + (broad - 0.5) * 0.30 + (patchy - 0.5) * 0.12,
+    w.coverage = clamp(asked * 0.50 + 0.06 + (broad - 0.5) * 0.34 + (patchy - 0.5) * 0.14,
                        0.0, 1.0);
     // Towers where the coverage is already high, which is what actually happens: a cumulonimbus
     // grows out of the middle of a crowded field of cumulus, not out of a clear sky.
@@ -487,10 +532,23 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
     bool creeping = false;
     int empty_run = 0;
 
+    // The step is never allowed to be so small that the budget runs out before the span does.
+    //
+    // THIS IS THE BUG THAT MADE THE HAIR. A fixed step count is a hard cutoff in the middle of the
+    // volume: a ray that meets a lot of cloud early spends all sixty-four steps in the first few
+    // kilometres and then simply stops, with transmittance still high — so the rest of that cloud
+    // is not drawn and the sky behind shows through at full strength. Whether a ray runs out
+    // depends on how much cloud it happened to cross, so one pixel finishes and its neighbour does
+    // not, and the boundary between them is a thin bright thread of sky lying across a cloud.
+    //
+    // A floor under the step turns "stop early" into "get coarser", which is wrong in a way that
+    // is spread evenly and invisible, rather than wrong in a way that draws a line.
+    float floor_step_m = (leave_m - enter_m) / float(kMaxSteps);
+
     for (int i = 0; i < kMaxSteps && travelled < leave_m; ++i) {
         if (transmittance < 0.01) break;
 
-        float step_m = creeping ? kFine : kCoarse;
+        float step_m = max(creeping ? kFine : kCoarse, floor_step_m);
         // Coarser the further out. A cloud twenty kilometres away is a few pixels across and does
         // not deserve the resolution one overhead does.
         step_m *= 1.0 + travelled * (1.0 / 12000.0);
@@ -499,8 +557,8 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
         float h = height_origin_m + dir.y * travelled;
 
         // The cheap density first, and the expensive one only where there is something to erode.
-        float density = cloud_density(at, h, false);
-        if (density <= 0.0) {
+        float coarse = cloud_density(at, h, false);
+        if (coarse <= 0.0) {
             if (creeping) {
                 ++empty_run;
                 if (empty_run >= kEmptyBeforeStriding) { creeping = false; empty_run = 0; }
@@ -518,11 +576,24 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
             travelled = max(travelled - step_m, enter_m);
             continue;
         }
-        empty_run = 0;
 
-        density = cloud_density(at, h, true);
+        float density = cloud_density(at, h, true);
         travelled += step_m;
-        if (density <= 0.0) continue;
+
+        // The empty run is counted from the DETAILED density and not the coarse one, and that
+        // distinction is the second half of the same fault.
+        //
+        // The coarse density deliberately over-estimates: it skips the erosion, which only ever
+        // removes. So everywhere the erosion has carved a hole, the coarse answer says cloud and
+        // the detailed one says nothing — and counting the coarse one meant the march never
+        // registered an empty step there. It crept at forty metres through air, accumulating
+        // nothing, until the step budget was gone. Which is what made the cutoff above fire on
+        // almost every ray that touched a cloud edge.
+        if (density <= 0.0) {
+            if (++empty_run >= kEmptyBeforeStriding) { creeping = false; empty_run = 0; }
+            continue;
+        }
+        empty_run = 0;
 
         float sun_t = light_transmittance(at, h, trace.sun.xyz);
 
