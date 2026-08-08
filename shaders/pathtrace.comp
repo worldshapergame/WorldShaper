@@ -788,7 +788,7 @@ FaceLight read_face(uint slot) {
 }
 
 // How many samples of its own a node needs before it stops leaning on its parent.
-const uint kSeedSamples = 48u;
+const uint kSeedSamples = 160u;
 
 // ---- filtering in face space ---------------------------------------------------------
 //
@@ -834,7 +834,7 @@ const uint kSeedSamples = 48u;
 // face that knows nothing reaches furthest, a settled one is not touched at all. So a still
 // scene pays nothing and converges sharp, which is the behaviour a filter over an accumulating
 // estimate should have.
-const uint kFaceSettled = 192u;
+const uint kFaceSettled = 512u;
 const int kFaceRings = 3;
 
 // How many standard errors apart two faces have to be before they count as genuinely different
@@ -851,8 +851,8 @@ const float kEdgeSigmas = 4.0;
 // How far to reach, given how much a face already knows.
 int face_rings(uint count) {
     if (count >= kFaceSettled) return 0;
-    if (count >= 64u) return 1;
-    if (count >= 16u) return 2;
+    if (count >= 256u) return 1;
+    if (count >= 64u) return 2;
     return kFaceRings;
 }
 
@@ -1135,7 +1135,7 @@ const uint kNeeCandidates = 8u;
 // exactly the right share; a floor of one in twenty spent forty times that on measuring almost
 // nothing, and the outdoor scenes went from 0.934 speckle to 0.976 paying for it.
 const float kNeeMinChance = 0.005;
-const float kNeeMaxChance = 0.95;
+const float kNeeMaxChance = 0.50;
 
 // ---- what a reservoir would be here, and why there is not one ---------------------------
 //
@@ -1431,12 +1431,36 @@ FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
     return blended;
 }
 
+// How much coarser a face is than the pixel that reads it.
+//
+// This is the single biggest thing deciding how fast light settles, and it is not a quality knob
+// in the direction you would expect.
+//
+// A face sized to one pixel gathers about one sample per frame, because about one pixel stands on
+// it. Sixty-four frames, sixty-four samples — and sixty-four samples of a hemisphere is visibly
+// noisy, so every surface in view spends its first second as a field of faces each holding a
+// different wrong answer. That is what the speckle IS: not noise, which would move and average
+// away in the eye, but a cache of under-measured constants, which sits still and reads as
+// streaks. Walking up to a wall fixes it because a face under the camera is covered by hundreds
+// of pixels and finishes in a frame.
+//
+// One step coarser is four times the pixels on a face and therefore four times the samples a
+// frame. What it costs is spatial detail in the indirect term, and the indirect term is the one
+// thing in the picture that has none to lose: bounced light off a plaster wall varies over
+// metres. Direct light, shadows and reflections are not affected — they are keyed and resolved
+// separately, and the geometry is still marched at full voxel detail regardless.
+//
+// The normal axis stays unquantised at every level, so this cannot merge the two sides of a wall
+// however coarse it gets. That is the property that makes coarsening safe rather than merely
+// cheap.
+const float kFaceCoarsening = 2.0;
+
 // The node size a pixel can resolve at this distance, as a power of two. The geometry is
 // still marched at full voxel detail - this only decides how coarsely faces are *shared*.
 float cache_level_exact(float t) {
     float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
     float footprint = max(t * pixel_angle, 1.0);
-    return clamp(log2(footprint), 0.0, 6.0);
+    return clamp(log2(footprint) + kFaceCoarsening, 0.0, 6.0);
 }
 
 uint cache_level(float t) {
@@ -1447,7 +1471,7 @@ uint cache_level(float t) {
     // distant surfaces across level 7, 8, 9 and 10 entries instead of pooling them in one -
     // and adjacent pixels either side of a distance boundary then look up different keys.
     // Measured: raising the cap to 10 took uncached surface pixels from 3,661 to 18,392.
-    return uint(clamp(floor(log2(footprint)), 0.0, 6.0));
+    return uint(clamp(floor(log2(footprint) + kFaceCoarsening), 0.0, 6.0));
 }
 
 
@@ -1511,12 +1535,12 @@ const uint kFaceTarget = 192u;
 
 // How well a face has to know itself before its pixels stop tracing for it: the mean within
 // about a twentieth of itself, which is finer than an eight-bit screen can show.
-const float kErrorTarget = 0.05;
+const float kErrorTarget = 0.03;
 
 // And how many samples it must have before that judgement is worth anything. The spread of a
 // handful is mostly noise about the spread, and a face that happened to draw three similar
 // samples would otherwise declare itself finished on the strength of a coincidence.
-const uint kErrorMinSamples = 32u;
+const uint kErrorMinSamples = 96u;
 
 // What fraction of the screen may trace past the primary ray in any one frame: one pixel in
 // this many, rotating so every pixel gets its turn.
