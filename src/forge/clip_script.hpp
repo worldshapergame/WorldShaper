@@ -137,6 +137,11 @@ struct Script {
     std::vector<std::string> paint_source;
 
     std::vector<WeatherRequest> weather;
+
+    // Where the clip's own origin should end up, from an `origin` statement. Applied to the solid
+    // AND to every paint rule at once, because moving one without the other is the mistake this
+    // exists to make impossible.
+    f64 origin_shift[3]{0.0, 0.0, 0.0};
     Variation variation;
 
     u32 solid = 0;

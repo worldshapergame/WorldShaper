@@ -946,6 +946,28 @@ void Parser::statement() {
         }
         return;
     }
+    // Move the whole clip: the shape AND every rule that decides its colour.
+    //
+    // This exists because doing it by hand is a trap that has already been fallen into. A clip is not
+    // one field, it is one solid plus a paint rule per material, and each rule is its own expression
+    // evaluated at the same world position. Wrapping only the solid in a translate — the obvious
+    // thing, and what `let all = translate { ... }` does — moves the stone and leaves the paint
+    // exactly where it was, so a building drops three and a half metres and its plinth course,
+    // weathering bands and ground line all stay at the height they were drawn for. The geometry is
+    // right, the colours are wrong, and it looks like a rendering fault rather than an edit.
+    //
+    // Written as one statement, that class of mistake cannot be made: there is no way to name the
+    // solid without the paint travelling with it.
+    if (head == "origin") {
+        const f64 dx = value_or(0.0);
+        const f64 dy = value_or(0.0);
+        const f64 dz = value_or(0.0);
+        script_.origin_shift[0] += dx;
+        script_.origin_shift[1] += dy;
+        script_.origin_shift[2] += dz;
+        return;
+    }
+
     if (head == "solid") {
         u32 node = 0;
         if (!expression(node)) {
@@ -1000,6 +1022,35 @@ VoxelTypeId make_material(VoxelTypeTable& types, Script& script, const char* nam
     }
     script.material_names[type] = name;
     return type;
+}
+
+// Shift the finished clip so a chosen point in it lands on the world origin.
+//
+// After weathering rather than before, and after every paint rule has been collected, because the
+// whole point is that NOTHING is left behind: whatever the script ended up with — the solid, the
+// rules the author wrote, the rules the weathering added — is moved by the same vector, once.
+void apply_origin(Script& script) {
+    const f64 dx = script.origin_shift[0];
+    const f64 dy = script.origin_shift[1];
+    const f64 dz = script.origin_shift[2];
+    if (dx == 0.0 && dy == 0.0 && dz == 0.0) return;
+
+    Field& f = script.field;
+    const Vec3 by{dx, dy, dz};
+
+    if (script.has_solid) script.solid = f.translate(script.solid, by);
+    for (PaintRule& rule : script.paint) {
+        rule.test = f.translate(rule.test, by);
+    }
+
+    // The bounds are in the same space and have to come along, or the clip is cut where it used to
+    // be rather than where it now is.
+    script.settings.low.x += dx;
+    script.settings.high.x += dx;
+    script.settings.low.y += dy;
+    script.settings.high.y += dy;
+    script.settings.low.z += dz;
+    script.settings.high.z += dz;
 }
 
 void apply_weather(Script& script, VoxelTypeTable& types) {
@@ -1296,6 +1347,7 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
     // Weathering is expanded after the whole file is read, because it acts on whatever ends up
     // being the solid and appends its coats after the author's.
     apply_weather(script, types);
+    apply_origin(script);
 
     // The graph is complete now, so the boxes that let a union skip its distant children can be
     // worked out. Done here rather than in the sampler because a Field can be sampled many
