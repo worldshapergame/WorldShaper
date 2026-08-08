@@ -45,6 +45,22 @@
 //   HIGH, 6500 to 12000 m. Ice, not water. Cirrus: streaked hard along the wind, thin enough to
 //   see the sun through, and it never shadows anything.
 
+// # A note on the units, because they cost an hour
+//
+// `--cam` takes METRES. Everything inside these shaders is in VOXELS, at thirty-two to the metre,
+// relative to the camera's own chunk. `world_height_metres` is the only place the two meet and it
+// is correct.
+//
+// The previous commit message claims that looking down from three thousand metres shows no cloud
+// and calls it an undiagnosed fault. It is not a fault. The test was written as `--cam
+// "0,96000,..."` in the belief that the argument was voxels, which put the camera ninety-six
+// kilometres up — above every deck, where the slab test correctly finds nothing and returns
+// immediately. At three thousand metres the same view shows exactly what it should: cumulus tops
+// catching the sun, shadowed flanks, and the deck receding to the horizon.
+//
+// Recorded here rather than quietly dropped, because the claim is in the history and somebody will
+// otherwise go looking for a bug that was never there.
+
 // --- constants ---------------------------------------------------------------------------------
 
 const float kVoxelsPerMetre = 32.0;
