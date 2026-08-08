@@ -40,7 +40,22 @@ enum class VisualFlags : u8 {
     None = 0,
     SmoothSurface = 1 << 0,   // normal from the fill gradient, for water and lenses
     Dispersive = 1 << 1,      // wavelength-dependent IOR (documentation/04 §3)
-    CausticSource = 1 << 2,   // photons are traced through it
+
+    // Bits 3 and 4 are a two-bit field, not three flags: which world axis the grain of a
+    // brushed surface runs along. A voxel world can honestly name exactly one thing here — it
+    // has no UVs and no tangent frame, and the only directions that lie in a face's plane and
+    // are still the same direction on the next face round a corner are the world's own three.
+    // See kFlagBrushShift in shaders/pt_material.glsl, which reads them.
+    BrushX = 1 << 3,
+    BrushY = 2 << 3,
+    BrushZ = 3 << 3,
+
+    // Bit 2 was CausticSource, "photons are traced through this". It is gone rather than
+    // reserved, because it named a mechanism this renderer has ruled out: a photon pass is a
+    // second traversal of the world, march is enormous, and the path tracer already carries as
+    // many inlined copies of it as the driver will take. Caustics here come out of the radiance
+    // bins, which already hold what arrives at a face along a direction — the same information
+    // a photon map holds, keyed the way everything else in this renderer is keyed.
 };
 
 inline VisualFlags operator|(VisualFlags a, VisualFlags b) {
@@ -71,7 +86,12 @@ struct VisualRecord {
 
     u16 emissive_tint = 0xFFFF;   // RGB565
     u8 flags = 0;                 // VisualFlags
-    u8 reserved = 0;
+    // Two lobes in one byte, four bits each: low nibble clearcoat strength, high nibble sheen.
+    // Sixteen steps is plenty for either, because both are the *strength* of a lobe whose shape
+    // is fixed and nobody can see the difference between a lacquer at 9/15 and one at 10/15.
+    // Zero in both nibbles is what every record written before this holds, so every existing
+    // world reads exactly as it did. See material_of in shaders/pt_material.glsl.
+    u8 coat = 0;
 
     u64 content_hash() const;
     bool operator==(const VisualRecord&) const = default;

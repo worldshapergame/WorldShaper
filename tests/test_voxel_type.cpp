@@ -129,10 +129,18 @@ TEST_CASE("visual record stays 16 bytes and hashes on its contents") {
 
 TEST_CASE("visual flags") {
     VisualRecord water{};
-    water.flags = static_cast<u8>(VisualFlags::SmoothSurface | VisualFlags::CausticSource);
+    water.flags = static_cast<u8>(VisualFlags::SmoothSurface | VisualFlags::Dispersive);
     CHECK(has_flag(static_cast<VisualFlags>(water.flags), VisualFlags::SmoothSurface));
-    CHECK(has_flag(static_cast<VisualFlags>(water.flags), VisualFlags::CausticSource));
-    CHECK_FALSE(has_flag(static_cast<VisualFlags>(water.flags), VisualFlags::Dispersive));
+    CHECK(has_flag(static_cast<VisualFlags>(water.flags), VisualFlags::Dispersive));
+
+    // The brush axis is a two-bit field sharing the byte with the flags, so the one thing worth
+    // testing is that the two do not run into each other: a grain along y must not read as a
+    // grain along x with something else set, and setting it must not disturb a flag below it.
+    VisualRecord rail{};
+    rail.flags = static_cast<u8>(VisualFlags::SmoothSurface | VisualFlags::BrushY);
+    CHECK(has_flag(static_cast<VisualFlags>(rail.flags), VisualFlags::SmoothSurface));
+    CHECK_FALSE(has_flag(static_cast<VisualFlags>(rail.flags), VisualFlags::Dispersive));
+    CHECK((rail.flags >> 3) == 2u);
 }
 
 TEST_CASE("hash collisions do not merge different records") {

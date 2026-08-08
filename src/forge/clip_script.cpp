@@ -722,6 +722,24 @@ void Parser::statement() {
         visual.opacity = static_cast<u8>(keys.number("opacity", 255.0));
         visual.emissive = static_cast<u8>(keys.number("emit", 0.0));
         visual.translucency = static_cast<u8>(keys.number("translucent", 0.0));
+        // Beer-Lambert, per metre, one byte a channel. Declared in clips/glass_test.clip since
+        // the day it was written and read by nothing until now, so every coloured pane in the
+        // repository has been rendering as a clear one.
+        auto absorb = keys.numbers.find("absorb");
+        if (absorb != keys.numbers.end() && absorb->second.size() >= 3) {
+            visual.absorb_red = static_cast<u8>(absorb->second[0]);
+            visual.absorb_green = static_cast<u8>(absorb->second[1]);
+            visual.absorb_blue = static_cast<u8>(absorb->second[2]);
+        }
+        visual.flags = static_cast<u8>(keys.number("flags", 0.0));
+        // A brushed metal names a world axis, because a world axis is the only direction a voxel
+        // face can be given that is still the same direction on the next face round a corner.
+        // 1 = x, 2 = y, 3 = z; see VisualFlags.
+        visual.flags |= static_cast<u8>(static_cast<u32>(keys.number("brush", 0.0)) & 3u) << 3;
+        // Two lobes in one byte, four bits each: enough, because both are a strength and the
+        // shape of each is fixed.
+        visual.coat = static_cast<u8>(static_cast<u32>(keys.number("lacquer", 0.0)) & 15u) |
+                      (static_cast<u8>(static_cast<u32>(keys.number("sheen", 0.0)) & 15u) << 4);
         if (keys.has("ior")) {
             // Written as a refractive index, stored as the offset from vacuum the record uses.
             const f64 index = keys.number("ior", 1.0);
