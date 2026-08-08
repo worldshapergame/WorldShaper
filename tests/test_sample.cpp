@@ -237,6 +237,67 @@ TEST_CASE("the sampler agrees with asking every voxel, whatever it skips") {
                    brute_force(f, all, paint, settings), "repeated");
     }
 
+    // A surface of revolution is the shape the whole building is made of, and the sampler treats
+    // it as a true distance — it settles whole boxes inside a column base from one reading. If
+    // that trust is misplaced anywhere the base comes out with holes in it, so it is checked
+    // against asking every voxel.
+    SUBCASE("a profile turned about an axis, which the sampler settles boxes inside") {
+        Field f;
+        const u32 section = f.unite({f.box({0.55, 0.1, 0}, {0.25, 0.1, 2.0}, 0.0),
+                                     f.sphere({0.5, 0.35, 0}, 0.2),
+                                     f.box({0.3, 0.7, 0}, {0.15, 0.25, 2.0}, 0.0)});
+        const u32 turned = f.revolve(section, {0, -0.9, 0}, 1);
+        const u32 floor_ = f.box({0, -1.2, 0}, {1.4, 0.35, 1.4}, 0.0);
+        const u32 all = f.unite({turned, floor_});
+        f.build_bounds();
+
+        std::vector<PaintRule> paint;
+        paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+        paint.push_back(PaintRule{turned, -1e30, 0.0, trim});
+
+        must_match(sample(f, all, paint, settings, &jobs).clip,
+                   brute_force(f, all, paint, settings), "revolved");
+    }
+
+    // A volute is a thin tube that doubles back on itself several times within a small box, which
+    // is the hardest thing in the building for a sampler to believe about: most of its bounding
+    // box is air, and the air is threaded.
+    SUBCASE("a spiral scroll, thin and folded back on itself") {
+        Field f;
+        const u32 scroll = f.spiral({0, 0, 0}, 1.0, 0.55, 0.06, 2.5, 2);
+        const u32 eye = f.cylinder({0, 0, 0}, 0.09, 0.12, 2);
+        const u32 all = f.unite({scroll, eye});
+        f.build_bounds();
+
+        std::vector<PaintRule> paint;
+        paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+
+        must_match(sample(f, all, paint, settings, &jobs).clip,
+                   brute_force(f, all, paint, settings), "spiral");
+    }
+
+    // The case scoped weathering produces: a shape displaced by a mask multiplied by an amount.
+    // The allowance for that is now worked out from the pattern's real range rather than assumed,
+    // which is what lets any of it settle — and an allowance that is too small is a hole.
+    SUBCASE("a displacement scoped by a mask, the shape every weathering makes") {
+        Field f;
+        const u32 block = f.box({0, 0, 0}, {1.0, 0.5, 1.0}, 0.0);
+        const u32 half = f.box({-0.6, 0, 0}, {0.6, 1.0, 1.4}, 0.0);
+        const u32 mask = f.smoothstep(f.negate(half), -0.06, 0.0);
+        const u32 grain = f.fbm(0.16, 3, 0.5, 2.0, 13u);
+        const u32 scoped =
+            f.displace(block, f.multiply({grain, mask, f.constant(0.8)}), 0.12);
+        f.build_bounds();
+
+        std::vector<PaintRule> paint;
+        paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+        paint.push_back(PaintRule{f.add({grain, f.multiply({mask, f.constant(-1e9)})}), 0.2, 1e30,
+                                  moss});
+
+        must_match(sample(f, scoped, paint, settings, &jobs).clip,
+                   brute_force(f, scoped, paint, settings), "scoped displacement");
+    }
+
     SUBCASE("many small things, so most boxes hold nothing at all") {
         Field f;
         std::vector<u32> parts;

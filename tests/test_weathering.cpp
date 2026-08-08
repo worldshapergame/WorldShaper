@@ -147,6 +147,147 @@ weather overgrown 0.7 scale=1.0 seed=5
     CHECK(b.measurement.types.size() >= 2);
 }
 
+// --- weathering that knows where it is allowed to work ----------------------------------------
+//
+// The debt this pays. Weathering used to act on the whole clip: one `weather desert` on a building
+// standing in a garden bleached the grass as readily as the stone, because the coats it adds are
+// keyed on a value rather than a place and they go on after everything the author painted. The
+// building shipped with no weathering at all rather than with that — which left the one system
+// written specifically for a stone building outdoors untested on the only stone building there is.
+
+namespace {
+
+// How many voxels of the clip are of a named material. Weathering brings its own materials, so
+// counting them is how "did this coat land here and not there" is asked.
+u64 count_of(const Built& b, const std::string& name) {
+    VoxelTypeId wanted = 0;
+    bool found = false;
+    for (usize i = 0; i < b.script.material_names.size(); ++i) {
+        if (b.script.material_names[i] == name) {
+            wanted = static_cast<VoxelTypeId>(i);
+            found = true;
+        }
+    }
+    if (!found) return 0;
+    u64 total = 0;
+    for (VoxelTypeId v : b.result.clip.voxels) {
+        if (v == wanted) ++total;
+    }
+    return total;
+}
+
+// Two blocks side by side of the same material, one named and one not. Whatever `weather` is
+// asked to do, it has to happen to the left one and not the right one.
+std::string two_blocks(const std::string& weathering) {
+    return R"(
+metre 16
+bounds -2.2 0 -1.1   2.2 1.7 1.1
+material stone rgb=150,148,142
+let left  = box -2.0 0 -1.0  -0.1 1.5 1.0
+let right = box  0.1 0 -1.0   2.0 1.5 1.0
+let both  = union { left right }
+paint stone
+solid both
+)" + weathering;
+}
+
+}  // namespace
+
+TEST_CASE("weathering scoped to a shape leaves everything else alone") {
+    const Built plain = build(two_blocks(""));
+    const Built whole = build(two_blocks("weather overgrown 0.8 scale=0.6 seed=5\n"));
+    const Built scoped = build(two_blocks("weather overgrown 0.8 scale=0.6 seed=5 on=left\n"));
+    REQUIRE(plain.script.ok());
+    REQUIRE(whole.script.ok());
+    REQUIRE(scoped.script.ok());
+
+    // Unscoped it covers both blocks; scoped it covers rather less, because half the clip is now
+    // out of bounds for it.
+    const u64 all_moss = count_of(whole, "moss") + count_of(whole, "lichen");
+    const u64 some_moss = count_of(scoped, "moss") + count_of(scoped, "lichen");
+    CHECK(all_moss > 0);
+    CHECK(some_moss > 0);
+    CHECK(some_moss < all_moss);
+
+    // And the half it was not asked about is untouched: exactly the stone it started as, voxel
+    // for voxel. Counted on the right-hand block alone, which is the whole point of the feature.
+    const Clip& before = plain.result.clip;
+    const Clip& after = scoped.result.clip;
+    REQUIRE(before.size[0] == after.size[0]);
+    const i32 middle = before.size[0] / 2;
+    u64 differing = 0;
+    for (i32 z = 0; z < before.size[2]; ++z) {
+        for (i32 y = 0; y < before.size[1]; ++y) {
+            for (i32 x = middle + 2; x < before.size[0]; ++x) {
+                const usize i = before.index(x, y, z);
+                if (before.voxels[i] != after.voxels[i]) ++differing;
+            }
+        }
+    }
+    CHECK(differing == 0);
+}
+
+TEST_CASE("a scoped deformation cuts only inside its own shape") {
+    // The other half of scoping, and the half that cannot be seen in a material count: cracks take
+    // matter away, and a crack scoped to one block must not open in the block beside it.
+    const Built plain = build(two_blocks(""));
+    const Built scoped = build(two_blocks("weather cracks 0.9 scale=0.5 seed=11 on=left\n"));
+    REQUIRE(scoped.script.ok());
+
+    CHECK(scoped.measurement.solid < plain.measurement.solid);
+
+    const Clip& before = plain.result.clip;
+    const Clip& after = scoped.result.clip;
+    const i32 middle = before.size[0] / 2;
+    u64 lost_left = 0;
+    u64 lost_right = 0;
+    for (i32 z = 0; z < before.size[2]; ++z) {
+        for (i32 y = 0; y < before.size[1]; ++y) {
+            for (i32 x = 0; x < before.size[0]; ++x) {
+                const usize i = before.index(x, y, z);
+                if (before.voxels[i] == kAir || after.voxels[i] != kAir) continue;
+                if (x < middle) ++lost_left;
+                else ++lost_right;
+            }
+        }
+    }
+    CHECK(lost_left > 0);
+    CHECK(lost_right == 0);
+}
+
+TEST_CASE("weathering on a name nothing was bound to is an error, not a silent whole-clip coat") {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(R"(
+metre 8
+bounds 0 0 0 1 1 1
+material stone rgb=1,2,3
+let b = box 0 0 0 1 1 1
+paint stone
+solid b
+weather desert 0.5 on=podium
+)",
+                                           types, tags);
+    REQUIRE(!script.errors.empty());
+    bool named = false;
+    for (const ScriptError& e : script.errors) {
+        if (e.message.find("podium") != std::string::npos) named = true;
+    }
+    CHECK(named);
+}
+
+TEST_CASE("weathering no longer costs the sampler every skip it had") {
+    // Every deformation weathering builds is a pattern multiplied by an amount, and the old rule
+    // for "how far can this move the surface" only knew about bare noises. So a weathered clip
+    // reported an unbounded allowance, no box in it could ever be settled, and every voxel of the
+    // bounding volume was asked through the whole expression. That is why it was too slow to ship,
+    // and it was arithmetic rather than weathering that made it so.
+    const Built weathered = build(two_blocks("weather desert 0.5 scale=0.8 seed=3 on=left\n"));
+    REQUIRE(weathered.script.ok());
+    CHECK(weathered.result.slack < 1.0);
+    CHECK(weathered.result.voxels_settled > weathered.result.voxels_asked);
+}
+
 TEST_CASE("an unknown weathering is an error rather than a silent nothing") {
     VoxelTypeTable types;
     TagRegistry tags;

@@ -771,14 +771,49 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     // every test below fails, and the sampler walks every voxel exactly as it would have.
     const f64 slack = std::min(field.metric_slack(root), field.skip_slack());
 
+    // The shape without its outermost displacements, and how far they can move its surface. Wanted
+    // here as well as in the descent, because it is also how far the paint has to reach — see
+    // below.
+    f64 amplitude = 0.0;
+    const u32 prune_root = field.undisplaced(root, amplitude);
+    const f64 prune_inner = field.metric_slack(prune_root);
+    const f64 prune_slack = (prune_inner >= Field::kInfiniteSlack)
+                                ? Field::kInfiniteSlack
+                                : std::min(prune_inner + amplitude, slack);
+
     // Whether each paint rule can be settled for a whole block from one reading at its centre.
     // A rule keyed on a shape can: the distance at the centre bounds the distance anywhere in
     // the block, so the rule either applies to all of it, none of it, or has its surface running
     // through it. A rule keyed on a pattern cannot, and is asked per voxel as before.
+    //
+    // The same reading says whether the rule may be widened, which is the other half of the job.
+    //
+    // Displacement moves a surface. It does not move which part a voxel belongs to. A rule says
+    // "this material where that shape is inside" — a test against a shape, accepted below zero —
+    // and then the shape is displaced, twelve millimetres of grain over the whole facility. A
+    // voxel that exists only because the grain pushed the surface *out* sits outside the shape its
+    // own rule names, so the test is false, no rule matches, and it falls back to the first coat.
+    // The result is a rind of the wrong colour over every outward-facing surface of every painted
+    // object, which reads exactly like weathering and was reported as such.
+    //
+    // So a metric rule is given the displacement's own amplitude at both ends of its band. That is
+    // exact rather than generous: the set a one-Lipschitz test accepts, grown by d in space, is the
+    // same test accepted over a band d wider — which is precisely what "metric" buys and precisely
+    // why a pattern is left alone, a noise's value being no kind of distance for a millimetre to be
+    // added to. Both ends, because displacement moves a surface inward as often as outward and a
+    // rule reading "within five centimetres of the face" has to follow the face both ways.
+    //
+    // Only the displacement applied to the whole shape is charged. One applied to a single part of
+    // a union is not, because there is no one number for it — and a rule widened by an unbounded
+    // amount is a rule that paints the entire clip.
     std::vector<f64> rule_slack(paint.size(), Field::kInfiniteSlack);
+    std::vector<PaintRule> widened = paint;
     for (usize i = 0; i < paint.size(); ++i) {
-        if (paint[i].facing_axis < 3) continue;   // a normal is a per-voxel question
-        rule_slack[i] = field.metric_slack(paint[i].test);
+        const f64 metric = field.metric_slack(paint[i].test);
+        if (paint[i].facing_axis >= 3) rule_slack[i] = metric;   // a normal is a per-voxel question
+        if (metric >= Field::kInfiniteSlack) continue;
+        widened[i].low -= amplitude;
+        widened[i].high += amplitude;
     }
 
     // Asked of a box, and then of its halves, and then of theirs.
@@ -805,14 +840,6 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     // rather than three million times. A rule keyed on a pattern cannot be settled that way — a
     // noise says nothing about the next voxel — so it is inherited as "still to ask" and paid for
     // per voxel, which is the honest price of asking for one.
-    // The shape without its outermost displacements, for settling boxes.
-    f64 amplitude = 0.0;
-    const u32 prune_root = field.undisplaced(root, amplitude);
-    const f64 prune_inner = field.metric_slack(prune_root);
-    const f64 prune_slack = (prune_inner >= Field::kInfiniteSlack)
-                                ? Field::kInfiniteSlack
-                                : std::min(prune_inner + amplitude, slack);
-
     Descent descent;
     descent.field = &field;
     descent.root = root;
@@ -836,7 +863,7 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
             descent.part_slack.push_back(field.metric_slack(part));
         }
     }
-    descent.paint = &paint;
+    descent.paint = &widened;
     descent.settings = &settings;
     descent.clip = &clip;
     descent.rule_slack = &rule_slack;
