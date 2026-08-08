@@ -447,9 +447,37 @@ vec3 sky_evaluate(vec3 dir, bool points) {
         // standing on it, which a hand-picked dark grey was quietly not providing.
         vec3 irradiance = sun_radiance() * max(trace.sun.y, 0.0) + clear * kPi;
         vec3 ground = kGroundAlbedo * irradiance * (1.0 / kPi);
+
         // Aerial perspective: the last few degrees above the ground are more air than ground,
-        // which is what stops the horizon being a drawn line.
-        return mix(clear, ground, smoothstep(0.0, 0.22, -dir.y));
+        // which is what stops the horizon being a drawn line. Past this it is all ground, and
+        // the air in front of it costs nothing to skip.
+        float air = 1.0 - smoothstep(0.0, 0.22, -dir.y);
+        if (air <= 0.0) return ground;
+
+        // And the air is the sky AT THE HORIZON, evaluated a second time, rather than the `clear`
+        // above -- which is the sky at a fixed slope of 26 degrees, chosen because it is a fair
+        // stand-in for what lights a distant plain and is nothing like a fair stand-in for what
+        // stands in front of one. The two are different values meeting at dir.y = 0, and they met
+        // with a step: a hard horizontal line drawn straight across every outdoor frame in the
+        // repository, warm haze above it and mid blue below. It cost a second Perez evaluation
+        // and a second look at the cloud deck to remove, on the twelve degrees below the horizon
+        // where anything is mixed at all.
+        vec3 edge = normalize(vec3(dir.x, 0.0, dir.z));
+        vec3 edge_ratio = sky_perez(0.0, sky_perez_gamma(edge, trace.sun.xyz)) /
+                          sky_perez(1.0, sun_theta);
+        vec3 haze = xyY_to_rgb(zenith.y * edge_ratio.y, zenith.z * edge_ratio.z,
+                               zenith.x * edge_ratio.x * kSkyUnit * sky_twilight(elevation));
+        haze += kNightHorizon * night;
+        // The deck as well, or the cloud stops dead at the horizon and puts the line back for
+        // the third of the sky that has cloud in it. It is gone again within three degrees,
+        // which is not a fade for the look of it: a deck at two kilometres genuinely is not in
+        // front of ground a kilometre away, and carried the full twelve degrees it smears into
+        // vertical streaks, because the projection is constant down a column of one bearing.
+        float edge_cloud = cloud_density(edge) * (1.0 - smoothstep(0.0, 0.05, -dir.y));
+        if (edge_cloud > 0.0) {
+            haze = mix(haze, cloud_radiance(edge, haze, edge_cloud), edge_cloud);
+        }
+        return mix(ground, haze, air);
     }
 
     vec3 radiance = clear;
