@@ -44,6 +44,18 @@ struct GpuBrickHeader {
     bool uniform() const { return index_bits == 0; }
     bool operator==(const GpuBrickHeader&) const = default;
 };
+
+// Set when nothing in this brick lets any light past: no transparency and no translucency.
+//
+// An optimisation and not a fact the renderer depends on. A shadow ray through a brick that
+// leaves this clear costs one type decode and one material lookup — once, at the voxel that
+// stops it, because the marcher only asks about a voxel it has already found solid. A brick
+// that sets it wrongly turns its window back into a wall with nothing to say so, which is why
+// the sense is "known opaque" rather than "holds glass": an encoder that has not been taught
+// about a new see-through material leaves the bit clear and stays correct, merely slower.
+//
+// Must match kBrickOpaqueOnly in shaders/world.glsl, which reads it out of `packed`.
+inline constexpr u8 kBrickOpaqueOnly = 1u << 0;
 static_assert(sizeof(GpuBrickHeader) == 32, "GpuBrickHeader must stay 32 bytes");
 
 // The canonical palette: distinct types in first-seen voxel order, plus the slot each

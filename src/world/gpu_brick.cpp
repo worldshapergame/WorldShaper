@@ -17,6 +17,35 @@ u32 read_u32(const u8* data, u32 byte_offset) {
     return value;
 }
 
+// Does one voxel type stop light dead? Air does not, but air is not solid and the marcher never
+// reaches the question for it, so it does not disqualify a brick.
+//
+// Two conditions and both are needed. `opacity` is what a ray you can see through gets past;
+// `translucency` is what a ray that will forget where it was going gets past, and a marble screen
+// has the first at full and the second well above zero. Flagging it opaque would put the hard
+// black shadow back under it.
+bool type_stops_light(const VoxelTypeTable& table, VoxelTypeId type) {
+    if (type == kAir) return true;
+    const VisualRecord& visual = table.visual_of(type);
+    return visual.opacity == 255 && visual.translucency == 0;
+}
+
+bool brick_stops_light(const Brick& brick, const VoxelTypeTable& table) {
+    if (brick.uniform()) return type_stops_light(table, brick.uniform_value());
+    if (brick.index_bits() == 32) {
+        for (VoxelTypeId type : brick.direct_data()) {
+            if (!type_stops_light(table, type)) return false;
+        }
+        return true;
+    }
+    // The palette is the brick's distinct types, so this is a handful of lookups rather than
+    // five hundred and twelve.
+    for (VoxelTypeId type : brick.palette_data()) {
+        if (!type_stops_light(table, type)) return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 void canonical_palette(const Brick& brick, std::vector<VoxelTypeId>& palette,
@@ -192,6 +221,9 @@ void encode_brick(const Brick& brick, const VoxelTypeTable& table, GpuBrickHeade
     header.index_bits = static_cast<u8>(bits);
     header.payload_offset = kNoOffset;
     header.average_colour = filtered_colour(brick, table);
+    // So a shadow ray crossing solid rock — which is nearly all of them — never touches the
+    // material tables at all. See kBrickOpaqueOnly.
+    header.flags = brick_stops_light(brick, table) ? kBrickOpaqueOnly : u8{0};
     build_mips(occupancy, header.mip_cell2, header.mip_cell4);
 
     if (bits == 0) {

@@ -236,6 +236,16 @@ bool brick_cell_solid(uint slot, ivec3 cell, int cell_size) {
     return ((headers.items[slot].mip_cell4 >> bit) & 1u) != 0u;
 }
 
+// Set on a brick that is known to hold nothing a ray can see through. Bit 0 of the header's
+// flags byte, which arrives here as `packed = index_bits | flags << 8`.
+//
+// The sense is "known opaque" and not "holds glass" on purpose. A brick whose flag has not been
+// worked out reads as 0, and 0 means "ask properly" — so a shadow ray through a window is
+// correct before anything sets the bit, and only gets cheaper once something does. The other
+// way round, a brick the encoder forgot would turn its window back into a wall and nothing
+// would say so. See kBrickOpaqueOnly in world/gpu_brick.hpp.
+const uint kBrickOpaqueOnly = 1u << 8u;
+
 uint read_payload_byte(uint byte_offset) {
     uint word = payload.words[byte_offset >> 2u];
     return (word >> ((byte_offset & 3u) * 8u)) & 0xFFu;
@@ -263,6 +273,45 @@ float bayer(ivec2 pixel) {
     const int table[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
     return float(table[(pixel.y & 3) * 4 + (pixel.x & 3)]) / 16.0;
 }
+
+// ---- what a ray can see through -----------------------------------------------------------
+//
+// A window is not a wall, and to a shadow ray it was: the primary ray learned to pass through
+// glass, so a glazed opening looks like an opening, and then the sun test behind it reported the
+// same hard black shadow it always had. A pane in a doorway made the room behind it as dark as
+// bricked-up stone.
+//
+// This is done *inside* the march rather than by a loop of marches around it, and that is not a
+// preference. The primary ray's loop restarts the ray a thousandth of a voxel past the interface
+// it just crossed, which is still inside the glass, so the next march hits the same voxel again
+// at t = 0; it works there only because the segment budget runs out and the ray is handed to the
+// sky. A shadow ray cannot be handed to the sky. Walking the pane voxel by voxel inside the one
+// DDA that is already running gives the exact distance through it, costs no second march, and
+// cannot re-enter what it has left.
+//
+// How much of a ray one voxel of a material lets past is a question about the *type* tables,
+// which are in the path tracer's descriptor set and not in the world's — visibility.comp
+// includes this same file and its set stops at binding 13. So the marcher asks through a macro
+// the including shader supplies, and the default answer is the one the marcher has always given.
+#ifndef WS_VOXEL_TRANSMIT
+#define WS_VOXEL_TRANSMIT(type_id) 0.0
+#endif
+
+// The mode, and its answer.
+//
+// Globals rather than a parameter and a return field because march's signature and its Hit are
+// depended on by three call sites, two of which would pass false and ignore the answer. A flag
+// set by the one caller that wants it is a smaller thing than a change to every caller.
+//
+// The answer is only meaningful when the march returns *no* hit: a hit means the ray was
+// stopped, by opaque matter or by having so little left that going on could not change the
+// picture, and a stopped ray transmits nothing.
+bool g_march_through_glass = false;
+float g_march_transmittance = 1.0;
+
+// Below this a shadow ray is called stopped. The same floor the primary ray's transmission loop
+// uses, so a pane that reads as opaque to one reads as opaque to the other.
+const float kMinTransmittance = 0.004;
 
 struct Hit {
     bool hit;
@@ -347,6 +396,19 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
     vec3 t_max = vec3(1e30);
     vec3 t_delta = vec3(1e30);
 
+    // Which chunk the last step was in, and what it resolved to.
+    //
+    // A chunk is 256 voxels and the outer walk steps 8 at the finest, so a ray asks the same
+    // question of the same chunk up to thirty-two times in a row along each axis it crosses.
+    // find_record is two *dependent* loads — the grid cell, and then that record's own
+    // coordinate, because the grid wraps and a cell can be held by a chunk from somewhere else
+    // entirely — and a dependent load is the one thing this loop cannot hide. The answer cannot
+    // change during a dispatch: both buffers are readonly. So ask once per chunk entered.
+    //
+    // The sentinel is a coordinate no world reaches, so the first step always misses.
+    ivec3 known_chunk = ivec3(0x7FFFFFFF);
+    uint known_record = kNoRecord;
+
     for (uint step = 0u; step < kMaxSteps && t < limit; ++step) {
         result.steps = step;
 
@@ -382,7 +444,11 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
         ivec3 chunk_offset = ivec3(floor_div(voxel_min.x, kChunkEdge),
                                    floor_div(voxel_min.y, kChunkEdge),
                                    floor_div(voxel_min.z, kChunkEdge));
-        uint record = find_record(push.camera_chunk.xyz + chunk_offset);
+        if (chunk_offset != known_chunk) {
+            known_chunk = chunk_offset;
+            known_record = find_record(push.camera_chunk.xyz + chunk_offset);
+        }
+        uint record = known_record;
 
         if (record == kNoRecord) {
             // No full-detail chunk here. Before writing this off as empty space, see whether
@@ -656,17 +722,44 @@ Hit march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
                     break;
                 }
                 if (brick_cell_solid(slot, inner, inner_size)) {
-                    result.hit = true;
-                    result.t = max(t_inner, 0.0);
-                    result.normal = inner_normal;
-                    result.level = level;
-                    if (level == 0) {
-                        result.type_id = voxel_type(slot, inner);
-                    } else {
-                        result.colour = headers.items[slot].average_colour;
+                    // How much of this ray the voxel lets past, and zero for everything that
+                    // is not a shadow ray asking about glass.
+                    //
+                    // This is where the cost had to be got right, and the shape of it is: a
+                    // material lookup happens once per ray at the voxel that stops it, never
+                    // once per step — this walk only reaches here when a voxel is solid, and an
+                    // opaque one returns immediately. The brick flag then removes even that
+                    // from the common case: `packed` is in the same 32 bytes as the
+                    // average colour and the mips this walk is already reading, so a brick with
+                    // nothing see-through in it answers from a line that is already warm, and
+                    // the type decode and the two dependent loads into the material tables
+                    // never happen at all.
+                    float keep = 0.0;
+                    if (g_march_through_glass &&
+                        (headers.items[slot].packed & kBrickOpaqueOnly) == 0u) {
+                        keep = WS_VOXEL_TRANSMIT(voxel_type(slot, inner));
                     }
-                    flush_missing(report, has_pending, pending);
-                    return result;
+                    // Stopped: opaque, or so little left that carrying on cannot change the
+                    // answer. Written as one test so the ordinary hit costs a multiply and a
+                    // compare rather than a second copy of everything below.
+                    if (keep * g_march_transmittance < kMinTransmittance) {
+                        result.hit = true;
+                        result.t = max(t_inner, 0.0);
+                        result.normal = inner_normal;
+                        result.level = level;
+                        if (level == 0) {
+                            result.type_id = voxel_type(slot, inner);
+                        } else {
+                            result.colour = headers.items[slot].average_colour;
+                        }
+                        flush_missing(report, has_pending, pending);
+                        return result;
+                    }
+                    // Through it, dimmed. Beer-Lambert is charged per voxel crossed rather
+                    // than per metre of pane, which is the same thing at a voxel's resolution
+                    // and means a grazing ray — which crosses more voxels — is dimmed more, as
+                    // it should be.
+                    g_march_transmittance *= keep;
                 }
                 if (i_max.x < i_max.y && i_max.x < i_max.z) {
                     t_inner = i_max.x; inner.x += step_dir.x; i_max.x += i_delta.x;
