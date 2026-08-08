@@ -1,0 +1,92 @@
+DERCODE License Agreement 2.5
+
+**DERCODE = DC**
+
+Copyright© DC Team
+
+This license applies to projects released under the **DERCODE/DER** repository unless stated otherwise.
+
+---
+
+# 1. Permissions
+
+## 1.1 Modifying
+
+You're free to modify, rewrite, optimize, or change any part of the shader however you want.
+
+This includes:
+
+* Making forks.
+* Publishing modified versions.
+* Using parts of the code in your own projects.
+* Learning from or adapting the source.
+
+Just make sure you follow the conditions below.
+
+---
+
+# 2. Conditions
+
+## 2.1 Keep original License
+
+This license file must stay included in every public fork or redistribution.
+
+Don't remove or replace it unless the DC Team gives you permission.
+
+---
+
+## 2.2 Main Menu
+
+You may not modify the main shader settings menu.
+
+Everything else, like submenus, settings pages, and other UI, can be changed however you want.
+
+---
+
+## 2.3 Publishing Forks
+
+If you publish a fork, you need to do **at least one** of these:
+
+* Let a DC Team developer know through the official Discord before you publish it.
+* Put **[DC Fork]** in the project's name.
+* Include a link to the official DC Team Discord and the original DC project on the download page or repository.
+
+Doing any one of these is enough.
+
+---
+
+## 2.4 Using DC's Code
+
+The DC Team can use code from any publicly released fork in official Derivative projects without asking first.
+
+If that happens, you're allowed to remove **DC Fork** references from your project, as long as:
+
+* this license stays included, and
+* there's still a link to the official DC Team Discord somewhere on the project's page.
+
+---
+
+## 2.5 Author Crediting
+
+The Original DC Authors (_DureXXX, M1zore, Skeeder461, Frs0n, and _Sone4ka_) must be credited on the project's page 
+
+# 3. Redistribution
+
+You can redistribute modified or unmodified versions of the project as long as you follow this license.
+
+---
+
+# 4. Enforcement
+
+for any project that fails to comply with this license, the owners may be asked to fix the issue or remove the project from public distribution.
+
+---
+
+# 5. Exceptions
+
+These projects are completely exempt from this license:
+
+* **Footage**, by skeeder461
+* **Derivative (Main)**, by M1zore
+
+The owners of these projects can modify or replace the license, source code, assets, branding, or anything else in their projects without restriction.

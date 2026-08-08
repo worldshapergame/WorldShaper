@@ -79,6 +79,30 @@ uint hash_u32(uint x) {
 #include "pt_sky.glsl"
 #include "pt_clouds.glsl"
 
+// This frame's marches, read as a CONTINUOUS field rather than as blocks.
+//
+// The marches live on a four-by-four lattice, and every path that reads them read the nearest one —
+// so anywhere a pixel had to fall back on them, or was pulled towards them by the clamp below, it
+// took a value quantised to a block. Sixteen pixels sharing one number is a visible square, and a
+// screen of visible squares is the pixelation that was reported.
+//
+// Interpolating between the four surrounding marches costs three extra loads on paths that are not
+// the common one, and turns the fallback from a mosaic into a smooth field. It is still not as sharp
+// as a march at the pixel — nothing could be — but it is no longer quantised, and quantisation is
+// what the eye was picking up.
+vec4 marched_between(vec2 pixel) {
+    ivec2 blocks = (ivec2(push.resolution.xy) + 3) / 4 - 1;
+    vec2 at = pixel * 0.25 - 0.5;
+    ivec2 base = ivec2(floor(at));
+    vec2 f = at - vec2(base);
+
+    vec4 s00 = imageLoad(cloud_marched, clamp(base + ivec2(0, 0), ivec2(0), blocks));
+    vec4 s10 = imageLoad(cloud_marched, clamp(base + ivec2(1, 0), ivec2(0), blocks));
+    vec4 s01 = imageLoad(cloud_marched, clamp(base + ivec2(0, 1), ivec2(0), blocks));
+    vec4 s11 = imageLoad(cloud_marched, clamp(base + ivec2(1, 1), ivec2(0), blocks));
+    return mix(mix(s00, s10, f.x), mix(s01, s11, f.x), f.y);
+}
+
 // Which pixel of a four-by-four block is marched on a given frame.
 //
 // Bayer order, so consecutive frames update pixels far apart and the image fills in evenly rather
@@ -132,7 +156,8 @@ vec3 where_it_was(vec3 dir, float aspect, float eye_height) {
     // a quarter of a second of itself behind at every pixel it passes — visible as a smear that
     // appears even when the CAMERA is perfectly still, which is how it was reported. Following the
     // wind, the carried value stays attached to the cloud it was measured on.
-    here -= vec3(push.sky_wind.z, 0.0, push.sky_wind.w) * metres(1.0);
+    vec2 slid = cloud_drift() * push.sky_wind.z;   // metres, this frame
+    here -= vec3(slid.x, 0.0, slid.y) * metres(1.0);
 
     vec3 relative = here - push.prev_origin.xyz;
 
@@ -231,7 +256,7 @@ void resolve_pass() {
     // This frame's own march, if this is the pixel that got one.
     ivec2 want = kUpdateOrder[trace.control.z & 15u];
     if ((pixel.x & 3) == want.x && (pixel.y & 3) == want.y) {
-        imageStore(cloud_history[writing], pixel, imageLoad(cloud_marched, pixel >> 2));
+        imageStore(cloud_history[writing], pixel, marched_between(vec2(pixel)));
         return;
     }
 
@@ -246,7 +271,7 @@ void resolve_pass() {
                      was.x <= float(push.resolution.x) && was.y <= float(push.resolution.y);
 
     vec4 carried = on_screen ? read_history(reading, was.xy)
-                             : imageLoad(cloud_marched, pixel >> 2);
+                             : marched_between(vec2(pixel));
 
     // Held to what is true NOW, by the marches this frame actually did.
     //

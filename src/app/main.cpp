@@ -2299,13 +2299,14 @@ void Application::record_frame(f32 time_seconds) {
         params.sky_cloud[1] = time_seconds * kGameSecondsPerSecond;
         params.sky_wind[0] = cloud_wind_[0];
         params.sky_wind[1] = cloud_wind_[1];
-        // How far the deck slid since the last frame, which is what lets the reprojection follow a
-        // cloud rather than follow the pixel it used to be under.
+        // How much GAME time passed since the last frame. The reprojection needs it to follow a
+        // cloud rather than the pixel it used to be under; how far that is in metres depends on the
+        // noise scale, which is the shader's business and not this one's.
         f32 game_now = time_seconds * kGameSecondsPerSecond;
         f32 game_step = std::clamp(game_now - prev_cloud_time_, 0.0f, kGameSecondsPerSecond);
         prev_cloud_time_ = game_now;
-        params.sky_wind[2] = cloud_wind_[0] * game_step;
-        params.sky_wind[3] = cloud_wind_[1] * game_step;
+        params.sky_wind[2] = game_step;
+        params.sky_wind[3] = 0.0f;
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
         // blurs against the frame before it rather than against itself.
