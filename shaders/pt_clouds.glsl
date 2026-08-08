@@ -121,6 +121,28 @@ const float kShadowFloor = 0.20;
 // How far a sky ray is worth marching, in metres.
 const float kCloudFarMetres = 90000.0;
 
+// The Earth's radius, in metres, and it is here for the horizon.
+//
+// A flat infinite deck reaches the horizon line exactly and piles up against it: a ray a degree
+// above horizontal crosses tens of kilometres of cloud and comes back solid, so the sky ends in a
+// hard white band with the deck's whole depth compressed into it. That band is not a rendering
+// artefact, it is what an infinite flat deck genuinely looks like — and the reason nobody has seen
+// one is that the real deck curves away.
+//
+// Dropping the deck by d²/2R sinks it below the horizon at distance, exactly as the real one does:
+// at fifty kilometres the drop is nearly two hundred metres and at a hundred it is almost eight
+// hundred, which is more than the base altitude. So the band thins and then ends, and there is a
+// horizon with sky under it.
+const float kEarthRadius = 6371000.0;
+
+// How far cloud stays visible through the air between it and the eye, in metres.
+//
+// Aerial perspective, and its absence is the other half of the horizon band. Air scatters, so a
+// cloud twenty kilometres off is paler and bluer than the same cloud overhead, and eventually it
+// is the sky. Without it every cloud is as saturated at the horizon as at the zenith, which reads
+// as a wall rather than as distance.
+const float kAirVisibility = 38000.0;
+
 // --- the world's own height --------------------------------------------------------------------
 //
 // Everything in these shaders is in voxels relative to the CAMERA'S CHUNK, which moves as the
@@ -332,7 +354,11 @@ float profile_stratus(float h) {
 // it is the height at which rising air has cooled to its dew point, and it is the same height
 // everywhere on a given day. That is why a field of cumulus looks like it is resting on glass.
 float profile_cumulus(float h) {
-    return remap(h, 0.0, 0.12, 0.0, 1.0) * remap(h, 0.55, 0.95, 1.0, 0.0);
+    // The body reaches higher than it did. A cumulus is roughly as tall as it is wide, and with a
+    // horizontal feature scale near a kilometre a body confined to h 0.12 to 0.55 of the deck is
+    // six hundred metres of cloud under eleven hundred metres of width — a pancake. From the
+    // ground that reads as flat cut-outs pasted on the sky, which is what it looked like.
+    return remap(h, 0.0, 0.10, 0.0, 1.0) * remap(h, 0.72, 1.0, 1.0, 0.0);
 }
 
 // Cumulonimbus: all the way up, and still solid near the top where it is about to spread into an
@@ -397,7 +423,10 @@ float low_deck_density(vec3 p, float height_m, bool detail) {
     // coarse path skips is the erosion, which only ever REMOVES density — so the coarse answer is
     // an over-estimate of the fine one, and an over-estimate is the safe direction for a strider:
     // it stops early and creeps, which costs a step and cannot miss anything.
-    vec3 base_p = q * (1.0 / metres(1100.0));
+    // Squashed vertically before the noise is sampled, which makes the cloud TALLER for the same
+    // horizontal size: a sphere in the noise's space is an egg standing on end in the world's. It
+    // is the cheapest way to get the proportions of convection, which rises.
+    vec3 base_p = q * vec3(1.0, 0.55, 1.0) * (1.0 / metres(850.0));
     float perlin = perlin_fbm(base_p, detail ? 3 : 2);
     float cells = detail ? worley_fbm(base_p * 2.4, 2.1) : worley(base_p * 2.4);
     float shape = remap(perlin, cells - 1.0, 1.0, 0.0, 1.0);
@@ -555,6 +584,9 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
     float cos_angle = dot(dir, trace.sun.xyz);
     vec3 sunlight = sun_radiance();
     vec3 ambient = sky_radiance(vec3(0.0, 1.0, 0.0)) * kSkyFill;
+    // The air's own colour in this direction, for the aerial perspective. Once, outside the loop:
+    // it does not change along the ray and it is not cheap.
+    vec3 air_colour = sky_radiance(dir);
 
     float travelled = enter_m;
     bool creeping = false;
@@ -582,7 +614,10 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
         step_m *= 1.0 + travelled * (1.0 / 12000.0);
 
         vec3 at = origin + dir * metres(travelled);
-        float h = height_origin_m + dir.y * travelled;
+        // Curving away with distance. See kEarthRadius: this is what puts an end to the deck
+        // instead of letting it pile up against the horizon line.
+        float h = height_origin_m + dir.y * travelled -
+                  travelled * travelled / (2.0 * kEarthRadius);
 
         // The cheap density first, and the expensive one only where there is something to erode.
         float coarse = cloud_density(at, h, false);
@@ -651,7 +686,13 @@ vec3 cloud_march(vec3 origin, vec3 dir, float height_origin_m, float max_distanc
         // single-scattering albedo times one minus the step's transmittance — the density and the
         // extinction cancel exactly, and writing the division without the matching multiplication
         // scales every step by one over the extinction, which is sixteen.
-        scattered += transmittance * light * kAlbedo * (1.0 - step_t) * mix(0.7, 1.0, powder);
+        // What this step scatters, then what the air between here and the eye does to it: the
+        // further away, the more of it has been replaced by the sky's own light.
+        vec3 here = light * kAlbedo * (1.0 - step_t) * mix(0.7, 1.0, powder);
+        float air = exp(-travelled / kAirVisibility);
+        here = mix(air_colour * (1.0 - step_t), here, air);
+
+        scattered += transmittance * here;
         transmittance *= step_t;
     }
     return scattered;
