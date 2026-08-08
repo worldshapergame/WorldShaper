@@ -448,6 +448,25 @@ public:
     usize size() const { return nodes_.size(); }
     const Node& node(u32 index) const { return nodes_[index]; }
 
+    // How well the field can cull, which is what decides what ONE evaluation costs.
+    //
+    // A node with no box cannot be skipped, and a hierarchy built over boxes that are all
+    // "everywhere" is a hierarchy that visits everything. Both are invisible from the outside —
+    // the answers stay right and the build simply takes twenty times as long — so they are
+    // reported rather than left to be inferred.
+    usize unbounded_nodes() const {
+        usize n = 0;
+        for (const Aabb& box : bounds_) { if (box.infinite()) ++n; }
+        return n;
+    }
+    usize unaccelerated_unions() const {
+        usize n = 0;
+        for (const Node& node : nodes_) {
+            if (node.op == Op::Union && node.children >= 4) ++n;
+        }
+        return n;
+    }
+
 private:
     u32 push(const Node& n);
     u32 combine(Op op, const std::vector<u32>& parts, f64 blend);

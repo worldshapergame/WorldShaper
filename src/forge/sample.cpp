@@ -1,6 +1,7 @@
 #include "forge/sample.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <unordered_map>
 
@@ -421,6 +422,30 @@ struct Descent {
     // evaluation in the building. Almost none of those rules can apply at any given place, and
     // almost all of them were being asked.
     const std::vector<Field::Aabb>* rule_box = nullptr;
+
+    // The pieces of a placed rule's zone, when its zone is a union of things standing apart.
+    //
+    // One box round a union of two distant pieces is a box round everything between them, and a
+    // weathering zone is exactly that: the facility's sunny zone is the great steps at the ground
+    // and the cornice wash at the top, so its bounding box is the building. The box above then
+    // rejects nothing and every solid voxel in the facility pays for an occlusion it is thirty
+    // metres from.
+    //
+    // Flat, with a begin/end pair per rule, because this is read at every box of the descent and a
+    // vector of vectors is a pointer chase per rule to find out there are no pieces.
+    const std::vector<Field::Aabb>* rule_piece = nullptr;
+    const std::vector<u32>* rule_piece_at = nullptr;
+
+    // Optional: one counter per paint rule, so a build can say which rules it spent itself on.
+    //
+    // Off unless asked for. Paint has been the majority of every expensive build this project has
+    // had, and every time the answer was a handful of rules out of a hundred and thirty-three —
+    // but finding out which took a guess, a change and a twenty-minute rebuild each round. A
+    // number per rule turns that into one run.
+    //
+    // Written from every worker, so relaxed atomics: the count is a diagnostic and an occasional
+    // lost increment against nine hundred million would not change a single decision made from it.
+    std::atomic<u64>* rule_cost = nullptr;
     i64 lo[3]{0, 0, 0};
     i32 size[3]{0, 0, 0};
     f64 voxel = 0.0;
@@ -501,6 +526,15 @@ struct Tally {
     u64 paint = 0;
     u64 singles = 0;   // boxes that came all the way down to one voxel
     u64 settled = 0;   // voxels decided in bulk, without being asked about
+
+    // Where the time actually went, as distinct from where the evaluations went.
+    //
+    // Those two turned out not to be the same thing at all, and assuming they were cost this file
+    // a day: halving the paint evaluations moved the build by three per cent, because the ones
+    // removed were the cheap ones. An evaluation is a walk of a tree and the trees differ by
+    // orders of magnitude, so a count says how often and only a clock says how long.
+    u64 paint_ns = 0;
+    u64 shape_ns = 0;
 };
 
 void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_covered,
@@ -510,6 +544,7 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
 // has rules nobody could settle. Walks the voxels evaluating only those.
 void paint_solid(const Descent& d, const i32 low[3], const i32 high[3], const u8* state,
                  Tally& local) {
+    const u64 entered = now_ns();
     const std::vector<PaintRule>& paint = *d.paint;
     for (i32 z = low[2]; z < high[2]; ++z) {
         const f64 pz = (static_cast<f64>(d.lo[2] + z) + d.centre_shift) * d.voxel;
@@ -531,6 +566,9 @@ void paint_solid(const Descent& d, const i32 low[3], const i32 high[3], const u8
                     const PaintRule& rule = paint[i];
                     const f64 value = d.field->eval(rule.test, p);
                     ++local.paint;
+                    if (d.rule_cost != nullptr) {
+                        d.rule_cost[i].fetch_add(1, std::memory_order_relaxed);
+                    }
                     if (value < rule.low || value > rule.high) continue;
                     if (rule.facing_axis < 3) {
                         if (!have_normal) {
@@ -558,6 +596,7 @@ void paint_solid(const Descent& d, const i32 low[3], const i32 high[3], const u8
             }
         }
     }
+    local.paint_ns += now_ns() - entered;
 }
 
 void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_covered,
@@ -594,7 +633,9 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
     // the answer is close enough to zero for displacement to flip it, was tried and measured
     // neutral. A voxel only reaches this level *because* it is near the surface, so the shortcut
     // almost never fires and mostly buys a second evaluation.)
+    const u64 shape_at = now_ns();
     const f64 dc = d.field->eval(single ? d.root : d.prune_root, middle);
+    local.shape_ns += now_ns() - shape_at;
     ++local.shape;
     if (single) ++local.singles;
 
@@ -660,6 +701,23 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
             state[i] = 0;
             continue;
         }
+        // Inside the rule's overall box, but a zone made of separate pieces is mostly the space
+        // between them. Asked second and only for the few boxes the test above let through, so a
+        // rule with no pieces pays two loads and a comparison.
+        if (d.rule_piece_at != nullptr) {
+            const u32 from = (*d.rule_piece_at)[i];
+            const u32 to = (*d.rule_piece_at)[i + 1];
+            if (from != to) {
+                bool near_a_piece = false;
+                for (u32 p = from; p < to && !near_a_piece; ++p) {
+                    near_a_piece = away_from((*d.rule_piece)[p], middle) <= radius;
+                }
+                if (!near_a_piece) {
+                    state[i] = 0;
+                    continue;
+                }
+            }
+        }
         if ((*d.rule_slack)[i] >= Field::kInfiniteSlack) {
             state[i] = 2;
             every_rule_known = false;
@@ -667,6 +725,7 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
         }
         const f64 value = d.field->eval(paint[i].test, middle);
         ++local.paint;
+        if (d.rule_cost != nullptr) d.rule_cost[i].fetch_add(1, std::memory_order_relaxed);
         const f64 span = radius + (*d.rule_slack)[i];
         if (value - span > paint[i].high || value + span < paint[i].low) {
             state[i] = 0;
@@ -729,7 +788,7 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
 }  // namespace
 
 SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,
-                    const SampleSettings& settings, JobSystem* jobs) {
+                    const SampleSettings& settings, JobSystem* jobs, const SampleWatcher& watch) {
     SampleResult result;
 
     const i32 per_metre = (settings.voxels_per_metre > 0) ? settings.voxels_per_metre
@@ -827,6 +886,14 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     // amount is a rule that paints the entire clip.
     std::vector<f64> rule_slack(paint.size(), Field::kInfiniteSlack);
     std::vector<Field::Aabb> rule_box(paint.size());
+
+    // Enough for a zone written as a handful of named places, and a ceiling so that a rule placed
+    // on a hedge of four hundred bushes falls back to its one box rather than making every voxel
+    // walk four hundred boxes to find out it is in none of them.
+    constexpr usize kMaxRulePieces = 16;
+    std::vector<Field::Aabb> rule_piece;
+    std::vector<u32> rule_piece_at(paint.size() + 1, 0);
+
     std::vector<PaintRule> widened = paint;
     for (usize i = 0; i < paint.size(); ++i) {
         // A rule that names its place is placed, WHATEVER its test is, and this has to come before
@@ -837,6 +904,7 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
         // not need to be, because it was confined to a named shape when it was written. Placing it
         // below the "this test says nothing, give up" branch put it after a `continue` taken by
         // exactly the rules it was written for, and changed nothing at all.
+        rule_piece_at[i] = static_cast<u32>(rule_piece.size());
         if (paint[i].has_place) {
             const Field::Aabb where = field.bounds_of(paint[i].place);
             if (!where.infinite()) {
@@ -847,30 +915,85 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
                                        where.low.z - reach};
                 rule_box[i].high = Vec3{where.high.x + reach, where.high.y + reach,
                                         where.high.z + reach};
+
+                // And the pieces the zone is actually made of.
+                //
+                // A weathering zone is written as the places that weather, which on a building are
+                // not one place: the facility's sunny zone is the great steps at the ground and the
+                // cornice wash twelve metres above them. One box round both is a box round the
+                // whole building, so the test above rejects nothing and every solid voxel pays for
+                // the occlusion of a cornice it is nowhere near — which is most of what a cold
+                // build of the facility was spending its time on.
+                //
+                // Only taken when the pieces are a real improvement on the box. Two overlapping
+                // pieces of one wall are the wall, and carrying them separately would cost a
+                // second test at every voxel to reach the same answer.
+                std::vector<Field::Part> parts;
+                field.union_children(paint[i].place, parts);
+                if (parts.size() > 1 && parts.size() <= kMaxRulePieces) {
+                    f64 piece_volume = 0.0;
+                    const usize first = rule_piece.size();
+                    for (const Field::Part& part : parts) {
+                        Field::Aabb box = field.bounds_of(part.node);
+                        if (box.infinite()) {   // one unbounded piece and the zone is the box again
+                            rule_piece.resize(first);
+                            piece_volume = -1.0;
+                            break;
+                        }
+                        const f64 grow = reach + part.extra;
+                        box.low = Vec3{box.low.x - grow, box.low.y - grow, box.low.z - grow};
+                        box.high = Vec3{box.high.x + grow, box.high.y + grow, box.high.z + grow};
+                        piece_volume += (box.high.x - box.low.x) * (box.high.y - box.low.y) *
+                                        (box.high.z - box.low.z);
+                        rule_piece.push_back(box);
+                    }
+                    const f64 whole = (rule_box[i].high.x - rule_box[i].low.x) *
+                                      (rule_box[i].high.y - rule_box[i].low.y) *
+                                      (rule_box[i].high.z - rule_box[i].low.z);
+                    // Overlap makes the sum an overestimate, which only ever makes this cautious.
+                    if (piece_volume < 0.0 || piece_volume > whole * 0.75) {
+                        rule_piece.resize(first);
+                    }
+                }
             }
         }
 
         const f64 metric = field.metric_slack(paint[i].test);
         if (paint[i].facing_axis >= 3) rule_slack[i] = metric;   // a normal is a per-voxel question
-        if (metric >= Field::kInfiniteSlack) continue;
-        widened[i].low -= amplitude;
-        widened[i].high += amplitude;
-        if (paint[i].has_place) continue;   // already placed, and exactly
+
+        // Whether the rule can be decided for a whole block from one reading at its centre.
+        const bool settleable = metric < Field::kInfiniteSlack;
+        if (settleable) {
+            widened[i].low -= amplitude;
+            widened[i].high += amplitude;
+        }
 
         // Where this rule could possibly say yes.
         //
-        // Only a rule that is bounded ABOVE can be placed. `where=<shape> below=0.02` accepts a
-        // small distance, so it accepts only inside that shape or just outside it, and the
-        // shape's box grown by the threshold contains every point it could ever paint.
+        // Asked of EVERY rule, including the ones that cannot be settled for a block, because
+        // those are two different questions and this used to answer only the first. A rule keyed
+        // on a shape the sampler cannot settle — a colonnade behind a `repeat`, a face carrying a
+        // pattern — got no box at all and was therefore asked at every solid voxel in the clip,
+        // even though the room it names is one per cent of the building. Measured on the facility
+        // at eight voxels to the metre: five such rules, one point nine million evaluations each,
+        // three quarters of all the paint work in the build.
         //
-        // A rule bounded below instead — `above=0.5` on a pattern, "where the grain is high" —
-        // is the complement of a shape and has no box at all: it can be true anywhere the shape
-        // is not, which is most of the world. Those keep the infinite box they start with and
-        // are settled the old way, by asking.
-        if (widened[i].high < 1e29 && widened[i].low <= -1e29) {
+        // Only a rule bounded ABOVE can be placed. `where=<shape> below=0.02` accepts a small
+        // distance, so it accepts only inside that shape or just outside it, and the shape's box
+        // grown by the threshold contains every point it could ever paint.
+        //
+        // A rule bounded below instead — `above=0.5` on a pattern, "where the grain is high" — is
+        // the complement of a shape and has no box at all: it can be true anywhere the shape is
+        // not, which is most of the world. Those keep the infinite box they start with.
+        if (!paint[i].has_place && widened[i].high < 1e29 && widened[i].low <= -1e29) {
             const Field::Aabb inner = field.bounds_of(paint[i].test);
             if (!inner.infinite()) {
-                const f64 reach = std::max(0.0, widened[i].high) + metric;
+                // A settleable rule reaches its accepted band plus its own slack, exactly as
+                // before. One that is not settleable has no slack to reach by, so it is charged
+                // the clip's displacement instead — the same allowance `bounds_of` has already
+                // put round the shape itself, and the only thing that can carry a voxel of that
+                // shape outside the box the shape came in.
+                const f64 reach = std::max(0.0, widened[i].high) + (settleable ? metric : amplitude);
                 rule_box[i].low = Vec3{inner.low.x - reach, inner.low.y - reach,
                                        inner.low.z - reach};
                 rule_box[i].high = Vec3{inner.high.x + reach, inner.high.y + reach,
@@ -878,6 +1001,7 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
             }
         }
     }
+    rule_piece_at[paint.size()] = static_cast<u32>(rule_piece.size());
 
     // Asked of a box, and then of its halves, and then of theirs.
     //
@@ -952,8 +1076,16 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     descent.paint = &widened;
     descent.settings = &settings;
     descent.clip = &clip;
+    std::vector<std::atomic<u64>> rule_cost(settings.count_rule_cost ? paint.size() : 0);
+    for (std::atomic<u64>& c : rule_cost) c.store(0, std::memory_order_relaxed);
+    if (!rule_cost.empty()) descent.rule_cost = rule_cost.data();
+
     descent.rule_slack = &rule_slack;
     descent.rule_box = &rule_box;
+    if (!rule_piece.empty()) {
+        descent.rule_piece = &rule_piece;
+        descent.rule_piece_at = &rule_piece_at;
+    }
     descent.voxel = voxel;
     descent.centre_shift = centre_shift;
     descent.slack = slack;
@@ -1001,6 +1133,23 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
                             static_cast<usize>(tops[2]);
     std::vector<Tally> counted(top_count);
 
+    // What the loading bar watches. Counted in blocks rather than in voxels because a block is the
+    // unit of work that actually completes: the bar is then monotonic and never has to be revised
+    // downward, which is the property that makes people believe it.
+    //
+    // Blocks are not all equally expensive — one full of matter costs far more than one full of
+    // sky — so the fraction is not linear in TIME. That is fine and is why the estimate is
+    // computed from elapsed seconds against fraction rather than from the fraction alone: an
+    // uneven rate corrects itself within a second or two.
+    //
+    // Called from every worker at once. `within` and `count` are relaxed atomic stores, so
+    // concurrent callers race to write and the loser's value is one block stale, which is a bar
+    // one block stale, which nobody can see.
+    std::atomic<usize> tops_done{0};
+    std::atomic<u64> voxels_done{0};
+    const u64 voxels_total = static_cast<u64>(size[0]) * static_cast<u64>(size[1]) *
+                             static_cast<u64>(size[2]);
+
     const auto do_top = [&](usize begin, usize end) {
         for (usize t = begin; t < end; ++t) {
             const i32 bx = static_cast<i32>(t % static_cast<usize>(tops[0]));
@@ -1016,6 +1165,16 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
             descend(descent, low, high, /*whole_covered=*/!settings.has_bounds,
                     /*parent_state=*/nullptr, /*inherited=*/false, local);
             counted[t] = local;
+
+            if (watch) {
+                const usize done = tops_done.fetch_add(1, std::memory_order_relaxed) + 1;
+                const u64 voxels =
+                    voxels_done.fetch_add(static_cast<u64>(high[0] - low[0]) *
+                                              static_cast<u64>(high[1] - low[1]) *
+                                              static_cast<u64>(high[2] - low[2]),
+                                          std::memory_order_relaxed);
+                watch(static_cast<f64>(done) / static_cast<f64>(top_count), voxels, voxels_total);
+            }
         }
     };
 
@@ -1031,8 +1190,16 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
         result.paint_evaluations += n.paint;
         result.voxels_asked += n.singles;
         result.voxels_settled += n.settled;
+        result.paint_ns += n.paint_ns;
+        result.shape_ns += n.shape_ns;
     }
     result.evaluations = result.shape_evaluations + result.paint_evaluations;
+    if (!rule_cost.empty()) {
+        result.rule_evaluations.resize(rule_cost.size());
+        for (usize i = 0; i < rule_cost.size(); ++i) {
+            result.rule_evaluations[i] = rule_cost[i].load(std::memory_order_relaxed);
+        }
+    }
     clip.build_coarse();
     return result;
 }

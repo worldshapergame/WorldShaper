@@ -26,6 +26,7 @@
 // inside; a `bounds` shape narrows it, which is how a clip ends up L-shaped or round rather than
 // always rectangular.
 
+#include <functional>
 #include <vector>
 
 #include "core/types.hpp"
@@ -96,6 +97,13 @@ struct SampleSettings {
     // Zero means the whole box.
     u32 bounds = 0;
     bool has_bounds = false;
+
+    // Count field evaluations per paint rule, so a slow build can say WHICH rule it was slow on.
+    //
+    // Off by default, and worth the flag rather than always on: it is an atomic increment beside
+    // every paint evaluation, and the builds this exists to diagnose are the ones with hundreds of
+    // millions of them.
+    bool count_rule_cost = false;
 };
 
 // No two voxels alike.
@@ -150,6 +158,12 @@ struct SampleResult {
     u64 voxels_asked = 0;      // boxes that came down to a single voxel
     u64 voxels_settled = 0;    // voxels decided in bulk, never asked about
 
+    // Core-nanoseconds, summed across every worker, so these add up to well over the wall clock
+    // on a machine with eight of them. What they are for is the RATIO: which half of the sampler
+    // the build was actually spent in, which an evaluation count does not say.
+    u64 paint_ns = 0;
+    u64 shape_ns = 0;
+
     // How much the sampler had to allow for, which is what decides how early a box can settle.
     // Reported because it is the single number that most affects how long a clip takes to build,
     // and it comes from the clip rather than the code — an author who displaces a whole site by
@@ -166,6 +180,10 @@ struct SampleResult {
     usize rules_total = 0;
     usize rules_per_voxel = 0;
     usize rules_placed = 0;      // how many carry an on= place the sampler can cull on
+
+    // One evaluation count per rule, in the order the rules were given. Empty unless
+    // `SampleSettings::count_rule_cost` asked for it.
+    std::vector<u64> rule_evaluations;
 };
 
 // Fill a clip from a field.
@@ -173,8 +191,17 @@ struct SampleResult {
 // `jobs` may be null, in which case it runs on the calling thread. With a job system it splits
 // by z slab, which is the axis a clip's memory is laid out along, so no two workers ever write
 // the same cache line.
+// Somebody to tell how far along the sampling is, called once per slab of work rather than per
+// voxel — a store on a shared line at voxel rate would be its own performance problem.
+//
+// A plain function rather than anything the forge has to know the shape of. Sampling a building is
+// nearly all of a cold load, so a loading bar that cannot see inside it has nothing to report for
+// the fifty seconds that matter, and a bar that does not move for fifty seconds is not a bar.
+using SampleWatcher = std::function<void(f64 fraction, u64 done, u64 expected)>;
+
 SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,
-                    const SampleSettings& settings, JobSystem* jobs = nullptr);
+                    const SampleSettings& settings, JobSystem* jobs = nullptr,
+                    const SampleWatcher& watch = {});
 
 // Give every voxel its own version of its material.
 //

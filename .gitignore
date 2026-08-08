@@ -17,3 +17,7 @@ STOP-LOOP
 *.clip.world.part
 
 renders/
+
+# How long each stage of a load took last run, so the next one can weight its bar by what
+# things actually cost here. Per-machine, like the built-world cache beside it.
+*.clip.load

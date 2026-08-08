@@ -91,6 +91,14 @@ void LoadHistory::write(const std::string& path) const {
     file.write(reinterpret_cast<const char*>(seconds), sizeof(seconds));
 }
 
+bool LoadProgress::likely_cached(const LoadHistory& history) {
+    if (!history.known) return false;
+    f64 total = 0.0;
+    for (usize i = 0; i < static_cast<usize>(LoadStage::Count); ++i) total += history.seconds[i];
+    if (total <= 0.0) return false;
+    return history.seconds[static_cast<usize>(LoadStage::Sampling)] < total * 0.05;
+}
+
 void LoadProgress::begin(const LoadHistory& history, bool from_cache) {
     const f64* fallback = from_cache ? kFromCache : kNominal;
     total_weight_ = 0.0;
@@ -107,6 +115,9 @@ void LoadProgress::begin(const LoadHistory& history, bool from_cache) {
     if (total_weight_ <= 0.0) total_weight_ = 1.0;
 
     began_ns_ = now_ns();
+    rate_old_ns_ = rate_new_ns_ = 0;
+    rate_old_fraction_ = rate_new_fraction_ = 0.0;
+    shown_left_ = -1.0;
     stage_.store(0, std::memory_order_relaxed);
     within_bits_.store(to_bits(0.0), std::memory_order_relaxed);
     done_.store(0, std::memory_order_relaxed);
@@ -183,20 +194,59 @@ LoadProgress::Snapshot LoadProgress::look() const {
     if (out.fraction < 0.0) out.fraction = 0.0;
     if (out.fraction > 0.999) out.fraction = 0.999;   // a hundred means done, and it is not
 
-    // How long is left, from how long this run has actually taken to get this far.
+    // How long is left, from how fast this run has been going LATELY.
     //
-    // Measured rather than predicted: whatever the weights said, this machine has just spent a
-    // known time reaching a known fraction, and the rest of the work is the rest of the weight at
-    // the same rate. That is what makes it self-correcting — a clip whose sampling is unusually
-    // cheap for its size does not spend the whole load claiming three more minutes.
+    // The obvious estimate is the average since launch: this machine has spent a known time
+    // reaching a known fraction, so the rest of the weight takes the rest of the time at the same
+    // rate. That is only a fair predictor if the work goes at a constant rate, and this work does
+    // not go at a constant rate at all.
     //
-    // Held back until a twentieth of the way through, because the rate over the first few
-    // hundredths is mostly the cost of starting and predicting from it gives wild numbers that
-    // then visibly settle down, which reads as the estimate being untrustworthy. It is better to
-    // say nothing for a moment than to say something silly.
-    const f64 spent = static_cast<f64>(now_ns() - began_ns_) * 1e-9;
-    if (out.fraction > 0.05 && spent > 0.25) {
-        out.seconds_left = spent * (1.0 - out.fraction) / out.fraction;
+    // Sampling is the clearest case. Empty space is settled a whole block at a time and matter is
+    // not, so the sky goes past in moments and the building crawls. An average taken while the sky
+    // was flying by says two minutes; a minute later it says six; a minute after that, eleven. A
+    // countdown that counts up is worse than no countdown — it does not merely fail to inform, it
+    // tells the player, once a second, that the game does not know what it is doing.
+    //
+    // So the rate is measured over a trailing window: a pair of readings, the older of which is
+    // between one and two windows back, and the slope between them. When the cheap work runs out
+    // the slope drops and the estimate rises ONCE and then tracks, instead of climbing forever.
+    const u64 at = now_ns();
+
+    constexpr f64 kWindow = 5.0;
+    if (rate_new_ns_ == 0) {
+        rate_old_ns_ = rate_new_ns_ = began_ns_;
+        rate_old_fraction_ = rate_new_fraction_ = 0.0;
+    }
+    if (static_cast<f64>(at - rate_new_ns_) * 1e-9 >= kWindow) {
+        rate_old_ns_ = rate_new_ns_;
+        rate_old_fraction_ = rate_new_fraction_;
+        rate_new_ns_ = at;
+        rate_new_fraction_ = out.fraction;
+    }
+
+    const f64 over = static_cast<f64>(at - rate_old_ns_) * 1e-9;
+    const f64 gained = out.fraction - rate_old_fraction_;
+
+    // Held back until there is a window's worth of evidence and the bar has actually moved. The
+    // rate over the first moments is mostly the cost of starting, and predicting from it gives a
+    // wild number that then visibly settles, which reads as the estimate being untrustworthy. It
+    // is better to say nothing for a few seconds than to say something silly.
+    if (over >= kWindow && gained > 1e-4 && out.fraction > 0.01) {
+        const f64 raw = (1.0 - out.fraction) * over / gained;
+        // Eased towards, so the reading does not jitter by tens of seconds between frames as the
+        // slope wobbles. Downward quickly and upward slowly: a countdown that drops is a pleasant
+        // surprise and one that climbs is the complaint this is here to answer.
+        if (shown_left_ < 0.0) {
+            shown_left_ = raw;
+        } else {
+            const f64 ease = (raw < shown_left_) ? 0.25 : 0.05;
+            shown_left_ += (raw - shown_left_) * ease;
+        }
+        // And never longer than a second ago, while nothing has gone wrong. Time passing is itself
+        // progress, so the number comes down between windows rather than standing still.
+        out.seconds_left = shown_left_;
+    } else if (shown_left_ >= 0.0) {
+        out.seconds_left = shown_left_;
     }
     return out;
 }

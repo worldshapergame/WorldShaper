@@ -7,12 +7,15 @@
 
 #include <imgui.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <filesystem>
 #include <string>
+#include <thread>
 
 #include "core/arena.hpp"
 #include "core/hash.hpp"
@@ -21,6 +24,7 @@
 #include "core/log.hpp"
 #include "game/quality.hpp"
 #include "world/light_list.hpp"
+#include "app/loading.hpp"
 #include "app/updater.hpp"
 #include "core/time.hpp"
 #include "core/version.hpp"
@@ -36,6 +40,7 @@
 #include "gpu/device.hpp"
 #include "gpu/feedback.hpp"
 #include "gpu/image.hpp"
+#include "gpu/loading_screen.hpp"
 #include "gpu/render_params.hpp"
 #include "gpu/profiler.hpp"
 #include "gpu/screenshot.hpp"
@@ -502,26 +507,50 @@ int run_headless(const Options& options) {
 // development one. A clip is content, so it is a file on disk rather than something compiled in
 // — which is the whole point of the format, and it means the scene can be edited without a
 // build.
-// When this build was made, as a number.
+// The version of how a clip becomes a world. Bump it when a change would make the same clip
+// produce a different world, so every cached world built the old way is thrown away.
+constexpr u64 kWorldBuildVersion = 1;
+
+// The directories holding the code that decides what a clip builds into. Nothing else counts:
+// the renderer, the HUD and the updater can all change without a single voxel moving.
+const char* const kBuildInputDirs[] = {"src/forge", "src/world"};
+const char* const kBuildInputFiles[] = {"src/game/clip.cpp", "src/game/clip.hpp"};
+
+// What the cached worlds are keyed on, beyond the clip itself.
 //
-// Used to key the clip cache, so that changing how clips are built throws away the worlds built
-// the old way. Taken from the executable's modification time rather than __DATE__, because a
-// source file only gets a new __DATE__ when that particular file is recompiled — and the file
-// whose behaviour changed is rarely the one holding the constant.
+// This used to be the executable's modification time, which is correct and unusable: it throws
+// away every built world on every relink, so changing a menu label costs a minute of resampling a
+// building that nobody touched. What actually matters is whether the code that decides the build
+// changed, so that is what is measured — the newest modification time across the forge and the
+// world format, folded together with the version above.
+//
+// In a shipped tree those sources are not present and the walk finds nothing, which leaves the
+// version constant alone as the key. That is the right answer there: a released build's clips are
+// built one way, and the way only changes when a release says it does.
 u64 build_stamp() {
+    u64 stamp = kWorldBuildVersion * 0x9E3779B97F4A7C15ull;
+
+    const auto fold = [&stamp](const std::filesystem::path& file) {
+        std::error_code error;
+        const auto when = std::filesystem::last_write_time(file, error);
+        if (error) return;
+        const u64 at = static_cast<u64>(when.time_since_epoch().count());
+        // A maximum, not a mix: reverting a file must give back the key it had before it was
+        // touched, and a running total would not.
+        stamp = at > stamp ? at : stamp;
+    };
+
+    const std::filesystem::path root = std::filesystem::path(WS_SHADER_SOURCE_DIR).parent_path();
     std::error_code error;
-#if defined(_WIN32)
-    wchar_t buffer[1024]{};
-    const unsigned long length =
-        GetModuleFileNameW(nullptr, buffer, static_cast<unsigned long>(std::size(buffer)));
-    if (length == 0) return 0;
-    const std::filesystem::path self(std::wstring(buffer, length));
-#else
-    const std::filesystem::path self = compiled_shader_dir().parent_path() / "WorldShaper";
-#endif
-    const auto when = std::filesystem::last_write_time(self, error);
-    if (error) return 0;
-    return static_cast<u64>(when.time_since_epoch().count());
+    for (const char* directory : kBuildInputDirs) {
+        for (std::filesystem::directory_iterator it(root / directory, error), end;
+             !error && it != end; it.increment(error)) {
+            if (it->is_regular_file(error)) fold(it->path());
+        }
+        error.clear();
+    }
+    for (const char* file : kBuildInputFiles) fold(root / file);
+    return stamp;
 }
 
 std::string default_clip_path() {
@@ -685,6 +714,16 @@ private:
     void save_settings();
 
     void build_world();
+
+    // One frame of the loading screen, drawn from wherever startup happens to be.
+    //
+    // Called at every point where startup passes from one piece of work to the next, so the bar
+    // keeps moving through the parts that are NOT the world build — the pipelines, the residency,
+    // the first upload. Those are the parts a bar usually leaves out, which is exactly why it
+    // reaches ninety-nine per cent and then sits there.
+    void draw_loading();
+    std::string loading_cache_path() const;
+
     void stream(f64 seconds);
     void update_tools(const InputState& input, bool chisel_has_wheel, bool clipboard_has_wheel,
                       f64 dt);
@@ -697,6 +736,17 @@ private:
     Swapchain swapchain_;
     GpuProfiler profiler_;
     Hud hud_;
+
+    // The load, and the screen that reports it. The screen is torn down once the game is up — it
+    // holds a full-resolution image and nothing after startup needs it — but the progress itself
+    // stays, because a level change is the same operation and will want to report the same way.
+    LoadProgress progress_;
+    LoadingScreen loading_screen_;
+    LoadHistory load_history_;
+    u64 load_began_ns_ = 0;
+    u64 loading_drawn_ns_ = 0;    // when the last loading frame went out, so it can be paced
+    bool loading_quit_ = false;   // the window was closed while it was still building
+
     ComputePipeline visibility_;
     ComputePipeline resolve_;
 
@@ -962,6 +1012,95 @@ void Application::handle_resize() {
 }
 
 
+// A count a person can read at a glance. Thirty-one million voxels is a number nobody parses;
+// "31.0M" is one they can watch move, which is the entire job of putting it on screen.
+std::string short_count(u64 value) {
+    char buffer[32];
+    if (value >= 1000000000ull) {
+        std::snprintf(buffer, sizeof(buffer), "%.1fB", static_cast<f64>(value) * 1e-9);
+    } else if (value >= 1000000ull) {
+        std::snprintf(buffer, sizeof(buffer), "%.1fM", static_cast<f64>(value) * 1e-6);
+    } else if (value >= 1000ull) {
+        std::snprintf(buffer, sizeof(buffer), "%.0fK", static_cast<f64>(value) * 1e-3);
+    } else {
+        std::snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(value));
+    }
+    return buffer;
+}
+
+// How much longer, in the coarsest unit that is still honest.
+//
+// Rounded DOWN to whole seconds and never to zero while there is work left, because a countdown
+// that reaches nought and keeps going is worse than no countdown: it does not just fail to inform,
+// it actively tells the player something is wrong when nothing is.
+std::string time_left(f64 seconds) {
+    if (seconds < 0.0) return {};                    // too early to say, so say nothing
+    if (seconds < 2.0) return "ALMOST THERE";
+    char buffer[32];
+    if (seconds < 90.0) {
+        std::snprintf(buffer, sizeof(buffer), "%d SECONDS LEFT", static_cast<i32>(seconds));
+    } else {
+        const i32 minutes = static_cast<i32>(seconds / 60.0);
+        const i32 rest = static_cast<i32>(seconds) - minutes * 60;
+        std::snprintf(buffer, sizeof(buffer), "%d MIN %d SEC LEFT", minutes, rest);
+    }
+    return buffer;
+}
+
+std::string Application::loading_cache_path() const {
+    const std::string clip =
+        options_.clip_file.empty() ? default_clip_path() : options_.clip_file;
+    return clip + ".load";
+}
+
+void Application::draw_loading() {
+    if (!loading_screen_.valid() || loading_quit_) return;
+
+    // Thirty frames a second, and not one more. The build wants every core it can get and this
+    // costs a dispatch over the window; the requirement was that watching the load must not make
+    // the load longer, and the way to keep that promise is to draw rarely enough that it cannot.
+    const u64 at = now_ns();
+    if (loading_drawn_ns_ != 0 && at - loading_drawn_ns_ < 33000000ull) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        return;
+    }
+    loading_drawn_ns_ = at;
+
+    // The window still has to answer the OS, or it greys out and the player is told by their
+    // desktop that the game has stopped responding while it is in fact working perfectly.
+    if (!window_.pump()) {
+        loading_quit_ = true;
+        return;
+    }
+    if (swapchain_.needs_recreate() || window_.width() != swapchain_.extent().width ||
+        window_.height() != swapchain_.extent().height) {
+        if (window_.width() == 0 || window_.height() == 0) return;   // minimised
+        vkDeviceWaitIdle(device_.handle());
+        swapchain_.recreate(window_.width(), window_.height());
+    }
+
+    const LoadProgress::Snapshot look = progress_.look();
+
+    LoadingFrame frame;
+    frame.fraction = static_cast<f32>(look.fraction);
+    frame.seconds = static_cast<f32>(static_cast<f64>(at - load_began_ns_) * 1e-9);
+    frame.stage = static_cast<u32>(look.stage);
+    frame.stage_text = stage_name(look.stage);
+    if (look.expected > 0) {
+        frame.count_text = short_count(look.done) + " OF " + short_count(look.expected) + " VOXELS";
+    } else if (look.done > 0) {
+        frame.count_text = short_count(look.done) + " VOXELS";
+    }
+    frame.left_text = time_left(look.seconds_left);
+
+    // The accent is left at its default. It is meant to be the player's choice, and there is no
+    // setting for it yet — but it is only ever reached in the narrow band where inversion has
+    // nothing to say, so a default here is a colour almost nobody will see rather than a decision
+    // quietly made on the player's behalf.
+
+    loading_screen_.present(swapchain_, frame);
+}
+
 void Application::build_world() {
     const u64 start = now_ns();
 
@@ -976,6 +1115,8 @@ void Application::build_world() {
         // text is what everything downstream works from — the cache key as well as the parser.
         // Keying the cache on the whole assembly and not just the manifest is what makes editing
         // one fragment of a twenty-fragment building rebuild the building.
+        progress_.enter(LoadStage::Reading);
+
         std::vector<forge::SourceLine> origin;
         std::vector<forge::ScriptError> trouble;
         const std::string source = forge::expand_includes(path, origin, trouble);
@@ -1050,7 +1191,13 @@ void Application::build_world() {
             cache.types = &types_;
             cache.world = &world_;
             cache.ledger = &ledger_;
+            // The cache read is left under Reading rather than given a stage of its own. On a hit
+            // the whole thing is half a second, so how the bar apportions it is invisible; on a
+            // miss it cost nothing to have tried. Splitting it would mean deciding which stage it
+            // belonged to BEFORE knowing whether it succeeded, and putting the bar back afterwards
+            // is how a bar starts going backwards.
             if (read_world_cache(cache_path, key, cache, &jobs)) {
+                progress_.enter(LoadStage::Uploading);
                 materials_ = cache.materials;
                 if (materials_.empty()) materials_.push_back(1);
                 material_index_ = options_.material % materials_.size();
@@ -1064,9 +1211,15 @@ void Application::build_world() {
         }
 
         if (script.ok()) {
-            forge::SampleResult built =
-                forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+            progress_.enter(LoadStage::Sampling);
+            forge::SampleResult built = forge::sample(
+                script.field, script.solid, script.paint, script.settings, &jobs,
+                [this](f64 fraction, u64 done, u64 expected) {
+                    progress_.within(fraction);
+                    progress_.count(done, expected);
+                });
             const u64 sampled_at = now_ns();
+            progress_.enter(LoadStage::Varying);
             // Every voxel gets its own version of its material before it goes in, so the world
             // holds the varied clip rather than the flat one.
             const forge::VariationReport variety = forge::apply_variation(
@@ -1079,6 +1232,7 @@ void Application::build_world() {
                             variety.distinct_types, variety.voxels, variety.largest_group,
                             variety.perturb_ms, variety.intern_ms, variety.resolve_ms);
             }
+            progress_.enter(LoadStage::Stamping);
             const PasteStats stamped = paste_clip(
                 world_, ledger_, built.clip, built.origin_voxel[0] + options_.clip_at[0],
                 built.origin_voxel[1] + options_.clip_at[1],
@@ -1106,6 +1260,7 @@ void Application::build_world() {
 
             // Kept, so the next run does not do any of that again.
             if (!options_.no_clip_cache) {
+                progress_.enter(LoadStage::Caching);
                 WorldCache cache;
                 cache.tags = &tags_;
                 cache.properties = &properties_;
@@ -2459,7 +2614,47 @@ int Application::run(const Options& options) {
     }
     if (!profiler_.create(device_)) return 1;
 
-    build_world();
+    // ---- the loading screen ------------------------------------------------------------
+    //
+    // Created here and nowhere later, because here is the earliest it CAN be: the device and the
+    // swapchain are up and nothing else is. Everything expensive in startup happens below this
+    // line, so this is the line that decides whether the player watches it or watches a black
+    // window and wonders whether the game has died.
+    {
+        const std::filesystem::path shaders = compiled_shader_dir();
+        loading_screen_.create(device_, std::filesystem::path(WS_SHADER_SOURCE_DIR) / "loading.comp",
+                               shaders / "loading.comp.spv");
+    }
+
+    load_history_ = LoadHistory::read(loading_cache_path());
+    progress_.begin(load_history_, LoadProgress::likely_cached(load_history_));
+    load_began_ns_ = now_ns();
+
+    // The build runs on its own thread and this one draws. Everything the build reports is atomic
+    // and relaxed, so there is no lock between them and a bar one frame stale is a bar nobody can
+    // tell is stale.
+    {
+        std::atomic<bool> built{false};
+        std::thread builder([&] {
+            build_world();
+            built.store(true, std::memory_order_release);
+        });
+        while (!built.load(std::memory_order_acquire)) {
+            draw_loading();
+            if (loading_quit_) break;
+        }
+        builder.join();
+    }
+    if (loading_quit_) return 0;
+
+    // Everything from here to the first frame is the part a progress bar normally leaves out, and
+    // leaving it out is exactly why bars sit at ninety-nine per cent: the residency tables, the
+    // summary tree, the three pipelines and their shader compiles are all real time, and none of
+    // it is "the world building". So the bar keeps running through it, with a frame drawn between
+    // each step. The last stage in the list is the first frame that can actually be shown, which
+    // is what makes a hundred per cent mean the game is up rather than nearly up.
+    progress_.enter(LoadStage::Uploading);
+    draw_loading();
 
     // Sized from detected VRAM, and never resized afterwards
     // (documentation/03-voxel-data-model.md Â§8).
@@ -2516,6 +2711,8 @@ int Application::run(const Options& options) {
     residency_budget_.max_chunk_uploads_per_frame = 8;
     residency_budget_.max_bricks_per_frame = 8192;
     residency_.create(residency_budget_, types_);
+    progress_.within(0.15);
+    draw_loading();
 
     // One cache per level of the summary octree, all sharing one pair of GPU buffers at
     // their own base offsets. Half the memory goes to level 0 and each level above halves
@@ -2554,11 +2751,15 @@ int Application::run(const Options& options) {
     // Coarse occupancy comes from the world, so the marcher can tell "nothing here" from
     // "something here that you have not streamed yet". Without it, feedback never fires.
     rebuild_coarse_grids();
+    progress_.within(0.45);
+    draw_loading();
     if (!world_buffers_.create(device_, residency_budget_, thumb_total_slots_, thumb_total_grid_,
                                32ull << 20)) {
         return 1;
     }
     if (!feedback_.create(device_)) return 1;
+    progress_.within(0.70);
+    draw_loading();
 
     // One slot per frame in flight, aligned to whatever the device demands, so writing
     // next frame's parameters cannot disturb the frame still executing.
@@ -2723,6 +2924,12 @@ int Application::run(const Options& options) {
         create_render_target(render.width, render.height);
     }
 
+    // The three pipelines, which is where the rest of the wait lives: a path tracer is a large
+    // shader and compiling it is seconds, not milliseconds. This is the last stage, so it is also
+    // the one that has to be included or the bar reaches its end and the screen stays up anyway.
+    progress_.enter(LoadStage::Settling);
+    draw_loading();
+
     // Compiled shaders sit beside the executable, and *beside* means beside the one that is
     // running — asked at run time, not baked in at build time. The source tree location
     // still comes from the build, because hot reload only ever runs where the source is.
@@ -2737,6 +2944,9 @@ int Application::run(const Options& options) {
         return 1;
     }
 
+    progress_.within(0.25);
+    draw_loading();
+
     const std::filesystem::path resolve_spirv = shaders / "resolve.comp.spv";
     const std::filesystem::path resolve_source =
         std::filesystem::path(WS_SHADER_SOURCE_DIR) / "resolve.comp";
@@ -2746,6 +2956,9 @@ int Application::run(const Options& options) {
                      resolve_.last_error());
         return 1;
     }
+
+    progress_.within(0.40);
+    draw_loading();
 
     {
         const std::filesystem::path trace_spirv = shaders / "pathtrace.comp.spv";
@@ -2917,7 +3130,25 @@ int Application::run(const Options& options) {
                 quality_.level(), kQualityLevels - 1,
                 benchmark_pending_ ? ", benchmarking this machine first" : "");
 
+    progress_.within(0.85);
+    draw_loading();
     if (!hud_.create(device_, window_, swapchain_.format())) return 1;
+
+    // A hundred per cent, and the next thing that happens is a real frame.
+    //
+    // This is the whole promise of the screen and it is kept here rather than anywhere earlier:
+    // there is no work left between this line and the frame loop, so the bar filling and the game
+    // appearing are the same instant. A bar that reached its end and then made the player wait
+    // would have measured everything except the thing they were waiting for.
+    // Deliberately not drawn again. A last frame showing a full bar would cost one present
+    // between the bar filling and the game appearing, which is precisely the gap the player
+    // reports as "it says a hundred and then hangs" — so the bar's last drawn state is the high
+    // nineties and the next thing on the screen is the world.
+    progress_.finish();
+    progress_.history().write(loading_cache_path());
+
+    // The screen holds a full-resolution image and startup is the only thing that needs it.
+    loading_screen_.destroy();
 
     // The compile time, every run. A stale binary is otherwise invisible: the build tool
     // once reported "no work to do" over a source file that had changed, and a measurement
@@ -3260,6 +3491,9 @@ int run_clip_tool(const Options& options) {
 
     JobSystem jobs;
     const u64 parsed = now_ns();
+    // Always counted here. This is the measuring tool; a build it measures should be able to say
+    // where it went, and one atomic beside an evaluation is nothing next to the evaluation.
+    script.settings.count_rule_cost = true;
     const forge::SampleResult built =
         forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
     const u64 sampled = now_ns();
@@ -3328,6 +3562,67 @@ int run_clip_tool(const Options& options) {
     std::printf("cost          parse %.1f ms, sample %.1f ms, %llu field evaluations\n",
                 ns_to_ms(parsed - begin), ns_to_ms(sampled - parsed),
                 static_cast<unsigned long long>(built.evaluations));
+    {
+        // Core-milliseconds across every worker, which is why they exceed the wall clock. The
+        // ratio is the point: it says which half to work on, and it has twice disagreed with what
+        // the evaluation counts implied.
+        const f64 shape_ms = ns_to_ms(built.shape_ns);
+        const f64 paint_ms = ns_to_ms(built.paint_ns);
+        const f64 both = std::max(1.0, shape_ms + paint_ms);
+        std::printf("where         shape %.0f core-ms (%.0f%%), paint %.0f core-ms (%.0f%%), "
+                    "%.2f us per shape eval\n",
+                    shape_ms, 100.0 * shape_ms / both, paint_ms, 100.0 * paint_ms / both,
+                    1000.0 * shape_ms / static_cast<f64>(std::max<u64>(1, built.shape_evaluations)));
+        std::printf("field         %zu nodes, %zu with no box (%.0f%%), %zu hierarchies over "
+                    "%zu leaves, %zu wide unions\n",
+                    script.field.size(), script.field.unbounded_nodes(),
+                    100.0 * static_cast<f64>(script.field.unbounded_nodes()) /
+                        static_cast<f64>(std::max<usize>(1, script.field.size())),
+                    script.field.accelerator_count(), script.field.accelerated_leaves(),
+                    script.field.unaccelerated_unions());
+    }
+
+    // WHICH rules the build spent itself on.
+    //
+    // Every expensive build this project has had turned out to be a handful of rules out of a
+    // hundred and thirty-three, and finding out which took a guess, a change and a rebuild each
+    // round. The list below is the answer in one run, and it is sorted because the interesting
+    // part is always the top of it.
+    if (!built.rule_evaluations.empty()) {
+        std::vector<usize> order(built.rule_evaluations.size());
+        for (usize i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](usize a, usize b) {
+            return built.rule_evaluations[a] > built.rule_evaluations[b];
+        });
+        const u64 all = std::max<u64>(1, built.paint_evaluations);
+        std::printf("paint by rule (of %llu paint evaluations)\n",
+                    static_cast<unsigned long long>(built.paint_evaluations));
+        for (usize n = 0; n < order.size() && n < 12; ++n) {
+            const usize i = order[n];
+            const u64 count = built.rule_evaluations[i];
+            if (count == 0) break;
+            const u32 type = script.paint[i].type;
+            const char* name = (type < script.material_names.size() &&
+                                !script.material_names[type].empty())
+                                   ? script.material_names[type].c_str()
+                                   : "?";
+            // WHY a rule costs what it does, which is always one of two things: it cannot be
+            // settled for a block, or it cannot be placed in space. Printed rather than deduced,
+            // because deducing it has cost this project several rebuilds each time.
+            const f64 metric = script.field.metric_slack(script.paint[i].test);
+            const bool boxed = !script.field.bounds_of(script.paint[i].test).infinite();
+            const char* wrote = (i < script.paint_source.size())
+                                    ? script.paint_source[i].c_str()
+                                    : "?";
+            std::printf("  %5.1f%%  %12llu  %-14s %-10s %-11s %-7s  %s%s\n",
+                        100.0 * static_cast<f64>(count) / static_cast<f64>(all),
+                        static_cast<unsigned long long>(count), name,
+                        script.paint[i].has_place ? "placed" : "unplaced",
+                        (metric < forge::Field::kInfiniteSlack) ? "settleable" : "per-voxel",
+                        boxed ? "boxed" : "NO BOX", wrote,
+                        script.paint[i].facing_axis < 3 ? " +normal" : "");
+        }
+    }
 
     // Slices, asked for as `axis,at` or `axis,at,step`. More than one may be given.
     for (const std::string& request : options.clip_slices) {

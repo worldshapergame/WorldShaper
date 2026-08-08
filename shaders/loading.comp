@@ -1,0 +1,277 @@
+#version 450
+// What the game shows while it is building the world.
+//
+// This is the first piece of the interface, so it is also where the ink rule stops being a
+// document and starts being something you can look at. documentation/14-ui-style.md is the
+// specification and shaders/ui.glsl is its implementation; everything below only arranges things
+// and lets that decide what colour they come out.
+//
+// # Why the bar is drawn as ink
+//
+// The obvious way to draw a progress bar is a dark track and a bright fill in the accent colour.
+// That is a bar with a colour of its own, which is the one thing the style forbids, and it fails
+// in the ordinary way the moment you put the percentage on top of it: black text vanishes into the
+// filled part, white text vanishes into the empty part, and the usual fix is to move the number
+// off the bar entirely.
+//
+// So the fill IS ink — the same function every mark uses, given the backdrop under the bar. And
+// then the percentage is ink over whatever is under IT, which is the fill on the left of the head
+// and the track on the right. The number inverts as the bar passes under it, per pixel, with no
+// branch and nothing to configure. It is the smallest thing on screen that shows the rule paying
+// for itself.
+//
+// # Why there is a backdrop at all
+//
+// A panel's backdrop is normally the world behind it, blurred. Here there is no world yet: that is
+// the entire point of the screen. So it makes its own — a dark drift that moves slowly enough to
+// read as depth rather than as animation — and the rule governs everything on top of it exactly as
+// it will over a sunset later.
+//
+// # The strings come from the CPU
+//
+// A shader with a table of stage names in it is a second place for them to be wrong. `stage_name`
+// in src/app/loading.hpp is the only list; the words arrive packed four to a uint. Nothing here
+// knows what a stage is called, and adding one costs nothing on this side.
+
+#extension GL_GOOGLE_include_directive : require
+#include "ui.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba16f) uniform writeonly image2D out_image;
+
+// Three text slots, packed four characters to a uint, zero-terminated: the stage, the quantity,
+// and the time remaining. Twenty-four characters each is what the font's line length already is.
+const uint kSlotStage = 0u;     // uints 0..5
+const uint kSlotCount = 6u;     // uints 6..11
+const uint kSlotLeft = 12u;     // uints 12..17
+
+layout(push_constant) uniform Push {
+    vec2 resolution;
+    float time;             // seconds since the load began, for the animation
+    float fraction;         // 0 to 1, of the whole load
+
+    float scale;            // device pixels per interface pixel
+    uint stage;             // which animated mark to draw
+    uint pad0;
+    uint pad1;
+
+    vec3 accent;            // the player's colour, used only where inversion is blind
+    float pad2;
+
+    uint text[18];
+} push;
+
+// --- the strings ------------------------------------------------------------------------------
+
+uint text_char(uint slot, uint index) {
+    return (push.text[slot + (index >> 2u)] >> ((index & 3u) * 8u)) & 0xFFu;
+}
+
+uint text_length(uint slot) {
+    for (uint i = 0u; i < 24u; ++i) {
+        if (text_char(slot, i) == 0u) return i;
+    }
+    return 24u;
+}
+
+// How much ink a slot puts at a point, `at` measured in glyph cells from the string's left edge
+// and its capitals' top. Same geometry as ui_text, reading from the packed slot instead of an
+// array, and with no length limit of its own.
+float slot_ink(uint slot, uint length, vec2 at) {
+    if (at.y < 0.0 || at.y >= 7.0) return 0.0;
+    float advance = 6.0;
+    int index = int(floor(at.x / advance));
+    if (index < 0 || index >= int(length)) return 0.0;
+    vec2 inside = vec2(at.x - float(index) * advance, at.y);
+    if (inside.x >= 5.0) return 0.0;
+    return ui_glyph_on(ui_glyph(text_char(slot, uint(index))), ivec2(inside)) ? 1.0 : 0.0;
+}
+
+// A string centred on a point, in interface pixels. Returns coverage.
+float centred_text(uint slot, vec2 at, vec2 centre_top) {
+    uint length = text_length(slot);
+    if (length == 0u) return 0.0;
+    float width = float(length) * 6.0 - 1.0;
+    return slot_ink(slot, length, at - centre_top + vec2(width * 0.5, 0.0));
+}
+
+// The percentage, drawn from the same number that drives the bar so the two can never disagree.
+float percent_ink(vec2 at, vec2 centre_top, float fraction) {
+    int whole = int(floor(clamp(fraction, 0.0, 1.0) * 100.0 + 0.5));
+    uint digits[4];
+    uint count = 0u;
+    if (whole >= 100) { digits[count++] = 49u; digits[count++] = 48u; digits[count++] = 48u; }
+    else if (whole >= 10) { digits[count++] = 48u + uint(whole / 10); digits[count++] = 48u + uint(whole % 10); }
+    else { digits[count++] = 48u + uint(whole); }
+    digits[count++] = 37u;   // %
+
+    float width = float(count) * 6.0 - 1.0;
+    vec2 local = at - centre_top + vec2(width * 0.5, 0.0);
+    if (local.y < 0.0 || local.y >= 7.0) return 0.0;
+    int index = int(floor(local.x / 6.0));
+    if (index < 0 || index >= int(count)) return 0.0;
+    vec2 inside = vec2(local.x - float(index) * 6.0, local.y);
+    if (inside.x >= 5.0) return 0.0;
+    return ui_glyph_on(ui_glyph(digits[index]), ivec2(inside)) ? 1.0 : 0.0;
+}
+
+// --- the animated marks -----------------------------------------------------------------------
+//
+// One per stage, drawn as pixels in a thirteen by thirteen cell so they belong to the same
+// alphabet as the letters beside them. They exist because a bar that has not moved for four
+// seconds is indistinguishable from a game that has died, and a mark that is still moving is the
+// cheapest possible answer to that. Each one is a picture of what the stage actually does, which
+// is the only reason to have seven rather than one spinner.
+
+float hash11(float n) { return fract(sin(n) * 43758.5453123); }
+float hash21(ivec2 c) { return hash11(float(c.x) * 12.9898 + float(c.y) * 78.233); }
+
+bool mark_reading(ivec2 c, float t) {
+    // Lines of text scrolling up under a fixed margin, the way a file goes past.
+    int row = int(mod(float(c.y) + floor(t * 5.0), 13.0));
+    if (c.x == 0 || c.x == 12) return false;
+    if ((row % 3) != 0) return false;
+    int length = 3 + int(hash11(float(row) * 3.7 + floor(t * 5.0 / 13.0)) * 8.0);
+    return c.x >= 1 && c.x <= length;
+}
+
+bool mark_sampling(ivec2 c, float t) {
+    // A grid of matter with an edge cutting across it: the sampler deciding, cell by cell, which
+    // side of the shape it is on.
+    float sweep = mod(t * 9.0, 26.0) - 6.0;
+    float across = float(c.x + c.y) * 0.5;
+    if (across > sweep) return ((c.x & 1) == 0) && ((c.y & 1) == 0);
+    return abs(across - sweep) < 1.2 ? true : ((c.x & 1) == 0 && (c.y & 1) == 0 && hash21(c) > 0.45);
+}
+
+bool mark_varying(ivec2 c, float t) {
+    // Every cell on its own clock, because that is exactly what variation is: no two voxels of the
+    // same material coming out alike.
+    float own = hash21(c);
+    return fract(t * 0.7 + own) > 0.55;
+}
+
+bool mark_stamping(ivec2 c, float t) {
+    // Blocks falling into a stack, one column at a time.
+    float phase = mod(t * 2.2, 13.0);
+    int settled = int(phase);
+    if (c.y >= 12 - settled) return true;
+    int falling = int(mod(floor(phase * 3.0), 13.0));
+    return c.y == falling && c.x >= 5 && c.x <= 7;
+}
+
+bool mark_caching(ivec2 c, float t) {
+    // Something going down into a box that keeps it.
+    bool box = (c.y >= 8) && (c.x == 1 || c.x == 11 || c.y == 12);
+    float drop = mod(t * 4.0, 9.0);
+    bool arrow = (c.x >= 5 && c.x <= 7) && (float(c.y) < drop) && c.y < 8;
+    bool head = (abs(float(c.y) - drop) < 1.0) && abs(c.x - 6) <= int(2.0 - abs(float(c.y) - drop) * 2.0);
+    return box || arrow || head;
+}
+
+bool mark_uploading(ivec2 c, float t) {
+    // Chevrons crossing to the right: bricks going to the card.
+    float shift = mod(t * 11.0, 6.0);
+    float x = mod(float(c.x) - shift + 12.0, 6.0);
+    return abs(x - abs(float(c.y) - 6.0) * 0.6) < 1.1;
+}
+
+bool mark_settling(ivec2 c, float t) {
+    // A ring closing, which is what the last stage is: everything already there, being tied off.
+    vec2 p = vec2(c) - vec2(6.0);
+    float r = length(p);
+    if (r < 4.0 || r > 6.0) return false;
+    float angle = atan(p.y, p.x) + 3.14159265;
+    float gap = mod(t * 3.0, 6.2831853);
+    return mod(angle - gap + 6.2831853, 6.2831853) > 1.1;
+}
+
+bool mark_on(uint stage, ivec2 c, float t) {
+    if (c.x < 0 || c.x > 12 || c.y < 0 || c.y > 12) return false;
+    if (stage == 0u) return mark_reading(c, t);
+    if (stage == 1u) return mark_sampling(c, t);
+    if (stage == 2u) return mark_varying(c, t);
+    if (stage == 3u) return mark_stamping(c, t);
+    if (stage == 4u) return mark_caching(c, t);
+    if (stage == 5u) return mark_uploading(c, t);
+    return mark_settling(c, t);
+}
+
+// --- the screen -------------------------------------------------------------------------------
+
+// The backdrop this screen makes for itself, since there is no world behind it yet. Dark, so the
+// ink comes out bright, and drifting slowly so the eye reads depth rather than a flat fill.
+vec3 backdrop_at(vec2 uv, float t) {
+    float down = uv.y;
+    float corner = length(uv - vec2(0.5, 0.42));
+    float drift = 0.5 + 0.5 * sin(t * 0.15 + uv.x * 1.7 + uv.y * 0.9);
+    float value = 0.055 + 0.045 * down + 0.02 * drift - 0.035 * corner;
+    return vec3(max(value, 0.02));
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(out_image);
+    if (pixel.x >= size.x || pixel.y >= size.y) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    float t = push.time;
+
+    vec3 colour = backdrop_at(uv, t);
+
+    // Everything below is in interface pixels measured from the centre of the column, so the
+    // layout is written once and holds at any window size.
+    vec2 at = (vec2(pixel) + 0.5 - vec2(size) * 0.5) / max(push.scale, 1.0);
+
+    const float kBarWidth = 300.0;
+    const float kBarHeight = 12.0;
+    const float kHalf = kBarWidth * 0.5;
+
+    // --- the bar ------------------------------------------------------------------------
+    //
+    // Drawn before anything else, because it becomes the backdrop for the number on top of it.
+    bool in_bar = abs(at.x) <= kHalf && at.y >= -kBarHeight * 0.5 && at.y <= kBarHeight * 0.5;
+    if (in_bar) {
+        float head = -kHalf + kBarWidth * clamp(push.fraction, 0.0, 1.0);
+        vec3 ink = ui_ink(colour, push.accent);
+        if (at.x <= head) {
+            colour = ink;
+        } else {
+            // The empty track is the same ink at a whisper, so the bar's full length is legible
+            // before it has filled any of it — otherwise a bar at two per cent is a dash floating
+            // in the dark with no indication of how far it has to go.
+            colour = mix(colour, ink, 0.10);
+        }
+    }
+    // A hairline edge, so the track's end is exact rather than approximately where the whisper
+    // fades out.
+    {
+        float edge_x = abs(abs(at.x) - kHalf);
+        float edge_y = abs(abs(at.y) - kBarHeight * 0.5);
+        bool on_edge = (edge_x < 1.0 && abs(at.y) <= kBarHeight * 0.5 + 1.0) ||
+                       (edge_y < 1.0 && abs(at.x) <= kHalf + 1.0);
+        if (on_edge) colour = mix(colour, ui_ink(colour, push.accent), 0.35);
+    }
+
+    // --- the marks ----------------------------------------------------------------------
+    //
+    // Each one asks the ink rule what colour it has to be against whatever it is standing on,
+    // which for the percentage is the bar and for everything else is the backdrop.
+    float coverage = 0.0;
+
+    // The stage's own icon, above the words.
+    {
+        vec2 cell = at - vec2(-6.5, -52.0);
+        if (mark_on(push.stage, ivec2(floor(cell)), t)) coverage = 1.0;
+    }
+
+    coverage = max(coverage, centred_text(kSlotStage, at, vec2(0.0, -32.0)));
+    coverage = max(coverage, percent_ink(at, vec2(0.0, -3.5), push.fraction));
+    coverage = max(coverage, centred_text(kSlotCount, at, vec2(0.0, 16.0)));
+    coverage = max(coverage, centred_text(kSlotLeft, at, vec2(0.0, 28.0)));
+
+    if (coverage > 0.0) colour = mix(colour, ui_ink(colour, push.accent), coverage);
+
+    imageStore(out_image, pixel, vec4(colour, 1.0));
+}

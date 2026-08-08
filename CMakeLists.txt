@@ -141,6 +141,7 @@ target_link_libraries(ws_platform PUBLIC ws_core SDL3::SDL3)
 add_library(ws_gpu STATIC
     src/gpu/device.cpp
     src/gpu/swapchain.cpp
+    src/gpu/loading_screen.cpp
     src/gpu/shader.cpp
     src/gpu/profiler.cpp
     src/gpu/vma_impl.cpp

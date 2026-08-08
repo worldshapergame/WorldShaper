@@ -833,6 +833,8 @@ void Parser::statement() {
             rule.facing_min = keys.number("at", 0.5);
         }
         script_.paint.push_back(rule);
+        script_.paint_source.push_back(where.empty() ? std::string("<no where>")
+                                                     : "where=" + where);
         return;
     }
     if (head == "weather") {
@@ -947,6 +949,15 @@ VoxelTypeId make_material(VoxelTypeTable& types, Script& script, const char* nam
 void apply_weather(Script& script, VoxelTypeTable& types) {
     if (script.weather.empty() || !script.has_solid) return;
     Field& f = script.field;
+
+    // Weather appends its coats after every fragment's paint, so the names have to be kept in step
+    // here too or the diagnostic starts naming the wrong rule at exactly the point it matters.
+    const auto name_new_coats = [&script](usize from, const std::string& what) {
+        script.paint_source.resize(from);
+        while (script.paint_source.size() < script.paint.size()) {
+            script.paint_source.push_back(what);
+        }
+    };
 
     for (const WeatherRequest& request : script.weather) {
         // Where this request's coats begin, so the scope can be stamped onto all of them at the
@@ -1213,6 +1224,9 @@ void apply_weather(Script& script, VoxelTypeTable& types) {
                 script.paint[i].has_place = true;
             }
         }
+        // Named by their scope rather than by their kind, because the scope is the half an author
+        // can do something about and the material name beside it already says which kind it is.
+        name_new_coats(first_coat, request.has_scope ? "weather on=<scope>" : "weather everywhere");
     }
 }
 

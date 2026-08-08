@@ -66,7 +66,18 @@ struct LoadHistory {
 // The live state of a load, written by the build thread and read by the drawing.
 class LoadProgress {
 public:
+    // `from_cache` picks which set of nominal weights to fall back on. It has to be decided here,
+    // before any work starts, and the honest answer is that nobody knows yet — the cache cannot be
+    // asked until the clip has been read and keyed. Guessing from the last run is what `likely`
+    // below is for; changing the weights afterwards is not an option, because they are read by the
+    // drawing thread while the build thread runs and there is no lock between them.
     void begin(const LoadHistory& history, bool from_cache);
+
+    // Whether the last run was a cache hit, judged by how little of it was spent sampling. A
+    // first run has no history and guesses cold, which is the safe way round: a bar weighted for a
+    // long build that turns out to be short finishes early, and a bar weighted for a short one
+    // that turns out to be long sticks near the end and lies about the time.
+    static bool likely_cached(const LoadHistory& history);
 
     // Entering a stage. Everything before it is now complete, whatever it claimed.
     void enter(LoadStage stage);
@@ -106,6 +117,16 @@ private:
     std::atomic<u64> done_{0};
     std::atomic<u64> expected_{0};
     std::atomic<bool> complete_{false};
+
+    // How fast the load has been going LATELY, kept as a trailing pair of readings.
+    //
+    // Touched only by `look`, which only the drawing thread calls, so these are plain values with
+    // no atomics: the build thread never sees them.
+    mutable u64 rate_old_ns_ = 0;
+    mutable f64 rate_old_fraction_ = 0.0;
+    mutable u64 rate_new_ns_ = 0;
+    mutable f64 rate_new_fraction_ = 0.0;
+    mutable f64 shown_left_ = -1.0;
 
     f64 weights_[static_cast<usize>(LoadStage::Count)]{};
     f64 total_weight_ = 1.0;

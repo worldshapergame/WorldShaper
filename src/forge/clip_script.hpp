@@ -126,6 +126,16 @@ struct Script {
     Field field;
     SampleSettings settings;
     std::vector<PaintRule> paint;
+
+    // What each paint rule was WRITTEN as, in step with `paint`. Carried for diagnostics only.
+    //
+    // A build that spends three quarters of itself on five of a hundred and thirty-eight rules has
+    // to be able to say which five, in the words the author used. Without this the answer is a
+    // rule index, and turning an index into a line means counting `paint` statements across
+    // twenty included files by hand — which is how two of the measurements on this file were taken
+    // against the wrong rule.
+    std::vector<std::string> paint_source;
+
     std::vector<WeatherRequest> weather;
     Variation variation;
 

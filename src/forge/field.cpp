@@ -1607,6 +1607,33 @@ void Field::build_bounds() {
                 for (u32 c = 1; c < n.children; ++c) box = overlapped(box, bounds_of(n.child[c]));
                 break;
             }
+
+            // `min` and `max` are union and intersection written arithmetically, and a box is owed
+            // to them for exactly the same reason.
+            //
+            // A box here means "the solid is inside this". `max(a, b)` is at most nought only
+            // where BOTH are, so it is inside either child's box and the tighter one may be taken;
+            // `min(a, b)` is at most nought where EITHER is, so it needs both. That holds whatever
+            // the children are, which matters because these two are the ops an author reaches for
+            // when a child is not a shape at all — `max { ashlar_band  add { constant 0.02
+            // negate { bond } } }` is how the facility cuts its rustication joints, and the
+            // arithmetic half is unbounded while the band is a box round one wall.
+            //
+            // Falling through to "everywhere" cost more than anything else in the building. Five
+            // paint rules were written this way, and with no box the sampler had to ask each of
+            // them at every solid voxel in the facility: one point nine million evaluations each,
+            // three quarters of all the paint work in a cold build, for rules naming a course of
+            // masonry and a vestibule floor.
+            case Op::Max: {
+                box = bounds_of(n.child[0]);
+                for (u32 c = 1; c < n.children; ++c) box = overlapped(box, bounds_of(n.child[c]));
+                break;
+            }
+            case Op::Min: {
+                box = bounds_of(n.child[0]);
+                for (u32 c = 1; c < n.children; ++c) box = merged(box, bounds_of(n.child[c]));
+                break;
+            }
             // Carving can only remove, so what is left is inside what it started as.
             case Op::Difference:
             case Op::SmoothDifference: box = bounds_of(n.child[0]); break;
