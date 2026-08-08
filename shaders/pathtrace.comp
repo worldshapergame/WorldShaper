@@ -339,10 +339,29 @@ void face_key(ivec3 voxel, ivec3 normal, uint level, uint kind, out uint lo, out
     // along that axis by definition, so the number of entries is unchanged; all it buys is
     // that two surfaces at different depths stay different faces. A wall one voxel thick is
     // enough to separate them, which is the thinnest wall there is.
+    // The normal axis is kept FINER than the other two, and no longer exact.
+    //
+    // Exact was the first answer and it is what a rusticated wall cannot survive. Every joint,
+    // every projecting course, every moulding puts its face a voxel or two proud of its
+    // neighbour — and a voxel along the normal is a different face at EVERY level, so an elevation
+    // with relief on it fragments into a separate cache entry per depth. Each one then gathers its
+    // own handful of samples, and the wall reads as vertical streaks: not noise, but a dozen
+    // measurements of the same light kept apart because they sit at slightly different depths.
+    // Coarsening the other two axes only makes the stripes longer.
+    //
+    // Four voxels reunites the relief. It is nowhere near enough to merge two surfaces that face
+    // the same way and are genuinely different places — a corridor's two walls are metres apart —
+    // and the opposite sides of any wall were never at risk, because a face's DIRECTION is part of
+    // the key and the two sides of a wall face opposite ways.
+    //
+    // Held at full resolution close up, where the level is low, there is no speckle to fix and an
+    // exact answer costs nothing.
+    const int kNormalLevel = 2;
+    int along = min(int(level), kNormalLevel);
     ivec3 node = voxel >> int(level);
-    if (normal.x != 0) node.x = voxel.x;
-    else if (normal.y != 0) node.y = voxel.y;
-    else node.z = voxel.z;
+    if (normal.x != 0) node.x = voxel.x >> along;
+    else if (normal.y != 0) node.y = voxel.y >> along;
+    else node.z = voxel.z >> along;
     face_key_node(node, normal, level, kind, lo, hi);
 }
 
@@ -759,10 +778,25 @@ FaceLight read_face(uint slot) {
     light.known = false;
     if (slot == 0xFFFFFFFFu) return light;
 
+    // The sum read twice, STRADDLING the count, and the smaller taken.
+    //
+    // An entry that reaches its window is halved: count first, because the compare-and-swap on it
+    // is what claims the right to halve, and the sum a moment later. A reader landing between the
+    // two divides a FULL sum by a HALVED count and sees exactly twice the light that is there. It
+    // is one frame, but with half a million entries some face is always halving, so there are
+    // always some of them, and they are bright dots on a settled surface — which is the artefact
+    // this is, not a real firefly.
+    //
+    // Reading the sum either side of the count and keeping the smaller cannot over-state: if the
+    // halving happened before the count was read, the second sum is halved too and the pair
+    // agrees; if it happened after, the smaller sum is the halved one against a full count, which
+    // reads dark for one frame. Never bright. Two extra loads and no atomics.
+    uvec4 sum_before = faces.items[slot].sum;
     uint count = faces.items[slot].count;
     if (count == 0u) return light;
+    uvec4 sum_after = faces.items[slot].sum;
+    uvec4 sum = min(sum_before, sum_after);
 
-    uvec4 sum = faces.items[slot].sum;
     float inv = 1.0 / (kFixedScale * float(count));
     // Clamped on the way out, as a backstop rather than a correction. Every contribution is
     // clamped to 64 going in, so a mean above that is arithmetic having gone wrong rather than
@@ -1453,7 +1487,7 @@ FaceLight read_face_seeded(ivec3 voxel, ivec3 normal, uint level, uint frame) {
 // The normal axis stays unquantised at every level, so this cannot merge the two sides of a wall
 // however coarse it gets. That is the property that makes coarsening safe rather than merely
 // cheap.
-const float kFaceCoarsening = 2.0;
+const float kFaceCoarsening = 3.0;
 
 // The node size a pixel can resolve at this distance, as a power of two. The geometry is
 // still marched at full voxel detail - this only decides how coarsely faces are *shared*.
