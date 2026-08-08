@@ -2009,30 +2009,10 @@ void main() {
         // around it is caught by one or two of them -- so one face in a few hundred settles at
         // twice its neighbours and stays there, a cache not being the sort of thing that washes
         // out. Every other call below is a cache or a reflection and keeps sky_radiance.
-        // The sky, with whatever cloud is between the eye and it.
-        //
-        // Composited here rather than inside sky_view because a volume has to be integrated along
-        // the ray from where the ray starts, and sky_view only ever knew a direction. What the
-        // march does not block is what the sky is worth behind it.
-        float through = 1.0;
-        vec3 cloud = cloud_march(origin, dir, world_height_metres(origin), kCloudFarMetres,
-                                 through);
-
-        // Contained, and the containment is diagnostic as much as defensive.
-        //
-        // One non-finite pixel in the accumulation buffer does not stay one pixel: `gather_bloom`
-        // reads a rectangular neighbourhood, so a single NaN spreads into a box the size of the
-        // bloom kernel and stays there, because a mean that has had a NaN added to it is a NaN
-        // for ever. A hard-edged white rectangle hanging in the sky is not a shape any cloud
-        // function can produce; it is the footprint of that kernel around one bad sample.
-        //
-        // The march has several places that could produce one — a pow of nought, a remap whose
-        // range collapses, a hash of a coordinate large enough to lose all precision in a sine —
-        // and rather than guess which, the value is checked where it is cheap to check.
-        if (any(isnan(cloud)) || any(isinf(cloud))) cloud = vec3(0.0);
-        if (isnan(through) || isinf(through)) through = 1.0;
-
-        radiance = cloud + through * sky_view(dir);
+        // Just the sky. The cloud in front of it is composited in write_pixel, over the
+        // distance to whatever the ray reached — which is the far plane for this one — so that a
+        // ray ending on a roof gets the same treatment as a ray ending on the sky.
+        radiance = sky_view(dir);
     } else {
         primary_t = hit.t;
         vec3 point = origin + dir * hit.t;

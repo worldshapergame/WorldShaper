@@ -285,8 +285,13 @@ Weather weather_at(vec3 p) {
     //
     // At the default setting this centres the threshold near 0.7 and swings it either side with
     // the weather map, so the sky has cloudy quarters and clear ones instead of a uniform dusting.
+    // The threshold the shape has to beat is 1 - coverage, and `shape` averages about two thirds.
+    // Set the threshold near that average and only isolated PEAKS of the noise clear it, which is
+    // why the sky came back as a scatter of small flecks: thresholding near the top of a
+    // distribution leaves islands, not clouds. Set it a little below the average and whole
+    // contiguous regions clear it, which is what a cumulus field is.
     float asked = clamp(push.sky_cloud.x, 0.0, 1.0);
-    w.coverage = clamp(asked * 0.50 + 0.06 + (broad - 0.5) * 0.34 + (patchy - 0.5) * 0.14,
+    w.coverage = clamp(asked * 0.50 + 0.08 + (broad - 0.5) * 0.34 + (patchy - 0.5) * 0.14,
                        0.0, 1.0);
     // Towers where the coverage is already high, which is what actually happens: a cumulonimbus
     // grows out of the middle of a crowded field of cumulus, not out of a clear sky.
@@ -394,7 +399,14 @@ float low_deck_density(vec3 p, float height_m, bool detail) {
         // that reads as noise laid over a shape rather than as the shape being made of something.
         float fine = worley_fbm(q * (1.0 / metres(130.0)), 2.2);
         float wispy = mix(1.0 - fine, fine, clamp(h * 4.0, 0.0, 1.0));
-        density = remap(density, wispy * 0.55, 1.0, 0.0, 1.0);
+        // Scaled by how thin the cloud already is, so it carves EDGES and leaves cores alone.
+        //
+        // Unscaled it gutted them. A remap that lifts the floor to half the wispy value takes a
+        // density of 0.3 down to 0.03 — a tenth of what was there — so every cloud was eroded to a
+        // wisp before it was ever drawn, and what reached the screen was the handful of peaks that
+        // had enough density to survive being cut by ninety per cent. Erosion is meant to be the
+        // ragged rim on a solid thing, not a filter that only the strongest tenth passes.
+        density = remap(density, wispy * 0.45 * (1.0 - density), 1.0, 0.0, 1.0);
     }
 
     // And more mass higher up. A cumulus is heaviest where it has risen furthest, which is what

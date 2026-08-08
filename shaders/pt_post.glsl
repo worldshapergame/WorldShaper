@@ -497,6 +497,28 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
     vec3 eye_dir = eye_ray(pixel, aspect);
     vec3 radiance = apply_media(g_prefix + g_throughput * radiance_in, push.origin.xyz, eye_dir,
                                 primary_t);
+
+    // Cloud, over EVERYTHING and not only over the sky.
+    //
+    // It was composited in the sky branch, which meant it was drawn only on rays that hit nothing.
+    // That is a backdrop, not a volume: fly above the deck and look down and there is no cloud
+    // between you and the ground, because every one of those rays hit the ground and took the
+    // other path. Standing under it and looking up was the one case that worked.
+    //
+    // Here it is applied exactly the way the air already is, a few lines above — integrated over
+    // the distance to whatever the ray actually reached. A ray that hit nothing carries the far
+    // plane and gets the whole sky's worth; a ray that hit a roof gets the cloud in front of the
+    // roof and no more. Same call, same place, and the special case disappears.
+    if (push.sky_cloud.x > 0.0) {
+        float through = 1.0;
+        vec3 cloud = cloud_march(push.origin.xyz, eye_dir, world_height_metres(push.origin.xyz),
+                                 primary_t / kVoxelsPerMetre, through);
+        // One non-finite sample spreads into a box the size of the bloom kernel and stays there,
+        // a mean that has had a NaN added to it being a NaN for ever.
+        if (any(isnan(cloud)) || any(isinf(cloud))) cloud = vec3(0.0);
+        if (isnan(through) || isinf(through)) through = 1.0;
+        radiance = cloud + through * radiance;
+    }
     vec4 total = (sample_index == 0u) ? vec4(0.0) : imageLoad(accum, pixel);
     if (total.w >= kAccumWindow) {
         total *= (kAccumWindow - 1.0) / kAccumWindow;
