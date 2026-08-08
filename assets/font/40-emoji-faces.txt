@@ -1,0 +1,168 @@
+# Emoji — the one place this typeface spends pixels, and the one place it spends colour.
+#
+# A face at five by seven is a smudge. The smallest cell in which a rounded mouth reads as a mouth
+# rather than as a dash is about eleven across, so that is the size, and not one pixel more: these
+# are still hand-placed and every one of them is still argued for.
+#
+# Colour is not decoration here. A yellow circle and a red one are different emoji, and a
+# monochrome set is a shrug — so a glyph may carry a palette of its own, written as `palette
+# <index> <RRGGBB>` and drawn with that index in place of `#`. Indices are hex digits, so fifteen
+# colours still fit one character to a pixel and the drawing stays a picture a person can read.
+#
+# They sit ON the baseline and rise above the cap height, which is what an emoji does in every
+# typeface: it is a picture in the line, not a letter of it.
+
+glyph U+1F600 grinning face
+palette 1 F4C430 2 6B4A0F 3 FFFFFF
+....11111....
+..111111111..
+.11111111111.
+1111111111111
+1122111112211
+1122111112211
+1111111111111
+1122222222211
+1233333333321
+1122222222211
+.11111111111.
+..111111111..
+....11111....
+top 11
+advance 14
+
+glyph U+1F642 slightly smiling face
+palette 1 F4C430 2 6B4A0F
+....11111....
+..111111111..
+.11111111111.
+1111111111111
+1122111112211
+1122111112211
+1111111111111
+1211111111121
+1121111111211
+1112222221111
+.11111111111.
+..111111111..
+....11111....
+top 11
+advance 14
+
+glyph U+2764 red heart
+palette 1 D3232F 2 8E1620
+..111...111..
+.11111.11111.
+1111111111111
+1111111111111
+1111111111111
+.11111111111.
+..111111111..
+...1111111...
+....11111....
+.....111.....
+......1......
+top 9
+advance 14
+
+glyph U+2B50 star
+palette 1 F5C518
+......1......
+......1......
+.....111.....
+.....111.....
+11111111111 1
+.11111111111.
+..111111111..
+...1111111...
+..111...111..
+..11.....11..
+.11.......11.
+top 10
+advance 14
+
+glyph U+1F525 fire
+palette 1 E85D0C 2 F5C518 3 FFE9A8
+......1......
+.....111.....
+....11111....
+...1112111...
+...1122111...
+..111222111..
+..112223211..
+.11122333211.
+.11223333221.
+.11233333321.
+..112333211..
+...11222111..
+....111111...
+top 12
+advance 14
+
+glyph U+1F4A7 droplet
+palette 1 2F9BD8 2 7FD4F5
+......1......
+.....111.....
+.....111.....
+....11111....
+....11211....
+...1112111...
+...1122111...
+..11122211..
+..11222211..
+..11222211..
+...1122211...
+....11111....
+.....111.....
+top 12
+advance 13
+
+glyph U+1F6A7 construction sign
+palette 1 F5A623 2 2B2B2B
+1111111111111
+1221111112211
+1122111122111
+1112211221111
+1111221122111
+1111122111111
+1111221122111
+1112211221111
+1122111122111
+1221111112211
+1111111111111
+top 9
+advance 14
+
+glyph U+2705 check mark
+palette 1 2FA84F 2 FFFFFF
+...........1.
+..........11.
+.........112.
+........1122.
+1.......1122.
+11.....11221.
+.11...112211.
+..11.1122111.
+...11122111..
+....1121111..
+.....11111...
+......111....
+top 10
+advance 14
+
+glyph U+274C cross mark
+palette 1 D3232F
+11.........11
+111.......111
+.111.....111.
+..111...111..
+...111.111...
+....11111....
+.....111.....
+....11111....
+...111.111...
+..111...111..
+.111.....111.
+111.......111
+11.........11
+top 11
+advance 14

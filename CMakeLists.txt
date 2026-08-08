@@ -107,6 +107,7 @@ add_library(ws_game STATIC
     src/game/quality.cpp
     src/game/chisel.cpp
     src/game/clip.cpp
+    src/game/font.cpp
     src/game/clipboard.cpp
     src/game/toolbelt.cpp)
 target_include_directories(ws_game PUBLIC src)
@@ -253,6 +254,7 @@ add_executable(ws_tests
     tests/test_clip_script.cpp
     tests/test_weathering.cpp
     tests/test_sample.cpp
+    tests/test_font.cpp
     tests/test_fixed.cpp
     tests/test_hash.cpp
     tests/test_arena.cpp
@@ -282,4 +284,9 @@ add_executable(ws_tests
     tests/test_quality.cpp
     tests/test_light_list.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_doctest)
+# Where the assets a test reads actually live. A test that walks up from the working directory
+# passes when it is run from the build folder and fails from anywhere else, which makes it a test
+# of where somebody was standing.
+target_compile_definitions(ws_tests PRIVATE
+    WS_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 add_test(NAME unit COMMAND ws_tests)
