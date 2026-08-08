@@ -687,12 +687,34 @@ void contribute(uint slot, vec3 value, uint window) {
             atomicAdd(faces.items[slot].sum.w, uint(-int(sum.w / 2u)));
         }
     }
-    atomicAdd(faces.items[slot].sum.x, uint(value.r * kFixedScale));
-    atomicAdd(faces.items[slot].sum.y, uint(value.g * kFixedScale));
-    atomicAdd(faces.items[slot].sum.z, uint(value.b * kFixedScale));
+    // Made safe to turn into an integer, and this is the other half of the saturated-square
+    // fault described above rather than defensive dressing.
+    //
+    // uint(x) of a NEGATIVE float wraps to about four billion, and of a NaN is undefined. Each
+    // channel is converted on its own, so one wrapping while the others do not is exactly a
+    // saturated cyan, magenta or purple — the colours are not a clue about light, they are a clue
+    // that the channels diverged. And it shows in DARK places because that is where the honest
+    // answer is nearly zero, so one wrapped sample is not a bright speck in an average, it IS the
+    // average. A sealed box with no lights in it came out full of coloured ones.
+    //
+    // Radiance has no business being negative, but it arrives here through a phase function, a
+    // division by a probability and several products, any one of which can produce a small negative
+    // or a NaN from a degenerate direction. The clamp costs three instructions and removes the
+    // whole class.
+    //
+    // The ceiling is the accumulator's, not the renderer's. The sum is a u32 holding value times
+    // kFixedScale, and the window halves it at `window` samples, so anything under about a thousand
+    // can never overflow. Sixty-four is far above any radiance in the scene and far below that.
+    const float kFaceSampleMax = 64.0;
+    vec3 safe = clamp(value, vec3(0.0), vec3(kFaceSampleMax));
+    if (any(isnan(value)) || any(isinf(value))) safe = vec3(0.0);
+
+    atomicAdd(faces.items[slot].sum.x, uint(safe.r * kFixedScale));
+    atomicAdd(faces.items[slot].sum.y, uint(safe.g * kFixedScale));
+    atomicAdd(faces.items[slot].sum.z, uint(safe.b * kFixedScale));
     // And the square of it, which is what lets the entry say how well it knows itself rather
     // than only how often it has been asked.
-    float lum = face_luminance(value);
+    float lum = clamp(face_luminance(safe), 0.0, kFaceSampleMax);
     atomicAdd(faces.items[slot].sum.w, uint(lum * lum * kSquareScale));
     atomicAdd(faces.items[slot].count, 1u);
 }
@@ -748,7 +770,11 @@ void contribute_shadow(uint slot, float visibility, uint window) {
             atomicAdd(faces.items[slot].sum.w, uint(-int(faces.items[slot].sum.w / 2u)));
         }
     }
-    atomicAdd(faces.items[slot].sum.w, uint(visibility * kFixedScale));
+    // Clamped for the same reason as the radiance above: a fraction that arrives slightly negative
+    // or as a NaN becomes four billion on the way to an unsigned sum, and a shadow entry that says
+    // four billion is a face lit by nothing at all.
+    const float lit = clamp(visibility, 0.0, 1.0);
+    atomicAdd(faces.items[slot].sum.w, uint(lit * kFixedScale));
     atomicAdd(faces.items[slot].count, 1u);
 }
 
