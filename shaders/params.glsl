@@ -41,4 +41,4 @@
 
     // Weather. See shaders/pt_clouds.glsl.
     vec4 sky_cloud;       // x coverage 0 clear to 1 overcast, y time in seconds, zw spare
-    vec4 sky_wind;        // xy the low deck's wind in metres a second, zw spare
+    vec4 sky_wind;        // xy the low deck's wind in metres a second, zw how far it slid this frame

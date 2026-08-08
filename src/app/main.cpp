@@ -337,6 +337,10 @@ void print_help() {
 // choppy is one where each frame is a sharp, still picture and the eye is handed a series of
 // unrelated stills. A streak between them is what tells the eye the two frames are the same scene
 // moving, and that reads as fluid at a frame rate where the sharp version does not.
+// How much faster the world's clock runs than the player's. One second at the keyboard is one
+// minute in the world.
+constexpr f32 kGameSecondsPerSecond = 60.0f;
+
 constexpr f32 kShutterFraction = 0.5f;
 
 // The longest streak, in pixels. A bound on cost rather than on looks: a fast spin can put a
@@ -862,7 +866,14 @@ private:
     f32 cloud_coverage_ = 0.45f;
     // The low deck's wind in metres a second. Six is a gentle breeze; the higher decks derive
     // their own from it, faster and veered, in shaders/pt_clouds.glsl.
-    f32 cloud_wind_[2]{5.0f, 2.0f};
+    // The low deck's wind, in metres a second of GAME time. Real cumulus drift at five to fifteen
+    // metres a second of REAL time, and the world's clock runs sixty times faster than the
+    // player's — so honest weather at honest speed crosses the sky at a few hundred metres a
+    // second, which does not read as weather at all. It reads as smoke in a wind tunnel. The
+    // coupling to game time is kept, because a cloud should cross a field in an in-game hour and
+    // not an in-game week; the speed is set by how it looks.
+    f32 cloud_wind_[2]{0.40f, 0.16f};
+    f32 prev_cloud_time_ = 0.0f;
     bool accum_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
     GpuImage visibility_image_;
     GpuImage render_target_;
@@ -2282,9 +2293,19 @@ void Application::record_frame(f32 time_seconds) {
         // The weather. Coverage is what kind of day it is; the time is what moves the decks, and
         // moving the decks is what moves their shadows across the ground.
         params.sky_cloud[0] = cloud_coverage_;
-        params.sky_cloud[1] = time_seconds;
+        // In GAME seconds, not real ones. A second at the keyboard is a minute in the world, so
+        // the weather has to move sixty times as fast or a cloud takes an in-game hour to cross a
+        // field it should cross in a minute — which reads as a painted sky that happens to drift.
+        params.sky_cloud[1] = time_seconds * kGameSecondsPerSecond;
         params.sky_wind[0] = cloud_wind_[0];
         params.sky_wind[1] = cloud_wind_[1];
+        // How far the deck slid since the last frame, which is what lets the reprojection follow a
+        // cloud rather than follow the pixel it used to be under.
+        f32 game_now = time_seconds * kGameSecondsPerSecond;
+        f32 game_step = std::clamp(game_now - prev_cloud_time_, 0.0f, kGameSecondsPerSecond);
+        prev_cloud_time_ = game_now;
+        params.sky_wind[2] = cloud_wind_[0] * game_step;
+        params.sky_wind[3] = cloud_wind_[1] * game_step;
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
         // blurs against the frame before it rather than against itself.
