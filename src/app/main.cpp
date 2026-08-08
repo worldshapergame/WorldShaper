@@ -829,6 +829,8 @@ private:
     std::vector<RefineRegion> refine_regions_;
     usize refine_region_ = 0;   // the one being sampled right now
     bool refine_wants_compact_ = false;
+    f64 refine_sample_ms_ = 0.0;   // the background half, which the paste timing never saw
+    u64 refine_asked_ = 0;
     void start_refinement();
     void pump_refinement();
 
@@ -1370,9 +1372,12 @@ void Application::start_refinement() {
     refine_ready_.store(false, std::memory_order_release);
     refine_running_ = true;
     refine_thread_ = std::thread([this] {
+        const u64 began = now_ns();
         auto built = std::make_unique<forge::SampleResult>(forge::sample(
             refine_script_->field, refine_script_->solid, refine_script_->paint,
             refine_script_->settings, refine_jobs_.get(), {}));
+        refine_sample_ms_ = ns_to_ms(now_ns() - began);
+        refine_asked_ = built->voxels_asked;
         refine_result_ = std::move(built);
         refine_ready_.store(true, std::memory_order_release);
     });
@@ -1391,6 +1396,22 @@ void Application::pump_refinement() {
     if (refine_result_ == nullptr) return;
 
     const u64 began = now_ns();
+
+    // Take the finished box off the shared slot and set the NEXT one sampling before pasting this
+    // one, rather than after.
+    //
+    // The two were serialised: the worker sat idle for the whole paste, then the main thread sat
+    // idle for the whole sample, and the world sharpened at the sum of the two instead of the
+    // larger. Overlapped, the sampler is never waiting on a paste it takes no part in — which very
+    // nearly halves how long it takes for what you are looking at to come good.
+    //
+    // Safe because nothing below reads the script: the paste needs only the result, and variation —
+    // the one thing that did read it — no longer runs per region. The box is marked done first, so
+    // the choice made below cannot land on the box being pasted.
+    std::unique_ptr<forge::SampleResult> finished = std::move(refine_result_);
+    const usize pasted_region = refine_region_;
+    refine_regions_[pasted_region].done = true;
+    start_refinement();
 
     // NOT varied, and this is the second time that lesson has been learned.
     //
@@ -1412,9 +1433,9 @@ void Application::pump_refinement() {
     // REPLACE, so the box supersedes the coarse voxels standing in for it. Stamped instead, the
     // blocky overshoot survives outside the finer surface and the world only ever grows.
     const PasteStats stamped = paste_clip(
-        world_, ledger_, refine_result_->clip, refine_result_->origin_voxel[0] + refine_at_[0],
-        refine_result_->origin_voxel[1] + refine_at_[1],
-        refine_result_->origin_voxel[2] + refine_at_[2], PasteMode::Replace,
+        world_, ledger_, finished->clip, finished->origin_voxel[0] + refine_at_[0],
+        finished->origin_voxel[1] + refine_at_[1],
+        finished->origin_voxel[2] + refine_at_[2], PasteMode::Replace,
         MatterReason::PlayerPlace, 1, refine_jobs_.get(), types_.type_count(), 1);
     // NOT compacted here, and that was the hiccup.
     //
@@ -1434,14 +1455,14 @@ void Application::pump_refinement() {
     const std::vector<Op>& done = op_log_.ops();
     if (!done.empty()) apply_ops(world_, done, ledger_);
 
-    refine_regions_[refine_region_].done = true;
-    refine_result_.reset();
+    finished.reset();
 
     usize left = 0;
     for (const RefineRegion& box : refine_regions_) {
         if (!box.done) ++left;
     }
-    WS_LOG_INFO("clip", "region sharpened in {:.0f} ms, {} left", ns_to_ms(now_ns() - began), left);
+    WS_LOG_INFO("clip", "region: sampled {:.0f} ms ({} voxels asked), pasted {:.0f} ms, {} left",
+                refine_sample_ms_, refine_asked_, ns_to_ms(now_ns() - began), left);
 
     if (left == 0) {
         // The one walk, now that there is nothing left to empty.
@@ -1696,7 +1717,24 @@ void Application::build_world() {
                 // Four metres. Two was tried and is worse — see the compaction below: the cost of
                 // finishing a box is very nearly FIXED rather than proportional to its volume, so
                 // smaller boxes do not buy smaller stalls, they buy more of them.
-                const f64 want = 4.0;
+                // Twelve metres, and the number comes from measuring where the time goes.
+                //
+                // Sampling a four-metre box took about a hundred milliseconds for ten thousand
+                // voxels -- ten microseconds each, against barely one when the whole clip is
+                // sampled in a single call. Almost none of that is the voxels. It is the fixed cost
+                // of a sample: allocating the clip, starting the workers, descending from the root
+                // of a field that describes the entire building however small the box asked for is.
+                // Three hundred and seventy-eight boxes paid it three hundred and seventy-eight
+                // times, and the world sharpened at eleven boxes in twenty-two seconds.
+                //
+                // Four was chosen to keep the stall short, and that reasoning was wrong twice over:
+                // the paste measures ZERO milliseconds, and what actually stalled was the world
+                // compaction, which is now done once at the end. A small box buys nothing.
+                //
+                // Twelve is twenty-seven times the volume for very nearly the same fixed cost, and
+                // still fine enough that the box in front of you is a small part of the building
+                // rather than half of it.
+                const f64 want = 12.0;
                 const auto steps = [&](f64 a, f64 b) {
                     return std::max<i32>(1, static_cast<i32>(std::ceil((b - a) / want)));
                 };
