@@ -19,6 +19,14 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(binding = 0, rgba32f) uniform image2D accum;
 layout(binding = 1, rgba8) uniform writeonly image2D out_colour;
 
+// The marcher walks a shadow ray through glass itself, and needs to know what one voxel of a
+// material lets past. It cannot work that out: the type and visual tables below are in this
+// shader's descriptor set and not in the world's, and visibility.comp includes the same
+// traversal with a set that stops at binding 13. So it asks through this, declared before the
+// traversal and defined after the tables it reads.
+float voxel_shadow_transmit(uint type_id);
+#define WS_VOXEL_TRANSMIT(type_id) voxel_shadow_transmit(type_id)
+
 #include "world.glsl"
 
 // The voxel type table, so a hit becomes a material. Same records the real-time pipeline
@@ -433,6 +441,11 @@ layout(push_constant) uniform Trace {
     // Quality, chosen at runtime by the auto-quality controller rather than compiled in:
     // x refine stride, y shadow sample target. See src/game/quality.hpp.
     uvec4 quality;
+    // Participating media; see shaders/pt_media.glsl. Zero extinction is clear air and the
+    // whole file costs one compare against a value that is uniform across the dispatch.
+    vec4 fog;          // xyz scattering coefficient, w extinction; both per voxel of path
+    vec4 fog_shape;    // x Henyey-Greenstein g, y height scale in voxels (0 = uniform),
+                       //   z the world height the coefficients are quoted at, w spare
 } trace;
 
 #include "pt_sampling.glsl"
@@ -442,11 +455,40 @@ layout(push_constant) uniform Trace {
 #include "pt_material.glsl"
 #include "pt_normals.glsl"
 
-bool occluded(vec3 origin, vec3 dir) {
+// How much of a shadow ray survives one voxel of this stuff, and zero for anything it cannot
+// pass. Answers the marcher's WS_VOXEL_TRANSMIT.
+//
+// Grey rather than coloured, because a shadow entry in the face cache is one float: it records
+// how much of the sun a face can see, not what colour it sees it in. So a green pane dims the
+// shadow it casts without tinting it. Tinting it means widening that entry to three floats,
+// which is a change to the cache and not to this.
+float voxel_shadow_transmit(uint type_id) {
+    Material m = material_of(type_id);
+    // Solid is not the same as opaque to light. A voxel of marble stops a ray you can see
+    // through and passes a fifth of the sun, which is why the lip of a moulding glows and why a
+    // marble screen casts a soft shadow rather than the same hard black one a brick wall does.
+    // Anything with translucency 0 — which is every material written before this — answers 0
+    // here exactly as it always did.
+    if (m.opacity >= 0.996) return voxel_transmit(m);
+    const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+    // What the surface itself keeps out, then what a voxel's thickness of the stuff absorbs.
+    return mix(1.0, dot(m.albedo, kLuma), m.opacity) * exp(-dot(m.absorb, kLuma));
+}
+
+// How much of the sun reaches a point, rather than whether anything is in the way.
+//
+// A window takes some of the light and passes the rest, and until the marcher could say so a
+// glazed opening cast the same hard black shadow a bricked-up one does.
+float sun_transmission(vec3 origin, vec3 dir) {
     // Full detail, and no feedback: a shadow ray must not drag streaming towards wherever it
     // happened to point.
+    g_march_through_glass = true;
+    g_march_transmittance = 1.0;
     Hit hit = march(origin, dir, 0.0, 0.0, false);
-    return hit.hit;
+    g_march_through_glass = false;
+    // A hit is a ray that was stopped, whether by opaque matter or by having nothing left worth
+    // carrying. Only a ray that reached the sky transmitted anything.
+    return hit.hit ? 0.0 : g_march_transmittance;
 }
 
 // Direct sun at a point, sampled rather than waited for. Without this the sun is found only
@@ -483,23 +525,17 @@ vec3 sun_sample(inout uint state) {
 // lets the expensive half ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the shadow ray ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â be traced once per face and shared, while the
 // cheap half, which depends on the viewing angle, stays per pixel.
 vec3 sun_light(vec3 normal, vec3 view, Material m, float visibility) {
-    float n_dot_l = dot(normal, trace.sun.xyz);
-    if (n_dot_l <= 0.0 || visibility <= 0.0) return vec3(0.0);
-
-    vec3 diffuse = m.albedo * (1.0 - m.metallic) / kPi;
-
-    vec3 h = normalize(trace.sun.xyz - view);
-    float n_dot_v = max(dot(normal, -view), 1e-4);
-    float n_dot_h = max(dot(normal, h), 0.0);
-    float v_dot_h = max(dot(-view, h), 1e-4);
-    float a = max(m.roughness * m.roughness, 1e-3);
-    float d = a * a / max(kPi * pow(n_dot_h * n_dot_h * (a * a - 1.0) + 1.0, 2.0), 1e-6);
-    float g = ggx_smith(n_dot_v, n_dot_l, m.roughness);
-    vec3 f0 = mix(vec3(0.04), m.albedo, m.metallic);
-    vec3 f = f0 + (vec3(1.0) - f0) * pow(1.0 - v_dot_h, 5.0);
-    vec3 specular = d * g * f / max(4.0 * n_dot_v * n_dot_l, 1e-4);
-
-    return (diffuse + specular) * trace.sun_colour.rgb * n_dot_l * visibility;
+    if (visibility <= 0.0) return vec3(0.0);
+    // Every lobe of it lives in pt_material.glsl. What a surface does with light is the
+    // material's business; the sun is only one direction to ask it about, and asking here rather
+    // than answering here is what let an anisotropic highlight, a clearcoat and a sheen arrive
+    // without this file changing at all.
+    //
+    // sun_radiance() and not trace.sun_colour: the constant is what the sun is worth at the
+    // reference hour, and the function is what is left of it after the air it came through. That
+    // is what stops a dusk frame being a red sky over a scene lit at full noon strength, and what
+    // stops a sun a degree below the horizon lighting every upward face in the world.
+    return surface_response(m, normal, -view, trace.sun.xyz) * sun_radiance() * visibility;
 }
 
 // Everything a face knows: how much of the sun it can see, and the light arriving from
@@ -1070,6 +1106,127 @@ const uint kNeeCandidates = 8u;
 const float kNeeMinChance = 0.005;
 const float kNeeMaxChance = 0.95;
 
+// ---- what a reservoir would be here, and why there is not one ---------------------------
+//
+// The draw below is resampled importance sampling and it stops there: eight candidates drawn
+// uniformly, one kept, and everything the draw learned thrown away at the end of the pixel.
+// ReSTIR's answer is a reservoir — keep the chosen sample together with the weight of everything
+// it beat, so it can be combined with a neighbour's and with its own from last frame, and the
+// effective candidate count climbs into the hundreds. It was built here, measured, and taken out
+// again. What it did and why is written down because it is the obvious thing to reach for, and
+// the next person will reach for it.
+//
+// A reservoir is per pixel in every renderer that has one, because a pixel is the only address
+// those renderers have. This one caches per voxel face, and a face is the better address: it is in
+// the world, it does not move when the eye does, and hundreds of pixels stand on it at once — so a
+// face-keyed reservoir gathers in one frame the candidate count a per-pixel one needs a hundred
+// frames of temporal reuse to reach. Spatial and temporal reuse even stop being two things: a face
+// under the camera fills its window from many pixels in a frame, one across the hall fills it from
+// one pixel over a hundred frames, and neither has to be arranged.
+//
+// The trouble is what a reservoir *is*. It holds one chosen sample, and everybody who reads it
+// shades from that same sample. Per pixel that is fine, because neighbouring pixels hold different
+// samples and the picture averages them. Per face it is not, because a face's answer is *already*
+// the average of its pixels' samples, and that average is where the whole of this renderer's
+// variance reduction comes from. Five hundred pixels all shooting at the one lamp the reservoir
+// chose measure that lamp five hundred times and every other lamp nought times; if it is behind a
+// wall they all come back black together and the face records that there is no light here, which
+// is the one thing a face must never be taught wrongly, because a cache does not wash out. Sharing
+// the sample trades five hundred independent measurements for one, and the sharing is the only
+// reason the face cache works at all.
+//
+// So what was built kept the reservoir as the face's *proposal* and never as its sample. One lamp
+// per face held a seat, won by an exponential-race reservoir living in a single word of a face
+// entry — twenty-two bits of clock and ten of lamp index, settled by one atomicMax because a
+// maximum is the one selection rule a thousand threads can run at once without a lock, and decayed
+// by one doubling per window so that no incumbent could hold the seat for ever. That lamp was
+// offered to every pixel as a ninth candidate on top of the eight uniform ones, and every pixel
+// still ran its own resampling over the nine and kept its own answer, so nothing was shared but
+// the shortlist. The seat could then be decided by the one thing an unshaded score can never know
+// — a lamp that came back dark did not compete for it and gave it up at once if it held it —
+// because a proposal is corrected by the balance heuristic whatever it proposes and stays unbiased
+// even when it is chosen adversarially.
+//
+// It is correct, and it does not pay, and the reason is the part worth keeping. Under the balance
+// heuristic a lamp proposed deterministically carries weight p/(1 + C/N) where a uniformly drawn
+// one carries p*N/C, so a seat contributes to the estimator exactly the share of the unshaded
+// total that its own lamp is worth — no more, however certain the face is about it. What it
+// removes is the *variance* of whether that share was drawn at all. Where one lamp is most of what
+// a surface receives, that is nearly all of the variance and the seat is worth a great deal; where
+// a face sees five sconces of similar brightness it is a fifth of it. And the visibility the seat
+// had learned buys nothing, because the balance heuristic reweights by the unshaded density and
+// hands the knowledge straight back. Visibility pays only if it enters the target function itself,
+// and the target has to be recomputable from a lamp index at the moment the sample is weighted,
+// which a learned per-face-per-lamp visibility is not without a cache of its own.
+//
+// Measured in clips/many_lamps.clip — a sealed hall, thirty-six sconces, partitions cutting the
+// sight lines so a face sees five of them — interleaved against its own control over several
+// rounds, because other work in this tree moves the baseline between one measurement and the next:
+// speckle 5.11 to 5.25 at the corner view and 6.35 to 6.66 standing close to a wall, so two to
+// five per cent *worse*, with mean brightness unmoved to a tenth of a per cent. Against that it
+// costs a fifth kind of face entry and a fifth eight-probe claim through a quarter of a gigabyte
+// on every pixel that asks a lamp, and this file already records what happens when that table
+// saturates. Correct, cheap to write, and not worth its claim.
+//
+// What would be worth it is the thing the seat kept bumping into. The sun's visibility is cached
+// per face and a lamp's is not, and that asymmetry is where the noise in a lamp-lit room actually
+// lives: thirty of those thirty-six lamps are behind a wall and every draw pays for them. A
+// visibility term keyed by (node, normal, lamp) at a coarse level, floored well above zero so that
+// no lamp can ever be extinguished by a wrong entry, folded into the target function rather than
+// into the proposal, is the change that would make fifty sconces converge like one. It is a new
+// kind of entry with a population of its own to budget for, which is why it is written down here
+// rather than done.
+
+// What one lamp would deliver to this face with nothing in the way: the target function the draw
+// scores by. The score and the density the kept sample is divided by have to be this same
+// expression, or the sample is not drawn from the distribution it is corrected by.
+float light_target(uint index, vec3 from, vec3 normal, out vec3 centre, out float radius) {
+    LightSource lamp = lights.items[index];
+    // The list is in absolute world voxels; the shader stands in its camera chunk.
+    centre = vec3(float(lamp.x), float(lamp.y), float(lamp.z)) + 0.5 -
+             vec3(push.camera_chunk.xyz) * float(kChunkEdge);
+    // A cluster of voxels, treated as the sphere that *contains* it rather than the one of the
+    // same volume. The difference is not cosmetic. Direct sampling owns emitters outright, so a
+    // cone too narrow to cover the lamp does not merely sample it badly — the light from the
+    // parts outside the cone is owned by nobody and goes out. An equal-volume sphere covers about
+    // half a cube, and the room measured thirteen per cent too dark against a long reference run
+    // because of it. Erring the other way costs nothing but noise: a direction that overshoots
+    // the lamp finds a wall and honestly reports nought.
+    //
+    // A sphere is what the record can describe, and it is the one thing left that a large fitting
+    // is genuinely badly served by. A fitting is a box of emissive voxels; where it is longer than
+    // it is wide, world/light_list.hpp inflates this count until the sphere covers that box, so
+    // the cone drawn round it is mostly empty air and most rays aimed into it miss. That is honest
+    // and it is noisy, and no arrangement of what is stored here can fix it: it needs the box.
+    // Three more numbers on LightSource — the fitting's half-extent — and this becomes the solid
+    // angle of a box rather than of the sphere that swallows it, which is where a metre-wide
+    // lantern's penumbra would come from.
+    radius = max(0.87 * pow(float(max(lamp.voxels, 1u)), 1.0 / 3.0), 0.87);
+
+    vec3 to = centre - from;
+    float distance_sq = max(dot(to, to), 1e-4);
+    float cos_surface = dot(to * inversesqrt(distance_sq), normal);
+    if (cos_surface <= 0.0) return 0.0;   // behind the face
+
+    // The solid angle the lamp's sphere actually covers, rather than r^2/d^2 standing in for it.
+    //
+    // The two agree to a fraction of a per cent once the lamp is more than a couple of radii away
+    // — the factor of two is what makes them agree there — and part company close to, where the
+    // proxy has to be clamped at one or it runs away. Clamped, it says a lamp an arm's length from
+    // a wall is worth no more than the same lamp across the room, when the truth is that it covers
+    // half that wall's sky, so the draw stops preferring the lamp that lights a surface at exactly
+    // the distance where it lights it most.
+    //
+    // It is a better importance function and it does not show: measured against the proxy in
+    // clips/many_lamps.clip, including a view standing an arm's length from a sconce, the two are
+    // identical to a tenth of a per cent in mean brightness and half a per cent in speckle, which
+    // is inside the spread between runs of one build. This is here on the argument and not on the
+    // number, and the number is written down so that nobody measures it again expecting one.
+    float sin_max_sq = min(radius * radius / distance_sq, 1.0);
+    float solid = 2.0 * (1.0 - sqrt(1.0 - sin_max_sq));
+    return face_luminance(vec3(lamp.red, lamp.green, lamp.blue)) * cos_surface * solid;
+}
+
 struct LightPick {
     vec3 dir;
     float inv_pdf;   // 1 / p(dir), in solid angle
@@ -1084,6 +1241,13 @@ struct LightPick {
 // scored by the light it would deliver if nothing were in the way, and one is kept in proportion
 // to that score. The estimator is corrected by the total weight the draw saw, which keeps it
 // unbiased while concentrating the samples on the lamps that actually matter to this face.
+//
+// Each candidate is divided by the density of the proposal that produced it, rather than the
+// whole draw being scaled by light_count/candidates at the end. Those are the same number while
+// every candidate is drawn uniformly, which is the case today — but writing it this way is what
+// lets a candidate arrive from somewhere other than the uniform draw without the correction
+// having to be rederived. It is the balance heuristic's denominator, waiting for a second
+// proposal; see the note above on why there is not one yet.
 LightPick pick_light(vec3 from, vec3 normal, uint light_count, inout uint state) {
     LightPick pick;
     pick.dir = normal;
@@ -1092,61 +1256,77 @@ LightPick pick_light(vec3 from, vec3 normal, uint light_count, inout uint state)
     pick.valid = false;
 
     uint candidates = min(light_count, kNeeCandidates);
+    float uniform_density = float(candidates) / float(light_count);
+
     float weight_sum = 0.0;
     float chosen_target = 0.0;
     vec3 chosen_centre = vec3(0.0);
-    float chosen_radius = 0.5;
+    float chosen_radius = 0.87;
 
     for (uint i = 0u; i < candidates; ++i) {
         uint index = min(uint(rand(state) * float(light_count)), light_count - 1u);
-        LightSource lamp = lights.items[index];
-        // The list is in absolute world voxels; the shader stands in its camera chunk.
-        vec3 centre = vec3(float(lamp.x), float(lamp.y), float(lamp.z)) + 0.5 -
-                      vec3(push.camera_chunk.xyz) * float(kChunkEdge);
-        vec3 to = centre - from;
-        float distance_sq = max(dot(to, to), 1.0);
-        float cos_surface = dot(to * inversesqrt(distance_sq), normal);
-        if (cos_surface <= 0.0) continue;   // behind the face
 
-        // A cluster of voxels, treated as the sphere that *contains* it rather than the one of
-        // the same volume. The difference is not cosmetic. Direct sampling owns emitters
-        // outright, so a cone too narrow to cover the lamp does not merely sample it badly — the
-        // light from the parts outside the cone is owned by nobody and goes out. An
-        // equal-volume sphere covers about half a cube, and the room measured thirteen per cent
-        // too dark against a long reference run because of it. Erring the other way costs
-        // nothing but noise: a direction that overshoots the lamp finds a wall and honestly
-        // reports nought.
-        float radius = max(0.87 * pow(float(max(lamp.voxels, 1u)), 1.0 / 3.0), 0.87);
-        // Radiance, times the solid angle it covers, times how square-on it is. What this lamp
-        // would contribute with nothing in the way, which is everything about it that can be
-        // known without tracing.
-        float target = face_luminance(vec3(lamp.red, lamp.green, lamp.blue)) * cos_surface *
-                       min(radius * radius / distance_sq, 1.0);
+        vec3 centre;
+        float radius;
+        float target = light_target(index, from, normal, centre, radius);
         if (target <= 0.0) continue;
 
-        weight_sum += target;
-        if (rand(state) * weight_sum <= target) {
+        float w = target / uniform_density;
+
+        weight_sum += w;
+        if (rand(state) * weight_sum <= w) {
             chosen_target = target;
             chosen_centre = centre;
             chosen_radius = radius;
         }
     }
-    // What every lamp in the list would deliver here, unshaded: the mean of what the draw saw,
-    // scaled back up to the whole list. This is the number the strategy split is decided by.
-    pick.estimate = float(light_count) * weight_sum / float(candidates);
+    // What every lamp in the list would deliver here, unshaded: the total weight the draw saw,
+    // each candidate already carrying the reciprocal of the density that produced it. This is the
+    // number the strategy split is decided by.
+    pick.estimate = weight_sum;
     if (chosen_target <= 0.0) return pick;
 
     // A direction inside the cone the lamp covers, which is what gives it a real solid-angle
     // density rather than the degenerate one a point light would have.
+    // No floor under the distance, where there used to be one of a whole voxel, and the ratio of
+    // radius to distance is allowed to reach one where it used to stop a ten-thousandth short.
+    //
+    // Both were holes in the same invariant rather than anything visible. A cone narrower than the
+    // lamp does not merely sample it badly: the part left outside is owned by nobody, because
+    // direct sampling owns emitters and the bounce is forbidden them. Floored, a point closer to
+    // the lamp's centre than one voxel was given a sixty-degree cone round a lamp filling its sky;
+    // stopped short of one, a point inside the lamp's own sphere got 89.2 degrees where it wanted
+    // 90. Neither case arises in any scene here that could be measured — every view tried came out
+    // identical to a tenth of a per cent — and both are a hole in a rule the rest of this file
+    // leans on, which is reason enough to close them.
     vec3 to = chosen_centre - from;
-    float distance_sq = max(dot(to, to), 1.0);
+    float distance_sq = max(dot(to, to), 1e-6);
     vec3 towards = to * inversesqrt(distance_sq);
-    float sin_max_sq = clamp(chosen_radius * chosen_radius / distance_sq, 0.0, 0.9999);
+    float sin_max_sq = clamp(chosen_radius * chosen_radius / distance_sq, 0.0, 1.0);
     float cos_max = sqrt(1.0 - sin_max_sq);
 
-    float cos_theta = mix(cos_max, 1.0, rand(state));
+    // Drawn independently, and not stratified across the pixels of the face the way the sun's disc
+    // is. That asymmetry looks wrong and is not, and it was measured both ways before it was left
+    // alone.
+    //
+    // The sun works because every pixel samples the *same* sun: a cell of the disc handed out by
+    // pixel position means the same thing to all of them, so the pixels covering a face sweep the
+    // whole disc between them and its penumbra resolves. Lamps are drawn, and neighbouring pixels
+    // routinely draw different ones — a shared cell index is then a cell of different cones, which
+    // covers nothing evenly and only correlates the draw. Measured in clips/many_lamps.clip:
+    // stratified, the view down a hall of small distant sconces cost one per cent of speckle and
+    // the view standing beside a fitting returned about half a per cent, so it is a wash. Gating
+    // it on the kept lamp being more than half of the draw's weight — which is when the neighbours
+    // have probably kept the same one — moved neither number: 5.09 to 5.13 at the corner and 6.55
+    // to 6.50 close to, against a spread of 0.3 per cent between runs of one build.
+    //
+    // So it is left independent, which is the cheaper of two equals. What a large fitting's
+    // penumbra actually wants is the sampling below to know the shape of the fitting rather than
+    // the sphere round it; see the note on LightSource extents.
+    vec2 u = vec2(rand(state), rand(state));
+    float cos_theta = mix(cos_max, 1.0, u.x);
     float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
-    float phi = 2.0 * kPi * rand(state);
+    float phi = 2.0 * kPi * u.y;
 
     vec3 up = (abs(towards.z) < 0.999) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tangent = normalize(cross(up, towards));
@@ -1157,10 +1337,8 @@ LightPick pick_light(vec3 from, vec3 normal, uint light_count, inout uint state)
     float pdf_direction = 1.0 / (2.0 * kPi * max(1.0 - cos_max, 1e-6));
     // The resampling correction: the kept candidate stands in for every one the draw saw, so its
     // density is scaled by the total weight against its own. The uniform density over the whole
-    // list enters as the factor of light_count.
-    float resample = (float(light_count) * weight_sum) /
-                     (float(candidates) * chosen_target);
-    pick.inv_pdf = resample / pdf_direction;
+    // list is already inside weight_sum, carried there by the balance heuristic.
+    pick.inv_pdf = (weight_sum / chosen_target) / pdf_direction;
     pick.valid = dot(pick.dir, normal) > 0.0;
     return pick;
 }
@@ -1342,7 +1520,7 @@ vec3 clamp_finite(vec3 v) {
 // but the near surfaces that bounce off it being told the world is unlit.
 vec3 summary_radiance(vec3 normal, Material m) {
     float n_dot_l = max(dot(normal, trace.sun.xyz), 0.0);
-    return m.emission + m.albedo * (trace.sun_colour.rgb * n_dot_l / kPi +
+    return m.emission + m.albedo * (sun_radiance() * n_dot_l / kPi +
                                     sky_radiance(normal) * 0.5);
 }
 
@@ -1381,7 +1559,6 @@ const float kAccumWindow = 1024.0;
 
 #include "pt_media.glsl"
 #include "pt_post.glsl"
-}
 
 void main() {
     ivec2 pixel = min(ivec2(gl_GlobalInvocationID.xy), ivec2(push.resolution.xy) - 1);
@@ -1389,14 +1566,13 @@ void main() {
     uint sample_index = trace.control.x;
     uint state = (uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + sample_index * 26699u) | 1u;
 
-    // Jitter inside the pixel, which is the whole of the anti-aliasing: with enough samples
-    // the average over the pixel's area is the correct answer, and no edge filter is needed.
-    vec2 jitter = vec2(rand(state), rand(state));
-    vec2 uv = (vec2(pixel) + jitter) / vec2(push.resolution) * 2.0 - 1.0;
+    // Which ray stands for this pixel, jitter and aperture and all. It lives in pt_post.glsl
+    // because a lens is not transport: it decides what to ask, not what happens to the answer,
+    // which is the same question exposure and the tone curve are answering. It is a pinhole
+    // while push.lens.w is zero, which is what the parameter block is value-initialised to.
     float aspect = float(push.resolution.x) / float(push.resolution.y);
-    vec3 dir = normalize(push.forward.xyz + push.right.xyz * uv.x * push.lens.x * aspect -
-                         push.up.xyz * uv.y * push.lens.x);
-    vec3 origin = push.origin.xyz;
+    vec3 origin, dir;
+    camera_ray(pixel, state, aspect, origin, dir);
 
     vec3 radiance = vec3(0.0);
     float primary_t = push.lens.y;   // kept for the preview's depth test
@@ -1435,8 +1611,41 @@ void main() {
         vec3 medium_absorb = vec3(0.0);
         float first_t = 0.0;
 
+        // The one segment after a scatter into a translucent solid is marched with the marcher
+        // told to pass through what it meets, which is the machinery a shadow ray already uses
+        // to get through glass. That is the whole trick, and it is forced: march cannot BEGIN
+        // inside solid matter — it answers a hit at zero distance with a normal facing the ray,
+        // deliberately, because a camera buried in a wall has no better answer — so a ray that
+        // is to cross a slab must start outside it and be let through, rather than start inside
+        // it and be let out.
+        bool passing = false;
+        vec3 kept_origin = vec3(0.0);
+        vec3 kept_dir = vec3(0.0);
+        vec3 kept_throughput = vec3(1.0);
+        Hit kept_hit;
+        kept_hit.hit = false;
+
         for (uint segment = 0u; segment < kGlassSegments; ++segment) {
+            g_march_through_glass = passing;
+            g_march_transmittance = 1.0;
             hit = march(ray_origin, ray_dir, 0.0, 0.0, true);
+            g_march_through_glass = false;
+            if (passing) {
+                passing = false;
+                if (g_march_transmittance <= kMinTransmittance * 4.0) {
+                    // It went in and did not come out. That is not a black pixel: it is what an
+                    // ordinary diffuse surface already describes, light entering the stone and
+                    // leaving the way it came. So the path shades the face it entered, exactly
+                    // as it would have had it never gone in — which is what keeps a marble WALL
+                    // no darker than the same stone opaque while its thin edges are brighter.
+                    ray_origin = kept_origin;
+                    ray_dir = kept_dir;
+                    g_throughput = kept_throughput;
+                    hit = kept_hit;
+                    break;
+                }
+                g_throughput *= g_march_transmittance;
+            }
             if (!hit.hit) {
                 // Out into the sky. Whatever it passed through still tints it.
                 if (inside) g_throughput *= exp(-medium_absorb * kGlassEscape);
@@ -1449,13 +1658,35 @@ void main() {
 
             Material clear = (hit.level == 0) ? material_of(hit.type_id)
                                               : material_from_colour(hit.colour);
-            if (clear.opacity >= 0.996) break;   // solid: this is the surface to shade
-
             vec3 face = vec3(hit.normal);
             vec3 point = ray_origin + ray_dir * hit.t;
             // The interface, from the ray's side of it. Entering when the face points back at
             // the ray, leaving when it points along it.
             bool entering = dot(ray_dir, face) < 0.0;
+
+            // Solid to a ray that insists on travelling in a straight line — and a translucent
+            // solid is not a wall to one that will forget where it was going. See scatter_into
+            // in pt_material.glsl. It costs no march: this loop already has one.
+            if (clear.opacity >= 0.996) {
+                vec3 scattered;
+                if (!entering || !scatter_into(clear, ray_dir, face, state, scattered)) {
+                    break;   // stops here: this is the surface to shade
+                }
+                kept_origin = ray_origin;
+                kept_dir = ray_dir;
+                kept_throughput = g_throughput;
+                kept_hit = hit;
+                // The colour light picks up from having been inside the stuff. The marcher's
+                // transmittance is one float and carries how MUCH survived; this is what colour
+                // it is, and it belongs at the way in for the same reason a pane of glass tints
+                // what passes rather than what it reflects.
+                g_throughput *= clear.albedo;
+                ray_origin = point + face * kGlassStep;   // just OUTSIDE, pointing in
+                ray_dir = scattered;
+                passing = true;
+                hit.hit = false;
+                continue;
+            }
             vec3 n = entering ? face : -face;
             float eta = entering ? (1.0 / max(clear.index, 1.0)) : max(clear.index, 1.0);
 
@@ -1507,19 +1738,36 @@ void main() {
     }
 
     if (!hit.hit) {
-        radiance = sky_radiance(dir);
+        // sky_view and not sky_radiance, and this is the only call site in the file that may be.
+        //
+        // The two differ by the things that are bright and small: the moon's disc and the stars.
+        // Those belong to the eye and must never reach the light path, because an irradiance
+        // entry pools five hundred samples and a point six hundred times brighter than the sky
+        // around it is caught by one or two of them -- so one face in a few hundred settles at
+        // twice its neighbours and stays there, a cache not being the sort of thing that washes
+        // out. Every other call below is a cache or a reflection and keeps sky_radiance.
+        radiance = sky_view(dir);
     } else {
         primary_t = hit.t;
         vec3 point = origin + dir * hit.t;
-        // Shaded by the shape the voxels approximate rather than by the face that was hit — see
-        // pt_normals.glsl for why those are not the same thing, and why a polished sphere in a
-        // voxel world reflects in exactly six directions until they are told apart.
-        vec3 normal = shading_normal(
-            ivec3(floor(point - vec3(hit.normal) * 0.5)) + push.camera_chunk.xyz * kChunkEdge,
-            hit.normal, point, hit.level);
-        vec3 from = point + normal * surface_offset(hit.level, hit.t);
+        // The voxel the face belongs to, worked out from the face that was hit and never from
+        // the shading normal. Everything keyed to a face has to agree on which voxel that is,
+        // and a shading normal leaning up to 54.7 degrees off its face moves point - normal*0.5
+        // as much as four tenths of a voxel sideways -- so on a curve a large fraction of pixels
+        // would name the voxel next door, which is a cache keyed on where the normal happened to
+        // point rather than on the face. That fault is the one the architecture note is about
+        // and it was latent here from the day shading_normal stopped returning the face.
+        ivec3 hit_voxel =
+            ivec3(floor(point - vec3(hit.normal) * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
         Material m = (hit.level == 0) ? material_of(hit.type_id)
                                       : material_from_colour(hit.colour);
+        // The shape the voxels approximate -- see pt_normals.glsl for why a face and a normal
+        // are not the same thing, and why a polished sphere in a voxel world reflects in exactly
+        // six directions until they are told apart -- then roughened by a hash on the voxel, so
+        // the surface has a microstructure the geometry does not. See perturb_normal.
+        vec3 normal = perturb_normal(shading_normal(hit_voxel, hit.normal, point, hit.level),
+                                     hit_voxel, hit.normal, m);
+        vec3 from = point + normal * surface_offset(hit.level, hit.t);
 
         radiance = m.emission;
 
@@ -1560,7 +1808,7 @@ void main() {
             return;
         }
 
-        ivec3 voxel = ivec3(floor(point - normal * 0.5)) + push.camera_chunk.xyz * kChunkEdge;
+        ivec3 voxel = hit_voxel;
         uint level = cache_level(hit.t);
         uint lo, hi;
         face_key(voxel, hit.normal, level, kFaceIndirect, lo, hi);
@@ -1605,6 +1853,29 @@ void main() {
         bool settled = own.known && own.count >= kErrorMinSamples && own.error < kErrorTarget;
         bool refine = (!settled || edited || (rand(state) < 0.02)) && turn;
 
+        // Adaptive sampling is asked here per face, and not per pixel, and that is a decision
+        // rather than an omission — so it is written down where the omission would be noticed.
+        //
+        // Every path tracer that measures variance measures it per pixel, because the estimate it
+        // is refining lives per pixel. Here it does not. A pixel's value is a *read* of face
+        // state, plus at most one traced ray, and its noise is its face's noise: a thousand
+        // pixels standing on one face all show the same number and are all wrong by the same
+        // amount at the same time. Measuring that a thousand times over, one ray each, would be a
+        // thousand worse estimates of the quantity the face already estimates well — the face has
+        // the statistics because the face has the samples.
+        //
+        // And there would be nothing to do with the answer. "This pixel is noisy, give it more
+        // rays" needs somewhere to put them, and a pixel is one invocation with one primary ray;
+        // more samples for it means another loop around the whole march, which costs what the
+        // architecture cannot spend. What it can spend is a ray on the face, which is what the
+        // stride and the error target already decide.
+        //
+        // The one quantity in this shader that genuinely is per pixel is a sharp reflection,
+        // because it is a property of where the eye is and not of the world. It is exempted from
+        // both the stride and the settled test immediately below — every such pixel traces every
+        // frame, which is already the most a pixel can be given. There is nothing above it for an
+        // adaptive rule to reach.
+        //
         // A sharp reflection is never settled, however many samples its face has.
         //
         // The stride and the settled test are both about the *face*: they ask whether this patch
@@ -1690,10 +1961,8 @@ void main() {
             uint parent_slot = face_slot(parent_lo, parent_hi, true, trace.control.z);
 
             if (trace_shadow) {
-                float measured =
-                    occluded(from, sun_sample_at(stratified_pair(pixel, trace.control.z, 1u, state)))
-                        ? 0.0
-                        : 1.0;
+                float measured = sun_transmission(
+                    from, sun_sample_at(stratified_pair(pixel, trace.control.z, 1u, state)));
                 contribute_shadow(shadow_slot, measured, edit_window);
                 contribute_shadow(parent_slot, measured, edit_window);
             }
@@ -1812,6 +2081,16 @@ void main() {
             spec_bounce = false;
             bounce_dir = cosine_hemisphere(normal, state);
         }
+        // And below the FACE, which is a second and different test now that the two are not the
+        // same vector. The shading normal leans off the face it is made of by up to 54.7 degrees,
+        // so a lobe built around it can point under the face itself; that ray starts underground,
+        // hits the surface it just left, and comes back black — a curve losing the indirect light
+        // a flat wall keeps. The face decides where a ray may go; the shading normal only decides
+        // what it is worth.
+        if (dot(bounce_dir, vec3(hit.normal)) <= 0.0) {
+            spec_bounce = false;
+            bounce_dir = cosine_hemisphere(vec3(hit.normal), state);
+        }
 
         // ---- ask a lamp, or bounce ----------------------------------------------------
         //
@@ -1833,7 +2112,7 @@ void main() {
             // are worth here. Then the split, from the lamps' share of everything this face is
             // receiving: the sun it can see, the sky above it, and the lamps around it.
             LightPick pick = pick_light(from, normal, light_count, state);
-            float from_sun = face_luminance(trace.sun_colour.rgb) *
+            float from_sun = face_luminance(sun_radiance()) *
                              max(dot(normal, trace.sun.xyz), 0.0) * visibility;
             float from_sky = face_luminance(sky_radiance(normal));
             nee_chance = clamp(pick.estimate / (pick.estimate + from_sun + from_sky + 1e-4),
@@ -1876,6 +2155,35 @@ void main() {
             rad_slot = face_slot(rad_lo, rad_hi, true, trace.control.z);
         }
 
+        // ---- how long a path is, and why nothing rolls a die to end it -----------------
+        //
+        // There is no Russian roulette anywhere in this file. That is the right answer here and
+        // not an oversight, and this is where someone will come looking for it.
+        //
+        // Roulette exists to end a path that would otherwise go on for ever: past some depth a
+        // path carries so little that continuing is not worth a ray, and killing it outright
+        // biases the picture, so it is killed at random and the survivors are scaled up to pay
+        // for the dead. Every word of that assumes there is a continuation to kill.
+        //
+        // A path here is exactly one segment long. The ray below marches once, and whatever it
+        // lands on is *read* — the far face's own sun and its own indirect, from the cache —
+        // rather than traced onward. Depth is unbounded, but it is unbounded in *frames* and not
+        // in rays: light gains a bounce per frame and keeps it, because each frame's estimate is
+        // stored where the next frame's bounce will find it. There is no tail. Roulette applied
+        // to this would delete the one segment that exists and pay for it with variance, saving
+        // nothing, because by the time throughput is known the march has already happened.
+        //
+        // What roulette *is* — a coin, a single continuation instead of several, and a division
+        // by the chance of having taken it — is already here twice, under other names. The lobe
+        // choice above spends one ray on the diffuse or the specular branch and divides by
+        // spec_chance; the lamp choice spends it on an emitter or a bounce and divides by
+        // nee_chance. Those are roulette between strategies rather than roulette against depth,
+        // and they are where the technique earns its keep in a renderer with three marches in it.
+        //
+        // The day march becomes something a ray can re-enter — a loop around the bounce, the way
+        // the glass segments are a loop around the primary — roulette against throughput becomes
+        // the right way to bound that loop, and the survival chance is the throughput itself,
+        // clamped to one, with the survivor divided by it. Until then there is nothing to bound.
         Hit second = march(from, bounce_dir, 0.0, 0.0, true);
         if (nee) {
             // Direct sampling owns emitters and nothing else. Whatever the ray reached, only its
@@ -2069,13 +2377,15 @@ void main() {
             // beside it comes from the face cache rather than from a ray this one displaced.
             // Dividing anyway makes a barely-reflective surface blaze.
             //
-            // Clamped harder than the cache contribution is, and for a reason the cache does not
-            // have: a bin averages forty-eight samples, so one that found the sun through a gap
-            // is a fiftieth of the answer. Used directly, it is the whole answer for that pixel
-            // in that frame, and a reflective surface accumulating one sample a frame shows it
-            // as a white speck that takes a hundred frames to wash out. Eight is well above
-            // anything a sky or a lit wall sends back and well below a specular glint.
-            vec3 traced = specular_weight(normal, -dir, m) * min(clamped, vec3(8.0));
+            // Not clamped a second time, where it used to be held at 8. That clamp was here to
+            // stop a one-sample white speck on a surface accumulating one sample a frame, and
+            // that is now the outlier test's job in pt_post.glsl — which does it better, because
+            // its bound grows with how much the pixel already knows instead of being a number
+            // chosen once. Eight was also demonstrably below a real sun glint on chrome, so it
+            // was throwing away the one thing a mirror is for. The other clamp, the 64 feeding
+            // contribute(), stays: that guards a *cache* entry with a five-hundred-sample window
+            // and a wrong entry there does not wash out.
+            vec3 traced = specular_weight(normal, -dir, m) * clamped;
             // Mixed with the cache by the same ramp the cache is weighted by, so a surface whose
             // roughness varies from voxel to voxel — which is every surface here — has no seam
             // running through it where one term hands over to the other.
@@ -2091,8 +2401,7 @@ void main() {
         radiance += sun_light(normal, dir, m, visibility) +
                     m.albedo * (1.0 - m.metallic) * here.indirect + reflection;
     }
-    // Whatever the air between here and there did to it. Clear until pt_media.glsl says
-    // otherwise, which is the common case and has to cost nothing.
-    radiance = apply_media(radiance, push.origin.xyz, dir, primary_t);
+    // The air between here and there is charged in write_pixel, which is the only place every
+    // path that produces a pixel goes through. Charging it here reached a quarter of them.
     write_pixel(pixel, sample_index, clamp_finite(radiance), primary_t, aspect);
 }

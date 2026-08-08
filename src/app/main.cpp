@@ -132,6 +132,18 @@ struct Options {
     // at frame 100, offsets the ghost by (dx,dy,dz), fans out `copies`, and turns it `turn`
     // degrees about y. Everything after the box is optional.
     std::string clip;
+
+    // Air that is not empty: --fog "extinction,albedo,g,scale-height,base".
+    //
+    // Authored per METRE and in metres, because that is the unit a person thinks in; the
+    // shader wants per voxel, and the conversion happens once here against whatever resolution
+    // the clip was built at rather than in every place a length appears. See pt_media.glsl.
+    //
+    // A flag rather than a clip statement, and that is a decision worth stating: fog is a
+    // property of the weather and not of the building, so a clip that carried one would make a
+    // beam through an oculus part of the architecture. When there is weather it belongs there
+    // and not here.
+    std::string fog;
 };
 
 // Reads up to `count` comma-separated numbers. Missing ones keep their defaults, so a
@@ -140,6 +152,15 @@ void parse_numbers(const std::string& text, i64* out, u32 count) {
     const char* cursor = text.c_str();
     for (u32 i = 0; i < count && *cursor != '\0'; ++i) {
         out[i] = std::strtoll(cursor, const_cast<char**>(&cursor), 10);
+        if (*cursor == ',') ++cursor;
+    }
+}
+
+// The same, for the numbers that are not whole ones.
+void parse_reals(const std::string& text, f64* out, u32 count) {
+    const char* cursor = text.c_str();
+    for (u32 i = 0; i < count && *cursor != '\0'; ++i) {
+        out[i] = std::strtod(cursor, const_cast<char**>(&cursor));
         if (*cursor == ',') ++cursor;
     }
 }
@@ -181,6 +202,8 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.preview = argv[++i];
         } else if (arg == "--clip") {
             if (i + 1 < argc) options.clip = argv[++i];
+        } else if (arg == "--fog") {
+            if (i + 1 < argc) options.fog = argv[++i];
         } else if (arg == "--clip-file") {
             if (i + 1 < argc) options.clip_file = argv[++i];
         } else if (arg == "--clip-slice") {
@@ -278,6 +301,8 @@ void print_help() {
         "  --clip-metre N        sample at N voxels per metre instead of the file's\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
+        "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
+        "                        albedo, Henyey-Greenstein g, scale height and base in metres\n"
         "\n"
         "In game:  F1 developer panel   F2 overlay   F4 path trace   F5 reload shaders\n"
         "          F11 toggle vsync     Esc quit\n"
@@ -292,10 +317,21 @@ void print_help() {
 struct TracePush {
     f32 sun[4]{};          // xyz towards the sun, w cos of its angular radius
     f32 sun_colour[4]{};
-    u32 control[4]{};      // x sample index, y bounce limit, z frame, w world changed
+    // x sample index, z frame, w world changed. y is spare: it used to carry a bounce limit,
+    // which the shader never read and could not have used — see src/game/quality.hpp for why
+    // this renderer has no such number.
+    u32 control[4]{};
     u32 quality[4]{};      // x refine stride, y shadow sample target
+    // Participating media. Per *voxel* of path and not per metre: the metre belongs to the
+    // clip (`metre 32` at the top of one), so the conversion happens once here rather than in
+    // every shader that has a length in it. fog_shape.z is an absolute world voxel height.
+    f32 fog[4]{};          // xyz scattering coefficient, w extinction; both per voxel of path
+    f32 fog_shape[4]{};    // x Henyey-Greenstein g, y height scale in voxels, z the world
+                           //   height the coefficients are quoted at, w spare
 };
-static_assert(sizeof(TracePush) == 64, "TracePush must match the shader's push block");
+// Ninety-six bytes, which is inside the 128 every Vulkan implementation is required to offer —
+// the same bound src/gpu/render_params.hpp records having already been walked into once.
+static_assert(sizeof(TracePush) == 96, "TracePush must match the shader's push block");
 
 // Where the compiled shaders are.
 //
@@ -627,6 +663,8 @@ public:
 private:
     bool create_render_target(u32 width, u32 height);
     void destroy_render_target();
+    // The window scaled by render_scale_, which is what the render targets are sized to.
+    VkExtent2D scaled_extent() const;
     void handle_resize();
     void record_frame(f32 time_seconds);
     void update_quality();
@@ -662,6 +700,11 @@ private:
     // the world rather than on the screen, turning the camera does not throw the work away.
     GpuBuffer face_cache_;
     bool face_cache_dirty_ = true;
+    // Whole-frame numbers the tracer adds up on the GPU, so that next frame can be exposed
+    // for the picture this one turned out to be. See gpu/render_params.hpp for the layout and
+    // for why there are two slots rather than one.
+    GpuBuffer frame_stats_;
+    bool frame_stats_zeroed_ = false;   // the very first frame has no previous frame to read
     bool path_trace_ = false;
     u32 trace_samples_ = 0;      // samples accumulated since the last reset
 
@@ -688,6 +731,11 @@ private:
     u32 light_count_ = 0;
     bool lights_dirty_ = true;
 
+    // The medium, already in the shader's units. Converted once, when the clip's resolution is
+    // known, rather than per frame or per shader: see the note on --fog.
+    f32 fog_[4]{};
+    f32 fog_shape_[4]{};
+
     AutoQuality quality_;
     u32 applied_quality_level_ = 0xFFFFFFFFu;   // what the renderer is currently set to
     bool benchmark_pending_ = false;
@@ -704,10 +752,6 @@ private:
     bool flying_ = false;
     f64 fly_state_[5]{-22.0, 5.0, -22.0, 45.0, -8.0};   // x, y, z, yaw, pitch
     f64 fly_velocity_[4]{};                             // vx, vy, vz, vyaw
-    // Not a quality setting so much as a safety net: Russian roulette decides when a path
-    // stops, weighted by how much light it can still carry, so paths end when they stop
-    // mattering rather than at a fixed depth. This only bounds the pathological case.
-    u32 trace_bounces_ = 64;
     // Shell thickness in voxels for anything the tools place. 0 is solid. Shared by the
     // chisel and the clipboard, because it is a property of how you are building rather than
     // of which tool is in your hand.
@@ -723,6 +767,11 @@ private:
     Camera camera_;
     u32 debug_mode_ = 0;
     f32 detail_bias_ = 1.0f;
+    // What fraction of the window the world is rendered at before being scaled up to it.
+    // Every render target is sized from this and every dispatch is sized from the targets, so
+    // this is the one place the saving comes from; the present blit already scales whatever it
+    // is given up to the swapchain.
+    f32 render_scale_ = 1.0f;
     bool mouse_look_ = false;
     // The click that captures the mouse must not also start a cut. Set when capture
     // happens, cleared when every button has come back up.
@@ -872,6 +921,21 @@ void Application::destroy_render_target() {
     if (accum_image_.valid()) destroy_image(device_, accum_image_);
 }
 
+// Both axes scale by the same number and neither is rounded to the workgroup, because the
+// aspect ratio has to survive: the dispatch already rounds up and the shaders already discard
+// invocations past the resolution in the parameter block — they must, since a 1600x900 window
+// was never a multiple of eight either. Rounding the height up to 592 from 585 would stretch
+// the picture by a percent on one axis only, which is exactly the kind of fault that gets
+// blamed on the lens.
+VkExtent2D Application::scaled_extent() const {
+    const VkExtent2D window = swapchain_.extent();
+    const f32 scale = std::clamp(render_scale_, 0.25f, 1.0f);
+    auto axis = [scale](u32 pixels) {
+        return std::max(8u, static_cast<u32>(static_cast<f32>(pixels) * scale + 0.5f));
+    };
+    return {axis(window.width), axis(window.height)};
+}
+
 void Application::handle_resize() {
     // The window reports a size change on the first frame even when nothing moved;
     // rebuilding the swapchain for that is pure waste.
@@ -882,7 +946,8 @@ void Application::handle_resize() {
     device_.wait_idle();
     if (!swapchain_.recreate(window_.width(), window_.height())) return;
     destroy_render_target();
-    create_render_target(swapchain_.extent().width, swapchain_.extent().height);
+    const VkExtent2D render = scaled_extent();
+    create_render_target(render.width, render.height);
 }
 
 
@@ -917,6 +982,27 @@ void Application::build_world() {
             }
         }
         if (options_.clip_metre > 0) script.settings.voxels_per_metre = options_.clip_metre;
+
+        // The air, in the shader's units, now that the clip has said how big a metre is.
+        //
+        // Authored as extinction per metre, a single-scattering albedo, an asymmetry and a scale
+        // height in metres. Extinction is what the fog takes out of a beam; the albedo is how
+        // much of that it puts back rather than absorbing, and splitting them that way is what
+        // lets smoke and mist be told apart with one number rather than four.
+        if (!options_.fog.empty()) {
+            f64 authored[5] = {0.0, 0.9, 0.0, 0.0, 0.0};
+            parse_reals(options_.fog, authored, 5);
+            const f64 per = static_cast<f64>(script.settings.voxels_per_metre);
+            const f64 extinct = std::max(authored[0], 0.0) / per;
+            const f64 albedo = std::clamp(authored[1], 0.0, 1.0);
+            fog_[0] = fog_[1] = fog_[2] = static_cast<f32>(extinct * albedo);
+            fog_[3] = static_cast<f32>(extinct);
+            fog_shape_[0] = static_cast<f32>(authored[2]);
+            fog_shape_[1] = static_cast<f32>(authored[3] * per);
+            fog_shape_[2] = static_cast<f32>(authored[4] * per);
+            WS_LOG_INFO("clip", "fog {:.4f}/voxel, albedo {:.2f}, g {:.2f}, scale {:.1f} voxels",
+                        extinct, albedo, fog_shape_[0], fog_shape_[1]);
+        }
 
         // Building one named part on its own, so a fragment can be looked at without the rest of
         // the building standing around it.
@@ -1556,25 +1642,49 @@ void Application::update_quality() {
 
 // Push the current level's knobs into the things that read them.
 //
-// All of these are read fresh every frame — from the parameter block or the push constants —
-// so changing a level costs nothing and cannot fail. Nothing is rebuilt and nothing waits on
-// the device.
+// Most of these are read fresh every frame — from the parameter block or the push constants —
+// so changing a level costs nothing and cannot fail.
 //
-// resolution_scale is the exception and is deliberately *not* applied yet. The dispatch size,
-// the parameter block's resolution and the descriptor-bound images all derive from the
-// swapchain extent, so rendering smaller than the window means changing all three together
-// and getting the blit to scale up. That is a real change to the frame's structure rather
-// than a knob, and shipping it unverified is how the last several faults got in. The ladder
-// carries the value so the ordering is already decided; the wiring is the next piece of work.
+// Resolution is the exception, and it is the reason this function can be slow. Rendering
+// smaller than the window means new images, new descriptors and a new dispatch size, so the
+// device has to be idle before the old ones go away. That is a stall of a millisecond or two,
+// taken at most once every twenty frames (kFramesToDrop in game/quality.cpp) and only on the
+// three rungs where the scale actually changes — 3 to 2, 2 to 1, 1 to 0. Everything above
+// level 3 renders at the window size and never pays it. Paying it here is what makes the
+// dispatch and the accumulation image genuinely smaller; scaling on presentation alone would
+// have traced the same pixels and saved nothing.
+//
+// This must not be called with a frame already recording — the images it frees are bound to
+// the descriptor sets that frame is using. The one caller is update_quality(), which runs
+// before the swapchain frame is begun.
 void Application::apply_quality() {
     const QualityKnobs& knobs = quality_.knobs();
     detail_bias_ = knobs.detail_bias;
-    trace_bounces_ = knobs.bounce_limit;
+
+    if (knobs.resolution_scale != render_scale_) {
+        render_scale_ = knobs.resolution_scale;
+        const VkExtent2D render = scaled_extent();
+        if (render_target_.valid() &&
+            (render.width != render_target_.extent.width ||
+             render.height != render_target_.extent.height)) {
+            device_.wait_idle();
+            destroy_render_target();
+            create_render_target(render.width, render.height);
+            WS_LOG_INFO("quality", "rendering at {}x{} of a {}x{} window ({:.0f}%)",
+                        render.width, render.height, swapchain_.extent().width,
+                        swapchain_.extent().height, render_scale_ * 100.0f);
+        }
+    }
 }
 
 void Application::record_frame(f32 time_seconds) {
     const VkCommandBuffer cmd = swapchain_.cmd();
     const VkExtent2D extent = swapchain_.extent();
+    // The world is rendered at this size and the window is filled from it by the present
+    // blit. The two are the same at every quality level above 2; below that they are not, and
+    // anything measured in pixels of the *picture* — the dispatch, the parameter block's
+    // resolution, the bandwidth counter — has to use this one rather than the window's.
+    const VkExtent2D render_extent = render_target_.extent;
 
     profiler_.begin_frame(cmd, swapchain_.frame_index());
     feedback_.begin_frame(cmd);
@@ -1954,8 +2064,8 @@ void Application::record_frame(f32 time_seconds) {
         }
     }
 
-    params.resolution[0] = extent.width;
-    params.resolution[1] = extent.height;
+    params.resolution[0] = render_extent.width;
+    params.resolution[1] = render_extent.height;
     params.resolution[2] = debug_mode_;
     params.resolution[3] = kFeedbackCapacity;
     params.lens[0] = camera_.tan_half_fov();
@@ -2117,6 +2227,54 @@ void Application::record_frame(f32 time_seconds) {
             face_cache_dirty_ = false;
         }
 
+        // Carry this frame's brightness forward and start a fresh count.
+        //
+        // Slot 1 is given whatever slot 0 finished the last traced frame as, and only then is
+        // slot 0 zeroed — so while the shader adds into an empty slot 0 it can read a whole,
+        // still slot 1 and expose for it. Doing it here rather than at the end of the frame
+        // means one place to look and no dependence on where a frame is considered to end.
+        {
+            auto memory_barrier = [cmd](VkPipelineStageFlags2 src_stage, VkAccessFlags2 src,
+                                        VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst) {
+                VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+                barrier.srcStageMask = src_stage;
+                barrier.srcAccessMask = src;
+                barrier.dstStageMask = dst_stage;
+                barrier.dstAccessMask = dst;
+                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                dependency.memoryBarrierCount = 1;
+                dependency.pMemoryBarriers = &barrier;
+                vkCmdPipelineBarrier2(cmd, &dependency);
+            };
+
+            constexpr VkDeviceSize kSlot = sizeof(FrameStatistics);
+            memory_barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT,
+                           VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            if (frame_stats_zeroed_) {
+                VkBufferCopy carry{};
+                carry.srcOffset = 0;
+                carry.dstOffset = kSlot;
+                carry.size = kSlot;
+                vkCmdCopyBuffer(cmd, frame_stats_.buffer, frame_stats_.buffer, 1, &carry);
+                // The fill overwrites what the copy just read, which is a hazard the hardware
+                // will not spot on its own.
+                memory_barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
+                               VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                vkCmdFillBuffer(cmd, frame_stats_.buffer, 0, kSlot, 0);
+            } else {
+                // Nothing has been measured yet, so there is no previous frame worth keeping
+                // and both slots go to zero. Device memory arrives uninitialised, and a first
+                // frame exposed for whatever was left in it would flash.
+                vkCmdFillBuffer(cmd, frame_stats_.buffer, 0, VK_WHOLE_SIZE, 0);
+                frame_stats_zeroed_ = true;
+            }
+            memory_barrier(VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT,
+                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+        }
+
         profiler_.begin_pass(cmd, "pathtrace", 1000.0);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.pipeline());
         const u32 trace_offset =
@@ -2142,17 +2300,18 @@ void Application::record_frame(f32 time_seconds) {
         trace.sun_colour[1] = 3.05f;
         trace.sun_colour[2] = 2.75f;
         trace.control[0] = trace_samples_;
-        trace.control[1] = trace_bounces_;
         trace.control[2] = static_cast<u32>(frame_counter_);   // for cache eviction
         trace.quality[0] = quality_.knobs().refine_stride;
         trace.quality[1] = quality_.knobs().shadow_target;
         trace.quality[2] = (shadow_refresh_frames_ > 0) ? 1u : 0u;
         trace.quality[3] = light_count_;
+        std::memcpy(trace.fog, fog_, sizeof(trace.fog));
+        std::memcpy(trace.fog_shape, fog_shape_, sizeof(trace.fog_shape));
         if (shadow_refresh_frames_ > 0) --shadow_refresh_frames_;
         vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(TracePush), &trace);
 
-        vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+        vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
         profiler_.end_pass(cmd);
         ++trace_samples_;
 
@@ -2176,8 +2335,8 @@ void Application::record_frame(f32 time_seconds) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.layout(), 0, 1,
                             &descriptor_set_, 1, &params_offset);
 
-    vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
-    profiler_.add_bytes(static_cast<u64>(extent.width) * extent.height * 20);
+    vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
+    profiler_.add_bytes(static_cast<u64>(render_extent.width) * render_extent.height * 20);
     profiler_.end_pass(cmd);
 
     // ---- resolve --------------------------------------------------------------------
@@ -2195,8 +2354,8 @@ void Application::record_frame(f32 time_seconds) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, resolve_.pipeline());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, resolve_.layout(), 0, 1,
                             &resolve_set_, 1, &params_offset);
-    vkCmdDispatch(cmd, (extent.width + 7) / 8, (extent.height + 7) / 8, 1);
-    profiler_.add_bytes(static_cast<u64>(extent.width) * extent.height * 20);
+    vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
+    profiler_.add_bytes(static_cast<u64>(render_extent.width) * render_extent.height * 20);
     profiler_.end_pass(cmd);
     }   // !path_trace_
 
@@ -2215,13 +2374,16 @@ void Application::record_frame(f32 time_seconds) {
                   VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_BLIT_BIT,
                   VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
+    // This is also where a scaled render is put back to the size of the window: source is the
+    // render target at whatever the quality level chose, destination is the whole swapchain
+    // image, and the filter below does the stretching. Nothing else in the frame needs to know.
     profiler_.begin_pass(cmd, "blit", 0.4);
     VkImageBlit2 region{VK_STRUCTURE_TYPE_IMAGE_BLIT_2};
     region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     region.srcSubresource.layerCount = 1;
     region.dstSubresource = region.srcSubresource;
-    region.srcOffsets[1] = {static_cast<i32>(render_target_.extent.width),
-                            static_cast<i32>(render_target_.extent.height), 1};
+    region.srcOffsets[1] = {static_cast<i32>(render_extent.width),
+                            static_cast<i32>(render_extent.height), 1};
     region.dstOffsets[1] = {static_cast<i32>(extent.width), static_cast<i32>(extent.height), 1};
 
     VkBlitImageInfo2 blit{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
@@ -2412,6 +2574,14 @@ int Application::run(const Options& options) {
     WS_LOG_INFO("app", "face cache: {} entries, {} MB", kFaceCacheEntries,
                 (kFaceCacheEntries * 32) >> 20);
 
+    // Thirty-two bytes for the whole frame's brightness. TRANSFER_SRC on top of the storage
+    // usage because this frame's slot is copied over the previous one before it is zeroed, and
+    // create_device_buffer only asks for TRANSFER_DST.
+    frame_stats_ = create_device_buffer(
+        device_, sizeof(FrameStatistics) * kFrameStatsSlots,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        "frame statistics");
+
     const u64 clip_bytes = kMaxClipPoolCells * sizeof(u32);
     clip_buffer_ = create_device_buffer(device_, clip_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                         "clip cells");
@@ -2492,10 +2662,11 @@ int Application::run(const Options& options) {
     // includes the same traversal, so the binding numbers come with it — then the parameter
     // block at 13 and the type tables at 14 and 15.
     {
-        // Nineteen: the two images, the world, the parameter block, the type tables, the
-        // clip, the face cache, and now the light list at 18.
-        VkDescriptorSetLayoutBinding trace_bindings[19]{};
-        for (u32 i = 0; i < 19; ++i) {
+        // Twenty: the two images, the world, the parameter block, the type tables, the clip,
+        // the face cache, the light list at 18, and the frame statistics at 19.
+        constexpr u32 kTraceBindings = kFrameStatsBinding + 1;
+        VkDescriptorSetLayoutBinding trace_bindings[kTraceBindings]{};
+        for (u32 i = 0; i < kTraceBindings; ++i) {
             trace_bindings[i].binding = i;
             trace_bindings[i].descriptorType =
                 (i < 2)     ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -2506,7 +2677,7 @@ int Application::run(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo trace_layout{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        trace_layout.bindingCount = 19;
+        trace_layout.bindingCount = kTraceBindings;
         trace_layout.pBindings = trace_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &trace_layout, nullptr,
                                           &pathtrace_layout_));
@@ -2518,7 +2689,10 @@ int Application::run(const Options& options) {
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &trace_alloc, &pathtrace_set_));
     }
 
-    create_render_target(swapchain_.extent().width, swapchain_.extent().height);
+    {
+        const VkExtent2D render = scaled_extent();
+        create_render_target(render.width, render.height);
+    }
 
     // Compiled shaders sit beside the executable, and *beside* means beside the one that is
     // running — asked at run time, not baked in at build time. The source tree location
@@ -2608,14 +2782,19 @@ int Application::run(const Options& options) {
     // because it includes the same traversal and the binding numbers come with it, plus the
     // type tables at 14 and 15 so a hit becomes a material.
     {
-        constexpr u32 kTraceBuffers = kBufferBindings + 5;   // world, types, visuals, clip, faces, lights
+        // world, types, visuals, clip, faces, lights, frame statistics
+        constexpr u32 kTraceBuffers = kBufferBindings + 6;
         const VkBuffer trace_buffers[kTraceBuffers]{
             marcher_buffers[0], marcher_buffers[1], marcher_buffers[2],  marcher_buffers[3],
             marcher_buffers[4], marcher_buffers[5], marcher_buffers[6],  marcher_buffers[7],
             marcher_buffers[8], marcher_buffers[9], marcher_buffers[10], world_buffers_.types(),
             world_buffers_.visuals(), clip_buffer_.buffer,   face_cache_.buffer,
-            light_buffer_.buffer,
+            light_buffer_.buffer, frame_stats_.buffer,
         };
+        // The last buffer in that list is the frame statistics, and the binding it lands on
+        // has to be the one the shader and gpu/render_params.hpp agree about.
+        static_assert(2 + (kTraceBuffers - 1) + 1 == kFrameStatsBinding,
+                      "the frame statistics must land on kFrameStatsBinding");
         VkDescriptorBufferInfo trace_infos[kTraceBuffers]{};
         VkWriteDescriptorSet trace_writes[kTraceBuffers + 1]{};
         for (u32 i = 0; i < kTraceBuffers; ++i) {
@@ -2624,7 +2803,8 @@ int Application::run(const Options& options) {
             trace_infos[i].range = VK_WHOLE_SIZE;
             trace_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             trace_writes[i].dstSet = pathtrace_set_;
-            // 2..12 are the world, 13 is the parameter block, then 14 and 15.
+            // 2..12 are the world, 13 is the parameter block, then 14 upwards in order —
+            // which lands the frame statistics on kFrameStatsBinding.
             trace_writes[i].dstBinding = (i < kBufferBindings) ? (2 + i) : (2 + i + 1);
             trace_writes[i].descriptorCount = 1;
             trace_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -2851,7 +3031,7 @@ int Application::run(const Options& options) {
         if (window_.minimised()) continue;
         if (window_.resized_this_frame() || swapchain_.needs_recreate()) handle_resize();
 
-            update_quality();
+        update_quality();
         update_lights();
 
         // Where the camera was standing and what it was doing, refreshed every frame, so a
@@ -2935,6 +3115,7 @@ int Application::run(const Options& options) {
     feedback_.destroy();
     destroy_buffer(device_, params_buffer_);
     destroy_buffer(device_, face_cache_);
+    destroy_buffer(device_, frame_stats_);
     destroy_buffer(device_, clip_buffer_);
     destroy_buffer(device_, clip_staging_);
     destroy_buffer(device_, light_buffer_);
