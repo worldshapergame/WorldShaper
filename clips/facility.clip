@@ -94,7 +94,20 @@ let hollowed = difference {
 # Twelve millimetres of grain over everything, which is under half a voxel at full detail, so it
 # moves no wall — and is the difference between a face that reads as carved stone and one that
 # reads as a drawing of carved stone.
-let all = displace { hollowed grain_fine } amount=0.012
+let grained = displace { hollowed grain_fine } amount=0.012
+
+# --- where the origin is ---------------------------------------------------------------------
+#
+# The player spawns at 0,0,0 and should be standing in the middle of the rotunda floor looking out
+# of the main door, so the BUILDING is moved to meet that rather than the spawn being moved to meet
+# the building. Anything else means the one coordinate everybody types is an arbitrary spot in a
+# field, and every camera argument in every test becomes a number nobody can reason about.
+#
+# The rotunda floor is a cylinder centred at y 1.7325 and 0.135 thick, so its top face is at 1.80.
+# The origin wants to be an eye height above that, which puts the shift at 1.80 + 1.70 = 3.50 m
+# down. Its centre is already at x 0, z 0 — the plan was drawn around it — so nothing moves
+# sideways, and the main door is on the minus-z face at z -7.35, which is the way the spawn looks.
+let all = translate { grained } 0 -3.50 0
 
 variation colour=0.030 rough=0.070 seed=17
 

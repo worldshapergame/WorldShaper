@@ -3395,8 +3395,12 @@ int Application::run(const Options& options) {
     // somebody's eyes, and looks back at the steps and the columns above them. Three quarters
     // rather than square on, because a portico read head-on is a row of verticals and read at an
     // angle is a building.
-    camera_.set_position_metres(-9.0, 2.6, -25.0);
-    camera_.set_look(62.0, 4.0);
+    // The origin, standing in the middle of the rotunda looking out of the main door.
+    //
+    // Yaw of minus ninety because forward is (cos yaw, sin pitch, sin yaw) — so minus ninety is
+    // straight down negative z, and the main door is the opening at z -7.35 on that face.
+    camera_.set_position_metres(0.0, 0.0, 0.0);
+    camera_.set_look(-90.0, 0.0);
     if (!options_.camera.empty()) {
         f64 values[5]{-22.0, 5.0, -22.0, 45.0, -8.0};
         const char* cursor = options_.camera.c_str();

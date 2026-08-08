@@ -67,7 +67,7 @@
 # metres do not fit in a dense array. They are the world's problem, not this building's, and
 # pretending otherwise here would only make the building slower.
 metre 32
-bounds -17 -0.9 -16.5   17 20 8.5
+bounds -17 -4.4 -16.5   17 16.5 8.5   # y shifted 3.50 down with the building; see facility.clip
 
 # --- the order, as dials -------------------------------------------------------------------
 #
