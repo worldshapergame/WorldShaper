@@ -1295,7 +1295,7 @@ void Application::pump_refinement() {
     if (next == 1) {
         forge::apply_variation(refine_result_->clip, types_, refine_script_->field,
                                refine_script_->variation, refine_script_->settings,
-                               *refine_result_, nullptr);
+                               *refine_result_, refine_jobs_.get());
     }
 
     const PasteStats stamped = paste_clip(world_, ledger_, refine_result_->clip,
@@ -1311,8 +1311,11 @@ void Application::pump_refinement() {
                //
                // Clearing the player's edits along with it is correct, because they are put back
                // immediately below and put back at the new detail.
-               PasteMode::Replace, MatterReason::PlayerPlace, 1, nullptr, types_.type_count(),
-               next);
+               // With the workers. Passing nullptr here ran the paste on ONE core, and it is the
+               // same paste the initial build does across all of them in a second and a half —
+               // twenty-two seconds of frozen frame for want of an argument.
+               PasteMode::Replace, MatterReason::PlayerPlace, 1, refine_jobs_.get(),
+               types_.type_count(), next);
 
     // Replace writes air wherever the clip is empty, and a chunk that is asked for and then filled
     // with nothing still exists. Without this the count climbs every rung — a hundred and twenty

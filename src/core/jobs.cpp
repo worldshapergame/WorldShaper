@@ -28,10 +28,15 @@ struct JobSystem::Impl {
 JobSystem::JobSystem(u32 worker_count) : impl_(std::make_unique<Impl>()) {
     if (worker_count == 0) {
         const u32 hardware = std::thread::hardware_concurrency();
-        // One held back, not two. The reserved core is for the thread that submitted the work,
-        // which on a clip build sits waiting rather than competing; leaving a second one idle gave
-        // eight workers on a ten core machine and twenty per cent of the machine to nobody.
-        worker_count = (hardware > 2) ? hardware - 1 : 1;
+        // TWO held back, and the second one is not waste.
+        //
+        // Taking it was tried, on the argument that the submitting thread waits during a clip build
+        // and a ten core machine was giving twenty per cent to nobody. That argument is only about
+        // the build. For the whole rest of the program the submitting thread is the RENDER thread,
+        // and it does not wait — it competes, along with the driver's own threads, for whatever the
+        // pool has left. Nine workers on ten cores buys a one-off build a few per cent and charges
+        // every frame after it for the privilege.
+        worker_count = (hardware > 3) ? hardware - 2 : 1;
     }
     worker_count_ = worker_count;
 
