@@ -161,6 +161,7 @@ endif()
 # --------------------------------------------------------------------------------------
 set(WS_APP_SOURCES
     src/app/main.cpp
+    src/app/loading.cpp
     src/app/updater.cpp
     src/debug/hud.cpp)
 

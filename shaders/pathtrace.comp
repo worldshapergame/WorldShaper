@@ -1558,6 +1558,7 @@ vec3 why_dark(Material m, FaceLight light) {
 const float kAccumWindow = 1024.0;
 
 #include "pt_media.glsl"
+#include "ui.glsl"
 #include "pt_post.glsl"
 
 void main() {
