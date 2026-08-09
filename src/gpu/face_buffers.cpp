@@ -333,7 +333,7 @@ bool FaceBuffers::audit(const FaceStore& store) {
             u64 sample_sum = 0;
             f64 facing_sum = 0.0;
             for (u32 slot = 0; slot < watermark; ++slot) {
-                if (face_samples(card[slot]) < kFaceSettled) continue;
+                if (face_samples(card[slot]) < kFaceEager) continue;
                 ++settled;
                 const u32 direction = face_direction(card[slot]);
                 if (direction >= 6) continue;

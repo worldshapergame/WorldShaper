@@ -168,6 +168,18 @@ struct Options {
     // benchmark that flies past the building in the first second measures empty sky.
     std::string orbit;
 
+    // frame,x,y,z,yaw,pitch — the camera jumps, once, at that measured frame.
+    //
+    // The instrument for anything that has to catch up with the view: light, streaming, residency.
+    // Every other camera here moves smoothly, and smooth motion reveals a sliver of new world per
+    // frame, so it measures the *rate* a system converges at while hiding what it does when handed
+    // a whole screen at once. A cut is the worst case and it is also the ordinary one — turning
+    // round in a doorway is a cut as far as the face store is concerned.
+    //
+    // Counted in MEASURED frames, so with --settle it fires after the world has stopped building
+    // and the only thing missing from the new view is the thing under test.
+    std::string cut;
+
     // Scripted chisel, for checking the tool without a person holding the mouse.
     // --edit "x0,y0,z0,x1,y1,z1,material" applies one edit through the history at startup;
     // material 0 carves. --preview takes the same six numbers plus a state (1 carve,
@@ -246,6 +258,8 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.orbit = argv[++i];
         } else if (arg == "--fly") {
             if (i + 1 < argc) options.fly = argv[++i];
+        } else if (arg == "--cut") {
+            if (i + 1 < argc) options.cut = argv[++i];
         } else if (arg == "--edit") {
             if (i + 1 < argc) options.edit = argv[++i];
         } else if (arg == "--preview") {
@@ -361,6 +375,9 @@ void print_help() {
         "  --benchmark           measure this machine again and save the result\n"
         "  --fly vx,vy,vz,vyaw   move the camera every frame (m/s, deg/s), so a screenshot\n"
         "                        is of the moving picture rather than a settled one\n"
+        "  --cut f,x,y,z,yaw,pitch  jump the camera once, at measured frame f. The worst case\n"
+        "                        for anything that has to catch up with the view, and what\n"
+        "                        turning round in a doorway looks like to the face store\n"
         "  --crash-test KIND     prove crash reporting works: read, write, check, throw,\n"
         "                        divzero, frame (faults in-game), report (no crash)\n"
         "  --clip x0,..,z1,dx,dy,dz,copies,turn   scripted clipboard ghost\n"
@@ -1002,6 +1019,11 @@ private:
     f64 orbit_[4]{30.0, 6.0, 25.0, 26.0};   // radius, height, degrees a second, how far in and out
     f64 orbit_angle_ = 0.0;
     bool orbiting_ = false;
+
+    // --cut: where the camera jumps to, and at which measured frame. See Options::cut.
+    f64 cut_pose_[5]{};
+    u64 cut_at_ = 0;
+    bool cut_pending_ = false;
     f64 fly_velocity_[4]{};                             // vx, vy, vz, vyaw
     // Shell thickness in voxels for anything the tools place. 0 is solid. Shared by the
     // chisel and the clipboard, because it is a property of how you are building rather than
@@ -3067,16 +3089,23 @@ void Application::record_frame(f32 time_seconds) {
         last_node_evicted_ = node_batch.evicted;
         last_node_deferred_ = node_batch.deferred;
         node_buffers_.upload(cmd, node_pool_);
-        // The face store's own mirror. Nothing reads it on the card yet; it is uploaded from the
-        // first frame so that the audit is checking a real difference rather than two empty
-        // buffers agreeing with each other.
-        face_buffers_.upload(cmd, face_store_);
         profiler_.add_bytes(node_buffers_.stats().uploaded_this_frame);
         profiler_.end_pass(cmd);
     }
 
     profiler_.begin_pass(cmd, "streaming", 0.8);
     stream(static_cast<f64>(time_seconds));
+
+    // The face store's mirror, AFTER the claims rather than before them.
+    //
+    // It used to be uploaded beside the node pool, which is recorded a few lines above `stream()` —
+    // so every face claimed this frame missed this frame's copy and reached the card on the next
+    // one. A whole frame of latency on the newest faces, spent on nothing, and invisible because
+    // the picture it produces is the one that arrives anyway a frame later. `shade_faces` is
+    // dispatched far below this point, so the only thing that ever needed the earlier position was
+    // the audit, which reads the CPU's copy and not the card's.
+    face_buffers_.upload(cmd, face_store_);
+    profiler_.add_bytes(face_buffers_.stats().uploaded_this_frame);
     const u64 residency_start = now_ns();
     const UploadBatch& batch = residency_.update(world_, frame_counter_);
     residency_ms_ = ns_to_ms(now_ns() - residency_start);
@@ -4675,6 +4704,13 @@ int Application::run(const Options& options) {
         for (u32 i = 0; i < 4; ++i) orbit_[i] = values[i];
         orbiting_ = true;
     }
+    if (!options_.cut.empty()) {
+        f64 values[6] = {30.0, 0.0, 0.0, 0.0, 90.0, 0.0};
+        parse_reals(options_.cut, values, 6);
+        cut_at_ = static_cast<u64>(values[0] < 0.0 ? 0.0 : values[0]);
+        for (u32 i = 0; i < 5; ++i) cut_pose_[i] = values[i + 1];
+        cut_pending_ = true;
+    }
     if (!options_.fly.empty()) {
         const char* cursor = options_.fly.c_str();
         for (u32 i = 0; i < 4 && *cursor != '\0'; ++i) {
@@ -4924,6 +4960,21 @@ int Application::run(const Options& options) {
             fly_state_[3] += fly_velocity_[3] * kStep;
             camera_.set_position_metres(fly_state_[0], fly_state_[1], fly_state_[2]);
             camera_.set_look(fly_state_[3], fly_state_[4]);
+        }
+
+        // The cut, after the smooth motion so it wins, and once.
+        //
+        // Gated on the measurement window having started, which under --settle means the world has
+        // stopped building — so what the new view is missing is faces and nothing else. Without
+        // that gate the cut fires during the load and measures streaming again, which is the
+        // confusion this instrument exists to end.
+        if (cut_pending_ && (!options_.settle || settled_seen_) &&
+            frame_counter_ - settle_frame_ >= cut_at_) {
+            camera_.set_position_metres(cut_pose_[0], cut_pose_[1], cut_pose_[2]);
+            camera_.set_look(cut_pose_[3], cut_pose_[4]);
+            for (u32 i = 0; i < 5; ++i) fly_state_[i] = cut_pose_[i];
+            cut_pending_ = false;
+            WS_LOG_INFO("frame", "camera cut at measured frame {}", cut_at_);
         }
         update_tools(input, chisel_has_wheel, clipboard_has_wheel, (dt > 0.1) ? 0.1 : dt);
 

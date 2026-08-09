@@ -434,6 +434,34 @@ Falling back to full sun, enclosed room, from a cold store: **under 1% at frame 
 78**, and 2,978 wrong pixels against 283,291 at frame 40. GPU unchanged still and turning, settled
 picture bit-identical, store +3.0%. D308–D311.
 
+### Shadow latency, and the number to beat (stage one done)
+
+The user asked for the wait before a surface has any shadow to be cut to **a hundredth**, in stages.
+Measure it with `--cut` (D312), which jumps the camera once at a given measured frame — under
+`--settle` the world has stopped building, so what the new view is missing is light and nothing
+else. Instrument: `--debug-mode 16`, magenta plus blue as a share of surface.
+
+Enclosed room, 180° cut, share of surface on the full-sun fallback:
+
+| | cut+1 | cut+2 | cut+3 | cut+5 | cut+8 | cut+15 |
+|---|---|---|---|---|---|---|
+| before stage one | 100% | 100% | 100% | 100% | 6.8% | 0.3% |
+| **now** | 100% | 100% | 73.9% | 2.6% | 0.6% | 0.2% |
+
+Stage one was two pieces of waste, both free to remove: the face mirror was uploaded *above* the
+line that claims faces, and the composite refused to read a face until it had four samples while
+showing full sun in the meantime (D313, D314). **The two frames still at 100% are the feedback round
+trip** — report on frame N, CPU reads it on N+2 because that is when N retires. No arrangement of
+CPU code shortens that.
+
+**Stage two is claiming the face on the card**, in the pass that discovers it, so a face exists in
+the same frame a ray first lands on it. Note before starting: `shade_faces` is dispatched *after*
+the visibility pass and *before* the composite in the same command buffer, so a face claimed during
+visibility can be shaded and read in that frame — zero latency is reachable. The hard part is not
+the atomics, it is that the CPU currently owns face identity and does the eviction, the mirror and
+the audit; D295 and D307 are both faults on exactly that seam. Read D315 first for the thing that
+looks like a shortcut and is not.
+
 **What is left of R3c**: sky, lamps and bounce, all on the same one-invocation-per-face footing.
 **R3d** deletes the per-pixel light path, and carries one debt from here — split `GpuFace` so the
 CPU's half and the card's half are never in one copy, which is what makes bug 5 impossible rather

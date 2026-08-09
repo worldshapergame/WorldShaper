@@ -193,7 +193,23 @@ bool face_live_of(uint packed) { return (packed & (1u << 23)) != 0u; }
 // in eight bits cannot be updated without eventually rounding back to itself.
 uint face_samples_of(uint counters) { return counters & 0xFFFFu; }
 uint face_lit_of(uint counters) { return (counters >> 16) & 0xFFFFu; }
-const uint kFaceSettled = 4u;    // samples before the light is worth reading
+// Samples before the light is worth reading, and it is ONE.
+//
+// It was four, and four is three frames of the composite lighting a surface with full sun -- which
+// indoors is not a cautious answer, it is the worst answer available. The reasoning for four was
+// that a single sample is binary, so a face reads as fully lit or fully shadowed with nothing in
+// between; that is true and it is the wrong comparison. One sample is NOISY and unbiased: in a room
+// where the true answer is 0.05, nineteen faces in twenty read black immediately and the twentieth
+// is wrong for a frame. Full sun is every face wrong, for four frames, in the same direction.
+//
+// Bias is what a player sees as "the shadows have not arrived yet"; variance is what they see as a
+// speckle that is gone before it registers, and it is what R5's denoise exists to take. The face
+// keeps accumulating to kFaceWindow either way -- this gates only when the answer may be READ.
+const uint kFaceSettled = 1u;
+// And how long a face is exempt from the shading stride, which is a different question with a
+// different answer: a face that may be read at one sample is still converging at four, so it keeps
+// its ray every frame until it has enough of them to be worth refreshing rather than finishing.
+const uint kFaceEager = 4u;
 const uint kFaceWindow = 256u;   // where both counts halve, so the sun may move
 
 // How far above a face its STAND-IN sits: the coarse face the composite reads while the fine one

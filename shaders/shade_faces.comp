@@ -63,7 +63,7 @@ void main() {
     // faces falls, which is the right thing to give up: they are watching a sun that has not
     // moved. See kFacesPerFrame in src/app/main.cpp.
     const uint samples = face_samples_of(face.counters);
-    if (node_push.face_stride > 1u && samples >= kFaceSettled &&
+    if (node_push.face_stride > 1u && samples >= kFaceEager &&
         ((slot + node_push.frame) % node_push.face_stride) != 0u) {
         return;
     }

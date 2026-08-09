@@ -52,13 +52,16 @@ layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
 
 const uint kNoFace = 0xFFFFFFFFu;
 
-// How many samples a face needs before its shadow is worth showing.
+// How many samples a face needs before its shadow is worth showing. Must match kFaceSettled in
+// shaders/node.glsl, which is where the reasoning for the number is.
 //
-// One sample is not a penumbra, it is a coin toss, and showing it makes an edge crawl while the
-// average settles. Below this the face reports fully lit and the picture is exactly what it was
-// before this pass existed -- so a face appearing is a shadow fading in over a few frames rather
-// than a black square blinking on.
-const uint kShadowSettled = 4u;
+// It was four, on the argument that one sample is not a penumbra but a coin toss, and that showing
+// it makes an edge crawl while the average settles. Both halves of that are true. What the argument
+// left out is what is shown INSTEAD, which is full sun -- so the choice was never "noisy or clean",
+// it was "wrong by a coin toss on one face in twenty" against "wrong on every face, in the same
+// direction, for four frames". Below this the face still reports fully lit; there are simply far
+// fewer frames in which it does.
+const uint kShadowSettled = 1u;
 
 // The cloud volume the cloud pass keeps, at full resolution. Two images alternating; the parity
 // arrives in the push constant, the same as in the path tracer.

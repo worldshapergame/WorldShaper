@@ -744,6 +744,38 @@ store grows by the stand-ins themselves: **113,043 faces → 116,389** on the en
 inside the harness's own run-to-run spread on that column (0.7 ms between two runs of one build),
 which is why D309's ungated variant needed three runs a side to be seen at all.
 
+## The renderer rewrite — shadow latency, stage one of getting it to a hundredth
+
+D308 gave a face with no light of its own something to read. This is the other half of the same
+report: how long a face waits before it has light at all. Asked for as *"make shadows load faster
+drastically and less falling back to full sun — in stages, to 1% of what they currently are"*.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D312 | **`--cut f,x,y,z,yaw,pitch`, because none of this was measurable** | — | Every other camera in the harness moves smoothly, and smooth motion reveals a sliver of new world per frame — so it measures the *rate* the store converges at and hides what happens when it is handed a whole screen at once. A cut is the worst case and also the ordinary one: turning round in a doorway is a cut as far as the face store is concerned. Counted in *measured* frames, so under `--settle` it fires after the world has stopped building and the only thing the new view is missing is light. The first thing it showed was that the cold-store curve everything had been measured against was half streaming |
+| D313 | **The face store's mirror was uploaded above the line that fills it** | measurement | `face_buffers_.upload` sat a few lines *before* `stream()`, which is where claims happen — so every face claimed on a frame missed that frame's copy and reached the card on the next one. A whole frame of latency on exactly the faces that had none, spent on nothing, and invisible because the picture it produces is the one that arrives anyway a frame later. `shade_faces` is dispatched hundreds of lines below, so nothing ever needed the earlier position |
+| D314 | **The composite reads a face at one sample, not four** | user report | Four was three more frames of the fallback, and the fallback is full sun. The argument for four — one sample is a coin toss, not a penumbra — is true and is the wrong comparison, because it leaves out what is shown *instead*. In a room where every correct answer is shadow, the choice is **one face in twenty wrong for one frame** against **every face wrong for four, in the same direction**. Bias is what a player reads as "the shadows have not arrived yet"; variance is a speckle gone before it registers, and R5 is the stage that exists to take it. The old four keeps its other job under its own name, `kFaceEager`: a face that may be *read* at one sample is still *converging* at four, so it is never held back by the shading stride until then, and the audit counts it as evidence only above it |
+| D315 | **Rejected: tracing the missing samples as a burst in one invocation** | measurement | It works, and it costs more than it is worth. With the trip count dynamic the pass measured **0.699 ms against 0.559** in a frame where every face was settled and the loop ran exactly once — a quarter of the pass, paid for ever, to buy what D314 gives for nothing. Hoisting the first ray out of the loop and leaving only the extras inside made it **0.769**: two inlined marches are worse than one dynamic loop. Written down because the idea is the obvious one and will occur to the next person |
+
+**Measured, and this is the figure to beat.** Enclosed room, settled world, camera cut through 180°,
+share of surface lit by the full-sun fallback:
+
+| | cut+1 | cut+2 | cut+3 | cut+5 | cut+8 | cut+15 | cut+30 |
+|---|---|---|---|---|---|---|---|
+| before | 100% | 100% | 100% | 100% | 6.8% | 0.3% | 0.1% |
+| **after** | 100% | 100% | **73.9%** | **2.6%** | **0.6%** | **0.2%** | 0.1% |
+
+Five frames of a completely unshadowed room, then a sixth still mostly wrong, becomes two frames and
+a third that is a quarter right. The cold-store curve moves with it: under 1% at frame 25 rather
+than 30, and 21.0% against 45.2% at frame 20.
+
+**What is left is the feedback round trip**, and it is exactly the two frames still reading 100%: a
+face is reported by the visibility pass, read by the CPU two frames later because that is when the
+frame it was written in has retired, and claimed then. Nothing on the CPU can shorten it. **Stage
+two is claiming on the card**, in the pass that discovers the face, which is the only thing that
+removes those two frames — and the reason it is its own stage is that it moves who owns a face's
+identity, which is the fault line D295 and D307 are both written about.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

@@ -149,8 +149,19 @@ constexpr u32 face_direction(const GpuFace& f) { return (f.packed >> 8) & 0xFFu;
 constexpr u32 face_flags(const GpuFace& f) { return (f.packed >> 16) & 0xFFu; }
 
 // How many samples a face must have before its light is worth reading. Below this the composite
-// uses its own lighting, so a face fades in over a few frames rather than blinking.
-inline constexpr u32 kFaceSettled = 4;
+// uses its own lighting, which is full sun. Must match kFaceSettled in shaders/node.glsl.
+//
+// One, and it was four. Four meant three extra frames in which a newly claimed face was lit by the
+// fallback, and the fallback is not a cautious answer — indoors it is the worst answer available.
+// A single sample is a coin toss, so a face may read fully lit when the truth is 0.05; that is
+// one face in twenty wrong for one frame, against every face wrong for four.
+inline constexpr u32 kFaceSettled = 1;
+
+// How many it needs before it is worth REFRESHING rather than finishing, which is the other
+// question the number four was answering. A face below this is never held back by the shading
+// stride, and the audit counts it as evidence only above it: a face with one sample says nothing
+// about whether shadow rays work, which is what that log line exists to answer.
+inline constexpr u32 kFaceEager = 4;
 
 // Where the counts halve. A power of two so halving is exact, and low enough that a face notices
 // the sun moving within a second or so at sixty frames.
