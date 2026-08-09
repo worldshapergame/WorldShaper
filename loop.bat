@@ -53,6 +53,23 @@ $opt = @{
     # Set it to carry on rather than wait. The CLI re-tries the primary at the
     # start of each session, so it climbs back on its own once the window resets.
     FallbackModel  = "none"
+    # Where the session compacts its own context instead of letting it grow.
+    #
+    # This is the largest lever there is, because an iteration's price is its
+    # context multiplied by its turns and only this bounds the first term.
+    # Iteration 1 peaked at 209,858 tokens and resent 26.4 million; held at 100k
+    # the same 200 turns resend roughly half that. Compaction summarises rather
+    # than truncates, so nothing is lost outright - it is the cheapest of the
+    # three levers and the only one that costs no work.
+    Autocompact    = 100000
+    # A hard ceiling on one iteration's usage, in USD-equivalent at API rates.
+    #
+    # 0 is off, and off is the default DELIBERATELY: the cap cuts an iteration
+    # wherever it happens to be, so it can stop one mid-edit and waste what it
+    # had done. It is the only thing that GUARANTEES a window buys several
+    # iterations rather than one, so it is here - but as something chosen rather
+    # than something arrived at. Iteration 1 was 11.38, for scale.
+    MaxBudget      = 0
     # The account this loop is meant to run as. Empty means "whichever one Claude
     # Code is signed in as when it starts", which is then held for the whole run.
     Account        = ""
@@ -723,6 +740,9 @@ if ($opt.FallbackModel -and $opt.FallbackModel -ne "none") {
 } else {
     Write-Host ("Model:     " + $opt.Model + " only; it waits for the reset when that runs out") -ForegroundColor Green
 }
+$ctxLine = if ($opt.Autocompact -gt 0) { "compacts at {0:N0} tokens" -f $opt.Autocompact } else { "no context limit" }
+$budgetLine = if ($opt.MaxBudget -gt 0) { ", capped at {0:N2} USD-equivalent an iteration" -f $opt.MaxBudget } else { "" }
+Write-Host ("Context:   " + $ctxLine + $budgetLine) -ForegroundColor Green
 
 # What the plan will actually buy, said before the night rather than after it.
 #
@@ -845,6 +865,12 @@ try {
                            "--verbose", "--output-format", "stream-json")
         if ($opt.FallbackModel -and $opt.FallbackModel -ne "none") {
             $iterationArgs += @("--fallback-model", $opt.FallbackModel)
+        }
+        if ($opt.Autocompact -gt 0) {
+            $iterationArgs += @("--autocompact", "$($opt.Autocompact)")
+        }
+        if ($opt.MaxBudget -gt 0) {
+            $iterationArgs += @("--max-budget-usd", "$($opt.MaxBudget)")
         }
 
         # stream-json so the window shows the work as it happens rather than a
