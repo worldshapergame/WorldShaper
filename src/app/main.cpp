@@ -390,6 +390,13 @@ void print_help() {
 // minute in the world.
 constexpr f32 kGameSecondsPerSecond = 60.0f;
 
+// Faces the shading pass will trace a shadow ray for in one frame. A budget on the pass rather
+// than on the store: everything visible keeps a face, and how often a settled one is refreshed is
+// what gives. Measured at 0.185 ms for 19,196 faces, so this is aimed at rather under a
+// millisecond against the pass's 4.4 ms budget, leaving room for the sky and lamp rays R3c adds
+// to the same invocation.
+constexpr u32 kFacesPerFrame = 96u * 1024u;
+
 constexpr f32 kShutterFraction = 0.5f;
 
 // The longest streak, in pixels. A bound on cost rather than on looks: a fast spin can put a
@@ -1129,7 +1136,8 @@ private:
         f32 sun[4];
         u32 face_capacity;    // buckets in the face table
         u32 face_probes;
-        u32 pad[2];
+        u32 face_stride;      // shade one face in this many each frame
+        u32 pad[1];
     };
     NodePush make_node_push(u32 face_count) const;
 
@@ -2851,6 +2859,24 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.sun[3] = std::cos(0.5f * 3.14159265f / 180.0f);
     push.face_capacity = face_buffers_.entry_capacity();
     push.face_probes = 32u;
+
+    // How many frames a face waits between shadow rays, so the pass costs the same whatever is on
+    // screen. This is face SELECTION -- R3a's third box -- folded into the shading pass rather
+    // than run as its own compaction pass, because what costs is the ray and not the record read:
+    // an invocation that decides it is not due this frame reads thirty-two bytes and stops.
+    //
+    // It exists because faces became voxels. A brick-keyed store held nineteen thousand faces at
+    // the close camera; keyed by voxel at the level the pixel resolves, the same view is a few
+    // hundred thousand, and shading all of them every frame is several milliseconds against a
+    // 4.4 ms budget. The plan says exactly what to do about that: the budget is a cap on
+    // CONVERGENCE, never on framerate (§6).
+    //
+    // A face that has not settled is never held back — a new surface reaches its answer in a
+    // handful of frames however busy the store is, and only the refresh rate of settled faces
+    // degrades. That is the right thing to give up: a settled face is looking at a sun that has
+    // not moved.
+    const u32 live = std::max(face_store_.watermark(), 1u);
+    push.face_stride = std::max(1u, (live + kFacesPerFrame - 1) / kFacesPerFrame);
     return push;
 }
 
@@ -5077,6 +5103,38 @@ int Application::run(const Options& options) {
                             "{} bytes of faces ({} with the table)",
                             face_stats.faces, last_faces_seen_, face_stats.claims,
                             face_stats.hits, face_stats.face_bytes, face_stats.total_bytes);
+
+                // What SIZE the faces are, which is the size of the smallest shadow the frame can
+                // cast. The plan's arithmetic assumes level 0 near the camera -- a voxel covers a
+                // whole pixel at 22.5 m at 1440 lines, so everything nearer gains nothing from
+                // more pixels (§6). A store with no level 0 in it is not shading voxel faces
+                // whatever the plan says, and the picture shows it as blocky shadows on flat
+                // stone. Counted here rather than deduced from a screenshot.
+                u32 by_level[16]{};
+                for (u32 slot = 0; slot < face_store_.watermark(); ++slot) {
+                    const GpuFace& face = face_store_.faces()[slot];
+                    if (!face_live(face)) continue;
+                    const u32 level = face_level(face);
+                    if (level < 16) ++by_level[level];
+                }
+                std::string face_levels;
+                for (u32 level = 0; level < 16; ++level) {
+                    if (by_level[level] == 0) continue;
+                    if (!face_levels.empty()) face_levels += "  ";
+                    face_levels += std::to_string(level) + ":" + std::to_string(by_level[level]);
+                }
+                WS_LOG_INFO("frame", "faces by level  {}", face_levels);
+
+                // A full table is a fact about the table and never about the world, and it has to
+                // be said out loud. Faces became voxels rather than bricks, which multiplied the
+                // count by about twenty-five: 639,233 at 4K on the close camera against a budget
+                // of 1,048,576. A larger scene reaches the cap, and a cap nobody reports looks
+                // exactly like geometry that will not take a shadow.
+                if (face_store_.out_of_room()) {
+                    WS_LOG_WARN("faces", "face store is FULL at {} faces -- surfaces past this "
+                                         "point get no light of their own",
+                                face_stats.faces);
+                }
             }
 
             const NodePoolStats node_stats = node_pool_.stats();

@@ -129,6 +129,18 @@ static_assert(sizeof(GpuFace) == 32, "GpuFace must stay two to a cache line");
 inline constexpr u32 kFaceLeaf = 1u << 0;         // the face of a leaf rather than a coarse node
 inline constexpr u32 kFaceTransmissive = 1u << 1; // light comes through it: glass, water
 
+// Set on every face this store claims, and the reason it exists is a collision on zero.
+//
+// A slot was called empty when its packed word was nought. That worked for exactly as long as the
+// finest face was a brick, because a level is at least three and `pack_face` puts the level in the
+// bottom byte. The moment faces became single voxels, `pack_face(0, 0, 0)` -- level 0, direction
+// +x, no flags -- IS nought, so one live face in six read as a free slot: never shaded, never
+// settled, and the composite fell back to full sun on it for ever.
+//
+// A marker bit costs nothing and makes the question answerable rather than inferred.
+inline constexpr u32 kFaceLive = 1u << 7;
+constexpr bool face_live(const GpuFace& f) { return (f.packed & (kFaceLive << 16)) != 0; }
+
 constexpr u32 pack_face(u32 level, u32 face, u32 flags) {
     return (level & 0xFFu) | ((face & 0xFFu) << 8) | ((flags & 0xFFu) << 16);
 }

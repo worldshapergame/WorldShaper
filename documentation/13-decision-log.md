@@ -653,6 +653,39 @@ real-time path has never had** — and the speckle figure falls with it, close *
 enclosed 17.5 → 8.2, outdoor 15.4 → 10.6, because pixels on one face now read one answer instead of
 each deciding for themselves.
 
+## The renderer rewrite — faces are voxels, and two collisions on the value zero
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D298 | **A face is the voxel the ray stopped on at the level the pixel resolves, not the brick the outer walk was stepping** | picture | The outer walk never steps finer than a brick, because the level decides the colour and must not decide the shape (D132) — and the face was being reported at that level. **Every face in the store was level 3**: 19,196 of them on the close camera, all 25 cm, so the smallest shadow the renderer could cast was a 25 cm block and flat stone came out chequered. Debug view 11 has keyed on the voxel at the pixel's level since before this marcher existed and counts **609,592** faces on the same view, which is the figure §6's arithmetic is written against — *a voxel covers a whole pixel at 22.5 m, so everything nearer is at level 0*. Now **416,261 level 0, 59,758 level 1, 1,603 level 3**. `voxel` is brick-aligned and `inner` is under eight, so at level 3 and above the shift is unchanged: the refinement is in the near field and nothing else moves |
+| D299 | **Two things meant "nothing" by being zero, and both stopped being true the moment a face could be a voxel** | user report | Neither produced an error and both produced a plausible picture. **(a)** `NodeHit.face_level` used 0 for "this ray stopped on nothing", so `node_visibility.comp` skipped the face lookup for every level-0 face — which is every face within twenty metres of the camera. The composite got `kNoFace`, fell back to full sun, and **the shadows vanished from exactly the region the change was meant to sharpen**. **(b)** `pack_face(0, 0, 0)` — level 0, direction +x, no flags — is literally zero, which was the store's spelling of an empty slot, so **one live face in six** was skipped by the shading pass, never settled, and read as fully lit for ever. `kNoFaceLevel` and a `kFaceLive` marker bit replace both. A sentinel that is also a legal value is a bug waiting for its range to widen |
+| D300 | **The shading pass has a budget, and it is a cap on convergence rather than on framerate** | measurement | Faces went from nineteen thousand to four hundred and seventy-seven thousand on one camera, and shading all of them every frame is milliseconds. One face in `face_stride` is traced each frame, round robin, with **a face that has not settled never held back** — so a surface that has just come into view converges in a handful of frames however large the store is, and only the refresh rate of settled faces falls. That is the right thing to give up: they are watching a sun that has not moved. This is R3a's face-select box, folded into the shading pass rather than run as its own compaction, because what costs is the march and not the record: an invocation that is not due reads thirty-two bytes and stops. **0.185 ms at 19k faces, 0.413 ms at 477k, 0.477 ms at 639k** |
+| D301 | **A full face store says so** | — | 639,233 faces at 4K on the close camera against a budget of 1,048,576. A larger scene reaches the cap, and a cap nobody reports looks exactly like geometry that will not take a shadow — the same failure D299 had just produced by a different route |
+
+| D302 | **A shell is opaque to a ray that is deciding what you can see THROUGH** | user report, measurement | A shell — a node the world says is occupied whose children have never been built — is deliberately not drawn by a primary ray: it has been folded from nothing, its colour is nought, and drawing it paints a building black (R2d). So it falls through and the ray carries on as though the cell were empty. That is right for deciding what you can *see* and wrong for deciding what you can see *through*. Indoors, where every correct answer is full shadow, **47,353 of 93,745 sun-facing faces leaked about a tenth of their rays**, with not one pixel of the room above 0.9 for that light to have come from — the sun coming in through walls that had not finished streaming. Occlusion now stops at WANTED with no colour and no conditions, because for occlusion there is nothing to draw. **Enclosed mean visibility 0.05 → 0.00, fully shadowed 46,392 → 93,741 of 93,745, and 255,999 of 256,000 sampled pixels below 0.1** |
+| D303 | **Correction to D292** | — | D292 said turning the stand-in off for shadow rays was what stopped the scene being uniformly black. Measured in isolation afterwards, it moves 3,840 faces of 93,745 — about four per cent. **The counters (D293) were the fix**; the stand-in was changed in the same edit and took the credit. What it *was* hiding is D302, which the stand-in could never have fixed anyway: a shell fails the `foldable` test, so it was passed through whatever the stand-in said |
+
+**The speckle figure, which turned out to be measuring this.** Deck realtime, enclosed / outdoor /
+close, across the four states — no shadows, brick faces, voxel faces with the leak, voxel faces
+without it: **17.5 / 8.2 / 21.7 / 3.8**, 15.4 / 10.6 / 10.5 / 9.8, 98.3 / 24.6 / 22.8 / 19.3. The
+enclosed regression noted below was the leak and nothing else: a tenth of the rays escaping through
+unbuilt walls, independently per face, is precisely a per-voxel speckle pattern. It now reads
+**better than the renderer did before shadows existed at all**, on every view.
+
+**What it costs, and one honest regression** — the regression is resolved by D302 above, and the
+paragraph is kept because the reasoning that led to it is what found the leak. Deck realtime, mean
+ms, across the three states —
+no shadows / brick faces / voxel faces: enclosed 2.382 / 2.500 / **2.774**, outdoor 1.709 / 1.892 /
+**1.797**, close 2.841 / 3.009 / **3.273**, mid 1.073 / 1.221 / **1.170**, far 1.393 / 1.552 /
+**1.418**, distant 1.461 / 1.499 / **1.445**, sky 1.287 / 1.364 / **1.305**. Distance views came
+back down to the no-shadow baseline, because there is little at level 0 in them.
+
+Speckle went **17.5 → 8.2 → 21.7** enclosed and **98.3 → 24.6 → 22.8** close. The 8.2 was flattery:
+sixty-four pixels reading one brick's answer is a blur, and that blur is the blockiness this
+change removes. Against the *no-shadow* baseline the enclosed figure is 21.7 against 17.5, and the
+difference is per-face Monte Carlo noise at about a hundred samples a face. **R5 — face denoise —
+is what that stage is for**, and this is the first measurement that says how much it has to do.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

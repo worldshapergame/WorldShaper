@@ -327,6 +327,33 @@ void main() {
         // detail, shading toward red as cells get coarser.
         float l = hit ? float(level) / 7.0 : 0.0;
         colour = hit ? mix(vec3(0.1, 0.9, 0.2), vec3(0.9, 0.2, 0.1), l) : vec3(0.0);
+    } else if (push.resolution.z == 16u) {
+        // The sun term on its own, with nothing else in the frame.
+        //
+        // This view exists because a shaded picture cannot answer the question that matters when
+        // shadows look wrong: is this surface mottled because its LIGHT is mottled, or because its
+        // colour and its detail level are? Both look identical through albedo and tone mapping,
+        // and the first is a shadow bug while the second is the voxel geometry doing what it does.
+        //
+        // Grey is the visibility fraction. MAGENTA is a pixel whose face the composite could not
+        // find, and BLUE is one whose face has not been shaded enough times to be believed -- both
+        // of those fall back to full sun, so both look like "no shadow here" in the real picture
+        // and neither is distinguishable from a face that is genuinely lit.
+        colour = vec3(0.0);
+        if (hit) {
+            uint slot = imageLoad(in_face, pixel).x;
+            if (slot >= faces.items.length()) {
+                colour = vec3(1.0, 0.0, 1.0);
+            } else {
+                uint counters = faces.items[slot].counters;
+                uint samples = counters & 0xFFFFu;
+                if (samples < kShadowSettled) {
+                    colour = vec3(0.0, 0.3, 1.0);
+                } else {
+                    colour = vec3(float((counters >> 16u) & 0xFFFFu) / float(samples));
+                }
+            }
+        }
     }
 
     // After the debug views, so the preview stays visible in all of them â€” the tool is what

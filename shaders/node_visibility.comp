@@ -121,7 +121,7 @@ void main() {
                              (((uint(pixel.y) + face_phase.y) & face_mask) == 0u);
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
-                             report_used, report_face, true);
+                             report_used, report_face, true, false);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {
@@ -150,7 +150,7 @@ void main() {
     // goes down the feedback buffer and the CPU claims it two frames later. The composite falls
     // back to its own lighting until then, which is what an unstreamed node already does.
     uint face_slot = kNoFace;
-    if (hit.hit && hit.face_level != 0u) {
+    if (hit.hit && hit.face_level != kNoFaceLevel) {
         face_slot = node_face_lookup(hit.face_node, hit.face_level, hit.face_dir);
     }
     imageStore(out_face, pixel, uvec4(face_slot, 0u, 0u, 0u));

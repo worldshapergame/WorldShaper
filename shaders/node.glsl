@@ -108,6 +108,7 @@ layout(push_constant) uniform NodeConstants {
     vec4 sun;           // face shader: xyz towards the sun
     uint face_capacity; // buckets in the face table, a power of two
     uint face_probes;
+    uint face_stride;   // face shader: shade one face in this many each frame, round robin
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }
@@ -184,6 +185,9 @@ const uint kFaceTombstone = 0xFFFFFFFEu;
 
 uint face_level_of(uint packed) { return packed & 0xFFu; }
 uint face_dir_of(uint packed) { return (packed >> 8) & 0xFFu; }
+// Must match kFaceLive in src/world/face_store.hpp: flags bit 7, so the flags byte at bits 16-23.
+uint face_flags_of(uint packed) { return (packed >> 16) & 0xFFu; }
+bool face_live_of(uint packed) { return (packed & (1u << 23)) != 0u; }
 // Two counts in one word: rays cast, and rays that reached the sun. Must match pack_counters in
 // src/world/face_store.hpp. The fraction is worked out where it is read, because a fraction stored
 // in eight bits cannot be updated without eventually rounding back to itself.
@@ -527,12 +531,19 @@ struct NodeHit {
     // directions it was hit from. The same three numbers the face request carries, produced by the
     // same arithmetic in the same place -- so the pass that asks for a face and the pass that
     // looks it up cannot disagree about which face it is.
+    // `face_level` is kNoFaceLevel when the ray stopped on nothing. It used to be nought, which
+    // was the same collision on zero that kFaceLive fixes on the other side: a level-0 face is a
+    // single voxel and is the ordinary case near the camera, so "level 0" stopped meaning "no
+    // face" the moment the marcher started reporting voxels. Every shadow within twenty metres of
+    // the camera disappeared, because the composite skipped the lookup for exactly those pixels.
     ivec3 face_node;
     uint face_level;
     uint face_dir;
     int level;
     uint steps;
 };
+
+const uint kNoFaceLevel = 0xFFFFFFFFu;
 
 // Coverage along one face direction, out of the six bytes a node carries.
 //
@@ -625,8 +636,21 @@ const uint kNodeMaxSteps = 512u;
 //
 // Marching past it means a shadow can be missed while the tree fills in, which is a shadow that
 // arrives late. Standing in means a scene that is black and stays black.
+// `occlude_unknown` is the OTHER half of the same question, and the half a shadow ray needs.
+//
+// `stand_in` decides what COLOUR to draw for a cell the pool has not built. It cannot answer for a
+// shell -- a node the world says is occupied whose children have never been built -- because a
+// shell has never been folded from anything and its colour is nought, and drawing that paints a
+// building black. So a shell falls through and the ray carries on as though the cell were empty.
+//
+// That is right for a ray that is deciding what you can see and wrong for a ray that is deciding
+// what you can see THROUGH. For occlusion there is nothing to draw: "the world has matter here and
+// the pool has not built it yet" is matter, and a shadow ray must stop. Letting it through is the
+// sun shining in through a wall that has not finished streaming, and indoors -- where every
+// correct answer is full shadow -- it measured as 47,353 of 93,745 faces leaking about a tenth of
+// their rays, with not one pixel of the room above 0.9 for that light to have come from.
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
-                   bool report_used, bool report_face, bool stand_in) {
+                   bool report_used, bool report_face, bool stand_in, bool occlude_unknown) {
     NodeHit result;
     result.hit = false;
     result.t = push.lens.y;
@@ -635,7 +659,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     result.colour = 0u;
     result.coverage = 255u;
     result.face_node = ivec3(0);
-    result.face_level = 0u;
+    result.face_level = kNoFaceLevel;
     result.face_dir = 0u;
     result.level = kLeafLevel;
     result.steps = 0u;
@@ -815,7 +839,23 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     node_flush(report, has_pending, pending);
                     node_flush_used(report_used, g_node_block);
                     node_flush_read(report_used, found.slot);
-                    node_face_hit(result, report_face, voxel, outer_level, inner_normal);
+                    // The VOXEL the ray stopped on, at the level the PIXEL resolves -- not the
+                    // brick the outer walk was stepping.
+                    //
+                    // The outer walk never steps finer than a brick, because the level decides
+                    // the colour and must not decide the shape (D132). Reporting the face at that
+                    // level made every face in the store a brick: 19,196 faces at the close
+                    // camera, all of them level 3, so the smallest shadow the renderer could cast
+                    // was 25 cm and flat stone came out in blocks. Debug view 11 has been keying
+                    // on the voxel at the pixel's level since long before this marcher existed
+                    // and counts 609,592 faces on the same view, which is the number the plan's
+                    // arithmetic is written against (§6: a voxel covers a whole pixel at 22.5 m,
+                    // so everything nearer is at level 0).
+                    //
+                    // `voxel` is brick-aligned and `inner` is under eight, so at level 3 and
+                    // above this shifts to exactly what it shifted to before -- the refinement is
+                    // in the near field and nothing else moves.
+                    node_face_hit(result, report_face, voxel + inner, level, inner_normal);
                     return result;
                 }
                 if (i_max.x < i_max.y && i_max.x < i_max.z) {
@@ -869,6 +909,17 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 // to do on the way down and what this managed to reintroduce on the way out.
                 // Reported from a screenshot: the facility in silhouette, every column solid
                 // black, against a correct sky.
+                // Occlusion stops here, with no colour and no conditions. Everything below this
+                // is about what to DRAW, and a ray that draws nothing has no use for any of it.
+                if (occlude_unknown) {
+                    result.hit = true;
+                    result.t = t;
+                    result.normal = last_normal;
+                    result.level = min(outer_level, kNodeMaxDetail);
+                    result.coverage = 255u;
+                    return result;
+                }
+
                 bool foldable = (node_flags_of(nodes.items[found.slot].packed) & kNodeLeaf) != 0 ||
                                 nodes.items[found.slot].children != kNoNode;
                 if (stand_in && found.level - 1 == outer_level && found.slot != kNoNode &&

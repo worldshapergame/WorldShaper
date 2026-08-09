@@ -91,7 +91,7 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame) {
     faces_[slot].x = static_cast<i32>(key.x);
     faces_[slot].y = static_cast<i32>(key.y);
     faces_[slot].z = static_cast<i32>(key.z);
-    faces_[slot].packed = pack_face(key.level, key.face, 0);
+    faces_[slot].packed = pack_face(key.level, key.face, kFaceLive);
     faces_[slot].bins = kNoOffset;
     last_read_[slot] = static_cast<u32>(frame);
     dirty_faces_.mark(slot);
@@ -134,7 +134,7 @@ void FaceStore::evict_cold(u64 frame) {
         // The cheap test first and the record second, which on the node pool was the difference
         // between 8.6 MB of memory traffic a frame and one megabyte (D273).
         if (now - last_read_[slot] <= budget_.cold_frames) continue;
-        if (face_level(faces_[slot]) == 0 && faces_[slot].packed == 0) continue;   // already free
+        if (!face_live(faces_[slot])) continue;   // already free
 
         const FaceKey key{faces_[slot].x, faces_[slot].y, faces_[slot].z,
                           face_level(faces_[slot]), face_direction(faces_[slot])};
@@ -182,7 +182,7 @@ bool FaceStore::validate() const {
     }
     for (u32 slot = 0; slot < next_free_; ++slot) {
         const GpuFace& face = faces_[slot];
-        if (face.packed == 0 && face.x == 0 && face.y == 0 && face.z == 0) continue;
+        if (!face_live(face)) continue;
         const FaceKey key{face.x, face.y, face.z, face_level(face), face_direction(face)};
         if (find(key) != slot) return false;
     }

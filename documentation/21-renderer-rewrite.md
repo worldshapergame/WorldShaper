@@ -507,6 +507,8 @@ checked. Tick the ledger in §8.0 when one lands.
 | R3 | a. split the frame | **done** — the marcher names the face each ray stopped on down the feedback buffer that already existed, AND resolves its slot into an R32_UINT image the composite reads (D290). The request lattice walks, or it samples the same 1/64 of the screen for ever (D291) |
 | R3 | c. sun and lamps in the face pass | **sun done, and now visible** — `shaders/shade_faces.comp`, one jittered shadow ray per face per frame across the face and the sun's disc (D294), two counts rather than a mean (D293), no standing in for unbuilt cells (D292). Deck realtime cost: enclosed 2.382 → 2.500 ms, outdoor 1.709 → 1.892, close 2.841 → 3.009 — 3–11% for a shadow the real-time path never had, with speckle falling close 98.3 → 24.6. Lamps and sky still to come |
 | R3 | d. delete the per-pixel light path | not started. Carries one debt from R3b: split `GpuFace` so the CPU's half and the card's half are never in one copy |
+| R3 | faces are voxels | **done** — D298–D303. Every face in the store was a brick, so the finest shadow was 25 cm; now 416,261 level 0, 59,758 level 1, 1,603 level 3 on the close camera. Two collisions on zero and a shell that was transparent to occlusion came with it. Speckle enclosed 17.5 (no shadows) → 3.8 |
+| R9 | the off-screen set | **planned, not started** — §8's new stage. The face store holds what the camera can see, so light is a screen-space set in world-space clothing. Prerequisite for R4c/R4d being worth measuring |
 | R4–R8 | | not started |
 
 #### What a player was actually waiting for, which none of the above was
@@ -794,6 +796,94 @@ output during a measurement, and write shader files with a writer that does not 
   Beer-Lambert over the exact voxel path, dispersion by hero wavelength per face sample.
   *Gate: a mirror wall shows a recognisable image with no per-pixel ray; glass and water read as
   glass and water; frame time within 15% of R3 on a scene with no reflective material in it.*
+
+### R9 — The off-screen set, so light is world space and not screen space · L
+
+**Where this comes from.** The one rule says every ray starts on a voxel face, and R3 makes the
+face store the place light lives. But a face only gets *into* the store when a primary ray lands on
+it — so the store holds exactly what the camera can see, and the light in it is a screen-space set
+wearing world-space clothes. Everything the eye can see behaves. Everything the eye cannot see, but
+which the eye's surfaces depend on, does not exist.
+
+**What is already world space, and must not be re-solved here.** Occlusion is. A shadow ray marches
+the node pool, which is the world, so a caster the player cannot see still casts (D302 made a shell
+opaque to that ray, which is the same principle). This stage is not about the geometry a secondary
+ray *crosses*. It is about the faces a secondary ray *lands on*, which is where light has to be
+read from rather than merely blocked by.
+
+**What breaks without it, concretely.**
+
+| | today | why |
+|---|---|---|
+| a mirror facing a wall behind the camera | the wall reflects as nothing | the wall has no face, so R4c has no bins to read |
+| a red wall bouncing light onto a white one | no bounce, whatever R3c does | the red wall is off screen; nothing carries its outgoing radiance |
+| glass with the room behind it | refraction shows unlit geometry | R4d's ray lands on faces with no light |
+| a lamp in the next room through a doorway | the doorway is dark | the lit floor inside has no face to be lit |
+| turning around | the world relights over a few frames | every face just claimed is at zero samples |
+
+The last row is the honest cost of the current design and the one a player feels: light has to be
+rediscovered every time the camera moves, because the set is defined by the camera.
+
+**The rule this stage adds.**
+
+> The face set is the transitive closure of what the screen sees, one bounce at a time, bounded by
+> a budget per bounce. A face is claimed because some face already in the set needs to read it, not
+> only because a pixel landed on it.
+
+**R9a — secondary faces are requested by the rays that need them.** The face pass already marches
+rays that stop on faces: the shadow ray stops on a caster, and R4's rays stop on whatever is
+reflected or refracted. Each of those hits knows its face key by the same arithmetic
+`node_face_hit` already uses. It reports it down the same feedback channel, tagged with a bounce
+depth. This is deliberately the *opposite* of the rule the shadow ray follows today — "a shadow ray
+must not drag streaming towards whatever it happens to cross" — and the distinction is that a ray
+now names what it **landed on**, which is one face, rather than everything it passed through.
+
+**R9b — a budget per bounce, and the reason it is per bounce.** One shared budget lets the
+off-screen set starve the on-screen one, and the on-screen set is what the player is looking at.
+Three classes: primary (a pixel landed on it), secondary (one bounce from a primary), tertiary and
+beyond (folded into one class with the smallest share). Each has its own share of the face-shading
+budget `kFacesPerFrame` and its own share of the claim rate. A class that overruns degrades its own
+refresh rate and nothing else's.
+
+**R9c — the halo, which is the "reprojection" half.** Faces do not leave the store the moment they
+leave the screen: they leave when they go cold, and `cold_frames` is already 600. That is most of
+what is wanted from reprojection and it exists. What is missing is the *entry* side — a face just
+off the edge of the screen is never claimed until it comes on, so a pan reveals unlit geometry
+that then lights over several frames. The primary pass therefore claims over a frustum widened by a
+margin, at a coarser request lattice than the on-screen one: geometry arrives already lit, and the
+cost is a fraction of a pass that is already sparse. Margin from the camera's angular velocity, so
+standing still costs nothing.
+
+**R9d — coarse light for a face that has none.** A face that has just entered any of these sets has
+zero samples, and the composite falls back to full sun on it, which reads as a flash. Its parent —
+the face one level up at the same direction, which is 1/4 as numerous and converged long before —
+is the right thing to read. This is R2d's rule applied to light rather than to colour, and R5b
+already calls for parent seeding at claim time; R9 is what makes the parent reliably present.
+
+**R9e — a debug view for the set itself.** Which class each visible face belongs to, and how many
+faces each class holds. Without it "the reflection is dark" and "the reflection is not in the set"
+are the same picture, which is the trap D296 was written about.
+
+*Gate: a mirror wall reflects a surface that is behind the camera, with light on it, and the
+reflection does not change when that surface comes into view; a 180° turn shows no relighting;
+faces in the off-screen classes stay within their budgets on the enclosed camera; frame time
+within 15% of R3 with the classes enabled and no reflective material in the scene.*
+
+**Sizing and order.** R9a and R9d are small and pay immediately: they are what stops a shadow
+caster's own surfaces going dark and what removes the relighting flash on a turn, and they can land
+straight after R3c. R9b is the machinery that keeps the rest affordable. R9c is independent and
+cheap. R9e comes first in practice, as instruments always have. **R9 as a whole is a prerequisite
+for R4c and R4d being worth measuring** — a reflection of an empty set is a black mirror, and no
+amount of bin resolution improves it.
+
+**The risk, stated plainly.** This is the stage where the face count stops being bounded by the
+screen. §6's whole argument is that faces grow sub-linearly with resolution because a voxel already
+covers a pixel at 22.5 m; that argument says nothing about a set which now includes surfaces no
+pixel is looking at. The budget per bounce is what holds it, and the thing to watch is not frame
+time — the budget fixes that by construction — but **convergence**: a store spread too thin gives
+every face too few samples and the picture gets noisier everywhere rather than slower anywhere.
+The measurement that decides it is samples-per-face per class, and it should be reported from the
+first commit of R9a.
 
 ### R5 — Face denoise and the composite · M
 

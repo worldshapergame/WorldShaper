@@ -134,7 +134,8 @@ written for the person the work is for, so it is the one to keep current.
 | R1 node pool | XL | a–d, f–i done. **R1e** outstanding, and it is most of what remains of R1 |
 | R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit |
 | R3 the face pass | XL | **a, b done; c half** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun only; lamps, sky and bounce are the rest of R3c. **R3d not started** |
-| R4 directional faces | L | not started |
+| R9 the off-screen set | L | **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. §8 R9 |
+| R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
 | R5 face denoise, composite | M | not started |
 | R6 post | M | not started |
 | R7 the primary ray | L | not started |
@@ -391,6 +392,15 @@ Four of those five were found by **one log line** — `faces sun on the card: �
 the card actually wrote, split by whether a face can see the sun at all. It is in the audit and it
 should stay: a picture cannot tell "every face is shadowed" from "every face is unlit", because both
 are a dark building and they have nothing in common to fix.
+
+Then faces became **voxels** rather than bricks (D298), which is what the plan's arithmetic always
+assumed and what the one rule says on its face, and which brought three more of the same kind:
+`NodeHit` used level 0 to mean "no face" while level 0 had just become the commonest face there is;
+`pack_face(0, 0, 0)` is literally zero, which was the store's spelling of an empty slot; and a
+**shell** — a node the world says is occupied whose children are not built — was transparent to
+shadow rays, so the sun came in through walls that had not finished streaming. That last one was
+the interior mottling, and fixing it took enclosed speckle to **3.8 against 17.5 before shadows
+existed at all**.
 
 **What is left of R3c**: sky, lamps and bounce, all on the same one-invocation-per-face footing.
 **R3d** deletes the per-pixel light path, and carries one debt from here — split `GpuFace` so the
