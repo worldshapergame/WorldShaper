@@ -1,0 +1,238 @@
+# The numbers a renderer change has to beat.
+#
+# # Why this exists
+#
+# Every performance figure in documentation/ was taken by hand, once, with whatever camera and
+# resolution was in front of somebody at the time, and then quoted for months. Two of them are
+# now known to be wrong rather than merely old: documentation/19-auto-quality.md records the
+# path tracer at 2.495 ms outdoors and 19.988 ms enclosed, and the pass those were read from was
+# not being timed at all — the profiler had no stack, so the cloud pass nested inside the tracer
+# overwrote its slot and the tracer's own dispatch fell outside every timestamp in the frame. It
+# read as 0.253 ms of GPU work against 37.7 ms of wall clock and nobody had reason to look.
+#
+# So: a fixed grid of cameras, resolutions and modes, run by one command, written to a file, and
+# diffed against the last one. A figure nobody can reproduce is not a measurement.
+#
+# # Running it
+#
+#   tools\baseline.ps1 -Out docs\baseline-r0.csv           # the whole grid
+#   tools\baseline.ps1 -Views enclosed,outdoor -Sizes deck # a quick look while working
+#   tools\baseline.ps1 -Compare docs\baseline-r0.csv       # what has moved, and by how much
+#
+# The full grid is seven views times three resolutions times two modes and takes a few minutes.
+# Narrow it while iterating; run all of it before claiming a stage is done.
+
+param(
+    # Named cameras, comma separated, or "all".
+    [string]$Views = "all",
+    # deck (1280x800), dev (2560x1440), high (3840x2160), or "all".
+    [string]$Sizes = "all",
+    [string]$Modes = "realtime,pathtrace",
+    [string]$Clip = "",
+    # Frames rendered before the shot. The first half is thrown away as warm-up by the engine
+    # itself and the rest is averaged, so this is twice the averaging window.
+    [int]$Frames = 120,
+    [int]$Quality = 7,
+    [string]$Out = "",
+    [string]$Compare = "",
+    [switch]$NoSpeckle,
+    # "vx,vy,vz,vyaw" in metres and degrees a second: the camera moves every frame, so the shot
+    # is of the moving picture rather than a settled one.
+    #
+    # THE case that matters, and the one every still camera flatters. src/app/main.cpp resets the
+    # per-pixel accumulator whenever the camera moves at all, so a moving frame is one sample per
+    # pixel however long you have been standing there. A grid of still cameras measures a
+    # photograph nobody takes; this measures the game.
+    [string]$Fly = "",
+    # How far a number may move before it is called a regression rather than noise.
+    [double]$Tolerance = 0.03
+)
+
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $PSScriptRoot
+$exe = Join-Path $root "build\bin\WorldShaper.exe"
+if (-not (Test-Path $exe)) { throw "no WorldShaper.exe at $exe - run build.bat first" }
+. (Join-Path $PSScriptRoot "_measure.ps1")
+# The cameras and resolutions, shared with tools\facecount.ps1 so the two cannot drift apart.
+. (Join-Path $PSScriptRoot "_grid.ps1")
+$allViews = $WsViews
+$allSizes = $WsSizes
+
+# Named apart from the parameters on purpose, and it is not a style choice. See the note above
+# Select-Named in _grid.ps1: `$views` and the parameter `$Views` are one variable, and a
+# `[string]` parameter keeps that constraint for life, so assigning the array back to it rejoins
+# it into a single space-separated name and the harness silently runs one view instead of two.
+$viewList = Select-Named $allViews $Views "view"
+$sizeList = Select-Named $allSizes $Sizes "size"
+$modeList = @($Modes -split "[,\s]+" | Where-Object { $_ -ne "" })
+
+$shots = Join-Path $env:TEMP "ws-baseline"
+New-Item -ItemType Directory -Force -Path $shots | Out-Null
+
+# --- one run ---------------------------------------------------------------------------------
+
+function Invoke-Run([string]$mode, [string]$view, [string]$size) {
+    $wh = $allSizes[$size]
+    $png = Join-Path $shots ("{0}-{1}-{2}.png" -f $mode, $view, $size)
+    if (Test-Path $png) { Remove-Item $png }
+
+    # Not $args, which is an automatic variable: assigning to it inside a function shadows the
+    # one PowerShell maintains and is a trap for whoever edits this next.
+    $runArgs = @("--screenshot", $png, "--screenshot-frame", "$Frames",
+                 "--width", "$($wh[0])", "--height", "$($wh[1])",
+                 "--cam", $allViews[$view], "--quality", "$Quality",
+                 "--no-vsync", "--no-update-check", "--no-auto-quality")
+    if ($mode -eq "pathtrace") { $runArgs += "--pathtrace" }
+    if ($Clip -ne "") { $runArgs += @("--clip-file", $Clip) }
+    if ($Fly -ne "") { $runArgs += @("--fly", $Fly) }
+
+    # Deliberately not letting a stderr line become a terminating error. Windows PowerShell wraps
+    # each stderr line from a native program in an ErrorRecord, so with ErrorActionPreference at
+    # Stop the harness dies on an ordinary renderer warning.
+    $before = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $log = (& $exe @runArgs 2>&1 | Out-String)
+    $ErrorActionPreference = $before
+
+    $row = [ordered]@{
+        mode = $mode; view = $view; size = $size
+        width = $wh[0]; height = $wh[1]
+        fly = $Fly
+        total_ms = 0.0; worst_ms = 0.0; cpu_ms = 0.0
+        dominant = ""; dominant_ms = 0.0
+        resident = 0; world_chunks = 0; bricks = 0
+        speckle = 0.0; fireflies = 0
+        frames = 0
+    }
+
+    if ($log -match "total GPU mean\s+([0-9.]+)\s+ms,\s+worst\s+([0-9.]+)\s+ms,\s+over\s+(\d+)") {
+        $row.total_ms = [double]$Matches[1]
+        $row.worst_ms = [double]$Matches[2]
+        $row.frames = [int]$Matches[3]
+    }
+    if ($log -match "CPU\s+([0-9.]+)\s+ms") { $row.cpu_ms = [double]$Matches[1] }
+    if ($log -match "resident\s+(\d+)\s+of\s+(\d+)\s+chunks,\s+(\d+)\s+bricks") {
+        $row.resident = [int]$Matches[1]
+        $row.world_chunks = [int]$Matches[2]
+        $row.bricks = [int]$Matches[3]
+    }
+
+    # The pass that costs the most, which is the only one worth naming in a summary. Nested
+    # passes are indented in the log and are excluded here: a pass inside another is already
+    # inside its parent's number, and naming a child as the dominant pass would double count.
+    # The engine writes the category, four spaces, then the label — and the label is indented two
+    # spaces per level of nesting. So the indent is captured rather than eaten, which is the only
+    # way to tell a child pass from a sibling that happens to sort next to it.
+    $passes = @()
+    foreach ($line in ($log -split "`r?`n")) {
+        if ($line -match "^\[[^\]]+\]\s+frame\s{4}(\s*)(\S+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*$") {
+            $passes += [PSCustomObject]@{
+                Name   = $Matches[2]
+                Ms     = [double]$Matches[3]
+                Nested = ($Matches[1].Length -gt 0)
+            }
+        }
+    }
+    $top = $passes | Where-Object { -not $_.Nested } | Sort-Object Ms -Descending | Select-Object -First 1
+    if ($top) { $row.dominant = $top.Name; $row.dominant_ms = $top.Ms }
+
+    if ((Test-Path $png) -and (-not $NoSpeckle)) {
+        $m = Measure-Speckle $png
+        $row.speckle = [Math]::Round($m.Speckle, 2)
+        $row.fireflies = $m.Fireflies
+    } elseif (-not (Test-Path $png)) {
+        Write-Host ("    no image written - the run failed") -ForegroundColor Red
+        ($log -split "`r?`n" | Select-String "error|ERROR|FATAL" | Select-Object -First 3) |
+            ForEach-Object { Write-Host ("      " + $_.Line.Trim()) -ForegroundColor Red }
+    }
+    return [PSCustomObject]$row
+}
+
+# --- the grid --------------------------------------------------------------------------------
+
+$rows = @()
+$count = $modeList.Count * $viewList.Count * $sizeList.Count
+$done = 0
+Write-Host ("{0} runs: {1} modes x {2} views x {3} sizes" -f $count, $modeList.Count, $viewList.Count, $sizeList.Count)
+Write-Host ""
+Write-Host ("  {0,-10} {1,-9} {2,-5} {3,9} {4,9} {5,9}  {6,-11} {7,8}" -f
+            "mode", "view", "size", "mean ms", "worst", "cpu ms", "dominant", "speckle")
+
+foreach ($mode in $modeList) {
+    foreach ($view in $viewList) {
+        foreach ($size in $sizeList) {
+            $done++
+            $r = Invoke-Run $mode $view $size
+            $rows += $r
+            Write-Host ("  {0,-10} {1,-9} {2,-5} {3,9:N3} {4,9:N3} {5,9:N3}  {6,-11} {7,8:N1}" -f
+                        $r.mode, $r.view, $r.size, $r.total_ms, $r.worst_ms, $r.cpu_ms,
+                        $r.dominant, $r.speckle)
+        }
+    }
+}
+
+# --- what it means ---------------------------------------------------------------------------
+
+Write-Host ""
+foreach ($mode in $modeList) {
+    foreach ($size in $sizeList) {
+        # `$outside` and not `$out`, for the reason given above `$viewList`: `$out` is the same
+        # variable as the `-Out` parameter, which is `[string]`, so a row object assigned to it
+        # would be stringified — and then written to a file whose name is the row.
+        $inside  = $rows | Where-Object { $_.mode -eq $mode -and $_.view -eq "enclosed" -and $_.size -eq $size }
+        $outside = $rows | Where-Object { $_.mode -eq $mode -and $_.view -eq "outdoor" -and $_.size -eq $size }
+        if ($inside -and $outside -and $outside.total_ms -gt 0) {
+            Write-Host ("{0,-10} {1,-5} enclosed / outdoor = {2:N2}x   ({3:N2} ms against {4:N2} ms)" -f
+                        $mode, $size, ($inside.total_ms / $outside.total_ms), $inside.total_ms,
+                        $outside.total_ms)
+        }
+    }
+}
+
+# How the cost moves with resolution, which is the whole claim the rewrite makes. Lighting that
+# is per face does not scale with the screen; lighting that is per pixel does.
+foreach ($mode in $modeList) {
+    foreach ($view in $viewList) {
+        $a = $rows | Where-Object { $_.mode -eq $mode -and $_.view -eq $view -and $_.size -eq "dev" }
+        $b = $rows | Where-Object { $_.mode -eq $mode -and $_.view -eq $view -and $_.size -eq "high" }
+        if ($a -and $b -and $a.total_ms -gt 0) {
+            Write-Host ("{0,-10} {1,-9} 1440p -> 4K = {2:N2}x  (pixels are 2.25x)" -f
+                        $mode, $view, ($b.total_ms / $a.total_ms))
+        }
+    }
+}
+
+if ($Out -ne "") {
+    $dir = Split-Path -Parent $Out
+    if ($dir -ne "" -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $rows | Export-Csv -Path $Out -NoTypeInformation -Encoding utf8
+    Write-Host ""
+    Write-Host ("written: " + $Out)
+}
+
+# --- against last time ------------------------------------------------------------------------
+
+if ($Compare -ne "") {
+    if (-not (Test-Path $Compare)) { throw "no baseline at $Compare" }
+    $was = Import-Csv $Compare
+    Write-Host ""
+    Write-Host ("against {0}, flagging moves over {1:P0}" -f $Compare, $Tolerance)
+    Write-Host ("  {0,-10} {1,-9} {2,-5} {3,9} {4,9} {5,8}" -f "mode", "view", "size", "was", "now", "change")
+    $regressed = 0
+    foreach ($now in $rows) {
+        $then = $was | Where-Object {
+            $_.mode -eq $now.mode -and $_.view -eq $now.view -and $_.size -eq $now.size
+        } | Select-Object -First 1
+        if (-not $then) { continue }
+        $old = [double]$then.total_ms
+        if ($old -le 0) { continue }
+        $change = ($now.total_ms - $old) / $old
+        if ([Math]::Abs($change) -lt $Tolerance) { continue }
+        if ($change -gt 0) { $regressed++ }
+        $colour = if ($change -gt 0) { "Red" } else { "Green" }
+        Write-Host ("  {0,-10} {1,-9} {2,-5} {3,9:N3} {4,9:N3} {5,8:P1}" -f
+                    $now.mode, $now.view, $now.size, $old, $now.total_ms, $change) -ForegroundColor $colour
+        $regressed = $regressed
+    }
+    if ($regressed -eq 0) { Write-Host "  nothing regressed" -ForegroundColor Green }
+}

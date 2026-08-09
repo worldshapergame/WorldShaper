@@ -1,0 +1,72 @@
+#version 450
+// Primary visibility against the node pool.
+//
+// The same pass shaders/visibility.comp performs, walking one sparse octree instead of four
+// addressing schemes. It exists beside the old one rather than replacing it so the two can be
+// rendered from the same camera and diffed: R1's claim is that the picture does not change and
+// the cost falls, and both halves of that need measuring rather than asserting.
+//
+// The visibility buffer it writes is byte-for-byte the old format, so shaders/resolve.comp reads
+// it unchanged.
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0, rgba32ui) uniform writeonly uimage2D out_visibility;
+layout(binding = 1, r32f) uniform writeonly image2D out_depth;
+
+#include "node.glsl"
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= int(push.resolution.x) || pixel.y >= int(push.resolution.y)) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(push.resolution) * 2.0 - 1.0;
+    float aspect = float(push.resolution.x) / float(push.resolution.y);
+    vec3 dir = normalize(push.forward.xyz +
+                         push.right.xyz * uv.x * push.lens.x * aspect -
+                         push.up.xyz * uv.y * push.lens.x);
+
+    // Voxels a pixel spans per unit of distance.
+    float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
+
+    // One pixel in four, where the chunk marcher reported one in sixty-four.
+    //
+    // The sampling rate has to follow the unit being reported, and the unit changed. A chunk is
+    // eight metres, so neighbouring rays wanted the same one and a sparse sample missed nothing.
+    // A node at the level a pixel resolves is a brick - twenty-five centimetres, under two pixels
+    // across at sixty metres - so one report in sixty-four asks for one path in sixty-four and
+    // the other sixty-three are never built. Measured: the tree converged at 765 leaves for a
+    // building needing hundreds of thousands, then went quiet, because the pixels that would have
+    // asked for the rest were not allowed to speak.
+    //
+    // It costs nothing at rest: a report only happens on a miss, and misses go to zero as the
+    // tree fills in.
+    const bool report = ((pixel.x & 1) == 0) && ((pixel.y & 1) == 0);
+
+    NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report);
+
+    uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
+    if (hit.hit) {
+        uint face = 0u;
+        if (hit.normal.x != 0) face = (hit.normal.x > 0) ? 0u : 1u;
+        else if (hit.normal.y != 0) face = (hit.normal.y > 0) ? 2u : 3u;
+        else face = (hit.normal.z > 0) ? 4u : 5u;
+        // How much of the cell that was hit is actually matter. A voxel is all of it; a coarser
+        // node carries its filtered coverage in the alpha of its colour.
+        // From the node's own per-direction coverage, not from the alpha of its filtered colour.
+        // See node_face_coverage: the alpha is a volumetric fill fraction and this is a projected
+        // one, and only the second answers "how much of this pixel is matter".
+        uint coverage = hit.coverage;
+        packed.x = face | (uint(hit.level) << 8u) | (min(hit.steps, 255u) << 16u) |
+                   (coverage << 24u);
+        packed.y = hit.type_id;
+        packed.z = hit.colour;
+    } else {
+        packed.x = 0xFFFFFFFFu;
+        packed.z = min(hit.steps, 255u);
+    }
+
+    imageStore(out_visibility, pixel, packed);
+    imageStore(out_depth, pixel, vec4(hit.hit ? hit.t : push.lens.y, 0, 0, 0));
+}

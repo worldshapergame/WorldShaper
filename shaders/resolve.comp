@@ -140,6 +140,30 @@ void main() {
                          push.up.xyz * uv.y * push.lens.x);
 
     uvec4 packed = imageLoad(in_visibility, pixel);
+
+    // Debug views 12-15: one word of the visibility buffer, written out as four exact bytes.
+    //
+    // These exist because an argument about which marcher is right cannot be settled by looking at
+    // the picture. Two marchers were producing images that differed on 83% of a sky camera, where
+    // there is no geometry to disagree about, and four separate changes inside the traversal moved
+    // the difference by less than a hundredth. At that point the useful question stops being "what
+    // else might the marcher do differently" and becomes "which of these four words is not what I
+    // think it is" - and that is a readback, not a hypothesis.
+    //
+    // Four channels carry thirty-two bits exactly: the screenshot path writes four channels
+    // through stbi_write_png, PNG is lossless, and a unorm8 channel returns exactly what
+    // `byte / 255.0` put into it. So the image IS the buffer.
+    if (push.resolution.z >= 12u && push.resolution.z <= 15u) {
+        uint word = (push.resolution.z == 12u)   ? packed.x
+                    : (push.resolution.z == 13u) ? packed.y
+                    : (push.resolution.z == 14u) ? packed.z
+                                                 : packed.w;
+        imageStore(out_colour, pixel,
+                   vec4(float(word & 0xFFu), float((word >> 8u) & 0xFFu),
+                        float((word >> 16u) & 0xFFu), float((word >> 24u) & 0xFFu)) / 255.0);
+        return;
+    }
+
     bool hit = packed.x != 0xFFFFFFFFu;
     float t = uintBitsToFloat(packed.w);
     uint face = packed.x & 0xFFu;

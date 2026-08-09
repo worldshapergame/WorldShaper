@@ -23,7 +23,10 @@ This folder is the source of truth for design, architecture, and planning. Code 
 | [14-ui-style.md](14-ui-style.md) | The visual language: no colour, blurred glass, per-pixel opposing ink, tooltips |
 | [17-crash-reports.md](17-crash-reports.md) | What a crash writes down, where it puts it, and how to prove it works |
 | [18-overnight-loop.md](18-overnight-loop.md) | Running the game on itself while you sleep: loop.bat, the journal, and how to stop it cleanly |
-| [19-auto-quality.md](19-auto-quality.md) | What costs frame time, the ladder of quality levels, and the benchmark the first run takes |
+| [19-auto-quality.md](19-auto-quality.md) | What costs frame time, the ladder of quality levels, and the benchmark the first run takes. **Its path-traced figures are withdrawn — see 21 §6** |
+| [20-clip-forge.md](20-clip-forge.md) | A clip is a description, not a box of voxels: the field, the vocabulary, weathering, and the instruments that say whether what came out is what was meant |
+| **[21-renderer-rewrite.md](21-renderer-rewrite.md)** | **The from-scratch rewrite of the path tracer, the chunk system and streaming. §8 is the work plan, §8.0 is where it stands** |
+| **[22-rewrite-handover.md](22-rewrite-handover.md)** | **Start here to pick the rewrite up cold: what is done, what is next, and every trap that has already cost a day** |
 
 ## Status
 

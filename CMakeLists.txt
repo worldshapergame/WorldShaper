@@ -60,7 +60,8 @@ add_library(ws_core STATIC
     src/core/crash.cpp
     src/core/jobs.cpp
     src/core/time.cpp
-    src/core/block_pool.cpp)
+    src/core/block_pool.cpp
+    src/core/pass_ledger.cpp)
 target_include_directories(ws_core PUBLIC src)
 target_link_libraries(ws_core PUBLIC ws_options ws_version)
 if(WIN32)
@@ -95,7 +96,8 @@ add_library(ws_world STATIC
     src/world/light_list.cpp
     src/world/thumbnail.cpp
     src/world/thumb_cache.cpp
-    src/world/summary_tree.cpp)
+    src/world/summary_tree.cpp
+    src/world/node_pool.cpp)
 target_include_directories(ws_world PUBLIC src)
 target_link_libraries(ws_world PUBLIC ws_core)
 
@@ -145,6 +147,7 @@ add_library(ws_gpu STATIC
     src/gpu/shader.cpp
     src/gpu/profiler.cpp
     src/gpu/vma_impl.cpp
+    src/gpu/node_buffers.cpp
     src/gpu/world_buffers.cpp
     src/gpu/screenshot.cpp
     src/gpu/feedback.cpp)
@@ -285,7 +288,9 @@ add_executable(ws_tests
     tests/test_hollow.cpp
     tests/test_log_ring.cpp
     tests/test_quality.cpp
-    tests/test_light_list.cpp)
+    tests/test_light_list.cpp
+    tests/test_pass_ledger.cpp
+    tests/test_node_pool.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_doctest)
 # Where the assets a test reads actually live. A test that walks up from the working directory
 # passes when it is run from the build folder and fails from anywhere else, which makes it a test

@@ -41,6 +41,7 @@
 #include "gpu/feedback.hpp"
 #include "gpu/image.hpp"
 #include "gpu/loading_screen.hpp"
+#include "gpu/node_buffers.hpp"
 #include "gpu/render_params.hpp"
 #include "gpu/profiler.hpp"
 #include "gpu/screenshot.hpp"
@@ -51,6 +52,7 @@
 #include "world/history.hpp"
 #include "world/op.hpp"
 #include "world/raycast.hpp"
+#include "world/node_pool.hpp"
 #include "world/residency.hpp"
 #include "world/serialize.hpp"
 #include "world/world_cache.hpp"
@@ -92,6 +94,10 @@ struct Options {
     std::string clip_bounds;
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
     bool path_trace = false;   // start in the reference path tracer
+    // Walk the node pool instead of the chunk grid. Both marchers are built so the two can
+    // render one camera and be diffed - R1 claims the picture does not change and the cost
+    // falls, and both halves need measuring rather than asserting.
+    bool node_pool = false;
     u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
 
     // Automatic quality. Off, or pinned, or aimed at something other than the monitor.
@@ -285,6 +291,8 @@ Options parse_options(int argc, char** argv) {
             options.clip_coarse = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--pathtrace") {
             options.path_trace = true;
+        } else if (arg == "--node-pool") {
+            options.node_pool = true;
         } else if (arg == "--no-update-check") {
             options.no_update_check = true;
         } else if (arg == "--version") {
@@ -316,8 +324,11 @@ void print_help() {
         "  --debug-mode N        0 shaded, 1 steps, 2 normals, 3 detail, 4 clip ghost,\n"
         "                        5 face cache, 6 why a path-traced pixel is dark,\n"
         "                        7 what the primary ray hit, 8 what the bounce found,\n"
-        "                        9 the sun's visibility on its own\n"
+        "                        9 the sun's visibility on its own, 10 no tone curve,\n"
+        "                        11 this pixel's face key as four exact bytes, for counting\n"
+        "                        distinct visible faces (tools\\facecount.ps1)\n"
         "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
+        "  --node-pool           march the node pool instead of the chunk grid\n"
         "  --target-fps N        frame rate to hold (default: the monitor's refresh rate)\n"
         "  --quality N           pin the quality level 0-7 instead of deciding it\n"
         "  --no-auto-quality     leave quality where it is and never adjust it\n"
@@ -1044,6 +1055,18 @@ private:
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
+
+    // The node pool, beside the chunk grid rather than replacing it yet. See
+    // documentation/21-renderer-rewrite.md section 8, sub-step R1c.
+    NodePool node_pool_;
+    NodeBuffers node_buffers_;
+    ComputePipeline node_visibility_;
+    VkDescriptorSetLayout node_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSet node_set_ = VK_NULL_HANDLE;
+    bool use_node_pool_ = false;
+    u32 last_node_built_ = 0;
+    u32 last_node_evicted_ = 0;
+    u32 last_node_deferred_ = 0;
     FrameStats stats_;
     // A device that dies of a timeout and a device that dies of a bad address leave exactly the
     // same message behind. The difference is in the frames just before it, and those are gone by
@@ -1106,7 +1129,19 @@ bool Application::create_render_target(u32 width, u32 height) {
     cloud_info[1].imageView = cloud_image_prev_.view;
     cloud_info[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkWriteDescriptorSet writes[9]{};
+    // Eleven, not nine: the last two are the node marcher's output images.
+    //
+    // They were missing, and the failure was silent in the worst way. The node pipeline ran, did
+    // all its work, and stored its result into an unwritten descriptor - so the visibility image
+    // kept whatever was in it and the picture never changed no matter what the marcher did. Five
+    // separate changes to the traversal produced bit-identical images while the *timing* moved
+    // with every one of them, which is the signature: the shader is running and its output is
+    // going nowhere.
+    //
+    // Descriptors for the images are the only bindings that change on resize, which is why they
+    // live here rather than beside the buffer writes where the node set was otherwise assembled -
+    // and that split is exactly how they came to be forgotten.
+    VkWriteDescriptorSet writes[11]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -1146,7 +1181,23 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[8].dstBinding = kCloudBinding;
     writes[8].descriptorCount = 2;
     writes[8].pImageInfo = cloud_info;
-    vkUpdateDescriptorSets(device_.handle(), 9, writes, 0, nullptr);
+    // The node marcher writes the same two images the chunk marcher does, so resolve reads one
+    // buffer whichever produced it.
+    //
+    // Guarded, because the render target is created before the descriptor sets are allocated on
+    // the first pass through startup - and a write to a null set is invalid rather than ignored.
+    // The node set is bound again where it is created, so the first frame has it either way.
+    u32 write_count = 9;
+    if (node_set_ != VK_NULL_HANDLE) {
+        writes[9].dstSet = node_set_;
+        writes[9].dstBinding = 0;
+        writes[9].pImageInfo = &vis_info;
+        writes[10].dstSet = node_set_;
+        writes[10].dstBinding = 1;
+        writes[10].pImageInfo = &depth_info;
+        write_count = 11;
+    }
+    vkUpdateDescriptorSets(device_.handle(), write_count, writes, 0, nullptr);
     return true;
 }
 
@@ -2216,6 +2267,34 @@ void Application::stream(f64 seconds) {
     last_feedback_accepted_ = accepted;
     last_feedback_rejected_ = rejected;
 
+    // The same reports, read the node pool's way.
+    //
+    // A node feedback entry carries the node coordinate at its own level in xyz and the level in
+    // w, where a chunk entry carried a chunk coordinate and a detail level it did not use. The two
+    // marchers write the same buffer in the same format, so whichever one ran this frame, the
+    // other's consumer sees numbers it can make sense of — which is what lets the two be swapped
+    // at run time without a second feedback path.
+    if (use_node_pool_) {
+        for (const FeedbackEntry& entry : wanted) {
+            const u32 level = static_cast<u32>(entry.level);
+            if (level < kLeafLevel || level > kMaxNodeLevel) continue;
+            node_pool_.request(NodeKey{entry.x, entry.y, entry.z, level});
+
+            // And the six face neighbours, for the same reason the chunk path dilates: a ray
+            // reports one node, so only the nodes some ray happened to land on would ever be
+            // built, which left visible notches along the edges of what had streamed. A
+            // neighbour that is already there costs one hash and a hit.
+            const NodeKey around[6] = {
+                {entry.x - 1, entry.y, entry.z, level}, {entry.x + 1, entry.y, entry.z, level},
+                {entry.x, entry.y - 1, entry.z, level}, {entry.x, entry.y + 1, entry.z, level},
+                {entry.x, entry.y, entry.z - 1, level}, {entry.x, entry.y, entry.z + 1, level},
+            };
+            // Not `near`: windows.h still defines it as an empty macro, so a loop variable
+            // by that name is a syntax error with no mention of macros anywhere in it.
+            for (const NodeKey& adjacent : around) node_pool_.request(adjacent);
+        }
+    }
+
     // A small radius around the camera on top, so the ground under your feet is resident
     // before it has been looked at. Feedback cannot report what has never been on screen.
     // (The window itself is set before the loop above, so requests outside it are already
@@ -2491,6 +2570,25 @@ void Application::record_frame(f32 time_seconds) {
     feedback_.begin_frame(cmd);
 
     // ---- streaming ------------------------------------------------------------------
+    // The node pool, updated and copied before anything reads it. Its own pass, so the cost is
+    // visible beside streaming rather than folded into it — the two are alternatives and the
+    // whole point of R1 is which of them is cheaper.
+    {
+        profiler_.begin_pass(cmd, "nodes", 0.8);
+        const f64 camera_voxel[3] = {
+            static_cast<f64>(camera_.chunk_x()) * 256.0 + camera_.local_x(),
+            static_cast<f64>(camera_.chunk_y()) * 256.0 + camera_.local_y(),
+            static_cast<f64>(camera_.chunk_z()) * 256.0 + camera_.local_z(),
+        };
+        const NodeUploadBatch& node_batch = node_pool_.update(world_, camera_voxel, frame_counter_);
+        last_node_built_ = node_batch.built;
+        last_node_evicted_ = node_batch.evicted;
+        last_node_deferred_ = node_batch.deferred;
+        node_buffers_.upload(cmd, node_pool_, node_batch);
+        profiler_.add_bytes(node_buffers_.stats().uploaded_this_frame);
+        profiler_.end_pass(cmd);
+    }
+
     profiler_.begin_pass(cmd, "streaming", 0.8);
     stream(static_cast<f64>(time_seconds));
     const u64 residency_start = now_ns();
@@ -3186,11 +3284,23 @@ void Application::record_frame(f32 time_seconds) {
     // ---- primary visibility ---------------------------------------------------------
     if (!path_trace_) {
     profiler_.begin_pass(cmd, "visibility", 9.5);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.pipeline());
     const u32 params_offset =
         static_cast<u32>(swapchain_.frame_index()) * static_cast<u32>(params_stride_);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.layout(), 0, 1,
-                            &descriptor_set_, 1, &params_offset);
+    if (use_node_pool_) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, node_visibility_.pipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, node_visibility_.layout(), 0,
+                                1, &node_set_, 1, &params_offset);
+        // The entry table's size and how far a probe may run. A push constant rather than a
+        // field in the parameter block, because it belongs to this pipeline and nothing else
+        // reads it — and because the block is already at the size AMD gives (128 bytes) once.
+        const u32 node_constants[4] = {node_buffers_.entry_capacity(), 32u, 0u, 0u};
+        vkCmdPushConstants(cmd, node_visibility_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(node_constants), node_constants);
+    } else {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.pipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.layout(), 0, 1,
+                                &descriptor_set_, 1, &params_offset);
+    }
 
     vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
     profiler_.add_bytes(static_cast<u64>(render_extent.width) * render_extent.height * 20);
@@ -3653,6 +3763,103 @@ int Application::run(const Options& options) {
     const std::filesystem::path source =
         std::filesystem::path(WS_SHADER_SOURCE_DIR) / "visibility.comp";
 
+    // The node pool, its buffers, its descriptor set and its pipeline. Created unconditionally
+    // rather than behind the flag: the point of R1c is that the two marchers can be swapped at
+    // run time and diffed on one camera, and a path that is only built when it is asked for is a
+    // path nobody notices has stopped compiling.
+    {
+        NodePoolBudget node_budget;
+        node_pool_.create(node_budget, types_);
+        if (!node_buffers_.create(device_, node_budget)) {
+            WS_LOG_FATAL("app", "could not create the node pool buffers");
+            return 1;
+        }
+
+        // 0-1 out images, 2-6 the pool, 7 feedback, 8 the parameter block.
+        VkDescriptorSetLayoutBinding node_bindings[9]{};
+        for (u32 i = 0; i < 9; ++i) {
+            node_bindings[i].binding = i;
+            node_bindings[i].descriptorType =
+                (i < 2)  ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                : (i < 8) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+                          : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            node_bindings[i].descriptorCount = 1;
+            node_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        VkDescriptorSetLayoutCreateInfo node_layout_info{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        node_layout_info.bindingCount = 9;
+        node_layout_info.pBindings = node_bindings;
+        WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
+                                          &node_layout_));
+
+        VkDescriptorSetAllocateInfo node_alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        node_alloc.descriptorPool = descriptor_pool_;
+        node_alloc.descriptorSetCount = 1;
+        node_alloc.pSetLayouts = &node_layout_;
+        WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
+
+        const VkBuffer node_pool_buffers[6]{
+            node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
+            node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
+        };
+        VkDescriptorBufferInfo node_infos[6]{};
+        VkWriteDescriptorSet node_writes[7]{};
+        for (u32 i = 0; i < 6; ++i) {
+            node_infos[i].buffer = node_pool_buffers[i];
+            node_infos[i].offset = 0;
+            node_infos[i].range = VK_WHOLE_SIZE;
+            node_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            node_writes[i].dstSet = node_set_;
+            node_writes[i].dstBinding = 2 + i;
+            node_writes[i].descriptorCount = 1;
+            node_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            node_writes[i].pBufferInfo = &node_infos[i];
+        }
+        VkDescriptorBufferInfo node_params{};
+        node_params.buffer = params_buffer_.buffer;
+        node_params.offset = 0;
+        node_params.range = sizeof(RenderParams);
+        node_writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[6].dstSet = node_set_;
+        node_writes[6].dstBinding = 8;
+        node_writes[6].descriptorCount = 1;
+        node_writes[6].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[6].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 7, node_writes, 0, nullptr);
+
+        // And the two output images, which the render target owns. It was created before this
+        // set existed, so its own binding pass skipped them.
+        VkDescriptorImageInfo node_vis{};
+        node_vis.imageView = visibility_image_.view;
+        node_vis.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkDescriptorImageInfo node_depth{};
+        node_depth.imageView = depth_target_.view;
+        node_depth.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkWriteDescriptorSet node_images[2]{};
+        for (u32 i = 0; i < 2; ++i) {
+            node_images[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            node_images[i].dstSet = node_set_;
+            node_images[i].dstBinding = i;
+            node_images[i].descriptorCount = 1;
+            node_images[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        }
+        node_images[0].pImageInfo = &node_vis;
+        node_images[1].pImageInfo = &node_depth;
+        vkUpdateDescriptorSets(device_.handle(), 2, node_images, 0, nullptr);
+
+        const std::filesystem::path node_spirv = shaders / "node_visibility.comp.spv";
+        const std::filesystem::path node_source =
+            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "node_visibility.comp";
+        if (!node_visibility_.create(device_, node_source, node_spirv, node_layout_,
+                                     sizeof(u32) * 4)) {
+            WS_LOG_FATAL("app", "could not create the node visibility pipeline: {}",
+                         node_visibility_.last_error());
+            return 1;
+        }
+        use_node_pool_ = options_.node_pool;
+    }
+
     if (!visibility_.create(device_, source, spirv, set_layout_, 0)) {
         WS_LOG_FATAL("app", "could not create the visibility pipeline: {}",
                      visibility_.last_error());
@@ -4106,22 +4313,61 @@ int Application::run(const Options& options) {
             *target = 1;
         }
 
+        // Warm-up thrown away before anything is averaged. Shaders are still compiling and
+        // the first nodes are still arriving for the opening frames, and timing those measures
+        // the loading screen rather than the renderer — the same reasoning the first-run
+        // benchmark in documentation/19-auto-quality.md already uses.
+        if (!options_.screenshot.empty() && frame_counter_ == options_.screenshot_frame / 2) {
+            profiler_.reset_averages();
+        }
+
         if (!options_.screenshot.empty() && frame_counter_ >= options_.screenshot_frame) {
             device_.wait_idle();
             save_image_png(device_, render_target_, options_.screenshot);
-            const std::vector<PassTiming>& passes = profiler_.results();
-            for (const PassTiming& pass : passes) {
-                WS_LOG_INFO("frame", "{:<12} {:.3f} ms  (budget {:.2f})", pass.name,
-                            pass.gpu_ms, pass.budget_ms);
+            // Averages, not the last frame. One frame's GPU time moves several per cent from
+            // clock and scheduling alone, so a figure another build has to beat has to be a
+            // mean over a window. `worst` is beside it because a locked frame rate is decided
+            // by the worst frame and not by the mean one (documentation/09 §9).
+            const std::vector<PassAverage>& passes = profiler_.averages();
+            WS_LOG_INFO("frame", "{:<14} {:>9} {:>9} {:>9}", "pass", "mean ms", "worst", "budget");
+            for (const PassAverage& pass : passes) {
+                // Indented by nesting, so a pass that contains another reads as containing it
+                // rather than as a sibling that happens to cost the same.
+                const std::string label = std::string(pass.depth * 2, ' ') + pass.name;
+                WS_LOG_INFO("frame", "{:<14} {:9.3f} {:9.3f} {:9.2f}", label, pass.mean_ms,
+                            pass.worst_ms, pass.budget_ms);
             }
-            WS_LOG_INFO("frame", "total GPU {:.3f} ms, CPU {:.3f} ms",
-                        profiler_.total_gpu_ms(), stats_.average_ms());
+            WS_LOG_INFO("frame", "total GPU mean {:.3f} ms, worst {:.3f} ms, over {} frames",
+                        profiler_.mean_total_gpu_ms(), profiler_.worst_total_gpu_ms(),
+                        profiler_.averaged_frames());
+            WS_LOG_INFO("frame", "CPU {:.3f} ms", stats_.average_ms());
             const ResidencyStats residency = residency_.stats();
             WS_LOG_INFO("frame",
                         "resident {} of {} chunks, {} bricks; feedback {} reports ({} dropped)",
                         residency.resident_chunks, world_.chunk_count(),
                         residency.resident_bricks, last_feedback_,
                         last_feedback_truncated_);
+            // In bytes as well as in chunks, because the claim the rewrite makes about streaming
+            // is about memory following the *screen* — and a chunk count cannot show that. Two
+            // views holding the same number of chunks at different resolutions should differ
+            // here, and that difference is the thing being aimed at.
+            // What the card actually holds, against what the pool holds. Run at the screenshot
+            // rather than per frame because it stalls the device; that is often enough to catch
+            // an upload that is dropping or misplacing something, which is the class of fault
+            // this exists for.
+            if (use_node_pool_) node_buffers_.audit(node_pool_);
+
+            const NodePoolStats node_stats = node_pool_.stats();
+            WS_LOG_INFO("frame",
+                        "node pool {}: {} nodes, {} leaves, {} bytes; built {} evicted {}; "
+                        "requests {} hits {} deferred {}",
+                        use_node_pool_ ? "marching" : "idle", node_stats.nodes,
+                        node_stats.leaves, node_stats.total_bytes, last_node_built_,
+                        last_node_evicted_, node_stats.requests, node_stats.hits,
+                        last_node_deferred_);
+            WS_LOG_INFO("frame", "resident bytes {} payload, {} index, {} total",
+                        residency.payload_in_use, residency.index_bytes,
+                        residency.total_bytes);
             break;
         }
     }
@@ -4143,6 +4389,12 @@ int Application::run(const Options& options) {
     destroy_buffer(device_, clip_staging_);
     destroy_buffer(device_, light_buffer_);
     visibility_.destroy();
+    node_visibility_.destroy();
+    node_buffers_.destroy();
+    if (node_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_.handle(), node_layout_, nullptr);
+        node_layout_ = VK_NULL_HANDLE;
+    }
     resolve_.destroy();
     pathtrace_.destroy();
     // And the cloud pass. Every pipeline has to be torn down HERE, while the device is still

@@ -486,6 +486,27 @@ vec3 unpack_rgb(uint packed) {
                 float((packed >> 16u) & 0xFFu)) / 255.0;
 }
 
+// Debug view 11: this pixel's face key, written out as four exact bytes.
+//
+// It exists to answer one question that the whole shape of documentation/21-renderer-rewrite.md
+// rests on and that nothing here has ever measured: **how many distinct faces are visible in a
+// frame, and how does that number move with resolution.** The face pass the rewrite is built
+// around is budgeted in faces, so if face count turns out to track pixels one for one, lighting
+// does not decouple from resolution and the central claim is wrong.
+//
+// Counting has to be exact rather than sampled, because the answer is a cardinality: a subset of
+// the pixels tells you nothing about how many distinct keys the whole frame holds. So the key is
+// written to the image and counted on the way out. The screenshot path writes four channels
+// through stbi_write_png, and PNG is lossless, so a 32-bit key survives a round trip intact —
+// and a unorm8 channel returns exactly what `byte / 255.0` put into it.
+//
+// Zero means "no face here": sky, or a summary block, neither of which the face pass would shade.
+void store_face_key(ivec2 pixel, uint key) {
+    imageStore(out_colour, pixel,
+               vec4(float(key & 0xFFu), float((key >> 8u) & 0xFFu), float((key >> 16u) & 0xFFu),
+                    float((key >> 24u) & 0xFFu)) / 255.0);
+}
+
 #include "preview.glsl"
 
 layout(push_constant) uniform Trace {
@@ -2059,6 +2080,7 @@ void main() {
         // Just the sky. The cloud in front of it is composited in write_pixel, over the
         // distance to whatever the ray reached — which is the far plane for this one — so that a
         // ray ending on a roof gets the same treatment as a ray ending on the sky.
+        if (push.resolution.z == 11u) { store_face_key(pixel, 0u); return; }
         radiance = sky_view(dir);
     } else {
         primary_t = hit.t;
@@ -2116,6 +2138,8 @@ void main() {
         // the block is kilometres away and a fraction of a pixel, and a shadow it cannot
         // resolve is not a shadow anyone can see.
         if (hit.level >= 5) {
+            // A summary block has no face and never gets one, so it counts as no face at all.
+            if (push.resolution.z == 11u) { store_face_key(pixel, 0u); return; }
             radiance = clamp_finite(summary_radiance(normal, m));
             write_pixel(pixel, sample_index, radiance, primary_t, aspect);
             return;
@@ -2125,6 +2149,11 @@ void main() {
         uint level = cache_level(hit.t);
         uint lo, hi;
         face_key(voxel, hit.normal, level, kFaceIndirect, lo, hi);
+
+        // Before any of the shading work, because the count is of what the primary ray resolved
+        // and nothing below can change which face that is.
+        if (push.resolution.z == 11u) { store_face_key(pixel, lo); return; }
+
         uint slot = face_slot(lo, hi, true, trace.control.z);
         seed_face(slot, voxel, hit.normal, level, trace.control.z);
 

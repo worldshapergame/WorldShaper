@@ -52,7 +52,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Add-Type -AssemblyName System.Drawing
 
 $root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $root "build\bin\WorldShaper.exe"
@@ -60,64 +59,8 @@ if (-not (Test-Path $exe)) { throw "no WorldShaper.exe at $exe - run build.bat f
 if ($Out -eq "") { $Out = Join-Path $env:TEMP "ws-speckle" }
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
-function Measure-Speckle([string]$png) {
-    $bmp = [System.Drawing.Bitmap]::FromFile($png)
-    try {
-        $w = $bmp.Width; $h = $bmp.Height
-        $data = $bmp.LockBits(
-            (New-Object System.Drawing.Rectangle 0, 0, $w, $h),
-            [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
-            [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-        $stride = $data.Stride
-        $bytes = New-Object byte[] ($stride * $h)
-        [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)
-        $bmp.UnlockBits($data)
-
-        # Luminance once, so the neighbourhood walk is arithmetic and not colour conversion.
-        $lum = New-Object 'double[]' ($w * $h)
-        for ($y = 0; $y -lt $h; $y++) {
-            $row = $y * $stride
-            for ($x = 0; $x -lt $w; $x++) {
-                $i = $row + $x * 4
-                $lum[$y * $w + $x] = 0.0722 * $bytes[$i] + 0.7152 * $bytes[$i + 1] +
-                                     0.2126 * $bytes[$i + 2]
-            }
-        }
-
-        $total = 0.0
-        $counted = 0
-        $fireflies = 0
-        $neighbours = New-Object 'double[]' 8
-        for ($y = 1; $y -lt $h - 1; $y++) {
-            for ($x = 1; $x -lt $w - 1; $x++) {
-                $k = $y * $w + $x
-                $n = 0
-                for ($dy = -1; $dy -le 1; $dy++) {
-                    for ($dx = -1; $dx -le 1; $dx++) {
-                        if ($dx -eq 0 -and $dy -eq 0) { continue }
-                        $neighbours[$n] = $lum[($y + $dy) * $w + ($x + $dx)]
-                        $n++
-                    }
-                }
-                $sorted = $neighbours | Sort-Object
-                $median = ($sorted[3] + $sorted[4]) * 0.5
-                # Against the local level plus a floor, so a dark room does not read as all noise
-                # for want of anything to divide by.
-                $relative = [Math]::Abs($lum[$k] - $median) / ($median + 8.0)
-                $total += $relative
-                $counted++
-                if ($lum[$k] -gt $median * 4.0 + 24.0) { $fireflies++ }
-            }
-        }
-        return [PSCustomObject]@{
-            Speckle   = if ($counted -gt 0) { 1000.0 * $total / $counted } else { 0.0 }
-            Fireflies = $fireflies
-            Pixels    = $counted
-        }
-    } finally {
-        $bmp.Dispose()
-    }
-}
+# The metric itself, shared with tools\baseline.ps1 so that the two cannot drift apart.
+. (Join-Path $PSScriptRoot "_measure.ps1")
 
 Write-Host ("camera {0}   {1}x{2}{3}" -f $Cam, $Width, $Height,
             $(if ($Fly -ne "") { "   flying " + $Fly } else { "   still" }))

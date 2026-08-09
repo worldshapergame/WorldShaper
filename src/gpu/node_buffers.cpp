@@ -1,0 +1,225 @@
+#include "gpu/node_buffers.hpp"
+
+#include <cstring>
+
+#include "core/log.hpp"
+
+namespace ws {
+
+bool NodeBuffers::create(Device& device, const NodePoolBudget& budget) {
+    device_ = &device;
+
+    const u64 node_bytes = static_cast<u64>(budget.max_nodes) * sizeof(GpuNode);
+    const u64 leaf_bytes = static_cast<u64>(budget.max_occupancy_leaves) * sizeof(GpuBrickHeader);
+    const u64 occupancy_bytes =
+        static_cast<u64>(budget.max_occupancy_leaves) * kBrickWords * sizeof(u64);
+
+    // The entry table's size is the pool's own rule, mirrored here so the shader can be told the
+    // capacity as a push constant rather than having to guess it.
+    entry_capacity_ = 1;
+    const u32 wanted = (budget.max_nodes / 4 > 1024) ? budget.max_nodes / 4 : 1024;
+    while (entry_capacity_ < wanted) entry_capacity_ <<= 1;
+    const u64 entry_bytes = static_cast<u64>(entry_capacity_) * sizeof(u32);
+
+    constexpr VkBufferUsageFlags kStorage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    entries_ = create_device_buffer(device, entry_bytes, kStorage, "node entries");
+    nodes_ = create_device_buffer(device, node_bytes, kStorage, "nodes");
+    leaves_ = create_device_buffer(device, leaf_bytes, kStorage, "node leaves");
+    occupancy_ = create_device_buffer(device, occupancy_bytes, kStorage, "node occupancy");
+    payload_ = create_device_buffer(device, budget.payload_bytes, kStorage, "node payload");
+
+    // Big enough for the largest single frame's worth: every array's used prefix at once, in the
+    // worst case where the whole pool has just been built. Sized once, never grown — a
+    // reallocation mid-play is the hitch streaming exists to avoid.
+    staging_capacity_ = node_bytes + leaf_bytes + occupancy_bytes + entry_bytes;
+    if (staging_capacity_ > budget.payload_bytes) {
+        staging_capacity_ += budget.payload_bytes;
+    } else {
+        staging_capacity_ += budget.payload_bytes;
+    }
+    staging_ = create_staging_buffer(device, staging_capacity_, "node staging");
+
+    stats_ = NodeBufferStats{};
+    stats_.device_bytes =
+        node_bytes + leaf_bytes + occupancy_bytes + entry_bytes + budget.payload_bytes;
+    return entries_.valid() && nodes_.valid() && leaves_.valid() && occupancy_.valid() &&
+           payload_.valid() && staging_.valid();
+}
+
+void NodeBuffers::destroy() {
+    if (device_ == nullptr) return;
+    destroy_buffer(*device_, entries_);
+    destroy_buffer(*device_, nodes_);
+    destroy_buffer(*device_, leaves_);
+    destroy_buffer(*device_, occupancy_);
+    destroy_buffer(*device_, payload_);
+    destroy_buffer(*device_, staging_);
+    device_ = nullptr;
+}
+
+bool NodeBuffers::stage(VkCommandBuffer cmd, const void* source, u64 bytes,
+                        GpuBuffer& destination) {
+    if (bytes == 0) return true;
+    if (staging_cursor_ + bytes > staging_capacity_) return false;
+
+    std::memcpy(static_cast<u8*>(staging_.mapped) + staging_cursor_, source, bytes);
+
+    VkBufferCopy copy{};
+    copy.srcOffset = staging_cursor_;
+    copy.dstOffset = 0;
+    copy.size = bytes;
+    vkCmdCopyBuffer(cmd, staging_.buffer, destination.buffer, 1, &copy);
+
+    staging_cursor_ += bytes;
+    stats_.uploaded_this_frame += bytes;
+    stats_.total_uploaded += bytes;
+    return true;
+}
+
+void NodeBuffers::upload(VkCommandBuffer cmd, const NodePool& pool,
+                         const NodeUploadBatch& batch) {
+    stats_.uploaded_this_frame = 0;
+    staging_cursor_ = 0;
+
+    // Nothing changed, so nothing is copied. This is the steady state: the tree converges and
+    // then goes quiet, exactly as feedback-driven streaming does once it has served every request
+    // — which is the property that makes copying whole prefixes affordable at all.
+    // `nodes` as well as the counters, and that is not belt and braces. The pool seeds a root
+    // for every entry block the world occupies without counting them as builds — they are not
+    // work anybody asked for — so a condition on the counters alone skipped the one upload the
+    // marcher cannot start without. The symptom was an empty entry table on the GPU: every ray
+    // found no root, read that as empty space, reported nothing, and marched to the far plane.
+    if (batch.built == 0 && batch.evicted == 0 && batch.nodes.empty()) return;
+
+    const u32 node_count = pool.node_watermark();
+    const u32 leaf_count = pool.leaf_watermark();
+
+    stage(cmd, pool.entries().data(), pool.entries().size() * sizeof(u32), entries_);
+    stage(cmd, pool.nodes().data(), static_cast<u64>(node_count) * sizeof(GpuNode), nodes_);
+    stage(cmd, pool.leaves().data(), static_cast<u64>(leaf_count) * sizeof(GpuBrickHeader),
+          leaves_);
+    stage(cmd, pool.occupancy().data(),
+          static_cast<u64>(leaf_count) * kBrickWords * sizeof(u64), occupancy_);
+    stage(cmd, pool.payload().data(), pool.payload_watermark(), payload_);
+
+    ++stats_.uploads;
+
+    // One barrier for the lot. The copies are independent of each other and every one of them has
+    // to land before the marcher reads any of them, so there is nothing to gain by separating.
+    VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.memoryBarrierCount = 1;
+    dependency.pMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(cmd, &dependency);
+}
+
+// ---- the mirror check --------------------------------------------------------------------------
+
+namespace {
+
+// Where each array lands in the readback, so one copy-back covers the lot.
+struct AuditRange {
+    const char* name;
+    VkBuffer source;
+    u64 bytes;
+    const void* expected;
+    u64 offset;
+};
+
+}  // namespace
+
+bool NodeBuffers::audit(const NodePool& pool) {
+    if (device_ == nullptr) return false;
+
+    const u32 node_count = pool.node_watermark();
+    const u32 leaf_count = pool.leaf_watermark();
+
+    AuditRange ranges[5]{
+        {"entries", entries_.buffer, pool.entries().size() * sizeof(u32), pool.entries().data(), 0},
+        {"nodes", nodes_.buffer, static_cast<u64>(node_count) * sizeof(GpuNode),
+         pool.nodes().data(), 0},
+        {"leaves", leaves_.buffer, static_cast<u64>(leaf_count) * sizeof(GpuBrickHeader),
+         pool.leaves().data(), 0},
+        {"occupancy", occupancy_.buffer,
+         static_cast<u64>(leaf_count) * kBrickWords * sizeof(u64), pool.occupancy().data(), 0},
+        {"payload", payload_.buffer, pool.payload_watermark(), pool.payload().data(), 0},
+    };
+
+    u64 cursor = 0;
+    for (AuditRange& range : ranges) {
+        range.offset = cursor;
+        cursor += range.bytes;
+    }
+    if (cursor > staging_capacity_) {
+        WS_LOG_ERROR("nodes", "audit needs {} bytes of staging, have {}", cursor,
+                     staging_capacity_);
+        return false;
+    }
+
+    // One-shot command buffer, exactly as the screenshot path does it. This is off the hot path
+    // by construction, so the simple thing is the right thing.
+    VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pool_info.queueFamilyIndex = device_->graphics_family();
+    VkCommandPool command_pool = VK_NULL_HANDLE;
+    WS_VK(vkCreateCommandPool(device_->handle(), &pool_info, nullptr, &command_pool));
+
+    VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    alloc.commandPool = command_pool;
+    alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    WS_VK(vkAllocateCommandBuffers(device_->handle(), &alloc, &cmd));
+
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    WS_VK(vkBeginCommandBuffer(cmd, &begin));
+    for (const AuditRange& range : ranges) {
+        if (range.bytes == 0) continue;
+        VkBufferCopy copy{};
+        copy.srcOffset = 0;
+        copy.dstOffset = range.offset;
+        copy.size = range.bytes;
+        vkCmdCopyBuffer(cmd, range.source, staging_.buffer, 1, &copy);
+    }
+    WS_VK(vkEndCommandBuffer(cmd));
+
+    VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+    cmd_info.commandBuffer = cmd;
+    VkSubmitInfo2 submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+    submit.commandBufferInfoCount = 1;
+    submit.pCommandBufferInfos = &cmd_info;
+    WS_VK(vkQueueSubmit2(device_->graphics_queue(), 1, &submit, VK_NULL_HANDLE));
+    device_->wait_idle();
+
+    bool matched = true;
+    for (const AuditRange& range : ranges) {
+        if (range.bytes == 0) continue;
+        const u8* card = static_cast<const u8*>(staging_.mapped) + range.offset;
+        const u8* host = static_cast<const u8*>(range.expected);
+        if (std::memcmp(card, host, static_cast<usize>(range.bytes)) == 0) continue;
+
+        // The first differing byte, not merely "they differ". An index is the difference between
+        // a bug you can look at and an afternoon of narrowing.
+        u64 at = 0;
+        while (at < range.bytes && card[at] == host[at]) ++at;
+        WS_LOG_ERROR("nodes",
+                     "GPU mirror mismatch in {}: first at byte {} of {} (card {:#04x}, "
+                     "host {:#04x})",
+                     range.name, at, range.bytes, card[at], host[at]);
+        matched = false;
+    }
+
+    vkDestroyCommandPool(device_->handle(), command_pool, nullptr);
+    if (matched) {
+        WS_LOG_INFO("nodes", "GPU mirror matches: {} nodes, {} leaves, {} payload bytes",
+                    node_count, leaf_count, pool.payload_watermark());
+    }
+    return matched;
+}
+
+}  // namespace ws

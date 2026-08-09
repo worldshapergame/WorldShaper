@@ -351,6 +351,57 @@ A **radiance** cache stores light per *direction*, which is what a reflection ne
 
 **So the plan is both, in that order, and after Stage 6:** SH irradiance for low-gloss response, plus a per-pixel specular ray that reads the cache at its far end for anything smooth. Doing it before materials exist would be tuning a reflection model against six placeholder substances, which is how you end up rewriting it once the real ones arrive.
 
+## The renderer rewrite — stage R0, the instruments
+
+The rewrite planned in `21-renderer-rewrite.md` begins by fixing the thing that measures it. The
+first hour of it found that the pass under rewrite has never been timed.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D201 | **The GPU profiler keeps a stack, and a pass claims its slot when it opens rather than when it closes** | measurement | It kept one open index and did not claim the slot until `end_pass`. The cloud dispatch was later moved *inside* the path tracer's pass, so the inner `begin_pass` took the outer one's slot and overwrote its name, the inner `end_pass` cleared the open index, and the outer `end_pass` found nothing open and wrote no end timestamp at all. Everything after the inner pass — which is the entire tracer — fell outside every timestamp in the frame. It read as **0.253 ms of GPU work against 37.7 ms of wall clock**, with a plausible-looking list of passes above it, and nothing anywhere said a pass had gone missing. The damage is confined to measurement: auto-quality observes wall-clock frame time and was never misled |
+| D202 | **A reported figure is a mean over a window, with the warm-up thrown away and the worst frame beside it** | D201 | One frame's GPU time moves several per cent from clock and scheduling alone, so a single-frame number cannot detect a 3% regression — which is the tolerance every stage of the rewrite is gated on. The engine now averages from half way through a scripted run and reports mean, worst and frame count. Worst is there because a locked frame rate is decided by the worst frame and not the mean one (`09-performance-budgets.md` §9) |
+| D203 | **The path-traced figures in `19-auto-quality.md` are withdrawn.** 2.495 ms outdoors and 19.988 ms enclosed cannot be reproduced by any build in the tree | D201 | They predate both the nesting and most of what the tracer now does — next-event estimation, directional radiance bins, the glass segment loop, the three-ring eight-tap face gather, the level pyramid. Every one of those is per pixel and none of them was ever timed. Measured now on the same machine at 1280×800: **12.28 ms outdoors and 40.07 ms enclosed** |
+| D204 | **Measurement lives in one place**: `tools/baseline.ps1` over a fixed grid of cameras, resolutions and modes, writing a file that the next run diffs against | — | Every performance figure in `documentation/` before this was taken by hand, once, at whatever camera and resolution happened to be in front of somebody, and then quoted for months. Two of them turned out to be wrong rather than merely old. The cameras live in `tools/_grid.ps1` so that no two tools can measure different things and call the numbers comparable |
+| D205 | **Debug view 11 writes each pixel's face key out as four exact bytes**, so the number of distinct faces in a frame can be counted rather than assumed | — | The whole of `21-renderer-rewrite.md` rests on face count growing far more slowly than pixel count, and nothing in the engine had ever measured it. A cardinality cannot be sampled, so it is written to the image and counted on the way out: the screenshot path writes four channels through `stbi_write_png`, PNG is lossless, and a unorm8 channel returns exactly what `byte / 255.0` put in |
+
+## The renderer rewrite — stage R1, the node pool
+
+Built and tested headless before anything in the renderer moved, which is how residency was built
+in Stage 2 and for the same reason: a structure the renderer walks and nobody compares against the
+world is a renderer debugging a mirage.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D206 | **One sparse octree at every scale replaces the chunk grid, the brick mask, the brick-mask pyramid, the coarse occupancy grids, the summary octree and the thumbnail tiers.** A node's coordinate is its voxel coordinate shifted by its level | D187 | Four addressing schemes glued end to end, every seam between them with its own entry in this log, and all the same fault: two structures answering one question and allowed to disagree |
+| D207 | **A leaf is a brick, at level 3.** Below that nothing changes — palette encodings, the 64-byte occupancy, the two mips, and a ray marching at single-voxel resolution | D132 | Bricks are the storage and compression unit and they work. Chunks are the fixed-size box and they do not |
+| D208 | **The eight children of a node are contiguous, so a descent is `children + octant`** | measurement | One hash to enter the tree; pure arithmetic below it. Against two dependent loads per chunk entered, up to thirty-two times along each axis crossed, plus a coarse-grid fetch per skip |
+| D209 | **A leaf carries a leaf id, not its data.** The header and the sixty-four bytes of occupancy live in their own array | bug | The first version stashed the brick's encoding in the spare bits of the coverage word. It collided with the -z byte, so `index_bits` read back as a coverage value and `decode_voxel` divided by it. A crash rather than a wrong picture, which was luck. Moving a node now copies thirty-two bytes and never its occupancy |
+| D210 | **Allocation is a bump pointer and two free lists, never a search for a contiguous run** | bug | The first version carved runs off the tail of one free list and checked the eight it found were consecutive. They are — until something is freed, after which the check fails, allocation returns "nothing", and the caller reads that as an empty region. **A tree that stops building because it ran out of memory must not look like a tree that stopped because the world is empty**, so `out_of_room_` tells the two apart |
+| D211 | **A build is gated on an index of what the world holds** | measurement | Without it a node at the entry level descends into eight children unconditionally: 8¹¹ is 8.6 billion nodes for a world holding one brick. The summary octree hit this once and never returned (D153); this hit it and was rescued by the allocator failing, which was worse |
+| D212 | **A radius of zero means no proximity residency at all** | bug | A loop that still runs once at radius zero holds the camera's own node resident for ever. Caught by an eviction test, not by looking |
+| D213 | **`mirror_voxel` walks the pool exactly as the shader will**, and is asserted against the world over every voxel of a scene with a slab, a one-voxel wall and an isolated voxel | D207 | The successor to the mirror check that has guarded residency since Stage 2. It immediately caught a payload base passed as the pool rather than the brick — which decoded the one brick at offset zero correctly and read a neighbour's palette for every other |
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D214 | **A child mask records what the WORLD has, not what the pool has built.** A child the world holds and the pool has not built is left at level nought in its slot | bug | Setting the bit only for built children makes a node whose budget ran out indistinguishable from a node over empty space — so no ray reports it and nothing is ever streamed. That is D133 and D147 arriving for a third time, and this is the version where it is a property of the structure rather than a bug to be found again |
+| D215 | **A descent returns three answers, not two: here, empty, and wanted** | D214 | They drive three different behaviours — draw, jump, report — and the whole of streaming is the difference between the last two. `NodeFind` carries it on the CPU and `Found` in the shader, from the same walk |
+| D216 | **The coarse skip falls out of the descent.** When a child mask bit is clear, the empty cell's size is known, so a ray jumps its width | D215 | This is what five separate wrapped occupancy grids were carrying, and it is now a consequence of the tree rather than a structure beside it |
+| D217 | **The walk keeps the ancestors it descended through, and which of them survive a step is computed rather than stored** | — | Two points share every ancestor above the highest bit in which they differ, so one XOR and one `findMSB` says where to restart. No coordinates are kept and no loads are spent finding out |
+| D218 | **The entry bucket is a 32-bit mix over truncated coordinates, mixed one axis at a time**, and the same function exists on both sides | D205 | The shader has no 64-bit arithmetic in its inner loop, and a hash short enough to compare by eye is worth more than one that is merely good. Mixed per axis rather than by XORing three products, because voxel coordinates are a dense lattice and XOR-of-products over a lattice drops whole planes into the same buckets — the fault the face-cache key already hit |
+
+**Where R1 stands.** The pool is built, correct and tested — 424 test cases, 18.0 M assertions —
+and `shaders/node.glsl` walks it, compiled, with `node_visibility.comp` writing the existing
+visibility format so `resolve.comp` reads it unchanged. It sits *beside* the old marcher rather
+than replacing it, so the two can be rendered from one camera and diffed: R1 claims the picture
+does not change and the cost falls, and both halves need measuring rather than asserting.
+
+**Known gap, carried to R2.** A node the world has and the pool has not built is currently skipped
+like empty space, so an unstreamed region draws as sky for a frame or two rather than showing its
+parent. Drawing the parent instead is the right answer and it needs the rule D151 already
+records — never fall back to a level coarser than the pixel resolves, or a two-kilometre block
+containing ground a mile away draws as a blob a few metres from the camera. That is residency
+policy, and residency policy is R2.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
