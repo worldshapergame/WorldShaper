@@ -1071,6 +1071,11 @@ NodePoolStats NodePool::stats() const {
     s.occupancy_bytes = static_cast<u64>(s.leaves) * kBrickWords * sizeof(u64);
     s.total_bytes = s.node_bytes + s.occupancy_bytes + s.payload_in_use +
                     entries_.size() * sizeof(u32);
+    s.screen_bytes = s.node_bytes + s.occupancy_bytes + s.payload_in_use;
+    for (u32 slot = 0; slot < next_free_; ++slot) {
+        const u32 level = node_level(nodes_[slot]);
+        if (level != 0 && level < 32) ++s.per_level[level];
+    }
     s.builds = builds_;
     s.evictions = evictions_;
     s.requests = requests_;

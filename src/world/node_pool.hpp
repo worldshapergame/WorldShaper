@@ -353,8 +353,22 @@ struct NodePoolStats {
     u64 node_bytes = 0;
     u64 occupancy_bytes = 0;
     u64 total_bytes = 0;
+    // What the screen is actually paying for: everything except the entry table, which is sized
+    // once from the budget and never changes.
+    //
+    // R2b's rule is about resident bytes following resolution, and the table is a fixed
+    // 1,048,576 bytes at the default budget -- on a distant camera that is 95% of `total_bytes`,
+    // so the total moved 3% while the thing the rule is about moved by 3.4x. A gate measured
+    // against a number with a megabyte constant in it cannot be met by any amount of eviction.
+    u64 screen_bytes = 0;
     u64 builds = 0;
     u64 evictions = 0;
+    // Resident nodes by level, which is the shape a total cannot show.
+    //
+    // R2b's rule is that halving the resolution moves every ray's stopping point exactly one
+    // level coarser, so the histogram should shift by one and lose three quarters of its finest
+    // level. A single number says memory fell by 22% and cannot say which levels did not move.
+    u32 per_level[32]{};
     u64 requests = 0;
     u64 hits = 0;
     f64 hit_rate() const {

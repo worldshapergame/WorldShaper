@@ -4783,12 +4783,27 @@ int Application::run(const Options& options) {
 
             const NodePoolStats node_stats = node_pool_.stats();
             WS_LOG_INFO("frame",
-                        "node pool {}: {} nodes, {} leaves, {} bytes; built {} evicted {}; "
+                        "node pool {}: {} nodes, {} leaves, {} bytes ({} for the screen); "
+                        "built {} evicted {}; "
                         "requests {} hits {} deferred {}",
                         use_node_pool_ ? "marching" : "idle", node_stats.nodes,
-                        node_stats.leaves, node_stats.total_bytes, last_node_built_,
+                        node_stats.leaves, node_stats.total_bytes, node_stats.screen_bytes,
+                        last_node_built_,
                         last_node_evicted_, node_stats.requests, node_stats.hits,
                         last_node_deferred_);
+            // Resident nodes by level. A total says memory fell and cannot say which levels
+            // failed to move, and R2b's whole rule is that halving the resolution shifts every
+            // ray's stopping point exactly one level coarser.
+            {
+                std::string levels;
+                for (u32 level = kLeafLevel; level <= kEntryLevel; ++level) {
+                    if (node_stats.per_level[level] == 0) continue;
+                    if (!levels.empty()) levels += "  ";
+                    levels += std::to_string(level) + ":" +
+                              std::to_string(node_stats.per_level[level]);
+                }
+                WS_LOG_INFO("frame", "nodes by level  {}", levels);
+            }
             WS_LOG_INFO("frame", "resident bytes {} payload, {} index, {} total",
                         residency.payload_in_use, residency.index_bytes,
                         residency.total_bytes);

@@ -559,6 +559,12 @@ every ray's stopping point one level coarser, and a per-level histogram either s
 or shows exactly which levels are not shifting. Guessing at it twice has produced two changes that
 were worth making and did not close the gap.
 
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D267 | **Resident bytes are reported apart from the entry table, and the gate is measured on the first** | measurement | `total_bytes` includes the entry table, which is sized once from the budget and never changes — 1,048,576 bytes at the default. On the distant camera that is **95% of the total**, so the number moved 3% while the thing R2b is about moved by 3.4×. A gate measured against a figure with a megabyte constant in it cannot be met by any amount of eviction, and two changes were made chasing it before the histogram showed where the bytes were |
+| D268 | **R2b is met where a pixel is coarser than a brick, and cannot be met nearer than that** | measurement | Measured on screen-dependent bytes, half resolution against a quarter of full: **far 1.17×, distant 0.68× — both inside the 30% tolerance.** The near cameras are over (outdoor 2.64×) and it is structural rather than a defect: a brick is the leaf, and at 1280×800 with a 90° lens a brick covers a pixel at **100 m**, so everything nearer is pinned at the floor and halving the resolution cannot coarsen it. The facility spans ±17 m and the outdoor camera sits at 60 m, so the whole scene is inside that floor. The histogram says it plainly — level 3 holds 27,443 nodes of 38,438 at full resolution and only falls to 12,902, while on the far camera level 6 disappears altogether and the whole histogram shifts by one, which is the rule working exactly as written. **This is the same floor R8 lifts from the other end**: sub-voxel levels are what make the near case behave like the far one |
+| D269 | **Resident nodes are reported per level** | — | A total says memory fell by 22% and cannot say which levels failed to move. The histogram answered in one reading what two changes and a session of guessing had not: the levels were shifting correctly and the metric was carrying a constant |
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
