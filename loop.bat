@@ -43,6 +43,12 @@ $opt = @{
     TimeoutMinutes = 60       # one wedged iteration must not eat the whole night
     PauseSeconds   = 10
     Agents         = ""       # y / n, asked if not given
+    # The account this loop is meant to run as. Empty means "whichever one Claude
+    # Code is signed in as when it starts", which is then held for the whole run.
+    Account        = ""
+    # How long to keep waiting when the subscription's usage is spent, in hours.
+    # 0 means wait indefinitely, which is the point of an overnight loop.
+    MaxWaitHours   = 0
 }
 if ($env:LOOP_ARGS) {
     $tokens = [regex]::Matches($env:LOOP_ARGS, '"[^"]*"|\S+') | ForEach-Object { $_.Value.Trim('"') }
@@ -174,6 +180,55 @@ function Get-RunningLoop {
 # ran. Judged on the reply and never on the exit code: a process started with
 # -PassThru and no -Wait does not reliably carry one here, and an empty value
 # compares as not-zero, which failed every run however well it had gone.
+# ---- who is signed in, and how it will be billed --------------------------
+#
+# Claude Code and the `claude` command share one credential store under
+# ~/.claude, so this reports whichever account the desktop app is signed in as.
+# That is what makes "always use the account I am logged in on" checkable rather
+# than hoped for: the loop reads it at the start, holds it, and checks it again
+# before every iteration. If it ever changes underneath, the loop stops rather
+# than quietly spending the wrong subscription.
+function Get-ClaudeAccount($claudePath) {
+    $raw = ""
+    try { $raw = & $claudePath auth status --json 2>&1 | Out-String } catch { }
+    $json = $null
+    try { $json = $raw | ConvertFrom-Json } catch { }
+    if (-not $json) {
+        return @{ ok = $false; why = "could not read 'claude auth status'." }
+    }
+    if (-not $json.loggedIn) {
+        return @{ ok = $false; auth = $true; why = "Claude Code is not signed in." }
+    }
+    return @{
+        ok           = $true
+        email        = "$($json.email)"
+        method       = "$($json.authMethod)"
+        provider     = "$($json.apiProvider)"
+        subscription = "$($json.subscriptionType)"
+    }
+}
+
+# Subscription, never API credits.
+#
+# The CLI bills the API when it is handed an API key, and it picks one up from
+# the environment without saying so -- which on an unattended loop is a bill
+# instead of a night's work. These are cleared in THIS process, and Start-Process
+# hands the child a copy of this environment, so every iteration inherits the
+# cleared set. Nothing outside this window is touched.
+function Use-SubscriptionBilling {
+    $stripped = @()
+    foreach ($name in @("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+                        "ANTHROPIC_MODEL", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                        "AWS_BEARER_TOKEN_BEDROCK")) {
+        if ([Environment]::GetEnvironmentVariable($name)) {
+            Set-Item -Path ("Env:" + $name) -Value "" -ErrorAction SilentlyContinue
+            Remove-Item -Path ("Env:" + $name) -ErrorAction SilentlyContinue
+            $stripped += $name
+        }
+    }
+    return $stripped
+}
+
 function Test-ClaudeReady($claudePath, $model) {
     $inFile  = Join-Path $stateDir "preflight-in.txt"
     $outFile = Join-Path $stateDir "preflight-out.txt"
@@ -208,6 +263,94 @@ function Test-ClaudeReady($claudePath, $model) {
     $detail = if ($err -and $err.Trim()) { $err } else { $text }
     if (-not $detail -or -not $detail.Trim()) { $detail = "nothing at all" }
     return @{ ok = $false; why = ("Claude replied with something unreadable: " + (Trim-To ($detail -replace '\s+', ' ') 300)) }
+}
+
+# ---- running out of usage, and coming back ---------------------------------
+#
+# A spent subscription is not a failure and must not be treated as one. Left
+# alone it looks exactly like an iteration that refused to start, so the loop
+# would count it towards the three-strikes rule and shut down -- turning "come
+# back in two hours" into "nothing happened all night".
+#
+# So: recognise it, wait, and pick up the same iteration afterwards. The wait
+# does not burn anything; it sleeps, and every ten minutes it asks the same
+# trivial question the preflight asks. When that answers, the usage is back.
+function Test-UsageExhausted($logPath, $errPath) {
+    $text = ""
+    if (Test-Path $logPath) { $text += (Get-Content $logPath -Raw) }
+    if (Test-Path $errPath) { $text += (Get-Content $errPath -Raw) }
+    if (-not $text) { return @{ hit = $false } }
+
+    # Deliberately broad. The wording of a limit message is not something this
+    # file controls, and the cost of missing one is a night; the cost of a false
+    # positive is ten minutes of sleeping and one tiny question.
+    $patterns = @(
+        "usage limit reached", "usage limit will reset", "out of usage",
+        "rate.?limit", "429", "quota", "insufficient credit",
+        "upgrade to increase your usage", "limit_error", "exceeded your"
+    )
+    $hit = $false
+    foreach ($p in $patterns) { if ($text -imatch $p) { $hit = $true; break } }
+    if (-not $hit) { return @{ hit = $false } }
+
+    # A reset time if one was offered, so the wait is exact rather than a poll.
+    # Epoch seconds or milliseconds; anything else falls through to polling,
+    # which is why nothing here has to be clever.
+    $until = $null
+    $m = [regex]::Match($text, '(?i)reset[^0-9]{0,40}(\d{10,13})')
+    if ($m.Success) {
+        $n = [double]$m.Groups[1].Value
+        if ($n -gt 99999999999) { $n = $n / 1000 }
+        try { $until = [DateTimeOffset]::FromUnixTimeSeconds([long]$n).LocalDateTime } catch { }
+    }
+    return @{ hit = $true; until = $until }
+}
+
+# Sleeps in short slices so that stopping stays instant while it waits. A loop
+# that cannot be stopped for two hours is not stoppable.
+function Wait-ForUsage($claudePath, $model, $until, $maxHours, $stopPath, $wrapPath) {
+    $waitedMinutes = 0
+    if ($until) {
+        Write-Host ("  usage is spent. It resets at " + $until.ToString("HH:mm") + "; waiting.") -ForegroundColor Yellow
+    } else {
+        Write-Host "  usage is spent. Waiting, and trying again every ten minutes." -ForegroundColor Yellow
+    }
+    Write-Host "  (create STOP-LOOP, or close this window, to stop while it waits)" -ForegroundColor DarkGray
+
+    while ($true) {
+        if ((Test-Path $stopPath) -or (Test-Path $wrapPath)) {
+            Write-Host "  stop requested while waiting." -ForegroundColor Yellow
+            return @{ resumed = $false; stopped = $true }
+        }
+        if ($maxHours -gt 0 -and $waitedMinutes -ge ($maxHours * 60)) {
+            return @{ resumed = $false; stopped = $false }
+        }
+
+        # Until the stated reset if there was one, otherwise ten minutes.
+        $sliceTarget = 10
+        if ($until) {
+            $left = [math]::Ceiling(($until - (Get-Date)).TotalMinutes)
+            if ($left -gt 0) { $sliceTarget = $left } else { $sliceTarget = 1; $until = $null }
+        }
+
+        for ($m = 0; $m -lt $sliceTarget; $m++) {
+            for ($s = 0; $s -lt 12; $s++) {
+                if ((Test-Path $stopPath) -or (Test-Path $wrapPath)) {
+                    Write-Host "  stop requested while waiting." -ForegroundColor Yellow
+                    return @{ resumed = $false; stopped = $true }
+                }
+                Start-Sleep -Seconds 5
+            }
+            $waitedMinutes++
+        }
+
+        Write-Host ("  waited " + $waitedMinutes + " min; checking whether usage is back...") -ForegroundColor DarkGray
+        $probe = Test-ClaudeReady $claudePath $model
+        if ($probe.ok) {
+            Write-Host "  usage is back. Carrying on." -ForegroundColor Green
+            return @{ resumed = $true; stopped = $false; waited = $waitedMinutes }
+        }
+    }
 }
 
 # ---- the prompts ----------------------------------------------------------
@@ -440,19 +583,85 @@ if (-not $opt.Agents) {
 $agentsRule = if ($opt.Agents -match '^[Yy]') { $agentsYes } else { $agentsNo }
 Write-Host ("Subagents: " + $(if ($opt.Agents -match '^[Yy]') { "allowed" } else { "off" })) -ForegroundColor DarkGray
 
+# ---- account and billing, before anything else ----------------------------
+$stripped = Use-SubscriptionBilling
+if ($stripped.Count -gt 0) {
+    Write-Host ("Ignoring for this run, so the subscription is used and not API credit: " +
+                ($stripped -join ", ")) -ForegroundColor Yellow
+}
+
+$account = Get-ClaudeAccount $claude.Source
+if (-not $account.ok) {
+    Write-Banner "Not starting: $($account.why)" "Red"
+    Write-Host "Sign in with the account you want it to run as:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "    claude auth login" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Claude Code and this loop share one login, so signing in there is enough." -ForegroundColor Yellow
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
+# Subscription, not API credit. `claude.ai` is the subscription sign-in; an API
+# key would report differently, and on an unattended loop that is a bill rather
+# than a night's work.
+if ($account.method -ne "claude.ai" -or $account.provider -ne "firstParty") {
+    Write-Banner "Not starting: this login would bill API credit, not a subscription." "Red"
+    Write-Host ("It is signed in as " + $account.email + " by " + $account.method +
+                " (" + $account.provider + ").") -ForegroundColor Yellow
+    Write-Host "Sign in with a subscription account instead:  claude auth login" -ForegroundColor Yellow
+    Read-Host "Press Enter to close"
+    exit 1
+}
+
+# Whichever account is signed in becomes the one this run is pinned to, unless a
+# specific one was asked for. Checked again before every iteration.
+if ($opt.Account -and ($opt.Account -ne $account.email)) {
+    Write-Banner "Not starting: signed in as the wrong account." "Red"
+    Write-Host ("Wanted " + $opt.Account + ", but Claude Code is signed in as " + $account.email + ".") -ForegroundColor Yellow
+    Write-Host "Switch account in the Claude app, or run:  claude auth login" -ForegroundColor Yellow
+    Read-Host "Press Enter to close"
+    exit 1
+}
+$opt.Account = $account.email
+Write-Host ("Account:   " + $account.email + "  (" + $account.subscription + " subscription)") -ForegroundColor Green
+Write-Host  "Billing:   subscription usage, not API credit" -ForegroundColor Green
+
+# Say it out loud and make it acknowledged, because the failure it prevents is a
+# whole night spent on the wrong account.
+#
+# `claude` keeps its own sign-in. It is NOT necessarily the account showing in
+# whatever Claude application is open beside it -- they are separate credential
+# stores, and the one this reads is the only one that decides what gets spent.
+# Checked by hand: the store held one account while a different one was in use
+# elsewhere, and nothing anywhere said so.
+if (-not $env:LOOP_ACCOUNT_CONFIRMED) {
+    Write-Host ""
+    Write-Host "This is the account the whole run will spend. It is this command line's own" -ForegroundColor Yellow
+    Write-Host "sign-in, which is separate from whichever account any Claude app beside it" -ForegroundColor Yellow
+    Write-Host "is showing. To run as a different one, stop here and sign in:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "    claude auth login" -ForegroundColor White
+    Write-Host ""
+    $answer = Read-Host ("Run as " + $account.email + "? (Y/n)")
+    if ($answer -match '^[Nn]') {
+        Write-Host "Stopped. Sign in with the account you want, then run this again." -ForegroundColor Yellow
+        exit 0
+    }
+}
+
 Write-Host ""
 Write-Host "Checking Claude answers before starting..." -ForegroundColor DarkGray
 $ready = Test-ClaudeReady $claude.Source $opt.Model
 if (-not $ready.ok) {
     Write-Banner "Not starting: $($ready.why)" "Red"
     if ($ready.auth) {
-        Write-Host "The command-line Claude keeps its own login, separate from any Claude app" -ForegroundColor Yellow
-        Write-Host "installed beside it. Sign it in once and it stays signed in:" -ForegroundColor Yellow
+        Write-Host "Sign in once and it stays signed in. Claude Code and this loop share the" -ForegroundColor Yellow
+        Write-Host "same login, so signing in to either one is enough:" -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "    claude" -ForegroundColor White
-        Write-Host "    /login" -ForegroundColor White
+        Write-Host "    claude auth login" -ForegroundColor White
         Write-Host ""
-        Write-Host "Then close that window and run this file again." -ForegroundColor Yellow
+        Write-Host "Then run this file again." -ForegroundColor Yellow
     } else {
         Write-Host "If the model name is the problem, try:  loop.bat -Model opus" -ForegroundColor Yellow
     }
@@ -487,6 +696,22 @@ try {
         elseif ($opt.MaxIterations -gt 0 -and $iteration -ge $opt.MaxIterations) {
             Write-Banner "Reached $($opt.MaxIterations) iterations. Wrapping up." "Yellow"
             $wrapping = $true
+        }
+
+        # Still the same account, and still on the subscription.
+        #
+        # Checked every iteration rather than once, because signing in elsewhere
+        # changes the shared credential store underneath a running loop -- and
+        # the failure that would cause is silent: it keeps working, on somebody
+        # else's usage, until morning.
+        $now = Get-ClaudeAccount $claude.Source
+        if (-not $now.ok -or $now.email -ne $opt.Account -or $now.method -ne "claude.ai") {
+            $became = if ($now.ok) { $now.email + " by " + $now.method } else { $now.why }
+            Write-Banner "The signed-in account changed. Stopping." "Red"
+            Write-Host ("Started as " + $opt.Account + ", now " + $became + ".") -ForegroundColor Yellow
+            Add-Content $journal ("`n> Loop stopped at iteration $iteration : the account changed from " +
+                                  $opt.Account + " to " + $became + ".`n")
+            break
         }
 
         $iteration++
@@ -558,6 +783,28 @@ try {
             if ($stderrText -and $stderrText.Trim()) {
                 Write-Host "  stderr: $(Trim-To ($stderrText -replace '\s+',' ') 300)" -ForegroundColor Red
             }
+        }
+
+        # Out of usage is not a failed iteration. Handled before the
+        # ended-in-seconds check below, which would otherwise count it towards
+        # three strikes and stop the loop for the night.
+        $spent = Test-UsageExhausted $log ($log + ".err")
+        if ($spent.hit) {
+            Add-Content $journal ("`n> Iteration $iteration hit the usage limit at $stamp. Waiting for it to reset.`n")
+            $waited = Wait-ForUsage $claude.Source $opt.Model $spent.until $opt.MaxWaitHours $stopFile $wrapFile
+            if ($waited.resumed) {
+                # Same iteration again, from a fresh session. Nothing was
+                # committed, so there is nothing half-done to reconcile.
+                Add-Content $journal ("`n> Usage came back after " + $waited.waited + " minutes. Retrying iteration $iteration.`n")
+                $iteration--
+                continue
+            }
+            if ($waited.stopped) {
+                Write-Banner "Stopped while waiting for usage." "Yellow"
+                break
+            }
+            Write-Banner "Usage did not come back within $($opt.MaxWaitHours) hours. Stopping." "Yellow"
+            break
         }
 
         # An iteration ending in seconds did no work; it refused to start. Say

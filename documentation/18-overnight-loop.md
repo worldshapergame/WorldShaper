@@ -42,6 +42,65 @@ Options, if you want them:
 loop.bat -MaxIterations 1 -TimeoutMinutes 90 -PauseSeconds 30 -Model opus
 ```
 
+## The account it runs as, and what it spends
+
+Before it starts, it prints both:
+
+```
+Account:   you@example.com  (max subscription)
+Billing:   subscription usage, not API credit
+```
+
+**It runs as whatever `claude auth status` reports, and that is its own sign-in.** It is not
+necessarily the account showing in a Claude application open beside it — those are separate
+credential stores, and only this one decides what gets spent. Checked by hand on this machine:
+the command line held one account while a different one was in use elsewhere, and nothing
+anywhere said so. That is why the account is printed at startup and has to be acknowledged
+before a run begins.
+
+To change which account it uses, sign the command line in as that account:
+
+```bash
+claude auth login
+```
+
+The account signed in when it starts is the one the run is pinned to, and it re-checks before
+**every** iteration: if the sign-in changes underneath a running loop it stops and writes that
+in the journal, rather than carrying on overnight against a different account's usage.
+
+To require a particular account instead of accepting whichever is signed in:
+
+```bash
+loop.bat -Account you@example.com
+```
+
+It refuses to start on a mismatch and tells you which account it found.
+
+**It will not spend API credit.** A subscription sign-in reports as `claude.ai`; anything
+else — an API key, Bedrock, Vertex — is refused at startup rather than discovered on a bill.
+`ANTHROPIC_API_KEY` and friends are also cleared for the loop's own child processes, because
+the CLI picks one up from the environment without mentioning it. Nothing outside that window
+is changed.
+
+## When the usage runs out
+
+It waits, then carries on. A spent subscription is not a failed iteration and is deliberately
+handled before the three-strikes rule that would otherwise stop the loop for the night.
+
+When it sees a limit it writes the fact to the journal, then sleeps — until the stated reset
+time if the message carried one, otherwise re-asking every ten minutes with the same one-word
+question the preflight uses. When that answers, it **retries the same iteration** from a fresh
+session. Nothing had been committed, so there is nothing half-done to reconcile.
+
+By default it waits as long as it takes, which is the point of leaving it running. To give up
+after a while instead:
+
+```bash
+loop.bat -MaxWaitHours 6
+```
+
+It stays stoppable the whole time it is waiting — see below.
+
 `-MaxIterations 1` is the right way to watch one iteration through before trusting it with a
 whole night.
 
@@ -55,6 +114,10 @@ entry. Nothing is lost.
 Closing the window or pressing Ctrl+C stops it too, but can leave work uncommitted. A file
 called `STOP-LOOP` beside `loop.bat` does the same as asking for a wrap-up, which is useful
 over a network share or a remote desktop.
+
+**While it is waiting for usage to come back it is still stoppable**, and instantly: the wait
+is made of five-second sleeps that check for `STOP-LOOP` and for a wrap-up request between
+each one. A loop that cannot be stopped for two hours is not a loop you can leave running.
 
 ## What you see while it runs
 
@@ -117,14 +180,21 @@ Before the loop begins it asks Claude one trivial question and waits for an answ
 seconds and a fraction of a penny, and it turns "nothing happened all night" into "it would
 not start, and here is what it said."
 
-**"The Claude CLI is not logged in."** The command-line `claude` keeps its own credentials,
-separate from any Claude app installed beside it. Sign it in once:
+**"Claude Code is not signed in."** Sign in once:
 
 ```bash
-claude
+claude auth login
 ```
 
-then `/login` inside it, close that window, and run `loop.bat` again.
+This is the command line's own sign-in, separate from any Claude app installed beside it. Run
+`loop.bat` again afterwards.
+
+**"This login would bill API credit, not a subscription."** Something is providing an API key
+or pointing the CLI at Bedrock or Vertex. Sign in with a subscription account and run it
+again; the loop will not start on an API login, deliberately.
+
+**"Signed in as the wrong account."** `-Account` was given and does not match. Switch account
+in the Claude app, or drop the option to accept whichever account is signed in.
 
 **Anything else** is printed as Claude's own words rather than a guess at the cause.
 
