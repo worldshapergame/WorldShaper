@@ -110,6 +110,20 @@ function Show-Event($line) {
     if (-not $line -or -not $line.TrimStart().StartsWith("{")) { return }
     try { $e = $line | ConvertFrom-Json } catch { Write-Host "  $line" -ForegroundColor DarkGray; return }
 
+    # Where the window actually goes, tallied as it goes past.
+    #
+    # An iteration's price is its context size times its turn count, because the whole context is
+    # resent on every turn. Iteration 1 measured a 210,000-token context over 200 turns: 26.4
+    # million tokens resent, one feature, one window. None of that was visible anywhere -- the
+    # only number reported was a dollar figure that is not even a bill -- so the thing you would
+    # change is the thing you could not see.
+    if ($e.type -eq "assistant" -and $e.message.usage) {
+        $u = $e.message.usage
+        $ctx = [int]$u.input_tokens + [int]$u.cache_read_input_tokens + [int]$u.cache_creation_input_tokens
+        $script:ctxResent += [int]$u.cache_read_input_tokens
+        if ($ctx -gt $script:ctxPeak) { $script:ctxPeak = $ctx }
+    }
+
     switch ($e.type) {
         "system" {
             if ($e.subtype -eq "init") {
@@ -395,6 +409,27 @@ records, and do not undo it without saying why.
 Work out how this project builds, tests and runs before you change anything — read its
 README, its CLAUDE.md if it has one, its build files, its CI configuration. The journal
 should record what you found so later iterations do not have to look again.
+
+What an iteration costs, and how not to waste it
+------------------------------------------------
+Your context is resent to the model on EVERY turn. So the price of an iteration is roughly its
+context size multiplied by its number of turns, and it is decided by what you READ rather than by
+what you write. Measured on iteration 1 of this loop: a 210,000-token context over 200 turns
+resent 26.4 MILLION tokens and spent a whole usage window on one feature.
+
+So:
+
+- NEVER read a large file whole when you want part of it. Grep for the line, then read with an
+  offset and a limit around it. A 4,700-line file read whole is roughly 60,000 tokens, and you
+  pay for it again on every later turn. Iteration 1 read one such file four times.
+- Never re-read a file you have already read this session. It is still in your context.
+- Prefer `grep -n` to reading, and read the smallest span that answers the question.
+- Do not print whole logs. Grep them for the lines that matter.
+- Fewer, larger steps beat many small ones, because every turn pays for the whole context again.
+
+If the context is getting large and the work is not finished, FINISH ANYWAY: commit what is done,
+write the journal, and leave the rest as the next iteration's `Next:`. A fresh session with a
+small context does the remainder for a fraction of what carrying on would cost.
 
 ultracode
 
@@ -803,6 +838,8 @@ try {
 
         $headBefore = (git rev-parse HEAD 2>$null)
         $started = Get-Date
+        $script:ctxResent = 0
+        $script:ctxPeak = 0
 
         $iterationArgs = @("-p", "--model", $opt.Model, "--dangerously-skip-permissions",
                            "--verbose", "--output-format", "stream-json")
@@ -916,9 +953,12 @@ try {
             Write-Host "No commit this iteration." -ForegroundColor Yellow
         }
         if ($script:lastResult) {
-            Add-Content $journal ("`n> Iteration {0}: {1} turns, {2:N1} min, model {4}. Plan usage worth {3:N2} USD at API rates - nothing is billed on a subscription.`n" -f
+            Add-Content $journal ("`n> Iteration {0}: {1} turns, {2:N1} min, model {5}. Peak context {3:N0} tokens, {4:N1}M tokens resent. Plan usage worth {6:N2} USD at API rates - nothing is billed on a subscription.`n" -f
                                   $iteration, $script:lastResult.turns, $script:lastResult.minutes,
-                                  $script:lastResult.cost, $opt.Model)
+                                  $script:ctxPeak, ($script:ctxResent / 1000000.0), $opt.Model,
+                                  $script:lastResult.cost)
+            Write-Host ("  context: peak {0:N0} tokens, {1:N1}M resent over the iteration" -f
+                        $script:ctxPeak, ($script:ctxResent / 1000000.0)) -ForegroundColor DarkGray
             $script:lastResult = $null
         }
 

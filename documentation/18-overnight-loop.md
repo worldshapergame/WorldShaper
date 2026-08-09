@@ -116,15 +116,39 @@ The same number goes to the journal, so the burn rate is visible rather than inf
   rates - nothing is billed on a subscription.
 ```
 
-## How much a window buys
+## How much a window buys, and what actually spends it
 
-Measured: one cold iteration doing a real feature end to end — read the handover, implement it,
-measure it, document it, commit, push — was **121 turns and 48.9 minutes**. On a Pro plan that is
-most of a window, so a five-hour window produced one iteration.
+An iteration's price is **its context size multiplied by its number of turns**, because the whole
+context is resent to the model on every turn. It is decided by what an iteration *reads*, not by
+how much work it does.
 
-That is not a fault in the iteration. It is what the most expensive model costs, and Opus is the
-default because the work is worth more than the count. The startup banner says so on a Pro plan,
-while there is still time to decide otherwise.
+Iteration 1 of this loop, measured from its own log:
+
+| | |
+| --- | --- |
+| Peak context | 209,858 tokens |
+| Assistant turns | 200 |
+| **Context resent** | **26,397,085 tokens** |
+| New context written | 391,086 tokens |
+| Fresh input | 27,507 tokens |
+
+Twenty-six million tokens of re-reading, for one feature, and it spent a whole window. It had read
+one 4,700-line source file **four times** — about 60,000 tokens each, and every one of those is
+paid again on every later turn of the session.
+
+So the iteration prompt now tells it to grep for a line and read a span around it rather than
+reading large files whole, never to re-read what is already in its context, and to **finish and
+commit when the context gets large** rather than carry on — a fresh session with a small context
+does the remainder for a fraction of the price.
+
+Every iteration now reports where its window went, on screen and in the journal:
+
+```
+  context: peak 209,858 tokens, 26.4M resent over the iteration
+```
+
+If a window buys less than it should, that line is the one to look at: a high peak means something
+large was read whole, and a high resent figure with a modest peak means too many turns.
 
 **When the model's usage runs out it waits for the reset** rather than finishing the night on
 something smaller — quietly switching models is a change to the work, not to the schedule, and the
