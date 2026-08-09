@@ -35,6 +35,11 @@ struct NodeBufferStats {
     u64 total_uploaded = 0;
     u32 uploads = 0;
     u64 device_bytes = 0;
+    // A frame whose dirty ranges did not fit in the staging ring. The ranges stay marked and go
+    // next frame, so this costs latency rather than correctness -- but it is the difference
+    // between "streaming is behind" and "streaming is broken", so it is counted rather than
+    // inferred.
+    bool staging_exhausted = false;
 };
 
 class NodeBuffers {
@@ -44,7 +49,12 @@ public:
 
     // Copies whatever the pool holds, when it holds something new. Must be recorded inside a
     // command buffer before anything reads the buffers.
-    void upload(VkCommandBuffer cmd, const NodePool& pool, const NodeUploadBatch& batch);
+    // Takes the pool by reference rather than by const reference because a successful upload
+    // clears what it sent. Nothing else about the pool is touched.
+    //
+    // The batch is no longer an argument. It describes what the pool decided to do; what has to
+    // be copied is what actually changed, and only the pool's dirty sets know that.
+    void upload(VkCommandBuffer cmd, NodePool& pool);
 
     // Decodes what the card actually holds and compares it against the pool, byte for byte.
     //
@@ -72,6 +82,8 @@ private:
     // pool can produce rather than grown on demand: a reallocation mid-play is a hitch, and a
     // hitch is the one thing streaming is never allowed to cause.
     bool stage(VkCommandBuffer cmd, const void* source, u64 bytes, GpuBuffer& destination);
+    bool stage_at(VkCommandBuffer cmd, const void* source, u64 bytes, u64 destination_offset,
+                  GpuBuffer& destination);
 
     Device* device_ = nullptr;
     GpuBuffer entries_;

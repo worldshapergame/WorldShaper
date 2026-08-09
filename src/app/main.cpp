@@ -2647,7 +2647,7 @@ void Application::record_frame(f32 time_seconds) {
         last_node_built_ = node_batch.built;
         last_node_evicted_ = node_batch.evicted;
         last_node_deferred_ = node_batch.deferred;
-        node_buffers_.upload(cmd, node_pool_, node_batch);
+        node_buffers_.upload(cmd, node_pool_);
         profiler_.add_bytes(node_buffers_.stats().uploaded_this_frame);
         profiler_.end_pass(cmd);
     }
@@ -4212,6 +4212,21 @@ int Application::run(const Options& options) {
             resolve_.force_reload();
             pathtrace_.force_reload();
             trace_samples_ = 0;
+        }
+        // Swap marchers where you are standing, without restarting.
+        //
+        // Both are built and both are fed every frame while R1e is outstanding, so this costs
+        // a branch and nothing else — and it is the only way to compare them on the thing a
+        // fixed camera cannot show: what loading and turning round actually feel like. A
+        // grid of settled means is blind to that by construction, which is how a marcher that
+        // is faster on all seven cameras can still be reported as laggy and both be true.
+        //
+        // It is also the escape hatch. If the new one is worse in front of you, press F6 and
+        // you are back on the old one for the rest of the session.
+        if (input.was_pressed(Key::F6)) {
+            use_node_pool_ = !use_node_pool_;
+            trace_samples_ = 0;
+            WS_LOG_INFO("app", "marcher: {}", use_node_pool_ ? "node pool" : "chunk grid");
         }
         if (input.was_pressed(Key::F11)) swapchain_.set_vsync(!swapchain_.vsync());
         // The only thing that starts a download. Nothing else does, and nothing does it

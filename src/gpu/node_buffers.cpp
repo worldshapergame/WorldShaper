@@ -59,14 +59,26 @@ void NodeBuffers::destroy() {
 
 bool NodeBuffers::stage(VkCommandBuffer cmd, const void* source, u64 bytes,
                         GpuBuffer& destination) {
+    return stage_at(cmd, source, bytes, 0, destination);
+}
+
+// The same copy, landing somewhere other than the start of the destination -- which is what a
+// dirty range needs and a whole-prefix copy never did.
+bool NodeBuffers::stage_at(VkCommandBuffer cmd, const void* source, u64 bytes, u64 destination_offset,
+                           GpuBuffer& destination) {
     if (bytes == 0) return true;
-    if (staging_cursor_ + bytes > staging_capacity_) return false;
+    if (staging_cursor_ + bytes > staging_capacity_) {
+        // Out of staging for this frame. Saying so matters: the arrays stay marked, so the run
+        // that did not fit is retried next frame rather than silently skipped and left stale.
+        stats_.staging_exhausted = true;
+        return false;
+    }
 
     std::memcpy(static_cast<u8*>(staging_.mapped) + staging_cursor_, source, bytes);
 
     VkBufferCopy copy{};
     copy.srcOffset = staging_cursor_;
-    copy.dstOffset = 0;
+    copy.dstOffset = destination_offset;
     copy.size = bytes;
     vkCmdCopyBuffer(cmd, staging_.buffer, destination.buffer, 1, &copy);
 
@@ -76,9 +88,9 @@ bool NodeBuffers::stage(VkCommandBuffer cmd, const void* source, u64 bytes,
     return true;
 }
 
-void NodeBuffers::upload(VkCommandBuffer cmd, const NodePool& pool,
-                         const NodeUploadBatch& batch) {
+void NodeBuffers::upload(VkCommandBuffer cmd, NodePool& pool) {
     stats_.uploaded_this_frame = 0;
+    stats_.staging_exhausted = false;
     staging_cursor_ = 0;
 
     // Nothing changed, so nothing is copied. This is the steady state: the tree converges and
@@ -89,19 +101,57 @@ void NodeBuffers::upload(VkCommandBuffer cmd, const NodePool& pool,
     // work anybody asked for — so a condition on the counters alone skipped the one upload the
     // marcher cannot start without. The symptom was an empty entry table on the GPU: every ray
     // found no root, read that as empty space, reported nothing, and marched to the far plane.
-    if (batch.built == 0 && batch.evicted == 0 && batch.nodes.empty()) return;
+    // Asked of the dirty sets rather than of the counters. The counters describe what the pool
+    // decided to do; the dirty sets describe what actually changed, and only the second can
+    // answer "is there anything to send". The old condition also had to name `nodes` explicitly
+    // because seeding a root is not counted as a build - a distinction that stops mattering once
+    // the question is asked of the right thing.
+    if (pool.nothing_dirty()) return;
 
-    const u32 node_count = pool.node_watermark();
-    const u32 leaf_count = pool.leaf_watermark();
+    // What changed, not what exists.
+    //
+    // This used to copy every array's whole used prefix on any frame that touched anything. That
+    // is free while the tree is converged and quiet, and it is 10 MB a frame while somebody walks
+    // across the building - measured on a flight at 2.725 ms mean and 8.915 ms worst against a
+    // 0.80 ms budget, the largest single cost in the frame, and the reason the pool read as laggy
+    // while marching faster than the thing it replaced.
+    //
+    // A missed dirty mark is a stale byte on the GPU and a wrong picture. That is precisely what
+    // NodeBuffers::audit checks -- it reads the real buffers back and names the first byte that
+    // disagrees with the pool -- so this is verifiable rather than hoped for.
+    //
+    // The gap is in elements and is why the runs are worth coalescing at all: a copy has a fixed
+    // cost, so sending a few spare records inside one is cheaper than issuing a second.
+    const u64 kNodeGap = 64;     // 2 KB of GpuNode
+    const u64 kLeafGap = 64;
+    const u64 kEntryGap = 256;   // 1 KB of u32
 
-    stage(cmd, pool.entries().data(), pool.entries().size() * sizeof(u32), entries_);
-    stage(cmd, pool.nodes().data(), static_cast<u64>(node_count) * sizeof(GpuNode), nodes_);
-    stage(cmd, pool.leaves().data(), static_cast<u64>(leaf_count) * sizeof(GpuBrickHeader),
-          leaves_);
-    stage(cmd, pool.occupancy().data(),
-          static_cast<u64>(leaf_count) * kBrickWords * sizeof(u64), occupancy_);
-    stage(cmd, pool.payload().data(), pool.payload_watermark(), payload_);
+    for (const auto& run : pool.dirty_entries().runs(kEntryGap)) {
+        stage_at(cmd, pool.entries().data() + run.first, run.second * sizeof(u32),
+                 run.first * sizeof(u32), entries_);
+    }
+    for (const auto& run : pool.dirty_nodes().runs(kNodeGap)) {
+        stage_at(cmd, pool.nodes().data() + run.first, run.second * sizeof(GpuNode),
+                 run.first * sizeof(GpuNode), nodes_);
+    }
+    for (const auto& run : pool.dirty_leaves().runs(kLeafGap)) {
+        stage_at(cmd, pool.leaves().data() + run.first, run.second * sizeof(GpuBrickHeader),
+                 run.first * sizeof(GpuBrickHeader), leaves_);
+        // Occupancy is kBrickWords per leaf and is written with its header, so one run covers
+        // both and the two arrays can never disagree about which leaf is current.
+        stage_at(cmd, pool.occupancy().data() + run.first * kBrickWords,
+                 run.second * kBrickWords * sizeof(u64),
+                 run.first * kBrickWords * sizeof(u64), occupancy_);
+    }
+    // Payload ranges are recorded where the bytes are written, and a block allocation is
+    // contiguous by construction, so these need no coalescing.
+    for (const auto& range : pool.dirty_payload()) {
+        stage_at(cmd, pool.payload().data() + range.first, range.second, range.first, payload_);
+    }
 
+    // Only when all of it fitted. Clearing after a partial upload would mark clean what the
+    // card has not been sent -- the stale-byte failure this whole change has to avoid.
+    if (!stats_.staging_exhausted) pool.clear_dirty();
     ++stats_.uploads;
 
     // One barrier for the lot. The copies are independent of each other and every one of them has

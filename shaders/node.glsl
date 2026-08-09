@@ -624,6 +624,42 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 node_note(has_pending, pending,
                           ivec3(voxel.x >> missing, voxel.y >> missing, voxel.z >> missing),
                           missing);
+
+                // Draw the parent rather than nothing (R2d).
+                //
+                // Falling through to the skip below treats a region the world HAS as empty
+                // space, so the ray flies through a building that has not streamed yet and
+                // draws sky. The old renderer never did this: it pushed a coarse thumbnail
+                // from the camera, so there was always something to show. This is why the
+                // node pool reads as slow to load when it is faster to march.
+                //
+                // Only when the missing cell is the size this pixel resolves, which is D151
+                // and is not a tuning choice. The descent returns WANTED at a level ABOVE the
+                // one it was asked for, so the cell standing in is never finer than the pixel
+                // and is only ever equal to it here. Allowing coarser is the fault D151
+                // records: a two-kilometre block containing ground a mile away has its near
+                // face a few metres from the camera, and drawing it there puts a blob in your
+                // face. The parent's folded colour and its per-direction coverage are exactly
+                // what a coarse hit is supposed to be, and both already exist on the node.
+                if (found.level - 1 == outer_level && found.slot != kNoNode) {
+                    ivec3 stand_normal = last_normal;
+                    if (stand_normal == ivec3(0)) {
+                        // First step, camera inside the cell: no face was crossed to get here,
+                        // so face the ray, exactly as the leaf march does.
+                        vec3 a = abs(dir);
+                        int dominant = (a.x > a.y && a.x > a.z) ? 0 : ((a.y > a.z) ? 1 : 2);
+                        stand_normal = ivec3(0);
+                        stand_normal[dominant] = -step_dir[dominant];
+                    }
+                    result.hit = true;
+                    result.t = t;
+                    result.normal = stand_normal;
+                    result.colour = nodes.items[found.slot].colour;
+                    result.coverage = node_face_coverage(found.slot, stand_normal);
+                    result.level = min(outer_level, kNodeMaxDetail);
+                    node_flush(report, has_pending, pending);
+                    return result;
+                }
             }
 
             // Nothing here. How far the ray may jump is what the descent already worked out: the

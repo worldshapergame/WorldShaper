@@ -76,6 +76,17 @@ void NodePool::create(const NodePoolBudget& budget, const VoxelTypeTable& types)
     // fraction of the tree — everything below them is reached by pointer — so this is generous.
     entries_.assign(next_power_of_two(std::max<u32>(budget_.max_nodes / 4, 1024)), kNoNode);
 
+    // Sized to the arrays they track. Nothing is marked: both sides start empty, and everything
+    // built from here marks itself on the way in.
+    dirty_nodes_.create(budget_.max_nodes);
+    dirty_leaves_.create(budget_.max_occupancy_leaves);
+    dirty_entries_.create(entries_.size());
+    dirty_payload_.clear();
+    // The one array whose empty value is not zero: a free bucket is kNoNode, which is all ones,
+    // and a device buffer starts at all zeroes. Copying whole prefixes hid that; sending only
+    // what changed does not, so the initial state is a change like any other.
+    dirty_entries_.mark_range(0, entries_.size());
+
     next_free_ = 0;
     free_singles_.clear();
     free_runs_.clear();
@@ -108,6 +119,7 @@ u32 NodePool::allocate_node() {
         const u32 slot = free_singles_.back();
         free_singles_.pop_back();
         nodes_[slot] = GpuNode{};
+        dirty_nodes_.mark(slot);
         return slot;
     }
     if (next_free_ >= budget_.max_nodes) {
@@ -116,6 +128,7 @@ u32 NodePool::allocate_node() {
     }
     const u32 slot = next_free_++;
     nodes_[slot] = GpuNode{};
+    dirty_nodes_.mark(slot);
     return slot;
 }
 
@@ -124,6 +137,7 @@ u32 NodePool::allocate_children() {
         const u32 base = free_runs_.back();
         free_runs_.pop_back();
         for (u32 i = 0; i < 8; ++i) nodes_[base + i] = GpuNode{};
+        dirty_nodes_.mark_range(base, 8);
         return base;
     }
     if (next_free_ + 8 > budget_.max_nodes) {
@@ -133,6 +147,7 @@ u32 NodePool::allocate_children() {
     const u32 base = next_free_;
     next_free_ += 8;
     for (u32 i = 0; i < 8; ++i) nodes_[base + i] = GpuNode{};
+    dirty_nodes_.mark_range(base, 8);
     return base;
 }
 
@@ -383,6 +398,9 @@ u32 NodePool::build_leaf(const World& world, const NodeKey& key, u32& budget) {
             return kNoNode;
         }
         std::memcpy(&payload_[offset], encoded.data(), encoded.size());
+        batch_.payload_from.push_back(offset);
+        batch_.payload_size.push_back(static_cast<u32>(encoded.size()));
+        dirty_payload_.emplace_back(static_cast<u64>(offset), static_cast<u64>(encoded.size()));
         header.payload_offset = offset;
         leaf_payload_size_[leaf] = static_cast<u32>(encoded.size());
         payload_high_ = std::max<u64>(payload_high_, offset + encoded.size());
@@ -394,6 +412,9 @@ u32 NodePool::build_leaf(const World& world, const NodeKey& key, u32& budget) {
     leaves_[leaf] = header;
     std::memcpy(&occupancy_[static_cast<usize>(leaf) * kBrickWords], bits,
                 sizeof(u64) * kBrickWords);
+    // Occupancy follows its leaf: kBrickWords words at leaf * kBrickWords, so one mark covers
+    // both arrays and they can never disagree about which leaf is stale.
+    dirty_leaves_.mark(leaf);
 
     // Coverage per face direction, from the occupancy bits: for each direction, how much of the
     // 8x8 face-on projection has any matter behind it. This is what an edge is anti-aliased
@@ -429,6 +450,7 @@ u32 NodePool::build_leaf(const World& world, const NodeKey& key, u32& budget) {
     nodes_[slot].children = leaf;
     nodes_[slot].colour = header.average_colour;
     nodes_[slot].packed = pack_node(kLeafLevel, flags, 0);
+    dirty_nodes_.mark(slot);
     ++builds_;
     return slot;
 }
@@ -443,6 +465,8 @@ u32 NodePool::build_leaf(const World& world, const NodeKey& key, u32& budget) {
 void NodePool::fold_children(u32 slot) {
     GpuNode& node = nodes_[slot];
     if ((node_flags(node) & kNodeLeaf) != 0 || node.children == kNoNode) return;
+    // Every path out of here rewrites the node's colour, coverage and flags.
+    dirty_nodes_.mark(slot);
 
     u64 r = 0, g = 0, b = 0, cover = 0;
     u32 present = 0;
@@ -528,6 +552,7 @@ u32 NodePool::build_shell(const World& world, const NodeKey& key, u32& budget) {
     nodes_[slot].children = kNoNode;
     nodes_[slot].colour = 0;
     nodes_[slot].packed = pack_node(key.level, 0, mask);
+    dirty_nodes_.mark(slot);
     ++builds_;
     return slot;
 }
@@ -556,6 +581,7 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
             const u32 run = allocate_children();
             if (run == kNoNode) break;
             nodes_[slot].children = run;
+            dirty_nodes_.mark(slot);
         }
 
         const u32 child = nodes_[slot].children + octant;
@@ -563,8 +589,15 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
             const NodeKey child_key{key.x >> shift, key.y >> shift, key.z >> shift, level - 1};
             const u32 built = build_shell(world, child_key, budget);
             if (built == kNoNode) break;
+            // Built into a slot of its own and then MOVED here, so both ends change: the
+            // destination gains the record, and the source is cleared before going back on the
+            // free list. Marking only the build (which build_shell does) leaves the card holding
+            // whatever was in `child` before -- caught by NodeBuffers::audit at byte 18,240,
+            // which is precisely the failure that check exists for.
             nodes_[child] = nodes_[built];
             nodes_[built] = GpuNode{};
+            dirty_nodes_.mark(child);
+            dirty_nodes_.mark(built);
             free_singles_.push_back(built);
         }
 
@@ -601,6 +634,7 @@ void NodePool::release_contents(u32 slot) {
                 leaf_payload_size_[leaf] = 0;
             }
             leaves_[leaf] = GpuBrickHeader{};
+            dirty_leaves_.mark(leaf);
             free_leaves_.push_back(leaf);
         }
     } else if (node.children != kNoNode) {
@@ -611,11 +645,13 @@ void NodePool::release_contents(u32 slot) {
             if (node_level(nodes_[child]) == 0) continue;
             release_contents(child);
             nodes_[child] = GpuNode{};
+            dirty_nodes_.mark(child);
         }
         free_runs_.push_back(node.children);
     }
 
     node = GpuNode{};
+    dirty_nodes_.mark(slot);
     ++evictions_;
 }
 
@@ -667,8 +703,9 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             const usize bucket = entry_bucket(key, capacity);
             bool placed = false;
             for (usize probe = 0; probe < capacity && !placed; ++probe) {
-                u32& cell = entries_[(bucket + probe) & (capacity - 1)];
-                if (cell == kNoNode) { cell = slot; placed = true; }
+                const usize index = (bucket + probe) & (capacity - 1);
+                u32& cell = entries_[index];
+                if (cell == kNoNode) { cell = slot; placed = true; dirty_entries_.mark(index); }
             }
             if (!placed) { release(slot); continue; }
             live_.emplace(key, Resident{slot, frame, 0});
@@ -686,8 +723,11 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             if (it == live_.end()) continue;
             const u32 slot = it->second.slot;
             release(slot);
-            for (u32& cell : entries_) {
-                if (cell == slot) cell = kNoNode;
+            for (usize index = 0; index < entries_.size(); ++index) {
+                if (entries_[index] == slot) {
+                    entries_[index] = kNoNode;
+                    dirty_entries_.mark(index);
+                }
             }
             live_.erase(it);
         }
@@ -768,10 +808,12 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         const usize bucket = entry_bucket(root, capacity);
         bool placed = false;
         for (usize probe = 0; probe < capacity && !placed; ++probe) {
-            u32& cell = entries_[(bucket + probe) & (capacity - 1)];
+            const usize index = (bucket + probe) & (capacity - 1);
+            u32& cell = entries_[index];
             if (cell == kNoNode) {
                 cell = slot;
                 placed = true;
+                dirty_entries_.mark(index);
             }
         }
         if (!placed) {
@@ -796,8 +838,11 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         }
         const u32 slot = it->second.slot;
         release(slot);
-        for (u32& cell : entries_) {
-            if (cell == slot) cell = kNoNode;
+        for (usize index = 0; index < entries_.size(); ++index) {
+            if (entries_[index] == slot) {
+                entries_[index] = kNoNode;
+                dirty_entries_.mark(index);
+            }
         }
         ++batch_.evicted;
         it = live_.erase(it);
