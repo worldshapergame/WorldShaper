@@ -238,12 +238,41 @@ failure, not a compile error.
    build against *one* scene give 0.481, 0.763, 0.472. The empty-space views inherit the node
    pool's own irreproducibility (D233) through the ray clip, and a single sample on one of them is
    not evidence in either direction. D234.
+10. **When somebody says it is slow, look at their overlay before your grid.** Four exchanges went
+    on quoting settled per-pass means at a report of stalls — and the settled grid discards
+    transients *by construction*, since that is what `--settle` is for. The overlay's three numbers
+    (GPU 0.92 ms, frame 247.51 ms, 99th 2,234 ms) named the culprit immediately, and it was not the
+    pass under rewrite. D239, D240.
 
 ---
 
 ## 5. What to do next
 
-### First, the thing R1e cannot be judged without
+### Before anything else: the paste, which is what a player actually feels
+
+**Not renderer work, and more important than any of it.** The scene sharpens region by region. The
+sampling runs on a background thread; the **paste does not**, and a paste measures **twelve to
+fourteen seconds** with the main thread blocked. That is what the in-game overlay reports as a
+2,234 ms 99th percentile and a 6,282 ms worst frame, while the GPU sits at 0.92 ms.
+
+Both marchers suffer it identically — swap with F6 and watch — and it predates the rewrite entirely.
+It also happens on **every run**, because the finished-world cache is only written when the last
+region lands and regions behind walls are never sharpened from a fixed camera, so it never
+completes and never caches.
+
+Two fixes, in the order they pay:
+
+1. **Write the cache when sharpening settles**, not only when it completes. Needs the cache to
+   record which regions are done so a later run from another camera can carry on. Small, and it
+   makes every run after the first start from a finished world.
+2. **Slice the paste across frames.** D74 already names this and hands it to Stage 16: *"an edit
+   runs in one frame and cannot be interrupted… raising the cap means slicing the work across
+   frames"*. This is the one that makes editing feel right.
+
+Until at least the first of those lands, nobody can judge the renderer by playing it, because what
+they are judging is the paste.
+
+### Then, the thing R1e cannot be judged without
 
 **The node pool does not converge** (D233). With the world provably identical and the camera still,
 it was still building 273–385 nodes a frame three thousand frames after the world stopped changing,

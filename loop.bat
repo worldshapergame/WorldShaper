@@ -583,21 +583,64 @@ if (-not $opt.Agents) {
 $agentsRule = if ($opt.Agents -match '^[Yy]') { $agentsYes } else { $agentsNo }
 Write-Host ("Subagents: " + $(if ($opt.Agents -match '^[Yy]') { "allowed" } else { "off" })) -ForegroundColor DarkGray
 
-# ---- account and billing, before anything else ----------------------------
+# ---- which account, before anything else ----------------------------------
+#
+# Asked rather than assumed, and asked FIRST, because everything after it spends
+# the answer. The failure this replaces is silent: `claude` keeps its own
+# sign-in, it is not necessarily the account showing in whatever Claude app is
+# open beside it, and a whole night can go to the wrong subscription with nothing
+# anywhere saying so. Checked by hand on this machine: the command line held one
+# account while a different one was in use elsewhere.
 $stripped = Use-SubscriptionBilling
 if ($stripped.Count -gt 0) {
     Write-Host ("Ignoring for this run, so the subscription is used and not API credit: " +
                 ($stripped -join ", ")) -ForegroundColor Yellow
 }
 
+# -Account picks one outright and never prompts, which is what a scheduled run
+# wants. LOOP_ACCOUNT_CONFIRMED does the same for anything else scripted.
+$askAccount = (-not $opt.Account) -and (-not $env:LOOP_ACCOUNT_CONFIRMED)
+
 $account = Get-ClaudeAccount $claude.Source
+while ($true) {
+    Write-Host ""
+    if ($account.ok) {
+        Write-Host ("Signed in as: " + $account.email) -ForegroundColor Cyan
+        Write-Host ("Plan:         " + $account.subscription + " subscription, billed as usage") -ForegroundColor Cyan
+    } else {
+        Write-Host ("Signed in as: nobody - " + $account.why) -ForegroundColor Yellow
+    }
+
+    if (-not $askAccount -and $account.ok) { break }
+
+    Write-Host ""
+    if ($account.ok) {
+        $choice = Read-Host "Use this account, or sign in with a different one? (U)se / (S)witch / (Q)uit"
+        if ($choice -match '^[Qq]') { Write-Host "Nothing started." ; exit 0 }
+        if ($choice -notmatch '^[Ss]') { break }
+    } else {
+        $choice = Read-Host "Sign in now? (Y/n)"
+        if ($choice -match '^[Nn]') { Write-Host "Nothing started." ; exit 0 }
+    }
+
+    # The supported sign-in, run for you rather than quoted at you. It opens a
+    # browser, you pick the account there, and it writes the credential store
+    # this loop reads. Run inline so it inherits this console: redirected, the
+    # code it prints has nowhere to appear and it looks like a hang.
+    Write-Host ""
+    Write-Host "Opening the Claude sign-in. Choose the account you want the loop to use." -ForegroundColor Cyan
+    Write-Host ""
+    & $claude.Source auth login
+    Write-Host ""
+
+    $account = Get-ClaudeAccount $claude.Source
+    if (-not $account.ok) {
+        Write-Host ("Still not signed in: " + $account.why) -ForegroundColor Yellow
+    }
+}
+
 if (-not $account.ok) {
     Write-Banner "Not starting: $($account.why)" "Red"
-    Write-Host "Sign in with the account you want it to run as:" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "    claude auth login" -ForegroundColor White
-    Write-Host ""
-    Write-Host "Claude Code and this loop share one login, so signing in there is enough." -ForegroundColor Yellow
     Read-Host "Press Enter to close"
     exit 1
 }
@@ -614,41 +657,21 @@ if ($account.method -ne "claude.ai" -or $account.provider -ne "firstParty") {
     exit 1
 }
 
-# Whichever account is signed in becomes the one this run is pinned to, unless a
-# specific one was asked for. Checked again before every iteration.
+# A named account is a requirement, not a preference: it refuses rather than
+# quietly running as somebody else.
 if ($opt.Account -and ($opt.Account -ne $account.email)) {
     Write-Banner "Not starting: signed in as the wrong account." "Red"
-    Write-Host ("Wanted " + $opt.Account + ", but Claude Code is signed in as " + $account.email + ".") -ForegroundColor Yellow
-    Write-Host "Switch account in the Claude app, or run:  claude auth login" -ForegroundColor Yellow
+    Write-Host ("Wanted " + $opt.Account + ", but the command line is signed in as " +
+                $account.email + ".") -ForegroundColor Yellow
+    Write-Host "Run loop.bat without -Account to choose one, or:  claude auth login" -ForegroundColor Yellow
     Read-Host "Press Enter to close"
     exit 1
 }
+
 $opt.Account = $account.email
+Write-Host ""
 Write-Host ("Account:   " + $account.email + "  (" + $account.subscription + " subscription)") -ForegroundColor Green
 Write-Host  "Billing:   subscription usage, not API credit" -ForegroundColor Green
-
-# Say it out loud and make it acknowledged, because the failure it prevents is a
-# whole night spent on the wrong account.
-#
-# `claude` keeps its own sign-in. It is NOT necessarily the account showing in
-# whatever Claude application is open beside it -- they are separate credential
-# stores, and the one this reads is the only one that decides what gets spent.
-# Checked by hand: the store held one account while a different one was in use
-# elsewhere, and nothing anywhere said so.
-if (-not $env:LOOP_ACCOUNT_CONFIRMED) {
-    Write-Host ""
-    Write-Host "This is the account the whole run will spend. It is this command line's own" -ForegroundColor Yellow
-    Write-Host "sign-in, which is separate from whichever account any Claude app beside it" -ForegroundColor Yellow
-    Write-Host "is showing. To run as a different one, stop here and sign in:" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "    claude auth login" -ForegroundColor White
-    Write-Host ""
-    $answer = Read-Host ("Run as " + $account.email + "? (Y/n)")
-    if ($answer -match '^[Nn]') {
-        Write-Host "Stopped. Sign in with the account you want, then run this again." -ForegroundColor Yellow
-        exit 0
-    }
-}
 
 Write-Host ""
 Write-Host "Checking Claude answers before starting..." -ForegroundColor DarkGray

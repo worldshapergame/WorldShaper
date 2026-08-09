@@ -496,7 +496,31 @@ checked. Tick the ledger in §8.0 when one lands.
 | R1 | f. GPU mirror check for the node pool | **done** - `NodeBuffers::audit`, and it eliminated the upload as a suspect on its first run |
 | R1 | g. make it the marcher the game launches with | **done** — D224–D226. The chunk marcher is behind `--chunk-marcher` until R1e |
 | R1 | h. the enclosed-room regression | **done** — D227–D232. It was the descent, re-walking eleven levels every step; two cached ancestors fixed it. Finding it needed the harness fixed first |
-| R2–R8 | | not started |
+| R1 | i. dirty-range uploads | **done** — D235–D236. The upload was 10 MB a frame while moving and eleven times over its budget; it is now 0.028 ms |
+| R2 | d. draw the parent while waiting | **done, early** — D237. Taken out of order because an unstreamed region drawing as sky is what "it loads slowly" turned out to mean |
+| R2 | a–c | not started |
+| R3–R8 | | not started |
+
+#### What a player was actually waiting for, which none of the above was
+
+The grid says this marcher is faster than the one it replaces on every camera. The person playing it
+reported lag, slow loading, and doubted it would ever be as good. Both were true, and the overlay
+settled it in one line: **GPU 0.92 ms, frame 247.51 ms, 99th percentile 2,234 ms.**
+
+Two things came out of looking at that instead of at the grid.
+
+**The pool's own upload was the largest thing in the frame while moving** (D235). It copied every
+array's whole used prefix whenever anything changed — free once the tree is converged and quiet,
+which is precisely the state a fixed camera measures, and 10 MB a frame while walking. The `nodes`
+pass measured 2.725 ms mean and 8.915 ms worst against a 0.80 ms budget. Sending only what changed
+takes it to 0.028 and 0.257.
+
+**And the hitching is not the renderer at all** (D239). The scene sharpens region by region; the
+sampling is threaded and the paste is not, so the main thread blocks for **twelve to fourteen seconds
+at a time**. That is the 6,282 ms worst frame. Both marchers suffer it identically, it predates the
+rewrite, and D74 already names the fix — slice the paste across frames — while assigning it to
+Stage 16. It is now the largest single thing standing between this engine and being judged fairly,
+and it is not in this plan.
 
 #### R1h — the enclosed room, and why the answer took longer than the fix
 

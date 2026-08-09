@@ -44,7 +44,25 @@ loop.bat -MaxIterations 1 -TimeoutMinutes 90 -PauseSeconds 30 -Model opus
 
 ## The account it runs as, and what it spends
 
-Before it starts, it prints both:
+**The first thing it asks, before the goal and before anything else**, is which account to spend:
+
+```
+Signed in as: you@example.com
+Plan:         max subscription, billed as usage
+
+Use this account, or sign in with a different one? (U)se / (S)witch / (Q)uit
+```
+
+Answer **S** and it runs the sign-in for you — a browser opens, you pick the account there, and it
+reads back who you ended up as and asks again. Answer **U** and it starts. **Q** stops without
+running anything.
+
+This is asked first because everything after it spends the answer, and the failure it replaces is
+silent: `claude` keeps its own sign-in, it is **not** necessarily the account showing in whatever
+Claude app is open beside it, and a whole night can go to the wrong subscription with nothing
+anywhere saying so.
+
+Once you have chosen, it confirms:
 
 ```
 Account:   you@example.com  (max subscription)
@@ -58,23 +76,18 @@ the command line held one account while a different one was in use elsewhere, an
 anywhere said so. That is why the account is printed at startup and has to be acknowledged
 before a run begins.
 
-To change which account it uses, sign the command line in as that account:
+The account you choose is the one the run is pinned to, and it re-checks before **every**
+iteration: if the sign-in changes underneath a running loop it stops and writes that in the
+journal, rather than carrying on overnight against a different account's usage.
 
-```bash
-claude auth login
-```
-
-The account signed in when it starts is the one the run is pinned to, and it re-checks before
-**every** iteration: if the sign-in changes underneath a running loop it stops and writes that
-in the journal, rather than carrying on overnight against a different account's usage.
-
-To require a particular account instead of accepting whichever is signed in:
+To skip the question and require a particular account — which is what a scheduled run wants:
 
 ```bash
 loop.bat -Account you@example.com
 ```
 
-It refuses to start on a mismatch and tells you which account it found.
+It refuses to start on a mismatch and tells you which account it found, rather than prompting.
+`LOOP_ACCOUNT_CONFIRMED=1` skips the question the same way while accepting whoever is signed in.
 
 **It will not spend API credit.** A subscription sign-in reports as `claude.ai`; anything
 else — an API key, Bedrock, Vertex — is refused at startup rather than discovered on a bill.
@@ -180,14 +193,9 @@ Before the loop begins it asks Claude one trivial question and waits for an answ
 seconds and a fraction of a penny, and it turns "nothing happened all night" into "it would
 not start, and here is what it said."
 
-**"Claude Code is not signed in."** Sign in once:
-
-```bash
-claude auth login
-```
-
-This is the command line's own sign-in, separate from any Claude app installed beside it. Run
-`loop.bat` again afterwards.
+**Not signed in.** It offers to sign you in and runs it for you; there is nothing to do first. If
+you would rather do it by hand, `claude auth login` is the same thing. This is the command line's
+own sign-in, separate from any Claude app installed beside it.
 
 **"This login would bill API credit, not a subscription."** Something is providing an API key
 or pointing the CLI at Bedrock or Vertex. Sign in with a subscription account and run it
