@@ -962,19 +962,20 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // Until then: evict only under pressure. A pool holding ten megabytes of a five-hundred
     // megabyte budget has nothing to gain by throwing away what it just built, and "nothing to
     // gain" is the whole of the argument -- this is not a tuning choice that could go either way.
-    // Age decides again, because it finally means something: a ray reading a node refreshes it
-    // through `touch`, so a root that has gone cold is one nothing has looked at for
-    // `cold_frames` — which is what this loop always believed and was never true before D247.
+    // Age decides, full stop, and it finally means something: a ray reading a node refreshes it
+    // through `touch` (R2a), so a root that has gone cold is one nothing has looked at for
+    // `cold_frames` -- which is what this loop always believed and was not true until D247.
     //
-    // The pressure test stays as a floor under it. A pool holding ten megabytes of a five-hundred
-    // megabyte budget gains nothing by evicting, and if the reporting is ever incomplete again
-    // this is what stops that becoming a churn instead of a bug report.
-    const bool node_pressure = next_free_ > budget_.max_nodes / 4;
-    const bool leaf_pressure = next_leaf_ > budget_.max_occupancy_leaves / 4;
-    const bool payload_pressure = payload_high_ > budget_.payload_bytes / 4;
-    const bool worth_evicting = node_pressure || leaf_pressure || payload_pressure;
-
-    for (auto it = live_.begin(); worth_evicting && it != live_.end();) {
+    // Not gated on memory pressure any more, and that gate was the bandaid rather than the
+    // policy. While it was there nothing was ever evicted, so resident memory was a high-water
+    // mark of everything ever asked for rather than a function of what is on screen -- and R2's
+    // whole claim is that halving the resolution quarters the memory. Measured with the gate in
+    // place: 6.04 MB at 1280x800 and 4.87 MB at 640x400, where a quarter is 1.51 MB.
+    //
+    // What makes this safe now is that a miss is no longer the only thing that says "wanted". If
+    // that ever stops being true the symptom is the churn D247 describes, and the test beside
+    // this one -- a root a ray keeps reading survives -- is what catches it.
+    for (auto it = live_.begin(); it != live_.end();) {
         if (frame - it->second.last_wanted <= budget_.cold_frames) {
             ++it;
             continue;

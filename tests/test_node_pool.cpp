@@ -227,7 +227,7 @@ TEST_CASE("an edit followed by a request rebuilds with the new contents") {
 // every ray was reading that frame. It then rebuilt it, went quiet, and did it again.
 //
 // This test used to assert the eviction half and pass while that was happening.
-TEST_CASE("a built tree survives being quiet, because a miss is the only thing that asks") {
+TEST_CASE("a tree nothing reads is evicted, and that is the point") {
     Fixture f;
     f.fill_box(0, 0, 0, 7, 7, 7);
     NodePoolBudget budget;
@@ -249,11 +249,12 @@ TEST_CASE("a built tree survives being quiet, because a miss is the only thing t
     }
     CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
 
-    // And then nobody asks, for far longer than cold_frames. It is still there, because there is
-    // room and nothing is gained by throwing away what the next frame will ask for again.
+    // And then nothing asks for it and nothing reads it, for far longer than cold_frames. It
+    // goes, which is what makes resident memory a function of what is on screen rather than a
+    // high-water mark of everything ever looked at. The companion test below is the other half:
+    // a tree something IS reading stays, and that is what stops this becoming the churn of D247.
     for (u64 frame = 20; frame < 200; ++frame) f.serve(frame);
-    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
-    CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) != kNoNode);
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) == kNoNode);
     CHECK(f.pool.validate());
 }
 
@@ -291,15 +292,13 @@ TEST_CASE("a one-voxel edit keeps the tree it did not touch") {
 // keeps it, not only a ray missing one. Without this, "wanted" meant "missing", so a finished tree
 // was wanted by nothing and the pool threw the scene away on a timer (D247).
 //
-// Under pressure, so eviction is actually running and the test is about `touch` rather than about
-// the floor beneath it.
-TEST_CASE("a node a ray keeps reading is not evicted, under pressure") {
+TEST_CASE("a node a ray keeps reading is not evicted") {
     Fixture f;
     f.fill_box(0, 0, 0, 63, 63, 63);
     NodePoolBudget budget;
-    budget.max_nodes = 512;
-    budget.max_occupancy_leaves = 64;
-    budget.payload_bytes = 64 * 1024;
+    budget.max_nodes = 1u << 16;
+    budget.max_occupancy_leaves = 1u << 14;
+    budget.payload_bytes = 1024 * 1024;
     budget.proximity_voxels = 0;
     budget.cold_frames = 4;
     f.pool.create(budget, f.types);
@@ -321,10 +320,9 @@ TEST_CASE("a node a ray keeps reading is not evicted, under pressure") {
     CHECK(f.pool.validate());
 }
 
-// And the other half, which still has to work: when the pool is genuinely full, the coldest thing
-// goes. Provoked with a budget small enough that building the scene crosses the pressure mark,
-// because that is the only condition under which evicting is a gain rather than a loss.
-TEST_CASE("under pressure the coldest node is evicted") {
+// The same policy seen from the memory side: a pool that keeps being asked for new things and
+// never re-reads the old ones does give the old ones up.
+TEST_CASE("a pool under load gives up what has gone cold") {
     Fixture f;
     f.fill_box(0, 0, 0, 63, 63, 63);
     NodePoolBudget budget;
