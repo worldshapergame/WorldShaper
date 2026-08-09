@@ -509,6 +509,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R3 | d. delete the per-pixel light path | not started. Carries one debt from R3b: split `GpuFace` so the CPU's half and the card's half are never in one copy |
 | R3 | faces are voxels | **done** — D298–D303. Every face in the store was a brick, so the finest shadow was 25 cm; now 416,261 level 0, 59,758 level 1, 1,603 level 3 on the close camera. Two collisions on zero and a shell that was transparent to occlusion came with it. Speckle enclosed 17.5 (no shadows) → 3.8 |
 | R9 | the off-screen set | **planned, not started** — §8's new stage. The face store holds what the camera can see, so light is a screen-space set in world-space clothing. Prerequisite for R4c/R4d being worth measuring |
+| R9 | light from what is not loaded | **planned, not started** — R9f–R9h. Light folds up the tree as colour does and outlives its children, so eviction stops being a lighting decision; the emitter list persists per region and loads with the index rather than the voxels; no light path may cause streaming |
 | R4–R8 | | not started |
 
 #### What a player was actually waiting for, which none of the above was
@@ -864,17 +865,104 @@ already calls for parent seeding at claim time; R9 is what makes the parent reli
 faces each class holds. Without it "the reflection is dark" and "the reflection is not in the set"
 are the same picture, which is the trap D296 was written about.
 
+#### Light from places that are not loaded
+
+R9a–R9e extend the set to geometry the camera cannot see. This half extends it to geometry the
+*engine* does not have — which is a different problem, because there is nothing to march and
+nothing to shade, and the answer must not be to go and fetch it.
+
+**"Not loaded" is three different things here, and only the third is hard.**
+
+| | what the engine holds | what a light ray can do |
+|---|---|---|
+| a **shell** — the world says occupied, children never built | the node, its folded colour, its per-direction coverage | read it; the data is already there |
+| in `World` but not in the node pool | CPU chunk data, no GPU node | nothing today |
+| not in `World` at all — never generated, or evicted | a region index entry at most | nothing today |
+
+**The rule that makes all three cheap.**
+
+> Light folds up the tree exactly as colour does, and eviction must never take light with it. A
+> gathering ray reads the coarsest node that has an answer, and a node that has an answer keeps it
+> after its children are gone.
+
+That is the whole mechanism, and it needs no new structure: a face is already keyed by *(node,
+direction)* at **any** level, so a coarse node's light is a face at a coarse level. The face store
+holds it, the face pass shades it, the composite reads it. What has to be added is the fold and the
+promise that it survives.
+
+**R9f — coarse faces carry folded light, and outlive their children.** When the face pass shades a
+face, it also folds its result into its parent face at the same direction, coverage-weighted — the
+same fold `node_face_coverage` already performs for colour. A 512 m node has six faces; the whole
+coarse pyramid over a scene is thousands of records, not millions, so this is O(coarse nodes) and
+independent of both the screen and the world size. Two consequences worth stating separately
+because they are what the stage is *for*:
+
+- **A ray that reaches an unbuilt region gets light rather than nothing.** It stops at the coarsest
+  node that exists — which for a shell is the shell itself — and reads a colour that was folded
+  from that region's own children the last time they were resident.
+- **Evicting geometry stops costing light.** Today the coarse ancestor survives eviction and its
+  light does not, because light lives only on faces the camera has seen. After this, walking away
+  from a room and back finds the room still lit, and the node pool's eviction policy stops being a
+  lighting decision.
+
+**R9g — the emitter list stops being camera-centric and stops needing voxels.** `src/world/light_list.*`
+already merges emissive voxels into fittings, and it is built from resident `World` chunks and then
+**sorted nearest-first around the camera and capped** — so a lamp in a region that is not loaded
+does not exist, and one just past the cap blinks out. Both are the same fault as the face set's:
+the light is defined by where the camera is rather than by where the light is.
+
+The fix is to persist the fittings, not to load the voxels. A region's emitters are a few dozen
+`LightSource` records — position, radiance, size — and they are written into the world cache beside
+the region index when the region is generated or sharpened. They load with the **index**, which is
+already always resident, not with the region's voxel data, which is not. Kilobytes for a world,
+against megabytes for one chunk of it.
+
+Sampling stays constant-cost per face: one fitting per face per frame, chosen by estimated
+contribution — radiance times solid angle over distance squared — and accumulated into the same two
+counters D293 introduced. **A face never loops over lights**, however many there are, and a scene
+with a thousand lamps costs a face exactly what a scene with one does. Occlusion for a distant
+fitting is tested at coarse levels only, with a shell counting as opaque (D302), which is bounded
+in steps and conservative in the right direction.
+
+**R9h — the fallback, for where there is genuinely nothing.** Past the last node and the last
+region record, the answer is the analytic sky and the coarsest folded colour on the path. It is
+never black, never a stall, and never a request. That last clause is a rule, not a preference:
+
+> **No light path may cause streaming.** A ray that gathers light reports nothing and asks for
+> nothing.
+
+D292 states the narrow version of this for shadow rays — a shadow ray must not drag residency
+towards whatever it crosses. R9g and R9f widen it to every gathering ray, and R9a is the single
+exception, deliberately: it reports the face a ray *landed on*, which is one face and one claim,
+never the geometry along the way. Without that line, GI becomes a streaming amplifier — every
+surface asks for the world behind every other surface — and the cost is unbounded in exactly the
+way this rewrite exists to stop.
+
+**Why this is the performant shape and not merely the correct one.** Every term above is bounded by
+something that is not the size of the world: coarse faces by the pyramid, lamp sampling by one
+fitting per face per frame, occlusion by the coarse levels, and all of it by R9b's per-class budget.
+Nothing here scales with how much world exists, how much of it is loaded, or how many lamps are in
+it. What it costs is **convergence**, paid in frames, which is the currency §6 already chose.
+
 *Gate: a mirror wall reflects a surface that is behind the camera, with light on it, and the
 reflection does not change when that surface comes into view; a 180° turn shows no relighting;
 faces in the off-screen classes stay within their budgets on the enclosed camera; frame time
 within 15% of R3 with the classes enabled and no reflective material in the scene.*
 
+*Gate, for the unloaded half: a lamp 200 m away in a region whose voxels are not resident lights
+what it should, and **the picture does not change when that region streams in**; walking out of a
+lit room and back finds it lit, with no relight; a scene with a thousand fittings costs a face what
+a scene with one costs; **streaming requests per frame do not move when GI is switched on**, which
+is the measurement that proves the no-streaming rule rather than asserting it.*
+
 **Sizing and order.** R9a and R9d are small and pay immediately: they are what stops a shadow
 caster's own surfaces going dark and what removes the relighting flash on a turn, and they can land
 straight after R3c. R9b is the machinery that keeps the rest affordable. R9c is independent and
-cheap. R9e comes first in practice, as instruments always have. **R9 as a whole is a prerequisite
-for R4c and R4d being worth measuring** — a reflection of an empty set is a black mirror, and no
-amount of bin resolution improves it.
+cheap. R9e comes first in practice, as instruments always have. **R9f is the one to build before
+R9g**: folded light on coarse faces is what a distant lamp's *effect* is read from, and it is also
+what stops eviction being a lighting decision, which is a bug today rather than a feature tomorrow.
+**R9 as a whole is a prerequisite for R4c and R4d being worth measuring** — a reflection of an
+empty set is a black mirror, and no amount of bin resolution improves it.
 
 **The risk, stated plainly.** This is the stage where the face count stops being bounded by the
 screen. §6's whole argument is that faces grow sub-linearly with resolution because a voxel already
@@ -884,6 +972,16 @@ time — the budget fixes that by construction — but **convergence**: a store 
 every face too few samples and the picture gets noisier everywhere rather than slower anywhere.
 The measurement that decides it is samples-per-face per class, and it should be reported from the
 first commit of R9a.
+
+**The second risk, which belongs to the unloaded half.** Folded light is a lie that gets more
+convincing as it gets coarser: a 512 m node's six faces stand for a square kilometre of surface,
+and any lighting read from them is an average over things that do not look alike. That is
+acceptable for a contribution arriving from far away and unacceptable for one arriving from the
+next room, so the fold must never be read at a level coarser than the *distance* justifies — the
+same footprint rule the primary ray already uses, applied to the gathering ray. If it is read too
+coarsely the failure is not noise but **flatness**: interiors lit by a plausible average that does
+not respond to what is actually in them, and no counter moves. The debug view in R9e must therefore
+show which *level* a face's light came from, not only which class.
 
 ### R5 — Face denoise and the composite · M
 
