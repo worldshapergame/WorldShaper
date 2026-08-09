@@ -1976,8 +1976,9 @@ void Application::build_world() {
                     resume_refinement(std::move(script), cache, cache_path, key, coarse);
                 }
                 const WorldStats cached_stats = world_.stats();
-                WS_LOG_INFO("world", "'{}' loaded from cache in {:.0f} ms: {} chunks, {} solid "
+                WS_LOG_INFO("world", "'{}' loaded from cache in {:.0f} ms [t+{:.0f} ms]: {} chunks, {} solid "
                                      "voxels", path, ns_to_ms(now_ns() - start),
+                            ns_to_ms(now_ns() - load_began_ns_),
                             cached_stats.chunks, cached_stats.solid_voxels);
                 return;
             }
@@ -3820,13 +3821,29 @@ int Application::run(const Options& options) {
     // few hundred chunks at full detail holds tens of thousands of them at a metre — which is
     // the difference between a view that ends and one that does not.
     constexpr u64 kSlotBytes = sizeof(GpuBrickHeader) + kBrickWords * sizeof(u64);
-    const u64 thumb_bytes = vram_budget * 15 / 100;
-    residency_budget_.payload_bytes = vram_budget * 45 / 100;
+    // What the chunk system gets, which since the node pool became the marcher is "enough to
+    // serve the path tracer" rather than "most of the card".
+    //
+    // Nothing else reads it. `visibility.comp` is behind --chunk-marcher, and `pathtrace.comp` is
+    // the only thing left that includes world.glsl. Sized for the whole card it costs **1,432 ms
+    // of chunk residency and 266 ms of thumbnail tiers on every single load** -- 83% of a 2,033 ms
+    // start -- almost all of it zeroing pools that the frame never touches, plus about 12 ms of
+    // CPU a frame keeping them current.
+    //
+    // A tenth of the share is still hundreds of megabytes, which is a reference path tracer's
+    // working set on one scene and is what it had before any of this existed. R1e deletes the rest
+    // of it; this stops it being paid for by everybody in the meantime.
+    const u64 chunk_share = options_.path_trace ? 100 : 10;
+    const u64 thumb_bytes = vram_budget * 15 / 100 * chunk_share / 100;
+    residency_budget_.payload_bytes = vram_budget * 45 / 100 * chunk_share / 100;
     residency_budget_.max_bricks =
-        static_cast<u32>((vram_budget * 40 / 100) / kSlotBytes);
+        static_cast<u32>((vram_budget * 40 / 100 * chunk_share / 100) / kSlotBytes);
     residency_budget_.max_chunk_uploads_per_frame = 8;
     residency_budget_.max_bricks_per_frame = 8192;
+    const u64 t_residency = now_ns();
     residency_.create(residency_budget_, types_);
+    WS_LOG_INFO("load", "chunk residency {:.0f} ms  [t+{:.0f} ms]",
+                ns_to_ms(now_ns() - t_residency), ns_to_ms(now_ns() - load_began_ns_));
     progress_.within(0.15);
     draw_loading();
 
@@ -3840,6 +3857,7 @@ int Application::run(const Options& options) {
 
     u32 slot_base = 0;
     u32 grid_offset = 0;
+    f64 tier_ms = 0.0;
     u64 share = thumb_bytes / 2;
     for (u32 level = 0; level < kSummaryTiers; ++level) {
         ThumbnailBudget budget;
@@ -3850,7 +3868,9 @@ int Application::run(const Options& options) {
         budget.radius_chunks = 96;   // in blocks, so 2^level times further each level up
         budget.max_builds_per_frame = (level == 0) ? 32u : 8u;
         thumb_budgets_[level] = budget;
+        const u64 t_tier = now_ns();
         thumb_tiers_[level].create(budget, summary_tree_);
+        tier_ms += ns_to_ms(now_ns() - t_tier);
 
         slot_base += budget.max_thumbs;
         grid_offset += budget.grid_width * budget.grid_height * budget.grid_depth;
@@ -3861,6 +3881,8 @@ int Application::run(const Options& options) {
                     (static_cast<u64>(budget.max_thumbs) * kThumbBytes) >> 20,
                     static_cast<f64>(budget.radius_chunks * summary_span(level) * 8) / 1000.0);
     }
+    WS_LOG_INFO("load", "thumbnail tiers {:.0f} ms  [t+{:.0f} ms]", tier_ms,
+                ns_to_ms(now_ns() - load_began_ns_));
     thumb_total_slots_ = slot_base;
     thumb_total_grid_ = grid_offset;
 
@@ -3869,6 +3891,7 @@ int Application::run(const Options& options) {
     rebuild_coarse_grids();
     progress_.within(0.45);
     draw_loading();
+    const u64 t_world_buffers = now_ns();
     if (!world_buffers_.create(device_, residency_budget_, thumb_total_slots_, thumb_total_grid_,
                                32ull << 20)) {
         return 1;
@@ -4074,11 +4097,18 @@ int Application::run(const Options& options) {
     // path nobody notices has stopped compiling.
     {
         NodePoolBudget node_budget;
+        WS_LOG_INFO("load", "world buffers {:.0f} ms  [t+{:.0f} ms]",
+                ns_to_ms(now_ns() - t_world_buffers), ns_to_ms(now_ns() - load_began_ns_));
+        const u64 t_pool = now_ns();
         node_pool_.create(node_budget, types_);
+        const u64 t_node_buffers = now_ns();
+        WS_LOG_INFO("load", "node pool {:.0f} ms", ns_to_ms(t_node_buffers - t_pool));
         if (!node_buffers_.create(device_, node_budget)) {
             WS_LOG_FATAL("app", "could not create the node pool buffers");
             return 1;
         }
+        WS_LOG_INFO("load", "node buffers {:.0f} ms  [t+{:.0f} ms]",
+                    ns_to_ms(now_ns() - t_node_buffers), ns_to_ms(now_ns() - load_began_ns_));
 
         // 0-1 out images, 2-6 the pool, 7 feedback, 8 the parameter block.
         VkDescriptorSetLayoutBinding node_bindings[9]{};
@@ -4165,6 +4195,7 @@ int Application::run(const Options& options) {
         use_node_pool_ = options_.node_pool;
     }
 
+    const u64 t_pipelines = now_ns();
     if (!visibility_.create(device_, source, spirv, set_layout_, 0)) {
         WS_LOG_FATAL("app", "could not create the visibility pipeline: {}",
                      visibility_.last_error());
@@ -4203,6 +4234,16 @@ int Application::run(const Options& options) {
             WS_LOG_ERROR("app", "no clouds this run: {}", clouds_.last_error());
         }
 
+        WS_LOG_INFO("load", "pipelines before the tracer {:.0f} ms",
+                    ns_to_ms(now_ns() - t_pipelines));
+        const u64 t_tracer = now_ns();
+        struct TracerTimer {
+            u64 began;
+            u64 origin;
+            ~TracerTimer() { WS_LOG_INFO("load", "path tracer pipeline {:.0f} ms  [t+{:.0f} ms]",
+                                         ns_to_ms(now_ns() - began),
+                                         ns_to_ms(now_ns() - origin)); }
+        } tracer_timer{t_tracer, load_began_ns_};
         if (!pathtrace_.create(device_, trace_source, trace_spirv, pathtrace_layout_,
                                sizeof(TracePush))) {
             WS_LOG_FATAL("app", "could not create the path tracing pipeline: {}",
@@ -4394,8 +4435,32 @@ int Application::run(const Options& options) {
     // between the bar filling and the game appearing, which is precisely the gap the player
     // reports as "it says a hundred and then hangs" — so the bar's last drawn state is the high
     // nineties and the next thing on the screen is the world.
+    WS_LOG_INFO("load", "everything ready  [t+{:.0f} ms]", ns_to_ms(now_ns() - load_began_ns_));
     progress_.finish();
+    const LoadHistory measured_load = progress_.history(load_history_);
     progress_.history(load_history_).write(loading_cache_path());
+
+    // What loading actually spent, per stage.
+    //
+    // These have been measured since the loading bar existed, to weight the bar, and never once
+    // printed -- so "it takes five seconds" has never had a breakdown behind it. A warm start
+    // reads the world from cache in 146 ms and still takes 4.85 s, and until this line nothing
+    // said where the rest went.
+    {
+        std::string breakdown;
+        for (u32 i = 0; i < static_cast<u32>(LoadStage::Count); ++i) {
+            // Two shapes are kept apart -- a cold build and a cache hit spend themselves on
+            // entirely different stages -- so report whichever this run actually was.
+            const usize shape = LoadProgress::likely_cached(measured_load) ? LoadHistory::kCached
+                                                                          : LoadHistory::kBuilt;
+            const f64 seconds = measured_load.seconds[shape][i];
+            if (seconds < 0.001) continue;
+            if (!breakdown.empty()) breakdown += "  ";
+            breakdown += std::string(stage_name(static_cast<LoadStage>(i))) + " " +
+                         std::to_string(static_cast<int>(seconds * 1000.0)) + "ms";
+        }
+        WS_LOG_INFO("app", "load stages: {}", breakdown);
+    }
 
     // The screen holds a full-resolution image and startup is the only thing that needs it.
     loading_screen_.destroy();

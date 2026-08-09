@@ -590,6 +590,18 @@ outdoors**, against 0.490 before this and 252.8 before the request dedupe. The w
 and 96 ms and both are during load — real, worth fixing, and a different problem from the one this
 was about.
 
+## The renderer rewrite — load time, which was mostly the system nothing reads
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D275 | **Loading reports where it went** | measurement | The per-stage times have been measured since the loading bar existed, to weight the bar, and were never printed — so "it takes about five seconds" had no breakdown behind it in a project whose first rule is to measure. They are printed now, with each init phase stamped against process start. The bar's own attribution turned out to be misleading on a cache hit, because a skipped stage absorbs the gap before the next one: it credited 2,450 ms to *sampling* on a run that did no sampling at all |
+| D276 | **The chunk system is sized for what still reads it, which is the path tracer alone** | measurement | Stamped against process start, a warm load read the world from its cache at **t+126 ms** and was not ready until **t+2,033 ms**. The gap was `residency_.create` at **1,432 ms** and the eight thumbnail tiers at **266 ms** — **83% of the load**, spent zeroing pools sized for most of the card, that the frame never touches. `visibility.comp` is behind `--chunk-marcher` and `pathtrace.comp` is the only thing left including `world.glsl`. At a tenth of the share: chunk residency **163 ms**, tiers **63 ms**, **ready at t+548 ms against t+2,033** — and the wall clock of a scripted run from 3.85 s to 2.11 s |
+| D277 | **`--pathtrace` still takes the whole share** | D276 | It is the one thing that needs it, and it is a reference mode with no frame budget (D157), so it pays the 1,428 ms when it is asked for. **F4 from a default start therefore traces on a tenth of the budget** — the facility fits, and a larger scene may not hold every chunk. That is a real consequence and is stated rather than discovered: R1e removes the choice by removing the system |
+
+**What is left of load.** Ready at 548 ms, of which the world itself is 126. There is no single large
+item left in it — the next thing worth attacking is the *cold* path, where a first build still
+sharpens region by region and pastes on the main thread for up to 17.4 s at a time.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
