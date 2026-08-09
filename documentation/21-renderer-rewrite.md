@@ -498,6 +498,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R1 | h. the enclosed-room regression | **done** — D227–D232. It was the descent, re-walking eleven levels every step; two cached ancestors fixed it. Finding it needed the harness fixed first |
 | R1 | i. dirty-range uploads | **done** — D235–D236. The upload was 10 MB a frame while moving and eleven times over its budget; it is now 0.028 ms |
 | R2 | d. draw the parent while waiting | **done, early** — D237. Taken out of order because an unstreamed region drawing as sky is what "it loads slowly" turned out to mean |
+| R2 | eviction churn | **fixed** — D247–D250. The pool was throwing away the scene it was drawing every 600 frames, because a node is only marked wanted by a *miss*. D233 and D234 were both this |
 | R2 | a–c | not started |
 | R3–R8 | | not started |
 

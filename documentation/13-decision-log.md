@@ -471,6 +471,26 @@ completed because each run rebuilds a hundred and twenty-five million voxels bef
 | D245 | **A world with no ladder is settled, and saying so out loud fixed a hang** | D241 | `start_refinement` returned early when there was no refinement script and left `refine_settled_` false, and `--settle` waits on that flag — so a run with no ladder waited for a fixed point that had already happened, for ever. It was reachable before (`--clip-coarse 1 --settle`) and nobody had hit it; D241 makes it the normal case, because a finished cached world has no ladder. Nothing here can be improved, which is what settled means |
 | D246 | **The region grid is compared corner for corner rather than trusted to the cache key** | D241 | The key covers the clip text, the resolution and the modification times of `src/forge`, `src/world` and `src/game/clip.*` — deliberately, so that editing a menu label does not throw away a minute of resampling. The region planner is in `src/app/main.cpp`, which is in none of them, so changing how the grid is cut would leave every cache file matching its key while its flags referred to boxes that no longer exist. Adding that file to the key would invalidate every built world on every edit to five thousand lines of renderer, HUD and command line. So the corners are compared instead and a grid that has moved re-sharpens from scratch: slow once, rather than a building quietly coarse in the wrong places for ever |
 
+## The renderer rewrite — the pool was throwing away the scene it was drawing
+
+D233 recorded that the node pool "does not converge" and carried it to R2 as an open question, with
+D234 recording that the empty-space cameras were bimodal and blaming the same unknown. They were one
+bug, and the reason it took three sittings to find is that every symptom it produced looked like a
+different subsystem.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D247 | **A node is evicted only when the pool is under pressure** | measurement | `last_wanted` is refreshed in exactly one place — the request loop — and requests come from feedback, and **feedback reports misses**. So the moment a tree finishes building, the rays stop missing, nothing is requested, no timestamp advances, every node goes cold on the same frame, and six hundred frames later the pool evicted the whole scene *including everything the rays were reading that frame*. Then they missed, it rebuilt, converged, went quiet, and did it again. Measured on a static camera over a cached world: 8,684 nodes at frame 400 and **1,713** at frame 1000, with the converged frame disagreeing with the chunk marcher on **767,526 pixels of 1,024,000** because it had been caught with the tree mostly gone. Now: 8,696 nodes at 400, 1000, 2000 and 4000 frames, `built 0`, `evicted 0`, and the two converged frames are **bit-identical** |
+| D248 | **D233 and D234 are closed, and both were this** | D247 | D233's "still building 273–385 nodes a frame three thousand frames after the world stopped changing" was the rebuild half of the cycle. Its "two runs ended at 89,560 against 81,464 nodes" was two runs caught at different phases of it. D234's bimodal sky — 0.481, 0.763, 0.472 from one build against one scene — was the ray clip following `resident_bounds` (D148) as the pool emptied and refilled; the same three runs now measure **0.834, 0.841, 0.846, a spread of 1% against 51%**. One fault, four write-ups, and every one of them had been filed as a separate open question |
+| D249 | **Image diffs can gate again** | D247 | The floor D232 withdrew R1d's image column over was this churn. The node pool now differs from the chunk marcher by **176 pixels of 1,024,000** on the enclosed camera — 0.017%, and that residue is the coarse-level colour rule D149 and D152 settled rather than an error. R1e's gate, "the grid table does not move", is checkable for the first time |
+| D250 | **The test that asserted eviction was asserting the bug** | — | `a node nobody wants is evicted` passed throughout, because the pool did exactly that and it was wrong to. Replaced by two: a built tree survives being quiet however long the frames run on, and — the half that still has to work — under a budget small enough to cross the pressure mark, the coldest node still goes. A test that passes while the thing it covers is broken is worth less than no test, because it is read as evidence |
+
+**Still open, and it is the right shape of open.** A node ought to be marked wanted when a ray *uses*
+it, which needs the marcher to report hits and not only misses. Until then "under pressure" decides
+eviction and `last_wanted` orders it, which is sound while there is room and approximate when there
+is not. That is residency policy and it belongs to R2 — but it is now a design question with a
+known answer rather than a mystery blocking a gate.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

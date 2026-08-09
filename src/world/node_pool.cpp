@@ -828,10 +828,32 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     }
     requested_.clear();
 
-    // And what has gone cold. Several seconds at any frame rate, because a node just off screen
-    // has to survive turning round and back — which is the entire reason for holding it in world
-    // space rather than on the screen.
-    for (auto it = live_.begin(); it != live_.end();) {
+    // And what has gone cold -- but only when there is something to gain by it.
+    //
+    // `last_wanted` is refreshed in exactly one place: the request loop above. Requests come from
+    // feedback, and feedback reports MISSES. So the moment the tree is built and the rays stop
+    // missing, no timestamp advances again, every node goes cold on the same frame, and six
+    // hundred frames later the pool evicts the entire scene -- including every node the rays are
+    // using right now. Then they miss, it rebuilds, converges, goes quiet, and does it again.
+    //
+    // That churn is one bug wearing four disguises, all of them recorded as separate mysteries
+    // before it was found: a pool "still building 385 nodes a frame three thousand frames after
+    // the world stopped changing" (D233), two runs of one binary ending at 89,560 against 81,464
+    // nodes, a sky camera whose timing was bimodal because the ray clip follows the resident set
+    // (D234), and a converged frame that disagreed with the chunk marcher on 767,526 pixels of
+    // 1,024,000 because it had been caught with the tree mostly evicted.
+    //
+    // The honest fix is for a node to be marked wanted when a ray USES it, which needs the
+    // marcher to report hits and not only misses. That is residency policy and belongs to R2.
+    // Until then: evict only under pressure. A pool holding ten megabytes of a five-hundred
+    // megabyte budget has nothing to gain by throwing away what it just built, and "nothing to
+    // gain" is the whole of the argument -- this is not a tuning choice that could go either way.
+    const bool node_pressure = next_free_ > (budget_.max_nodes / 4) * 3;
+    const bool leaf_pressure = next_leaf_ > (budget_.max_occupancy_leaves / 4) * 3;
+    const bool payload_pressure = payload_high_ > (budget_.payload_bytes / 4) * 3;
+    const bool under_pressure = node_pressure || leaf_pressure || payload_pressure;
+
+    for (auto it = live_.begin(); under_pressure && it != live_.end();) {
         if (frame - it->second.last_wanted <= budget_.cold_frames) {
             ++it;
             continue;

@@ -213,7 +213,15 @@ TEST_CASE("an edit followed by a request rebuilds with the new contents") {
     CHECK(f.pool.validate());
 }
 
-TEST_CASE("a node nobody wants is evicted, and one that is wanted is not") {
+// Nothing is evicted while there is room, and that is the fix rather than the tuning.
+//
+// `last_wanted` is refreshed only by a request, and requests come from feedback, and feedback
+// reports misses. So a tree that has finished building stops being asked for anything, every node
+// goes cold on the same frame, and the pool used to throw away the entire scene -- including what
+// every ray was reading that frame. It then rebuilt it, went quiet, and did it again.
+//
+// This test used to assert the eviction half and pass while that was happening.
+TEST_CASE("a built tree survives being quiet, because a miss is the only thing that asks") {
     Fixture f;
     f.fill_box(0, 0, 0, 7, 7, 7);
     NodePoolBudget budget;
@@ -235,9 +243,39 @@ TEST_CASE("a node nobody wants is evicted, and one that is wanted is not") {
     }
     CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
 
-    // And then nobody asks.
-    for (u64 frame = 20; frame < 30; ++frame) f.serve(frame);
-    CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) == kNoNode);
+    // And then nobody asks, for far longer than cold_frames. It is still there, because there is
+    // room and nothing is gained by throwing away what the next frame will ask for again.
+    for (u64 frame = 20; frame < 200; ++frame) f.serve(frame);
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) != kNoNode);
+    CHECK(f.pool.validate());
+}
+
+// And the other half, which still has to work: when the pool is genuinely full, the coldest thing
+// goes. Provoked with a budget small enough that building the scene crosses the pressure mark,
+// because that is the only condition under which evicting is a gain rather than a loss.
+TEST_CASE("under pressure the coldest node is evicted") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 63, 63, 63);
+    NodePoolBudget budget;
+    budget.max_nodes = 512;
+    budget.max_occupancy_leaves = 64;
+    budget.payload_bytes = 64 * 1024;
+    budget.proximity_voxels = 0;
+    budget.cold_frames = 4;
+    f.pool.create(budget, f.types);
+
+    // Fill it until it is over the high-water mark.
+    for (u64 frame = 1; frame < 40; ++frame) {
+        f.want_box(0, 0, 0, 63, 63, 63);
+        f.serve(frame);
+    }
+    const NodePoolStats loaded = f.pool.stats();
+    REQUIRE(loaded.nodes > 0);
+
+    // Then ask for nothing for long enough to go cold. Under pressure that is a real eviction.
+    for (u64 frame = 40; frame < 120; ++frame) f.serve(frame);
+    CHECK(f.pool.stats().evictions > 0);
     CHECK(f.pool.validate());
 }
 

@@ -284,18 +284,28 @@ Two fixes, in the order they pay:
 Until the second lands, nobody can judge the renderer by playing a *first* load, because what they
 are judging is the paste. Every load after the first is now the renderer.
 
-### Then, the thing R1e cannot be judged without
+### ~~Then, the thing R1e cannot be judged without~~ — solved
 
-**The node pool does not converge** (D233). With the world provably identical and the camera still,
-it was still building 273–385 nodes a frame three thousand frames after the world stopped changing,
-and two runs ended at 89,560 against 81,464 nodes with no evictions. That is why the empty-space
-cameras give bimodal timings and why an image diff on any view that sees the building has a floor of
-tens of thousands of pixels.
+**The node pool converges.** D233 said it did not and carried it to R2; D234 blamed the bimodal
+empty-space cameras on the same unknown. They were one bug: `last_wanted` is refreshed only by a
+*request*, requests come from feedback, and feedback reports **misses** — so a finished tree stops
+being asked for anything, every node goes cold on the same frame, and the pool threw away the whole
+scene including what the rays were reading. Then it rebuilt it and did it again.
 
-It is R2's subject — residency policy — and R1e does not depend on it. But **R1e's gate does**: "the
-grid table does not move" cannot be checked to better than that floor until it is understood. Either
-settle it first, or state plainly that R1e closed on the enclosed and close cameras only, which are
-the two that repeat.
+Eviction now happens only under memory pressure (D247). Measured on a static camera over a cached
+world:
+
+| | before | after |
+|---|---|---|
+| nodes at frame 400 / 4000 | 8,684 / 1,713 | **8,696 / 8,696** |
+| two converged frames | 114,112 pixels apart | **bit-identical** |
+| against the chunk marcher | 767,526 pixels (75%) | **176 pixels (0.017%)** |
+| sky camera, three runs | 51% spread | **1% spread** |
+
+**So image diffs gate again** (D249), and R1e's "the grid table does not move" is checkable for the
+first time. What remains is a design question with a known answer rather than a blocker: a node
+should be marked wanted when a ray *uses* it, which needs the marcher to report hits as well as
+misses. That is R2's residency policy.
 
 ### R1e — delete the old addressing
 
