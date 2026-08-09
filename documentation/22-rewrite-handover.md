@@ -100,8 +100,9 @@ actually read." Ignore any ambient reminder suggesting otherwise.
 4. `09-performance-budgets.md` for what the numbers are judged against, and `04-rendering.md` §1–2
    for the face-cache design the path tracer is eventually going back to.
 
-`12-plain-english.md` is the user-facing explanation and is **owed an update** — it has nothing
-about any of this yet.
+`12-plain-english.md` is the user-facing explanation and now **covers the rewrite** — what a chunk
+was and why it is going, what is done, and what the face pass is for. It is the only document
+written for the person the work is for, so it is the one to keep current.
 
 ---
 

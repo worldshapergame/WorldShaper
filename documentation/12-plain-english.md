@@ -387,6 +387,60 @@ Measured on the spot the game starts you in: the first run still takes 133 secon
 
 What this does **not** fix is the stutter during that first build. Each box, when it's ready, gets stamped into the world in one uninterrupted go, and the big ones take up to seventeen seconds with everything else frozen. That's the freezing you reported, it's the next thing on the list, and the answer is to stamp it in slices across many frames instead of all at once. This change just means you only pay it once.
 
+## The renderer rewrite — what has actually changed
+
+You asked for three things rewritten: the path tracer made faster and cleaner, the chunk system
+taken out, and world streaming made to follow what's actually on your screen. Here is where that
+stands, in plain terms.
+
+### What a "chunk" was, and why it's going
+
+The game used to find geometry by cutting the world into fixed eight-metre boxes. To draw anything
+it kept a table of which boxes were on the graphics card — and then, because that alone is far too
+coarse, three more structures stacked on top of it: grids for skipping empty space, and eight tiers
+of cheap blurry copies for things far away. Four different filing systems glued end to end, and
+nearly every rendering bug we've ever had lived in a seam between two of them.
+
+They existed because a chunk is a fixed size, in a renderer whose entire idea is that **nothing has
+a fixed size**.
+
+That is all replaced by one thing: a single tree that holds the world at every scale at once, from
+a whole kilometre down to a single cube. A ray asks it one question and walks down. It is faster on
+every camera we measure, and it uses 4.8 megabytes where the old one used 57.7.
+
+**Chunks themselves are staying.** They're still how the world is saved to disk and sent to other
+players, and that's fine — that was never the problem. It's the *renderer's* use of them that's
+going.
+
+### What's done
+
+- The new tree is what your game runs. The old one is still there behind a key (F6) so the two can
+  be compared, and it goes when the last thing reading it does.
+- Editing works properly again. Carving used to tell four different systems the world had changed
+  and none of them was the one actually drawing — so chiselling did nothing you could see. And a
+  single carved cube used to throw away everything within half a kilometre and rebuild it; now it
+  throws away the cube.
+- Memory now follows your screen. Halving the resolution roughly quarters what's held, which is the
+  whole point of the design — with one honest limit: it can't do that for things closer than about
+  a hundred metres, because a 25 cm brick is the smallest piece the tree currently has. Lifting that
+  is the "infinite detail" work, much later.
+- Twenty metres around you is kept loaded whether you're looking at it or not, so collision,
+  physics and editing can touch what's behind you. That was written down as a promise and wasn't
+  actually implemented; now it is.
+- Loading is about four times quicker. Most of a load was building the old chunk system that
+  nothing draws from any more.
+
+### What's next, and what it's for
+
+The path tracer — the pretty, slow, accurate lighting on F4 — is the big one and hasn't been
+started. Right now it works out lighting **for every pixel on your screen**, which is why it costs
+more the bigger your window is. The rewrite moves that onto the *surfaces themselves*: light is
+worked out once per cube face, and pixels just look up the answer. A face doesn't care how many
+pixels are looking at it, so the cost stops growing with resolution.
+
+That's the change that's supposed to make it fast enough to be the normal renderer rather than a
+slideshow, and it's what I'm starting now.
+
 ## How we'll work
 
 - I write all the code. You never open a code file.

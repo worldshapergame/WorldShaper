@@ -602,6 +602,11 @@ was about.
 item left in it — the next thing worth attacking is the *cold* path, where a first build still
 sharpens region by region and pastes on the main thread for up to 17.4 s at a time.
 
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D278 | **R3 is done before R1e, reversing the plan's order** | — | R1e requires moving `pathtrace.comp` from `world.glsl` to `node.glsl`, which §8 calls "the bulk of the work" — and §9 **deletes** `pathtrace.comp` at R3 and replaces it with the face pass. Porting it means building something to throw away one stage later, and doing R3 first leaves R1e with nothing to port. What it costs is the chunk system staying in the build a while longer, which since D276 is 226 ms of load and about 12 ms of CPU a frame rather than 1.7 s and the same 12. That is a much smaller price than the throwaway |
+| D279 | **`12-plain-english.md` covers the rewrite** | — | It is the one document written for the person the work is for, who does not read code, and it had nothing about any of this — while the decision log had seventy entries. Owed since the handover was written and noted as owed each time, which is not the same as writing it |
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
