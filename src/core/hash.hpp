@@ -33,6 +33,36 @@ constexpr u64 hash_cell(i64 x, i64 y, i64 z, u64 tick, u64 salt) noexcept {
     return hash_combine(h, salt);
 }
 
+// A 32-bit mix, for the tables a shader has to probe as well as the CPU.
+//
+// Not an alternative to hash_mix and not a better one: it exists because a GPU has no 64-bit
+// arithmetic in an inner loop worth relying on, and because a hash short enough to be compared by
+// eye between two implementations is worth more than a hash that is merely stronger (D218). The
+// node pool settled this; the face store then reached for hash_cell and put its bucket somewhere
+// no shader could compute, which is why the composite could not look a face up at all.
+constexpr u32 hash_mix32(u32 x) noexcept {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// The bucket a lattice key lands in, mixed one axis at a time.
+//
+// One axis at a time rather than XORing three products together, because voxel coordinates are a
+// dense lattice and XOR-of-products over a lattice leaves whole planes in the same few buckets --
+// the fault the path tracer's face key already hit, where faces that failed to find a slot drew
+// as scattered black voxels.
+constexpr u32 hash_lattice32(i32 x, i32 y, i32 z, u32 tag) noexcept {
+    u32 h = 0x811C9DC5u;
+    h = hash_mix32(h ^ static_cast<u32>(x));
+    h = hash_mix32(h ^ static_cast<u32>(y));
+    h = hash_mix32(h ^ static_cast<u32>(z));
+    return hash_mix32(h ^ tag);
+}
+
 // Uniform value in [0, bound). Uses the high bits, which mix best.
 constexpr u32 hash_range(u64 h, u32 bound) noexcept {
     return static_cast<u32>((static_cast<u64>(static_cast<u32>(h >> 32)) * bound) >> 32);

@@ -11,6 +11,8 @@
 // way to the free list -- and each was named to the byte rather than deduced from a photograph.
 // A face store written by one invocation per face has exactly the same failure mode.
 
+#include <vector>
+
 #include "gpu/buffer.hpp"
 #include "gpu/swapchain.hpp"
 #include "world/face_store.hpp"
@@ -45,6 +47,7 @@ public:
 private:
     bool stage_at(VkCommandBuffer cmd, const void* source, u64 bytes, u64 destination_offset,
                   GpuBuffer& destination);
+    void stage_regions(VkCommandBuffer cmd, const FaceStore& store);
 
     Device* device_ = nullptr;
     GpuBuffer faces_;
@@ -53,6 +56,8 @@ private:
     u64 staging_capacity_ = 0;
     u64 staging_cursor_ = 0;
     u32 entry_capacity_ = 0;
+    // Kept between frames so a few hundred regions a frame is not a few hundred allocations.
+    std::vector<VkBufferCopy> regions_;
     FaceBufferStats stats_;
 };
 

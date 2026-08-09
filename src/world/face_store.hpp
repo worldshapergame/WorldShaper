@@ -74,9 +74,17 @@ struct FaceKey {
     }
 };
 
+// Thirty-two bits, over the coordinate truncated exactly as the record stores it, so the shader
+// computes the identical bucket from the identical numbers. See hash_lattice32 for why this is
+// not the 64-bit hash the rest of the engine uses.
+//
+// A false match needs two faces 2^32 apart at one level, and the probe compares the stored
+// coordinate anyway.
 struct FaceKeyHash {
     usize operator()(const FaceKey& k) const noexcept {
-        return static_cast<usize>(hash_cell(k.x, k.y, k.z, (k.level << 3) | k.face, 0x46414345ull));
+        return static_cast<usize>(hash_lattice32(static_cast<i32>(k.x), static_cast<i32>(k.y),
+                                                 static_cast<i32>(k.z),
+                                                 (k.level << 3) | k.face));
     }
 };
 
@@ -95,12 +103,22 @@ struct GpuFace {
     u32 irradiance = 0;    // rgb9e5: what arrives over the hemisphere. All a diffuse face needs.
     u32 photons = 0;       // rgb9e5: caustic energy, deposited by the photon pass
 
-    // samples | visibility << 16 | variance << 24
+    // samples | lit << 16
     //
-    // Visibility is the sun as a fraction with its penumbra resolved over the samples, which is
-    // what moves shadowing off the pixel. Variance is for prioritising and for how far the
-    // denoiser reaches, so eight bits of it is plenty and it shares this word rather than
-    // widening the record past thirty-two bytes.
+    // A COUNT of shadow rays that reached the sun, out of a count of rays cast. The visibility is
+    // their ratio, worked out where it is read, and the penumbra resolves over the samples --
+    // which is what moves shadowing off the pixel.
+    //
+    // It used to hold the ratio itself, as eight bits, updated as a running mean. That cannot
+    // converge and the failure is silent: once the mean is within half a count of its target the
+    // update rounds back to where it was and stays there for ever. Measured, on a face lit by
+    // every one of 494 rays: 245 of 255, parked, with nothing in the picture to say why. A face
+    // that always sees the sun must read as fully lit, and two counters give that exactly, at the
+    // same eight bytes.
+    //
+    // Both halve when the sample count fills, which keeps the ratio exact while letting a face
+    // notice that the light has moved. Variance -- for prioritising, and for how far a denoiser
+    // reaches -- was sharing this word and now has to live elsewhere when R3c needs it.
     u32 counters = 0;
 
     // The directional payload, or kNoOffset. Null for a matte face, which is most of them.
@@ -118,11 +136,22 @@ constexpr u32 face_level(const GpuFace& f) { return f.packed & 0xFFu; }
 constexpr u32 face_direction(const GpuFace& f) { return (f.packed >> 8) & 0xFFu; }
 constexpr u32 face_flags(const GpuFace& f) { return (f.packed >> 16) & 0xFFu; }
 
+// How many samples a face must have before its light is worth reading. Below this the composite
+// uses its own lighting, so a face fades in over a few frames rather than blinking.
+inline constexpr u32 kFaceSettled = 4;
+
+// Where the counts halve. A power of two so halving is exact, and low enough that a face notices
+// the sun moving within a second or so at sixty frames.
+inline constexpr u32 kFaceWindow = 256;
+
 constexpr u32 face_samples(const GpuFace& f) { return f.counters & 0xFFFFu; }
-constexpr u32 face_visibility(const GpuFace& f) { return (f.counters >> 16) & 0xFFu; }
-constexpr u32 face_variance(const GpuFace& f) { return (f.counters >> 24) & 0xFFu; }
-constexpr u32 pack_counters(u32 samples, u32 visibility, u32 variance) {
-    return (samples & 0xFFFFu) | ((visibility & 0xFFu) << 16) | ((variance & 0xFFu) << 24);
+constexpr u32 face_lit(const GpuFace& f) { return (f.counters >> 16) & 0xFFFFu; }
+constexpr f32 face_visibility(const GpuFace& f) {
+    const u32 samples = face_samples(f);
+    return samples == 0 ? 1.0f : static_cast<f32>(face_lit(f)) / static_cast<f32>(samples);
+}
+constexpr u32 pack_counters(u32 samples, u32 lit) {
+    return (samples & 0xFFFFu) | ((lit & 0xFFFFu) << 16);
 }
 
 struct FaceStoreBudget {
@@ -170,7 +199,7 @@ public:
 
     // What a shading pass writes. One invocation per face per frame owns this (D191), so it is a
     // plain store rather than an atomic.
-    void write(u32 slot, u32 irradiance, u32 visibility, u32 samples, u32 variance);
+    void write(u32 slot, u32 irradiance, u32 samples, u32 lit);
 
     const std::vector<GpuFace>& faces() const { return faces_; }
     const std::vector<u32>& entries() const { return entries_; }

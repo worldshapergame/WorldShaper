@@ -28,6 +28,38 @@ layout(std140, binding = 4) uniform Params {
 // can mean "outside the clip". See gpu/render_params.hpp.
 layout(std430, binding = 5) readonly buffer ClipCells { uint items[]; } clip;
 
+// The face store, and the slot this pixel's surface lives in.
+//
+// This is the whole point of the stage arriving in the pass that draws: light is worked out once
+// per face, on the surface, and a pixel READS it. Nothing is traced here and nothing scales with
+// the size of the window.
+//
+// Only what a face knows is read. Everything a face does not know yet -- sky, bounce, the
+// directional bins -- stays where it is until the pass that fills them exists, so this changes
+// what the picture is lit BY without changing what it is made of.
+struct Face {
+    int x;
+    int y;
+    int z;
+    uint packed;
+    uint irradiance;
+    uint photons;
+    uint counters;
+    uint bins;
+};
+layout(std430, binding = 6) readonly buffer Faces { Face items[]; } faces;
+layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
+
+const uint kNoFace = 0xFFFFFFFFu;
+
+// How many samples a face needs before its shadow is worth showing.
+//
+// One sample is not a penumbra, it is a coin toss, and showing it makes an edge crawl while the
+// average settles. Below this the face reports fully lit and the picture is exactly what it was
+// before this pass existed -- so a face appearing is a shadow fading in over a few frames rather
+// than a black square blinking on.
+const uint kShadowSettled = 4u;
+
 // The cloud volume the cloud pass keeps, at full resolution. Two images alternating; the parity
 // arrives in the push constant, the same as in the path tracer.
 layout(binding = 20, rgba16f) uniform readonly image2D in_cloud[2];
@@ -198,6 +230,26 @@ void main() {
         // sky, which is broad and comes mostly from above. A north wall now sits at a fraction of a
         // south one instead of at nine tenths of it.
         float lambert = max(dot(normal, trace.sun.xyz), 0.0);
+
+        // The sun's visibility, from the face rather than from a ray traced here.
+        //
+        // The real-time path has never had a shadow: every surface facing the sun was lit by it,
+        // whatever stood in the way. This is where that changes, and it costs one buffer read.
+        //
+        // Bounded against the buffer as well as against kNoFace. The slot came from an image the
+        // marcher wrote on some earlier frame, and the store it indexes can be rebuilt smaller
+        // between then and now; an unchecked index into an SSBO is not a wrong colour, it is
+        // whatever the driver decides out-of-bounds means.
+        float sun_visible = 1.0;
+        uint face_slot = imageLoad(in_face, pixel).x;
+        if (face_slot < faces.items.length()) {
+            uint counters = faces.items[face_slot].counters;
+            uint samples = counters & 0xFFFFu;
+            if (samples >= kShadowSettled) {
+                sun_visible = float((counters >> 16u) & 0xFFFFu) / float(samples);
+            }
+        }
+        lambert *= sun_visible;
         float sees_sky = kSkyAmbient * (0.5 + 0.5 * normal.y) + kGroundBounce;
         // Over PI, and leaving it out is what blew the building white while the sky stayed dark.
         //

@@ -77,13 +77,35 @@ TEST_CASE("what a shading pass writes is what the composite reads") {
     const u32 slot = store.claim(key, 1);
     REQUIRE(slot != kNoFace);
 
-    store.write(slot, 0x1234u, 200, 64, 7);
+    store.write(slot, 0x1234u, 64, 48);
     const GpuFace& face = store.faces()[slot];
     CHECK(face.irradiance == 0x1234u);
-    CHECK(face_visibility(face) == 200);
     CHECK(face_samples(face) == 64);
-    CHECK(face_variance(face) == 7);
+    CHECK(face_lit(face) == 48);
+    CHECK(face_visibility(face) == doctest::Approx(0.75));
     CHECK(store.validate());
+}
+
+// The counts are counts, not a mean, and this is the property that failed when they were one.
+//
+// A face lit by every ray must read as fully lit however many rays it has had. Stored as an
+// eight-bit running mean it read 245 of 255 after 494 rays and would never have read more, because
+// the update rounded back to where it started once the step fell below half a count -- so "always
+// lit" and "nearly always lit" became the same number and no test could tell them apart.
+TEST_CASE("a face lit by every ray reads as fully lit, at any sample count") {
+    FaceStore store = make_store();
+    const u32 slot = store.claim(FaceKey{7, 1, 2, 3, 2}, 1);
+    REQUIRE(slot != kNoFace);
+
+    for (u32 samples : {1u, 4u, 64u, 494u, 4096u, 65535u}) {
+        store.write(slot, 0u, samples, samples);
+        CHECK(face_visibility(store.faces()[slot]) == doctest::Approx(1.0));
+    }
+    // And one in four is one in four at every one of them, rather than drifting with the count.
+    for (u32 samples : {4u, 64u, 4096u}) {
+        store.write(slot, 0u, samples, samples / 4u);
+        CHECK(face_visibility(store.faces()[slot]) == doctest::Approx(0.25));
+    }
 }
 
 // A matte face allocates no payload, which is most of a world (documentation/21 §4).
@@ -161,7 +183,7 @@ TEST_CASE("evicting one face does not hide the ones behind it") {
 TEST_CASE("a reclaimed slot carries nothing of the face before it") {
     FaceStore store = make_store(1024, 4);
     const u32 first = store.claim(FaceKey{3, 3, 3, 3, 0}, 1);
-    store.write(first, 0xFFFFFFFFu, 255, 4096, 255);
+    store.write(first, 0xFFFFFFFFu, 4096, 4096);
 
     for (u64 frame = 2; frame < 40; ++frame) store.evict_cold(frame);
     REQUIRE(store.find(FaceKey{3, 3, 3, 3, 0}) == kNoFace);
@@ -171,6 +193,6 @@ TEST_CASE("a reclaimed slot carries nothing of the face before it") {
     const GpuFace& face = store.faces()[second];
     CHECK(face.irradiance == 0u);
     CHECK(face_samples(face) == 0u);
-    CHECK(face_visibility(face) == 0u);
+    CHECK(face_lit(face) == 0u);
     CHECK(store.validate());
 }

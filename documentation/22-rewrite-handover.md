@@ -132,8 +132,8 @@ written for the person the work is for, so it is the one to keep current.
 |---|---|---|
 | R0 instruments | S | a–c done. **R0d** outstanding — record the grid; now 6.6 s a run rather than 133 |
 | R1 node pool | XL | a–d, f–i done. **R1e** outstanding, and it is most of what remains of R1 |
-| R2 pixel residency | L | a and d done, plus the eviction churn and the edit cost. **R2b, R2c** outstanding |
-| R3 the face pass | XL | **not started** — the largest single win in the plan |
+| R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit |
+| R3 the face pass | XL | **a, b done; c half** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun only; lamps, sky and bounce are the rest of R3c. **R3d not started** |
 | R4 directional faces | L | not started |
 | R5 face denoise, composite | M | not started |
 | R6 post | M | not started |
@@ -144,8 +144,10 @@ written for the person the work is for, so it is the one to keep current.
 the foundation rather than the feature: the marcher, its residency, and the instruments that make
 either measurable. Against the three things the user actually asked for:
 
-- **the path tracer, faster and cleaner** — R3 to R6. **Not started.** The tracer still shades per
-  pixel over the old face cache and still includes `world.glsl`;
+- **the path tracer, faster and cleaner** — R3 to R6. **Begun**: the real-time path now takes its
+  sun from the face store rather than from the pixel, which is the first thing in the plan that
+  actually moves light off the screen. The *reference* tracer (`--pathtrace`, F4) still shades per
+  pixel over the old face cache and still includes `world.glsl`; that is R3d and R1e;
 - **chunks removed** — the node pool is proven and is what the game launches with, but the chunk
   system is still in the build and still maintained every frame, at about 12 ms of CPU. R1e;
 - **streaming and coarse resolution driven by pixels** — half. Feedback drives residency and a ray
@@ -360,6 +362,41 @@ is the bulk of the work and the reason this is its own sub-step.
 **Before starting it, decide the enclosed-room regression.** 1.108 against 0.699 is the only place
 the pool is worse, and once the old marcher is gone there is nothing to compare against.
 
+### R3 — the face pass (a and b done, c half) — and how it failed, which is the useful part
+
+The chain, end to end: the marcher stops on a face → it reports the face down the feedback buffer
+and *also* writes the face's slot into an R32_UINT image → the CPU claims a slot for each reported
+face → `shade_faces.comp` runs one invocation per face and traces one jittered shadow ray at the
+sun → `resolve.comp` reads the slot image and multiplies its Lambert term by that face's stored
+visibility. Cost: 3–11% on the grid, for a shadow the real-time path has never had.
+
+Between "the face pass computes visibility" and "the picture has a shadow in it" were **five
+separate bugs, four of which produced a plausible picture and no error anywhere**. In the order
+they were found — this is the shape of the work, not a list of mistakes:
+
+1. **Nothing read it.** The face pass had been shading for two stages and `resolve.comp` still lit
+   every pixel itself. Check who *consumes* a pass before optimising it.
+2. **The request lattice never moved**, so the same 1/64 of the screen was sampled every frame and
+   the store settled at 630 faces against thirty thousand on screen. A fixed sparse grid is not a
+   sample; it is a permanent choice of which pixels may speak.
+3. **A shadow ray stood in for unbuilt geometry.** R2d has a primary ray draw the parent when the
+   pool has no detail; a shadow ray doing that treats "I do not know" as "opaque", and the tree is
+   only refined where the *camera* looks. Not one face in the scene was lit.
+4. **An eight-bit running mean cannot converge.** A face lit by all 494 of its rays read 245/255
+   and would never read more. It is two counts now, and the fraction is worked out on read.
+5. **The upload wiped the light.** The record has two owners, and the uploader coalesced dirty runs
+   across up to 63 clean records, sending the CPU's zeroed counters over what the card wrote.
+
+Four of those five were found by **one log line** — `faces sun on the card: …`, which reports what
+the card actually wrote, split by whether a face can see the sun at all. It is in the audit and it
+should stay: a picture cannot tell "every face is shadowed" from "every face is unlit", because both
+are a dark building and they have nothing in common to fix.
+
+**What is left of R3c**: sky, lamps and bounce, all on the same one-invocation-per-face footing.
+**R3d** deletes the per-pixel light path, and carries one debt from here — split `GpuFace` so the
+CPU's half and the card's half are never in one copy, which is what makes bug 5 impossible rather
+than merely absent.
+
 ### Then R2 onward
 
 `21-renderer-rewrite.md` §8 has every sub-step with its files and its gate. In order: R2
@@ -388,14 +425,16 @@ R7 the primary ray, R8 infinite detail.
 
 ## 6. The state of the tree
 
-**New:** `src/world/node_pool.{hpp,cpp}`, `src/gpu/node_buffers.{hpp,cpp}`,
-`src/core/pass_ledger.{hpp,cpp}`, `shaders/node.glsl`, `shaders/node_visibility.comp`,
-`tests/test_node_pool.cpp`, `tests/test_pass_ledger.cpp`, `tests/test_world_cache.cpp`,
+**New:** `src/world/node_pool.{hpp,cpp}`, `src/world/face_store.{hpp,cpp}`,
+`src/gpu/node_buffers.{hpp,cpp}`, `src/gpu/face_buffers.{hpp,cpp}`, `src/core/pass_ledger.{hpp,cpp}`,
+`src/core/dirty_set.hpp`, `shaders/node.glsl`, `shaders/node_visibility.comp`,
+`shaders/shade_faces.comp`, `tests/test_node_pool.cpp`, `tests/test_face_store.cpp`,
+`tests/test_pass_ledger.cpp`, `tests/test_world_cache.cpp`,
 `tools/{baseline,facecount,_grid,_measure}.ps1`, `documentation/21-renderer-rewrite.md`, this file.
 
-**Modified:** `CMakeLists.txt`, `src/app/main.cpp`, `src/world/world_cache.{hpp,cpp}`,
-`src/gpu/profiler.{hpp,cpp}`, `shaders/{pathtrace,resolve}.comp`, `tools/speckle.ps1`,
-`documentation/{13-decision-log,README}.md`.
+**Modified:** `CMakeLists.txt`, `src/app/main.cpp`, `src/core/hash.hpp`, `src/gpu/image.hpp`,
+`src/world/world_cache.{hpp,cpp}`, `src/gpu/profiler.{hpp,cpp}`, `shaders/{pathtrace,resolve}.comp`,
+`tools/speckle.ps1`, `documentation/{13-decision-log,README}.md`.
 
 Nothing has been deleted yet.
 

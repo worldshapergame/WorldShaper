@@ -106,6 +106,8 @@ layout(push_constant) uniform NodeConstants {
     uint face_count;    // face shader: how many face slots are in use
     uint frame;
     vec4 sun;           // face shader: xyz towards the sun
+    uint face_capacity; // buckets in the face table, a power of two
+    uint face_probes;
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }
@@ -120,6 +122,16 @@ uint node_hash_mix(uint x) {
     x ^= x >> 15; x *= 0x846ca68bu;
     x ^= x >> 16;
     return x;
+}
+
+// Must match hash_lattice32 in src/core/hash.hpp. Shared by the node entry table and the face
+// table, so there is one mixing function on this side as there is one on the other.
+uint node_hash_lattice(ivec3 coord, uint tag) {
+    uint h = 0x811C9DC5u;
+    h = node_hash_mix(h ^ uint(coord.x));
+    h = node_hash_mix(h ^ uint(coord.y));
+    h = node_hash_mix(h ^ uint(coord.z));
+    return node_hash_mix(h ^ tag);
 }
 
 uint node_entry_hash(ivec3 coord, uint level) {
@@ -144,6 +156,87 @@ uint node_entry_lookup(ivec3 block) {
         }
     }
     return kNoNode;
+}
+
+// ---- the face store ------------------------------------------------------------------------
+//
+// Declared here rather than in the pass that shades it, because three passes need it now: the
+// shading pass writes light into it, the visibility pass resolves each pixel to a slot, and the
+// composite reads that slot. One declaration means the three cannot disagree about the layout,
+// which is the same reason the traversal itself lives in this file.
+
+struct Face {
+    int x;
+    int y;
+    int z;
+    uint packed;      // level | face << 8 | flags << 16
+    uint irradiance;
+    uint photons;
+    uint counters;    // samples | visibility << 16 | variance << 24
+    uint bins;
+};
+
+layout(std430, binding = 9) buffer Faces { Face items[]; } faces;
+layout(std430, binding = 10) readonly buffer FaceEntries { uint slots[]; } face_entries;
+
+const uint kNoFace = 0xFFFFFFFFu;
+const uint kFaceTombstone = 0xFFFFFFFEu;
+
+uint face_level_of(uint packed) { return packed & 0xFFu; }
+uint face_dir_of(uint packed) { return (packed >> 8) & 0xFFu; }
+// Two counts in one word: rays cast, and rays that reached the sun. Must match pack_counters in
+// src/world/face_store.hpp. The fraction is worked out where it is read, because a fraction stored
+// in eight bits cannot be updated without eventually rounding back to itself.
+uint face_samples_of(uint counters) { return counters & 0xFFFFu; }
+uint face_lit_of(uint counters) { return (counters >> 16) & 0xFFFFu; }
+const uint kFaceSettled = 4u;    // samples before the light is worth reading
+const uint kFaceWindow = 256u;   // where both counts halve, so the sun may move
+
+// One more ray into a face's two counts. Halving at the window keeps the ratio exact -- both
+// counts are integers and the halving is a shift -- while stopping a face that has watched the
+// sun for an hour from needing another hour to notice it has set.
+uint face_accumulate(uint counters, bool reached_the_sun) {
+    uint samples = face_samples_of(counters);
+    uint lit = face_lit_of(counters);
+    if (samples >= kFaceWindow) {
+        samples >>= 1u;
+        lit >>= 1u;
+    }
+    return ((samples + 1u) & 0xFFFFu) | ((lit + (reached_the_sun ? 1u : 0u)) << 16);
+}
+
+// What fraction of this face's rays reached the sun. One before any have been cast, so a face
+// nobody has shaded yet is lit rather than black -- the composite gates on the sample count and
+// never sees this, but a caller that forgets to should fail towards the picture it already had.
+float face_visibility_of(uint counters) {
+    uint samples = face_samples_of(counters);
+    return samples == 0u ? 1.0 : float(face_lit_of(counters)) / float(samples);
+}
+
+// The slot a face lives in, or kNoFace. Never claims -- claiming is the CPU's, from the requests
+// this pass puts down the feedback buffer, so a face that has not been claimed yet is simply not
+// here for a frame or two and the composite falls back to its own lighting. That is the same
+// graceful degradation an unstreamed node already gets.
+//
+// Mirrors FaceStore::find exactly, including the two rules that made it correct: an empty bucket
+// ENDS the run, because a probe that walked past one would miss a face a later insertion
+// displaced; a tombstone does NOT, because that is what makes it a tombstone -- and it is not a
+// slot number either, so indexing it reads past the end of the table.
+uint node_face_lookup(ivec3 node, uint level, uint face) {
+    if (node_push.face_capacity == 0u) return kNoFace;
+    uint mask = node_push.face_capacity - 1u;
+    uint bucket = node_hash_lattice(node, (level << 3) | face) & mask;
+    for (uint probe = 0u; probe < node_push.face_probes; ++probe) {
+        uint slot = face_entries.slots[(bucket + probe) & mask];
+        if (slot == kNoFace) return kNoFace;
+        if (slot == kFaceTombstone) continue;
+        Face f = faces.items[slot];
+        if (f.x == node.x && f.y == node.y && f.z == node.z &&
+            face_level_of(f.packed) == level && face_dir_of(f.packed) == face) {
+            return slot;
+        }
+    }
+    return kNoFace;
 }
 
 // ---- the descent, with its stack ---------------------------------------------------------------
@@ -413,21 +506,6 @@ void node_flush_used(bool enabled, ivec3 block) {
 // The face a ray stopped on. `voxel` is the absolute coordinate of the cell it stopped in and
 // `level` is that cell's level, so the node's own coordinate is one shift -- the same arithmetic
 // the descent already did to get there, so the two cannot disagree about which face this is.
-void node_flush_face(bool enabled, ivec3 voxel, int level, ivec3 normal) {
-    if (!enabled) return;
-    uint face;
-    if (normal.x != 0) face = (normal.x > 0) ? 0u : 1u;
-    else if (normal.y != 0) face = (normal.y > 0) ? 2u : 3u;
-    else face = (normal.z > 0) ? 4u : 5u;
-
-    uint index = atomicAdd(feedback.count, 1u);
-    if (index < push.resolution.w) {
-        feedback.entries[index].coord =
-            ivec4(voxel.x >> level, voxel.y >> level, voxel.z >> level,
-                  (level & 0xFF) | int(face << 8) | kFeedbackFace);
-    }
-}
-
 void node_flush_read(bool enabled, uint slot) {
     if (!enabled || slot == kNoNode) return;
     uint index = atomicAdd(feedback.count, 1u);
@@ -445,6 +523,13 @@ struct NodeHit {
     uint type_id;    // valid when level == kLeafLevel and the voxel resolved
     uint colour;     // rgba8, valid above the leaf
     uint coverage;   // how much of the cell is matter AS SEEN ALONG the face that was hit
+    // The face this ray stopped on: the node's own coordinate at `face_level`, and which of six
+    // directions it was hit from. The same three numbers the face request carries, produced by the
+    // same arithmetic in the same place -- so the pass that asks for a face and the pass that
+    // looks it up cannot disagree about which face it is.
+    ivec3 face_node;
+    uint face_level;
+    uint face_dir;
     int level;
     uint steps;
 };
@@ -490,10 +575,58 @@ float node_bayer(ivec2 pixel) {
     return float(table[(pixel.y & 3) * 4 + (pixel.x & 3)]) / 16.0;
 }
 
+// Where this frame's sparse-sample lattice sits, for a power-of-two stride.
+//
+// A sampling grid that never moves is not a sample of the screen; it is a permanent choice of
+// which pixels are allowed to speak. Everything that lands between the points is invisible to
+// whatever is being fed, and no amount of waiting fixes it because the next frame asks the same
+// pixels again. Walking the offset one column a frame, wrapping into the next row, visits every
+// phase in stride^2 frames and asks nothing of the caller but the frame number.
+uvec2 node_sample_phase(uint frame, uint stride) {
+    uint mask = stride - 1u;
+    return uvec2(frame & mask, (frame >> uint(findMSB(stride))) & mask);
+}
+
+// Records the face this ray stopped on, and reports it when this pixel is one of the ones asking.
+//
+// Recording is unconditional and reporting is not: EVERY pixel needs the key so the composite can
+// look its face up, while only a fraction need to ask for one to be claimed. Splitting those two
+// jobs across two pieces of code is how they would come to disagree about which face a pixel is
+// on -- and a composite reading a different face from the one being shaded is a lighting bug with
+// no visible cause.
+void node_face_hit(inout NodeHit result, bool report, ivec3 voxel, int level, ivec3 normal) {
+    uint face;
+    if (normal.x != 0) face = (normal.x > 0) ? 0u : 1u;
+    else if (normal.y != 0) face = (normal.y > 0) ? 2u : 3u;
+    else face = (normal.z > 0) ? 4u : 5u;
+
+    result.face_node = ivec3(voxel.x >> level, voxel.y >> level, voxel.z >> level);
+    result.face_level = uint(level);
+    result.face_dir = face;
+
+    if (!report) return;
+    uint index = atomicAdd(feedback.count, 1u);
+    if (index < push.resolution.w) {
+        feedback.entries[index].coord =
+            ivec4(result.face_node, (level & 0xFF) | int(face << 8) | kFeedbackFace);
+    }
+}
+
 const uint kNodeMaxSteps = 512u;
 
+// `stand_in` is what a ray does when the pool does not know what is in a cell the world says is
+// occupied. A PRIMARY ray draws the parent, because the alternative is sky where a building is
+// (R2d). A SHADOW ray must not: "I do not know" is not "opaque", and treating it as opaque means
+// every ray leaving a surface is stopped by the first unbuilt cell it meets. The tree is only
+// refined where the camera looks, and a shadow ray leaves the surface in whatever direction the
+// sun happens to be, so it meets one almost at once -- measured, with this reading as solid:
+// 15,038 faces settled, 14,325 of them fully shadowed, and NOT ONE face anywhere in the scene
+// lit, on an outdoor camera at midday.
+//
+// Marching past it means a shadow can be missed while the tree fills in, which is a shadow that
+// arrives late. Standing in means a scene that is black and stays black.
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
-                   bool report_used, bool report_face) {
+                   bool report_used, bool report_face, bool stand_in) {
     NodeHit result;
     result.hit = false;
     result.t = push.lens.y;
@@ -501,6 +634,9 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     result.type_id = 0u;
     result.colour = 0u;
     result.coverage = 255u;
+    result.face_node = ivec3(0);
+    result.face_level = 0u;
+    result.face_dir = 0u;
     result.level = kLeafLevel;
     result.steps = 0u;
 
@@ -624,7 +760,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 node_flush(report, has_pending, pending);
                 node_flush_used(report_used, g_node_block);
                 node_flush_read(report_used, found.slot);
-                node_flush_face(report_face, voxel, outer_level, last_normal);
+                node_face_hit(result, report_face, voxel, outer_level, last_normal);
                 return result;
             }
 
@@ -679,7 +815,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     node_flush(report, has_pending, pending);
                     node_flush_used(report_used, g_node_block);
                     node_flush_read(report_used, found.slot);
-                    node_flush_face(report_face, voxel, outer_level, inner_normal);
+                    node_face_hit(result, report_face, voxel, outer_level, inner_normal);
                     return result;
                 }
                 if (i_max.x < i_max.y && i_max.x < i_max.z) {
@@ -735,8 +871,8 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 // black, against a correct sky.
                 bool foldable = (node_flags_of(nodes.items[found.slot].packed) & kNodeLeaf) != 0 ||
                                 nodes.items[found.slot].children != kNoNode;
-                if (found.level - 1 == outer_level && found.slot != kNoNode && foldable &&
-                    (nodes.items[found.slot].colour >> 24) != 0u) {
+                if (stand_in && found.level - 1 == outer_level && found.slot != kNoNode &&
+                    foldable && (nodes.items[found.slot].colour >> 24) != 0u) {
                     ivec3 stand_normal = last_normal;
                     if (stand_normal == ivec3(0)) {
                         // First step, camera inside the cell: no face was crossed to get here,
@@ -755,7 +891,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     node_flush(report, has_pending, pending);
                     node_flush_used(report_used, g_node_block);
                     node_flush_read(report_used, found.slot);
-                    node_flush_face(report_face, voxel, outer_level, stand_normal);
+                    node_face_hit(result, report_face, voxel, outer_level, stand_normal);
                     return result;
                 }
             }

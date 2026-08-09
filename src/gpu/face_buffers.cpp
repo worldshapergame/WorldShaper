@@ -76,6 +76,35 @@ bool FaceBuffers::stage_at(VkCommandBuffer cmd, const void* source, u64 bytes,
     return true;
 }
 
+// Every dirty face, exactly and only the dirty ones, in one copy with many regions.
+//
+// Runs are still coalesced where they are genuinely adjacent -- that costs nothing and is not
+// what the gap was for.
+void FaceBuffers::stage_regions(VkCommandBuffer cmd, const FaceStore& store) {
+    regions_.clear();
+    for (const auto& run : store.dirty_faces().runs(0)) {
+        const u64 bytes = run.second * sizeof(GpuFace);
+        if (staging_cursor_ + bytes > staging_capacity_) {
+            stats_.staging_exhausted = true;
+            break;
+        }
+        std::memcpy(static_cast<u8*>(staging_.mapped) + staging_cursor_,
+                    store.faces().data() + run.first, static_cast<usize>(bytes));
+        VkBufferCopy copy{};
+        copy.srcOffset = staging_cursor_;
+        copy.dstOffset = run.first * sizeof(GpuFace);
+        copy.size = bytes;
+        regions_.push_back(copy);
+        staging_cursor_ += bytes;
+        stats_.uploaded_this_frame += bytes;
+        stats_.total_uploaded += bytes;
+    }
+    if (!regions_.empty()) {
+        vkCmdCopyBuffer(cmd, staging_.buffer, faces_.buffer,
+                        static_cast<u32>(regions_.size()), regions_.data());
+    }
+}
+
 void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store) {
     stats_.uploaded_this_frame = 0;
     stats_.staging_exhausted = false;
@@ -85,17 +114,31 @@ void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store) {
 
     // The gap is in elements, and coalescing is worth it because a copy has a fixed cost of its
     // own: sending a few spare records inside one is cheaper than issuing a second.
-    const u64 kFaceGap = 64;    // 2 KB of GpuFace
     const u64 kEntryGap = 256;  // 1 KB of u32
 
     for (const auto& run : store.dirty_entries().runs(kEntryGap)) {
         stage_at(cmd, store.entries().data() + run.first, run.second * sizeof(u32),
                  run.first * sizeof(u32), entries_);
     }
-    for (const auto& run : store.dirty_faces().runs(kFaceGap)) {
-        stage_at(cmd, store.faces().data() + run.first, run.second * sizeof(GpuFace),
-                 run.first * sizeof(GpuFace), faces_);
-    }
+
+    // No gap at all on the faces, and this is not a tuning choice.
+    //
+    // A GpuFace is written from BOTH sides. The CPU owns which face a slot is -- coordinate,
+    // level, direction -- and the GPU owns what light is on it. Coalescing sends the clean
+    // records that fall inside a run, and the CPU's copy of a clean record has counters of nought
+    // because the CPU has never seen the light the card computed. So every upload wiped the sun
+    // off up to sixty-three faces around each new one, every frame, for ever.
+    //
+    // What that looks like from outside is a shadow bug: 11,214 faces pointing at the sun, mean
+    // visibility 0.69, and not one of them fully lit -- because a face is bright only until the
+    // next claim lands within sixty-four slots of it, which at a few hundred claims a frame is
+    // constantly. Nothing about it reads as an upload.
+    //
+    // The right long-term shape is to split the record so the two owners never share a copy, and
+    // that is R3d's business. Until then the rule is that the CPU sends exactly the records it
+    // changed, in one call with many regions so the fixed cost coalescing was avoiding is paid
+    // once rather than per run.
+    stage_regions(cmd, store);
 
     // Only when all of it fitted. Clearing after a partial upload marks clean what the card has
     // not been sent, which is the stale byte this whole arrangement exists to avoid.
@@ -255,6 +298,51 @@ bool FaceBuffers::audit(const FaceStore& store) {
                              host.z, host.packed);
                 break;
             }
+            // And what the card WROTE into them, which is the one field no check here can
+            // compare against a host copy: the CPU claims a face and never touches its light
+            // again. Without this the face pass is a stage whose only evidence is the picture,
+            // and a picture cannot tell "every face is shadowed" from "every face is unlit" --
+            // both are a dark building, and they have nothing in common to fix.
+            // Split by whether the face can see the sun at all, because the two populations mean
+            // different things and their average means neither. A face pointing away from the sun
+            // is meant to read nought and needs no ray; only the ones pointing at it are evidence
+            // about whether the shadow ray works.
+            const f32 sun[3] = {0.4f, 0.85f, 0.3f};
+            const f32 normals[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                                       {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+            u32 settled = 0;
+            u32 facing = 0;
+            u32 dark = 0;
+            u32 bright = 0;
+            f32 brightest = 0.0f;
+            u64 sample_sum = 0;
+            f64 facing_sum = 0.0;
+            for (u32 slot = 0; slot < watermark; ++slot) {
+                if (face_samples(card[slot]) < kFaceSettled) continue;
+                ++settled;
+                const u32 direction = face_direction(card[slot]);
+                if (direction >= 6) continue;
+                const f32 towards = normals[direction][0] * sun[0] +
+                                    normals[direction][1] * sun[1] + normals[direction][2] * sun[2];
+                if (towards <= 0.0f) continue;
+                ++facing;
+                const f32 visibility = face_visibility(card[slot]);
+                facing_sum += visibility;
+                if (visibility < 0.03f) ++dark;
+                if (visibility > 0.97f) ++bright;
+                if (visibility > brightest) brightest = visibility;
+                sample_sum += face_samples(card[slot]);
+            }
+            if (settled > 0) {
+                WS_LOG_INFO("faces",
+                            "sun on the card: {} of {} settled, {} face the sun -- of those, mean "
+                            "visibility {:.2f}, brightest {:.2f}, {} fully shadowed, {} fully lit, "
+                            "{:.0f} samples each",
+                            settled, watermark, facing,
+                            facing > 0 ? facing_sum / facing : 0.0, brightest, dark, bright,
+                            facing > 0 ? static_cast<f64>(sample_sum) / facing : 0.0);
+            }
+
             vkDestroyCommandPool(device_->handle(), face_pool, nullptr);
         }
     }

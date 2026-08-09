@@ -15,6 +15,18 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(binding = 0, rgba32ui) uniform writeonly uimage2D out_visibility;
 layout(binding = 1, r32f) uniform writeonly image2D out_depth;
 
+// Which face store slot this pixel's surface lives in, or kNoFace.
+//
+// Resolved here rather than in the composite because the key is already in hand: the marcher
+// descended to that node and knows its coordinate, its level and the direction it was hit from.
+// Making the composite rebuild the key from a depth and a normal would be a second piece of code
+// that has to agree with this one about which face a pixel is on, and the two would eventually
+// not -- which is the fault D133 and D147 both describe, arriving through a third door.
+//
+// One word a pixel. The alternative is carrying the whole key in the visibility buffer, which is
+// four, and at 4K that is 265 MB a frame of extra traffic for something a single probe answers.
+layout(binding = 11, r32ui) uniform writeonly uimage2D out_face;
+
 #include "node.glsl"
 
 void main() {
@@ -65,8 +77,9 @@ void main() {
         used_stride <<= 1u;
     }
     const uint used_mask = used_stride - 1u;
-    const bool report_used = ((uint(pixel.x) & used_mask) == 0u) &&
-                             ((uint(pixel.y) & used_mask) == 0u);
+    const uvec2 used_phase = node_sample_phase(node_push.frame, used_stride);
+    const bool report_used = (((uint(pixel.x) + used_phase.x) & used_mask) == 0u) &&
+                             (((uint(pixel.y) + used_phase.y) & used_mask) == 0u);
 
     // One pixel in sixteen names the face it landed on.
     //
@@ -91,12 +104,24 @@ void main() {
     uint pixels = push.resolution.x * push.resolution.y;
     uint stride = 4u;
     while ((pixels / (stride * stride)) > 60000u) stride <<= 1u;
+    //
+    // And the lattice MOVES, which is not a refinement of the sampling but the difference between
+    // this converging and not. A fixed one-in-sixty-four grid does not sample one face in
+    // sixty-four: it samples the same faces every frame and the other sixty-three never exist. At
+    // this camera the store settled at 630 faces against about thirty thousand on screen, and
+    // stayed there -- 278,195 claims of which 277,565 were for a face already claimed. Every
+    // surface that happened to fall between the sample points was lit by the composite's fallback
+    // forever, which looks like the face pass working on a few stripes of the building.
+    //
+    // Walking the phase visits every offset in stride^2 frames -- about a second at stride 8 --
+    // and the store's cold window is 600, so nothing claimed goes stale waiting its turn.
     const uint face_mask = stride - 1u;
-    const bool report_face = ((uint(pixel.x) & face_mask) == 0u) &&
-                             ((uint(pixel.y) & face_mask) == 0u);
+    const uvec2 face_phase = node_sample_phase(node_push.frame, stride);
+    const bool report_face = (((uint(pixel.x) + face_phase.x) & face_mask) == 0u) &&
+                             (((uint(pixel.y) + face_phase.y) & face_mask) == 0u);
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
-                             report_used, report_face);
+                             report_used, report_face, true);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {
@@ -118,6 +143,17 @@ void main() {
         packed.x = 0xFFFFFFFFu;
         packed.z = min(hit.steps, 255u);
     }
+
+    // The slot, looked up once here, so every pixel on a face reads the same light.
+    //
+    // kNoFace is the ordinary state for a frame or two after a face first appears: the request
+    // goes down the feedback buffer and the CPU claims it two frames later. The composite falls
+    // back to its own lighting until then, which is what an unstreamed node already does.
+    uint face_slot = kNoFace;
+    if (hit.hit && hit.face_level != 0u) {
+        face_slot = node_face_lookup(hit.face_node, hit.face_level, hit.face_dir);
+    }
+    imageStore(out_face, pixel, uvec4(face_slot, 0u, 0u, 0u));
 
     imageStore(out_visibility, pixel, packed);
     imageStore(out_depth, pixel, vec4(hit.hit ? hit.t : push.lens.y, 0, 0, 0));

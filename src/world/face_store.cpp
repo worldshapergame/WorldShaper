@@ -120,11 +120,11 @@ void FaceStore::touch(u32 slot, u64 frame) {
     if (slot < last_read_.size()) last_read_[slot] = static_cast<u32>(frame);
 }
 
-void FaceStore::write(u32 slot, u32 irradiance, u32 visibility, u32 samples, u32 variance) {
+void FaceStore::write(u32 slot, u32 irradiance, u32 samples, u32 lit) {
     if (slot >= faces_.size()) return;
     GpuFace& face = faces_[slot];
     face.irradiance = irradiance;
-    face.counters = pack_counters(samples, visibility, variance);
+    face.counters = pack_counters(samples, lit);
     dirty_faces_.mark(slot);
 }
 

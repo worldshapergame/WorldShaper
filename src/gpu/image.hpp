@@ -34,8 +34,12 @@ inline GpuImage create_storage_image(const Device& device, u32 width, u32 height
     info.arrayLayers = 1;
     info.samples = VK_SAMPLE_COUNT_1_BIT;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    // TRANSFER_DST because a storage image is not always written in full every frame. One that
+    // is read on a frame nothing produced needs a defined value in it, and a clear is how you
+    // put one there. See the face slot image in Application::record: only one of the two
+    // marchers fills it, and the composite reads it either way.
     info.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                 VK_IMAGE_USAGE_SAMPLED_BIT;
+                 VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo alloc{};

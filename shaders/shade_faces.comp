@@ -24,27 +24,9 @@ layout(local_size_x = 64) in;
 
 #include "node.glsl"
 
-// The face store, alongside the tree the shadow ray marches. Both in one set, because a shadow
-// ray has to march exactly the geometry the primary ray stopped on.
-struct Face {
-    int x;
-    int y;
-    int z;
-    uint packed;      // level | face << 8 | flags << 16
-    uint irradiance;
-    uint photons;
-    uint counters;    // samples | visibility << 16 | variance << 24
-    uint bins;
-};
-
-layout(std430, binding = 9) buffer Faces { Face items[]; } faces;
-layout(std430, binding = 10) readonly buffer FaceEntries { uint slots[]; } face_entries;
-
-uint face_level_of(uint packed) { return packed & 0xFFu; }
-uint face_dir_of(uint packed) { return (packed >> 8) & 0xFFu; }
-
-uint face_samples_of(uint counters) { return counters & 0xFFFFu; }
-uint face_visibility_of(uint counters) { return (counters >> 16) & 0xFFu; }
+// The face store and its accessors come from node.glsl, alongside the tree the shadow ray
+// marches -- one declaration, so the pass that writes light and the pass that reads it cannot
+// drift apart about the layout.
 
 // The outward normal of one of the six faces, in the order node_face_coverage uses so that a
 // direction never has to be translated between the two.
@@ -74,24 +56,42 @@ void main() {
     // cube has six faces and the sun reaches at most three of them.
     const float facing = dot(vec3(normal), node_push.sun.xyz);
     if (facing <= 0.0) {
-        const uint samples = min(face_samples_of(face.counters) + 1u, 4096u);
-        // Averaged in rather than assigned, so a face that turns away from the sun fades rather
-        // than snapping -- and so this costs the same code path as a lit one.
-        const uint was = face_visibility_of(face.counters);
-        const uint now = (was * samples) / (samples + 1u);
-        faces.items[slot].counters = (samples & 0xFFFFu) | (now << 16);
+        // Counted as a ray that did not reach the sun, which is what it is. The fraction then
+        // falls as the samples come in rather than snapping to nought, and this is the same
+        // arithmetic a lit face does with one term different.
+        faces.items[slot].counters = face_accumulate(face.counters, false);
         return;
     }
 
-    // The centre of the face, in the voxel coordinates the marcher works in.
+    // A point ON the face, somewhere different every frame.
     //
     // The node's own coordinate is its voxel coordinate shifted by its level, so this reverses
     // exactly the shift the marcher applied when it reported the face -- and lands half a cell
     // along the normal, which is the face rather than the middle of the cell behind it.
+    //
+    // Somewhere different, because a face is not a point. Always tracing from the centre makes
+    // every sample of a face identical, so the fraction can only ever be nought or one and the
+    // shadow edge lands on face boundaries: at the leaf level that is a 25 cm staircase across a
+    // flat terrace, which is what the first picture with shadows in it showed. Spreading the
+    // samples over the face makes the fraction mean what it says -- how much of this face the sun
+    // reaches -- and the edge then resolves WITHIN a face, over frames, at no extra cost per
+    // frame. That is the whole claim of §6: the penumbra costs the face a few samples instead of
+    // costing every pixel looking at it a ray of its own, for ever.
     const float size = float(1 << level);
     const vec3 corner = vec3(ivec3(face.x, face.y, face.z)) * size;
-    const vec3 centre = corner + vec3(size * 0.5);
-    const vec3 point = centre + vec3(normal) * (size * 0.5 + 0.03125);
+
+    const uint seed = node_hash_mix(slot * 0x9E3779B9u + node_push.frame);
+    const vec2 jitter = vec2(float(seed & 0xFFFFu), float((seed >> 16) & 0xFFFFu)) / 65536.0;
+
+    // The two axes across the face, which are the two the normal is not along.
+    const vec3 across = abs(normal.x) != 0 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+    const vec3 down = abs(normal.z) != 0 ? vec3(0, 1, 0) : vec3(0, 0, 1);
+    // Just inside the edge rather than up to it, so a sample never starts in the cell next door.
+    const float span = size * 0.98;
+    const vec3 on_face = corner + vec3(size * 0.5) +
+                         across * ((jitter.x - 0.5) * span) +
+                         down * ((jitter.y - 0.5) * span);
+    const vec3 point = on_face + vec3(normal) * (size * 0.5 + 0.03125);
 
     // Where the camera's chunk puts the origin, so the march works in the same space the primary
     // ray did rather than in absolute voxels, which lose precision a long way out (D156).
@@ -100,16 +100,38 @@ void main() {
     // One ray at the sun. `report` and the two used-reports are off: a shadow ray must not drag
     // streaming towards whatever it happens to cross, which is the rule the old tracer already
     // follows and the reason a structure built at a distance never cast a shadow until somebody
-    // walked up to it.
-    NodeHit hit = node_march(origin, normalize(node_push.sun.xyz), 0.0, 0.0, false, false, false);
+    // walked up to it. `stand_in` is off for the reason node_march sets out at length: an unbuilt
+    // cell is not an occluder.
+    //
+    // The ray widens with distance, at the same rate a pixel does. Asking for full voxel detail
+    // along its whole length -- which a zero angle does, since the footprint then floors at one
+    // voxel for ever -- asks the tree for detail a kilometre away that nothing on screen has any
+    // reason to have built, so the ray spends its steps in cells the pool has only outlined. A
+    // shadow does not need to know the shape of what casts it to the centimetre from 300 m.
+    // And the sun is a disc, not a point. node_push.sun.w is the cosine of its angular radius,
+    // the same figure the path tracer is given, so the two agree about how soft an edge is rather
+    // than both being plausible. Without it every sample of a face asks the same question and a
+    // contact shadow has an edge one voxel wide at any distance from what casts it.
+    const uint cone_seed = node_hash_mix(seed ^ 0x85EBCA6Bu);
+    const vec2 disc = vec2(float(cone_seed & 0xFFFFu), float((cone_seed >> 16) & 0xFFFFu)) /
+                      65536.0;
+    const float cos_theta = mix(node_push.sun.w, 1.0, disc.x);
+    const float sin_theta = sqrt(max(1.0 - cos_theta * cos_theta, 0.0));
+    const float phi = disc.y * 6.28318530718;
 
-    const uint samples = min(face_samples_of(face.counters) + 1u, 4096u);
-    const uint lit = hit.hit ? 0u : 255u;
-    // A running mean, in eight bits. The penumbra resolves over samples on the FACE, which is
-    // what takes it off the pixel: a soft edge costs the face a few frames instead of costing
-    // every pixel that looks at it a ray of its own, every frame, for ever.
-    const uint was = face_visibility_of(face.counters);
-    const uint now = (was * samples + lit) / (samples + 1u);
+    const vec3 towards = normalize(node_push.sun.xyz);
+    const vec3 tangent = normalize(abs(towards.y) < 0.9 ? cross(towards, vec3(0, 1, 0))
+                                                        : cross(towards, vec3(1, 0, 0)));
+    const vec3 bitangent = cross(towards, tangent);
+    const vec3 dir = normalize(towards * cos_theta +
+                               tangent * (sin_theta * cos(phi)) +
+                               bitangent * (sin_theta * sin(phi)));
 
-    faces.items[slot].counters = (samples & 0xFFFFu) | (min(now, 255u) << 16);
+    const float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
+    NodeHit hit = node_march(origin, dir, pixel_angle, 0.0, false, false, false, false);
+
+    // The penumbra resolves over samples on the FACE, which is what takes it off the pixel: a soft
+    // edge costs the face a few frames instead of costing every pixel that looks at it a ray of
+    // its own, every frame, for ever.
+    faces.items[slot].counters = face_accumulate(face.counters, !hit.hit);
 }
