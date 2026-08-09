@@ -177,7 +177,7 @@ TEST_CASE("a child mask bit is set exactly where a child exists") {
     CHECK((node_child_mask(node) & (1u << 7)) != 0);
 }
 
-TEST_CASE("an edit drops the node and every ancestor that was folded from it") {
+TEST_CASE("an edit drops the brick it touched, and not the half kilometre around it") {
     Fixture f;
     f.fill_box(0, 0, 0, 7, 7, 7);
     f.want_box(0, 0, 0, 7, 7, 7);
@@ -191,7 +191,13 @@ TEST_CASE("an edit drops the node and every ancestor that was folded from it") {
     // Dropped rather than refreshed: nothing asked for it on this frame, so nothing rebuilt it.
     // What matters is that the stale copy is gone — a resident-but-wrong node is the one thing
     // feedback can never discover, because a ray that finds it does not report it (D131).
-    CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) == kNoNode);
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) == kNoNode);
+
+    // And that the root above it survived, which is the other half and used not to be true. This
+    // asserted the ROOT was gone, which passed for the wrong reason: an edit dropped the entry
+    // node and every ancestor, so one voxel cost everything within 512 m. The stale-copy
+    // guarantee above is what the test was for; the root was standing in for it.
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) != kNoNode);
     CHECK(f.pool.validate());
 }
 
@@ -248,6 +254,36 @@ TEST_CASE("a built tree survives being quiet, because a miss is the only thing t
     for (u64 frame = 20; frame < 200; ++frame) f.serve(frame);
     CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
     CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) != kNoNode);
+    CHECK(f.pool.validate());
+}
+
+// Carving one voxel must not cost the scene.
+//
+// Editing is what this game is FOR, so the cost of an edit is the cost of playing it. Dropping
+// the entry-level root is correct and enormous: a root is 512 m, so a single chiselled voxel
+// threw away everything within half a kilometre and rebuilt it from the world at the rate pixels
+// asked for it. Measured in the game as an 18.8 ms CPU spike and a scene that visibly reassembles
+// itself around the edit.
+TEST_CASE("a one-voxel edit keeps the tree it did not touch") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 255, 255, 255);
+    f.want_box(0, 0, 0, 255, 255, 255);
+    for (u64 frame = 1; frame < 12; ++frame) { f.want_box(0, 0, 0, 255, 255, 255); f.serve(frame); }
+
+    const u32 before = f.pool.stats().nodes;
+    REQUIRE(before > 1000);
+
+    // One voxel, at one corner, a long way from most of what is built.
+    f.world.set(4, 4, 4, kAir);
+    f.pool.invalidate(4, 4, 4);
+    f.serve(12);
+
+    const u32 after = f.pool.stats().nodes;
+    INFO("nodes before " << before << ", after " << after);
+    // Nearly all of it survives. Generous, because the path from the root down to the edited
+    // brick genuinely has to be rebuilt and its ancestors re-folded -- that is eleven nodes and
+    // their siblings, not eleven thousand.
+    CHECK(after > (before / 4) * 3);
     CHECK(f.pool.validate());
 }
 

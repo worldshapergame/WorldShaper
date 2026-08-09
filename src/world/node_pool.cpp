@@ -728,42 +728,109 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         }
     }
 
-    // Anything an edit touched is dropped so it is rebuilt from the world.
+    // Anything an edit touched is dropped so it is rebuilt from the world -- and ONLY that.
     //
-    // Dropped at the ROOT, once per distinct root, and that is a deliberate retreat from what
-    // this used to do. It walked every level from the leaf to kMaxNodeLevel for every dirty
-    // brick, released each ancestor it found -- and releasing a root frees its whole subtree
-    // anyway -- then scanned the entire 262,144-entry table looking for the slot. A carve of
-    // 49.9 million voxels is 97,500 dirty bricks, so that was some twenty million full-table
-    // scans in one frame, each of them freeing a subtree that the previous one had already
-    // freed. Measured from the player's side: 4 FPS at 276 ms a frame with the GPU at 7 ms.
+    // This released the entry-level root, which is 512 m across, so chiselling one voxel threw
+    // away everything within half a kilometre and rebuilt it at the rate pixels asked for it.
+    // Measured by the test beside this: 37,497 nodes before a single-voxel edit and 0 after.
+    // Editing is what this game is for, so the cost of an edit is the cost of playing it.
     //
-    // One release per root does the same work once. It is conservative -- a single carved voxel
-    // costs the root its whole subtree, which then rebuilds at the rate pixels ask for it -- and
-    // refreshing a leaf in place while re-folding its ancestors is the better answer, which
-    // needs the parent's child mask to be refreshed from the world as well and belongs with the
-    // rest of R2.
+    // Now it walks down to the brick that changed, drops that brick alone, and walks back up.
+    // Two things have to happen on the way up and only one of them is the colour:
+    //
+    //   the MASK, re-derived from the world, because the edit may have emptied the brick -- and a
+    //   bit left set over nothing is a ray reporting a node the world does not have, every frame,
+    //   for ever, which is D133 exactly;
+    //   the FOLD, because every ancestor's colour and coverage were averaged from what changed.
+    //
+    // The dropped brick is left at level nought rather than removed, which is this pool's
+    // spelling of "the world has this and I have not built it" -- so the next ray that wants it
+    // reports it and it returns on demand, at the level that ray asked for.
     if (!dirty_.empty()) {
-        std::unordered_set<NodeKey, NodeKeyHash> roots;
-        const u32 up = kEntryLevel - kLeafLevel;
-        for (const NodeKey& key : dirty_) {
-            roots.insert(NodeKey{key.x >> up, key.y >> up, key.z >> up, kEntryLevel});
-        }
-        for (const NodeKey& root : roots) {
-            const auto it = live_.find(root);
-            if (it == live_.end()) continue;
-            const u32 slot = it->second.slot;
-            release(slot);
-            for (usize index = 0; index < entries_.size(); ++index) {
-                if (entries_[index] == slot) {
-                    entries_[index] = kNoNode;
-                    dirty_entries_.mark(index);
-                    break;   // a slot appears once; the scan used to run to the end regardless
+        const std::unordered_set<NodeKey, NodeKeyHash> touched(dirty_.begin(), dirty_.end());
+
+        // Two passes, and the split is the whole of what makes a large edit affordable.
+        //
+        // An ancestor is shared by everything beneath it, so a carve of 97,500 bricks walks the
+        // same handful of upper nodes tens of thousands of times -- and re-deriving one mask is
+        // eight `world_has` calls, which below level 8 walk bricks in a chunk. Doing that per
+        // brick measured a single frame of 22,481 ms. Each node is refreshed once instead.
+        //
+        // And the order matters: a fold reads its children, so every brick has to be dropped
+        // before anything above it is folded, and the ancestors themselves have to go deepest
+        // first or a parent averages a child that has not been refreshed yet.
+        std::vector<std::pair<u32, NodeKey>> ancestors;
+        std::unordered_set<u32> seen_ancestor;
+
+        for (const NodeKey& leaf_key : touched) {
+            const u32 up = kEntryLevel - kLeafLevel;
+            const NodeKey root_key{leaf_key.x >> up, leaf_key.y >> up, leaf_key.z >> up,
+                                   kEntryLevel};
+            const auto it = live_.find(root_key);
+            if (it == live_.end()) continue;   // nothing built here, so nothing to refresh
+
+            u32 chain[kEntryLevel + 2];
+            NodeKey keys[kEntryLevel + 2];
+            u32 depth = 0;
+            u32 slot = it->second.slot;
+            chain[depth] = slot;
+            keys[depth] = root_key;
+            ++depth;
+
+            for (u32 level = kEntryLevel; level > kLeafLevel; --level) {
+                const GpuNode& node = nodes_[slot];
+                if ((node_flags(node) & kNodeLeaf) != 0 || node.children == kNoNode) break;
+                const u32 shift = level - 1 - kLeafLevel;
+                const u32 octant = octant_of(leaf_key.x >> shift, leaf_key.y >> shift,
+                                             leaf_key.z >> shift);
+                const u32 child = node.children + octant;
+                if (node_level(nodes_[child]) == 0) break;   // not built below here
+                slot = child;
+                chain[depth] = slot;
+                keys[depth] = NodeKey{leaf_key.x >> shift, leaf_key.y >> shift,
+                                      leaf_key.z >> shift, level - 1};
+                ++depth;
+            }
+
+            // The brick itself, when it was built at all.
+            if (node_level(nodes_[slot]) == kLeafLevel) {
+                release_contents(slot);
+                nodes_[slot] = GpuNode{};
+                dirty_nodes_.mark(slot);
+                --depth;   // a node is not its own ancestor
+            }
+
+            for (u32 i = 0; i < depth; ++i) {
+                if (seen_ancestor.insert(chain[i]).second) {
+                    ancestors.emplace_back(chain[i], keys[i]);
                 }
             }
-            live_.erase(it);
+        }
+
+        // Deepest first: level 3 is a brick and level 14 is the root.
+        std::sort(ancestors.begin(), ancestors.end(),
+                  [](const std::pair<u32, NodeKey>& l, const std::pair<u32, NodeKey>& r) {
+                      return l.second.level < r.second.level;
+                  });
+
+        for (const std::pair<u32, NodeKey>& entry : ancestors) {
+            const u32 ancestor = entry.first;
+            const NodeKey& key = entry.second;
+            u32 mask = 0;
+            for (u32 octant = 0; octant < 8; ++octant) {
+                const NodeKey child{(key.x << 1) | static_cast<i64>(octant & 1),
+                                    (key.y << 1) | static_cast<i64>((octant >> 1) & 1),
+                                    (key.z << 1) | static_cast<i64>((octant >> 2) & 1),
+                                    key.level - 1};
+                if (world_has(world, child)) mask |= (1u << octant);
+            }
+            nodes_[ancestor].packed =
+                pack_node(node_level(nodes_[ancestor]), node_flags(nodes_[ancestor]), mask);
+            dirty_nodes_.mark(ancestor);
+            fold_children(ancestor);
         }
     }
+
     dirty_.clear();
 
     // The proximity radius, added as ordinary requests so there is one path that builds things

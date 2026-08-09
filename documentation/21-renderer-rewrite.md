@@ -499,7 +499,9 @@ checked. Tick the ledger in §8.0 when one lands.
 | R1 | i. dirty-range uploads | **done** — D235–D236. The upload was 10 MB a frame while moving and eleven times over its budget; it is now 0.028 ms |
 | R2 | d. draw the parent while waiting | **done, early** — D237. Taken out of order because an unstreamed region drawing as sky is what "it loads slowly" turned out to mean |
 | R2 | eviction churn | **fixed** — D247–D250. The pool was throwing away the scene it was drawing every 600 frames, because a node is only marked wanted by a *miss*. D233 and D234 were both this |
-| R2 | a–c | not started |
+| R2 | a. feedback drives everything | **done** — D251–D252. A ray reports what it USED, not only what it missed, and a request is served once however many times it is asked for |
+| R2 | edit cost | **fixed** — D256–D258. One voxel used to cost the 512 m root; it now costs the brick |
+| R2 | b–c | not started |
 | R3–R8 | | not started |
 
 #### What a player was actually waiting for, which none of the above was

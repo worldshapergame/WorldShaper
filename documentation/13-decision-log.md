@@ -504,6 +504,16 @@ frames of 247 and 275 ms. Four exchanges went on the renderer before anything me
 | D254 | **Invalidation drops one root per edit, not every ancestor of every brick** | measurement | It walked leaf to level 24 for each dirty brick, released every ancestor — and releasing a root frees its whole subtree anyway — then scanned the whole 262,144-entry table without breaking on the match. 97,500 dirty bricks is some twenty million full-table scans in a frame. This is a retreat rather than the answer: refreshing the leaf in place and re-folding its ancestors is right, and needs the parent's child mask refreshed from the world, which is R2 |
 | D255 | **`--screenshot-frame` counts frames, so a scripted measurement on a slow build is a long one** | user | 1200 frames at 4 FPS is five minutes of a game window on somebody's machine, twice, while they waited. Measure with sixty frames and raise it only when the figure needs it |
 
+## The renderer rewrite — the cost of an edit
+
+Editing is what this game is for, so the cost of an edit is the cost of playing it.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D256 | **An edit drops the brick it touched, not the half kilometre around it** | measurement | Invalidation released the entry-level root, which is 512 m across, so chiselling one voxel threw away everything within half a kilometre and rebuilt it at the rate pixels asked for it. Measured by a test written before the fix: **37,497 nodes before a single-voxel edit and 0 after**. It now walks down to the brick, drops that alone, and walks back up re-deriving each ancestor's child mask **from the world** and re-folding it. The mask matters as much as the fold: a bit left set over an emptied brick is a ray reporting a node the world does not have, every frame, for ever, which is D133 exactly. A chisel-sized edit now costs **0.001 ms** and leaves the tree identical to no edit at all |
+| D257 | **Each ancestor is refreshed once, deepest first** | measurement | An ancestor is shared by everything beneath it, so a large carve walks the same upper nodes tens of thousands of times, and one mask is eight `world_has` calls that below level 8 walk bricks in a chunk. Per brick, that measured a single frame of **22,481 ms**. Deduped, the same carve's worst frame is **355 ms**. The order is not incidental either: a fold reads its children, so every brick must be dropped before anything above it folds, and the ancestors must go deepest first or a parent averages a child that has not been refreshed |
+| D258 | **The test that covered edits was asserting the root disappeared** | D256 | Its stated intent was right and is the reason it exists — "a resident-but-wrong node is the one thing feedback can never discover, because a ray that finds it does not report it (D131)" — but it checked the *root* was gone, which was standing in for "the stale brick is gone" and passed for the wrong reason. It now asserts the brick went and the root stayed, which is both halves |
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
