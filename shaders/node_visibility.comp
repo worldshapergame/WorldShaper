@@ -55,8 +55,20 @@ void main() {
     // seven in a hundred thousand.
     const bool report_used = ((pixel.x & 7) == 0) && ((pixel.y & 7) == 0);
 
+    // One pixel in sixteen names the face it landed on.
+    //
+    // A face is what the light pass will shade, and the premise of the whole stage is that there
+    // are far fewer of them than there are pixels: measured before any of it was built, a frame
+    // holds 118,826 to 141,110 distinct faces while its pixel count goes up 8.1x (D205). So a
+    // sparse sample names nearly all of them and the duplicates are the overwhelming majority.
+    //
+    // Sixteen rather than four because these share the feedback buffer with the node reports, and
+    // its capacity is 131,072: one pixel in four at 1280x800 would be 256,000 requests and the
+    // buffer would truncate, which costs convergence rather than correctness but silently.
+    const bool report_face = ((pixel.x & 3) == 0) && ((pixel.y & 3) == 0);
+
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
-                             report_used);
+                             report_used, report_face);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {

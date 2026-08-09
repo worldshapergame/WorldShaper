@@ -41,6 +41,7 @@
 #include "gpu/feedback.hpp"
 #include "gpu/image.hpp"
 #include "gpu/loading_screen.hpp"
+#include "gpu/face_buffers.hpp"
 #include "gpu/node_buffers.hpp"
 #include "gpu/render_params.hpp"
 #include "gpu/profiler.hpp"
@@ -52,6 +53,7 @@
 #include "world/history.hpp"
 #include "world/op.hpp"
 #include "world/raycast.hpp"
+#include "world/face_store.hpp"
 #include "world/node_pool.hpp"
 #include "world/residency.hpp"
 #include "world/serialize.hpp"
@@ -1114,6 +1116,10 @@ private:
     // documentation/21-renderer-rewrite.md section 8, sub-step R1c.
     NodePool node_pool_;
     NodeBuffers node_buffers_;
+    // R3. Claimed from what the marcher reports and mirrored to the card; nothing shades it yet.
+    FaceStore face_store_;
+    FaceBuffers face_buffers_;
+    u32 last_faces_seen_ = 0;
     ComputePipeline node_visibility_;
     VkDescriptorSetLayout node_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet node_set_ = VK_NULL_HANDLE;
@@ -2503,7 +2509,10 @@ void Application::stream(f64 seconds) {
         // gave an empty world.
         // A used-report is not a request for anything; chunk residency has nothing to do with
         // it, and its level field carries a flag that would shift the coordinate into nonsense.
-        if (node_feedback && (entry.level & (kFeedbackUsed | kFeedbackRead)) != 0) continue;
+        if (node_feedback &&
+            (entry.level & (kFeedbackUsed | kFeedbackRead | kFeedbackFace)) != 0) {
+            continue;
+        }
 
         ChunkCoord coord{entry.x, entry.y, entry.z};
         if (node_feedback) {
@@ -2556,6 +2565,7 @@ void Application::stream(f64 seconds) {
     // Gated on the same thing as the loop above, and for the sharper half of the same reason: a
     // chunk coordinate read as a node key is a request for a node the world does not have, and
     // the pool builds toward it. In the path tracer that spent budget on 488 nodes of nothing.
+    u32 faces_seen = 0;
     if (node_feedback) {
         for (const FeedbackEntry& entry : wanted) {
             // A ray that READ this node, rather than one that could not find it.
@@ -2563,6 +2573,19 @@ void Application::stream(f64 seconds) {
             // Residency had only ever heard about misses, so the moment the tree was complete it
             // heard nothing at all and evicted the scene on a timer (D247). A hit costs one entry
             // per visible root per frame and is what makes "wanted" mean wanted.
+            // A face the eye can see: the node the ray stopped on and the direction it was hit
+            // from. Claimed rather than requested -- there is nothing to build, only somewhere
+            // for the light pass to put an answer.
+            if ((entry.level & kFeedbackFace) != 0) {
+                const u32 level = static_cast<u32>(entry.level & 0xFF);
+                const u32 face = static_cast<u32>((entry.level >> 8) & 0xFF);
+                if (level > kMaxNodeLevel || face >= kFaceCount) continue;
+                face_store_.claim(FaceKey{entry.x, entry.y, entry.z, level, face},
+                                  frame_counter_);
+                ++faces_seen;
+                continue;
+            }
+
             // A node read by a ray, named by slot. Per node rather than per root, because
             // eviction at the root can only keep the scene whole or drop it whole (D260).
             if ((entry.level & kFeedbackRead) != 0) {
@@ -2594,6 +2617,8 @@ void Application::stream(f64 seconds) {
             for (const NodeKey& adjacent : around) node_pool_.request(adjacent);
         }
     }
+
+    last_faces_seen_ = faces_seen;
 
     // A small radius around the camera on top, so the ground under your feet is resident
     // before it has been looked at. Feedback cannot report what has never been on screen.
@@ -2891,6 +2916,10 @@ void Application::record_frame(f32 time_seconds) {
         last_node_evicted_ = node_batch.evicted;
         last_node_deferred_ = node_batch.deferred;
         node_buffers_.upload(cmd, node_pool_);
+        // The face store's own mirror. Nothing reads it on the card yet; it is uploaded from the
+        // first frame so that the audit is checking a real difference rather than two empty
+        // buffers agreeing with each other.
+        face_buffers_.upload(cmd, face_store_);
         profiler_.add_bytes(node_buffers_.stats().uploaded_this_frame);
         profiler_.end_pass(cmd);
     }
@@ -4107,6 +4136,12 @@ int Application::run(const Options& options) {
             WS_LOG_FATAL("app", "could not create the node pool buffers");
             return 1;
         }
+        FaceStoreBudget face_budget;
+        face_store_.create(face_budget);
+        if (!face_buffers_.create(device_, face_budget)) {
+            WS_LOG_FATAL("app", "could not create the face store buffers");
+            return 1;
+        }
         WS_LOG_INFO("load", "node buffers {:.0f} ms  [t+{:.0f} ms]",
                     ns_to_ms(now_ns() - t_node_buffers), ns_to_ms(now_ns() - load_began_ns_));
 
@@ -4851,7 +4886,16 @@ int Application::run(const Options& options) {
             // rather than per frame because it stalls the device; that is often enough to catch
             // an upload that is dropping or misplacing something, which is the class of fault
             // this exists for.
-            if (use_node_pool_) node_buffers_.audit(node_pool_);
+            if (use_node_pool_) {
+                node_buffers_.audit(node_pool_);
+                face_buffers_.audit(face_store_);
+                const FaceStoreStats face_stats = face_store_.stats();
+                WS_LOG_INFO("frame",
+                            "faces: {} live, {} seen this frame, {} claims {} already there, "
+                            "{} bytes of faces ({} with the table)",
+                            face_stats.faces, last_faces_seen_, face_stats.claims,
+                            face_stats.hits, face_stats.face_bytes, face_stats.total_bytes);
+            }
 
             const NodePoolStats node_stats = node_pool_.stats();
             WS_LOG_INFO("frame",

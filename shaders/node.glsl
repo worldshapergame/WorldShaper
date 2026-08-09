@@ -374,6 +374,14 @@ void node_flush(bool enabled, bool has_pending, ivec4 pending) {
 const int kFeedbackUsed = 0x10000;   // in the level field: used, as against missing
 const int kFeedbackRead = 0x20000;   // ...and this one carries a slot in x, not a coordinate
 
+// A FACE the eye can see: the node the ray stopped on and the direction it was hit from.
+//
+// This is what the face pass shades, and it goes down the buffer that already exists rather than
+// a second one, because a face request is the same four integers a node request is -- a
+// coordinate and a level -- with the direction packed beside the level. One buffer means one
+// capacity, one readback and one barrier to get right instead of two.
+const int kFeedbackFace = 0x40000;
+
 void node_flush_used(bool enabled, ivec3 block) {
     if (!enabled) return;
     uint index = atomicAdd(feedback.count, 1u);
@@ -393,6 +401,24 @@ void node_flush_used(bool enabled, ivec3 block) {
 //
 // The CPU and the GPU agree about slot numbering by construction -- the buffers are a mirror of
 // the arrays, and NodeBuffers::audit checks it byte for byte.
+// The face a ray stopped on. `voxel` is the absolute coordinate of the cell it stopped in and
+// `level` is that cell's level, so the node's own coordinate is one shift -- the same arithmetic
+// the descent already did to get there, so the two cannot disagree about which face this is.
+void node_flush_face(bool enabled, ivec3 voxel, int level, ivec3 normal) {
+    if (!enabled) return;
+    uint face;
+    if (normal.x != 0) face = (normal.x > 0) ? 0u : 1u;
+    else if (normal.y != 0) face = (normal.y > 0) ? 2u : 3u;
+    else face = (normal.z > 0) ? 4u : 5u;
+
+    uint index = atomicAdd(feedback.count, 1u);
+    if (index < push.resolution.w) {
+        feedback.entries[index].coord =
+            ivec4(voxel.x >> level, voxel.y >> level, voxel.z >> level,
+                  (level & 0xFF) | int(face << 8) | kFeedbackFace);
+    }
+}
+
 void node_flush_read(bool enabled, uint slot) {
     if (!enabled || slot == kNoNode) return;
     uint index = atomicAdd(feedback.count, 1u);
@@ -458,7 +484,7 @@ float node_bayer(ivec2 pixel) {
 const uint kNodeMaxSteps = 512u;
 
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
-                   bool report_used) {
+                   bool report_used, bool report_face) {
     NodeHit result;
     result.hit = false;
     result.t = push.lens.y;
@@ -589,6 +615,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 node_flush(report, has_pending, pending);
                 node_flush_used(report_used, g_node_block);
                 node_flush_read(report_used, found.slot);
+                node_flush_face(report_face, voxel, outer_level, last_normal);
                 return result;
             }
 
@@ -643,6 +670,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     node_flush(report, has_pending, pending);
                     node_flush_used(report_used, g_node_block);
                     node_flush_read(report_used, found.slot);
+                    node_flush_face(report_face, voxel, outer_level, inner_normal);
                     return result;
                 }
                 if (i_max.x < i_max.y && i_max.x < i_max.z) {
@@ -718,6 +746,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     node_flush(report, has_pending, pending);
                     node_flush_used(report_used, g_node_block);
                     node_flush_read(report_used, found.slot);
+                    node_flush_face(report_face, voxel, outer_level, stand_normal);
                     return result;
                 }
             }

@@ -149,6 +149,11 @@ inline constexpr i32 kFeedbackUsed = 0x10000;
 // descends. Must match kFeedbackRead in shaders/node.glsl.
 inline constexpr i32 kFeedbackRead = 0x20000;
 
+// ...and this one is a FACE the eye can see: a node coordinate in xyz, and its level with the
+// direction packed above it. What the face pass shades. Must match kFeedbackFace in
+// shaders/node.glsl.
+inline constexpr i32 kFeedbackFace = 0x40000;
+
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.
 // One report per sampled pixel worst case, and sampling is one pixel in 64 — so this has
