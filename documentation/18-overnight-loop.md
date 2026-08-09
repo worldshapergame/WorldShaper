@@ -150,6 +150,26 @@ Every iteration now reports where its window went, on screen and in the journal:
 If a window buys less than it should, that line is the one to look at: a high peak means something
 large was read whole, and a high resent figure with a modest peak means too many turns.
 
+### What is being done about it, and the ceiling on it
+
+| Lever | State | What it does |
+| --- | --- | --- |
+| `-Autocompact 100000` | **on** | Bounds the context. The session summarises itself at 100k rather than growing to 210k. Costs no work — this is the cheapest of the three |
+| Read discipline in the prompt | **on** | Grep and read spans instead of whole files; never re-read what is in context |
+| Finish when the context is large | **on** | Commit, journal, leave the rest as `Next:`. A fresh session does the remainder cheaply |
+| `-MaxBudget <usd>` | **off** | The only thing that *guarantees* several iterations per window, and it does it by cutting an iteration wherever it happens to be. Chosen, never defaulted |
+
+**The ceiling, and it is worth knowing before hoping for more.** A session starts at about
+**46,000 tokens** before it does anything — system prompt and tool definitions — measured, and not
+something this file can shrink (`--strict-mcp-config` was tried: 46,434 against 46,600, so MCP is
+not what is in there). That baseline is resent on every turn like everything else, so 200 turns
+cannot cost less than about 9.2M tokens however perfectly it behaves.
+
+Against iteration 1's 26.4M, that is a hard ceiling of **2.9×** for the same amount of work. So the
+levers above are worth roughly 2–3× and there is very little left after them. Going further means
+doing *fewer turns per session* — smaller, sharper iterations — rather than being cleverer within
+one.
+
 **When the model's usage runs out it waits for the reset** rather than finishing the night on
 something smaller — quietly switching models is a change to the work, not to the schedule, and the
 difference does not show up until somebody reads what was built. To carry on instead:
