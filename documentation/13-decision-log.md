@@ -625,6 +625,14 @@ sharpens region by region and pastes on the main thread for up to 17.4 s at a ti
 |---|---|---|---|
 | D286 | **The CPU owns which face a slot is; the card owns what arrives there** | — | The whole point of the stage is that the card writes the light, so a byte-for-byte mirror check would report a mismatch on every frame that shaded anything — an audit that cries wolf until somebody turns it off, and this one has already caught three real stale-byte bugs a photograph never would have. So the bucket table is compared exactly and a face is compared on **identity alone**: key, level, direction, flags. A slot the CPU thinks is face A while the card thinks it is face B writes light onto the wrong surface and looks like a shading bug for ever, which is the fault worth keeping the check for. What is *in* a face is the card's business and is not compared |
 
+## The renderer rewrite — the face pass shades
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D287 | **`shade_faces.comp`: one invocation per face, dispatched by face count and not by pixels** | — | Sun visibility, one shadow ray per face per frame, averaged so the penumbra resolves over samples on the *face*. Measured: **0.162 ms at 1280×800, 0.170 at 1440p, 0.177 at 4K** against a 4.40 ms budget — flat across a 8.1× change in pixels, which is the claim the whole stage is for. Visibility over the same range goes 1.62 → 4.91 → 10.03 |
+| D288 | **The audits were an illegal copy, and had been since they were written** | `--validation` | The device buffers were created without `TRANSFER_SRC`, so every `vkCmdCopyBuffer` in both mirror checks was undefined behaviour that happened to work on this driver. The check that found three real stale-byte bugs was itself unsound, and nothing had run with `--validation` since it was written — which is trap 1 in the handover almost exactly: ask whether the tool is connected before trusting what it says. Found by running validation because a pipeline was new, which is the rule that trap states |
+| D289 | **A sampling rate that does not follow the resolution measures its own truncation** | measurement | Face requests at a fixed one-in-sixteen are 518,400 at 4K against a 131,072 buffer, and node read-reports at one-in-sixty-four are another 129,600. Two thirds were dropped, and the face pass then measured **faster** at 4K than at 800p — 0.038 ms against 0.195 — purely because it had been handed a third of the work. That reads exactly like the resolution independence this stage exists to demonstrate, which is the worst way for a measurement to be wrong. Both strides now scale with the pixel count: **0 dropped at every resolution**, and the flat figures above are real |
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

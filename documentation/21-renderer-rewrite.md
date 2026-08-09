@@ -505,7 +505,8 @@ checked. Tick the ledger in §8.0 when one lands.
 | R2 | c. proximity | **done** — D270–D272. Twenty metres at brick detail, asked of the world rather than of the volume, resumable and bounded, anchored two metres so walking cannot restart it forever. A background guarantee: standing still finishes it |
 | R3 | b. the face store | **CPU side done** — `src/world/face_store.{hpp,cpp}` and ten tests; `src/gpu/face_buffers.{hpp,cpp}` mirrors it to the card with dirty ranges and a byte-for-byte audit. Not yet bound to any shader |
 | R3 | a. split the frame | **producer done** — the marcher names the face each ray stopped on, down the feedback buffer that already existed. Face select, shade and composite still to come |
-| R3 | c, d | not started |
+| R3 | c. sun and lamps in the face pass | **sun done** — `shaders/shade_faces.comp`, one shadow ray per face, 0.162/0.170/0.177 ms across 800p/1440p/4K. Lamps and sky still to come |
+| R3 | d. delete the per-pixel light path | not started |
 | R4–R8 | | not started |
 
 #### What a player was actually waiting for, which none of the above was

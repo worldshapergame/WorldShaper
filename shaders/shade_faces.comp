@@ -1,0 +1,115 @@
+#version 450
+// One invocation per face, and the whole reason this stage exists.
+//
+// Light is worked out here, on the surface, instead of on the screen. A face does not care how
+// many pixels are looking at it, so the cost of lighting stops being a function of resolution:
+// the same building at 4K shades exactly the faces it shades at 800p (documentation/21 §6).
+//
+// # One writer
+//
+// Exactly one invocation owns each face (D191). Everything the per-pixel tracer does to survive a
+// thousand pixels writing one face in the same dispatch -- the halving compare-and-swap, the
+// read-the-sum-twice-and-take-the-minimum, the empty-then-publish key ordering, the eight-probe
+// coldest-slot eviction -- exists because the wrong thing owns the write. None of it is here, and
+// none of it was removed: it was never needed.
+//
+// # What it does so far
+//
+// The sun, and only the sun. One shadow ray per face per frame, accumulated into a visibility
+// fraction so the penumbra resolves over samples rather than over pixels. Bounce, sky and lamps
+// are R3c; the directional bins that make a mirror are R4.
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "node.glsl"
+
+// The face store, alongside the tree the shadow ray marches. Both in one set, because a shadow
+// ray has to march exactly the geometry the primary ray stopped on.
+struct Face {
+    int x;
+    int y;
+    int z;
+    uint packed;      // level | face << 8 | flags << 16
+    uint irradiance;
+    uint photons;
+    uint counters;    // samples | visibility << 16 | variance << 24
+    uint bins;
+};
+
+layout(std430, binding = 9) buffer Faces { Face items[]; } faces;
+layout(std430, binding = 10) readonly buffer FaceEntries { uint slots[]; } face_entries;
+
+uint face_level_of(uint packed) { return packed & 0xFFu; }
+uint face_dir_of(uint packed) { return (packed >> 8) & 0xFFu; }
+
+uint face_samples_of(uint counters) { return counters & 0xFFFFu; }
+uint face_visibility_of(uint counters) { return (counters >> 16) & 0xFFu; }
+
+// The outward normal of one of the six faces, in the order node_face_coverage uses so that a
+// direction never has to be translated between the two.
+ivec3 face_normal(uint face) {
+    if (face == 0u) return ivec3(1, 0, 0);
+    if (face == 1u) return ivec3(-1, 0, 0);
+    if (face == 2u) return ivec3(0, 1, 0);
+    if (face == 3u) return ivec3(0, -1, 0);
+    if (face == 4u) return ivec3(0, 0, 1);
+    return ivec3(0, 0, -1);
+}
+
+void main() {
+    const uint slot = gl_GlobalInvocationID.x;
+    if (slot >= node_push.face_count) return;
+
+    Face face = faces.items[slot];
+    const uint level = face_level_of(face.packed);
+    // A free slot. Levels start at kLeafLevel, so nought is the store's spelling of empty and the
+    // coordinate cannot be trusted.
+    if (level == 0u && face.packed == 0u) return;
+
+    const uint direction = face_dir_of(face.packed);
+    const ivec3 normal = face_normal(direction);
+
+    // Back-facing to the sun is nought without tracing anything, which is most of a building: a
+    // cube has six faces and the sun reaches at most three of them.
+    const float facing = dot(vec3(normal), node_push.sun.xyz);
+    if (facing <= 0.0) {
+        const uint samples = min(face_samples_of(face.counters) + 1u, 4096u);
+        // Averaged in rather than assigned, so a face that turns away from the sun fades rather
+        // than snapping -- and so this costs the same code path as a lit one.
+        const uint was = face_visibility_of(face.counters);
+        const uint now = (was * samples) / (samples + 1u);
+        faces.items[slot].counters = (samples & 0xFFFFu) | (now << 16);
+        return;
+    }
+
+    // The centre of the face, in the voxel coordinates the marcher works in.
+    //
+    // The node's own coordinate is its voxel coordinate shifted by its level, so this reverses
+    // exactly the shift the marcher applied when it reported the face -- and lands half a cell
+    // along the normal, which is the face rather than the middle of the cell behind it.
+    const float size = float(1 << level);
+    const vec3 corner = vec3(ivec3(face.x, face.y, face.z)) * size;
+    const vec3 centre = corner + vec3(size * 0.5);
+    const vec3 point = centre + vec3(normal) * (size * 0.5 + 0.03125);
+
+    // Where the camera's chunk puts the origin, so the march works in the same space the primary
+    // ray did rather than in absolute voxels, which lose precision a long way out (D156).
+    const vec3 origin = point - vec3(push.camera_chunk.xyz * 256);
+
+    // One ray at the sun. `report` and the two used-reports are off: a shadow ray must not drag
+    // streaming towards whatever it happens to cross, which is the rule the old tracer already
+    // follows and the reason a structure built at a distance never cast a shadow until somebody
+    // walked up to it.
+    NodeHit hit = node_march(origin, normalize(node_push.sun.xyz), 0.0, 0.0, false, false, false);
+
+    const uint samples = min(face_samples_of(face.counters) + 1u, 4096u);
+    const uint lit = hit.hit ? 0u : 255u;
+    // A running mean, in eight bits. The penumbra resolves over samples on the FACE, which is
+    // what takes it off the pixel: a soft edge costs the face a few frames instead of costing
+    // every pixel that looks at it a ray of its own, every frame, for ever.
+    const uint was = face_visibility_of(face.counters);
+    const uint now = (was * samples + lit) / (samples + 1u);
+
+    faces.items[slot].counters = (samples & 0xFFFFu) | (min(now, 255u) << 16);
+}

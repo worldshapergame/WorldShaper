@@ -92,11 +92,20 @@ layout(std140, binding = 8) uniform Params {
 
 // How many buckets the entry table has, and how far a probe may run. A power of two, so the
 // modulo is a mask.
+// One push-constant block for every pipeline that includes this file, because a stage is allowed
+// exactly one and the face shader needs the marcher.
+//
+// The visibility pass writes only the first two fields and ignores the rest; the face shader
+// writes all of them. Both pipelines declare the same range so neither reads past what its layout
+// allows -- a shader declaring more than its pipeline layout reserves is a validation error, and
+// one declaring less than the other pushes is a silent misread of the fields after the gap, which
+// is exactly the std140 fault D168 records in params.glsl.
 layout(push_constant) uniform NodeConstants {
     uint entry_capacity;
     uint entry_probes;
-    uint pad_a;
-    uint pad_b;
+    uint face_count;    // face shader: how many face slots are in use
+    uint frame;
+    vec4 sun;           // face shader: xyz towards the sun
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }

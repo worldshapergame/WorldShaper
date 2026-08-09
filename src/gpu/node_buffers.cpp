@@ -21,7 +21,16 @@ bool NodeBuffers::create(Device& device, const NodePoolBudget& budget) {
     while (entry_capacity_ < wanted) entry_capacity_ <<= 1;
     const u64 entry_bytes = static_cast<u64>(entry_capacity_) * sizeof(u32);
 
-    constexpr VkBufferUsageFlags kStorage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    // TRANSFER_SRC as well as storage, because the audit reads these back.
+    //
+    // Without it every mirror check has been an illegal copy: `vkCmdCopyBuffer` from a buffer that
+    // was never declared as a copy source is undefined behaviour that happens to work on this
+    // driver, and it went unseen because nothing ran with --validation after the audit was
+    // written. The check that has found three stale-byte bugs was itself unsound, which is the
+    // handover's first trap almost exactly -- ask whether the tool is connected before trusting
+    // what it says.
+    constexpr VkBufferUsageFlags kStorage =
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     entries_ = create_device_buffer(device, entry_bytes, kStorage, "node entries");
     nodes_ = create_device_buffer(device, node_bytes, kStorage, "nodes");
     leaves_ = create_device_buffer(device, leaf_bytes, kStorage, "node leaves");

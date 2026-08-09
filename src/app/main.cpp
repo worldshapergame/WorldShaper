@@ -900,6 +900,8 @@ private:
 
     ComputePipeline visibility_;
     ComputePipeline resolve_;
+    // R3: one invocation per face, working out light on the surface instead of on the screen.
+    ComputePipeline shade_faces_;
 
     // The reference path tracer. A separate pipeline that shares only the world, so with the
     // mode off it costs exactly nothing — no branch in the marcher, no extra binding.
@@ -3641,6 +3643,47 @@ void Application::record_frame(f32 time_seconds) {
     profiler_.add_bytes(static_cast<u64>(render_extent.width) * render_extent.height * 20);
     profiler_.end_pass(cmd);
 
+    // ---- shade the faces -------------------------------------------------------------
+    //
+    // One invocation per face, and the whole point of the stage: the dispatch is sized by how
+    // many FACES are live, not by how many pixels there are. The same building at 4K shades
+    // exactly what it shades at 800p.
+    //
+    // Its own pass, so the cost is visible beside visibility rather than folded into it -- the
+    // claim R3 makes is that this number does not move with resolution and that has to be
+    // measurable rather than asserted (D201's lesson, in the pass it is being made about).
+    if (use_node_pool_) {
+        const u32 face_count = face_store_.watermark();
+        if (face_count > 0) {
+            profiler_.begin_pass(cmd, "faces", 4.4);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.pipeline());
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.layout(), 0,
+                                    1, &node_set_, 1, &params_offset);
+            struct ShadePush {
+                u32 control[4];   // entry capacity, probes, face count, frame
+                f32 sun[4];
+            } shade_push{};
+            shade_push.control[0] = node_buffers_.entry_capacity();
+            shade_push.control[1] = 32u;
+            // The same sun make_trace_push() hands the tracer, so the two agree about where it
+            // is. One constant in one place is what stopped `19-auto-quality.md` holding two
+            // figures no build could reproduce.
+            const f32 sun[3] = {0.4f, 0.85f, 0.3f};
+            const f32 sun_length =
+                std::sqrt(sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]);
+            shade_push.sun[0] = sun[0] / sun_length;
+            shade_push.sun[1] = sun[1] / sun_length;
+            shade_push.sun[2] = sun[2] / sun_length;
+            shade_push.control[2] = face_count;
+            shade_push.control[3] = static_cast<u32>(frame_counter_);
+            vkCmdPushConstants(cmd, shade_faces_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(shade_push), &shade_push);
+            vkCmdDispatch(cmd, (face_count + 63) / 64, 1, 1);
+            profiler_.add_bytes(static_cast<u64>(face_count) * sizeof(GpuFace));
+            profiler_.end_pass(cmd);
+        }
+    }
+
     // ---- resolve --------------------------------------------------------------------
     VkMemoryBarrier2 vis_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     vis_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -4145,20 +4188,26 @@ int Application::run(const Options& options) {
         WS_LOG_INFO("load", "node buffers {:.0f} ms  [t+{:.0f} ms]",
                     ns_to_ms(now_ns() - t_node_buffers), ns_to_ms(now_ns() - load_began_ns_));
 
-        // 0-1 out images, 2-6 the pool, 7 feedback, 8 the parameter block.
-        VkDescriptorSetLayoutBinding node_bindings[9]{};
-        for (u32 i = 0; i < 9; ++i) {
+        // 0-1 out images, 2-6 the pool, 7 feedback, 8 the parameter block, 9-10 the faces.
+        //
+        // One set for both the marcher and the face shader. They need the same tree — the shading
+        // pass marches shadow rays through exactly the geometry the primary ray stopped on — and
+        // two sets would be two places for the same buffers to be bound, which is how the node
+        // pipeline's output images came to be written in one place and forgotten in the other
+        // (§4 trap 1). A shader need not use every binding in a set.
+        VkDescriptorSetLayoutBinding node_bindings[11]{};
+        for (u32 i = 0; i < 11; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2)  ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                : (i < 8) ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-                          : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+                : (i == 8) ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                           : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             node_bindings[i].descriptorCount = 1;
             node_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 9;
+        node_layout_info.bindingCount = 11;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -4169,19 +4218,22 @@ int Application::run(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[6]{
+        const VkBuffer node_pool_buffers[8]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
+            face_buffers_.faces(), face_buffers_.entries(),
         };
-        VkDescriptorBufferInfo node_infos[6]{};
-        VkWriteDescriptorSet node_writes[7]{};
-        for (u32 i = 0; i < 6; ++i) {
+        VkDescriptorBufferInfo node_infos[8]{};
+        VkWriteDescriptorSet node_writes[9]{};
+        for (u32 i = 0; i < 8; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
             node_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             node_writes[i].dstSet = node_set_;
-            node_writes[i].dstBinding = 2 + i;
+            // 2..7 are the pool and the feedback buffer; 8 is the parameter block, which is a
+            // different descriptor type and is written separately below; 9 and 10 are the faces.
+            node_writes[i].dstBinding = (i < 6) ? (2 + i) : (3 + i);
             node_writes[i].descriptorCount = 1;
             node_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             node_writes[i].pBufferInfo = &node_infos[i];
@@ -4190,13 +4242,13 @@ int Application::run(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[6].dstSet = node_set_;
-        node_writes[6].dstBinding = 8;
-        node_writes[6].descriptorCount = 1;
-        node_writes[6].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[6].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 7, node_writes, 0, nullptr);
+        node_writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[8].dstSet = node_set_;
+        node_writes[8].dstBinding = 8;
+        node_writes[8].descriptorCount = 1;
+        node_writes[8].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[8].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 9, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -4221,8 +4273,25 @@ int Application::run(const Options& options) {
         const std::filesystem::path node_spirv = shaders / "node_visibility.comp.spv";
         const std::filesystem::path node_source =
             std::filesystem::path(WS_SHADER_SOURCE_DIR) / "node_visibility.comp";
+        // The face shader shares the marcher's set: a shadow ray has to march exactly the
+        // geometry the primary ray stopped on, so giving it its own set would be two places to
+        // bind the same buffers. Its push constant is larger -- a sun direction and a count --
+        // and a pipeline layout takes the size it is given, so they are made separately.
+        const std::filesystem::path shade_spirv = shaders / "shade_faces.comp.spv";
+        const std::filesystem::path shade_source =
+            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "shade_faces.comp";
+        if (!shade_faces_.create(device_, shade_source, shade_spirv, node_layout_,
+                                 sizeof(u32) * 4 + sizeof(f32) * 4)) {
+            WS_LOG_FATAL("app", "could not create the face shading pipeline: {}",
+                         shade_faces_.last_error());
+            return 1;
+        }
+
+        // The same push range as the face shader, because they include the same file and a
+        // stage may declare only one block: the marcher writes the first two fields and ignores
+        // the rest, but its layout has to reserve what the block declares.
         if (!node_visibility_.create(device_, node_source, node_spirv, node_layout_,
-                                     sizeof(u32) * 4)) {
+                                     sizeof(u32) * 4 + sizeof(f32) * 4)) {
             WS_LOG_FATAL("app", "could not create the node visibility pipeline: {}",
                          node_visibility_.last_error());
             return 1;

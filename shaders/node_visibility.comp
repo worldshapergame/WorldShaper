@@ -53,7 +53,20 @@ void main() {
     // 256 a node covering a single pixel goes unsampled for 600 frames about one time in ten,
     // and the cost of being wrong is geometry that vanishes and comes back. At one in 64 it is
     // seven in a hundred thousand.
-    const bool report_used = ((pixel.x & 7) == 0) && ((pixel.y & 7) == 0);
+    //
+    // Scaled with the resolution for the same reason the face stride is. A fixed one in sixty-four
+    // is 129,600 reports at 4K, which very nearly fills the 131,072-entry buffer on its own and
+    // then starves the face requests sharing it -- 94,905 dropped in a frame, measured. Aimed at
+    // about sixteen thousand, which is far more than enough: a node has to be read once inside
+    // `cold_frames`, and six hundred frames of sixteen thousand samples covers everything visible
+    // many times over.
+    uint used_stride = 8u;
+    while ((push.resolution.x * push.resolution.y / (used_stride * used_stride)) > 16000u) {
+        used_stride <<= 1u;
+    }
+    const uint used_mask = used_stride - 1u;
+    const bool report_used = ((uint(pixel.x) & used_mask) == 0u) &&
+                             ((uint(pixel.y) & used_mask) == 0u);
 
     // One pixel in sixteen names the face it landed on.
     //
@@ -65,7 +78,22 @@ void main() {
     // Sixteen rather than four because these share the feedback buffer with the node reports, and
     // its capacity is 131,072: one pixel in four at 1280x800 would be 256,000 requests and the
     // buffer would truncate, which costs convergence rather than correctness but silently.
-    const bool report_face = ((pixel.x & 3) == 0) && ((pixel.y & 3) == 0);
+    //
+    // The stride follows the RESOLUTION, or the buffer truncates and the truncation looks like a
+    // result. At a fixed one-in-sixteen, 4K asks for 518,400 faces against a capacity of 131,072,
+    // so two thirds of them are dropped -- and the face pass then measures *faster* at 4K than at
+    // 800p (0.038 ms against 0.195) purely because it was given a third of the work. That reads
+    // exactly like the resolution independence this stage exists to demonstrate, which is the
+    // worst way for a measurement to be wrong.
+    //
+    // A power of two so the test stays a mask. Aimed at about sixty thousand requests a frame,
+    // which fits the buffer with room for the node reports beside it.
+    uint pixels = push.resolution.x * push.resolution.y;
+    uint stride = 4u;
+    while ((pixels / (stride * stride)) > 60000u) stride <<= 1u;
+    const uint face_mask = stride - 1u;
+    const bool report_face = ((uint(pixel.x) & face_mask) == 0u) &&
+                             ((uint(pixel.y) & face_mask) == 0u);
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
                              report_used, report_face);
