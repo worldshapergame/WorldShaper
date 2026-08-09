@@ -506,6 +506,8 @@ checked. Tick the ledger in §8.0 when one lands.
 | R3 | b. the face store | **done** — `src/world/face_store.{hpp,cpp}` and twelve tests; `src/gpu/face_buffers.{hpp,cpp}` mirrors it to the card with dirty ranges and an identity audit that also reports what the card wrote (D296). Uploads by exact region, never by coalesced range: the record has two owners (D295) |
 | R3 | a. split the frame | **done** — the marcher names the face each ray stopped on down the feedback buffer that already existed, AND resolves its slot into an R32_UINT image the composite reads (D290). The request lattice walks, or it samples the same 1/64 of the screen for ever (D291) |
 | R3 | c. sun and lamps in the face pass | **sun done, and now visible** — `shaders/shade_faces.comp`, one jittered shadow ray per face per frame across the face and the sun's disc (D294), two counts rather than a mean (D293), no standing in for unbuilt cells (D292). Deck realtime cost: enclosed 2.382 → 2.500 ms, outdoor 1.709 → 1.892, close 2.841 → 3.009 — 3–11% for a shadow the real-time path never had, with speckle falling close 98.3 → 24.6. Lamps and sky still to come |
+| R3 | shadow latency, stage one | **done** — D312–D315. `--cut` first, because a smooth camera measures the rate the store converges at and hides what it does when handed a whole screen: a 180° cut showed **five frames of a completely unshadowed room**. The mirror was uploaded above the line that claims faces, and the composite would not read a face under four samples while showing full sun instead. Both free to fix; five frames became two |
+| R3 | e. claim on the card | **planned, not started.** The two frames left are the feedback round trip and nothing else. §8 R3e has the design: a provisional table in the tail of the faces buffer that the CPU never touches, the claim in the visibility pass, and an indirect fix-up pass over the pixels that lost the race |
 | R3 | d. delete the per-pixel light path | not started. Carries one debt from R3b: split `GpuFace` so the CPU's half and the card's half are never in one copy |
 | R3 | faces are voxels | **done** — D298–D303. Every face in the store was a brick, so the finest shadow was 25 cm; now 416,261 level 0, 59,758 level 1, 1,603 level 3 on the close camera. Two collisions on zero and a shell that was transparent to occlusion came with it. Speckle enclosed 17.5 (no shadows) → 3.8 |
 | R3 | the store recycles | **fixed** — D304–D306. `evict_cold` was written, tested and never called, so the store filled and then refused every face after it: the shadowed set froze and everything new was lit by the fallback. A slice a frame now, with the threshold halving when the table is full |
@@ -786,6 +788,45 @@ output during a measurement, and write shader files with a writer that does not 
   one level, from the descent, used by both passes.
 - **R3c — sun and lamps in the face pass.** Shadow rays and next-event estimation move off the
   pixel entirely.
+- **R3e — a face is claimed on the card, in the frame a ray first lands on it.** Stage two of
+  shadow latency; stage one was D312–D315 and took a hard 180° cut from five frames of a completely
+  unshadowed room to two. **The two that remain are the feedback round trip and nothing else**: a
+  face is reported by the visibility pass, the CPU reads that report two frames later because
+  `kFramesInFlight` is 2 and that is when the frame it was written in retires, and claims it then.
+  No arrangement of CPU code shortens it. Reading the buffer a frame earlier is a fence wait.
+
+  The design, in the order the pieces have to exist:
+
+  1. **A provisional table the CPU never touches.** Records in the *tail* of the existing faces
+     buffer, above `max_faces`, so the composite reads them with no tag bit and no second array and
+     `resolve.comp` does not change at all. Buckets in their own small SSBO, because the main
+     bucket array is uploaded from the CPU and would overwrite anything the card wrote — which is
+     D295, exactly, and the reason this table is separate rather than shared. A ring allocator with
+     a generation stamp: an entry older than a few frames is free, so nothing is ever deleted and
+     the CPU's own claim two frames later simply takes over.
+  2. **The claim itself**, in the visibility pass where the key already is: probe the main table,
+     and on a miss `atomicCompSwap` the provisional bucket from empty to a slot taken from the ring.
+     Racing pixels of the same face compute the same bucket, so the loser finds the winner's key
+     rather than allocating a second slot.
+  3. **The pixels that lost the race still have no slot this frame**, because nothing orders two
+     workgroups. So the misses go in a compact append list — pixel and node slot, two words — and a
+     small pass after the visibility pass, **dispatched indirectly over that list**, redoes the
+     lookup and writes `out_face` for those pixels. Its cost is proportional to the number of
+     pixels with no face, which is zero at rest and one screen for one frame after a cut. That is
+     the whole reason it is a list and not a full-screen pass.
+  4. **`shade_faces` covers the ring** as well as the store, so a face claimed in the visibility
+     pass is shaded later in the *same* command buffer and read by the composite after it — the
+     pass order already allows this, which is what makes zero frames reachable rather than one.
+
+  *Gate: `--cut` at the enclosed camera, cut+1 under 1% of surface on the fallback — against 100%
+  today. Settled cost unchanged on the grid, still and turning; the provisional table adds no CPU
+  work and no upload; two settled frames stay bit-identical (D194).*
+
+  **What this must not become**: a per-pixel shadow ray as the fallback. It is the obvious
+  alternative, it is one line, and it is the per-pixel escape hatch §1 exists to forbid — 1M rays on
+  the reveal frame, a spike measured in milliseconds, on the exact frame the frame time is already
+  worst. The whole point of a face store is that the answer is looked up.
+
 - **R3d — delete the per-pixel light path.** Bounce, shadow, NEE coin, lobe choice, specular
   stride, glass segment loop, `pt_normals.glsl`, the rgba32f accumulator and its reset.
   *Gate: enclosed room within 30% of outdoor at the same resolution; face-pass time within 10%
