@@ -125,7 +125,35 @@ about any of this yet.
   enclosed 118,826 → 134,076 → 141,110 while pixels go ×8.1. Worst case anywhere 654k, growing
   1.4× from 800p to 4K. Distance views need **zero** faces. R3's argument holds.
 
-### R1 — the node pool (a–d and f done, e outstanding)
+### How much is left, by the plan's own sizing
+
+| Stage | Size | State |
+|---|---|---|
+| R0 instruments | S | a–c done. **R0d** outstanding — record the grid; now 6.6 s a run rather than 133 |
+| R1 node pool | XL | a–d, f–i done. **R1e** outstanding, and it is most of what remains of R1 |
+| R2 pixel residency | L | a and d done, plus the eviction churn and the edit cost. **R2b, R2c** outstanding |
+| R3 the face pass | XL | **not started** — the largest single win in the plan |
+| R4 directional faces | L | not started |
+| R5 face denoise, composite | M | not started |
+| R6 post | M | not started |
+| R7 the primary ray | L | not started |
+| R8 infinite detail | XL | not started |
+
+**Weighted by those sizes, roughly a fifth to a quarter of the plan is done**, and what is done is
+the foundation rather than the feature: the marcher, its residency, and the instruments that make
+either measurable. Against the three things the user actually asked for:
+
+- **the path tracer, faster and cleaner** — R3 to R6. **Not started.** The tracer still shades per
+  pixel over the old face cache and still includes `world.glsl`;
+- **chunks removed** — the node pool is proven and is what the game launches with, but the chunk
+  system is still in the build and still maintained every frame, at about 12 ms of CPU. R1e;
+- **streaming and coarse resolution driven by pixels** — half. Feedback drives residency and a ray
+  reports what it uses; the sub-pixel rule and proximity are R2b and R2c.
+
+The unplanned work has been most of the elapsed time and is not visible in that table: nine faults
+found and fixed, of which three were introduced by this rewrite and six predate it.
+
+### R1 — the node pool (a–d and f–i done, e outstanding)
 
 One sparse octree at every scale replaces the wrapped chunk grid, brick masks, popcount prefixes,
 slot runs, five coarse occupancy grids, the summary octree and eight thumbnail tiers. A leaf is a

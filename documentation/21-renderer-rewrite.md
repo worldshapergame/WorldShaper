@@ -751,7 +751,7 @@ rejected the file, and every run used a stale `.spv`. The build output was piped
 so nothing said so. Two rules fall out and both are now in `tools/` practice: never discard build
 output during a measurement, and write shader files with a writer that does not add a BOM.
 
-### R2 — Pixel-driven residency · L### R2 — Pixel-driven residency · L
+### R2 — Pixel-driven residency · L
 
 - **R2a — feedback drives everything.** Read back `(key, level)` and request it; drop the radius
   push tier entirely.
