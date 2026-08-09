@@ -87,6 +87,13 @@ inline constexpr u32 kMaxNodeLevel = 24;
 // which is the property to preserve when tuning it.
 inline constexpr u32 kEntryLevel = 14;
 
+// Where the proximity sweep anchors itself. 64 voxels is two metres.
+//
+// The sweep restarts when this changes, and it takes a couple of hundred frames to cover twenty
+// metres, so anchoring it any finer means a walking player restarts it before it ever finishes.
+// A brick would restart it four times a metre.
+inline constexpr u32 kProximityAnchorLevel = 6;
+
 struct NodeKey {
     i64 x = 0;
     i64 y = 0;
@@ -256,6 +263,10 @@ struct NodePoolBudget {
     // Held resident regardless of visibility, at full detail, because collision, physics and
     // editing have to touch what is behind you and under your feet (D199). Twenty metres.
     i64 proximity_voxels = 20 * 32;
+    // How much of the proximity sweep is done per frame. Twenty metres is eighty bricks, so the
+    // volume is millions of cells even though only the ones the world holds are ever requested,
+    // and walking it in one frame is a stall rather than a guarantee.
+    u32 proximity_per_frame = 32768;
 };
 
 // Which elements of one array changed this frame.
@@ -540,6 +551,12 @@ private:
     // a wrong picture, which is exactly what NodeBuffers::audit exists to catch: it walks the
     // real buffers against these arrays and names the first byte that disagrees.
     u64 touch_frame_ = 0;   // the frame `touch` stamps, set by update()
+    // The resumable proximity sweep: where it is, and the brick it was started for. Restarted
+    // when the camera crosses into a new brick, or when the world's chunk set changes.
+    NodeKey proximity_at_{0, 0, 0, 0xFFFFFFFFu};
+    u64 proximity_cursor_ = 0;
+    usize proximity_chunks_ = 0;
+    bool proximity_done_ = false;
     // When each node was last read by a ray. CPU-side and parallel to `nodes_`, rather than a
     // field in GpuNode: the record is thirty-two bytes, which is two nodes to a cache line, and
     // the GPU never reads this. Four bytes a node, so four megabytes at the default budget.

@@ -502,7 +502,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R2 | a. feedback drives everything | **done** — D251–D252. A ray reports what it USED, not only what it missed, and a request is served once however many times it is asked for |
 | R2 | edit cost | **fixed** — D256–D258. One voxel used to cost the 512 m root; it now costs the brick |
 | R2 | b. the sub-pixel rule | **done, with a stated limit** — D262–D269. Gate met where a pixel is coarser than a brick (far 1.17×, distant 0.68×, tolerance 1.30×); structurally unmeetable nearer, because a brick is the leaf and covers a pixel at 100 m. R8 is what lifts that floor | **half, and the half that is left is large** — D259–D261. A node finer than the pixel is never *requested*; making it never *stored* needs per-node residency, because eviction currently works at the 512 m root and the whole scene is one root. Gate measured at 3.2× over |
-| R2 | c. proximity | **a stub.** `proximity_voxels` is 20 m but the loop steps by the entry level (512 m), so it runs once per axis and requests a single root. It is not holding 20 m at full detail; it is making sure the root exists |
+| R2 | c. proximity | **done** — D270–D272. Twenty metres at brick detail, asked of the world rather than of the volume, resumable and bounded, anchored two metres so walking cannot restart it forever. A background guarantee: standing still finishes it |
 | R3–R8 | | not started |
 
 #### What a player was actually waiting for, which none of the above was

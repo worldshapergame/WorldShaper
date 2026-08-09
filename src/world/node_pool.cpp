@@ -850,18 +850,71 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // and one policy that decides what to build. Zero means off, and off has to mean nothing at
     // all: a loop that still runs once at radius zero holds the camera's own node resident for
     // ever, which is not "off" and took a failing eviction test to notice.
+    // Twenty metres, at brick detail, whatever is on screen (D199).
+    //
+    // This asked for one node at the ENTRY level, because it stepped by 1 << kEntryLevel -- 512 m
+    // -- over a range of 640 voxels, so the loop ran exactly once per axis. It was not holding
+    // twenty metres of anything; it was making sure the root existed. Collision, physics and
+    // editing all touch what is behind you and under your feet, and none of them can be served by
+    // a 512 m shell.
+    //
+    // Asked of the WORLD rather than of the volume. Twenty metres is eighty bricks, so the cube
+    // around the camera is 4.2 million of them and the overwhelming majority are air the world has
+    // no record of; iterating what the world holds instead visits the handful that exist.
+    //
+    // Resumable and bounded, because even that is too much to do in one frame while somebody is
+    // walking. The sweep carries a cursor and does a slice a frame, and restarts when the camera
+    // crosses into a new brick -- so standing still finishes it and then costs nothing at all.
     if (budget_.proximity_voxels > 0) {
         const i64 near = budget_.proximity_voxels;
-        const i64 step = static_cast<i64>(1) << kEntryLevel;
-        for (i64 dz = -near; dz <= near; dz += step) {
-            for (i64 dy = -near; dy <= near; dy += step) {
-                for (i64 dx = -near; dx <= near; dx += step) {
-                    requested_.push_back(node_key_of(static_cast<i64>(camera_voxel[0]) + dx,
-                                                     static_cast<i64>(camera_voxel[1]) + dy,
-                                                     static_cast<i64>(camera_voxel[2]) + dz,
-                                                     kEntryLevel));
-                }
+        // Anchored two metres, not a brick.
+        //
+        // The sweep restarts when the anchor moves, and a brick is twenty-five centimetres: a
+        // player walking restarts it four times a metre and it never finishes, which is the exact
+        // opposite of a guarantee. kProximityAnchorLevel is 64 voxels, so it restarts every two
+        // metres and the radius is generous enough to cover the slack.
+        const NodeKey here = node_key_of(static_cast<i64>(camera_voxel[0]),
+                                         static_cast<i64>(camera_voxel[1]),
+                                         static_cast<i64>(camera_voxel[2]),
+                                         kProximityAnchorLevel);
+        if (!(here == proximity_at_) || indexed_chunks_ != proximity_chunks_) {
+            proximity_at_ = here;
+            proximity_chunks_ = indexed_chunks_;
+            proximity_cursor_ = 0;
+            proximity_done_ = false;
+        }
+
+        if (!proximity_done_) {
+            const i64 lo_x = static_cast<i64>(camera_voxel[0]) - near;
+            const i64 lo_y = static_cast<i64>(camera_voxel[1]) - near;
+            const i64 lo_z = static_cast<i64>(camera_voxel[2]) - near;
+            const i64 hi_x = static_cast<i64>(camera_voxel[0]) + near;
+            const i64 hi_y = static_cast<i64>(camera_voxel[1]) + near;
+            const i64 hi_z = static_cast<i64>(camera_voxel[2]) + near;
+
+            const i64 bx0 = lo_x >> kLeafLevel, bx1 = hi_x >> kLeafLevel;
+            const i64 by0 = lo_y >> kLeafLevel, by1 = hi_y >> kLeafLevel;
+            const i64 bz0 = lo_z >> kLeafLevel, bz1 = hi_z >> kLeafLevel;
+            const i64 span_x = bx1 - bx0 + 1;
+            const i64 span_y = by1 - by0 + 1;
+            const i64 total = span_x * span_y * (bz1 - bz0 + 1);
+
+            u32 served = 0;
+            while (proximity_cursor_ < static_cast<u64>(total) &&
+                   served < budget_.proximity_per_frame) {
+                const i64 i = static_cast<i64>(proximity_cursor_++);
+                const i64 bx = bx0 + (i % span_x);
+                const i64 by = by0 + ((i / span_x) % span_y);
+                const i64 bz = bz0 + (i / (span_x * span_y));
+                ++served;
+
+                // Only what the world actually holds. `world_has` at leaf level is a chunk
+                // lookup and one brick test, and it is the whole reason this is affordable.
+                const NodeKey key{bx, by, bz, kLeafLevel};
+                if (!world_has(world, key)) continue;
+                requested_.push_back(key);
             }
+            if (proximity_cursor_ >= static_cast<u64>(total)) proximity_done_ = true;
         }
     }
 

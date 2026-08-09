@@ -303,6 +303,42 @@ TEST_CASE("a subtree nothing reads erodes, while the part being read stays") {
     CHECK(f.pool.validate());
 }
 
+// Twenty metres, held whatever is on screen (D199).
+//
+// Collision, physics and editing all touch what is behind you and under your feet, and none of
+// them can be served by what a ray happened to look at. This asked for a single node at the ENTRY
+// level -- it stepped by 512 m over a range of 640 voxels, so the loop ran once per axis -- which
+// held a shell and nothing under it.
+TEST_CASE("the proximity radius holds bricks nothing has looked at") {
+    Fixture f;
+    // A slab well away from the origin in one direction, and another outside the radius.
+    f.fill_box(64, 0, 0, 95, 7, 7);        // 2 m out: inside twenty metres
+    f.fill_box(4096, 0, 0, 4127, 7, 7);    // 128 m out: outside it
+
+    NodePoolBudget budget;
+    budget.max_nodes = 1u << 16;
+    budget.max_occupancy_leaves = 1u << 14;
+    budget.payload_bytes = 4ull * 1024 * 1024;
+    budget.proximity_voxels = 20 * 32;     // the twenty metres D199 settled
+    budget.cold_frames = 100000;           // eviction is not what this is testing
+    f.pool.create(budget, f.types);
+
+    // Nothing is ever requested: no ray looks anywhere. The camera simply stands at the origin.
+    //
+    // Long enough for the sweep to finish. Twenty metres is a hundred and sixty bricks a side, so
+    // the volume is 4.2 million cells and the sweep does a slice a frame -- about a hundred and
+    // thirty of them. It is a background guarantee rather than an instant one, and standing still
+    // is what finishes it.
+    for (u64 frame = 1; frame < 200; ++frame) f.serve(frame);
+
+    CHECK(f.pool.find(node_key_of(64, 0, 0, kLeafLevel)) != kNoNode);
+    CHECK(f.pool.mirror_voxel(64, 0, 0) == f.stone);
+
+    // And it is a radius, not the whole world.
+    CHECK(f.pool.find(node_key_of(4096, 0, 0, kLeafLevel)) == kNoNode);
+    CHECK(f.pool.validate());
+}
+
 // Carving one voxel must not cost the scene.
 //
 // Editing is what this game is FOR, so the cost of an edit is the cost of playing it. Dropping

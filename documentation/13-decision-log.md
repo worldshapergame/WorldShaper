@@ -565,6 +565,19 @@ were worth making and did not close the gap.
 | D268 | **R2b is met where a pixel is coarser than a brick, and cannot be met nearer than that** | measurement | Measured on screen-dependent bytes, half resolution against a quarter of full: **far 1.17×, distant 0.68× — both inside the 30% tolerance.** The near cameras are over (outdoor 2.64×) and it is structural rather than a defect: a brick is the leaf, and at 1280×800 with a 90° lens a brick covers a pixel at **100 m**, so everything nearer is pinned at the floor and halving the resolution cannot coarsen it. The facility spans ±17 m and the outdoor camera sits at 60 m, so the whole scene is inside that floor. The histogram says it plainly — level 3 holds 27,443 nodes of 38,438 at full resolution and only falls to 12,902, while on the far camera level 6 disappears altogether and the whole histogram shifts by one, which is the rule working exactly as written. **This is the same floor R8 lifts from the other end**: sub-voxel levels are what make the near case behave like the far one |
 | D269 | **Resident nodes are reported per level** | — | A total says memory fell by 22% and cannot say which levels failed to move. The histogram answered in one reading what two changes and a session of guessing had not: the levels were shifting correctly and the metric was carrying a constant |
 
+## The renderer rewrite — R2c, the twenty metres
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D270 | **The proximity radius asks the world what it holds, not the volume what it contains** | D199 | It asked for a single node at the *entry* level: it stepped by `1 << kEntryLevel`, which is 512 m, over a range of 640 voxels, so the loop ran exactly once per axis. It was not holding twenty metres of anything — it was making sure the root existed, and collision, physics and editing cannot be served by a 512 m shell. Twenty metres is eighty bricks, so the cube around the camera is **4.2 million cells** and almost all of them are air the world has no record of; `world_has` at leaf level is a chunk lookup and one brick test, so iterating what the world holds visits the handful that exist |
+| D271 | **The sweep is resumable and bounded, and anchored at two metres rather than at a brick** | measurement | Even 4.2 million cells is too much for one frame while somebody is walking, so it carries a cursor and does a slice a frame — about a hundred and thirty of them to cover the radius. It restarts when the anchor moves, and **a brick is twenty-five centimetres**: anchored there, a walking player restarts it four times a metre and it never finishes, which is the exact opposite of a guarantee. Anchored at 64 voxels it restarts every two metres. Measured in the facility: 0.490 ms of CPU steady, 27.6 ms on the frames the sweep is running |
+| D272 | **It is a background guarantee, not an instant one** | D271 | Standing still finishes it; walking keeps it a couple of seconds behind. That is the honest description and it is what the test asserts — a slab two metres away that no ray has ever looked at becomes resident, and one a hundred and twenty-eight metres away does not |
+
+**Noted, not fixed.** The steady 0.490 ms is mostly the erosion sweep rather than the proximity one:
+it scans the node watermark up to twelve times a frame, which at 268,761 slots is some three
+million checks. It is inside the 0.8 ms budget for streaming but it is most of it, and the obvious
+improvement is to sweep only when something has actually gone cold.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
