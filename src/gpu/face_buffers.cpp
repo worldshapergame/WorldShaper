@@ -159,6 +159,20 @@ void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store) {
 bool FaceBuffers::audit(const FaceStore& store) {
     if (device_ == nullptr) return false;
 
+    // Nothing may still be owed to the card, or this compares a host that has moved on against a
+    // card that has not and calls the difference a bug.
+    //
+    // An upload that does not fit its staging ring in one frame leaves its ranges marked and sends
+    // them next frame -- deliberately, and the comment above `clear_dirty` says so. The audit had
+    // no idea about any of that: it read the buffers whenever it was asked and reported the
+    // backlog as a stale byte. Intermittent, scale-dependent, and pointing at the one check that
+    // has actually caught three real faults, which is the worst possible thing to make untrustworthy.
+    if (!store.nothing_dirty()) {
+        WS_LOG_INFO("faces", "mirror not compared: {} faces and {} buckets still owed to the card",
+                    store.dirty_faces().marked(), store.dirty_entries().marked());
+        return true;
+    }
+
     // Wait for the frame BEFORE touching the staging ring, not only after submitting.
     //
     // This reads the device buffers back into the same ring `upload` writes through, and an

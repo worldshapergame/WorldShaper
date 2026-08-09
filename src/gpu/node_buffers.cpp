@@ -209,6 +209,20 @@ bool NodeBuffers::audit(const NodePool& pool) {
     // twice costs nothing worth having.
     device_->wait_idle();
 
+    // And nothing may still be OWED to the card, which is a different thing from nothing being in
+    // flight. An upload too large for its staging ring in one frame leaves its ranges marked and
+    // sends them on the next -- deliberately; `clear_dirty` says so in as many words. Comparing
+    // during that backlog reports a host that has moved on against a card that has not yet been
+    // told, as a stale byte. It presents exactly like a real fault: intermittent, and only on the
+    // larger trees, because those are the ones whose uploads do not fit.
+    if (!pool.nothing_dirty()) {
+        WS_LOG_INFO("nodes", "mirror not compared: {} nodes, {} leaves, {} buckets and {} payload "
+                             "ranges still owed to the card",
+                    pool.dirty_nodes().marked(), pool.dirty_leaves().marked(),
+                    pool.dirty_entries().marked(), pool.dirty_payload().size());
+        return true;
+    }
+
     const u32 node_count = pool.node_watermark();
     const u32 leaf_count = pool.leaf_watermark();
 
