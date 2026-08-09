@@ -476,9 +476,15 @@ only 52% of its shadow after three hundred frames, while its own faces were lit 
 Two rules fix it: a sample that contradicts a *unanimous* history is treated as the world having
 changed, so the face keeps its ratio and drops to two samples; and faces inside the edited region
 skip the shading stride, using the box the path tracer has had in the parameter block all along.
-Detection in one frame, 93% of the converged shadow by edit+30. **Still open and written up: light
-through a hole just carved** — `invalidate` drops the bricks, an unbuilt cell is an occluder (D302),
-and only primary rays ask for rebuilds. Read D321 before trying the obvious fix; it was tried.
+Detection in one frame, 93% of the converged shadow by edit+30.
+
+**Still open: light through a hole just carved**, which reads nought until somewhere past edit+200.
+Two hypotheses are already disproved and both are the ones a reasonable person tries first — asking
+the pool for the invalidated bricks (D321, moved nothing, nothing deferred), and the unbuilt-cell
+occluder rule (D302; turning it off for shadow rays leaks the sun through unstreamed walls exactly
+as advertised and *still* does not deliver the beam). The onset instead lands on the 600-frame cold
+window, which points at faces that are visible but sampled too rarely to be kept warm, so they are
+never corrected — only recycled. Read that entry before spending a session on it.
 
 The answer is correct from the first frame, not merely present: at cut+1 the enclosed room reads
 identically to the same camera 120 frames later. Where the answer is not uniformly black, the

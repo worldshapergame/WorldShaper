@@ -844,16 +844,31 @@ grid, still, at 3% tolerance; **speckle is unchanged** at 3.8 / 19.3 / 9.9 enclo
 outdoor, which is the figure that would have moved if the demotion were firing on ordinary faces;
 450 tests pass; and the R3e reveal case still reads 0% on the fallback at cut+1.
 
-**Open, and measured rather than suspected: light through a hole the player has just carved.**
-Carving a skylight over the enclosed camera reaches a mean visibility of 0.0457 by frame 300 against
-a converged 0.0604, and reads **nought** for the first 150. Neither D319 nor D320 touches it, because
-the faces are not the problem: `invalidate` *drops* the carved bricks from the node pool, an
-unbuilt cell is an OCCLUDER to a shadow ray by D302, and the pool rebuilds only what feedback asks
-for — which comes from primary rays, which need not go anywhere near a hole in a roof. So the hole
-stays opaque to the sun while being perfectly transparent to the eye. D321 records the obvious fix
-failing; the real one is likely to be that **a shadow ray meeting an unbuilt cell inside a recently
-edited region should report it**, which is the one place the "shadow rays never drag streaming" rule
-(D292) has a reason to bend.
+**Open: light through a hole the player has just carved.** Carving a skylight over the enclosed
+camera reads a mean visibility of **nought** until somewhere between edit+200 and edit+300, then
+0.0457 against a converged 0.0604. Neither D319 nor D320 moves it, and the placement case above —
+same build, same rules — is fixed, so whatever this is, it is not the accumulation and not the
+shading queue.
+
+**Two hypotheses tried and disproved, which is most of what is known:**
+
+| Tried | Result |
+|---|---|
+| The pool is slow to rebuild the carved bricks, so ask for them outright (D321) | No number moved in 300 frames. The pool's counters read **nothing deferred, nothing starved** |
+| An unbuilt cell is an occluder (D302), so the hole is opaque to the sun while transparent to the eye | Turning `occlude_unknown` off for shadow rays as a diagnostic makes the sun leak through unstreamed walls exactly as D302 says (0.0000 → 0.0092 *before* any edit) and **still does not deliver the beam** — 0.0094 at edit+1, 0.0109 at edit+10 |
+
+**What the timing points at instead.** The onset lands on the 600-frame cold window: faces claimed
+in the opening frames of the run reach that age around frame 650, and `evict_cold` recycles the ones
+nothing has re-requested. A recycled face is claimed fresh and measures the world as it now is. That
+would mean the affected faces are **visible but too rarely sampled by the request lattice to be kept
+warm**, so they are never corrected — only replaced. If that is right, the fault is not in shading
+at all, and the fix is on the request side rather than the accumulation side. It is a hypothesis: it
+has a testable prediction — shortening `cold_frames` should move the onset by the same amount — and
+that test has not been run.
+
+Recorded this way deliberately. The two disproofs above are worth more than the guess: both were
+things a reasonable person would try first, and one of them was written into this document as the
+likely cause before it was measured and turned out to be wrong.
 
 ## Open items carried forward
 
