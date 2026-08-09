@@ -182,12 +182,13 @@ function Get-RunningLoop {
 # compares as not-zero, which failed every run however well it had gone.
 # ---- who is signed in, and how it will be billed --------------------------
 #
-# Claude Code and the `claude` command share one credential store under
-# ~/.claude, so this reports whichever account the desktop app is signed in as.
-# That is what makes "always use the account I am logged in on" checkable rather
-# than hoped for: the loop reads it at the start, holds it, and checks it again
-# before every iteration. If it ever changes underneath, the loop stops rather
-# than quietly spending the wrong subscription.
+# This is the `claude` command's OWN sign-in, and it is not necessarily the
+# account showing in whatever Claude app is open beside it -- checked by hand on
+# one machine, the two held different accounts and nothing anywhere said so. It
+# is the only one that decides what gets spent, which is why the loop asks about
+# it before it asks anything else, holds the answer, and checks it again before
+# every iteration. If it changes underneath, the loop stops rather than quietly
+# spending a different subscription.
 function Get-ClaudeAccount($claudePath) {
     $raw = ""
     try { $raw = & $claudePath auth status --json 2>&1 | Out-String } catch { }
@@ -562,27 +563,14 @@ if (git status --porcelain) {
     if ((Read-Host "Continue anyway? (y/N)") -notmatch '^[Yy]') { exit 0 }
 }
 
-if (-not $opt.Goal) {
-    Write-Banner "Overnight loop"
-    Write-Host "Project: $root"
-    Write-Host "Branch:  $branch"
-    Write-Host "Journal: $journal"
-    Write-Host "Logs:    $logDir"
-    Write-Host ""
-    Write-Host "It will build, test, document, commit and push on every iteration, without" -ForegroundColor Yellow
-    Write-Host "asking. To stop it cleanly, run this file again and say yes to wrapping up." -ForegroundColor Yellow
-    Write-Host ""
-    $opt.Goal = Read-Host "What should it work on"
-}
-if (-not $opt.Goal) { Write-Host "Nothing to do."; exit 0 }
-
-if (-not $opt.Agents) {
-    Write-Host ""
-    $opt.Agents = Read-Host "Let it use subagents and workflows? (y/N)"
-}
-$agentsRule = if ($opt.Agents -match '^[Yy]') { $agentsYes } else { $agentsNo }
-Write-Host ("Subagents: " + $(if ($opt.Agents -match '^[Yy]') { "allowed" } else { "off" })) -ForegroundColor DarkGray
-
+Write-Banner "Overnight loop"
+Write-Host "Project: $root"
+Write-Host "Branch:  $branch"
+Write-Host "Journal: $journal"
+Write-Host "Logs:    $logDir"
+Write-Host ""
+Write-Host "It will build, test, document, commit and push on every iteration, without" -ForegroundColor Yellow
+Write-Host "asking. To stop it cleanly, run this file again and say yes to wrapping up." -ForegroundColor Yellow
 # ---- which account, before anything else ----------------------------------
 #
 # Asked rather than assumed, and asked FIRST, because everything after it spends
@@ -672,6 +660,19 @@ $opt.Account = $account.email
 Write-Host ""
 Write-Host ("Account:   " + $account.email + "  (" + $account.subscription + " subscription)") -ForegroundColor Green
 Write-Host  "Billing:   subscription usage, not API credit" -ForegroundColor Green
+if (-not $opt.Goal) {
+    Write-Host ""
+    $opt.Goal = Read-Host "What should it work on"
+}
+if (-not $opt.Goal) { Write-Host "Nothing to do."; exit 0 }
+
+if (-not $opt.Agents) {
+    Write-Host ""
+    $opt.Agents = Read-Host "Let it use subagents and workflows? (y/N)"
+}
+$agentsRule = if ($opt.Agents -match '^[Yy]') { $agentsYes } else { $agentsNo }
+Write-Host ("Subagents: " + $(if ($opt.Agents -match '^[Yy]') { "allowed" } else { "off" })) -ForegroundColor DarkGray
+
 
 Write-Host ""
 Write-Host "Checking Claude answers before starting..." -ForegroundColor DarkGray
