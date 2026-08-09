@@ -97,7 +97,8 @@ add_library(ws_world STATIC
     src/world/thumbnail.cpp
     src/world/thumb_cache.cpp
     src/world/summary_tree.cpp
-    src/world/node_pool.cpp)
+    src/world/node_pool.cpp
+    src/world/face_store.cpp)
 target_include_directories(ws_world PUBLIC src)
 target_link_libraries(ws_world PUBLIC ws_core)
 
@@ -291,7 +292,8 @@ add_executable(ws_tests
     tests/test_light_list.cpp
     tests/test_pass_ledger.cpp
     tests/test_node_pool.cpp
-    tests/test_world_cache.cpp)
+    tests/test_world_cache.cpp
+    tests/test_face_store.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_doctest)
 # Where the assets a test reads actually live. A test that walks up from the working directory
 # passes when it is run from the build folder and fails from anywhere else, which makes it a test
