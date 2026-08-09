@@ -22,6 +22,12 @@ void FaceStore::create(const FaceStoreBudget& budget) {
     // addressing degrades sharply past that, and the table is four bytes an entry against
     // thirty-two for the record it points at, so the headroom is cheap.
     entries_.assign(next_power_of_two(std::max<u32>(budget_.max_faces * 2, 1024)), kNoFace);
+    dirty_faces_.create(budget_.max_faces);
+    dirty_entries_.create(entries_.size());
+    // The one array whose empty value is not zero: a free bucket is kNoFace, which is all ones,
+    // and a device buffer starts at all zeroes. The node pool learned this the hard way when the
+    // audit named byte 0 of its entry table (D236).
+    dirty_entries_.mark_range(0, entries_.size());
     free_faces_.clear();
     next_free_ = 0;
     out_of_room_ = false;
@@ -88,6 +94,7 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame) {
     faces_[slot].packed = pack_face(key.level, key.face, 0);
     faces_[slot].bins = kNoOffset;
     last_read_[slot] = static_cast<u32>(frame);
+    dirty_faces_.mark(slot);
 
     const usize capacity = entries_.size();
     const usize bucket = bucket_of(key);
@@ -97,6 +104,7 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame) {
         // is not in the table, so nothing behind it is this key.
         if (cell == kNoFace || cell == kFaceTombstone) {
             cell = slot;
+            dirty_entries_.mark((bucket + probe) & (capacity - 1));
             return slot;
         }
     }
@@ -117,6 +125,7 @@ void FaceStore::write(u32 slot, u32 irradiance, u32 visibility, u32 samples, u32
     GpuFace& face = faces_[slot];
     face.irradiance = irradiance;
     face.counters = pack_counters(samples, visibility, variance);
+    dirty_faces_.mark(slot);
 }
 
 void FaceStore::evict_cold(u64 frame) {
@@ -140,10 +149,12 @@ void FaceStore::evict_cold(u64 frame) {
                 // table and can no longer be found, which is a stale-but-unreachable entry and
                 // the worst of both.
                 cell = kFaceTombstone;
+                dirty_entries_.mark((bucket + probe) & (capacity - 1));
                 break;
             }
         }
         faces_[slot] = GpuFace{};
+        dirty_faces_.mark(slot);
         last_read_[slot] = now;
         free_faces_.push_back(slot);
         ++evictions_;

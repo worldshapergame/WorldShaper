@@ -40,6 +40,7 @@
 #include <vector>
 
 #include "core/block_pool.hpp"
+#include "core/dirty_set.hpp"
 #include "core/hash.hpp"
 #include "core/types.hpp"
 
@@ -176,6 +177,17 @@ public:
     u32 watermark() const { return next_free_; }
     bool out_of_room() const { return out_of_room_; }
 
+    // What changed since the last upload, so the card is sent that rather than every used byte.
+    // The same arrangement as the node pool's, and for the reason D235 measured there: copying
+    // whole prefixes is free while a structure is quiet and ten megabytes a frame while it is not.
+    const DirtySet& dirty_faces() const { return dirty_faces_; }
+    const DirtySet& dirty_entries() const { return dirty_entries_; }
+    bool nothing_dirty() const { return dirty_faces_.empty() && dirty_entries_.empty(); }
+    void clear_dirty() {
+        dirty_faces_.clear();
+        dirty_entries_.clear();
+    }
+
     FaceStoreStats stats() const;
     bool validate() const;
 
@@ -189,6 +201,11 @@ private:
     std::vector<u32> free_faces_;
     u32 next_free_ = 0;
     bool out_of_room_ = false;
+
+    // Marked at every write into the two arrays above. A missed mark is a stale byte on the card
+    // and a wrong picture, which is what the audit in gpu/face_buffers.cpp exists to name.
+    DirtySet dirty_faces_;
+    DirtySet dirty_entries_;
 
     u64 claims_ = 0;
     u64 hits_ = 0;

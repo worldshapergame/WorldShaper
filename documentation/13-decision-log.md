@@ -607,6 +607,14 @@ sharpens region by region and pastes on the main thread for up to 17.4 s at a ti
 | D278 | **R3 is done before R1e, reversing the plan's order** | — | R1e requires moving `pathtrace.comp` from `world.glsl` to `node.glsl`, which §8 calls "the bulk of the work" — and §9 **deletes** `pathtrace.comp` at R3 and replaces it with the face pass. Porting it means building something to throw away one stage later, and doing R3 first leaves R1e with nothing to port. What it costs is the chunk system staying in the build a while longer, which since D276 is 226 ms of load and about 12 ms of CPU a frame rather than 1.7 s and the same 12. That is a much smaller price than the throwaway |
 | D279 | **`12-plain-english.md` covers the rewrite** | — | It is the one document written for the person the work is for, who does not read code, and it had nothing about any of this — while the decision log had seventy entries. Owed since the handover was written and noted as owed each time, which is not the same as writing it |
 
+## The renderer rewrite — R3, the face store
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D280 | **The dirty-range map is shared rather than copied** | — | `DirtySet` moved to `core/dirty_set.hpp` when the face store became the second structure to mirror a CPU array onto the card. A coalescing rule written twice is a coalescing rule that drifts, and a dirty map that disagrees with itself is a stale byte on the GPU — the one class of fault that shows up as a wrong picture rather than an error |
+| D281 | **The face store gets the node pool's audit, before any shader reads it** | D236, D265 | Same shape throughout: two device buffers mirroring two CPU arrays, dirty ranges rather than whole prefixes, and a read-back that names the first byte that disagrees. On the node pool that check found three stale-byte bugs in one sitting and each was named to the byte. It also waits for the frame *before* touching the staging ring rather than only after submitting, which is the fault D265 records — an audit that causes what it exists to report |
+| D282 | **An evicted bucket is a tombstone, and a tombstone is not a slot** | bug | Emptying a bucket mid-probe cuts every face behind it out of its own sequence: they are still in the table, can no longer be found, and nothing anywhere says so. So eviction leaves a marker that ends nothing and is reusable on the way past. `find` stopped only on the *empty* marker, read the tombstone as a slot number, and indexed `faces_[0xFFFFFFFE]` — SIGSEGV on the first run of the test written for that case, which is the headless-first rule earning its keep before a shader existed to blame |
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

@@ -149,6 +149,7 @@ add_library(ws_gpu STATIC
     src/gpu/profiler.cpp
     src/gpu/vma_impl.cpp
     src/gpu/node_buffers.cpp
+    src/gpu/face_buffers.cpp
     src/gpu/world_buffers.cpp
     src/gpu/screenshot.cpp
     src/gpu/feedback.cpp)
