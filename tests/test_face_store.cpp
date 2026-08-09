@@ -227,6 +227,40 @@ TEST_CASE("evicting one face does not hide the ones behind it") {
 
 // A dropped slot comes back, and comes back clean: whatever the last face wrote into it must not
 // be readable as the new face's light.
+// `was_new` decides whether the caller claims a stand-in beside this face, and the caller runs
+// sixteen thousand times a frame — so "new" has to mean *this call put it here*, not "a claim
+// happened" and not "the store has one of these". Both of the wrong answers are silent: reporting
+// new on a repeat is the cost the gate exists to avoid, and reporting new on a refusal hangs a
+// stand-in claim off a face that is not in the table at all.
+TEST_CASE("a claim says whether it is what put the face here") {
+    FaceStore store = make_store(4, 600);
+
+    bool was_new = false;
+    REQUIRE(store.claim(FaceKey{1, 2, 3, 0, 4}, 1, &was_new) != kNoFace);
+    CHECK(was_new);
+
+    // The same face again, which is the overwhelming majority of what the marcher reports.
+    was_new = true;
+    REQUIRE(store.claim(FaceKey{1, 2, 3, 0, 4}, 2, &was_new) != kNoFace);
+    CHECK_FALSE(was_new);
+
+    // A different direction on the same node is a different face, and so is a different level.
+    was_new = false;
+    store.claim(FaceKey{1, 2, 3, 0, 5}, 3, &was_new);
+    CHECK(was_new);
+    was_new = false;
+    store.claim(FaceKey{1, 2, 3, 3, 4}, 3, &was_new);
+    CHECK(was_new);
+
+    // And a full table, where nothing was put anywhere. Four faces, four claimed, no cold ones to
+    // take: the answer is kNoFace and it is not new.
+    was_new = false;
+    REQUIRE(store.claim(FaceKey{9, 9, 9, 0, 0}, 4, &was_new) != kNoFace);
+    was_new = true;
+    CHECK(store.claim(FaceKey{8, 8, 8, 0, 0}, 4, &was_new) == kNoFace);
+    CHECK_FALSE(was_new);
+}
+
 TEST_CASE("a reclaimed slot carries nothing of the face before it") {
     FaceStore store = make_store(1024, 4);
     const u32 first = store.claim(FaceKey{3, 3, 3, 3, 0}, 1);

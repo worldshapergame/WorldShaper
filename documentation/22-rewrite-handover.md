@@ -134,7 +134,7 @@ written for the person the work is for, so it is the one to keep current.
 | R1 node pool | XL | a–d, f–i done. **R1e** outstanding, and it is most of what remains of R1 |
 | R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit |
 | R3 the face pass | XL | **a, b done; c half** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun only; lamps, sky and bounce are the rest of R3c. **R3d not started** |
-| R9 the off-screen set | L | **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
+| R9 the off-screen set | L | **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). The rest **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
 | R5 face denoise, composite | M | not started |
 | R6 post | M | not started |
@@ -276,7 +276,18 @@ failure, not a compile error.
    build against *one* scene give 0.481, 0.763, 0.472. The empty-space views inherit the node
    pool's own irreproducibility (D233) through the ray clip, and a single sample on one of them is
    not evidence in either direction. D234.
-10. **When somebody says it is slow, look at their overlay before your grid.** Four exchanges went
+10. **A debug view where two different answers are the same colour will produce a wrong number, and
+    it will be the number you went there to get.** Trap 7, in the instrument rather than in the
+    engine. Debug view 16 painted "no geometry" the same black a fully shadowed face reads as —
+    which is nearly every face indoors — so the first histogram of the R9d change reported the
+    enclosed room as 0.3% surface at frame 40 and only looked wrong because it was absurd. Sky is
+    green there now. D310.
+11. **`Copy-Item` keeps the source's timestamp, so restoring a file can leave a stale `.spv`.**
+    Save-edit-measure-restore is the obvious way to run an A/B on a shader, and the restored file
+    lands with an mtime *older* than the SPIR-V built from the edit, so ninja skips it and the
+    "after" run measures the "before" build. It reads as five frames agreeing to the digit. Touch
+    the file, or restore with `git stash pop`, which stamps it. Trap 2 with a different cause. D311.
+12. **When somebody says it is slow, look at their overlay before your grid.** Four exchanges went
     on quoting settled per-pass means at a report of stalls — and the settled grid discards
     transients *by construction*, since that is what `--settle` is for. The overlay's three numbers
     (GPU 0.92 ms, frame 247.51 ms, 99th 2,234 ms) named the culprit immediately, and it was not the
@@ -402,6 +413,26 @@ shadow rays, so the sun came in through walls that had not finished streaming. T
 the interior mottling, and fixing it took enclosed speckle to **3.8 against 17.5 before shadows
 existed at all**.
 
+### R9d — the shadow that arrives a second late (done, early)
+
+Reported from playing, and worth reading before touching the face store: *"shadows occluded by
+things are not drawn until you actually see them"*. Nothing was wrong with the shadows. A face is
+claimed only when a primary ray lands on it **and** that pixel is one of the one-in-sixty-four the
+request lattice is asking with, so newly revealed geometry waits up to 64 frames for the lattice,
+two for the readback and claim, and four samples to settle — over a second, during which the
+composite has no face and falls back to full sun. Indoors that is the most wrong answer there is.
+
+The fix is the codebase's own doctrine (R2d, *draw the parent while waiting*) applied to light: a
+face with nothing to say reads the face **three levels above it**, which 512 faces share and which
+the lattice therefore cannot miss. Three, not one, because what matters is how many faces share the
+stand-in, not how coarse it is. It is claimed on the CPU by shifting the fine key — no extra
+feedback traffic, and the buffer is the binding constraint — and only when the fine face is new,
+because repeat claims measurably cost and provably buy nothing (D309).
+
+Falling back to full sun, enclosed room, from a cold store: **under 1% at frame 30 rather than frame
+78**, and 2,978 wrong pixels against 283,291 at frame 40. GPU unchanged still and turning, settled
+picture bit-identical, store +3.0%. D308–D311.
+
 **What is left of R3c**: sky, lamps and bounce, all on the same one-invocation-per-face footing.
 **R3d** deletes the per-pixel light path, and carries one debt from here — split `GpuFace` so the
 CPU's half and the card's half are never in one copy, which is what makes bug 5 impossible rather
@@ -468,6 +499,10 @@ Compare the two marchers on one camera:
 **The node pool is what the game launches with** (D224). Add `--chunk-marcher` for the old one;
 `--node-pool` still parses and is now a no-op that says what it means. `--debug-mode 11` writes each pixel's face key as four
 exact bytes; `12`–`15` write one word of the visibility buffer the same way, which is how a
-disagreement gets localised to a field instead of argued about from a screenshot. The node pool's
+disagreement gets localised to a field instead of argued about from a screenshot. **`16` is the sun
+term on its own** and is the instrument for anything about shadows: grey is the visibility fraction,
+**magenta** a face the composite could not find, **blue** one it will not believe yet, **green** no
+geometry. Magenta and blue are the pixels being lit by the fallback, so their share of the surface
+is a number rather than an impression — that is what R9d was measured with. The node pool's
 GPU mirror is checked automatically at the screenshot in `--node-pool` mode and logs either
 `GPU mirror matches` or the first differing byte.

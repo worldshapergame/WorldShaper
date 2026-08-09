@@ -698,6 +698,52 @@ is what that stage is for**, and this is the first measurement that says how muc
 |---|---|---|---|
 | D307 | **A mirror check compares nothing while bytes are still owed to the card** | `--validation` | Both audits waited for the device before reading — D265's fix, for work already submitted — and neither asked whether anything was still *queued*. An upload too large for its staging ring in one frame leaves its ranges marked and sends them on the next, deliberately and documented; comparing during that backlog reports a host that has moved on against a card that has not been told yet, and calls it a stale byte. It presented exactly like a real fault: **intermittent, three runs in five, and only on the larger tree** — because a large tree is what produces uploads that do not fit. Caught firing on the frame it happens: at frame 25, mid-stream, *"mirror not compared: 6923 faces and 6923 buckets still owed to the card"*. Five clean runs after, including one with 364,687 evictions in flight. The failure mode this avoids is the one both audits' own comments name — a check that cries wolf until somebody turns it off, on the check that has caught four real stale-byte faults |
 
+## The renderer rewrite — the shadow that arrives a second late
+
+Reported from playing: *"shadows that are occluded by things are not drawn until you actually see
+them, so when you move the camera indoors there is no shadow behind things for some time."* It is
+not a bug in the shadows. It is the discovery latency of the face store, seen through a fallback
+that is wrong in exactly the place it is most visible.
+
+**The chain, in frames.** A face is claimed only when a primary ray lands on it and that pixel is
+one of the one-in-sixty-four the request lattice is asking with. So a surface that was hidden and is
+now visible waits for the lattice phase to reach its own pixel (up to 64 frames), then two frames
+for the feedback readback and the claim, then four samples before the composite will read it —
+**about seventy frames, over a second**. Until then the composite has no face and falls back to
+`sun_visible = 1.0`. Indoors, where D302 measured 93,741 of 93,745 faces fully shadowed, full sun is
+the most wrong answer available, and it is applied to precisely the surfaces the player just
+revealed.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D308 | **A face with no light of its own reads the coarse face standing over it** | user report | R2d's rule — *draw the parent while waiting* — applied to light instead of colour, which is what R9d always said and what the plan now records the working form of. The stand-in is **three levels up, not one**: the quantity that matters is not how much coarser it is but how many faces share it. Three levels is 512 fine faces to one and about sixty-four times the screen area, so the request lattice that takes 64 frames to land on one pixel **cannot miss the stand-in at all** — it is claimed the frame a region appears and settled a few frames later. One level up is 4:1 and would wait nearly as long as the thing it stands in for. Three is also the brick, which is what every face in the store was before D298, so the picture has already been seen at this granularity and it read as blocky rather than wrong. Both the fine face and the stand-in are gated on being *answerable* — settled, not merely present — since the composite treats "missing" and "unshaded" identically |
+| D309 | **The stand-in is derived from the request, not reported beside it, and claimed only when the face under it is new** | measurement | The marcher could report both keys. It must not: an ancestor key is a *shift* of its descendant's, so sending it is bandwidth spent on something computable, and it would double face traffic through the one buffer that is already the binding constraint — 57,600 face samples a frame at 1440p against a capacity of 131,072 shared with the node reports. The CPU shifts the key instead, at no traffic at all. Then the same argument again one level down: claiming the stand-in on *every* report is 16,000 extra probes a frame that change nothing, measured at **+0.24 ms of CPU while turning**, and the case they would serve cannot occur — a stand-in is wanted for geometry the store has not seen, and geometry the store has not seen has no repeat reports to hang a claim off. Gated on `FaceStore::claim`'s new `was_new`, which costs nothing because `claim` has already done that probe. **The convergence curve is identical with the gate and without it**, which is the measurement that says the repeats bought nothing |
+| D310 | **Debug view 16 painted "no geometry" the same black as "fully shadowed"** | measurement | Trap 7 — *"nothing here" and "I could not fit it" must never be the same answer* — in the one place built to answer questions, and it produced a wrong number immediately: the first histogram of this change read the enclosed room as **0.3% surface at frame 40**, because by then nearly every pixel had settled at visibility 0 and had been counted as sky. Sky is green there now. The view is otherwise unchanged: grey is the visibility fraction, magenta a face the composite could not find, blue one it will not believe yet |
+| D311 | **`Copy-Item` preserves the source's timestamp, so restoring a shader leaves a stale `.spv`** | measurement | The A/B was run by editing a shader, measuring, and copying the saved original back. The restored file carried an mtime *older* than the SPIR-V built from the edited one, ninja called it up to date, and the "after" run measured the "before" build — **identical to the digit at five frames**, which is what gave it away. Trap 2 with a different cause and the same shape: a stale `.spv` behind a build that reports success. Touch a restored file, or restore it with `git stash pop`, which stamps it |
+
+**What it measures.** The instrument is debug view 16 with the fix in D310, histogrammed over the
+enclosed camera from a cold face store — which is the same state as geometry that has just been
+revealed, since neither has ever been claimed. Share of surface pixels falling back to full sun,
+1280×800, quality 7, one scene (content `766f2fd63f1a01c4`) across every run:
+
+| frame | 15 | 20 | 25 | 30 | 40 | 50 | 60 | 80 |
+|---|---|---|---|---|---|---|---|---|
+| before | 98.9% | 81.9% | 54.2% | 41.0% | 27.7% | 14.0% | 5.2% | 0.1% |
+| **with the stand-in** | 91.9% | **45.2%** | **11.4%** | **0.7%** | **0.3%** | **0.2%** | **0.1%** | 0.0% |
+
+Under one per cent at frame 30 rather than frame 78, and at frame 40 it is **2,978 wrong pixels
+against 283,291** — ninety-five times fewer. What is left at frames 15–20 is the store having
+nothing settled at all yet, stand-in or otherwise; nothing can fix that but the four samples.
+
+**What it costs.** Nothing measurable on the GPU, still or moving: three views, deck resolution,
+300 frames, `-Tolerance 0.03` — *nothing regressed*, both from a still camera and turning at 60°/s.
+The settled picture is **bit-identical**, 0 pixels of 1,024,000 — the stand-in is read only while a
+face is unsettled, so once the store has converged this change is not in the frame at all. The
+store grows by the stand-ins themselves: **113,043 faces → 116,389** on the enclosed camera at frame
+200 (+3.0%, 107 KB), of which levels 3–4 hold 4,681 against 1,466 before. CPU while turning is
+inside the harness's own run-to-run spread on that column (0.7 ms between two runs of one build),
+which is why D309's ungated variant needed three runs a side to be seen at all.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

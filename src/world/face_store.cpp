@@ -65,7 +65,8 @@ u32 FaceStore::find(const FaceKey& key) const {
     return kNoFace;
 }
 
-u32 FaceStore::claim(const FaceKey& key, u64 frame) {
+u32 FaceStore::claim(const FaceKey& key, u64 frame, bool* was_new) {
+    if (was_new != nullptr) *was_new = false;
     ++claims_;
     const u32 existing = find(key);
     if (existing != kNoFace) {
@@ -88,6 +89,10 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame) {
         out_of_room_ = true;
         return kNoFace;
     }
+
+    // After the table has actually found room, so a refused claim reports "not new": the caller's
+    // follow-on work is for a face that is now here, and there is no face here.
+    if (was_new != nullptr) *was_new = true;
 
     faces_[slot] = GpuFace{};
     faces_[slot].x = static_cast<i32>(key.x);

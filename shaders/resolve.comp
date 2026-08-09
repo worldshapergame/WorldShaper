@@ -339,7 +339,12 @@ void main() {
         // find, and BLUE is one whose face has not been shaded enough times to be believed -- both
         // of those fall back to full sun, so both look like "no shadow here" in the real picture
         // and neither is distinguishable from a face that is genuinely lit.
-        colour = vec3(0.0);
+        //
+        // GREEN is no geometry, and it is green rather than black because black is what a fully
+        // shadowed face reads as. Indoors that is nearly every face, so "the sun cannot reach here"
+        // and "there is nothing here" were the same pixel -- and counting either of them off this
+        // view counted both. Trap 7 in the handover, in the one place built to answer questions.
+        colour = vec3(0.0, 0.35, 0.0);
         if (hit) {
             uint slot = imageLoad(in_face, pixel).x;
             if (slot >= faces.items.length()) {

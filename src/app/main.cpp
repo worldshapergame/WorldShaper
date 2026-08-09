@@ -2641,9 +2641,39 @@ void Application::stream(f64 seconds) {
                 const u32 level = static_cast<u32>(entry.level & 0xFF);
                 const u32 face = static_cast<u32>((entry.level >> 8) & 0xFF);
                 if (level > kMaxNodeLevel || face >= kFaceCount) continue;
-                face_store_.claim(FaceKey{entry.x, entry.y, entry.z, level, face},
-                                  frame_counter_);
+                bool first_time = false;
+                face_store_.claim(FaceKey{entry.x, entry.y, entry.z, level, face}, frame_counter_,
+                                  &first_time);
                 ++faces_seen;
+
+                // And the coarse face standing over it, which the marcher reads while this one is
+                // still being found. Derived here rather than reported, because an ancestor key is
+                // a shift of its descendant's and a coordinate computable from another coordinate
+                // is not information: sending it would double the face traffic through a buffer
+                // that is already the binding constraint, and buy nothing.
+                //
+                // What it buys instead is the wait. A face is claimed only when a primary ray lands
+                // on it, at one pixel in sixty-four, so a surface that was hidden behind something
+                // and is now visible has no light of its own for about a second — and the composite
+                // falls back to full sun on it, which indoors is the most wrong answer available.
+                // Five hundred and twelve fine faces share one stand-in, so the stand-in is claimed
+                // the frame the region appears and settled a few frames later, and what a player
+                // sees is a blocky shadow sharpening rather than no shadow arriving. R9d.
+                //
+                // Only when the face under it is NEW, which is the whole reason `was_new` exists.
+                // Doing it on every report is 16,000 extra probes a frame that change nothing —
+                // measured at 0.24 ms of CPU while turning — and the case they would serve cannot
+                // occur: a stand-in is wanted for geometry the store has not seen, and geometry the
+                // store has not seen has no repeat reports to hang the claim off. What the repeats
+                // would buy is keeping a stand-in warm past its cold window while its children stay
+                // live, and a stand-in whose children are all live is a stand-in nothing reads.
+                const u32 coarse_level = level + kFaceAncestorStep;
+                if (first_time && coarse_level <= kMaxNodeLevel) {
+                    face_store_.claim(FaceKey{entry.x >> kFaceAncestorStep,
+                                              entry.y >> kFaceAncestorStep,
+                                              entry.z >> kFaceAncestorStep, coarse_level, face},
+                                      frame_counter_);
+                }
                 continue;
             }
 

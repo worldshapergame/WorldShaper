@@ -429,17 +429,28 @@ going.
   actually implemented; now it is.
 - Loading is about four times quicker. Most of a load was building the old chunk system that
   nothing draws from any more.
+- **The fast renderer has real sun shadows now**, which it never had — worked out per cube face
+  rather than per pixel, which is the first piece of the lighting rewrite actually in your hands.
+- **Shadows no longer arrive a second late.** You reported that when you moved the camera indoors,
+  things had no shadow behind them for a while and then filled in. Here is what was happening: a
+  surface only gets a shadow worked out once a ray from your eye lands on it, and to keep that cheap
+  only one pixel in sixty-four asks per frame. Anything that was hidden and then revealed had to
+  wait its turn — about a second. Now a surface with no shadow of its own borrows the shadow of a
+  bigger, blockier surface covering it, which 512 small ones share, so it exists almost immediately.
+  You get a chunky shadow at once that sharpens into the real one over the next half second, instead
+  of no shadow that appears. It costs nothing measurable and the final picture is identical.
 
 ### What's next, and what it's for
 
-The path tracer — the pretty, slow, accurate lighting on F4 — is the big one and hasn't been
-started. Right now it works out lighting **for every pixel on your screen**, which is why it costs
-more the bigger your window is. The rewrite moves that onto the *surfaces themselves*: light is
-worked out once per cube face, and pixels just look up the answer. A face doesn't care how many
-pixels are looking at it, so the cost stops growing with resolution.
+The path tracer — the pretty, slow, accurate lighting on F4 — is the big one and is **under way**.
+It works out lighting **for every pixel on your screen**, which is why it costs more the bigger your
+window is. The rewrite moves that onto the *surfaces themselves*: light is worked out once per cube
+face, and pixels just look up the answer. A face doesn't care how many pixels are looking at it, so
+the cost stops growing with resolution.
 
-That's the change that's supposed to make it fast enough to be the normal renderer rather than a
-slideshow, and it's what I'm starting now.
+Sunlight has made that move already — that's the shadows above. Sky light, lamps and bounced light
+are next, on the same footing, and after that the old per-pixel lighting comes out entirely. That's
+the change that's supposed to make it fast enough to be the normal renderer rather than a slideshow.
 
 ## How we'll work
 

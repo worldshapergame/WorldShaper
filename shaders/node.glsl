@@ -196,6 +196,22 @@ uint face_lit_of(uint counters) { return (counters >> 16) & 0xFFFFu; }
 const uint kFaceSettled = 4u;    // samples before the light is worth reading
 const uint kFaceWindow = 256u;   // where both counts halve, so the sun may move
 
+// How far above a face its STAND-IN sits: the coarse face the composite reads while the fine one
+// is still being discovered. Must match kFaceAncestorStep in src/world/face_store.hpp, which is
+// where the stand-in is actually claimed.
+//
+// Three levels, because the number that matters is how many fine faces share one. Eight times
+// coarser on each axis is five hundred and twelve to one, so a stand-in is claimed by the first of
+// five hundred and twelve pixels to ask, and covers about sixty-four times the screen area of the
+// face under it -- which is the whole mechanism: the fine face waits for a one-in-sixty-four
+// sampling lattice to reach its own pixel, and the stand-in over it cannot be missed by that
+// lattice at all. One level up would be four to one and would wait nearly as long as the face it
+// is standing in for.
+//
+// Three is also the brick, which is what every face in the store was before D298, so the picture
+// has already been seen at this granularity: it read as blocky, not as wrong.
+const int kFaceAncestorStep = 3;
+
 // One more ray into a face's two counts. Halving at the window keeps the ratio exact -- both
 // counts are integers and the halving is a shift -- while stopping a face that has watched the
 // sun for an hour from needing another hour to notice it has set.
@@ -615,6 +631,13 @@ void node_face_hit(inout NodeHit result, bool report, ivec3 voxel, int level, iv
     result.face_level = uint(level);
     result.face_dir = face;
 
+    // One entry, still: the stand-in three levels up is a SHIFT of this key, so the CPU derives it
+    // from this request rather than being told it twice.
+    //
+    // Sending it would double the face traffic in a buffer that is already the binding constraint
+    // -- 57,600 face samples a frame at 1440p against a capacity of 131,072 shared with the node
+    // reports -- and buying nothing with it, because a coordinate that can be computed from another
+    // coordinate is not information. See the claim in src/app/main.cpp.
     if (!report) return;
     uint index = atomicAdd(feedback.count, 1u);
     if (index < push.resolution.w) {

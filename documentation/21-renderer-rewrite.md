@@ -509,6 +509,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R3 | d. delete the per-pixel light path | not started. Carries one debt from R3b: split `GpuFace` so the CPU's half and the card's half are never in one copy |
 | R3 | faces are voxels | **done** — D298–D303. Every face in the store was a brick, so the finest shadow was 25 cm; now 416,261 level 0, 59,758 level 1, 1,603 level 3 on the close camera. Two collisions on zero and a shell that was transparent to occlusion came with it. Speckle enclosed 17.5 (no shadows) → 3.8 |
 | R3 | the store recycles | **fixed** — D304–D306. `evict_cold` was written, tested and never called, so the store filled and then refused every face after it: the shadowed set froze and everything new was lit by the fallback. A slice a frame now, with the threshold halving when the table is full |
+| R9 | d. coarse light for a face that has none | **done, early** — D308–D311. A face with no light of its own reads the face three levels above it, which 512 faces share and the request lattice cannot miss. Falling back to full sun: under 1% of the enclosed room at frame 30 against frame 78, and 2,978 wrong pixels against 283,291 at frame 40. GPU unchanged still and moving, settled picture bit-identical, store +3.0% |
 | R9 | the off-screen set | **planned, not started** — §8's new stage. The face store holds what the camera can see, so light is a screen-space set in world-space clothing. Prerequisite for R4c/R4d being worth measuring |
 | R9 | light from what is not loaded | **planned, not started** — R9f–R9h. Light folds up the tree as colour does and outlives its children, so eviction stops being a lighting decision; the emitter list persists per region and loads with the index rather than the voxels; no light path may cause streaming |
 | R4–R8 | | not started |
@@ -856,11 +857,24 @@ margin, at a coarser request lattice than the on-screen one: geometry arrives al
 cost is a fraction of a pass that is already sparse. Margin from the camera's angular velocity, so
 standing still costs nothing.
 
-**R9d — coarse light for a face that has none.** A face that has just entered any of these sets has
-zero samples, and the composite falls back to full sun on it, which reads as a flash. Its parent —
-the face one level up at the same direction, which is 1/4 as numerous and converged long before —
-is the right thing to read. This is R2d's rule applied to light rather than to colour, and R5b
-already calls for parent seeding at claim time; R9 is what makes the parent reliably present.
+**R9d — coarse light for a face that has none. Done, early — D308–D309.** A face that has just
+entered any of these sets has zero samples, and the composite falls back to full sun on it, which
+reads as a flash indoors and as no shadow behind things after the camera moves. This is R2d's rule
+applied to light rather than to colour, and R5b already calls for parent seeding at claim time; R9
+is what makes the parent reliably present.
+
+Built ahead of the rest of R9, because it does not need the rest of R9: the face the camera can see
+is already in the store, and the only thing missing was something for it to read while it waits.
+**Three levels up rather than one**, which is the one thing this paragraph had wrong — what matters
+is not how much coarser the stand-in is but how many faces share it, and 512:1 is what makes it
+immune to the request lattice that the fine face waits on. Claimed CPU-side by shifting the fine
+key, so it costs no feedback traffic, and only when the fine face is new, so it costs no repeat
+probes. Measured: under 1% of surface falling back at frame 30 rather than frame 78, GPU unchanged,
+settled picture bit-identical.
+
+What is still R9's to do here is the other half — seeding a new face's *counters* from its stand-in
+at claim time, so it starts at a plausible answer rather than at zero samples. That needs R9's sets
+to decide which faces are worth seeding and is where R5b's parent seeding lands.
 
 **R9e — a debug view for the set itself.** Which class each visible face belongs to, and how many
 faces each class holds. Without it "the reflection is dark" and "the reflection is not in the set"

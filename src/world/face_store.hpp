@@ -156,6 +156,18 @@ inline constexpr u32 kFaceSettled = 4;
 // the sun moving within a second or so at sixty frames.
 inline constexpr u32 kFaceWindow = 256;
 
+// How far above a face its STAND-IN sits: the coarse face the composite reads while the fine one
+// is still being discovered. Must match kFaceAncestorStep in shaders/node.glsl, which is where the
+// stand-in is read; it is claimed in src/app/main.cpp, from the fine request rather than from one
+// of its own, because an ancestor key is a shift of its descendant's.
+//
+// Three levels is five hundred and twelve fine faces to one stand-in, and about sixty-four times
+// the screen area — which is the point. A fine face waits for the one-in-sixty-four request lattice
+// to land on its own pixel; a stand-in is claimed by the first of five hundred and twelve pixels to
+// ask, so it cannot be missed by that lattice and is settled while its children are still being
+// found. One level up would be four to one and would wait nearly as long as what it stands in for.
+inline constexpr u32 kFaceAncestorStep = 3;
+
 constexpr u32 face_samples(const GpuFace& f) { return f.counters & 0xFFFFu; }
 constexpr u32 face_lit(const GpuFace& f) { return (f.counters >> 16) & 0xFFFFu; }
 constexpr f32 face_visibility(const GpuFace& f) {
@@ -214,7 +226,13 @@ public:
     // The slot for a face, claiming one if it is not there. kNoFace only when the table is full,
     // which is a fact about this store and never about the world -- the same distinction
     // `out_of_room_` draws in the node pool, and for the same reason.
-    u32 claim(const FaceKey& key, u64 frame);
+    //
+    // `was_new` says whether this call is what put the face here, which the caller needs to avoid
+    // doing follow-on work for a face it has already done it for: the overwhelming majority of
+    // claims are repeats -- the same surfaces reported by the same lattice frame after frame -- and
+    // the stand-in claim hanging off this one is only worth anything the first time. Asking the
+    // store instead of asking `find` first is the point: `claim` has already done that probe.
+    u32 claim(const FaceKey& key, u64 frame, bool* was_new = nullptr);
 
     // The slot for a face, or kNoFace. Never claims. This is what the composite does.
     u32 find(const FaceKey& key) const;
