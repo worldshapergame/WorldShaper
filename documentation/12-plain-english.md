@@ -373,6 +373,20 @@ The fix: the detail level still decides the **colour** — a distant pixel gets 
 
 I was worried that would cost speed. It doesn't — the data's already been fetched, so it's a few more steps through memory the game is holding anyway. Before: 1,722 wrong pixels, 1.929 ms a frame. After: 11 wrong pixels, 1.886 ms. Slightly faster, if anything, and that difference is just noise.
 
+## Why the building was rebuilt from nothing every single time you started the game
+
+The building isn't stored anywhere as a building. It's a recipe, and starting the game means cooking it: about two hundred million questions asked of a mathematical description, answered into a hundred and twenty-five million cubes. That takes a couple of minutes, so the answer is meant to be kept in a file beside the recipe, and every launch after the first is meant to read it back in a second.
+
+It was never once kept. Not because the saving was broken — because of *when* it was told to save.
+
+The building doesn't come out sharp in one go. A rough version appears immediately so there's something to look at, and then it's re-done properly one twelve-metre box at a time, nearest and most visible first, while you're standing there. The file was written when the *last* box finished. And the last box never finishes: a box behind a wall is deliberately skipped, because sharpening a room nobody can see is time taken away from the wall in front of you. So from any one spot the game gets to fourteen boxes of eighteen, runs out of anything worth doing, and stops — four short, for ever, and the file was never written. Two minutes, every launch, for a result that was already sitting in memory.
+
+The fix is to write it when it *stops* rather than when it *finishes*, and to write down which boxes are sharp so far. Then a later run reads that back, sees which four are still rough, and if you happen to be standing somewhere they're visible from, it does those and saves again. The building finishes itself across several sessions instead of never.
+
+Measured on the spot the game starts you in: the first run still takes 133 seconds. Every run after it takes **6.6 seconds**. Walk somewhere else once and the remaining four boxes get done, after which every launch loads the whole finished building in about five seconds.
+
+What this does **not** fix is the stutter during that first build. Each box, when it's ready, gets stamped into the world in one uninterrupted go, and the big ones take up to seventeen seconds with everything else frozen. That's the freezing you reported, it's the next thing on the list, and the answer is to stamp it in slices across many frames instead of all at once. This change just means you only pay it once.
+
 ## How we'll work
 
 - I write all the code. You never open a code file.

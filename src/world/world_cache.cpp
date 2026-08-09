@@ -8,6 +8,7 @@
 #include "core/hash.hpp"
 #include "core/jobs.hpp"
 #include "core/log.hpp"
+#include "core/time.hpp"
 #include "world/brick.hpp"
 #include "world/ledger.hpp"
 #include "world/property.hpp"
@@ -18,7 +19,9 @@ namespace ws {
 namespace {
 
 constexpr u32 kMagic = 0x57534357u;   // "WSCW"
-constexpr u32 kVersion = 1u;
+// 2 — the sharpened-region list, so a world cached before it finished can be carried on rather
+// than mistaken for a finished one. An older file is rejected by the header check and rebuilt.
+constexpr u32 kVersion = 2u;
 
 // A brick, exactly as it is held. No canonical form, no re-encode: the whole reason this file
 // exists is that it can be read faster than the world can be rebuilt, and a normalisation pass
@@ -168,6 +171,11 @@ u64 world_cache_key(const std::string& source_text, i32 voxels_per_metre, u64 bu
 bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache) {
     if (cache.world == nullptr || cache.types == nullptr) return false;
 
+    // Timed, and reported, because this now runs while somebody is playing rather than only at
+    // the end of a build. A cost nobody can see is a cost nobody can weigh against the stall it
+    // is meant to be saving.
+    const u64 began = now_ns();
+
     std::vector<u8> out;
     out.reserve(1u << 24);
     put_pod(out, kMagic);
@@ -229,6 +237,15 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
 
     put_pod(out, static_cast<u32>(cache.materials.size()));
     for (VoxelTypeId id : cache.materials) put_pod(out, id);
+
+    // Which boxes of the ladder have been sharpened. See CachedRegion: this is what makes a
+    // half-built world worth keeping instead of a trap.
+    put_pod(out, static_cast<u32>(cache.regions.size()));
+    for (const CachedRegion& region : cache.regions) {
+        for (f64 v : region.low) put_pod(out, v);
+        for (f64 v : region.high) put_pod(out, v);
+        put_pod(out, static_cast<u8>(region.done ? 1u : 0u));
+    }
 
     // The ledger's running totals. Recomputing them means counting every voxel in the world,
     // which is the same order of work the cache exists to skip.
@@ -297,7 +314,8 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
         WS_LOG_WARN("cache", "could not rename '{}' into place", temporary);
         return false;
     }
-    WS_LOG_INFO("cache", "wrote '{}' ({} MB)", path, out.size() / (1024 * 1024));
+    WS_LOG_INFO("cache", "wrote '{}' ({} MB in {:.0f} ms)", path, out.size() / (1024 * 1024),
+                ns_to_ms(now_ns() - began));
     return true;
 }
 
@@ -399,6 +417,19 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
     const u32 material_count = in.pod<u32>();
     cache.materials.clear();
     for (u32 i = 0; i < material_count && in.ok; ++i) cache.materials.push_back(in.pod<u32>());
+
+    const u32 region_count = in.pod<u32>();
+    cache.regions.clear();
+    if (!in.ok) return false;
+    cache.regions.reserve(region_count);
+    for (u32 i = 0; i < region_count && in.ok; ++i) {
+        CachedRegion region;
+        for (f64& v : region.low) v = in.pod<f64>();
+        for (f64& v : region.high) v = in.pod<f64>();
+        region.done = in.pod<u8>() != 0u;
+        cache.regions.push_back(region);
+    }
+    if (!in.ok) return false;
 
     const u32 ledger_count = in.pod<u32>();
     for (u32 i = 0; i < ledger_count && in.ok; ++i) {

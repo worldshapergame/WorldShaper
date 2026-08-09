@@ -857,6 +857,11 @@ private:
     std::vector<RefineRegion> refine_regions_;
     usize refine_region_ = 0;   // the one being sampled right now
     bool refine_wants_compact_ = false;
+    // How many boxes the world on disk already has. The cache is written whenever refinement runs
+    // out of things it can do and this has moved since, which is once per camera rather than once
+    // per box: a six-hundred-megabyte file is not worth rewriting to record one more box, and it
+    // is very much worth rewriting to record the fourteen a camera just paid two minutes for.
+    usize refine_saved_regions_ = 0;
     // No region this camera can improve, which is where a still camera settles. Not "the world is
     // finished" — see the note in start_refinement — but it IS a fixed point, so it is the state a
     // measurement can be taken in and compared against another run.
@@ -871,6 +876,16 @@ private:
     u64 refine_asked_ = 0;
     void start_refinement();
     void pump_refinement();
+    // The ladder's boxes, from the clip's own bounds. One function so the run that builds the
+    // world and the run that loads a half-built one plan the same grid — if they did not, the
+    // flags in the cache would be read against boxes they were never about.
+    void plan_refine_regions(const forge::Script& script);
+    // Pick a half-built world back up: adopt the cache's flags onto the planned grid and leave
+    // the ladder standing if anything is still coarse.
+    void resume_refinement(forge::Script&& script, const WorldCache& cache,
+                           const std::string& cache_path, u64 key, u32 coarse);
+    // Keep what has been sharpened so far, if it is more than the file already holds.
+    void save_refined_world();
 
     LoadHistory load_history_;
     u64 load_began_ns_ = 0;
@@ -1361,7 +1376,19 @@ void Application::draw_loading() {
 // doing: every rung before the last is nearly free next to it, and the player sees the world from
 // the first one.
 void Application::start_refinement() {
-    if (refine_running_ || refine_script_ == nullptr) return;
+    if (refine_running_) return;
+    if (refine_script_ == nullptr) {
+        // There is no ladder at all — the clip was built at its authored detail in one pass, or
+        // the world came back from the cache already finished. Nothing here can be improved, and
+        // that is precisely what settled means.
+        //
+        // It used to return without saying so, and --settle waits on this flag: a run with no
+        // ladder therefore waited for a fixed point that had already happened and never took its
+        // measurement at all. That was reachable before — `--clip-coarse 1 --settle` hangs — and
+        // it is reachable constantly now that a finished world is cached and read back.
+        refine_settled_ = true;
+        return;
+    }
 
     // Nearest first, measured from where the camera is now rather than from where it was when the
     // list was made. Somebody who walks across the building while it sharpens should have the far
@@ -1474,6 +1501,11 @@ void Application::start_refinement() {
 void Application::pump_refinement() {
     if (!refine_running_) {
         start_refinement();
+        // Refinement has run out of things this camera can improve, and — because this branch is
+        // only reached with no box in flight — the last one has landed. That is the moment the
+        // world on disk can be brought up to date, and it is the only moment when doing so cannot
+        // catch the world half-pasted.
+        if (!refine_running_) save_refined_world();
         return;
     }
     if (!refine_ready_.load(std::memory_order_acquire)) return;
@@ -1557,15 +1589,8 @@ void Application::pump_refinement() {
         const WorldStats now = world_.stats();
         WS_LOG_INFO("clip", "world fully sharpened: {} chunks, {} solid voxels", now.chunks,
                     now.solid_voxels);
+        save_refined_world();
         if (!refine_cache_path_.empty()) {
-            WorldCache cache;
-            cache.tags = &tags_;
-            cache.properties = &properties_;
-            cache.types = &types_;
-            cache.world = &world_;
-            cache.ledger = &ledger_;
-            cache.materials = materials_;
-            write_world_cache(refine_cache_path_, refine_cache_key_, cache);
             WS_LOG_INFO("clip", "kept the finished world; the next launch reads it back");
             refine_cache_path_.clear();
         }
@@ -1575,6 +1600,201 @@ void Application::pump_refinement() {
     }
 
     start_refinement();
+}
+
+// What the world on disk is worth, and when it is worth writing.
+//
+// It used to be written only when the LAST box landed, and the last box never lands: a box behind
+// a wall is skipped by the occlusion test in start_refinement and stays coarse for as long as the
+// camera stands where it does. The facility settles at fourteen boxes of eighteen from its own
+// default camera, so the cache was never written once, and every launch — and every one of the
+// forty-two runs of the measurement grid — rebuilt a hundred and twenty-five million voxels from
+// the field. Two minutes, every time, for a file that was already sitting there in every sense
+// except that nobody had saved it.
+//
+// So it is written at the fixed point instead, with the flags that say what it is. The next run
+// loads it in a second, and if it stands somewhere else it sharpens what it can see from there and
+// writes again — the world converges across runs rather than being thrown away at the end of each.
+void Application::save_refined_world() {
+    if (refine_cache_path_.empty() || refine_regions_.empty()) return;
+
+    usize done = 0;
+    for (const RefineRegion& box : refine_regions_) {
+        if (box.done) ++done;
+    }
+    // Nothing has been sharpened since the file was written. Rewriting six hundred megabytes to
+    // say the same thing is the sort of cost that only shows up as a stutter nobody can explain.
+    if (done <= refine_saved_regions_) return;
+
+    // An edited world is not cached MID-ladder, and the reason is not obvious. A region paste is
+    // a Replace over its box, so a later box would put pristine clip geometry back over anything
+    // carved inside it — which the live session survives because pump_refinement replays the op
+    // log after every paste, and a fresh run would not, because its op log starts empty. The edits
+    // would quietly come back. A world that is FINISHED has no later box to undo them and is
+    // cached as it stands, which is what it has always done.
+    if (done < refine_regions_.size() && !op_log_.ops().empty()) {
+        WS_LOG_INFO("clip",
+                    "{} of {} regions sharpened, but the world has been edited; not caching a "
+                    "half-built world an edit would be replayed over",
+                    done, refine_regions_.size());
+        return;
+    }
+
+    WorldCache cache;
+    cache.tags = &tags_;
+    cache.properties = &properties_;
+    cache.types = &types_;
+    cache.world = &world_;
+    cache.ledger = &ledger_;
+    cache.materials = materials_;
+    cache.regions.reserve(refine_regions_.size());
+    for (const RefineRegion& box : refine_regions_) {
+        CachedRegion out;
+        out.low[0] = box.low.x;
+        out.low[1] = box.low.y;
+        out.low[2] = box.low.z;
+        out.high[0] = box.high.x;
+        out.high[1] = box.high.y;
+        out.high[2] = box.high.z;
+        out.done = box.done;
+        cache.regions.push_back(out);
+    }
+    if (!write_world_cache(refine_cache_path_, refine_cache_key_, cache)) return;
+    refine_saved_regions_ = done;
+    WS_LOG_INFO("clip", "kept the world with {} of {} regions sharpened", done,
+                refine_regions_.size());
+}
+
+// Boxes of about twelve metres, cut from the clip's own bounds.
+//
+// Refining the whole world a rung at a time is the wrong shape for this: every rung is eight times
+// the last, so the final one is minutes, and until it lands EVERYTHING is coarse — the wall you are
+// standing at included. Sampling the box you are standing in instead is a second.
+//
+// Twelve metres, and the number comes from measuring where the time goes. Sampling a four-metre box
+// took about a hundred milliseconds for ten thousand voxels — ten microseconds each, against barely
+// one when the whole clip is sampled in a single call. Almost none of that is the voxels. It is the
+// fixed cost of a sample: allocating the clip, starting the workers, descending from the root of a
+// field that describes the entire building however small the box asked for is. Three hundred and
+// seventy-eight boxes paid it three hundred and seventy-eight times, and the world sharpened at
+// eleven boxes in twenty-two seconds.
+//
+// Four was chosen to keep the stall short, and that reasoning was wrong twice over: the paste
+// measures ZERO milliseconds, and what actually stalled was the world compaction, which is now done
+// once at the end. A small box buys nothing. Twelve is twenty-seven times the volume for very nearly
+// the same fixed cost, and still fine enough that the box in front of you is a small part of the
+// building rather than half of it.
+//
+// It is a pure function of the clip's bounds on purpose. The cache records which of these boxes have
+// been sharpened, and a flag is only meaningful against a grid that comes out the same way twice.
+void Application::plan_refine_regions(const forge::Script& script) {
+    const forge::Vec3 lo = script.settings.low;
+    const forge::Vec3 hi = script.settings.high;
+    const f64 want = 12.0;
+    const auto steps = [&](f64 a, f64 b) {
+        return std::max<i32>(1, static_cast<i32>(std::ceil((b - a) / want)));
+    };
+    const i32 nx = steps(lo.x, hi.x);
+    const i32 ny = steps(lo.y, hi.y);
+    const i32 nz = steps(lo.z, hi.z);
+    refine_regions_.clear();
+    refine_regions_.reserve(static_cast<usize>(nx) * static_cast<usize>(ny) *
+                            static_cast<usize>(nz));
+    for (i32 z = 0; z < nz; ++z) {
+        for (i32 y = 0; y < ny; ++y) {
+            for (i32 x = 0; x < nx; ++x) {
+                RefineRegion box;
+                box.low = {lo.x + (hi.x - lo.x) * x / nx, lo.y + (hi.y - lo.y) * y / ny,
+                           lo.z + (hi.z - lo.z) * z / nz};
+                box.high = {lo.x + (hi.x - lo.x) * (x + 1) / nx,
+                            lo.y + (hi.y - lo.y) * (y + 1) / ny,
+                            lo.z + (hi.z - lo.z) * (z + 1) / nz};
+                refine_regions_.push_back(box);
+            }
+        }
+    }
+}
+
+// A cached world is not necessarily a finished one, and this is what tells them apart.
+//
+// The ladder is stood back up over the world that came off the disk, and the boxes the file says
+// were sharpened are marked so. What is left carries on from wherever this run happens to be
+// standing — which is usually somewhere else, which is how a world that no single camera can finish
+// still finishes.
+//
+// The boxes are checked rather than trusted, and this is not belt and braces. The cache key covers
+// the clip's text, the resolution, and the modification times of src/forge, src/world and
+// src/game/clip.* — deliberately, so that editing a menu label does not throw away a minute of
+// resampling. plan_refine_regions is in NEITHER, so changing how the grid is cut leaves every
+// existing cache file matching its key while its flags refer to boxes that no longer exist. The
+// alternative — adding this file to the key — would invalidate every built world on every edit to
+// five thousand lines of renderer, HUD and command line, which is the cost that list was drawn up
+// to avoid. So the corners are compared instead, and a grid that has moved re-sharpens from
+// scratch: slow once, rather than a building that is quietly coarse in the wrong places for ever.
+void Application::resume_refinement(forge::Script&& script, const WorldCache& cache,
+                                    const std::string& cache_path, u64 key, u32 coarse) {
+    refine_cache_path_ = options_.no_clip_cache ? std::string() : cache_path;
+    refine_cache_key_ = key;
+    refine_authored_ = (options_.clip_metre > 0)
+                           ? options_.clip_metre
+                           : script.settings.voxels_per_metre * static_cast<i32>(coarse);
+    refine_scale_ = coarse;
+    refine_at_[0] = options_.clip_at[0];
+    refine_at_[1] = options_.clip_at[1];
+    refine_at_[2] = options_.clip_at[2];
+    refine_script_ = std::make_unique<forge::Script>(std::move(script));
+    plan_refine_regions(*refine_script_);
+
+    const bool same_grid = cache.regions.size() == refine_regions_.size();
+    bool same_boxes = same_grid;
+    if (same_grid) {
+        for (usize i = 0; i < refine_regions_.size() && same_boxes; ++i) {
+            const CachedRegion& from = cache.regions[i];
+            const RefineRegion& box = refine_regions_[i];
+            same_boxes = from.low[0] == box.low.x && from.low[1] == box.low.y &&
+                         from.low[2] == box.low.z && from.high[0] == box.high.x &&
+                         from.high[1] == box.high.y && from.high[2] == box.high.z;
+        }
+    }
+    if (!same_boxes) {
+        if (!cache.regions.empty()) {
+            WS_LOG_WARN("clip",
+                        "the cached world's {} regions do not match the {} this build plans; "
+                        "sharpening all of them again",
+                        cache.regions.size(), refine_regions_.size());
+        }
+        // An empty list is the other case entirely: a world built at its authored detail in one
+        // pass, with no ladder behind it and nothing to carry on. Nothing is coarse, so nothing
+        // needs sharpening, and standing the ladder up over it would re-sample the whole building
+        // to arrive back where it already is.
+        if (cache.regions.empty()) {
+            refine_script_.reset();
+            refine_regions_.clear();
+            refine_cache_path_.clear();
+            return;
+        }
+    } else {
+        for (usize i = 0; i < refine_regions_.size(); ++i) {
+            refine_regions_[i].done = cache.regions[i].done;
+        }
+    }
+
+    usize done = 0;
+    for (const RefineRegion& box : refine_regions_) {
+        if (box.done) ++done;
+    }
+    refine_saved_regions_ = done;
+    if (done == refine_regions_.size()) {
+        // Finished, so there is no ladder to stand up and no reason to keep the field alive.
+        refine_script_.reset();
+        refine_regions_.clear();
+        refine_cache_path_.clear();
+        refine_saved_regions_ = 0;
+        WS_LOG_INFO("clip", "the cached world is fully sharpened");
+        return;
+    }
+    WS_LOG_INFO("clip", "cached world has {} of {} regions sharpened; carrying on from here", done,
+                refine_regions_.size());
 }
 
 void Application::build_world() {
@@ -1736,6 +1956,13 @@ void Application::build_world() {
                 if (materials_.empty()) materials_.push_back(1);
                 material_index_ = options_.material % materials_.size();
                 chisel_.set_material(materials_[material_index_]);
+                // What came off the disk may be a world that stopped short — see
+                // resume_refinement. The script has to be handed over here rather than
+                // rebuilt later, because it owns the field the background sampler reads and
+                // parsing is the only place it comes from.
+                if (coarse > 1) {
+                    resume_refinement(std::move(script), cache, cache_path, key, coarse);
+                }
                 const WorldStats cached_stats = world_.stats();
                 WS_LOG_INFO("world", "'{}' loaded from cache in {:.0f} ms: {} chunks, {} solid "
                                      "voxels", path, ns_to_ms(now_ns() - start),
@@ -1795,53 +2022,7 @@ void Application::build_world() {
                 refine_at_[1] = options_.clip_at[1];
                 refine_at_[2] = options_.clip_at[2];
                 refine_script_ = std::make_unique<forge::Script>(std::move(script));
-
-                // Boxes of about four metres. Small enough that one is a second of sampling rather
-                // than a minute, large enough that the per-box overhead — a field walk, a paste, a
-                // compaction — is not most of the work.
-                const forge::Vec3 lo = refine_script_->settings.low;
-                const forge::Vec3 hi = refine_script_->settings.high;
-                // Four metres. Two was tried and is worse — see the compaction below: the cost of
-                // finishing a box is very nearly FIXED rather than proportional to its volume, so
-                // smaller boxes do not buy smaller stalls, they buy more of them.
-                // Twelve metres, and the number comes from measuring where the time goes.
-                //
-                // Sampling a four-metre box took about a hundred milliseconds for ten thousand
-                // voxels -- ten microseconds each, against barely one when the whole clip is
-                // sampled in a single call. Almost none of that is the voxels. It is the fixed cost
-                // of a sample: allocating the clip, starting the workers, descending from the root
-                // of a field that describes the entire building however small the box asked for is.
-                // Three hundred and seventy-eight boxes paid it three hundred and seventy-eight
-                // times, and the world sharpened at eleven boxes in twenty-two seconds.
-                //
-                // Four was chosen to keep the stall short, and that reasoning was wrong twice over:
-                // the paste measures ZERO milliseconds, and what actually stalled was the world
-                // compaction, which is now done once at the end. A small box buys nothing.
-                //
-                // Twelve is twenty-seven times the volume for very nearly the same fixed cost, and
-                // still fine enough that the box in front of you is a small part of the building
-                // rather than half of it.
-                const f64 want = 12.0;
-                const auto steps = [&](f64 a, f64 b) {
-                    return std::max<i32>(1, static_cast<i32>(std::ceil((b - a) / want)));
-                };
-                const i32 nx = steps(lo.x, hi.x);
-                const i32 ny = steps(lo.y, hi.y);
-                const i32 nz = steps(lo.z, hi.z);
-                for (i32 z = 0; z < nz; ++z) {
-                    for (i32 y = 0; y < ny; ++y) {
-                        for (i32 x = 0; x < nx; ++x) {
-                            RefineRegion box;
-                            box.low = {lo.x + (hi.x - lo.x) * x / nx,
-                                       lo.y + (hi.y - lo.y) * y / ny,
-                                       lo.z + (hi.z - lo.z) * z / nz};
-                            box.high = {lo.x + (hi.x - lo.x) * (x + 1) / nx,
-                                        lo.y + (hi.y - lo.y) * (y + 1) / ny,
-                                        lo.z + (hi.z - lo.z) * (z + 1) / nz};
-                            refine_regions_.push_back(box);
-                        }
-                    }
-                }
+                plan_refine_regions(*refine_script_);
                 WS_LOG_INFO("clip", "{} regions to sharpen, biggest on screen first",
                             refine_regions_.size());
             }
@@ -1870,9 +2051,10 @@ void Application::build_world() {
 
             // Kept, so the next run does not do any of that again — but NOT while it is still
             // arriving. A coarse build is a stage on the way to the real world, and writing it here
-            // would cache the blocky one for ever: every launch after the first would load it in
-            // half a second, find nothing left to refine, and the building would never come good
-            // again. Deferred to the last rung; see pump_refinement.
+            // would cache the blocky one with nothing recording that it is blocky. On the ladder
+            // the write is save_refined_world's, which happens at the fixed point and carries the
+            // list of which boxes are sharp; here there is no ladder and the world is already what
+            // the clip asked for.
             if (!options_.no_clip_cache && coarse <= 1) {
                 progress_.enter(LoadStage::Caching);
                 WorldCache cache;
@@ -4464,10 +4646,23 @@ int Application::run(const Options& options) {
             // measured wherever it had got to. Two figures are comparable only if these three
             // numbers match, so they are printed beside the timings rather than left to be
             // inferred from how long somebody waited.
+            // The content hash is the scene's identity rather than a description of it. Chunk and
+            // voxel counts are a proxy — two different worlds can share both — and the question
+            // "are these two runs looking at the same thing" has to be answerable exactly, not
+            // plausibly. It skips empty chunks, so a world that has been compacted and one that
+            // has not agree, which is the difference between a world built here and the same world
+            // read back from the clip cache.
             const WorldStats measured_world = world_.stats();
-            WS_LOG_INFO("frame", "scene: {} chunks, {} solid voxels, {} of {} regions sharpened",
-                        measured_world.chunks, measured_world.solid_voxels,
-                        refine_regions_.size() - unrefined, refine_regions_.size());
+            // "0 of 0" would be the literal truth for a world with no ladder behind it and would
+            // read as "nothing has been sharpened", which is the opposite of what it means.
+            const std::string sharpness =
+                refine_regions_.empty()
+                    ? std::string("no ladder, the world is at the detail the clip asked for")
+                    : std::to_string(refine_regions_.size() - unrefined) + " of " +
+                          std::to_string(refine_regions_.size()) + " regions sharpened";
+            WS_LOG_INFO("frame", "scene: {} chunks, {} solid voxels, {}, content {:016x}",
+                        measured_world.chunks, measured_world.solid_voxels, sharpness,
+                        world_.content_hash());
             if (unrefined > 0 && !options_.settle) {
                 WS_LOG_WARN("frame",
                             "the world was still being sharpened - {} regions left. This figure is "

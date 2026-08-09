@@ -290,7 +290,8 @@ add_executable(ws_tests
     tests/test_quality.cpp
     tests/test_light_list.cpp
     tests/test_pass_ledger.cpp
-    tests/test_node_pool.cpp)
+    tests/test_node_pool.cpp
+    tests/test_world_cache.cpp)
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_doctest)
 # Where the assets a test reads actually live. A test that walks up from the working directory
 # passes when it is run from the build folder and fails from anywhere else, which makes it a test

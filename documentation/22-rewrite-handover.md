@@ -226,13 +226,19 @@ failure, not a compile error.
    already live but whose frame had spent its build budget was dropped without incrementing
    `deferred`, so the counter read nought while the tree quietly failed to fill in.
 8. **A measurement is against a scene, and the scene is not a constant.** The facility sharpens
-   region by region in the background, and its clip cache is written only when the *last* region
-   lands — which never happens from a fixed camera, because regions behind walls are skipped. So
-   every run rebuilds the world while being timed, and a screenshot at frame 300 catches however
-   much exists by then. **The bias runs against whatever you are testing**: a faster build gets
-   there sooner with less world in front of it. Two runs of one binary differed on 52,292 pixels.
-   Use `--settle`, and check the `scene:` line printed beside the pass table before comparing two
-   numbers. D229–D232.
+   region by region in the background, and a screenshot at frame 300 catches however much exists by
+   then. **The bias runs against whatever you are testing**: a faster build gets there sooner with
+   less world in front of it. Two runs of one binary differed on 52,292 pixels. Use `--settle`, and
+   check the `scene:` line printed beside the pass table — including its **content hash**, which is
+   the scene's identity rather than a description of it — before comparing two numbers. D229–D232,
+   D243.
+
+   The cache half of this is fixed (D241): it used to be written only when the *last* region landed,
+   which never happens from a fixed camera, so the world was rebuilt on every launch. It is now
+   written when refinement settles, with the list of which regions are sharp. **The consequence for
+   old figures is that they are not comparable with new ones** — a run that loaded a finished world
+   and a run that watched it sharpen draw different pictures from the same world, because the node
+   pool evicts nothing (D244).
 9. **Repeat a figure before calling it a regression.** The sky camera read 0.484 against 0.759
    between two builds and looked like a 57% regression on the floor view. Three runs of *one*
    build against *one* scene give 0.481, 0.763, 0.472. The empty-space views inherit the node
@@ -262,15 +268,21 @@ completes and never caches.
 
 Two fixes, in the order they pay:
 
-1. **Write the cache when sharpening settles**, not only when it completes. Needs the cache to
-   record which regions are done so a later run from another camera can carry on. Small, and it
-   makes every run after the first start from a finished world.
+1. ~~**Write the cache when sharpening settles**, not only when it completes.~~ **Done** — D241–D246.
+   The cache is written at the fixed point carrying a `CachedRegion` per box saying which are sharp,
+   and a later run from another camera carries on from it. Default camera, `--settle`: first run
+   133.3 s, every run after 6.6 s; two runs from different cameras finish the building and every run
+   after that loads a complete world in five to seven seconds. **Read D243 and D244 before comparing
+   any figure across this change** — the `scene:` line now carries the world's content hash, and
+   figures taken before it are not comparable with figures taken after it.
 2. **Slice the paste across frames.** D74 already names this and hands it to Stage 16: *"an edit
    runs in one frame and cannot be interrupted… raising the cap means slicing the work across
-   frames"*. This is the one that makes editing feel right.
+   frames"*. This is the one that makes editing feel right, and it is now the whole of what is left
+   here: the first run on a cold cache still pastes for up to **17.4 s at a time** with the main
+   thread blocked, and the fourteen seconds of stall in a first load is still fourteen seconds.
 
-Until at least the first of those lands, nobody can judge the renderer by playing it, because what
-they are judging is the paste.
+Until the second lands, nobody can judge the renderer by playing a *first* load, because what they
+are judging is the paste. Every load after the first is now the renderer.
 
 ### Then, the thing R1e cannot be judged without
 
@@ -312,11 +324,10 @@ R7 the primary ray, R8 infinite detail.
 
 - **R0d**: `tools\baseline.ps1 -Out documentation\baselines\r0-before-rewrite.csv` has never
   completed a full run — it was interrupted twice. The directory exists and holds only the face
-  counts. Run it — but note that it now passes `--settle`, so each of the forty-two runs waits for
-  the scene to stop sharpening and the grid takes the better part of an hour rather than minutes.
-  Worth fixing first: the clip cache would make every one of those runs start from a finished world
-  if it were written when refinement *settles* rather than only when the last region lands, which
-  needs the cache to record which regions are done so a later run from another camera can carry on.
+  counts. **The reason it was unaffordable is gone** (D241): a settled run was 133 s and is 6.6 s,
+  and after two runs from different cameras the world is complete and every run measures the same
+  scene. The grid is now minutes. Run it, check the `scene:` content hashes agree across the runs
+  being compared, and commit the csv. Note that the first grid run still pays one cold build.
 - **`12-plain-english.md`** has nothing about the rewrite.
 - ~~**Nothing is committed.**~~ Out of date: the rewrite landed as `669f883`, "One sparse octree
   replaces four addressing schemes". Ask before committing anything on top of it.
@@ -331,11 +342,12 @@ R7 the primary ray, R8 infinite detail.
 
 **New:** `src/world/node_pool.{hpp,cpp}`, `src/gpu/node_buffers.{hpp,cpp}`,
 `src/core/pass_ledger.{hpp,cpp}`, `shaders/node.glsl`, `shaders/node_visibility.comp`,
-`tests/test_node_pool.cpp`, `tests/test_pass_ledger.cpp`, `tools/{baseline,facecount,_grid,_measure}.ps1`,
-`documentation/21-renderer-rewrite.md`, this file.
+`tests/test_node_pool.cpp`, `tests/test_pass_ledger.cpp`, `tests/test_world_cache.cpp`,
+`tools/{baseline,facecount,_grid,_measure}.ps1`, `documentation/21-renderer-rewrite.md`, this file.
 
-**Modified:** `CMakeLists.txt`, `src/app/main.cpp`, `src/gpu/profiler.{hpp,cpp}`,
-`shaders/{pathtrace,resolve}.comp`, `tools/speckle.ps1`, `documentation/{13-decision-log,README}.md`.
+**Modified:** `CMakeLists.txt`, `src/app/main.cpp`, `src/world/world_cache.{hpp,cpp}`,
+`src/gpu/profiler.{hpp,cpp}`, `shaders/{pathtrace,resolve}.comp`, `tools/speckle.ps1`,
+`documentation/{13-decision-log,README}.md`.
 
 Nothing has been deleted yet.
 

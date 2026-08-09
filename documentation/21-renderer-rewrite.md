@@ -487,7 +487,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R0 | a. profiler, averages, warm-up | **done** — D201–D203 |
 | R0 | b. `baseline.ps1`, `_grid.ps1`, `_measure.ps1`, image diff | **done** — D204 |
 | R0 | c. debug view 11 + `facecount.ps1`, premise verified | **done** — D205 |
-| R0 | d. record the full grid to `documentation/baselines/` | **outstanding** — the grid was interrupted; rerun and commit the csv |
+| R0 | d. record the full grid to `documentation/baselines/` | **outstanding** — the grid was interrupted; rerun and commit the csv. Now affordable: a settled run was 133 s and is 6.6 s, because the clip cache is written at the fixed point (D241) |
 | R1 | a. `NodePool` CPU structure + tests | **done** — D206–D213 |
 | R1 | b. `node.glsl` descent + `node_visibility.comp` | **done, compiles** — D214–D218 |
 | R1 | c. GPU buffers, pipeline, `--node-pool` | **done** — both marchers run, D219–D223 |
@@ -521,6 +521,26 @@ at a time**. That is the 6,282 ms worst frame. Both marchers suffer it identical
 rewrite, and D74 already names the fix — slice the paste across frames — while assigning it to
 Stage 16. It is now the largest single thing standing between this engine and being judged fairly,
 and it is not in this plan.
+
+**Half of that is now paid once rather than every launch** (D241–D246). The sharpening was thrown
+away at the end of every run, because the cache was written only when the last region landed and the
+last region never lands — a box behind a wall is skipped for as long as the camera stands there, so
+the facility settles at 14 of 18 and stops. The cache is now written at that fixed point, carrying
+the list of which boxes are sharp, and a later run standing somewhere else carries on from it. The
+default camera goes from **133.3 s to 6.6 s** on its second run; two runs from different cameras
+finish the building, and every run after that loads a complete world in five to seven seconds.
+
+It does not touch the stall itself — the first run still pastes for seventeen seconds at a time, and
+slicing the paste across frames is still the fix and still outstanding. What it removes is having to
+pay that first run again on every launch and on every one of R0d's forty-two grid runs.
+
+**Two things follow that anyone measuring has to know.** Runs are now compared against a world that
+converges across runs rather than being rebuilt per run, so the `scene:` line carries the world's
+**content hash** (D243) and two figures are comparable when the hashes match. And the picture a run
+draws depends on whether it watched the world sharpen: cold and warm runs of one binary, on a world
+proven identical by that hash, differ on 87,357 pixels, because the node pool evicts nothing and the
+cold run holds nodes built from geometry that has since been replaced (D244). **Figures taken before
+this change are not comparable with figures taken after it.**
 
 #### R1h — the enclosed room, and why the answer took longer than the fix
 
