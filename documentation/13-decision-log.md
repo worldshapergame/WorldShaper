@@ -491,6 +491,19 @@ eviction and `last_wanted` orders it, which is sound while there is room and app
 is not. That is residency policy and it belongs to R2 — but it is now a design question with a
 known answer rather than a mystery blocking a gate.
 
+## The renderer rewrite — the 275 ms frame, which was never the renderer
+
+The player reported 4 FPS with the overlay showing **GPU 0.92 ms** and later **6.81 ms** against
+frames of 247 and 275 ms. Four exchanges went on the renderer before anything measured the gap.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D251 | **The node pool's CPU update is timed, like the chunk path has been since Stage 2** | measurement | It never was, so the cost of building the tree appeared in no figure anywhere — and it turned out to be the entire frame. With a carve applied: **`CPU node pool 252.763 ms, worst 267.495`** against a 3.8 ms GPU. The engine's own CPU counter said 236 ms and nothing said where it went. A subsystem nobody times is a subsystem nobody can be wrong about |
+| D252 | **A request is served once however many times it is asked for** | measurement | Feedback saturates at its 131,072 capacity the instant a large edit drops the tree, and `stream()` dilates every entry to its six face neighbours — so **917,504 requests** arrive each frame for a handful of distinct nodes, and each is walked from its root through eleven levels of dependent loads to discover it is already built. `built 914333` in one frame. Deduping is one hash against eleven dependent loads, and the duplicates are the overwhelming majority rather than an edge case: **252.8 ms to 18.8 ms**, total CPU 236.8 to 47.2, `built` 914,333 to 18,812 |
+| D253 | **A stand-in must come from a node that has been folded** | user report | The R2d stand-in drew whatever colour the WANTED node carried, and at WANTED that node can be a shell — never folded, colour nought. It painted the facility black in silhouette, columns and all. The guard against exactly this sits twenty lines above in the same function and states the consequence in words: drawing a shell "paints black geometry over open sky". Refused on the way down, reintroduced on the way out |
+| D254 | **Invalidation drops one root per edit, not every ancestor of every brick** | measurement | It walked leaf to level 24 for each dirty brick, released every ancestor — and releasing a root frees its whole subtree anyway — then scanned the whole 262,144-entry table without breaking on the match. 97,500 dirty bricks is some twenty million full-table scans in a frame. This is a retreat rather than the answer: refreshing the leaf in place and re-folding its ancestors is right, and needs the parent's child mask refreshed from the world, which is R2 |
+| D255 | **`--screenshot-frame` counts frames, so a scripted measurement on a slow build is a long one** | user | 1200 frames at 4 FPS is five minutes of a game window on somebody's machine, twice, while they waited. Measure with sixty frames and raise it only when the figure needs it |
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

@@ -785,7 +785,22 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         }
     }
 
+    // Asked once each, however many times it was asked for.
+    //
+    // Feedback saturates at its capacity the moment a large edit drops the tree - 131,072 entries
+    // - and stream() dilates every one of them to its six face neighbours, so 917,504 requests
+    // arrive for a handful of distinct nodes. Each was walked from its root, and the walk is the
+    // whole of `refine`: eleven levels of dependent loads to discover that everything is already
+    // built. Measured after a 49.9-million-voxel carve: `built 914333` in one frame and 252.8 ms
+    // of CPU inside this function, against a 7 ms GPU. That is the whole of the 275 ms frame the
+    // player reported, and it was invisible because the node path had never been timed.
+    //
+    // A set costs one hash per request against eleven dependent loads, and the duplicates are the
+    // overwhelming majority rather than an edge case.
+    seen_requests_.clear();
     for (const NodeKey& key : requested_) {
+        if (!seen_requests_.insert(key).second) continue;
+
         const u32 enter_level = std::max(key.level, kEntryLevel);
         const u32 up = enter_level - key.level;
         const NodeKey root{key.x >> up, key.y >> up, key.z >> up, enter_level};

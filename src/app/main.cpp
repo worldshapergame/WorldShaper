@@ -1098,6 +1098,11 @@ private:
     u32 last_thumbs_built_ = 0;
     f64 residency_ms_ = 0.0;
     f64 worst_residency_ms_ = 0.0;
+    // The same, for the pool. The chunk path has been timed since Stage 2 and the node path never
+    // was, so the CPU cost of building the tree has never appeared in any figure -- which is a
+    // problem when a frame is 275 ms, the GPU is 7 ms, and nothing accounts for the rest.
+    f64 node_ms_ = 0.0;
+    f64 worst_node_ms_ = 0.0;
     VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
@@ -2865,7 +2870,10 @@ void Application::record_frame(f32 time_seconds) {
             static_cast<f64>(camera_.chunk_y()) * 256.0 + camera_.local_y(),
             static_cast<f64>(camera_.chunk_z()) * 256.0 + camera_.local_z(),
         };
+        const u64 node_start = now_ns();
         const NodeUploadBatch& node_batch = node_pool_.update(world_, camera_voxel, frame_counter_);
+        node_ms_ = ns_to_ms(now_ns() - node_start);
+        if (node_ms_ > worst_node_ms_) worst_node_ms_ = node_ms_;
         last_node_built_ = node_batch.built;
         last_node_evicted_ = node_batch.evicted;
         last_node_deferred_ = node_batch.deferred;
@@ -4748,6 +4756,9 @@ int Application::run(const Options& options) {
                         profiler_.mean_total_gpu_ms(), profiler_.worst_total_gpu_ms(),
                         profiler_.averaged_frames());
             WS_LOG_INFO("frame", "CPU {:.3f} ms", stats_.average_ms());
+            WS_LOG_INFO("frame", "CPU node pool {:.3f} ms, worst {:.3f}; chunk residency {:.3f} "
+                                 "ms, worst {:.3f}",
+                        node_ms_, worst_node_ms_, residency_ms_, worst_residency_ms_);
             const ResidencyStats residency = residency_.stats();
             WS_LOG_INFO("frame",
                         "resident {} of {} chunks, {} bricks; feedback {} reports ({} dropped)",

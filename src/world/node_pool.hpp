@@ -519,6 +519,8 @@ private:
     // a wrong picture, which is exactly what NodeBuffers::audit exists to catch: it walks the
     // real buffers against these arrays and names the first byte that disagrees.
     u64 touch_frame_ = 0;   // the frame `touch` stamps, set by update()
+    // Kept between frames so it is not reallocated every one. Cleared at the top of update().
+    std::unordered_set<NodeKey, NodeKeyHash> seen_requests_;
     DirtySet dirty_nodes_;
     DirtySet dirty_leaves_;
     DirtySet dirty_entries_;
