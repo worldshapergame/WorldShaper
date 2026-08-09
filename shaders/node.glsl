@@ -665,7 +665,19 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 // face a few metres from the camera, and drawing it there puts a blob in your
                 // face. The parent's folded colour and its per-direction coverage are exactly
                 // what a coarse hit is supposed to be, and both already exist on the node.
-                if (found.level - 1 == outer_level && found.slot != kNoNode) {
+                // ...and only from a node that HAS a folded colour.
+                //
+                // At WANTED the node reached can itself be a shell - the world says it has
+                // children and the pool has not built them - and a shell has never been folded
+                // from anything, so its colour is nought. Standing in with that paints the
+                // building black, which is precisely what the check twenty lines above refuses
+                // to do on the way down and what this managed to reintroduce on the way out.
+                // Reported from a screenshot: the facility in silhouette, every column solid
+                // black, against a correct sky.
+                bool foldable = (node_flags_of(nodes.items[found.slot].packed) & kNodeLeaf) != 0 ||
+                                nodes.items[found.slot].children != kNoNode;
+                if (found.level - 1 == outer_level && found.slot != kNoNode && foldable &&
+                    (nodes.items[found.slot].colour >> 24) != 0u) {
                     ivec3 stand_normal = last_normal;
                     if (stand_normal == ivec3(0)) {
                         // First step, camera inside the cell: no face was crossed to get here,

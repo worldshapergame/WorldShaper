@@ -872,6 +872,10 @@ private:
     // Long enough that a paste landing between the pick and the world being updated cannot be
     // mistaken for the end of the build. A region takes seconds; this is a fraction of one.
     static constexpr u32 kSettleFrames = 240;
+    // Past this, take the measurement rather than never taking one. Generous: a cold facility
+    // settles in a few thousand frames, so reaching this means something is actively unsettling
+    // it, which an edit does.
+    static constexpr u64 kSettleGiveUp = 30000;
     f64 refine_sample_ms_ = 0.0;   // the background half, which the paste timing never saw
     u64 refine_asked_ = 0;
     void start_refinement();
@@ -4633,6 +4637,21 @@ int Application::run(const Options& options) {
                 ++settle_streak_;
             } else {
                 settle_streak_ = 0;
+            }
+            // And it cannot wait for ever.
+            //
+            // Settling means "refinement has nothing left it can do from here", and an EDIT can
+            // give it something to do again -- carving a wall exposes regions the occlusion test
+            // was rejecting. So a run that edits can reset the streak repeatedly and never reach
+            // its screenshot frame at all, which is not a slow measurement, it is a measurement
+            // that never returns. Two of them ran until they were killed and wrote nothing.
+            if (!settled_seen_ && frame_counter_ > kSettleGiveUp) {
+                settled_seen_ = true;
+                settle_frame_ = frame_counter_;
+                WS_LOG_WARN("frame",
+                            "gave up waiting for the world to settle after {} frames; measuring "
+                            "from here anyway, and this figure is not comparable with a settled "
+                            "one", kSettleGiveUp);
             }
             if (settle_streak_ >= kSettleFrames) {
                 settled_seen_ = true;

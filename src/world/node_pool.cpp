@@ -728,13 +728,29 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         }
     }
 
-    // Anything an edit touched is dropped so it is rebuilt, and the drop reaches every ancestor
-    // because each of them was folded from it.
-    for (const NodeKey& key : dirty_) {
-        for (u32 level = kLeafLevel; level <= kMaxNodeLevel; ++level) {
-            const u32 up = level - kLeafLevel;
-            const NodeKey ancestor{key.x >> up, key.y >> up, key.z >> up, level};
-            const auto it = live_.find(ancestor);
+    // Anything an edit touched is dropped so it is rebuilt from the world.
+    //
+    // Dropped at the ROOT, once per distinct root, and that is a deliberate retreat from what
+    // this used to do. It walked every level from the leaf to kMaxNodeLevel for every dirty
+    // brick, released each ancestor it found -- and releasing a root frees its whole subtree
+    // anyway -- then scanned the entire 262,144-entry table looking for the slot. A carve of
+    // 49.9 million voxels is 97,500 dirty bricks, so that was some twenty million full-table
+    // scans in one frame, each of them freeing a subtree that the previous one had already
+    // freed. Measured from the player's side: 4 FPS at 276 ms a frame with the GPU at 7 ms.
+    //
+    // One release per root does the same work once. It is conservative -- a single carved voxel
+    // costs the root its whole subtree, which then rebuilds at the rate pixels ask for it -- and
+    // refreshing a leaf in place while re-folding its ancestors is the better answer, which
+    // needs the parent's child mask to be refreshed from the world as well and belongs with the
+    // rest of R2.
+    if (!dirty_.empty()) {
+        std::unordered_set<NodeKey, NodeKeyHash> roots;
+        const u32 up = kEntryLevel - kLeafLevel;
+        for (const NodeKey& key : dirty_) {
+            roots.insert(NodeKey{key.x >> up, key.y >> up, key.z >> up, kEntryLevel});
+        }
+        for (const NodeKey& root : roots) {
+            const auto it = live_.find(root);
             if (it == live_.end()) continue;
             const u32 slot = it->second.slot;
             release(slot);
@@ -742,6 +758,7 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
                 if (entries_[index] == slot) {
                     entries_[index] = kNoNode;
                     dirty_entries_.mark(index);
+                    break;   // a slot appears once; the scan used to run to the end regardless
                 }
             }
             live_.erase(it);
