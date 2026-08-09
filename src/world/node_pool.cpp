@@ -661,6 +661,10 @@ void NodePool::release_contents(u32 slot) {
 
     node = GpuNode{};
     dirty_nodes_.mark(slot);
+    // Stamped so the empty slot is not a candidate for ever. Left with its old timestamp it reads
+    // as cold on every sweep, and the whole point of testing the timestamp first is that a slot
+    // which is not cold costs nothing but the timestamp.
+    node_last_read_[slot] = static_cast<u32>(touch_frame_);
     ++evictions_;
 }
 
@@ -899,6 +903,15 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             const i64 span_y = by1 - by0 + 1;
             const i64 total = span_x * span_y * (bz1 - bz0 + 1);
 
+            // The chunk the last brick was in, kept across the sweep.
+            //
+            // `world_has` looks the chunk up by hash for every cell, and the sweep walks x fastest
+            // -- thirty-two consecutive bricks share a chunk, and a row of a hundred and sixty
+            // crosses five. Looking it up once per brick was thirty-two thousand hash lookups a
+            // frame and the whole of the 29.9 ms this sweep cost.
+            ChunkCoord cached{0x7FFFFFFF, 0x7FFFFFFF, 0x7FFFFFFF};
+            const Chunk* cached_chunk = nullptr;
+
             u32 served = 0;
             while (proximity_cursor_ < static_cast<u64>(total) &&
                    served < budget_.proximity_per_frame) {
@@ -908,11 +921,24 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
                 const i64 bz = bz0 + (i / (span_x * span_y));
                 ++served;
 
-                // Only what the world actually holds. `world_has` at leaf level is a chunk
-                // lookup and one brick test, and it is the whole reason this is affordable.
-                const NodeKey key{bx, by, bz, kLeafLevel};
-                if (!world_has(world, key)) continue;
-                requested_.push_back(key);
+                // Only what the world actually holds, which is the whole reason this is
+                // affordable: the volume is millions of cells and almost all of them are air the
+                // world has no record of.
+                const i64 vx = bx << kLeafLevel;
+                const i64 vy = by << kLeafLevel;
+                const i64 vz = bz << kLeafLevel;
+                const ChunkCoord coord = chunk_coord_of(vx, vy, vz);
+                if (!(coord == cached)) {
+                    cached = coord;
+                    cached_chunk = world.chunk(coord);
+                }
+                if (cached_chunk == nullptr) continue;
+                if (cached_chunk->brick(static_cast<u32>((vx >> 3) & 31),
+                                        static_cast<u32>((vy >> 3) & 31),
+                                        static_cast<u32>((vz >> 3) & 31)) == nullptr) {
+                    continue;
+                }
+                requested_.push_back(NodeKey{bx, by, bz, kLeafLevel});
             }
             if (proximity_cursor_ >= static_cast<u64>(total)) proximity_done_ = true;
         }
@@ -1034,31 +1060,58 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // Bounded by the depth of the tree by construction -- each pass removes a level, and there
     // are at most kEntryLevel of them -- and each pass over eighty thousand nodes is a scan of a
     // few hundred kilobytes, so the loop is cheap and its bound is not a guess.
-    for (u32 pass = 0; next_free_ > 0 && pass <= kEntryLevel; ++pass) {
-        const u32 before_pass = batch_.evicted;
+    // A slice a frame, and the cheap test first.
+    //
+    // Two things made this the most expensive thing in the pool once everything else was fixed.
+    // It read the 32-byte node record BEFORE the four-byte timestamp, so a steady frame touched
+    // every node in the pool -- 268,761 records is 8.6 MB of memory traffic to discover that
+    // nothing had gone cold. And it swept the whole pool every frame, when `cold_frames` is six
+    // hundred and there is nothing to gain from asking more than a few times a second.
+    //
+    // So: the timestamp array is walked instead, which is one megabyte and sequential, and only a
+    // slot that is actually cold costs a look at its record. And a slice at a time, so a steady
+    // frame reads a hundred and twenty-eight kilobytes rather than nine megabytes. Eviction
+    // latency rises by the number of slices, which against six hundred frames is nothing.
+    //
+    // The repeat stays, but within the slice: a node is only a candidate once its children are
+    // gone, so one pass takes one level. Allocation is a bump pointer, so a subtree's nodes are
+    // near each other and a slice usually holds the whole of one.
+    if (next_free_ > 0) {
         const u32 cold = budget_.cold_frames;
         const u32 now = static_cast<u32>(frame);
-        for (u32 slot = 0; slot < next_free_; ++slot) {
-            const GpuNode& node = nodes_[slot];
-            const u32 level = node_level(node);
-            if (level == 0 || level >= kEntryLevel) continue;   // unbuilt, or a root that live_ owns
-            if (now - node_last_read_[slot] <= cold) continue;
+        const u32 slice = (next_free_ + kErodeSlices - 1) / kErodeSlices;
+        if (erode_cursor_ >= next_free_) erode_cursor_ = 0;
+        const u32 first = erode_cursor_;
+        const u32 last = (first + slice < next_free_) ? first + slice : next_free_;
+        erode_cursor_ = last;
 
-            if ((node_flags(node) & kNodeLeaf) == 0) {
-                if (node.children == kNoNode) continue;   // a shell already; nothing under it
-                bool any_built = false;
-                for (u32 octant = 0; octant < 8 && !any_built; ++octant) {
-                    any_built = node_level(nodes_[node.children + octant]) != 0;
+        for (u32 pass = 0; pass <= kEntryLevel; ++pass) {
+            const u32 before_pass = batch_.evicted;
+            for (u32 slot = first; slot < last; ++slot) {
+                // The cheap one first. In a settled frame almost every slot stops here, and this
+                // array is a quarter the width of a node record and read in order.
+                if (now - node_last_read_[slot] <= cold) continue;
+
+                const GpuNode& node = nodes_[slot];
+                const u32 level = node_level(node);
+                if (level == 0 || level >= kEntryLevel) continue;   // unbuilt, or a root live_ owns
+
+                if ((node_flags(node) & kNodeLeaf) == 0) {
+                    if (node.children == kNoNode) continue;   // a shell already; nothing under it
+                    bool any_built = false;
+                    for (u32 octant = 0; octant < 8 && !any_built; ++octant) {
+                        any_built = node_level(nodes_[node.children + octant]) != 0;
+                    }
+                    if (any_built) continue;   // something below is still in use
                 }
-                if (any_built) continue;   // something below is still in use
-            }
 
-            release_contents(slot);
-            nodes_[slot] = GpuNode{};
-            dirty_nodes_.mark(slot);
-            ++batch_.evicted;
+                release_contents(slot);
+                nodes_[slot] = GpuNode{};
+                dirty_nodes_.mark(slot);
+                ++batch_.evicted;
+            }
+            if (batch_.evicted == before_pass) break;   // nothing both cold and childless left
         }
-        if (batch_.evicted == before_pass) break;   // nothing left that is both cold and childless
     }
 
     // And what has gone cold -- but only when there is something to gain by it.

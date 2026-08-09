@@ -94,6 +94,10 @@ inline constexpr u32 kEntryLevel = 14;
 // A brick would restart it four times a metre.
 inline constexpr u32 kProximityAnchorLevel = 6;
 
+// How many frames one full erosion sweep is spread over. `cold_frames` is six hundred, so eight
+// slices costs eight frames of latency on an eviction and saves seven eighths of the scan.
+inline constexpr u32 kErodeSlices = 8;
+
 struct NodeKey {
     i64 x = 0;
     i64 y = 0;
@@ -253,6 +257,11 @@ struct NodePoolBudget {
     // Raised from 2048 once a request meant a whole path rather than one level of one. A frame
     // that builds more converges sooner, and the cap bounds a spike rather than rationing
     // steady-state work - which is nil, because a converged tree builds nothing at all.
+    // A count, not a time, and that is worth knowing before tuning it.
+    //
+    // It was lowered to 2,048 and then 4,096 chasing a 27 ms worst frame, which moved it by four
+    // milliseconds and then by nothing -- because the worst frame turned out to be frame SIXTEEN,
+    // during load, and lowering this only slowed the fill-in that a player sees. Restored.
     u32 max_builds_per_frame = 16384;
     u64 max_upload_bytes_per_frame = 8ull * 1024 * 1024;
 
@@ -266,6 +275,10 @@ struct NodePoolBudget {
     // How much of the proximity sweep is done per frame. Twenty metres is eighty bricks, so the
     // volume is millions of cells even though only the ones the world holds are ever requested,
     // and walking it in one frame is a stall rather than a guarantee.
+    // Restored, for the same reason as the build budget above: it was cut to a quarter to make
+    // a spike smaller and the spike did not move, because it was a startup frame rather than
+    // anything the sweep did. A quarter of the slice is four times as long to reach twenty
+    // metres, and that is a real cost paid for nothing.
     u32 proximity_per_frame = 32768;
 };
 
@@ -557,6 +570,7 @@ private:
     u64 proximity_cursor_ = 0;
     usize proximity_chunks_ = 0;
     bool proximity_done_ = false;
+    u32 erode_cursor_ = 0;   // where the rolling erosion sweep is
     // When each node was last read by a ray. CPU-side and parallel to `nodes_`, rather than a
     // field in GpuNode: the record is thirty-two bytes, which is two nodes to a cache line, and
     // the GPU never reads this. Four bytes a node, so four megabytes at the default budget.

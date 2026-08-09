@@ -578,6 +578,18 @@ it scans the node watermark up to twelve times a frame, which at 268,761 slots i
 million checks. It is inside the 0.8 ms budget for streaming but it is most of it, and the obvious
 improvement is to sweep only when something has actually gone cold.
 
+## The renderer rewrite — the erosion sweep, and a worst frame that was startup
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D273 | **The erosion sweep tests the timestamp before the node record, and walks a slice a frame** | measurement | It read the 32-byte record *first* and then the four-byte timestamp, so a settled frame touched every node in the pool — 268,761 records is **8.6 MB of memory traffic to discover nothing had gone cold** — and it did that every frame when `cold_frames` is six hundred. Now the one-megabyte timestamp array is walked and only a slot that is genuinely cold costs a look at its record, an eighth of the range at a time. **0.490 ms to 0.060 ms.** A freed slot is stamped on release as well, or it reads as cold for ever and costs the record read the ordering exists to avoid |
+| D274 | **Ask when the worst frame happened before trying to make it smaller** | measurement | Three changes were made chasing a 27 ms worst frame: caching the chunk across the proximity sweep (29.9 → 27.4), quartering the build budget (27.4 → 23.2), quartering the proximity slice (23.2 → 22.9). Each moved it less than the last, which was the signal. **It was frame 16** — during load, before the world settled at frame 240 — so nothing done to the steady state could touch it, and two of those three changes were pure cost: a smaller build budget is slower fill-in and a smaller proximity slice is four times as long to reach twenty metres. Both restored. The worst-frame report now names its frame, which is the one line that would have prevented all three |
+
+**Where it stands.** Steady-state node pool CPU is **0.063 ms on the close camera and 0.072 ms
+outdoors**, against 0.490 before this and 252.8 before the request dedupe. The worst frames are 36
+and 96 ms and both are during load — real, worth fixing, and a different problem from the one this
+was about.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
