@@ -452,6 +452,26 @@ Sunlight has made that move already — that's the shadows above. Sky light, lam
 are next, on the same footing, and after that the old per-pixel lighting comes out entirely. That's
 the change that's supposed to make it fast enough to be the normal renderer rather than a slideshow.
 
+**Ambient occlusion, planned next to the sky light and not after it.** Right now every surface in
+the game gets the full sky, whatever is in front of it. A wall at the back of a corridor is lit as
+brightly as one standing in a field — which is most of why the inside of the building looks like a
+model of a room rather than a room, even now that it has real sun shadows. Ambient occlusion is the
+missing half of that: the light that *cannot* reach a surface because something is in the way. It's
+what makes corners settle into shadow, what makes a doorway read as a hole in a wall, and what makes
+a carved cylinder look round instead of like a stack of blocks.
+
+Three things about how it's planned, in plain terms:
+
+- **It's measured, not faked.** Most games guess this from the picture on screen, which is why it
+  smears when you turn and disappears at the edges of the screen. Here it's worked out on the
+  surfaces themselves with real rays against real voxels, the same way the sun's shadow now is.
+- **It goes finer than a voxel.** Each cube face doesn't store one darkness value — it stores how
+  that darkness *changes* across the face: which way it gets darker, and how fast. So the shading
+  keeps getting smoother as you walk up to a wall instead of turning into 3 cm squares.
+- **It costs nothing once it settles.** Shadows from the sun have to be re-checked forever, because
+  the sun moves. This doesn't: if you're not carving, the answer never changes, so it's worked out
+  once and then stops using any time at all. Carving reopens it around what you carved.
+
 ## How we'll work
 
 - I write all the code. You never open a code file.

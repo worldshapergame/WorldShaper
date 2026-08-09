@@ -135,6 +135,7 @@ written for the person the work is for, so it is the one to keep current.
 | R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit |
 | R3 the face pass | XL | **a, b done; c half** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun only; lamps, sky and bounce are the rest of R3c. **R3d not started** |
 | R9 the off-screen set | L | **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). The rest **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
+| R10 ambient occlusion | L | **planned, not started.** §8 R10. The composite applies an ambient term to every surface with **no occlusion in it at all** — `sees_sky` is decided from which way a face points and nothing else — so the interior is lit as though the building stood in the open. It is the same integral the sun already gets, over the hemisphere instead of the sun's disc, so it is the same machinery; it is sub-voxel because the face pass already jitters its sample across the face and throws the position away, and keeping the Legendre moments of that costs no rays and no solve; and it converges once and then stops tracing, because occlusion of static geometry is a constant |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
 | R5 face denoise, composite | M | not started |
 | R6 post | M | not started |
@@ -437,6 +438,23 @@ picture bit-identical, store +3.0%. D308–D311.
 **R3d** deletes the per-pixel light path, and carries one debt from here — split `GpuFace` so the
 CPU's half and the card's half are never in one copy, which is what makes bug 5 impossible rather
 than merely absent.
+
+### R10 — ambient occlusion, and why it is planned next to R3c rather than as a feature
+
+Asked for by the user, planned in `21-renderer-rewrite.md` §8 R10 and not started. Read that section
+before the rest of this list, because it changes what R3c's sky sub-step is: **the composite already
+applies an ambient term to every surface in the frame and there is nothing anywhere that occludes
+it**, so a corridor and an open field receive the same dome. AO is not an effect to add on top; it
+is the missing visibility on a term already being applied, and it is the same integral the sun gets
+over a different set of directions. Building the sky term and AO as two things guarantees they will
+disagree, and the failure — every crease double-darkened — reads as taste rather than as a bug.
+
+Three claims in it that are worth knowing before touching the face pass: the sub-voxel half is free
+because `shade_faces.comp` already jitters its sample across the face and throws the position away;
+the fit needs no solve because the jitter is uniform, so the Legendre basis is already orthogonal
+under it and every coefficient is a running mean; and the steady-state cost is **zero rays**,
+because occlusion of geometry that is not being edited is a constant and the sun is the only thing
+that has to be re-traced for ever.
 
 ### Then R2 onward
 

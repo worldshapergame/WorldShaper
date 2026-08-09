@@ -510,6 +510,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R3 | faces are voxels | **done** — D298–D303. Every face in the store was a brick, so the finest shadow was 25 cm; now 416,261 level 0, 59,758 level 1, 1,603 level 3 on the close camera. Two collisions on zero and a shell that was transparent to occlusion came with it. Speckle enclosed 17.5 (no shadows) → 3.8 |
 | R3 | the store recycles | **fixed** — D304–D306. `evict_cold` was written, tested and never called, so the store filled and then refused every face after it: the shadowed set froze and everything new was lit by the fallback. A slice a frame now, with the threshold halving when the table is full |
 | R9 | d. coarse light for a face that has none | **done, early** — D308–D311. A face with no light of its own reads the face three levels above it, which 512 faces share and the request lattice cannot miss. Falling back to full sun: under 1% of the enclosed room at frame 30 against frame 78, and 2,978 wrong pixels against 283,291 at frame 40. GPU unchanged still and moving, settled picture bit-identical, store +3.0% |
+| R10 | ambient occlusion, per face and under it | **planned, not started.** The composite applies an ambient term with no occlusion in it at all, so the interior is lit as though it stood in the open. Same integral as the sun over a different domain; sub-voxel from a Legendre fit over the face that the existing jitter already pays for; converges once and then costs nothing. §8 R10 |
 | R9 | the off-screen set | **planned, not started** — §8's new stage. The face store holds what the camera can see, so light is a screen-space set in world-space clothing. Prerequisite for R4c/R4d being worth measuring |
 | R9 | light from what is not loaded | **planned, not started** — R9f–R9h. Light folds up the tree as colour does and outlives its children, so eviction stops being a lighting decision; the emitter list persists per region and loads with the index rather than the voxels; no light path may cause streaming |
 | R4–R8 | | not started |
@@ -998,6 +999,314 @@ coarsely the failure is not noise but **flatness**: interiors lit by a plausible
 not respond to what is actually in them, and no counter moves. The debug view in R9e must therefore
 show which *level* a face's light came from, not only which class.
 
+### R10 — Ambient occlusion, per face and under it · L
+
+**Where this comes from.** `resolve.comp` already applies an ambient term to every surface in the
+frame, and there is nothing anywhere that stops it:
+
+```glsl
+float sees_sky = kSkyAmbient * (0.5 + 0.5 * normal.y) + kGroundBounce;
+```
+
+That is how much of the sky a surface sees, decided from which way it points and from nothing else.
+A wall at the back of a corridor, a floor under a ceiling, the inside of the facility — every one of
+them receives the whole dome. The building is lit as though it were a cut-out standing in the open,
+which is exactly what it looks like, and it is why the interior reads as a model of a room rather
+than as a room even now that the sun casts real shadows.
+
+So ambient occlusion is not an effect being added here. **It is the missing visibility on a term
+that is already being applied**, and the reason it has never been there is that visibility used to
+mean a per-pixel gather, which this renderer does not do and will not do.
+
+**What it is, exactly, and why it is one machine and not two.** The quantity is the cosine-weighted
+fraction of the hemisphere above a face that reaches somewhere else:
+
+```
+V(x) = (1/π) ∫_Ω v(x, ω) cos θ dω
+```
+
+The sun term R3c already computes is that integral over a domain of one direction with a disc
+around it. Ambient occlusion is the same integral over the whole hemisphere. Same face, same one
+writer, same two counts, same round robin, same accumulation that made the penumbra resolve over
+samples instead of over pixels — **a different set of directions and nothing else**. Anything in
+this stage that needs its own pass, its own budget or its own buffer is a sign of having got it
+wrong.
+
+**The rule this stage adds.**
+
+> Ambient occlusion is the visibility factor of the ambient integral, and there is exactly one of
+> it. It is measured on the face by the rays the face pass already traces, it is stored where the
+> face's other light is stored, and nothing in the composite multiplies by it twice.
+
+That last clause is not pedantry. AO applied *as well as* a real sky-visibility term — which is
+what R3c and R9 are going to produce — double-darkens every crease in the building, and the failure
+looks like a taste problem rather than like a bug. One quantity, one consumer.
+
+**What this stage is not, stated so it is never argued about again.**
+
+- **Not screen space.** SSAO is a second gather per pixel, so it scales with resolution — the one
+  thing this whole rewrite exists to stop — and it is view-dependent, so it swims when the camera
+  moves and vanishes at screen edges. It also cannot see the occluder standing behind you, which is
+  precisely the occluder that darkens the wall you are looking at. It fails the one rule in §1 on
+  its first line.
+- **Not baked.** A lightmap is an answer to a world that does not change, and this world is editable
+  at 3 cm with a chisel.
+- **Not a normal-map trick.** D195 already deleted derived smooth normals: detail comes from real
+  smaller voxels. AO here is measured against the geometry that is actually there.
+
+#### The three things it has to deliver
+
+1. **Per face.** One occlusion answer per voxel face, from real rays against real voxels — so a
+   corner is dark because a corner *is* dark, not because a heuristic said corners are dark.
+2. **Under the face.** Occlusion that varies *within* a single voxel face, continuously. At level 0
+   a face is 3.125 cm; a pixel at arm's length covers a fraction of one. Without this, AO is
+   flat-shaded per voxel and the picture gets *blockier* the closer you stand — the exact failure
+   D298 fixed for shadows, arriving again through a different door.
+3. **Aware of corners, planes, curvature and shape.** Not as four heuristics. As one consequence:
+   the thing being measured is the real visibility field, and the thing being stored is a low-order
+   *fit* of that field over the face, whose terms are literally its value, its gradient and its
+   curvature.
+
+#### R10a — one ray into the hemisphere, and the constant comes out of the composite
+
+Cosine-weighted direction about the face normal, from the same per-slot hash `shade_faces.comp`
+already uses for the sun disc; one ray per due face per frame; accumulated with `face_accumulate`'s
+two counts, for the reason D293 recorded — a running mean in eight bits cannot converge. The
+composite reads it in place of `sees_sky`.
+
+**Where it is stored, and this is the sub-step's real decision.** Not in `GpuFace`. That record has
+two owners, and D295 already cost a session to the fact: the uploader sent the CPU's zeroed bytes
+over what the card had written. AO is written by the card, read by the card, and never looked at by
+the CPU at all — so it goes in a **card-only array, one entry per face slot, allocated with the
+store and never uploaded, never mirrored, never in a dirty range**. `src/gpu/face_light.*`. This
+also starts paying down R3d's standing debt (*split `GpuFace` so the CPU's half and the card's half
+are never in one copy*) rather than adding to it: the sun's counters move there when R3d lands.
+
+*Files: `shaders/shade_faces.comp`, `shaders/resolve.comp`, `src/gpu/face_light.{hpp,cpp}`,
+`src/world/face_store.*` (slot lifetime only).*
+*Gate: against a brute-force reference — see the gate at the end of the stage. The enclosed room's
+mean sky visibility must fall from 1.00 to the reference's answer, and outdoor faces pointing at
+open sky must stay at 1.00, because a change that darkens everything is indistinguishable from a
+change that darkens nothing but the exposure.*
+
+#### R10b — the near field and the far field are two answers from one ray
+
+They are different quantities and they must not be averaged into one:
+
+- **far field — sky visibility.** Unbounded. Multiplies sky radiance. Physical, and the thing the
+  ambient term is actually missing.
+- **near field — contact.** The same ray's *first hit distance*, put through a falloff over about a
+  metre. This is the crease darkening that reads as shape, and it is what carries the sub-voxel
+  detail in R10c because it is the part that varies quickly across a face.
+
+One ray answers both: a hit at 0.3 m says "not sky" and "contact", a ray that escapes says "sky" and
+"no contact". The falloff radius is **in metres and not in voxels**, so a coarse face at 200 m and a
+level-0 face at arm's length darken over the same physical distance and a dolly-in shows no
+transition.
+
+**The cost inverts, which is worth noticing.** An AO ray dies at the first thing it meets, so the
+enclosed room — the case that costs the most in every other pass, the one the whole plan is gated
+on — is the *cheapest* case here: every ray terminates in a metre. Outdoors the rays escape, and
+escaping is what the node pool's empty-child skip is best at. There is no camera where this is the
+expensive term.
+
+*Gate: the contact term alone, in the debug view, on a flat wall in the open, must be zero
+everywhere — a falloff that darkens a plane against itself is the classic self-occlusion bug and it
+is invisible once the two terms are multiplied together.*
+
+#### R10c — the polynomial over the face, which is where "under the voxel" comes from
+
+The face pass **already** picks a point on the face and throws its position away:
+
+```glsl
+const vec3 on_face = corner + vec3(size * 0.5) +
+                     across * ((jitter.x - 0.5) * span) +
+                     down   * ((jitter.y - 0.5) * span);
+```
+
+Every sample therefore knows *where on the face* it was taken. Keeping only the count is what makes
+AO flat over a face. Keep the first and second moments in (u, w) instead and the face carries a
+continuous field — **at no extra rays, no extra passes and no fitting step**.
+
+**Why there is no fitting step, which is the whole reason this is affordable.** Use Legendre
+polynomials on [−1, 1]: `P₀ = 1`, `P₁ = u`, `P₂ = (3u² − 1)/2`. The jitter is uniform over the face,
+so ⟨PᵢPⱼ⟩ = δᵢⱼ/(2i+1) — the basis is *already orthogonal under the sampling distribution*.
+Each coefficient is then an independent running mean:
+
+```
+ĉ_kl = (2k+1)(2l+1) · E[ v · P_k(u) P_l(w) ]
+```
+
+No normal equations, no matrix, no least-squares solve, no second pass over the samples. Each
+coefficient accumulates exactly the way the scalar does now, with the sample weighted by two cheap
+polynomials. Six terms are kept — `{1, u, w, uw, u², w²}` — and the cross-quadratics are dropped
+because nothing in a voxel world produces them at a scale a face can see.
+
+**What each term is, in the picture:**
+
+| term | what it holds | what it looks like |
+|---|---|---|
+| `1` | the mean | today's flat per-face answer |
+| `u`, `w` | the gradient | darkening *towards* the edge that meets a wall — a corner, resolved continuously across the face instead of at its boundary |
+| `uw` | the saddle | the inside corner where two walls meet: dark in one quadrant, not in the others |
+| `u²`, `w²` | the curvature | the *rate* at which occlusion changes, which is what makes a voxel cylinder read as a cylinder rather than as a faceted prism |
+
+That is the answer to "corner, plane, curvature and shape aware", and it is one answer rather than
+four: the field being fitted is the real visibility integral, so a plane fits to a constant, a
+corner to a gradient, a crease to a saddle and a curved surface to a quadratic, without anything in
+the code knowing which of those it is looking at.
+
+**Read in the composite for six multiply-adds.** The pixel's (u, w) on the face comes from the world
+position it already reconstructs and the face key it already has — two subtractions and a multiply.
+No extra buffer, no extra fetch: the record is the one it is already reading.
+
+**Where the noise goes, honestly.** The variance of ĉ_k is about (2k+1) times the mean's, so the
+gradient terms need roughly three times the samples and the curvature terms about five, for the same
+absolute error. Three consequences, all of them design rather than apology: the higher terms are
+**allocated only where they earn it** (a face whose measured gradient is inside its own noise stores
+nothing but the mean, and most faces in the open are that face); the evaluated quadratic is
+**clamped to [0,1] over the face**, which for a quadratic is a closed-form bound on three points per
+axis rather than a per-pixel saturate; and R5a's a-trous over the face lattice is what the residual
+is left to.
+
+**The trap that will bite, named in advance.** `span` is half the face today, and deliberately: a
+ray starting at the exact edge of a face slips through the shared edge of two solid cells — the DDA
+crosses both boundaries on one step — and about five per cent of them came out the other side
+indoors. A quadratic fitted from the middle half and *extrapolated* to the face edge is worst
+exactly where AO matters most, which is the edge. So this sub-step has to sample the full face and
+fix the leak at its cause, and it has to prove the fix with the measurement that found it: the share
+of rays escaping a fully enclosed room, which must stay at nought.
+
+**Continuity across the face boundary** is not enforced and does not need to be: neighbouring faces
+fit the same continuous integral over adjoining domains, so their polynomials agree at the shared
+edge to within their noise. That is a claim, so it is gated: no face boundary may be findable in the
+AO channel by an edge detector.
+
+**And it survives R8.** A quadratic restricted to a quadrant of its own domain is still a quadratic,
+by a fixed linear map — so when infinite detail subdivides a face, the children inherit their part
+of the parent's field exactly and there is no pop at the subdivision. AO is the one quantity in this
+renderer that gets *continuously* finer rather than in steps, which is what §1 has been claiming for
+everything else.
+
+#### R10d — the bent normal, where "shape aware" stops being a figure of speech
+
+The l=1 moment of the same visibility function: the mean unoccluded direction, accumulated as a
+vector sum from the same rays, with the length of that sum giving a cone half-angle. Three more
+accumulators.
+
+What it buys, none of which a scalar can:
+
+- **the sky is read along it, not along the geometric normal.** A wall beside a doorway is lit from
+  the doorway, which is where its light actually comes from. This is the difference between a room
+  that is uniformly dimmer and a room that is lit.
+- **specular occlusion for R4.** A bin whose direction lies outside the visibility cone is occluded,
+  and R4c gets that for free instead of reflecting a room the face cannot see.
+- **a gathering direction for R9's bounce**, so the first bounce starts pointed at where the light
+  is rather than at where the surface faces.
+
+#### R10e — the shape prior, so a face is never wrong-bright
+
+A newly claimed face has no samples, and the composite's fallback is *no occlusion*, which is the
+same failure D308 fixed for the sun and would arrive here in the same clothes: geometry revealed by
+a camera move flashing bright before it darkens. Three layers, in the order they arrive:
+
+1. **Instant, from the tree and no rays at all.** The node's child mask and the six coverage bytes
+   of its neighbours already say how enclosed this face is — the classic voxel-vertex occlusion
+   count, which is cheap, wrong in the third decimal and right about which faces are in a corner.
+   As a *seed* it is exactly what is wanted; as an answer it is what everyone else ships.
+2. **A few frames later, the coarse stand-in** — D308's machinery, unchanged, because AO folds up
+   the tree as light does (R10g).
+3. **Converged, the traced integral**, which replaces both.
+
+*Gate: the R9d instrument, unchanged — the share of surface pixels on the fallback, from a cold
+store — must not regress, and no camera move may produce a frame in which a revealed surface is
+brighter than its converged answer.*
+
+#### R10f — it converges, and then it stops. This is the performance claim
+
+**Ambient occlusion of static geometry is a constant.** The sun moves and its visibility must be
+re-traced for ever; AO must not be. A face whose AO has met its variance target leaves the shading
+rotation **entirely** — not "refreshes rarely", stops — and the steady-state cost of this stage in a
+world nobody is editing is *zero rays per frame*. That is the whole reason it can afford to be good:
+the budget is spent on convergence, once, and then returned.
+
+What that requires, and it is the only new machinery in the stage:
+
+- **A convergence test per face**, from the counts already kept — with the higher-order terms
+  allowed to keep sampling after the mean has stopped, since they need the samples.
+- **More rays while unsettled, none when settled.** A face gets several AO rays a frame while it is
+  converging, which costs nothing in the enclosed case because they all die in a metre. The
+  arithmetic: a binomial estimator holds ±2% at the worst case p = 0.5 after about 600 samples, so
+  at 8 rays a frame a face converges in **under eighty frames** and then costs nothing for ever.
+- **Invalidation, which is the part that will be forgotten.** An edit already tells the node pool;
+  it must tell the face store to reopen AO within a radius of the edit, or a carved doorway leaves
+  the wall beside it dark for the rest of the session. Same shape as `kEditWindow` (D74) and the
+  same radius argument as D256–D258: the cost of an edit is the brick, not the neighbourhood.
+
+*Gate: standing still, AO rays a frame fall to nought within N frames and stay there; carving a hole
+in a wall re-lights the room within M frames; an edit's own cost does not move.*
+
+#### R10g — fold up the tree, and outlive the face that measured it
+
+A coarse face's AO is the coverage-weighted mean of its children's, and its bent normal is the
+normalised sum of theirs. This is R9f's rule — light folds up the tree exactly as colour does —
+applied to the one quantity that folds *perfectly*, because it is scalar, geometric and bounded.
+
+Three things fall out at once: distant geometry has AO with no rays traced for it; D308's stand-in
+has a real value to hand out rather than an unshaded one; and a face re-claimed after eviction
+starts converged instead of starting again. Optionally — and only once R10f's invalidation is
+trustworthy — AO persists into the world cache beside the refinement state (D241), because it
+depends on geometry alone, so a reload starts lit rather than converging in front of the player.
+
+#### R10h — the debug view, before any of the above is believed
+
+The AO channel on its own; the contact and sky terms separable; **which of the three sources this
+face's value came from** (seed, stand-in, traced) in distinguishable colours; and face boundaries
+drawn on request, since "no seam is visible" is a claim this stage has to prove rather than assert.
+D310 is the reason this is a numbered sub-step and not a line in R10a: an instrument where two
+different answers share a colour will produce a wrong number, and it will be the number that was
+gone there for.
+
+#### The arithmetic
+
+**Rays.** One to eight per face per frame while converging, zero after. The march is short by
+construction — AO's ray dies at the first occluder — where the sun's may cross the whole scene, so
+an AO ray is a fraction of the cost of the shadow ray already measured at 0.185 ms for 19k faces and
+0.477 ms for 639k (D300). The transient is bounded by the claim rate, which R9b already budgets.
+
+**Memory.** Sixteen bytes a face in the card-only array — counts, mean, contact, bent normal — which
+is 7.6 MB at the 477,622 faces the close camera claims and 16 MB at the million-face cap. Plus a
+sixteen-byte field block from the size-classed payload pool **only for faces whose measured gradient
+is larger than its own noise**, which is creases and corners rather than the flat majority. Stated
+plainly because it is the largest single number in the stage: this is not free, it is *bounded*, and
+it is bounded by the same face count everything else here is.
+
+**Composite.** Six multiply-adds and a dot product, on a record already being read. No new fetch.
+
+**Resolution.** None of the above is a function of pixels, which is the point.
+
+#### The gate for the stage
+
+- **Against a reference, not against taste.** `--ao-reference N` traces N (default 1024)
+  cosine-weighted rays per face in one dispatch and writes the result; the incremental answer must
+  match it within 2% mean absolute error over the enclosed camera, and the reference itself is
+  checked by doubling N and finding it does not move.
+- **Cost:** face pass within +15% while converging, within noise once settled; composite within
+  noise; the whole stage within 10% between 800p and 4K, which is what per-face means.
+- **Look, measured:** no face boundary findable by an edge detector in the AO channel; a voxel
+  sphere's shading is continuous across face boundaries to second order; the enclosed room's mean
+  ambient visibility matches the reference rather than 1.0.
+- **Behaviour:** two settled frames from one camera stay bit-identical (D194); no revealed surface
+  is ever brighter than its converged answer; AO rays a frame reach nought on a still camera.
+
+#### Where it sits
+
+After R3c's sky, because they are the same integral and building them apart guarantees they will
+disagree; after R9d, whose stand-in R10e reads. R10a–R10b can land the moment the sky term does.
+R10c is the largest sub-step and the one worth its own measurement session. R10d feeds R4c's
+specular occlusion and R9's gathering direction, so it wants to be in before R4 closes. R10f is what
+makes the whole thing free, and R10g is what makes it survive eviction.
+
 ### R5 — Face denoise and the composite · M
 
 - **R5a — a-trous over the face lattice**, kept wholesale from the current tracer; it is the one
@@ -1054,7 +1363,8 @@ frame, paths per face and resolution scale.
 
 **New:** `shaders/face_select.comp`, `shaders/shade_faces.comp`, `shaders/photons.comp`,
 `shaders/face_denoise.comp`, `shaders/composite.comp`, `shaders/subdivide.glsl`,
-`src/world/face_store.*`.
+`src/world/face_store.*`, `src/gpu/face_light.*` — the card-only half of a face's light, which
+exists so the record with two owners never grows another field (D295, and R3d's standing debt).
 
 **Kept nearly as they are:** `pt_sky.glsl`, `pt_clouds.glsl`, `pt_media.glsl`, `pt_sampling.glsl`,
 `preview.glsl`, `ui.glsl`, the exposure meter and tone curve in `pt_post.glsl`, the whole world
@@ -1075,12 +1385,19 @@ Net: roughly 3,500 lines deleted against roughly 2,200 written.
 | Light latency after a large edit | a room takes a visible moment to relight | the short-window trick that already works (`kEditWindow`), applied to face selection priority rather than to sample weighting |
 | Infinite detail multiplies face count | face budget saturates and light stops converging near surfaces | budget is a cap on *convergence*, never on framerate; measure the face count per pixel, which theory says is constant |
 | One hash probe per ray is slower than a wrapped-grid fetch | primary visibility regresses in R1 | R0 records the baseline precisely so R1 cannot close on a guess |
+| AO noise reads as blotches on a large flat wall | a settled interior that looks dirty rather than dark | the mean converges as √N and the higher terms are allocated only where they beat their own noise; R5a's a-trous over the face lattice is what the residual is for; and R10f can spend more rays because it stops spending them afterwards |
+| The face polynomial overshoots near the face edge | a bright or black rim at every voxel boundary, which reads as a wireframe | a quadratic's extremum over a square is a closed form — clamp the coefficients so the evaluated field stays in [0,1] over the whole face, not per pixel |
+| AO folded up the tree makes distance too dark | mid and far cameras darken against the reference while the close one matches | fold coverage-weighted, and gate the fold on the mid/far/distant cameras rather than only on the one the feature was built at |
+| AO applied on top of a real sky-visibility or bounce term | every crease double-darkened, and it looks like a taste problem rather than a bug | the rule in R10: one visibility factor for the ambient integral, one consumer, checked when R3c's sky and R9's bounce land |
+| An edit does not reopen AO near it | a carved doorway leaves the wall beside it dark for the rest of the session | R10f's invalidation radius, and a test that carves and re-measures rather than a screenshot |
 
 ---
 
 ## 11. Decisions this plan proposes
 
-Numbered from D184, folded into `13-decision-log.md` as each stage lands.
+Numbered from D184, folded into `13-decision-log.md` as each stage lands. The log itself has run
+past this range while the rewrite was being built, so the lettered entries at the end are R10's
+proposals and take their real numbers when they land.
 
 | # | Decision |
 |---|---|
@@ -1101,6 +1418,9 @@ Numbered from D184, folded into `13-decision-log.md` as each stage lands.
 | D198 | **Simulation does not descend below level 0.** Sub-voxel matter is visual and editable, not simulated. |
 | D199 | **The proximity radius is twenty metres**, at full voxel detail, held regardless of visibility. Affordable because a node pool folds a uniform subtree into one node, which is what stops standing underground costing two million brick slots. |
 | D200 | **Sub-voxel depth has no number in it.** A sub-voxel node is identified by its parent and which of eight children it is, so the tree is the coordinate and there is no field to overflow. The practical floor is 32-bit float precision at roughly twenty-four levels down, which is fourteen levels past the closest look anyone can take. |
+| D200a | **Ambient occlusion is the visibility factor of the ambient integral, and there is exactly one of it.** The same rays, the same face, the same accumulation as the sun, over the hemisphere instead of over the sun's disc — and nothing in the composite multiplies by it twice. Screen space is excluded on the same line as everything else: it is a second gather per pixel. |
+| D200b | **Occlusion varies within a face, and it is stored as a low-order fit rather than as a map.** The face pass already jitters its sample across the face and throws the position away; keeping the Legendre moments of it costs no rays, no pass and no solve, and the terms it produces *are* the value, the gradient and the curvature of the real visibility field. |
+| D200c | **AO of static geometry converges and then stops being traced at all**, which is what makes it affordable to be good. The sun cannot do this because the sun moves. Edits reopen it within a radius. |
 
 ---
 
