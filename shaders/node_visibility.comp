@@ -44,7 +44,13 @@ void main() {
     // tree fills in.
     const bool report = ((pixel.x & 1) == 0) && ((pixel.y & 1) == 0);
 
-    NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report);
+    // One pixel in 256 says which root it read. Eviction releases a root with its whole subtree,
+    // and a 512 m root covers the entire scene here, so the useful information is a handful of
+    // distinct values and every pixel would repeat them. This is enough by a wide margin.
+    const bool report_used = ((pixel.x & 15) == 0) && ((pixel.y & 15) == 0);
+
+    NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
+                             report_used);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {

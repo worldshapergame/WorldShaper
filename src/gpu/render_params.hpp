@@ -137,6 +137,13 @@ struct FeedbackEntry {
 };
 static_assert(sizeof(FeedbackEntry) == 16, "FeedbackEntry must match the GLSL struct");
 
+// Set in `level` when the entry says a ray READ this node rather than failed to find it.
+//
+// One buffer carries both because they arrive from the same place at the same rate and a second
+// would need its own capacity, its own readback and its own barrier. A level is 0..24, so the bit
+// is free. Must match kFeedbackUsed in shaders/node.glsl.
+inline constexpr i32 kFeedbackUsed = 0x10000;
+
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.
 // One report per sampled pixel worst case, and sampling is one pixel in 64 — so this has

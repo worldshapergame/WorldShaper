@@ -669,12 +669,27 @@ void NodePool::request(const NodeKey& key) {
     requested_.push_back(key);
 }
 
+// Read by a ray, so it is wanted. Deliberately NOT a request: there is nothing to build, and
+// putting it through `requested_` would make every visible root re-descend its whole path every
+// frame for a tree that is already complete.
+void NodePool::touch(const NodeKey& key) {
+    const u32 enter_level = std::max(key.level, kEntryLevel);
+    const u32 up = enter_level - key.level;
+    const NodeKey root{key.x >> up, key.y >> up, key.z >> up, enter_level};
+    const auto it = live_.find(root);
+    if (it != live_.end()) it->second.last_wanted = touch_frame_;
+}
+
 void NodePool::invalidate(i64 x, i64 y, i64 z) {
     dirty_.push_back(node_key_of(x, y, z, kLeafLevel));
 }
 
 const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_voxel[3],
                                         u64 frame) {
+    // What `touch` stamps. It is called from the feedback loop before this runs, so it needs the
+    // frame from somewhere; keeping it here rather than passing it through every call site means
+    // a hit reported this frame is stamped with the frame it was reported in.
+    touch_frame_ = frame;
     batch_.clear();
     out_of_room_ = false;
     u32 budget = budget_.max_builds_per_frame;
@@ -848,12 +863,19 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // Until then: evict only under pressure. A pool holding ten megabytes of a five-hundred
     // megabyte budget has nothing to gain by throwing away what it just built, and "nothing to
     // gain" is the whole of the argument -- this is not a tuning choice that could go either way.
-    const bool node_pressure = next_free_ > (budget_.max_nodes / 4) * 3;
-    const bool leaf_pressure = next_leaf_ > (budget_.max_occupancy_leaves / 4) * 3;
-    const bool payload_pressure = payload_high_ > (budget_.payload_bytes / 4) * 3;
-    const bool under_pressure = node_pressure || leaf_pressure || payload_pressure;
+    // Age decides again, because it finally means something: a ray reading a node refreshes it
+    // through `touch`, so a root that has gone cold is one nothing has looked at for
+    // `cold_frames` — which is what this loop always believed and was never true before D247.
+    //
+    // The pressure test stays as a floor under it. A pool holding ten megabytes of a five-hundred
+    // megabyte budget gains nothing by evicting, and if the reporting is ever incomplete again
+    // this is what stops that becoming a churn instead of a bug report.
+    const bool node_pressure = next_free_ > budget_.max_nodes / 4;
+    const bool leaf_pressure = next_leaf_ > budget_.max_occupancy_leaves / 4;
+    const bool payload_pressure = payload_high_ > budget_.payload_bytes / 4;
+    const bool worth_evicting = node_pressure || leaf_pressure || payload_pressure;
 
-    for (auto it = live_.begin(); under_pressure && it != live_.end();) {
+    for (auto it = live_.begin(); worth_evicting && it != live_.end();) {
         if (frame - it->second.last_wanted <= budget_.cold_frames) {
             ++it;
             continue;

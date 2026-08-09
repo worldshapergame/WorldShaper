@@ -372,6 +372,12 @@ public:
     // footprint — so it is never fetched, never uploaded, and does not exist (D190).
     void request(const NodeKey& key);
 
+    // A ray READ this node, so it is wanted whether or not anything is missing under it.
+    //
+    // Without this, "wanted" only ever meant "missing", and a finished tree stopped being wanted
+    // by everything at once. See D247 and the note over the eviction loop.
+    void touch(const NodeKey& key);
+
     // "The copy you are holding is out of date." Pushed by whatever edited the world, and
     // remembered until it is served.
     //
@@ -512,6 +518,7 @@ private:
     // Marked at every write into the arrays above. A missed mark is a stale byte on the GPU and
     // a wrong picture, which is exactly what NodeBuffers::audit exists to catch: it walks the
     // real buffers against these arrays and names the first byte that disagrees.
+    u64 touch_frame_ = 0;   // the frame `touch` stamps, set by update()
     DirtySet dirty_nodes_;
     DirtySet dirty_leaves_;
     DirtySet dirty_entries_;

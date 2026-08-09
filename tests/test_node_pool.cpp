@@ -251,6 +251,40 @@ TEST_CASE("a built tree survives being quiet, because a miss is the only thing t
     CHECK(f.pool.validate());
 }
 
+// The other half of residency, and the reason eviction can be trusted again: a ray READING a node
+// keeps it, not only a ray missing one. Without this, "wanted" meant "missing", so a finished tree
+// was wanted by nothing and the pool threw the scene away on a timer (D247).
+//
+// Under pressure, so eviction is actually running and the test is about `touch` rather than about
+// the floor beneath it.
+TEST_CASE("a node a ray keeps reading is not evicted, under pressure") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 63, 63, 63);
+    NodePoolBudget budget;
+    budget.max_nodes = 512;
+    budget.max_occupancy_leaves = 64;
+    budget.payload_bytes = 64 * 1024;
+    budget.proximity_voxels = 0;
+    budget.cold_frames = 4;
+    f.pool.create(budget, f.types);
+
+    for (u64 frame = 1; frame < 40; ++frame) {
+        f.want_box(0, 0, 0, 63, 63, 63);
+        f.serve(frame);
+    }
+    const NodeKey root = node_key_of(0, 0, 0, kEntryLevel);
+    REQUIRE(f.pool.find(root) != kNoNode);
+
+    // Nobody asks for anything ever again -- the tree is complete, so there is nothing to miss.
+    // But a ray reads it every frame, which is the only thing that should matter.
+    for (u64 frame = 40; frame < 200; ++frame) {
+        f.serve(frame);
+        f.pool.touch(root);
+    }
+    CHECK(f.pool.find(root) != kNoNode);
+    CHECK(f.pool.validate());
+}
+
 // And the other half, which still has to work: when the pool is genuinely full, the coldest thing
 // goes. Provoked with a budget small enough that building the scene crosses the pressure mark,
 // because that is the only condition under which evicting is a gain rather than a loss.

@@ -360,6 +360,27 @@ void node_flush(bool enabled, bool has_pending, ivec4 pending) {
     if (index < push.resolution.w) feedback.entries[index].coord = pending;
 }
 
+// A ray reporting what it USED, which is the other half of residency and was missing.
+//
+// Feedback has only ever carried misses, and a miss is the one thing that cannot keep a node
+// alive: the moment the tree is complete the rays stop missing, nothing is reported, and the
+// pool's idea of what is wanted stops advancing for everything at once. It then evicted the
+// whole scene on a timer while every ray was reading it (D247).
+//
+// Reported at the ENTRY level, because that is the granularity eviction works at - a root is
+// released with its entire subtree - so one report per visible root per frame is all that is
+// needed, and every pixel would otherwise say the same handful of things. A sparse sample
+// covers it by a wide margin at a fraction of the buffer.
+const int kFeedbackUsed = 0x10000;   // in the level field: used, as against missing
+
+void node_flush_used(bool enabled, ivec3 block) {
+    if (!enabled) return;
+    uint index = atomicAdd(feedback.count, 1u);
+    if (index < push.resolution.w) {
+        feedback.entries[index].coord = ivec4(block, kEntryLevel | kFeedbackUsed);
+    }
+}
+
 // ---- the march ------------------------------------------------------------------------------------
 
 struct NodeHit {
@@ -416,7 +437,8 @@ float node_bayer(ivec2 pixel) {
 
 const uint kNodeMaxSteps = 512u;
 
-NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report) {
+NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
+                   bool report_used) {
     NodeHit result;
     result.hit = false;
     result.t = push.lens.y;
@@ -545,6 +567,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 // at anyway.
                 result.level = min(found.level, kNodeMaxDetail);
                 node_flush(report, has_pending, pending);
+                node_flush_used(report_used, g_node_block);
                 return result;
             }
 
@@ -597,6 +620,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                         result.coverage = node_face_coverage(found.slot, inner_normal);
                     }
                     node_flush(report, has_pending, pending);
+                    node_flush_used(report_used, g_node_block);
                     return result;
                 }
                 if (i_max.x < i_max.y && i_max.x < i_max.z) {
@@ -658,6 +682,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     result.coverage = node_face_coverage(found.slot, stand_normal);
                     result.level = min(outer_level, kNodeMaxDetail);
                     node_flush(report, has_pending, pending);
+                    node_flush_used(report_used, g_node_block);
                     return result;
                 }
             }

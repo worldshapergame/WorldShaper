@@ -2376,6 +2376,26 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
                 }
             }
         }
+
+        // And the node pool, which was never told at all.
+        //
+        // Every structure above is a chunk structure, and the marcher stopped reading those when
+        // the node pool became the default. So carving or placing changed the world, refreshed
+        // four things nothing was drawing from, and left the tree the renderer actually walks
+        // holding the world as it was before the edit -- which on screen is an edit that does
+        // nothing whatsoever. Reported by the player, and it is the plainest possible symptom of
+        // the seam R1e exists to remove.
+        //
+        // Per brick rather than per chunk, because that is the pool's leaf and `invalidate` drops
+        // the node and every ancestor folded from it. The op is normalised above, so these bounds
+        // are already the right way round.
+        for (i64 bz = op.z0 >> kLeafLevel; bz <= (op.z1 >> kLeafLevel); ++bz) {
+            for (i64 by = op.y0 >> kLeafLevel; by <= (op.y1 >> kLeafLevel); ++by) {
+                for (i64 bx = op.x0 >> kLeafLevel; bx <= (op.x1 >> kLeafLevel); ++bx) {
+                    node_pool_.invalidate(bx << kLeafLevel, by << kLeafLevel, bz << kLeafLevel);
+                }
+            }
+        }
     }
 }
 
@@ -2468,6 +2488,10 @@ void Application::stream(f64 seconds) {
         // Chunk residency is fed whichever marcher ran, because the path tracer reads the chunk
         // buffers directly — so with the node pool marching and this left as it was, pressing F4
         // gave an empty world.
+        // A used-report is not a request for anything; chunk residency has nothing to do with
+        // it, and its level field carries a flag that would shift the coordinate into nonsense.
+        if (node_feedback && (entry.level & kFeedbackUsed) != 0) continue;
+
         ChunkCoord coord{entry.x, entry.y, entry.z};
         if (node_feedback) {
             const u32 level = static_cast<u32>(entry.level);
@@ -2521,6 +2545,18 @@ void Application::stream(f64 seconds) {
     // the pool builds toward it. In the path tracer that spent budget on 488 nodes of nothing.
     if (node_feedback) {
         for (const FeedbackEntry& entry : wanted) {
+            // A ray that READ this node, rather than one that could not find it.
+            //
+            // Residency had only ever heard about misses, so the moment the tree was complete it
+            // heard nothing at all and evicted the scene on a timer (D247). A hit costs one entry
+            // per visible root per frame and is what makes "wanted" mean wanted.
+            if ((entry.level & kFeedbackUsed) != 0) {
+                const u32 level = static_cast<u32>(entry.level & ~kFeedbackUsed);
+                if (level > kMaxNodeLevel) continue;
+                node_pool_.touch(NodeKey{entry.x, entry.y, entry.z, level});
+                continue;
+            }
+
             const u32 level = static_cast<u32>(entry.level);
             if (level < kLeafLevel || level > kMaxNodeLevel) continue;
             node_pool_.request(NodeKey{entry.x, entry.y, entry.z, level});
