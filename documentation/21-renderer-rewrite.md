@@ -487,7 +487,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R0 | a. profiler, averages, warm-up | **done** — D201–D203 |
 | R0 | b. `baseline.ps1`, `_grid.ps1`, `_measure.ps1`, image diff | **done** — D204 |
 | R0 | c. debug view 11 + `facecount.ps1`, premise verified | **done** — D205 |
-| R0 | d. record the full grid to `documentation/baselines/` | **outstanding** — the grid was interrupted; rerun and commit the csv. Now affordable: a settled run was 133 s and is 6.6 s, because the clip cache is written at the fixed point (D241) |
+| R0 | d. record the full grid to `documentation/baselines/` | **done** — `r2-node-pool.csv`, the realtime grid at all seven cameras and three resolutions, with the node pool as the marcher and `--settle` so the runs are comparable. It was impossible before: a settled run cost 133 s and now costs a few. Previously **outstanding**|
 | R1 | a. `NodePool` CPU structure + tests | **done** — D206–D213 |
 | R1 | b. `node.glsl` descent + `node_visibility.comp` | **done, compiles** — D214–D218 |
 | R1 | c. GPU buffers, pipeline, `--node-pool` | **done** — both marchers run, D219–D223 |
