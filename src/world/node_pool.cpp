@@ -971,7 +971,18 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // wants it again reports it and it returns at the level that ray asks for. The slot itself
     // stays in its parent's run of eight, because the run is the allocation unit and the subtree
     // underneath is where the memory actually was.
-    if (next_free_ > 0) {
+    // Repeated until nothing more is cold, because one pass only takes one level.
+    //
+    // A node is a candidate only once its children are gone, so a single sweep erodes exactly one
+    // level: an eleven-level subtree that nothing reads would take eleven times `cold_frames` to
+    // shed, which is twenty seconds at three hundred frames a second, and R2b asks for a ratio
+    // rather than a direction. Repeating collapses a dead subtree in the frame it goes cold.
+    //
+    // Bounded by the depth of the tree by construction -- each pass removes a level, and there
+    // are at most kEntryLevel of them -- and each pass over eighty thousand nodes is a scan of a
+    // few hundred kilobytes, so the loop is cheap and its bound is not a guess.
+    for (u32 pass = 0; next_free_ > 0 && pass <= kEntryLevel; ++pass) {
+        const u32 before_pass = batch_.evicted;
         const u32 cold = budget_.cold_frames;
         const u32 now = static_cast<u32>(frame);
         for (u32 slot = 0; slot < next_free_; ++slot) {
@@ -994,6 +1005,7 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             dirty_nodes_.mark(slot);
             ++batch_.evicted;
         }
+        if (batch_.evicted == before_pass) break;   // nothing left that is both cold and childless
     }
 
     // And what has gone cold -- but only when there is something to gain by it.

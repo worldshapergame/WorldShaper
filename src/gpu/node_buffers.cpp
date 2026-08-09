@@ -185,6 +185,21 @@ struct AuditRange {
 bool NodeBuffers::audit(const NodePool& pool) {
     if (device_ == nullptr) return false;
 
+    // Wait for the frame BEFORE touching the staging ring, not only after submitting.
+    //
+    // This reads the device buffers back into `staging_`, which is the same ring `upload` writes
+    // its dirty ranges through -- and an upload recorded into the frame's command buffer has not
+    // necessarily executed yet. Copying over those bytes hands the pending upload whatever the
+    // audit just read, so the card receives the wrong thing and then disagrees with the pool: an
+    // audit that CAUSES the fault it exists to report, intermittently, depending on whether an
+    // upload happened to be in flight.
+    //
+    // Seen once at 640x400 after per-node eviction (D262) started making uploads happen on most
+    // frames rather than a few, and it did not reproduce, which is exactly how a race presents.
+    // The audit is off the hot path by construction -- it stalls the device anyway -- so waiting
+    // twice costs nothing worth having.
+    device_->wait_idle();
+
     const u32 node_count = pool.node_watermark();
     const u32 leaf_count = pool.leaf_watermark();
 

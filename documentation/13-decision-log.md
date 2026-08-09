@@ -545,6 +545,20 @@ is the obvious suspect: it is the first code to release nodes in bulk while the 
 running. It must be understood before anything relies on the erosion, because an intermittent
 mirror mismatch is the exact shape of the fault that took R1 five readings to find.
 
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D265 | **The audit waits for the frame before it touches the staging ring, not only after submitting** | measurement | It reads the device buffers back into `staging_`, which is the same ring `upload` writes its dirty ranges through — and an upload recorded into the frame's command buffer has not necessarily executed. Copying over those bytes hands the pending upload whatever the audit just read, so the card receives the wrong thing and then disagrees with the pool: **an audit that causes the fault it exists to report**, intermittently, depending on whether an upload was in flight. Per-node eviction made uploads happen on most frames rather than a few, which is what surfaced it. Four consecutive runs at the resolution it failed on now match with identical node counts — which is consistent with the fix and is not proof, an intermittent fault being what it is |
+| D266 | **The erosion sweep repeats until nothing more is cold** | measurement | A node is a candidate only once its children are gone, so one sweep takes one level: an eleven-level dead subtree needed eleven times `cold_frames`, or twenty seconds at three hundred frames a second. Bounded by the depth of the tree by construction, and each pass is a scan of a few hundred kilobytes |
+
+**R2b's gate is still not met, and the remaining gap is not understood.** Half resolution holds
+3.95 MB against a target of 1.36 MB — **2.90× over**; quarter resolution is 1.62× over. Erosion is
+demonstrably working (82,798 nodes to 64,846 at half resolution) but it removes 22% where the rule
+predicts 75%, and the reason is not yet measured. The next thing to do is count resident leaves per
+*level* at each resolution rather than in total: the rule says halving the resolution should move
+every ray's stopping point one level coarser, and a per-level histogram either shows that happening
+or shows exactly which levels are not shifting. Guessing at it twice has produced two changes that
+were worth making and did not close the gap.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
