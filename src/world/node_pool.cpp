@@ -78,6 +78,7 @@ void NodePool::create(const NodePoolBudget& budget, const VoxelTypeTable& types)
 
     // Sized to the arrays they track. Nothing is marked: both sides start empty, and everything
     // built from here marks itself on the way in.
+    node_last_read_.assign(budget_.max_nodes, 0);
     dirty_nodes_.create(budget_.max_nodes);
     dirty_leaves_.create(budget_.max_occupancy_leaves);
     dirty_entries_.create(entries_.size());
@@ -120,6 +121,7 @@ u32 NodePool::allocate_node() {
         free_singles_.pop_back();
         nodes_[slot] = GpuNode{};
         dirty_nodes_.mark(slot);
+        node_last_read_[slot] = static_cast<u32>(touch_frame_);
         return slot;
     }
     if (next_free_ >= budget_.max_nodes) {
@@ -129,6 +131,7 @@ u32 NodePool::allocate_node() {
     const u32 slot = next_free_++;
     nodes_[slot] = GpuNode{};
     dirty_nodes_.mark(slot);
+    node_last_read_[slot] = static_cast<u32>(touch_frame_);
     return slot;
 }
 
@@ -138,6 +141,7 @@ u32 NodePool::allocate_children() {
         free_runs_.pop_back();
         for (u32 i = 0; i < 8; ++i) nodes_[base + i] = GpuNode{};
         dirty_nodes_.mark_range(base, 8);
+        for (u32 i = 0; i < 8; ++i) node_last_read_[base + i] = static_cast<u32>(touch_frame_);
         return base;
     }
     if (next_free_ + 8 > budget_.max_nodes) {
@@ -148,6 +152,10 @@ u32 NodePool::allocate_children() {
     next_free_ += 8;
     for (u32 i = 0; i < 8; ++i) nodes_[base + i] = GpuNode{};
     dirty_nodes_.mark_range(base, 8);
+    // Born fresh, not born stale. Left at nought, every node built after frame `cold_frames` is
+    // already older than the threshold and is evicted before a ray has had the chance to read it
+    // once -- built and thrown away in the same breath, for ever.
+    for (u32 i = 0; i < 8; ++i) node_last_read_[base + i] = static_cast<u32>(touch_frame_);
     return base;
 }
 
@@ -598,6 +606,7 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
             nodes_[built] = GpuNode{};
             dirty_nodes_.mark(child);
             dirty_nodes_.mark(built);
+            node_last_read_[child] = static_cast<u32>(touch_frame_);
             free_singles_.push_back(built);
         }
 
@@ -672,6 +681,10 @@ void NodePool::request(const NodeKey& key) {
 // Read by a ray, so it is wanted. Deliberately NOT a request: there is nothing to build, and
 // putting it through `requested_` would make every visible root re-descend its whole path every
 // frame for a tree that is already complete.
+void NodePool::touch_slot(u32 slot) {
+    if (slot < node_last_read_.size()) node_last_read_[slot] = static_cast<u32>(touch_frame_);
+}
+
 void NodePool::touch(const NodeKey& key) {
     const u32 enter_level = std::max(key.level, kEntryLevel);
     const u32 up = enter_level - key.level;
@@ -941,6 +954,47 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         ++batch_.built;
     }
     requested_.clear();
+
+    // The tree erodes from the leaves, so that memory follows the screen.
+    //
+    // Eviction below works at the entry level, and a root is 512 m: it can drop the whole scene or
+    // nothing, which is why resident bytes were a high-water mark of everything ever looked at
+    // rather than a function of what is on view (D260). This is the other end of the same policy.
+    //
+    // Only a node with no BUILT children is a candidate, so a parent is never dropped out from
+    // under a child something is still reading. That makes the erosion one level a frame from the
+    // bottom, which is the right shape: the deepest nodes are the ones a moving camera stops
+    // needing first, and they are where the bytes are.
+    //
+    // What is left behind is a node at level nought, which is this pool's spelling of "the world
+    // has this and I have not built it" -- the same state an edit leaves (D256) -- so a ray that
+    // wants it again reports it and it returns at the level that ray asks for. The slot itself
+    // stays in its parent's run of eight, because the run is the allocation unit and the subtree
+    // underneath is where the memory actually was.
+    if (next_free_ > 0) {
+        const u32 cold = budget_.cold_frames;
+        const u32 now = static_cast<u32>(frame);
+        for (u32 slot = 0; slot < next_free_; ++slot) {
+            const GpuNode& node = nodes_[slot];
+            const u32 level = node_level(node);
+            if (level == 0 || level >= kEntryLevel) continue;   // unbuilt, or a root that live_ owns
+            if (now - node_last_read_[slot] <= cold) continue;
+
+            if ((node_flags(node) & kNodeLeaf) == 0) {
+                if (node.children == kNoNode) continue;   // a shell already; nothing under it
+                bool any_built = false;
+                for (u32 octant = 0; octant < 8 && !any_built; ++octant) {
+                    any_built = node_level(nodes_[node.children + octant]) != 0;
+                }
+                if (any_built) continue;   // something below is still in use
+            }
+
+            release_contents(slot);
+            nodes_[slot] = GpuNode{};
+            dirty_nodes_.mark(slot);
+            ++batch_.evicted;
+        }
+    }
 
     // And what has gone cold -- but only when there is something to gain by it.
     //

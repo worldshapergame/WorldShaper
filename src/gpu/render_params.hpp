@@ -144,6 +144,11 @@ static_assert(sizeof(FeedbackEntry) == 16, "FeedbackEntry must match the GLSL st
 // is free. Must match kFeedbackUsed in shaders/node.glsl.
 inline constexpr i32 kFeedbackUsed = 0x10000;
 
+// ...and this one says the entry carries a node SLOT in x rather than a coordinate. Residency is
+// per node now (D260), and a ray knows the slot it stopped on, so the CPU stores rather than
+// descends. Must match kFeedbackRead in shaders/node.glsl.
+inline constexpr i32 kFeedbackRead = 0x20000;
+
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.
 // One report per sampled pixel worst case, and sampling is one pixel in 64 — so this has

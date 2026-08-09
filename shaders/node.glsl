@@ -372,12 +372,32 @@ void node_flush(bool enabled, bool has_pending, ivec4 pending) {
 // needed, and every pixel would otherwise say the same handful of things. A sparse sample
 // covers it by a wide margin at a fraction of the buffer.
 const int kFeedbackUsed = 0x10000;   // in the level field: used, as against missing
+const int kFeedbackRead = 0x20000;   // ...and this one carries a slot in x, not a coordinate
 
 void node_flush_used(bool enabled, ivec3 block) {
     if (!enabled) return;
     uint index = atomicAdd(feedback.count, 1u);
     if (index < push.resolution.w) {
         feedback.entries[index].coord = ivec4(block, kEntryLevel | kFeedbackUsed);
+    }
+}
+
+// And the node itself, by slot.
+//
+// The root says a ray entered a 512 m block, which is all eviction could act on while residency
+// was tracked per root -- and a scene inside one root can then only be kept whole or dropped
+// whole, which is why resident memory could not follow the screen (D260). What actually decides
+// that is which NODES were read, and a ray knows the slot it stopped on because it descended to
+// it. A slot rather than a key so the CPU can store it instead of walking the tree to find it
+// again: sixteen thousand of these a frame is sixteen thousand stores.
+//
+// The CPU and the GPU agree about slot numbering by construction -- the buffers are a mirror of
+// the arrays, and NodeBuffers::audit checks it byte for byte.
+void node_flush_read(bool enabled, uint slot) {
+    if (!enabled || slot == kNoNode) return;
+    uint index = atomicAdd(feedback.count, 1u);
+    if (index < push.resolution.w) {
+        feedback.entries[index].coord = ivec4(int(slot), 0, 0, kFeedbackRead);
     }
 }
 
@@ -568,6 +588,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 result.level = min(found.level, kNodeMaxDetail);
                 node_flush(report, has_pending, pending);
                 node_flush_used(report_used, g_node_block);
+                node_flush_read(report_used, found.slot);
                 return result;
             }
 
@@ -621,6 +642,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     }
                     node_flush(report, has_pending, pending);
                     node_flush_used(report_used, g_node_block);
+                    node_flush_read(report_used, found.slot);
                     return result;
                 }
                 if (i_max.x < i_max.y && i_max.x < i_max.z) {
@@ -695,6 +717,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     result.level = min(outer_level, kNodeMaxDetail);
                     node_flush(report, has_pending, pending);
                     node_flush_used(report_used, g_node_block);
+                    node_flush_read(report_used, found.slot);
                     return result;
                 }
             }

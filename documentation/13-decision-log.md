@@ -522,6 +522,29 @@ Editing is what this game is for, so the cost of an edit is the cost of playing 
 | D260 | **R2b's gate fails, and residency granularity is why** | measurement | The gate is *resident bytes at half resolution within 30% of a quarter of the full-resolution figure*. Measured: **6.04 MB at 1280×800 against 4.87 MB at 640×400**, where a quarter is 1.51 MB — 3.2× over. Enabling eviction moved it to 5.39 and 3.90 and evicted nothing at all, which is the finding rather than a disappointment: **`live_` holds entry-level roots only**, a root is 512 m, and the whole facility sits inside one. So eviction can drop the entire scene or nothing, and there is no granularity in between at which memory could track the screen. The first half of the rule already holds — the marcher never *requests* below the pixel footprint — and it is the "never stored" half that has nowhere to happen |
 | D261 | **R2b is per-node residency, and that is the core of R2 rather than a sub-step of it** | D260 | Nodes have to be tracked, aged and released individually instead of by the root they hang from, which means an LRU over the whole pool rather than over the entry table, and a release path that detaches a node from its parent's `children` run without freeing its siblings. Sizing it honestly: this is most of what L was meant to cover, and the sub-step list under R2 reads as though it were a flag to set |
 
+## The renderer rewrite — residency per node
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D262 | **Residency is tracked per node, and the tree erodes from the leaves** | D260 | A node with no *built* children that nothing has read for `cold_frames` gives up its subtree; next frame its parent has no built children either. Only childless nodes are candidates, so a parent is never dropped from under a child something is still reading. What is left behind is a node at level nought — the same state an edit leaves (D256) — so a ray that wants it again reports it and it returns at the level that ray asks for. The slot stays in its parent's run of eight, because the run is the allocation unit and the subtree underneath is where the bytes were |
+| D263 | **A ray reports the node it stopped on, by slot** | D262 | The root only says a ray entered a 512 m block. A slot rather than a key because the ray descended to it and knows it, so the CPU stores instead of walking the tree to find it again — sixteen thousand reports a frame is sixteen thousand stores. The two sides agree about slot numbering by construction and `NodeBuffers::audit` checks it byte for byte. Sampling went from one pixel in 256 to one in 64: a node must be read once inside `cold_frames` or it is dropped, and at one in 256 a node covering a single pixel is missed for 600 frames about **one time in ten**, where the cost of being wrong is geometry that vanishes and comes back. At one in 64 it is seven in a hundred thousand |
+| D264 | **A node is born fresh, not born stale** | bug | `node_last_read_` starts at nought, so every node built after frame `cold_frames` was already past the threshold and was evicted before a ray had read it once — built and thrown away in the same breath, for ever. Caught by two tests that could no longer build a tree at all. Set at allocation, and on the destination when `refine` moves a shell into a child slot |
+
+**Two things are open and neither should be built on until they are settled.**
+
+**The gate is still not met.** Erosion is one level per `cold_frames`, so a tree eleven levels deep
+takes some 6,600 frames to shed its fine detail after a resolution change. Resident bytes do now
+follow the screen — 75,295 nodes fell to 66,630 at 640×400 over 1,200 frames — but *slowly*, and
+R2b asks for a ratio, not a direction. Either the erosion needs to key on the level a node's
+footprint now resolves to rather than on age alone, or `cold_frames` needs to be a function of
+depth.
+
+**A GPU mirror mismatch was seen once at 640×400 and did not reproduce.** The audit passed on every
+other run including a direct retry of the same command. Erosion is the only thing that changed and
+is the obvious suspect: it is the first code to release nodes in bulk while the renderer is
+running. It must be understood before anything relies on the erosion, because an intermittent
+mirror mismatch is the exact shape of the fault that took R1 five readings to find.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

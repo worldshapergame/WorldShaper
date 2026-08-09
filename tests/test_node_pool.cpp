@@ -258,6 +258,51 @@ TEST_CASE("a tree nothing reads is evicted, and that is the point") {
     CHECK(f.pool.validate());
 }
 
+// Memory has to follow the screen, which means a node has to be droppable on its own.
+//
+// Eviction worked at the entry level, and a root is 512 m, so the whole facility sits inside one:
+// it could throw away the scene or nothing, and resident bytes were a high-water mark of
+// everything ever looked at rather than a function of what is on screen. Measured before this:
+// 6.04 MB at 1280x800 against 4.87 MB at 640x400, where a quarter is 1.51 MB (D260).
+//
+// So the tree erodes from the leaves. A node with no built children that nothing has read for
+// cold_frames gives up its subtree; next frame its parent has no built children either. What it
+// leaves behind is a node at level nought, which is this pool's spelling of "the world has this
+// and I have not built it", so a ray that wants it again reports it and it comes back.
+TEST_CASE("a subtree nothing reads erodes, while the part being read stays") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 255, 255, 255);
+    NodePoolBudget budget;
+    budget.max_nodes = 1u << 16;
+    budget.max_occupancy_leaves = 1u << 14;
+    budget.payload_bytes = 4ull * 1024 * 1024;
+    budget.proximity_voxels = 0;
+    // Long enough that the build below finishes before anything goes cold. Nothing touches while
+    // a test is setting up, where in the game every frame's rays do.
+    budget.cold_frames = 20;
+    f.pool.create(budget, f.types);
+
+    for (u64 frame = 1; frame < 10; ++frame) { f.want_box(0, 0, 0, 255, 255, 255); f.serve(frame); }
+    const u32 built = f.pool.stats().nodes;
+    REQUIRE(built > 2000);
+
+    // One corner keeps being read; nothing else is. `touch_slot` is what the marcher reports, so
+    // this is the same path the renderer drives it through.
+    const u32 kept = f.pool.find(node_key_of(0, 0, 0, kLeafLevel));
+    REQUIRE(kept != kNoNode);
+    for (u64 frame = 10; frame < 400; ++frame) {
+        f.serve(frame);
+        f.pool.touch_slot(kept);
+        f.pool.touch(node_key_of(0, 0, 0, kEntryLevel));
+    }
+
+    const u32 after = f.pool.stats().nodes;
+    INFO("nodes built " << built << ", after erosion " << after);
+    CHECK(after < built / 2);                                   // most of it went
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);   // and the read part did not
+    CHECK(f.pool.validate());
+}
+
 // Carving one voxel must not cost the scene.
 //
 // Editing is what this game is FOR, so the cost of an edit is the cost of playing it. Dropping
@@ -309,12 +354,19 @@ TEST_CASE("a node a ray keeps reading is not evicted") {
     }
     const NodeKey root = node_key_of(0, 0, 0, kEntryLevel);
     REQUIRE(f.pool.find(root) != kNoNode);
+    const u32 leaf_slot = f.pool.find(node_key_of(0, 0, 0, kLeafLevel));
+    REQUIRE(leaf_slot != kNoNode);
 
     // Nobody asks for anything ever again -- the tree is complete, so there is nothing to miss.
     // But a ray reads it every frame, which is the only thing that should matter.
+    //
+    // Read per NODE, not per root. Touching the root says the root was entered and nothing about
+    // what is under it, and since D260 that distinction is the whole of how memory follows the
+    // screen: a leaf nothing looks at goes even while its root stays.
     for (u64 frame = 40; frame < 200; ++frame) {
         f.serve(frame);
         f.pool.touch(root);
+        f.pool.touch_slot(leaf_slot);
     }
     CHECK(f.pool.find(root) != kNoNode);
     CHECK(f.pool.validate());

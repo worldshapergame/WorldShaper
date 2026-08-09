@@ -2499,7 +2499,7 @@ void Application::stream(f64 seconds) {
         // gave an empty world.
         // A used-report is not a request for anything; chunk residency has nothing to do with
         // it, and its level field carries a flag that would shift the coordinate into nonsense.
-        if (node_feedback && (entry.level & kFeedbackUsed) != 0) continue;
+        if (node_feedback && (entry.level & (kFeedbackUsed | kFeedbackRead)) != 0) continue;
 
         ChunkCoord coord{entry.x, entry.y, entry.z};
         if (node_feedback) {
@@ -2559,6 +2559,12 @@ void Application::stream(f64 seconds) {
             // Residency had only ever heard about misses, so the moment the tree was complete it
             // heard nothing at all and evicted the scene on a timer (D247). A hit costs one entry
             // per visible root per frame and is what makes "wanted" mean wanted.
+            // A node read by a ray, named by slot. Per node rather than per root, because
+            // eviction at the root can only keep the scene whole or drop it whole (D260).
+            if ((entry.level & kFeedbackRead) != 0) {
+                node_pool_.touch_slot(static_cast<u32>(entry.x));
+                continue;
+            }
             if ((entry.level & kFeedbackUsed) != 0) {
                 const u32 level = static_cast<u32>(entry.level & ~kFeedbackUsed);
                 if (level > kMaxNodeLevel) continue;

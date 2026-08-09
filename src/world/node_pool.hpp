@@ -378,6 +378,13 @@ public:
     // by everything at once. See D247 and the note over the eviction loop.
     void touch(const NodeKey& key);
 
+    // The same, for a node the marcher can name outright.
+    //
+    // A ray knows the SLOT it stopped on -- it descended to it -- so it reports that rather than a
+    // key, and this is a store instead of a descent. Per node rather than per root, because
+    // eviction at the root can only drop the scene or nothing (D260).
+    void touch_slot(u32 slot);
+
     // "The copy you are holding is out of date." Pushed by whatever edited the world, and
     // remembered until it is served.
     //
@@ -519,6 +526,10 @@ private:
     // a wrong picture, which is exactly what NodeBuffers::audit exists to catch: it walks the
     // real buffers against these arrays and names the first byte that disagrees.
     u64 touch_frame_ = 0;   // the frame `touch` stamps, set by update()
+    // When each node was last read by a ray. CPU-side and parallel to `nodes_`, rather than a
+    // field in GpuNode: the record is thirty-two bytes, which is two nodes to a cache line, and
+    // the GPU never reads this. Four bytes a node, so four megabytes at the default budget.
+    std::vector<u32> node_last_read_;
     // Kept between frames so it is not reallocated every one. Cleared at the top of update().
     std::unordered_set<NodeKey, NodeKeyHash> seen_requests_;
     DirtySet dirty_nodes_;

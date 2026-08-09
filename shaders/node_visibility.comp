@@ -47,7 +47,13 @@ void main() {
     // One pixel in 256 says which root it read. Eviction releases a root with its whole subtree,
     // and a 512 m root covers the entire scene here, so the useful information is a handful of
     // distinct values and every pixel would repeat them. This is enough by a wide margin.
-    const bool report_used = ((pixel.x & 15) == 0) && ((pixel.y & 15) == 0);
+    // One pixel in 64. It was one in 256 while this only had to name the root a ray entered,
+    // where a handful of distinct values repeat across the whole screen. Now it names the NODE,
+    // and a node has to be read at least once inside cold_frames or it is dropped -- at one in
+    // 256 a node covering a single pixel goes unsampled for 600 frames about one time in ten,
+    // and the cost of being wrong is geometry that vanishes and comes back. At one in 64 it is
+    // seven in a hundred thousand.
+    const bool report_used = ((pixel.x & 7) == 0) && ((pixel.y & 7) == 0);
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
                              report_used);
