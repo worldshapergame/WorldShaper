@@ -124,11 +124,17 @@ bool FaceBuffers::audit(const FaceStore& store) {
         u64 offset;
     };
 
-    const u64 face_bytes = static_cast<u64>(store.watermark()) * sizeof(GpuFace);
-    Range ranges[2]{
+    // The bucket table only, byte for byte -- and the faces compared on IDENTITY alone below.
+    //
+    // Ownership is split here and it has to be, because the whole point of the stage is that the
+    // card writes the light. The CPU owns which face a slot is: the key, the level, the direction,
+    // the flags. The GPU owns what arrives there: irradiance, photons, the sample counters. So a
+    // byte-for-byte comparison of the record would report a mismatch on every frame that shaded
+    // anything, which is an audit that cries wolf until somebody turns it off -- and this check
+    // has already caught three real stale-byte bugs that a photograph never would have.
+    Range ranges[1]{
         {"face entries", entries_.buffer, store.entries().size() * sizeof(u32),
          store.entries().data(), 0},
-        {"faces", faces_.buffer, face_bytes, store.faces().data(), 0},
     };
     u64 cursor = 0;
     for (Range& range : ranges) {
@@ -191,9 +197,62 @@ bool FaceBuffers::audit(const FaceStore& store) {
             break;
         }
     }
+    // And the faces, on identity only. A slot the CPU thinks is face A while the card thinks it is
+    // face B is the fault that matters: the light would be written to the wrong surface and look
+    // like a shading bug for ever. What is IN the face is the card's business.
+    const u32 watermark = store.watermark();
+    if (matched && watermark > 0) {
+        const u64 face_bytes = static_cast<u64>(watermark) * sizeof(GpuFace);
+        if (face_bytes <= staging_capacity_) {
+            VkCommandPoolCreateInfo face_pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+            face_pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            face_pool_info.queueFamilyIndex = device_->graphics_family();
+            VkCommandPool face_pool = VK_NULL_HANDLE;
+            WS_VK(vkCreateCommandPool(device_->handle(), &face_pool_info, nullptr, &face_pool));
+            VkCommandBufferAllocateInfo face_alloc{
+                VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+            face_alloc.commandPool = face_pool;
+            face_alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            face_alloc.commandBufferCount = 1;
+            VkCommandBuffer face_cmd = VK_NULL_HANDLE;
+            WS_VK(vkAllocateCommandBuffers(device_->handle(), &face_alloc, &face_cmd));
+            VkCommandBufferBeginInfo face_begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            face_begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            WS_VK(vkBeginCommandBuffer(face_cmd, &face_begin));
+            VkBufferCopy face_copy{};
+            face_copy.size = face_bytes;
+            vkCmdCopyBuffer(face_cmd, faces_.buffer, staging_.buffer, 1, &face_copy);
+            WS_VK(vkEndCommandBuffer(face_cmd));
+            VkCommandBufferSubmitInfo face_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+            face_info.commandBuffer = face_cmd;
+            VkSubmitInfo2 face_submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+            face_submit.commandBufferInfoCount = 1;
+            face_submit.pCommandBufferInfos = &face_info;
+            WS_VK(vkQueueSubmit2(device_->graphics_queue(), 1, &face_submit, VK_NULL_HANDLE));
+            device_->wait_idle();
+
+            const GpuFace* card = static_cast<const GpuFace*>(staging_.mapped);
+            for (u32 slot = 0; slot < watermark; ++slot) {
+                const GpuFace& host = store.faces()[slot];
+                if (card[slot].x == host.x && card[slot].y == host.y && card[slot].z == host.z &&
+                    card[slot].packed == host.packed) {
+                    continue;
+                }
+                matched = false;
+                WS_LOG_ERROR("faces",
+                             "GPU mirror mismatch: slot {} is ({},{},{}) packed 0x{:08x} on the "
+                             "card and ({},{},{}) packed 0x{:08x} here", slot, card[slot].x,
+                             card[slot].y, card[slot].z, card[slot].packed, host.x, host.y,
+                             host.z, host.packed);
+                break;
+            }
+            vkDestroyCommandPool(device_->handle(), face_pool, nullptr);
+        }
+    }
+
     if (matched) {
-        WS_LOG_INFO("faces", "GPU mirror matches: {} faces, {} buckets", store.watermark(),
-                    store.entries().size());
+        WS_LOG_INFO("faces", "GPU mirror matches: {} faces by identity, {} buckets exactly",
+                    watermark, store.entries().size());
     }
 
     vkDestroyCommandPool(device_->handle(), command_pool, nullptr);

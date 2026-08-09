@@ -621,6 +621,10 @@ sharpens region by region and pastes on the main thread for up to 17.4 s at a ti
 | D284 | **The premise of R3, measured on the real thing at last** | measurement | The stage rests on there being far fewer faces than pixels, which D205 checked by counting distinct face keys in an image before any of this was built. Now the store itself says it: **64,000 requests a frame collapse to 4,178 live faces enclosed and 14,232 close** — fifteen to four times fewer, from one pixel in sixteen. Sampled at one in sixteen rather than one in four because these share the feedback buffer's 131,072 capacity with the node reports, and one in four at 1280×800 is 256,000 requests, which truncates silently and costs convergence |
 | D285 | **The face figure is reported apart from its table**, immediately | D267 | 14,217 faces is 455 KB of faces and 8.8 MB with the bucket table, which is fixed and has nothing to do with what is on screen. D267 was a session spent chasing a gate that could not be met because a megabyte of constant was buried in the number being measured. Reporting both from the first line written is cheaper than learning it twice |
 
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D286 | **The CPU owns which face a slot is; the card owns what arrives there** | — | The whole point of the stage is that the card writes the light, so a byte-for-byte mirror check would report a mismatch on every frame that shaded anything — an audit that cries wolf until somebody turns it off, and this one has already caught three real stale-byte bugs a photograph never would have. So the bucket table is compared exactly and a face is compared on **identity alone**: key, level, direction, flags. A slot the CPU thinks is face A while the card thinks it is face B writes light onto the wrong surface and looks like a shading bug for ever, which is the fault worth keeping the check for. What is *in* a face is the card's business and is not compared |
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
