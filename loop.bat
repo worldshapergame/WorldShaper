@@ -43,6 +43,16 @@ $opt = @{
     TimeoutMinutes = 60       # one wedged iteration must not eat the whole night
     PauseSeconds   = 10
     Agents         = ""       # y / n, asked if not given
+    # What to carry on with when the primary model's usage is spent.
+    #
+    # "none" by default, deliberately: quietly finishing the night on a smaller
+    # model is a change to the work, not to the schedule, and the difference does
+    # not show up until somebody reads what was built. The loop waits for the
+    # reset instead, which keeps every iteration the model that was asked for.
+    #
+    # Set it to carry on rather than wait. The CLI re-tries the primary at the
+    # start of each session, so it climbs back on its own once the window resets.
+    FallbackModel  = "none"
     # The account this loop is meant to run as. Empty means "whichever one Claude
     # Code is signed in as when it starts", which is then held for the whole run.
     Account        = ""
@@ -154,7 +164,20 @@ function Show-Event($line) {
             $bits += if ($e.is_error) { "FAILED" } else { "done" }
             if ($e.num_turns)      { $bits += "turns $($e.num_turns)" }
             if ($e.duration_ms)    { $bits += ("{0:N1} min" -f ($e.duration_ms / 60000.0)) }
-            if ($e.total_cost_usd) { $bits += ("cost {0:N2} USD" -f $e.total_cost_usd) }
+            # NOT a bill. On a subscription nothing is charged for this: the figure
+            # is what those tokens would have cost at API prices, and it is useful
+            # only as a measure of how much of the plan's window an iteration ate.
+            # Printed as "cost ... USD" it read as money and was reasonably taken
+            # for money.
+            if ($e.total_cost_usd) { $bits += ("plan usage worth {0:N2} USD at API rates" -f $e.total_cost_usd) }
+            # Kept, so the journal can record what a window is actually buying.
+            # Without it the only record of the burn rate scrolls off the screen.
+            $script:lastResult = @{
+                turns = $e.num_turns
+                minutes = if ($e.duration_ms) { $e.duration_ms / 60000.0 } else { 0 }
+                cost = $e.total_cost_usd
+                failed = [bool]$e.is_error
+            }
             $colour = if ($e.is_error) { "Red" } else { "Green" }
             Write-Host ("  == " + ($bits -join "  ")) -ForegroundColor $colour
             if ($e.is_error -and $e.result) {
@@ -660,6 +683,28 @@ $opt.Account = $account.email
 Write-Host ""
 Write-Host ("Account:   " + $account.email + "  (" + $account.subscription + " subscription)") -ForegroundColor Green
 Write-Host  "Billing:   subscription usage, not API credit" -ForegroundColor Green
+if ($opt.FallbackModel -and $opt.FallbackModel -ne "none") {
+    Write-Host ("Model:     " + $opt.Model + ", then " + $opt.FallbackModel + " when that runs out") -ForegroundColor Green
+} else {
+    Write-Host ("Model:     " + $opt.Model + " only; it waits for the reset when that runs out") -ForegroundColor Green
+}
+
+# What the plan will actually buy, said before the night rather than after it.
+#
+# Measured here: one cold iteration doing a real feature end to end was 121 turns
+# and 48.9 minutes, and it spent a Pro window on its own. That is not a fault in
+# the iteration -- it built, measured, documented, committed and pushed -- it is
+# what the most expensive model costs. Somebody who wanted six iterations and got
+# one deserves to have been told which knob decides that.
+if ($account.subscription -match 'pro' -and $opt.Model -match 'opus') {
+    Write-Host ""
+    Write-Host "Note: Opus on a Pro plan is roughly one long iteration per window." -ForegroundColor Yellow
+    if ($opt.FallbackModel -and $opt.FallbackModel -ne "none") {
+        Write-Host ("      It will carry on with " + $opt.FallbackModel + " rather than wait.") -ForegroundColor Yellow
+    } else {
+        Write-Host "      It waits for the reset rather than finish the night on a smaller model." -ForegroundColor Yellow
+    }
+}
 if (-not $opt.Goal) {
     Write-Host ""
     $opt.Goal = Read-Host "What should it work on"
@@ -759,14 +804,19 @@ try {
         $headBefore = (git rev-parse HEAD 2>$null)
         $started = Get-Date
 
+        $iterationArgs = @("-p", "--model", $opt.Model, "--dangerously-skip-permissions",
+                           "--verbose", "--output-format", "stream-json")
+        if ($opt.FallbackModel -and $opt.FallbackModel -ne "none") {
+            $iterationArgs += @("--fallback-model", $opt.FallbackModel)
+        }
+
         # stream-json so the window shows the work as it happens rather than a
         # wall of text an hour later. stdin from a file because the prompt is
         # long and full of quotes and newlines, and a mangled command line makes
         # an agent that works from a corrupted instruction -- worse than one that
         # fails outright.
         $process = Start-Process -FilePath $claude.Source `
-            -ArgumentList @("-p", "--model", $opt.Model, "--dangerously-skip-permissions",
-                            "--verbose", "--output-format", "stream-json") `
+            -ArgumentList $iterationArgs `
             -RedirectStandardInput $promptFile -RedirectStandardOutput $log `
             -RedirectStandardError ($log + ".err") -NoNewWindow -PassThru
 
@@ -865,6 +915,13 @@ try {
         } elseif (-not $wrapping) {
             Write-Host "No commit this iteration." -ForegroundColor Yellow
         }
+        if ($script:lastResult) {
+            Add-Content $journal ("`n> Iteration {0}: {1} turns, {2:N1} min, model {4}. Plan usage worth {3:N2} USD at API rates - nothing is billed on a subscription.`n" -f
+                                  $iteration, $script:lastResult.turns, $script:lastResult.minutes,
+                                  $script:lastResult.cost, $opt.Model)
+            $script:lastResult = $null
+        }
+
         if (git status --porcelain) {
             Write-Host "Working tree left dirty:" -ForegroundColor Yellow
             git status --short | Select-Object -First 10 | ForEach-Object { Write-Host "    $_" -ForegroundColor Yellow }

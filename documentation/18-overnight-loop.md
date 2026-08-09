@@ -95,6 +95,50 @@ else — an API key, Bedrock, Vertex — is refused at startup rather than disco
 the CLI picks one up from the environment without mentioning it. Nothing outside that window
 is changed.
 
+## The money figure is not money
+
+An iteration finishes with a line like:
+
+```
+== done  turns 121  48.9 min  plan usage worth 11.38 USD at API rates
+```
+
+**Nothing is billed.** The loop refuses to start on anything but a subscription sign-in, and a
+subscription is not metered per token. That figure is what those tokens *would* have cost had they
+gone through the API, and the only thing it is good for is measuring how much of the plan's window
+an iteration ate. It used to be printed as `cost 11.38 USD`, which read as a charge and was
+reasonably taken for one.
+
+The same number goes to the journal, so the burn rate is visible rather than inferred:
+
+```
+> Iteration 1: 121 turns, 48.9 min, model claude-opus-5. Plan usage worth 11.38 USD at API
+  rates - nothing is billed on a subscription.
+```
+
+## How much a window buys
+
+Measured: one cold iteration doing a real feature end to end — read the handover, implement it,
+measure it, document it, commit, push — was **121 turns and 48.9 minutes**. On a Pro plan that is
+most of a window, so a five-hour window produced one iteration.
+
+That is not a fault in the iteration. It is what the most expensive model costs, and Opus is the
+default because the work is worth more than the count. The startup banner says so on a Pro plan,
+while there is still time to decide otherwise.
+
+**When the model's usage runs out it waits for the reset** rather than finishing the night on
+something smaller — quietly switching models is a change to the work, not to the schedule, and the
+difference does not show up until somebody reads what was built. To carry on instead:
+
+```bash
+loop.bat -FallbackModel claude-sonnet-5
+```
+
+The CLI re-tries the primary at the start of each session, so it climbs back to Opus by itself once
+the window resets. That is one account's own models, not a second account. Whether a spent
+subscription counts as "not available" to the fallback is the CLI's decision and not something this
+file can promise, so the wait-and-resume below stays as the backstop either way.
+
 ## When the usage runs out
 
 It waits, then carries on. A spent subscription is not a failed iteration and is deliberately
