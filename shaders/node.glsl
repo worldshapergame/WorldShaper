@@ -165,43 +165,57 @@ struct Found {
 // A single root, held in two scalars, costs registers and stays in them. It saves the hash â€” which
 // is the one genuinely expensive part, since a ray crosses few 512 m blocks â€” and the descent
 // below it is a handful of dependent loads through nodes whose siblings share a cache line.
+//
+// # Why the root alone was not enough
+//
+// It saved the hash and nothing else: every step still walked all eleven levels from 512 m down to
+// a brick. Measured on the enclosed room, which is the one camera this marcher lost on: 9.12 steps
+// a pixel against the chunk marcher's 31.27, and 1.088 ms against 0.723. Three and a half times
+// fewer steps and half again the time, so a step cost about five times what the old one did, and
+// the step is this descent.
+//
+// So two more ancestors are cached, at fixed levels, in named scalars - never an array indexed by a
+// level, which is the trap above. A cached ancestor is used when the point being located sits in
+// the same cell: two points in one cell at level L share every ancestor above L by definition, so
+// they take the same octant at every level down to L and every child-mask test above L gives the
+// same answer. The descent from the cache is therefore identical to the descent from the root, and
+// the picture cannot move - which is the claim the image diff checks rather than assumes.
+//
+// The levels are chosen against how far a step actually moves. Near geometry a ray marches bricks,
+// so it crosses a 1 m cell every four steps and an 8 m cell every thirty-two: the deep cache pays
+// two levels a step, the middle one three levels every fourth step, and the root six every
+// thirty-second.
+//
+// Nothing needs invalidating between steps. The pool is immutable for the whole dispatch, so a
+// cached slot is a function of the tree rather than of the path taken to it - a stale entry whose
+// cell still contains the point is the same node it would have been found by walking.
+const int kMidLevel = 8;    // 256 voxels - 8 m
+const int kFineLevel = 5;   // 32 voxels - 1 m
+
 uint g_node_root = kNoNode;
 ivec3 g_node_block = ivec3(0x7FFFFFFF);
+uint g_node_mid = kNoNode;
+ivec3 g_node_mid_block = ivec3(0x7FFFFFFF);
+uint g_node_fine = kNoNode;
+ivec3 g_node_fine_block = ivec3(0x7FFFFFFF);
 
 void node_walk_reset() {
     g_node_root = kNoNode;
     g_node_block = ivec3(0x7FFFFFFF);
+    g_node_mid = kNoNode;
+    g_node_mid_block = ivec3(0x7FFFFFFF);
+    g_node_fine = kNoNode;
+    g_node_fine_block = ivec3(0x7FFFFFFF);
 }
 
-Found node_locate(ivec3 p, int target) {
+// The walk itself, from wherever it is entered. Split out from node_locate so that the entry can be
+// the root or a cached ancestor without two copies of the loop drifting apart.
+Found node_descend(ivec3 p, int target, uint slot, int level) {
     Found result;
     result.slot = kNoNode;
-    result.level = kEntryLevel;
+    result.level = level;
     result.state = kFoundWanted;
 
-    target = clamp(target, kLeafLevel, kEntryLevel);
-
-    ivec3 block = ivec3(p.x >> kEntryLevel, p.y >> kEntryLevel, p.z >> kEntryLevel);
-    if (block != g_node_block) {
-        g_node_block = block;
-        g_node_root = node_entry_lookup(block);
-    }
-
-    uint slot = g_node_root;
-    if (slot == kNoNode) {
-        // No root means the WORLD is empty here, not that the pool is behind: the pool seeds a
-        // root for every entry block the world occupies, whether anything has looked at it or not.
-        // See the note in NodePool::update.
-        //
-        // Reporting this as wanted instead is D133 in a new structure. A ray crossing open sky
-        // asks for nothing, the CPU has nothing to give it, and the same useless request repeats
-        // every frame while every counter reads calm â€” measured at 3.7 million requests a run
-        // against 367,000 hits, with the tree frozen and the scene undrawn.
-        result.state = kFoundEmpty;
-        return result;
-    }
-
-    int level = kEntryLevel;
     while (level > target) {
         uint packed = nodes.items[slot].packed;
         if ((node_flags_of(packed) & kNodeLeaf) != 0u) break;   // as fine as this gets
@@ -241,12 +255,64 @@ Found node_locate(ivec3 p, int target) {
 
         slot = child;
         level = child_level;
+
+        // Keep the two ancestors the next step is most likely to enter at. Each test is against a
+        // compile-time constant, so these stay named scalars and never become an array indexed by
+        // a run-time level - which is the thing that sent the first version to scratch memory.
+        if (level == kMidLevel) {
+            g_node_mid = slot;
+            g_node_mid_block = ivec3(p.x >> kMidLevel, p.y >> kMidLevel, p.z >> kMidLevel);
+        } else if (level == kFineLevel) {
+            g_node_fine = slot;
+            g_node_fine_block = ivec3(p.x >> kFineLevel, p.y >> kFineLevel, p.z >> kFineLevel);
+        }
     }
 
     result.slot = slot;
     result.level = level;
     result.state = kFoundHere;
     return result;
+}
+
+Found node_locate(ivec3 p, int target) {
+    target = clamp(target, kLeafLevel, kEntryLevel);
+
+    // The deepest cached ancestor that still contains this point and is not already below what was
+    // asked for. `>=` rather than `>`: a cache sitting exactly at the target level is the answer,
+    // and the loop exits on its first test and returns it.
+    ivec3 fine_block = ivec3(p.x >> kFineLevel, p.y >> kFineLevel, p.z >> kFineLevel);
+    if (kFineLevel >= target && g_node_fine != kNoNode && fine_block == g_node_fine_block) {
+        return node_descend(p, target, g_node_fine, kFineLevel);
+    }
+
+    ivec3 mid_block = ivec3(p.x >> kMidLevel, p.y >> kMidLevel, p.z >> kMidLevel);
+    if (kMidLevel >= target && g_node_mid != kNoNode && mid_block == g_node_mid_block) {
+        return node_descend(p, target, g_node_mid, kMidLevel);
+    }
+
+    ivec3 block = ivec3(p.x >> kEntryLevel, p.y >> kEntryLevel, p.z >> kEntryLevel);
+    if (block != g_node_block) {
+        g_node_block = block;
+        g_node_root = node_entry_lookup(block);
+    }
+
+    if (g_node_root == kNoNode) {
+        // No root means the WORLD is empty here, not that the pool is behind: the pool seeds a
+        // root for every entry block the world occupies, whether anything has looked at it or not.
+        // See the note in NodePool::update.
+        //
+        // Reporting this as wanted instead is D133 in a new structure. A ray crossing open sky
+        // asks for nothing, the CPU has nothing to give it, and the same useless request repeats
+        // every frame while every counter reads calm â€” measured at 3.7 million requests a run
+        // against 367,000 hits, with the tree frozen and the scene undrawn.
+        Found result;
+        result.slot = kNoNode;
+        result.level = kEntryLevel;
+        result.state = kFoundEmpty;
+        return result;
+    }
+
+    return node_descend(p, target, g_node_root, kEntryLevel);
 }
 
 // ---- inside a leaf -------------------------------------------------------------------------------

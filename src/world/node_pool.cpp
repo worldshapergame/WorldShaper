@@ -726,9 +726,22 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
             // stopped here, so a tree that had been budget-limited on the frame it was created
             // never filled in — 15,470 reports a frame at frame 120, for ever, with `built` at
             // nought because nothing new was being rooted. A request is for a NODE, not a root.
-            if (budget > 0 && key.level < kEntryLevel) {
-                refine(world, key, it->second.slot, budget);
-                ++batch_.built;
+            if (key.level < kEntryLevel) {
+                if (budget > 0) {
+                    refine(world, key, it->second.slot, budget);
+                    ++batch_.built;
+                } else {
+                    // Counted, because the alternative is the fault this pool was built to make
+                    // unrepresentable, arriving through the instruments instead of the structure.
+                    //
+                    // A request whose root is live but whose frame has run out of budget used to
+                    // fall off the end of this branch and be counted as nothing at all — so
+                    // `deferred` read nought while the tree quietly failed to fill in, which is
+                    // the same silence D136 put a number next to. It is what made "the pool is
+                    // still building 385 nodes a frame three thousand frames after the world
+                    // stopped changing" impossible to tell from a pool that was simply busy.
+                    ++batch_.deferred;
+                }
             }
             continue;
         }

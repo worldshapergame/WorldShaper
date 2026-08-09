@@ -147,8 +147,51 @@ brick at level 3; below that nothing changed. Children are contiguous, so a desc
 Memory 4.8 MB against 57.7. Run-to-run noise is 0.073 mean, so two views are at the floor and the
 rest differ by under one part in three hundred. 424 tests, 18.0 M assertions, all passing.
 
-The one regression is the enclosed room — the view with least empty space to skip, so the one a
-descent helps least. It is not yet understood and is worth a look.
+*The table above is superseded — see R1h below. It was taken before `--settle` existed, so each
+figure was measured against however much of the scene had been rebuilt by frame 300, and the two
+marchers in it were not looking at the same world.*
+
+### R1h — the enclosed room, closed (done)
+
+D227–D234. It was the descent: `node_locate` walked all eleven levels from the 512 m root on every
+step, because only the root was cached. The step count in the visibility buffer said so and nobody
+had read it — **9.12 steps a pixel against the chunk marcher's 31.27**, at half again the cost.
+Caching two ancestors at levels 8 and 5, in named scalars, fixes it.
+
+Settled, scenes verified identical per camera, visibility pass only, 1280×800 quality 7:
+
+| view | chunk marcher | node pool | change |
+|---|---|---|---|
+| enclosed | 0.886 | **0.803** | −9% |
+| outdoor | 1.602 | **0.642** | −60% |
+| close | 1.882 | **0.990** | −47% |
+| mid | 0.870 | **0.242** | −72% |
+| far | 1.506 | **0.504** | −67% |
+| distant | 1.105 | **0.555** | −50% |
+| sky | 2.377 | **0.472–0.763** | −68% to −80% |
+
+**Read §4 trap 8 before trusting any measurement here**, including these. Finding the cause took one
+readback; being able to tell whether the fix worked took the rest of the session, because the
+harness was racing the scene.
+
+### R1g — the node pool is what the game launches with (done)
+
+D224–D226. `--chunk-marcher` selects the old one; there is no longer a flag to switch the new one
+on. Reproduced at the default camera, which is the enclosed case: visibility **1.105 ms against
+0.719**, pictures apart by 0.006 mean and 54 pixels of 1,024,000.
+
+**The chunk system did not stop running.** `pathtrace.comp` still includes `world.glsl`, so chunk
+residency, the coarse grids and the eight thumbnail tiers are maintained every frame regardless —
+fed by translating the node marcher's reports back into chunk coordinates. Both systems are live at
+once, and R1e is what ends that.
+
+Landing it turned up one fault worth knowing before touching this code (D225): **both marchers write
+one feedback buffer in two formats**, and the consumer was choosing between them with
+`use_node_pool_`. That flag describes the visibility pass, which does not run in the path tracer at
+all — so `pathtrace.comp`'s chunk coordinates were shifted left by a detail level, streaming served
+the wrong chunks (52 of 68 against 57), and the pool built 488 nodes toward keys the world is empty
+at. No counter reported it: a shifted coordinate usually lands on a chunk that does exist, so the
+phantom count stayed at zero.
 
 ---
 
@@ -179,18 +222,46 @@ failure, not a compile error.
    six bytes of per-direction coverage for this. Stage 4 hit the same wall from the other side.
 7. **"Nothing here" and "I could not fit it" must never be the same answer.** `NodePool` has
    `out_of_room_` beside `kNoNode` for exactly this, and a child mask records what the *world*
-   has, not what the pool built.
+   has, not what the pool built. It caught the pool out again in R1h: a request whose root was
+   already live but whose frame had spent its build budget was dropped without incrementing
+   `deferred`, so the counter read nought while the tree quietly failed to fill in.
+8. **A measurement is against a scene, and the scene is not a constant.** The facility sharpens
+   region by region in the background, and its clip cache is written only when the *last* region
+   lands — which never happens from a fixed camera, because regions behind walls are skipped. So
+   every run rebuilds the world while being timed, and a screenshot at frame 300 catches however
+   much exists by then. **The bias runs against whatever you are testing**: a faster build gets
+   there sooner with less world in front of it. Two runs of one binary differed on 52,292 pixels.
+   Use `--settle`, and check the `scene:` line printed beside the pass table before comparing two
+   numbers. D229–D232.
+9. **Repeat a figure before calling it a regression.** The sky camera read 0.484 against 0.759
+   between two builds and looked like a 57% regression on the floor view. Three runs of *one*
+   build against *one* scene give 0.481, 0.763, 0.472. The empty-space views inherit the node
+   pool's own irreproducibility (D233) through the ray clip, and a single sample on one of them is
+   not evidence in either direction. D234.
 
 ---
 
 ## 5. What to do next
+
+### First, the thing R1e cannot be judged without
+
+**The node pool does not converge** (D233). With the world provably identical and the camera still,
+it was still building 273–385 nodes a frame three thousand frames after the world stopped changing,
+and two runs ended at 89,560 against 81,464 nodes with no evictions. That is why the empty-space
+cameras give bimodal timings and why an image diff on any view that sees the building has a floor of
+tens of thousands of pixels.
+
+It is R2's subject — residency policy — and R1e does not depend on it. But **R1e's gate does**: "the
+grid table does not move" cannot be checked to better than that floor until it is understood. Either
+settle it first, or state plainly that R1e closed on the enclosed and close cameras only, which are
+the two that repeat.
 
 ### R1e — delete the old addressing
 
 The node pool is proven, so the chunk renderer comes out. Delete `src/world/residency.*`,
 `thumb_cache.*`, `thumbnail.*`, `summary_tree.*` and their tests; delete `shaders/world.glsl`'s
 chunk walk, the coarse grids and the thumbnail tiers; fold `node_visibility.comp` into
-`visibility.comp` and drop `--node-pool`. `src/gpu/world_buffers.*` loses most of its contents.
+`visibility.comp` and drop `--chunk-marcher`. `src/gpu/world_buffers.*` loses most of its contents.
 
 The path tracer includes `world.glsl`, so it has to move to `node.glsl` in the same change — that
 is the bulk of the work and the reason this is its own sub-step.
@@ -212,10 +283,14 @@ R7 the primary ray, R8 infinite detail.
 
 - **R0d**: `tools\baseline.ps1 -Out documentation\baselines\r0-before-rewrite.csv` has never
   completed a full run — it was interrupted twice. The directory exists and holds only the face
-  counts. Run it.
+  counts. Run it — but note that it now passes `--settle`, so each of the forty-two runs waits for
+  the scene to stop sharpening and the grid takes the better part of an hour rather than minutes.
+  Worth fixing first: the clip cache would make every one of those runs start from a finished world
+  if it were written when refinement *settles* rather than only when the last region lands, which
+  needs the cache to record which regions are done so a later run from another camera can carry on.
 - **`12-plain-english.md`** has nothing about the rewrite.
-- **Nothing is committed.** The whole rewrite is in the working tree (see §6). The user has not
-  asked for a commit; ask before making one.
+- ~~**Nothing is committed.**~~ Out of date: the rewrite landed as `669f883`, "One sparse octree
+  replaces four addressing schemes". Ask before committing anything on top of it.
 - `src/gpu/node_buffers.cpp` uploads whole array prefixes rather than dirty ranges. Deliberate and
   documented; revisit only if it shows on the frame graph.
 - The mojibake em-dashes in `shaders/node.glsl` and `resolve.comp` came from a round trip through
@@ -247,12 +322,13 @@ Nothing has been deleted yet.
 Compare the two marchers on one camera:
 
 ```powershell
-.\build\bin\WorldShaper.exe --node-pool --screenshot out.png --screenshot-frame 300 `
+.\build\bin\WorldShaper.exe --screenshot out.png --screenshot-frame 300 `
   --width 1280 --height 800 --cam "0,10,-60,90,-6" --quality 7 `
   --no-vsync --no-update-check --no-auto-quality
 ```
 
-Drop `--node-pool` for the chunk marcher. `--debug-mode 11` writes each pixel's face key as four
+**The node pool is what the game launches with** (D224). Add `--chunk-marcher` for the old one;
+`--node-pool` still parses and is now a no-op that says what it means. `--debug-mode 11` writes each pixel's face key as four
 exact bytes; `12`–`15` write one word of the visibility buffer the same way, which is how a
 disagreement gets localised to a field instead of argued about from a screenshot. The node pool's
 GPU mirror is checked automatically at the screenshot in `--node-pool` mode and logs either

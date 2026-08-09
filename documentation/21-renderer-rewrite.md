@@ -476,8 +476,9 @@ checked. Tick the ledger in §8.0 when one lands.
    the world. Two of the four bugs in R1a were caught by that and nothing else.
 4. Measure with `tools\baseline.ps1 -Compare <the last csv>`. A number quoted from memory is how
    `19-auto-quality.md` came to hold two figures that no build in the tree could reproduce.
-5. When a new thing sits *beside* an old thing, keep both until the diff is clean. `--node-pool`
-   exists so the two marchers can render one camera and be compared, not as a permanent option.
+5. When a new thing sits *beside* an old thing, keep both until the diff is clean. `--chunk-marcher`
+   exists so the two marchers can render one camera and be compared, not as a permanent option. It
+   goes when the addressing behind it does, in R1e.
 
 ### 8.0 Where it stands
 
@@ -493,7 +494,85 @@ checked. Tick the ledger in §8.0 when one lands.
 | R1 | d. diff against the old marcher, meet the gate | **done.** Faster on six views of seven and up to 3x on distance; 4.8 MB against 57.7; pictures agree to within one part in three hundred. One regression: the enclosed room, 1.108 ms against 0.699 |
 | R1 | e. delete the old addressing | |
 | R1 | f. GPU mirror check for the node pool | **done** - `NodeBuffers::audit`, and it eliminated the upload as a suspect on its first run |
+| R1 | g. make it the marcher the game launches with | **done** — D224–D226. The chunk marcher is behind `--chunk-marcher` until R1e |
+| R1 | h. the enclosed-room regression | **done** — D227–D232. It was the descent, re-walking eleven levels every step; two cached ancestors fixed it. Finding it needed the harness fixed first |
 | R2–R8 | | not started |
+
+#### R1h — the enclosed room, and why the answer took longer than the fix
+
+R1d left one camera where the pool lost, and the handover made settling it the gate before R1e,
+because once the old marcher is deleted there is nothing left to compare against.
+
+**The cause was one measurement away and nobody had taken it.** The visibility buffer has carried a
+per-pixel step count since Stage 2. Read out on the enclosed camera it says the node pool takes
+**9.12 steps a pixel against the chunk marcher's 31.27** — three and a half times fewer — while
+costing half as much again. A marcher doing less work for more money is paying inside the step, and
+the step is `node_locate`, which walked all eleven levels from the 512 m root every time because
+only the root was cached. Caching two more ancestors, at levels 8 and 5, in named scalars fixes it.
+
+**But the harness could not have told anyone whether it worked.** See D229–D232: the facility never
+finishes sharpening from a fixed camera, its clip cache is therefore never written, and every run
+was measured against however much world had been rebuilt by the time it reached its screenshot
+frame — which is *fewer* voxels the faster the build under test is. Two runs of one binary differed
+on 52,292 pixels. `--settle` starts the window at refinement's fixed point instead, every timing now
+prints the scene it was taken against, and only then do two builds mean anything to each other.
+
+Measured settled, 1280×800, quality 7, visibility pass only, scenes verified identical per view:
+
+| view | no cache | cached | change |
+|---|---|---|---|
+| enclosed | 1.082 | **0.803** | −26% |
+| close | 1.486 | **0.990** | −33% |
+| far | 0.515 | **0.504** | −2% |
+| distant | 0.569 | **0.555** | −2% |
+| outdoor | 0.601 | 0.642 | +7% |
+| mid | 0.221 | 0.242 | +10% |
+| sky | 0.484 | 0.759 | *see below* |
+
+It pays where a ray marches fine cells through geometry, which is where the cost is, and is flat to
+slightly negative where a ray skips empty space and never consults it — the shape the mechanism
+predicts, since a cached ancestor is only reachable once a descent has gone below level 8. One tier
+instead of two was measured and is worse where it counts: enclosed 0.974 and close 1.405, against
+0.803 and 0.990 for both.
+
+**The sky row is not a regression, and the way that was established matters more than the row.** It
+first read as +57%, which on the floor view would be serious. Run three times on one build against
+one scene it gives **0.481, 0.763, 0.472 — a 51% spread**, so the two builds had simply landed in
+different modes of a bimodal number. The bottom two rows of the table are single samples on views
+with the same character and should be read as "no effect measured" rather than as small costs.
+
+The bimodality is not mysterious and is not the shader's: a ray is clipped to
+`residency_.resident_bounds`, the resident set is what a run converges to, and D233 records that it
+does not converge to the same thing twice. So the empty-space views inherit the pool's own
+irreproducibility, and they will keep doing so until R2 settles it.
+
+#### Against the marcher it replaces, on a harness that can be trusted
+
+Same conditions, same scenes, `--chunk-marcher` for the old one. This is the first version of this
+comparison taken with `--settle`, and it supersedes R1d's table above rather than confirming it —
+R1d measured two builds of different speed against worlds that had been rebuilt to different extents.
+
+| view | chunk marcher | node pool | change |
+|---|---|---|---|
+| enclosed | 0.886 | **0.803** | −9% |
+| outdoor | 1.602 | **0.642** | −60% |
+| close | 1.882 | **0.990** | −47% |
+| mid | 0.870 | **0.242** | −72% |
+| far | 1.506 | **0.504** | −67% |
+| distant | 1.105 | **0.555** | −50% |
+| sky | 2.377 | **0.472–0.763** | −68% to −80% |
+
+Faster on all seven, the enclosed room included, which is what R1d could not say. The margin there
+is the smallest of the seven and that is expected: it is the view with the least empty space to
+skip, so it is the one a descent helps least, and it took the ancestor cache to turn it from a loss
+into a win at all. 424 tests, 18.0 M assertions, passing.
+
+**What the game runs now.** The node pool marches by default. The chunk system has not left the
+build and is not idle: `pathtrace.comp` still includes `world.glsl`, so chunk residency, the coarse
+grids and the thumbnail tiers are all still maintained every frame, fed by the node marcher's own
+reports translated back to chunk coordinates. That is a double cost, and it is the cost R1e removes
+by porting the path tracer to `node.glsl` — which is why R1e is a sub-step of its own rather than a
+deletion.
 
 ---
 

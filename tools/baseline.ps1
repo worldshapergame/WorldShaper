@@ -78,7 +78,15 @@ function Invoke-Run([string]$mode, [string]$view, [string]$size) {
 
     # Not $args, which is an automatic variable: assigning to it inside a function shadows the
     # one PowerShell maintains and is a trap for whoever edits this next.
-    $runArgs = @("--screenshot", $png, "--screenshot-frame", "$Frames",
+    # --settle, always, and it is not optional for anything written to a csv.
+    #
+    # The scene sharpens region by region in the background and its cache is only written when the
+    # last region lands, which a scripted run never reaches - so without this the window opens at
+    # frame nought against however much world happened to exist by then, and a FASTER build gets
+    # there sooner with LESS in front of it. Two runs of one binary differed on 52,292 pixels that
+    # way. See D229-D231.
+    $runArgs = @("--settle",
+                 "--screenshot", $png, "--screenshot-frame", "$Frames",
                  "--width", "$($wh[0])", "--height", "$($wh[1])",
                  "--cam", $allViews[$view], "--quality", "$Quality",
                  "--no-vsync", "--no-update-check", "--no-auto-quality")
@@ -101,6 +109,9 @@ function Invoke-Run([string]$mode, [string]$view, [string]$size) {
         total_ms = 0.0; worst_ms = 0.0; cpu_ms = 0.0
         dominant = ""; dominant_ms = 0.0
         resident = 0; world_chunks = 0; bricks = 0
+        # What the figures on this row were measured against. Two rows are comparable only if these
+        # match; before D231 there was no way to tell, and they frequently did not.
+        solid_voxels = 0; regions = ""
         speckle = 0.0; fireflies = 0
         frames = 0
     }
@@ -115,6 +126,10 @@ function Invoke-Run([string]$mode, [string]$view, [string]$size) {
         $row.resident = [int]$Matches[1]
         $row.world_chunks = [int]$Matches[2]
         $row.bricks = [int]$Matches[3]
+    }
+    if ($log -match "scene: \d+ chunks, (\d+) solid voxels, (\d+ of \d+) regions") {
+        $row.solid_voxels = [long]$Matches[1]
+        $row.regions = $Matches[2]
     }
 
     # The pass that costs the most, which is the only one worth naming in a summary. Nested
@@ -224,6 +239,24 @@ if ($Compare -ne "") {
             $_.mode -eq $now.mode -and $_.view -eq $now.view -and $_.size -eq $now.size
         } | Select-Object -First 1
         if (-not $then) { continue }
+
+        # Refuse to call it a change if the two rows were measured against different worlds.
+        #
+        # This is the check that was missing rather than failing. A csv taken before D231 has no
+        # scene columns at all, which is itself the warning: those rows were taken against whatever
+        # had been sharpened by the time the run reached its screenshot frame.
+        if ($null -eq $then.solid_voxels -or $then.solid_voxels -eq "") {
+            Write-Host ("  {0,-10} {1,-9} {2,-5} {3}" -f $now.mode, $now.view, $now.size,
+                        "the old row records no scene - not comparable (D231)") -ForegroundColor Yellow
+            continue
+        }
+        if ([long]$then.solid_voxels -ne [long]$now.solid_voxels) {
+            Write-Host ("  {0,-10} {1,-9} {2,-5} was {3} solid voxels, now {4} - not comparable" -f
+                        $now.mode, $now.view, $now.size, $then.solid_voxels,
+                        $now.solid_voxels) -ForegroundColor Yellow
+            continue
+        }
+
         $old = [double]$then.total_ms
         if ($old -le 0) { continue }
         $change = ($now.total_ms - $old) / $old

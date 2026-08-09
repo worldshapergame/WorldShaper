@@ -93,11 +93,21 @@ struct Options {
     // confidently and wrongly.
     std::string clip_bounds;
     bool stream_log = false;   // per-second residency report, for diagnosing streaming
+    // Start the measurement window when the world stops changing, rather than at frame nought.
+    // Any figure meant to be compared with another run wants this; see the note at its use.
+    bool settle = false;
     bool path_trace = false;   // start in the reference path tracer
-    // Walk the node pool instead of the chunk grid. Both marchers are built so the two can
-    // render one camera and be diffed - R1 claims the picture does not change and the cost
-    // falls, and both halves need measuring rather than asserting.
-    bool node_pool = false;
+    // Which marcher walks the world.
+    //
+    // The node pool is the default. Measured across the whole camera grid it is faster on six
+    // views of seven, up to three times faster where distance dominates, holds 4.8 MB against
+    // 57.7, and draws a picture that agrees with the old marcher to within one part in three
+    // hundred. See documentation/21-renderer-rewrite.md section 8.
+    //
+    // The chunk marcher stays behind --chunk-marcher rather than being deleted, because R1e has
+    // not happened yet and because two marchers that can render the same camera are how any
+    // disagreement gets settled. It goes when the old addressing does.
+    bool node_pool = true;
     u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
 
     // Automatic quality. Off, or pinned, or aimed at something other than the monitor.
@@ -293,6 +303,10 @@ Options parse_options(int argc, char** argv) {
             options.path_trace = true;
         } else if (arg == "--node-pool") {
             options.node_pool = true;
+        } else if (arg == "--chunk-marcher") {
+            options.node_pool = false;
+        } else if (arg == "--settle") {
+            options.settle = true;
         } else if (arg == "--no-update-check") {
             options.no_update_check = true;
         } else if (arg == "--version") {
@@ -328,7 +342,10 @@ void print_help() {
         "                        11 this pixel's face key as four exact bytes, for counting\n"
         "                        distinct visible faces (tools\\facecount.ps1)\n"
         "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
-        "  --node-pool           march the node pool instead of the chunk grid\n"
+        "  --chunk-marcher       march the old chunk grid instead of the node pool\n"
+        "  --settle              start the measurement window once the world stops sharpening,\n"
+        "                        rather than at frame nought. Any figure to be compared with\n"
+        "                        another run needs this\n"
         "  --target-fps N        frame rate to hold (default: the monitor's refresh rate)\n"
         "  --quality N           pin the quality level 0-7 instead of deciding it\n"
         "  --no-auto-quality     leave quality where it is and never adjust it\n"
@@ -840,6 +857,16 @@ private:
     std::vector<RefineRegion> refine_regions_;
     usize refine_region_ = 0;   // the one being sampled right now
     bool refine_wants_compact_ = false;
+    // No region this camera can improve, which is where a still camera settles. Not "the world is
+    // finished" — see the note in start_refinement — but it IS a fixed point, so it is the state a
+    // measurement can be taken in and compared against another run.
+    bool refine_settled_ = false;
+    bool settled_seen_ = false;   // --settle: the settled state has held long enough
+    u64 settle_frame_ = 0;        // and this is the frame it was declared on
+    u32 settle_streak_ = 0;       // consecutive frames with nothing left to sharpen
+    // Long enough that a paste landing between the pick and the world being updated cannot be
+    // mistaken for the end of the build. A region takes seconds; this is a fraction of one.
+    static constexpr u32 kSettleFrames = 240;
     f64 refine_sample_ms_ = 0.0;   // the background half, which the paste timing never saw
     u64 refine_asked_ = 0;
     void start_refinement();
@@ -1406,8 +1433,17 @@ void Application::start_refinement() {
         best = i;
         keenest = keen;
     }
-    if (best == refine_regions_.size()) return;   // every box is sharp
+    if (best == refine_regions_.size()) {
+        // Nothing this camera can improve. Not the same as "every box is sharp": a box behind a
+        // wall is skipped by the occlusion test above and stays coarse for as long as the camera
+        // stands here, so the facility settles at four regions left and never writes its cache.
+        //
+        // It is a fixed point all the same, and that is what a measurement needs. See --settle.
+        refine_settled_ = true;
+        return;
+    }
 
+    refine_settled_ = false;
     refine_region_ = best;
     refine_script_->settings.voxels_per_metre = refine_authored_;
     refine_script_->settings.low = refine_regions_[best].low;
@@ -2233,8 +2269,31 @@ void Application::stream(f64 seconds) {
     last_feedback_truncated_ = feedback_.last_truncated();
     u32 accepted = 0;
     u32 rejected = 0;
+
+    // Which format this frame's reports are in, and it is decided by **who wrote the buffer**
+    // rather than by which marcher is configured. A node entry carries a node coordinate at its
+    // own level; a chunk entry carries a chunk coordinate and a detail level nothing shifts by.
+    //
+    // The path tracer is the case that separates the two. It has not been ported to the node
+    // pool, so it marches `world.glsl` and reports chunks — while `use_node_pool_` is still
+    // true, because that flag says what the *visibility* pass would do and the visibility pass
+    // does not run in this mode at all. Reading a chunk coordinate as a node coordinate shifts
+    // it by a detail level and asks for a chunk kilometres from the one that was missing, so
+    // streaming stops serving the tracer: measured 52 of 68 chunks against 57.
+    const bool node_feedback = use_node_pool_ && !path_trace_;
+
     for (const FeedbackEntry& entry : wanted) {
-        const ChunkCoord coord{entry.x, entry.y, entry.z};
+        // Chunk residency is fed whichever marcher ran, because the path tracer reads the chunk
+        // buffers directly — so with the node pool marching and this left as it was, pressing F4
+        // gave an empty world.
+        ChunkCoord coord{entry.x, entry.y, entry.z};
+        if (node_feedback) {
+            const u32 level = static_cast<u32>(entry.level);
+            if (level > 40) continue;
+            coord = chunk_coord_of(static_cast<i64>(entry.x) << level,
+                                   static_cast<i64>(entry.y) << level,
+                                   static_cast<i64>(entry.z) << level);
+        }
         if (!world_.has_chunk(coord)) {
             // Reported, but the world has nothing there. A few of these are normal — the
             // grid answers at block granularity, so a ray inside an occupied block still
@@ -2274,7 +2333,11 @@ void Application::stream(f64 seconds) {
     // marchers write the same buffer in the same format, so whichever one ran this frame, the
     // other's consumer sees numbers it can make sense of — which is what lets the two be swapped
     // at run time without a second feedback path.
-    if (use_node_pool_) {
+    //
+    // Gated on the same thing as the loop above, and for the sharper half of the same reason: a
+    // chunk coordinate read as a node key is a request for a node the world does not have, and
+    // the pool builds toward it. In the path tracer that spent budget on 488 nodes of nothing.
+    if (node_feedback) {
         for (const FeedbackEntry& entry : wanted) {
             const u32 level = static_cast<u32>(entry.level);
             if (level < kLeafLevel || level > kMaxNodeLevel) continue;
@@ -4313,17 +4376,96 @@ int Application::run(const Options& options) {
             *target = 1;
         }
 
+        // Where the measurement window starts counting from.
+        //
+        // Without --settle that is frame nought, which is what every figure in this repository was
+        // taken with and is why two runs of one binary could not be compared: the scene sharpens
+        // region by region in the background, so frame 300 catches whatever happened to be built by
+        // then, and a build that renders faster gets there sooner with LESS world in front of it.
+        // Measured on the `close` camera: 52,292 pixels between two runs of the same executable.
+        //
+        // With it, the window starts when refinement has nothing left it can do from this camera.
+        // That is a fixed point rather than a stopwatch reading, so two runs measure one scene.
+        // And it has to HOLD, not merely happen once.
+        //
+        // "Nothing selectable" is transient. pump_refinement marks a box done and calls
+        // start_refinement BEFORE pasting it, so the pick that decides whether anything is left is
+        // made against the world as it was before the box landed - and a box that lands can uncover
+        // regions the occlusion test was rejecting. Latching on the first quiet frame therefore
+        // started the window in the middle of the build: two runs measured 82,718 and 95,638 nodes
+        // and disagreed on 65,316 pixels, and a longer window made it worse rather than better,
+        // which is the signature of a world still changing rather than a picture still converging.
+        if (options_.settle && !settled_seen_) {
+            if (refine_settled_ && !refine_running_) {
+                ++settle_streak_;
+            } else {
+                settle_streak_ = 0;
+            }
+            if (settle_streak_ >= kSettleFrames) {
+                settled_seen_ = true;
+                settle_frame_ = frame_counter_;
+                WS_LOG_INFO("frame", "world settled at frame {}; measuring from here",
+                            settle_frame_);
+            }
+        }
+        const bool measuring = !options_.settle || settled_seen_;
+        const u64 measured = measuring ? frame_counter_ - settle_frame_ : 0;
+
         // Warm-up thrown away before anything is averaged. Shaders are still compiling and
         // the first nodes are still arriving for the opening frames, and timing those measures
         // the loading screen rather than the renderer — the same reasoning the first-run
         // benchmark in documentation/19-auto-quality.md already uses.
-        if (!options_.screenshot.empty() && frame_counter_ == options_.screenshot_frame / 2) {
+        if (!options_.screenshot.empty() && measuring && measured == options_.screenshot_frame / 2) {
             profiler_.reset_averages();
         }
 
-        if (!options_.screenshot.empty() && frame_counter_ >= options_.screenshot_frame) {
+        if (!options_.screenshot.empty() && measuring && measured >= options_.screenshot_frame) {
             device_.wait_idle();
             save_image_png(device_, render_target_, options_.screenshot);
+
+            // A figure taken while the world is still being built is not comparable to anything,
+            // and nothing said so.
+            //
+            // The scene is sharpened region by region over the opening frames and the result is
+            // cached — but the cache is only written when the LAST region lands, and a scripted
+            // measurement exits at its screenshot frame long before that. So every run rebuilt the
+            // world from scratch, and how much of it existed at frame 300 depended on how fast the
+            // frames ran. That inverts the thing a measurement is for: a build that renders faster
+            // reaches frame 300 sooner, has *less* world in front of it, and flatters itself.
+            // Measured: two runs of one binary on the `close` camera differed on 52,292 pixels,
+            // which is more than the change being tested moved them.
+            //
+            // Left as a warning rather than an implicit wait, because --settle is the wait and
+            // some runs genuinely want the cold case.
+            usize unrefined = 0;
+            for (const RefineRegion& box : refine_regions_) {
+                if (!box.done) ++unrefined;
+            }
+
+            // What scene the figure above was taken against, which nothing has ever recorded.
+            //
+            // Every performance number in this repository is a time without a scene attached, and
+            // the scene is not fixed: it sharpens region by region in the background and a run is
+            // measured wherever it had got to. Two figures are comparable only if these three
+            // numbers match, so they are printed beside the timings rather than left to be
+            // inferred from how long somebody waited.
+            const WorldStats measured_world = world_.stats();
+            WS_LOG_INFO("frame", "scene: {} chunks, {} solid voxels, {} of {} regions sharpened",
+                        measured_world.chunks, measured_world.solid_voxels,
+                        refine_regions_.size() - unrefined, refine_regions_.size());
+            if (unrefined > 0 && !options_.settle) {
+                WS_LOG_WARN("frame",
+                            "the world was still being sharpened - {} regions left. This figure is "
+                            "NOT comparable with another run; take it with --settle",
+                            unrefined);
+            } else if (unrefined > 0) {
+                // Settled, and still short. Expected: a region behind a wall is skipped by the
+                // occlusion test in start_refinement and stays coarse while the camera stands
+                // here. Said out loud so the number is not read as a failure.
+                WS_LOG_INFO("frame",
+                            "settled with {} regions this camera cannot see; they stay coarse",
+                            unrefined);
+            }
             // Averages, not the last frame. One frame's GPU time moves several per cent from
             // clock and scheduling alone, so a figure another build has to beat has to be a
             // mean over a window. `worst` is beside it because a locked frame rate is decided
