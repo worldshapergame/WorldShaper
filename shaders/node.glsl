@@ -238,9 +238,42 @@ const int kFaceAncestorStep = 3;
 // One more ray into a face's two counts. Halving at the window keeps the ratio exact -- both
 // counts are integers and the halving is a shift -- while stopping a face that has watched the
 // sun for an hour from needing another hour to notice it has set.
+//
+// # A sample that contradicts a unanimous history is the world having changed
+//
+// The window alone is far too slow for an EDIT, and the arithmetic says why: a floor indoors sits
+// at nought lit of two hundred and fifty-six, so the first ray to reach the sun through a hole the
+// player has just carved moves it to one in two hundred and fifty-seven. It needs a hundred and
+// twenty-eight more rays to reach a half, and a settled face gets one every `face_stride` frames.
+// Measured, carving a hole in the roof over the enclosed camera: the light reached **twelve per
+// cent** of its converged value after three hundred frames -- five seconds -- and a player reads
+// that as the chisel not casting shadows at all.
+//
+// The fix is not a shorter window, which would cost every face its penumbra. It is that
+// UNANIMITY is what makes a contradiction meaningful. A face that has seen the sun on every one of
+// two hundred rays and is now told it cannot is not observing noise; something moved. A face
+// already at half has no such claim, and is left alone to converge as it always did.
+//
+// So a contradicted face keeps its answer and loses its confidence: two samples, the same ratio.
+// The next ray puts it at a third or two thirds, and because two is below kFaceEager it is shaded
+// every frame instead of one frame in `face_stride` -- so it lands on the new answer in a handful
+// of frames rather than a thousand. It never drops below kFaceSettled, so the composite keeps
+// reading it throughout and no pixel ever falls back to full sun on account of an edit.
+//
+// The false positive is a face whose true visibility is a shade under one -- a thin occluder that
+// crosses the sun's disc for one sample in hundreds. It demotes, dips for two or three frames, and
+// climbs back. That is the cost, it is small, and it is paid by faces that are nearly unanimous
+// rather than by the penumbra, which is where a wrong answer would actually show.
 uint face_accumulate(uint counters, bool reached_the_sun) {
     uint samples = face_samples_of(counters);
     uint lit = face_lit_of(counters);
+
+    if (samples >= kFaceEager && (lit == samples ? !reached_the_sun : (lit == 0u &&
+                                                                      reached_the_sun))) {
+        lit = (lit == samples) ? 2u : 0u;
+        samples = 2u;
+    }
+
     if (samples >= kFaceWindow) {
         samples >>= 1u;
         lit >>= 1u;

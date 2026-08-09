@@ -76,8 +76,30 @@ void main() {
     // converges in a few frames however large the store is. Only the refresh rate of settled
     // faces falls, which is the right thing to give up: they are watching a sun that has not
     // moved. See kFacesPerFrame in src/app/main.cpp.
+    // ...unless the player has just edited near it, in which case it goes to the front of the
+    // queue and stays there for as long as the edit window lasts.
+    //
+    // A settled face is refreshed one frame in `face_stride`, which is three at the enclosed camera
+    // and seven at 4K -- so the ray that would NOTICE an edit is up to seven frames away, on top of
+    // however long the answer then takes to move. `face_accumulate` fixes the second half; this is
+    // the first. The region is the edit's own bounds grown by the reach of a shadow, worked out on
+    // the host and already in the parameter block, because the path tracer has needed exactly this
+    // box since long before the face store existed.
+    //
+    // What it costs is bounded by the box: those faces are shaded every frame instead of one frame
+    // in three, for the hundred and twenty frames the window is open, and nothing outside it is
+    // disturbed at all.
+    bool near_edit = false;
+    if (push.edit_min.w != 0) {
+        const float extent = float(1 << face_level_of(face.packed));
+        const vec3 low = vec3(ivec3(face.x, face.y, face.z)) * extent -
+                         vec3(push.camera_chunk.xyz * 256);
+        near_edit = all(greaterThanEqual(low + vec3(extent), vec3(push.edit_min.xyz))) &&
+                    all(lessThanEqual(low, vec3(push.edit_max.xyz)));
+    }
+
     const uint samples = face_samples_of(face.counters);
-    if (node_push.face_stride > 1u && samples >= kFaceEager &&
+    if (node_push.face_stride > 1u && samples >= kFaceEager && !near_edit &&
         ((slot + node_push.frame) % node_push.face_stride) != 0u) {
         return;
     }

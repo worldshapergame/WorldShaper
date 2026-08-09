@@ -470,6 +470,16 @@ things to know before touching it:
   not there before, and the shading pass gates provisional slots on the mark's frame stamp. Without
   the second half, every bucket ever used is re-traced every frame for the rest of the run.
 
+**Stage three is the edit** (D319–D321). A revealed face has no answer; an edited one has a wrong
+answer it is confident about, which is the harder case — a slab placed over sunlit roof had reached
+only 52% of its shadow after three hundred frames, while its own faces were lit correctly at once.
+Two rules fix it: a sample that contradicts a *unanimous* history is treated as the world having
+changed, so the face keeps its ratio and drops to two samples; and faces inside the edited region
+skip the shading stride, using the box the path tracer has had in the parameter block all along.
+Detection in one frame, 93% of the converged shadow by edit+30. **Still open and written up: light
+through a hole just carved** — `invalidate` drops the bricks, an unbuilt cell is an occluder (D302),
+and only primary rays ask for rebuilds. Read D321 before trying the obvious fix; it was tried.
+
 The answer is correct from the first frame, not merely present: at cut+1 the enclosed room reads
 identically to the same camera 120 frames later. Where the answer is not uniformly black, the
 stand-in is about a tenth too bright and sharpens — against a fallback that was twenty times too

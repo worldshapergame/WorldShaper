@@ -2492,6 +2492,18 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
         // Per brick rather than per chunk, because that is the pool's leaf and `invalidate` drops
         // the node and every ancestor folded from it. The op is normalised above, so these bounds
         // are already the right way round.
+        //
+        // NOT accompanied by a request, and that is measured rather than assumed. An invalidated
+        // node is a node the pool does not have, and D302 makes a cell the pool does not have an
+        // OCCLUDER to a shadow ray -- so a freshly carved hole is opaque to the sun until the pool
+        // rebuilds it, and rebuilding is driven by feedback from PRIMARY rays. Asking for the
+        // bricks back here looks like the fix, and the chunk half of this function is written
+        // around exactly that argument. It was tried: it moved no number on the carved-skylight
+        // case in three hundred frames, while costing a request per brick per edit, and the pool's
+        // own counters showed nothing deferred and nothing starved. So it is not here.
+        //
+        // The case is real and is written up as open work -- see the shadow-latency section of
+        // documentation/13-decision-log.md.
         for (i64 bz = op.z0 >> kLeafLevel; bz <= (op.z1 >> kLeafLevel); ++bz) {
             for (i64 by = op.y0 >> kLeafLevel; by <= (op.y1 >> kLeafLevel); ++by) {
                 for (i64 bx = op.x0 >> kLeafLevel; bx <= (op.x1 >> kLeafLevel); ++bx) {

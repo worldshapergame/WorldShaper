@@ -439,6 +439,15 @@ going.
   pure waste inside the engine, and the last two were the graphics card having to ask the rest of
   the program for permission to remember a surface — so now it just remembers it itself, and tells
   the program afterwards. Costs nothing measurable.
+- **Blocks you place now cast their shadow straight away.** They did not: the block itself looked
+  right immediately, but the shadow it should throw onto everything below took **hundreds of
+  frames** to arrive, and after five seconds was only about half there. The reason is that every
+  surface remembers what it has seen — a patch of roof that has watched the sun two hundred times
+  running does not change its mind because of one new answer. So now it does: if a surface that has
+  *always* seen the sun is suddenly told it cannot, that is not a mistake, it is you having built
+  something, and the surface throws away its confidence and re-measures. Shadow starts moving on the
+  next frame and is basically right within half a second. One case is still slow and is written
+  down: sunlight coming through a hole you have just carved, which is a different fault underneath.
 - **Shadows no longer arrive a second late.** You reported that when you moved the camera indoors,
   things had no shadow behind them for a while and then filled in. Here is what was happening: a
   surface only gets a shadow worked out once a ray from your eye lands on it, and to keep that cheap

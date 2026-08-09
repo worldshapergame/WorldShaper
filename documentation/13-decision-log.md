@@ -813,6 +813,48 @@ regressed*, still or turning at 60°/s, and the enclosed view sits at 2.739 ms a
 any of this work. Two runs at one frame are bit-identical (D194), the mirror audit passes by
 identity, and `--validation` is clean. No host work was added and nothing new is uploaded.
 
+## The renderer rewrite — an edit's own shadow
+
+R3e made a *revealed* surface light up in the frame it appears. An EDITED one did not, and for the
+opposite reason: its face is already in the store, already converged, and confidently wrong.
+
+**What it looked like.** A slab placed in mid-air over sunlit roof, camera framing the lit side.
+Share of the frame fully shadowed and its mean sun visibility, against the same scene with the slab
+present from the start (the converged truth: **7,493 shadowed, mean 0.8303**):
+
+| | edit+1 | edit+3 | edit+10 | edit+30 | edit+300 |
+|---|---|---|---|---|---|
+| before | 3,614 / 0.861 | 3,614 / 0.861 | 3,682 / 0.894 | 3,609 / 0.890 | **3,903 / 0.8435** |
+| after | **19,798 lit → shadowed begins / 0.759** | — | 3,661 / 0.799 | **6,998 / 0.822** | **7,222 / 0.8292** |
+
+The old number to read is the last column: after **three hundred frames** the picture had reached
+**52%** of the shadow it was supposed to have, and it was still climbing. The slab's *own* faces
+were right immediately — they are new, and R3e claims them in the frame they appear — so what a
+player saw was a block that casts no shadow while looking perfectly lit itself.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D319 | **A sample that contradicts a unanimous history is the world having changed, not noise** | measurement | The window alone cannot do this and the arithmetic says why: a lawn face sits at 256 lit of 256, so the first ray blocked by a new wall moves it to 256 of 257, and it needs 128 more to reach a half — at one ray every `face_stride` frames. Shortening the window is the wrong fix; it costs every face its penumbra. **Unanimity is what makes a contradiction meaningful**: a face that has seen the sun on every one of two hundred rays and is now told it cannot is not observing noise. Such a face keeps its answer and loses its confidence — two samples, same ratio — so the next ray moves it a third of the way and, being under `kFaceEager`, it is shaded every frame until it re-settles. A face already at a half has no claim to make and is left alone. The false positive is a face whose true visibility is a shade under one: it dips for two or three frames and climbs back, which is a cost paid by nearly-unanimous faces rather than by the penumbra, where a wrong answer would actually show |
+| D320 | **An edited region goes to the front of the shading queue** | measurement | D319 fixes how fast the answer moves once a ray notices; this is how long until one does. A settled face is refreshed one frame in `face_stride` — three at the enclosed camera, seven at 4K — so detection alone was up to seven frames. The region is the edit's own bounds grown by the reach of a shadow, computed on the host and **already in the parameter block**, because the path tracer has needed that box since long before the face store existed (`kEditShadowReach`, `kShadowRefreshFrames`). Reading it in the shading pass is a bounds test and nothing else. Detection went from three frames to **one** |
+| D321 | **Rejected: asking the node pool for the bricks an edit invalidated** | measurement | It looks like the fix for the carved-skylight case below, and the chunk half of `invalidate_edited_chunks` is written around exactly that argument — *"a chunk the player just built is not a guess about what might be looked at"*. Tried, and it moved no number in three hundred frames, while costing a request per brick per edit; the pool's own counters showed **nothing deferred and nothing starved**, so the premise that the rebuild was being delayed by budget was simply wrong. Reverted. Written down because it is the obvious next thing to try and somebody will try it again |
+
+**Measured after.** Detection in **one frame**, 93% of the converged shadow by **edit+30**, and 7,222
+against a truth of 7,493 by edit+300 — where the old behaviour was 3,903. Nothing regressed on the
+grid, still, at 3% tolerance; **speckle is unchanged** at 3.8 / 19.3 / 9.9 enclosed / close /
+outdoor, which is the figure that would have moved if the demotion were firing on ordinary faces;
+450 tests pass; and the R3e reveal case still reads 0% on the fallback at cut+1.
+
+**Open, and measured rather than suspected: light through a hole the player has just carved.**
+Carving a skylight over the enclosed camera reaches a mean visibility of 0.0457 by frame 300 against
+a converged 0.0604, and reads **nought** for the first 150. Neither D319 nor D320 touches it, because
+the faces are not the problem: `invalidate` *drops* the carved bricks from the node pool, an
+unbuilt cell is an OCCLUDER to a shadow ray by D302, and the pool rebuilds only what feedback asks
+for — which comes from primary rays, which need not go anywhere near a hole in a roof. So the hole
+stays opaque to the sun while being perfectly transparent to the eye. D321 records the obvious fix
+failing; the real one is likely to be that **a shadow ray meeting an unbuilt cell inside a recently
+edited region should report it**, which is the one place the "shadow rays never drag streaming" rule
+(D292) has a reason to bend.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
