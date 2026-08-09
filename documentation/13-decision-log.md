@@ -776,6 +776,43 @@ two is claiming on the card**, in the pass that discovers the face, which is the
 removes those two frames — and the reason it is its own stage is that it moves who owns a face's
 identity, which is the fault line D295 and D307 are both written about.
 
+## The renderer rewrite — stage two: the card claims its own faces
+
+D312–D315 took a hard 180° cut from five frames of a completely unshadowed room to two. Those two
+were the feedback round trip and nothing else: the GPU writes a report on frame N, the host cannot
+read it until N+2 because that is when frame N retires, and no arrangement of host code shortens it.
+This is R3e.
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D316 | **The card may claim a face, in the pass that discovers it** | measurement | A provisional table, holding **stand-ins only** — the coarse face `kFaceAncestorStep` above the fine one, which 512 faces share, so a screen needs a few thousand of them rather than the 477,622 the close camera claims per voxel. Records live in the **tail of the same buffer** the store mirrors into, above `max_faces`, so a slot is a slot: the composite reads `faces.items[slot]` with no tag bit and no second binding, and `resolve.comp` needed no change at all. The two allocators can never meet — the host hands out `[0, watermark)` and nothing in the upload path or the audit walks past the watermark — which is what keeps D295 unrepresentable rather than merely avoided. The buckets are its own, because the store's bucket array is uploaded from the host every frame and would overwrite anything the card wrote into it |
+| D317 | **The slot IS the bucket, and that is the whole trick** | — | There is no allocator: a face's slot is the bucket its key hashes to, so a claim is one `atomicCompSwap` — and **the pixel that loses the race learns the winner's slot from the value the atomic hands back, in the same instruction**. That is what matters, not the saving. The alternative — allocate a slot, then publish it — leaves every other pixel on that face reading what the winner wrote, and nothing orders two workgroups, so they would all wait a frame. That frame is the one this stage exists to remove. The word carries the frame it was claimed in and a 24-bit tag from a second, independent hash, so a stale entry is free without any sweep and a false match needs the same bucket *and* the same tag — about one pair in five hundred billion, costing one coarse face one frame of another's shadow |
+| D318 | **The visibility pass writes faces now, so the shading pass has to be told to wait** | — | The only barrier in the frame was the one before the composite. A claim and the ray that fills it are otherwise a race, and its failure mode is a face reading fully lit for one frame — which is exactly what this stage removes, so it would have looked like the change not working. A provisional record also keeps `kFaceLive` for ever, so the shading pass gates on the mark's frame stamp: without that, every bucket ever used would be traced again every frame, thirty-two thousand rays a frame spent on stand-ins nothing is looking at |
+
+**Measured.** Enclosed room, settled world, camera cut through 180°, share of surface lit by the
+full-sun fallback:
+
+| | cut+1 | cut+2 | cut+3 | cut+5 | cut+8 | cut+15 |
+|---|---|---|---|---|---|---|
+| before stage one | 100% | 100% | 100% | 100% | 6.8% | 0.3% |
+| after stage one | 100% | 100% | 73.9% | 2.6% | 0.6% | 0.2% |
+| **after stage two** | **0%** | **0%** | **0%** | **0%** | **0%** | **0%** |
+
+The cold-start curve goes the same way: **0% at every frame measured**, against 30.8% at frame 15
+and 21.0% at frame 20 after stage one, and 91.9% / 45.2% before it.
+
+**And the answer is right, not merely present.** At cut+1 the enclosed room reads 1,023,994 pixels
+fully shadowed with a mean visibility of 0.0000 — *identical to the same camera 120 frames later*.
+On a cut where the answer is not uniformly black (outdoors to the steps), cut+1 reads a mean
+visibility of **0.0489 against 0.0446** converged, with 0.9% still on the fallback: the stand-in is
+about a tenth too bright and sharpens over the next hundred frames, against a fallback that was
+1.0 — twenty times too bright — for eight of them.
+
+**What it costs: nothing measurable.** Three views, deck, 300 frames, `-Tolerance 0.03`: *nothing
+regressed*, still or turning at 60°/s, and the enclosed view sits at 2.739 ms against 2.743 before
+any of this work. Two runs at one frame are bit-identical (D194), the mirror audit passes by
+identity, and `--validation` is clean. No host work was added and nothing new is uploaded.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

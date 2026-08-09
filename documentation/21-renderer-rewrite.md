@@ -507,7 +507,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R3 | a. split the frame | **done** — the marcher names the face each ray stopped on down the feedback buffer that already existed, AND resolves its slot into an R32_UINT image the composite reads (D290). The request lattice walks, or it samples the same 1/64 of the screen for ever (D291) |
 | R3 | c. sun and lamps in the face pass | **sun done, and now visible** — `shaders/shade_faces.comp`, one jittered shadow ray per face per frame across the face and the sun's disc (D294), two counts rather than a mean (D293), no standing in for unbuilt cells (D292). Deck realtime cost: enclosed 2.382 → 2.500 ms, outdoor 1.709 → 1.892, close 2.841 → 3.009 — 3–11% for a shadow the real-time path never had, with speckle falling close 98.3 → 24.6. Lamps and sky still to come |
 | R3 | shadow latency, stage one | **done** — D312–D315. `--cut` first, because a smooth camera measures the rate the store converges at and hides what it does when handed a whole screen: a 180° cut showed **five frames of a completely unshadowed room**. The mirror was uploaded above the line that claims faces, and the composite would not read a face under four samples while showing full sun instead. Both free to fix; five frames became two |
-| R3 | e. claim on the card | **planned, not started.** The two frames left are the feedback round trip and nothing else. §8 R3e has the design: a provisional table in the tail of the faces buffer that the CPU never touches, the claim in the visibility pass, and an indirect fix-up pass over the pixels that lost the race |
+| R3 | e. claim on the card | **done** — D316–D318. A provisional table of stand-ins in the tail of the faces buffer, which the host never writes; the claim is one atomicCompSwap whose return value serves the pixel that lost it, so no fix-up pass was needed at all. The full-sun fallback is **0% of surface from the first frame after a 180° cut**, against 100% for two frames before it, and 0% at every frame of a cold start. Settled cost unchanged, `--validation` clean, two runs bit-identical |
 | R3 | d. delete the per-pixel light path | not started. Carries one debt from R3b: split `GpuFace` so the CPU's half and the card's half are never in one copy |
 | R3 | faces are voxels | **done** — D298–D303. Every face in the store was a brick, so the finest shadow was 25 cm; now 416,261 level 0, 59,758 level 1, 1,603 level 3 on the close camera. Two collisions on zero and a shell that was transparent to occlusion came with it. Speckle enclosed 17.5 (no shadows) → 3.8 |
 | R3 | the store recycles | **fixed** — D304–D306. `evict_cold` was written, tested and never called, so the store filled and then refused every face after it: the shadowed set froze and everything new was lit by the fallback. A slice a frame now, with the threshold halving when the table is full |
@@ -788,9 +788,17 @@ output during a measurement, and write shader files with a writer that does not 
   one level, from the descent, used by both passes.
 - **R3c — sun and lamps in the face pass.** Shadow rays and next-event estimation move off the
   pixel entirely.
-- **R3e — a face is claimed on the card, in the frame a ray first lands on it.** Stage two of
-  shadow latency; stage one was D312–D315 and took a hard 180° cut from five frames of a completely
-  unshadowed room to two. **The two that remain are the feedback round trip and nothing else**: a
+- **R3e — a face is claimed on the card, in the frame a ray first lands on it. Done — D316–D318,
+  and the fix-up pass in step 3 below turned out not to be needed.** Stage two of shadow latency;
+  stage one was D312–D315 and took a hard 180° cut from five frames of a completely unshadowed room
+  to two. Stage two takes it to **nought, from the first frame**, at no measurable cost.
+
+  What the design below got wrong, which is the useful part: it assumed the pixel that loses the
+  claim race has to be served by a second pass, because it cannot read what the winner wrote. It
+  does not have to read anything. If the slot IS the bucket, `atomicCompSwap` *hands the loser the
+  winner's slot as its return value* — so there is no allocator, no append list, no indirect
+  dispatch and no second pass. Step 3 exists only as a record of the more complicated thing that
+  was not built. **The two that remain are the feedback round trip and nothing else**: a
   face is reported by the visibility pass, the CPU reads that report two frames later because
   `kFramesInFlight` is 2 and that is when the frame it was written in retires, and claims it then.
   No arrangement of CPU code shortens it. Reading the buffer a frame earlier is a fence wait.

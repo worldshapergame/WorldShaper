@@ -431,6 +431,14 @@ going.
   nothing draws from any more.
 - **The fast renderer has real sun shadows now**, which it never had — worked out per cube face
   rather than per pixel, which is the first piece of the lighting rewrite actually in your hands.
+- **Shadows now exist on the first frame you can see a surface — including when you spin round.**
+  Measured by jumping the camera 180° in a settled world and counting the pixels with no shadow
+  information: it was **five whole frames of a completely unshadowed room**, then a sixth still
+  mostly wrong. It is now **none, from the first frame**, and the shadow you get on that first frame
+  reads the same as the one 120 frames later. Three things did it: two frames were being spent on
+  pure waste inside the engine, and the last two were the graphics card having to ask the rest of
+  the program for permission to remember a surface — so now it just remembers it itself, and tells
+  the program afterwards. Costs nothing measurable.
 - **Shadows no longer arrive a second late.** You reported that when you moved the camera indoors,
   things had no shadow behind them for a while and then filled in. Here is what was happening: a
   surface only gets a shadow worked out once a ray from your eye lands on it, and to keep that cheap

@@ -41,7 +41,14 @@ public:
 
     VkBuffer faces() const { return faces_.buffer; }
     VkBuffer entries() const { return entries_.buffer; }
+    VkBuffer provisional() const { return provisional_.buffer; }
     u32 entry_capacity() const { return entry_capacity_; }
+
+    // Where the card's own faces start, and how many there are. See create() for why they live in
+    // the tail of the same buffer the store mirrors into.
+    u32 provisional_base() const { return provisional_base_; }
+    static constexpr u32 provisional_count() { return kProvisionalFaces; }
+
     const FaceBufferStats& stats() const { return stats_; }
 
 private:
@@ -49,9 +56,19 @@ private:
                   GpuBuffer& destination);
     void stage_regions(VkCommandBuffer cmd, const FaceStore& store);
 
+    // How many faces the card may claim for itself, and it is a small number on purpose.
+    //
+    // These are STAND-INS, not the fine faces: one of them covers five hundred and twelve voxel
+    // faces (kFaceAncestorStep), so a screen holds a few thousand rather than the 477,622 faces the
+    // close camera claims per voxel. Sized well above that so a claim never fails on a reveal,
+    // which is the one frame it exists for; a power of two, so the bucket index is a mask.
+    static constexpr u32 kProvisionalFaces = 1u << 15;   // 32,768 — 1 MB of records
+
     Device* device_ = nullptr;
     GpuBuffer faces_;
     GpuBuffer entries_;
+    GpuBuffer provisional_;
+    u32 provisional_base_ = 0;
     GpuBuffer staging_;
     u64 staging_capacity_ = 0;
     u64 staging_cursor_ = 0;

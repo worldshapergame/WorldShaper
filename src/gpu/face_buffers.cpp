@@ -9,7 +9,22 @@ namespace ws {
 bool FaceBuffers::create(Device& device, const FaceStoreBudget& budget) {
     device_ = &device;
 
-    const u64 face_bytes = static_cast<u64>(budget.max_faces) * sizeof(GpuFace);
+    // The store's records, and then a tail the CPU never writes.
+    //
+    // The tail is the provisional table (R3e): faces claimed by the card, in the pass that
+    // discovers them, so that a surface revealed by a camera move has light in the SAME frame
+    // rather than two frames later when the feedback round trip lands. They live in this buffer
+    // rather than a second one so that a slot is a slot -- the composite reads
+    // `faces.items[slot]` with no tag bit, no branch and no second binding, and `resolve.comp`
+    // needed no change at all.
+    //
+    // Above `max_faces`, so the two allocators can never meet: the CPU hands out [0, watermark)
+    // and the card hands out [provisional_base, +kProvisionalFaces). Nothing in the upload path
+    // or the audit walks past the watermark, so the card's half is never overwritten by the
+    // host's -- which is D295, the fault this arrangement exists to make unrepresentable.
+    provisional_base_ = budget.max_faces;
+    const u64 face_bytes =
+        (static_cast<u64>(budget.max_faces) + kProvisionalFaces) * sizeof(GpuFace);
 
     // The store's own rule, mirrored here so the shader can be told the capacity as a push
     // constant rather than having to guess it -- and so the two cannot disagree about the mask a
@@ -33,21 +48,34 @@ bool FaceBuffers::create(Device& device, const FaceStoreBudget& budget) {
     faces_ = create_device_buffer(device, face_bytes, kStorage, "faces");
     entries_ = create_device_buffer(device, entry_bytes, kStorage, "face entries");
 
-    // Big enough for both arrays at once, which is what the audit reads back and what a first
+    // The provisional table's buckets, which are its own and not the store's.
+    //
+    // Sharing the store's bucket array would be the obvious saving and is exactly the bug: that
+    // array is uploaded from the host every frame, so anything the card wrote into it is
+    // overwritten by a host copy that never knew about it. One word a bucket, and the slot IS the
+    // bucket index -- there is no allocator here, which is what lets a claim be a single atomic
+    // and lets the pixel that loses the race learn the winner's slot from the value the atomic
+    // hands back, in the same instruction, with no ordering between workgroups to depend on.
+    const u64 provisional_bytes = static_cast<u64>(kProvisionalFaces) * sizeof(u32);
+    provisional_ = create_device_buffer(device, provisional_bytes, kStorage, "face provisional");
+
+    // Big enough for both host arrays at once, which is what the audit reads back and what a first
     // upload of a full store would send. Sized once and never grown: a reallocation mid-play is
-    // the hitch streaming exists to avoid.
-    staging_capacity_ = face_bytes + entry_bytes;
+    // the hitch streaming exists to avoid. The provisional tail is not staged and not audited, so
+    // it is not in here.
+    staging_capacity_ = static_cast<u64>(budget.max_faces) * sizeof(GpuFace) + entry_bytes;
     staging_ = create_staging_buffer(device, staging_capacity_, "face staging");
 
     stats_ = FaceBufferStats{};
-    stats_.device_bytes = face_bytes + entry_bytes;
-    return faces_.valid() && entries_.valid() && staging_.valid();
+    stats_.device_bytes = face_bytes + entry_bytes + provisional_bytes;
+    return faces_.valid() && entries_.valid() && staging_.valid() && provisional_.valid();
 }
 
 void FaceBuffers::destroy() {
     if (device_ == nullptr) return;
     destroy_buffer(*device_, faces_);
     destroy_buffer(*device_, entries_);
+    destroy_buffer(*device_, provisional_);
     destroy_buffer(*device_, staging_);
     device_ = nullptr;
 }

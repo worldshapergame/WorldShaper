@@ -40,8 +40,22 @@ ivec3 face_normal(uint face) {
 }
 
 void main() {
-    const uint slot = gl_GlobalInvocationID.x;
+    // `face_first` is nought for the store and the provisional base for the card's own faces, which
+    // are dispatched separately because they sit in the tail of the same array rather than after the
+    // watermark -- and a dispatch spanning the gap would be a million invocations returning at once.
+    const uint slot = node_push.face_first + gl_GlobalInvocationID.x;
     if (slot >= node_push.face_count) return;
+
+    // A card-claimed face is only worth a ray on the frame it was claimed.
+    //
+    // Its record keeps kFaceLive set for ever, so without this every provisional bucket ever used
+    // would be traced again every frame for the rest of the run -- thirty-two thousand rays a frame
+    // spent on stand-ins nothing is looking at any more. The mark says which frame it was claimed
+    // in, and that is the whole of the test.
+    if (node_push.face_first != 0u && slot >= node_push.provisional_base) {
+        const uint mark = provisional.marks[slot - node_push.provisional_base];
+        if ((mark >> 24) != (node_push.frame & 0xFFu)) return;
+    }
 
     Face face = faces.items[slot];
     const uint level = face_level_of(face.packed);

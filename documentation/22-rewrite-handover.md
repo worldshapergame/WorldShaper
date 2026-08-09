@@ -446,21 +446,34 @@ Enclosed room, 180° cut, share of surface on the full-sun fallback:
 | | cut+1 | cut+2 | cut+3 | cut+5 | cut+8 | cut+15 |
 |---|---|---|---|---|---|---|
 | before stage one | 100% | 100% | 100% | 100% | 6.8% | 0.3% |
-| **now** | 100% | 100% | 73.9% | 2.6% | 0.6% | 0.2% |
+| after stage one | 100% | 100% | 73.9% | 2.6% | 0.6% | 0.2% |
+| **after stage two** | **0%** | **0%** | **0%** | **0%** | **0%** | **0%** |
 
 Stage one was two pieces of waste, both free to remove: the face mirror was uploaded *above* the
 line that claims faces, and the composite refused to read a face until it had four samples while
-showing full sun in the meantime (D313, D314). **The two frames still at 100% are the feedback round
-trip** — report on frame N, CPU reads it on N+2 because that is when N retires. No arrangement of
-CPU code shortens that.
+showing full sun in the meantime (D313, D314). The two frames left at 100% were the feedback round
+trip — report on frame N, host reads it on N+2 because that is when N retires — and no arrangement
+of host code shortens that.
 
-**Stage two is claiming the face on the card**, in the pass that discovers it, so a face exists in
-the same frame a ray first lands on it. Note before starting: `shade_faces` is dispatched *after*
-the visibility pass and *before* the composite in the same command buffer, so a face claimed during
-visibility can be shaded and read in that frame — zero latency is reachable. The hard part is not
-the atomics, it is that the CPU currently owns face identity and does the eviction, the mirror and
-the audit; D295 and D307 are both faults on exactly that seam. Read D315 first for the thing that
-looks like a shortcut and is not.
+Stage two (D316–D318) is the card claiming a stand-in itself, in the pass that discovers it. Three
+things to know before touching it:
+
+- **The slot is the bucket.** There is no allocator, so a claim is one `atomicCompSwap`, and the
+  pixel that loses the race is handed the winner's slot as the return value — in the same
+  instruction, with no ordering between workgroups to depend on. That single property is what
+  removed the second pass the plan had budgeted for.
+- **The card's records live in the tail of the faces buffer**, above `max_faces`, and its buckets
+  are a separate buffer. Not sharing the store's bucket array is the point: that array is uploaded
+  from the host every frame and would overwrite anything the card wrote. D295 is the fault this
+  arrangement makes unrepresentable.
+- **The visibility pass writes faces now**, so there is a barrier before the shading pass that was
+  not there before, and the shading pass gates provisional slots on the mark's frame stamp. Without
+  the second half, every bucket ever used is re-traced every frame for the rest of the run.
+
+The answer is correct from the first frame, not merely present: at cut+1 the enclosed room reads
+identically to the same camera 120 frames later. Where the answer is not uniformly black, the
+stand-in is about a tenth too bright and sharpens — against a fallback that was twenty times too
+bright.
 
 **What is left of R3c**: sky, lamps and bounce, all on the same one-invocation-per-face footing.
 **R3d** deletes the per-pixel light path, and carries one debt from here — split `GpuFace` so the

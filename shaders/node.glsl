@@ -109,6 +109,8 @@ layout(push_constant) uniform NodeConstants {
     uint face_capacity; // buckets in the face table, a power of two
     uint face_probes;
     uint face_stride;   // face shader: shade one face in this many each frame, round robin
+    uint provisional_base;  // where the card's own faces start in the same array. 0 disables them
+    uint face_first;    // face shader: the first slot this dispatch owns
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }
@@ -180,12 +182,17 @@ struct Face {
 layout(std430, binding = 9) buffer Faces { Face items[]; } faces;
 layout(std430, binding = 10) readonly buffer FaceEntries { uint slots[]; } face_entries;
 
+// The card's own faces: one word a bucket, and the slot is the bucket. See node_face_claim below,
+// and src/gpu/face_buffers.hpp for why this table is separate from the one above.
+layout(std430, binding = 12) buffer FaceProvisional { uint marks[]; } provisional;
+
 const uint kNoFace = 0xFFFFFFFFu;
 const uint kFaceTombstone = 0xFFFFFFFEu;
 
 uint face_level_of(uint packed) { return packed & 0xFFu; }
 uint face_dir_of(uint packed) { return (packed >> 8) & 0xFFu; }
 // Must match kFaceLive in src/world/face_store.hpp: flags bit 7, so the flags byte at bits 16-23.
+const uint kFaceLive = 1u << 7;
 uint face_flags_of(uint packed) { return (packed >> 16) & 0xFFu; }
 bool face_live_of(uint packed) { return (packed & (1u << 23)) != 0u; }
 // Two counts in one word: rays cast, and rays that reached the sun. Must match pack_counters in
@@ -270,6 +277,69 @@ uint node_face_lookup(ivec3 node, uint level, uint face) {
         if (f.x == node.x && f.y == node.y && f.z == node.z &&
             face_level_of(f.packed) == level && face_dir_of(f.packed) == face) {
             return slot;
+        }
+    }
+    return kNoFace;
+}
+
+// ---- the card's own claim -----------------------------------------------------------------------
+//
+// A face the CPU has not heard of yet, claimed here, in the pass that discovered it.
+//
+// # Why this exists
+//
+// The store is claimed from the feedback buffer, and feedback is two frames old by construction:
+// the GPU writes a report on frame N and the host may not read it until frame N+2, because that is
+// when frame N's command buffer has retired. So a surface revealed by turning round had NO face for
+// two frames however fast everything else was, and the composite lit it with full sun -- measured
+// at a hard cut as two full frames of a completely unshadowed room. No arrangement of host code
+// shortens that; reading the buffer earlier is a fence wait.
+//
+// So this table is the card's. It holds STAND-INS only -- the coarse face kFaceAncestorStep above
+// the fine one, which five hundred and twelve faces share -- so a screen needs a few thousand of
+// them rather than the half million faces it holds per voxel. The store's own claims arrive two
+// frames later and take over, and a provisional entry is simply never looked at again.
+//
+// # Why the slot IS the bucket, and why that is the whole trick
+//
+// There is no allocator here. A face's slot is the bucket its key hashes to, so a claim is one
+// atomicCompSwap and nothing else -- and the pixel that LOSES that race learns the winner's slot
+// from the value the atomic hands back, in the same instruction. That matters more than the saving:
+// the alternative is allocating a slot and then publishing it, where a pixel that lost has to read
+// what the winner wrote, and nothing orders two workgroups. Every other pixel on the face would
+// have to wait a frame, which is the frame this exists to remove.
+//
+// The word holds the frame it was claimed in and a tag from a second hash. An entry stamped with an
+// older frame is free, so nothing is ever cleared and there is no sweep: the first claimant of a
+// bucket this frame takes it. A face therefore re-claims itself each frame it is needed, and gets
+// one fresh sample per frame, which is exactly what kFaceSettled = 1 makes readable.
+//
+// A false match needs the same bucket AND the same twenty-four-bit tag from an independent hash --
+// fifteen bits plus twenty-four, so about one pair in five hundred billion. What it would cost is
+// one coarse face reading another's shadow for one frame.
+const uint kProvisionalMask = (1u << 15) - 1u;   // must match kProvisionalFaces in face_buffers.hpp
+
+uint node_face_claim(ivec3 node, uint level, uint face, out bool claimed) {
+    claimed = false;
+    if (node_push.provisional_base == 0u) return kNoFace;
+
+    const uint tag = node_hash_lattice(node.zxy, (level << 3) | face | 0x8000u) & 0xFFFFFFu;
+    const uint want = ((node_push.frame & 0xFFu) << 24) | tag;
+    uint bucket = node_hash_lattice(node, (level << 3) | face) & kProvisionalMask;
+
+    for (uint probe = 0u; probe < 8u; ++probe) {
+        const uint at = (bucket + probe) & kProvisionalMask;
+        uint current = provisional.marks[at];
+        if (current == want) return node_push.provisional_base + at;   // already ours this frame
+        if ((current >> 24) != (node_push.frame & 0xFFu)) {
+            // Stale or never used: take it. Whoever wins writes the record; whoever loses reads
+            // the winner's mark out of the compare-exchange and needs nothing else.
+            const uint previous = atomicCompSwap(provisional.marks[at], current, want);
+            if (previous == current) {
+                claimed = true;
+                return node_push.provisional_base + at;
+            }
+            if (previous == want) return node_push.provisional_base + at;
         }
     }
     return kNoFace;

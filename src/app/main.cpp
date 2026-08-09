@@ -1166,7 +1166,8 @@ private:
         u32 face_capacity;    // buckets in the face table
         u32 face_probes;
         u32 face_stride;      // shade one face in this many each frame
-        u32 pad[1];
+        u32 provisional_base; // where the card's own faces start in the same array (R3e)
+        u32 face_first;       // shading: the first slot this dispatch owns
     };
     NodePush make_node_push(u32 face_count) const;
 
@@ -2956,6 +2957,10 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     // not moved.
     const u32 live = std::max(face_store_.watermark(), 1u);
     push.face_stride = std::max(1u, (live + kFacesPerFrame - 1) / kFacesPerFrame);
+
+    // Where the card may claim faces of its own, and R3e is the whole of why it may.
+    push.provisional_base = face_buffers_.provisional_base();
+    push.face_first = 0;
     return push;
 }
 
@@ -3868,17 +3873,50 @@ void Application::record_frame(f32 time_seconds) {
     // claim R3 makes is that this number does not move with resolution and that has to be
     // measurable rather than asserted (D201's lesson, in the pass it is being made about).
     if (use_node_pool_) {
+        // The visibility pass writes faces now, not only reads them: R3e has it claim a stand-in on
+        // the card for any surface the store has never heard of. So the shading pass has to be told
+        // to wait for those writes, where before the only barrier in the frame was the one before
+        // the composite. Without it the claim and the ray that fills it are a race, and the shape
+        // of that failure is a face that reads as fully lit for one frame -- which is precisely
+        // what this stage exists to remove, so it would look like the change not working.
+        VkMemoryBarrier2 claim_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        claim_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        claim_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        claim_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        claim_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        VkDependencyInfo claim_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        claim_dependency.memoryBarrierCount = 1;
+        claim_dependency.pMemoryBarriers = &claim_barrier;
+        vkCmdPipelineBarrier2(cmd, &claim_dependency);
+
         const u32 face_count = face_store_.watermark();
-        if (face_count > 0) {
+        const u32 provisional_base = face_buffers_.provisional_base();
+        const u32 provisional_count = FaceBuffers::provisional_count();
+        if (face_count > 0 || provisional_count > 0) {
             profiler_.begin_pass(cmd, "faces", 4.4);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.pipeline());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.layout(), 0,
                                     1, &node_set_, 1, &params_offset);
-            const NodePush shade_push = make_node_push(face_count);
+            if (face_count > 0) {
+                const NodePush shade_push = make_node_push(face_count);
+                vkCmdPushConstants(cmd, shade_faces_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                   sizeof(shade_push), &shade_push);
+                vkCmdDispatch(cmd, (face_count + 63) / 64, 1, 1);
+            }
+
+            // And the card's own faces, as a second dispatch rather than a longer first one.
+            //
+            // They sit in the tail of the same array, above `max_faces`, while the store's
+            // watermark is far below it — so one dispatch spanning both would be a million
+            // invocations reading thirty-two bytes and stopping. This one is 32,768 invocations,
+            // most of which find a mark from an older frame and return.
+            NodePush provisional_push = make_node_push(provisional_base + provisional_count);
+            provisional_push.face_first = provisional_base;
             vkCmdPushConstants(cmd, shade_faces_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                               sizeof(shade_push), &shade_push);
-            vkCmdDispatch(cmd, (face_count + 63) / 64, 1, 1);
-            profiler_.add_bytes(static_cast<u64>(face_count) * sizeof(GpuFace));
+                               sizeof(provisional_push), &provisional_push);
+            vkCmdDispatch(cmd, (provisional_count + 63) / 64, 1, 1);
+
+            profiler_.add_bytes(static_cast<u64>(face_count + provisional_count) * sizeof(GpuFace));
             profiler_.end_pass(cmd);
         }
     }
@@ -4405,10 +4443,11 @@ int Application::run(const Options& options) {
         // two sets would be two places for the same buffers to be bound, which is how the node
         // pipeline's output images came to be written in one place and forgotten in the other
         // (§4 trap 1). A shader need not use every binding in a set.
-        // Twelve: 0-1 the visibility and depth images, 2-7 the pool and feedback, 8 the parameter
-        // block, 9-10 the face store, 11 the face-slot image the composite reads.
-        VkDescriptorSetLayoutBinding node_bindings[12]{};
-        for (u32 i = 0; i < 12; ++i) {
+        // Thirteen: 0-1 the visibility and depth images, 2-7 the pool and feedback, 8 the parameter
+        // block, 9-10 the face store, 11 the face-slot image the composite reads, 12 the card's own
+        // provisional face table (R3e), which is the store's shape minus the host.
+        VkDescriptorSetLayoutBinding node_bindings[13]{};
+        for (u32 i = 0; i < 13; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -4419,7 +4458,7 @@ int Application::run(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 12;
+        node_layout_info.bindingCount = 13;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -4430,22 +4469,23 @@ int Application::run(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[8]{
+        const VkBuffer node_pool_buffers[9]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
-            face_buffers_.faces(), face_buffers_.entries(),
+            face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
         };
-        VkDescriptorBufferInfo node_infos[8]{};
-        VkWriteDescriptorSet node_writes[9]{};
-        for (u32 i = 0; i < 8; ++i) {
+        VkDescriptorBufferInfo node_infos[9]{};
+        VkWriteDescriptorSet node_writes[10]{};
+        for (u32 i = 0; i < 9; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
             node_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             node_writes[i].dstSet = node_set_;
             // 2..7 are the pool and the feedback buffer; 8 is the parameter block, which is a
-            // different descriptor type and is written separately below; 9 and 10 are the faces.
-            node_writes[i].dstBinding = (i < 6) ? (2 + i) : (3 + i);
+            // different descriptor type and is written separately below; 9 and 10 are the faces,
+            // and 12 is the provisional table, which skips 11 because that is an image.
+            node_writes[i].dstBinding = (i < 6) ? (2 + i) : (i == 8) ? 12 : (3 + i);
             node_writes[i].descriptorCount = 1;
             node_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             node_writes[i].pBufferInfo = &node_infos[i];
@@ -4454,13 +4494,13 @@ int Application::run(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[8].dstSet = node_set_;
-        node_writes[8].dstBinding = 8;
-        node_writes[8].descriptorCount = 1;
-        node_writes[8].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[8].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 9, node_writes, 0, nullptr);
+        node_writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[9].dstSet = node_set_;
+        node_writes[9].dstBinding = 8;
+        node_writes[9].descriptorCount = 1;
+        node_writes[9].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[9].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 10, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.

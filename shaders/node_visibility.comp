@@ -174,13 +174,37 @@ void main() {
         bool answerable = face_slot != kNoFace &&
                           face_samples_of(faces.items[face_slot].counters) >= kFaceSettled;
         if (!answerable) {
-            uint stand_in = node_face_lookup(
-                ivec3(hit.face_node.x >> kFaceAncestorStep, hit.face_node.y >> kFaceAncestorStep,
-                      hit.face_node.z >> kFaceAncestorStep),
-                hit.face_level + uint(kFaceAncestorStep), hit.face_dir);
+            const ivec3 coarse = ivec3(hit.face_node.x >> kFaceAncestorStep,
+                                       hit.face_node.y >> kFaceAncestorStep,
+                                       hit.face_node.z >> kFaceAncestorStep);
+            const uint coarse_level = hit.face_level + uint(kFaceAncestorStep);
+            uint stand_in = node_face_lookup(coarse, coarse_level, hit.face_dir);
             if (stand_in != kNoFace &&
                 face_samples_of(faces.items[stand_in].counters) >= kFaceSettled) {
                 face_slot = stand_in;
+            } else {
+                // Nothing in the store, so claim it here rather than waiting two frames for the
+                // host to hear about it. R3e; see node_face_claim for why the claim is one atomic
+                // and why the pixel that loses the race is served by the same one.
+                //
+                // The record is written by whichever pixel won. It is written HERE rather than in
+                // the shading pass because the shading pass has no key to write -- and it is safe
+                // to write from a pass that other pixels are still reading, because the only thing
+                // they read of it this frame is the slot number, which the atomic gave them.
+                bool claimed = false;
+                const uint fresh = node_face_claim(coarse, coarse_level, hit.face_dir, claimed);
+                if (claimed) {
+                    faces.items[fresh].x = coarse.x;
+                    faces.items[fresh].y = coarse.y;
+                    faces.items[fresh].z = coarse.z;
+                    faces.items[fresh].packed =
+                        (coarse_level & 0xFFu) | (hit.face_dir << 8) | (kFaceLive << 16);
+                    faces.items[fresh].counters = 0u;
+                    faces.items[fresh].irradiance = 0u;
+                    faces.items[fresh].photons = 0u;
+                    faces.items[fresh].bins = 0u;
+                }
+                if (fresh != kNoFace) face_slot = fresh;
             }
         }
     }
