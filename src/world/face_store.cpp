@@ -30,6 +30,8 @@ void FaceStore::create(const FaceStoreBudget& budget) {
     dirty_entries_.mark_range(0, entries_.size());
     free_faces_.clear();
     next_free_ = 0;
+    evict_cursor_ = 0;
+    last_emergency_ = 0;
     out_of_room_ = false;
     claims_ = 0;
     hits_ = 0;
@@ -129,11 +131,56 @@ void FaceStore::write(u32 slot, u32 irradiance, u32 samples, u32 lit) {
 }
 
 void FaceStore::evict_cold(u64 frame) {
+    if (next_free_ == 0) return;
     const u32 now = static_cast<u32>(frame);
-    for (u32 slot = 0; slot < next_free_; ++slot) {
+
+    // How cold is cold. Normally the budget's own figure; when the table has run out of slots,
+    // whatever it takes to get some back.
+    //
+    // Without the second half the store never recovers from being full. A face is given up after
+    // six hundred frames of nobody asking for it, and a player who fills the table in less than
+    // that -- which one camera position now does, since faces became voxels -- gets no new faces
+    // at all until ten seconds after they stop moving. What that looks like is the reported bug
+    // exactly: shadows do not stop being *drawn*, they stop being *produced*, so the picture keeps
+    // whatever set of shadowed faces it had and every new surface is fully lit.
+    //
+    // Halving down to a floor rather than dropping straight to it, so a store that is only just
+    // full gives up only what it must. The floor is well above the handful of frames a face needs
+    // to settle, or the store would recycle faces it is still converging.
+    u32 cold = budget_.cold_frames;
+    if (out_of_room_ && free_faces_.empty() &&
+        (last_emergency_ == 0 || now - last_emergency_ >= kFaceEmergencyGap)) {
+        // Rate limited, because this scans the whole table several times over and a store whose
+        // every face is genuinely hot would otherwise pay that on every frame for ever -- turning
+        // "no new faces" into "no new faces and a frame rate to match". Once every sixty frames is
+        // often enough to recover in under a second and rare enough to be invisible if it cannot.
+        last_emergency_ = now;
+        while (cold > kFaceMinCold && free_faces_.empty()) {
+            cold >>= 1;
+            sweep(now, cold, 0, next_free_);
+        }
+        evict_cursor_ = 0;
+        out_of_room_ = free_faces_.empty();
+        return;
+    }
+
+    // A slice a frame, exactly as the node pool's erosion sweep does it and for the reason D273
+    // records: the timestamp array is a quarter the width of a record and read in order, so the
+    // cheap test costs a fraction of what looking at every face would. Eight slices costs eight
+    // frames of latency on an eviction against a window of six hundred.
+    const u32 slice = (next_free_ + kFaceEvictSlices - 1) / kFaceEvictSlices;
+    if (evict_cursor_ >= next_free_) evict_cursor_ = 0;
+    const u32 first = evict_cursor_;
+    const u32 last = (first + slice < next_free_) ? first + slice : next_free_;
+    evict_cursor_ = last;
+    sweep(now, cold, first, last);
+}
+
+void FaceStore::sweep(u32 now, u32 cold, u32 first, u32 last) {
+    for (u32 slot = first; slot < last; ++slot) {
         // The cheap test first and the record second, which on the node pool was the difference
         // between 8.6 MB of memory traffic a frame and one megabyte (D273).
-        if (now - last_read_[slot] <= budget_.cold_frames) continue;
+        if (now - last_read_[slot] <= cold) continue;
         if (!face_live(faces_[slot])) continue;   // already free
 
         const FaceKey key{faces_[slot].x, faces_[slot].y, faces_[slot].z,

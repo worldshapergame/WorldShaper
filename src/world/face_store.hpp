@@ -179,6 +179,19 @@ struct FaceStoreBudget {
     u32 cold_frames = 600;
 };
 
+// How many frames one full eviction sweep is spread over. Eight slices costs eight frames of
+// latency on an eviction against a six-hundred-frame window, and saves seven eighths of the scan.
+// The same figure and the same reasoning as the node pool's kErodeSlices (D273).
+inline constexpr u32 kFaceEvictSlices = 8;
+
+// How cold a face may be forced to be when the table is full. Far above the handful of frames a
+// face needs to settle, so a store under pressure never recycles what it is still converging.
+inline constexpr u32 kFaceMinCold = 32;
+
+// How rarely the full-table emergency sweep may run. It scans everything several times over, so a
+// store whose faces are all genuinely hot must not pay it every frame.
+inline constexpr u32 kFaceEmergencyGap = 60;
+
 struct FaceStoreStats {
     u32 faces = 0;
     u64 face_bytes = 0;
@@ -207,6 +220,9 @@ public:
     u32 find(const FaceKey& key) const;
 
     void touch(u32 slot, u64 frame);
+
+    // Give up faces nobody has asked for. Must be called every frame: without it the store only
+    // ever grows, reaches its cap, and then refuses every new face for the rest of the run.
     void evict_cold(u64 frame);
 
     // What a shading pass writes. One invocation per face per frame owns this (D191), so it is a
@@ -234,6 +250,7 @@ public:
 
 private:
     usize bucket_of(const FaceKey& key) const;
+    void sweep(u32 now, u32 cold, u32 first, u32 last);
 
     FaceStoreBudget budget_;
     std::vector<GpuFace> faces_;
@@ -241,6 +258,8 @@ private:
     std::vector<u32> last_read_;      // CPU-side, parallel to faces_, as the node pool's is
     std::vector<u32> free_faces_;
     u32 next_free_ = 0;
+    u32 evict_cursor_ = 0;     // where the rolling eviction sweep is
+    u32 last_emergency_ = 0;   // when the full-table sweep last ran
     bool out_of_room_ = false;
 
     // Marked at every write into the two arrays above. A missed mark is a stale byte on the card

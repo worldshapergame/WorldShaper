@@ -17,6 +17,53 @@ FaceStore make_store(u32 max_faces = 1024, u32 cold_frames = 4) {
 
 }  // namespace
 
+// The failure this pair is written for is not "eviction is wrong", it is "eviction never ran".
+//
+// `evict_cold` was written with the store and tested with the store, and no caller ever called it.
+// A store that only grows reaches its cap and then refuses every face after it, and what that looks
+// like from the game is not shadows switching off: the faces that already have light keep it, so
+// the picture holds whatever set of shadowed surfaces it had when the table filled and everything
+// found after that is lit by the composite's fallback. Nothing in the store is in a bad state and
+// no counter is obviously wrong, which is why it took a player to notice.
+TEST_CASE("a full store recovers, rather than refusing faces for ever") {
+    FaceStore store = make_store(64, 600);
+
+    // Fill it, with every face claimed at frame 1 and never asked for again.
+    for (u32 i = 0; i < 64; ++i) {
+        REQUIRE(store.claim(FaceKey{i, 0, 0, 0, 0}, 1) != kNoFace);
+    }
+    CHECK(store.stats().faces == 64);
+    CHECK(store.claim(FaceKey{999, 0, 0, 0, 0}, 2) == kNoFace);
+    CHECK(store.out_of_room());
+
+    // Well inside cold_frames, so the ordinary rule would give up nothing at all. The store is
+    // full and the faces are not cold: it has to take the coldest anyway or the game stops
+    // producing shadows until the player stands still for ten seconds.
+    store.evict_cold(200);
+    const u32 slot = store.claim(FaceKey{999, 0, 0, 0, 0}, 200);
+    CHECK(slot != kNoFace);
+    CHECK(store.find(FaceKey{999, 0, 0, 0, 0}) == slot);
+    CHECK(store.validate());
+}
+
+// And the ordinary path still gives up only what is genuinely cold, a slice at a time.
+TEST_CASE("a face still in use is not evicted, however many sweeps run") {
+    FaceStore store = make_store(1024, 8);
+    const FaceKey kept{1, 2, 3, 0, 4};
+    const FaceKey dropped{9, 9, 9, 0, 4};
+    REQUIRE(store.claim(kept, 1) != kNoFace);
+    REQUIRE(store.claim(dropped, 1) != kNoFace);
+
+    // kFaceEvictSlices sweeps cover the whole table once, so run several times that many.
+    for (u64 frame = 2; frame < 60; ++frame) {
+        store.claim(kept, frame);        // asked for every frame
+        store.evict_cold(frame);
+    }
+    CHECK(store.find(kept) != kNoFace);
+    CHECK(store.find(dropped) == kNoFace);
+    CHECK(store.validate());
+}
+
 TEST_CASE("a face is claimed once and found again") {
     FaceStore store = make_store();
     const FaceKey key{4, -9, 22, 3, 2};

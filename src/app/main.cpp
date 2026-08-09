@@ -149,6 +149,7 @@ struct Options {
     std::string screenshot;
     u64 screenshot_frame = 30;
     u32 debug_mode = 0;   // 0 shaded, 1 step count, 2 face normals
+    u32 face_budget = 0;  // faces the store may hold; 0 keeps FaceStoreBudget's own figure
 
     // "x,y,z,yaw,pitch" in metres and degrees. Lets a measurement be repeated exactly,
     // which is what makes frame times comparable between builds.
@@ -295,6 +296,12 @@ Options parse_options(int argc, char** argv) {
             options.no_auto_quality = true;
         } else if (arg == "--quality" && i + 1 < argc) {
             options.quality_level = std::atoi(argv[++i]);
+        } else if (arg == "--face-budget" && i + 1 < argc) {
+            // How many faces the store may hold. Here so the full-table path can be reached from
+            // one camera in one run: at the real budget it takes a player moving about for a
+            // while, which is precisely why "the shadowed faces stop being produced" was found by
+            // playing rather than by any test.
+            options.face_budget = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--crash-test" && i + 1 < argc) {
             options.crash_test = argv[++i];
         } else if (arg == "--hollow" && i + 1 < argc) {
@@ -2674,6 +2681,26 @@ void Application::stream(f64 seconds) {
 
     last_faces_seen_ = faces_seen;
 
+    // And give up the faces nobody asked for, which nothing did until now.
+    //
+    // `FaceStore::evict_cold` was written with the store, tested with the store, and never called.
+    // A store that only grows reaches its cap and then refuses every face after it, and the shape
+    // of that failure is not the one you would guess: shadows do not stop being DRAWN. The faces
+    // that already have light keep it, so the picture holds whatever set of shadowed surfaces it
+    // had when the table filled, and everything discovered after that is lit by the composite's
+    // fallback. Reported as "after some time the shadowed voxel faces stop being produced and it
+    // stays as whatever was produced before", which is the mechanism described exactly.
+    //
+    // It is new in practice rather than in theory: at brick granularity one camera claimed about
+    // nineteen thousand faces against a budget of a million, so a session would rarely reach it.
+    // Per voxel the same camera claims four hundred and seventy-seven thousand, and two or three
+    // positions fill the table.
+    //
+    // Runs every frame regardless of which marcher is drawing, because the store is claimed from
+    // whichever one ran and a store that stops being swept while the chunk marcher is up would
+    // come back full.
+    face_store_.evict_cold(frame_counter_);
+
     // A small radius around the camera on top, so the ground under your feet is resident
     // before it has been looked at. Feedback cannot report what has never been on screen.
     // (The window itself is set before the loop above, so requests outside it are already
@@ -4303,6 +4330,7 @@ int Application::run(const Options& options) {
             return 1;
         }
         FaceStoreBudget face_budget;
+        if (options_.face_budget > 0) face_budget.max_faces = options_.face_budget;
         face_store_.create(face_budget);
         if (!face_buffers_.create(device_, face_budget)) {
             WS_LOG_FATAL("app", "could not create the face store buffers");
@@ -5100,9 +5128,10 @@ int Application::run(const Options& options) {
                 const FaceStoreStats face_stats = face_store_.stats();
                 WS_LOG_INFO("frame",
                             "faces: {} live, {} seen this frame, {} claims {} already there, "
-                            "{} bytes of faces ({} with the table)",
+                            "{} evicted, {} bytes of faces ({} with the table)",
                             face_stats.faces, last_faces_seen_, face_stats.claims,
-                            face_stats.hits, face_stats.face_bytes, face_stats.total_bytes);
+                            face_stats.hits, face_stats.evictions, face_stats.face_bytes,
+                            face_stats.total_bytes);
 
                 // What SIZE the faces are, which is the size of the smallest shadow the frame can
                 // cast. The plan's arithmetic assumes level 0 near the camera -- a voxel covers a
