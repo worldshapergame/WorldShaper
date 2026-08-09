@@ -313,6 +313,15 @@ Two fixes, in the order they pay:
 Until the second lands, nobody can judge the renderer by playing a *first* load, because what they
 are judging is the paste. Every load after the first is now the renderer.
 
+### R3 comes before R1e, deliberately
+
+R1e's bulk is moving `pathtrace.comp` from `world.glsl` onto the node pool — and §9 of the plan
+**deletes** `pathtrace.comp` at R3 and replaces it with the face pass. Doing R1e first is building
+something to throw away one stage later, so R3 goes first and leaves R1e with nothing to port
+(D278). What that costs is the chunk system staying in the build, which since it was resized to
+what still reads it is 226 ms of load and about 12 ms of CPU a frame rather than 1.7 s and the
+same 12.
+
 ### ~~Then, the thing R1e cannot be judged without~~ — solved
 
 **The node pool converges.** D233 said it did not and carried it to R2; D234 blamed the bimodal
