@@ -379,6 +379,22 @@ public:
     // successor to mirror_voxel_world and is held to the same standard.
     VoxelTypeId mirror_voxel(i64 x, i64 y, i64 z) const;
 
+    // How many built leaves hold a shape the world no longer has. The other half of the same
+    // standard: `mirror_voxel` asks whether the pool agrees with itself, and this asks whether it
+    // agrees with the WORLD.
+    //
+    // It exists because that question had no instrument and the answer was "thirty thousand". The
+    // world is written by more than the edit path — a region paste sharpens a box of it in the
+    // background — and a leaf is a copy taken at build time, so a writer that does not call
+    // `invalidate` leaves the pool holding the shape it had before. Nothing anywhere said so: the
+    // GPU mirror matched, the node count was healthy, and the picture was of a building that had
+    // been sharpened everywhere except in the tree the renderer walks.
+    //
+    // Occupancy only, which is the cheap half and the half that carries a paste: comparing
+    // payloads would mean re-encoding every brick. `first` receives the first disagreeing leaf's
+    // key, because a count says there is a fault and a coordinate says where to look.
+    u32 stale_leaves(const World& world, NodeKey* first = nullptr) const;
+
     // How much of each array is in use, so the GPU copies a prefix rather than a capacity. An
     // empty world uploads nothing and the facility uploads a couple of megabytes, where copying
     // the whole pool would be 32 MB whatever it held.

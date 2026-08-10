@@ -421,7 +421,13 @@ void print_help() {
         "                        7 what the primary ray hit, 8 what the bounce found,\n"
         "                        9 the sun's visibility on its own, 10 no tone curve,\n"
         "                        11 this pixel's face key as four exact bytes, for counting\n"
-        "                        distinct visible faces (tools\\facecount.ps1)\n"
+        "                        distinct visible faces (tools\\facecount.ps1),\n"
+        "                        16 the sun term alone, 17 sky visibility, 18 the near field,\n"
+        "                        19 how far each face is through its ambient rays: green\n"
+        "                        converged and silent, red held short of it by unbuilt\n"
+        "                        geometry, grey the progress between,\n"
+        "                        20 the lamp term alone: what the emitters deliver to each\n"
+        "                        face, with blue for a face that has not measured yet\n"
         "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
         "  --chunk-marcher       march the old chunk grid instead of the node pool\n"
         "  --settle              start the measurement window once the world stops sharpening,\n"
@@ -487,6 +493,13 @@ constexpr f32 kGameSecondsPerSecond = 60.0f;
 // millisecond against the pass's 4.4 ms budget, leaving room for the sky and lamp rays R3c adds
 // to the same invocation.
 constexpr u32 kFacesPerFrame = 96u * 1024u;
+
+// Must match kSkyBurst and kSkyConverged in shaders/node.glsl. Nothing here meters the ambient
+// burst -- three ways of doing that were built and measured and all three were slower than none;
+// shade_faces.comp records the table. These are kept because the audit and the comments refer to
+// them, and because a number that lives in two files should be declared in both.
+constexpr u32 kSkyBurstMax = 32u;
+constexpr u32 kSkyConverged = 2048u;
 
 constexpr f32 kShutterFraction = 0.5f;
 
@@ -921,6 +934,8 @@ private:
     void update_tools(const InputState& input, bool chisel_has_wheel, bool clipboard_has_wheel,
                       f64 dt);
     void invalidate_edited_chunks(const std::vector<Op>& ops);
+    // The same, for a writer that is not made of ops. See the function.
+    void announce_world_change(const i64 lo[3], const i64 hi[3]);
     void rebuild_coarse_grids();
 
     Options options_;
@@ -1096,6 +1111,18 @@ private:
     GpuBuffer light_buffer_;
     u32 light_count_ = 0;
     bool lights_dirty_ = true;
+    // The identity of the list on the card, and a counter over it.
+    //
+    // The face pass accumulates lamp light per face and then stops casting rays, so it cannot
+    // notice a lamp being placed, deleted or dimmed unless it is told. `light_hash_` is what
+    // decides whether anything actually changed -- a rebuild triggered by an edit twenty metres
+    // from the nearest sconce usually produces the identical list, and re-measuring the whole store
+    // for that would cost a second of rays to arrive at the number already held. `light_version_`
+    // is what the shader compares against, because a hash does not fit in the sixteen bits a face
+    // has room for and a counter does.
+    u64 light_hash_ = 0;
+    u32 light_version_ = 1;   // 1 rather than 0, so a zeroed face record can never read as current
+    bool light_changed_ = false;
 
     // The medium, already in the shader's units. Converted once, when the clip's resolution is
     // known, rather than per frame or per shader: see the note on --fog.
@@ -1281,8 +1308,12 @@ private:
         u32 face_stride;      // shade one face in this many each frame
         u32 provisional_base; // where the card's own faces start in the same array (R3e)
         u32 face_first;       // shading: the first slot this dispatch owns
+        u32 light_count;      // live entries of the emitter list. 0 means the scene has no lamps
+        u32 light_version;    // bumped when the list's CONTENTS change (light_list_hash)
+        u32 light_reset;      // 1 on the one frame it changed, which reopens every idle face
     };
     NodePush make_node_push(u32 face_count) const;
+
 
     // The node pool, beside the chunk grid rather than replacing it yet. See
     // documentation/21-renderer-rewrite.md section 8, sub-step R1c.
@@ -1789,6 +1820,28 @@ void Application::pump_refinement() {
     // re-cuts the same volume at the new detail. The cut re-measures itself.
     const std::vector<Op>& done = op_log_.ops();
     if (!done.empty()) apply_ops(world_, done, ledger_);
+
+    // And the renderer is told, which for the whole life of the clip ladder it was not.
+    //
+    // This paste has just rewritten a box of the world at four times the detail it held a moment
+    // ago, and everything downstream is holding a copy of the blocky version: the node pool's
+    // leaves are copies taken at build time, and a face's ambient occlusion is a measurement taken
+    // through them which, since R10d, converges and then stops casting rays for ever. Neither can
+    // notice on its own -- the pool's feedback reports what a ray could not FIND, and a brick that
+    // is resident but out of date is found; and a face's own samples cannot see a change that
+    // arrives after they have stopped being taken, which is D373's lesson from the other end.
+    //
+    // The box is the clip's own extent where it landed, and the announcement is the same one an
+    // edit makes, because it is the same event: the world here is not what you were told it was.
+    // What it costs is bounded by that box and is charged against a paste that already measures in
+    // seconds. See D397.
+    const i64 paste_lo[3] = {finished->origin_voxel[0] + refine_at_[0],
+                             finished->origin_voxel[1] + refine_at_[1],
+                             finished->origin_voxel[2] + refine_at_[2]};
+    const i64 paste_hi[3] = {paste_lo[0] + std::max(finished->clip.size[0] - 1, 0),
+                             paste_lo[1] + std::max(finished->clip.size[1] - 1, 0),
+                             paste_lo[2] + std::max(finished->clip.size[2] - 1, 0)};
+    announce_world_change(paste_lo, paste_hi);
 
     finished.reset();
 
@@ -2549,6 +2602,39 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
 //
 // The edit knows exactly which chunks it touched, so it says so.
 void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
+    bool first = true;
+    i64 lo[3]{};
+    i64 hi[3]{};
+    for (const Op& raw : ops) {
+        Op op = raw;
+        op.normalise();
+        const i64 op_lo[3] = {op.x0, op.y0, op.z0};
+        const i64 op_hi[3] = {op.x1, op.y1, op.z1};
+        for (u32 axis = 0; axis < 3; ++axis) {
+            lo[axis] = first ? op_lo[axis] : std::min(lo[axis], op_lo[axis]);
+            hi[axis] = first ? op_hi[axis] : std::max(hi[axis], op_hi[axis]);
+        }
+        first = false;
+    }
+    if (first) return;   // no ops, so nothing changed
+    announce_world_change(lo, hi);
+}
+
+// One box of the world is not what the renderer is holding a copy of, and everything that holds
+// one is told here.
+//
+// Split out of `invalidate_edited_chunks` because an EDIT is not the only thing that writes to the
+// world. The clip ladder sharpens the building region by region in the background and pastes each
+// box straight into the world's bricks (`pump_refinement`), and for as long as this was reachable
+// only from the edit path, nothing downstream ever heard about any of it. Measured, on the same
+// world at the same camera with the same content hash, one run watching it sharpen and one loading
+// the finished article: the node pool held **7,497 of its 17,344 leaves** in a shape the world no
+// longer had, and the ambient term -- which since R10d converges and then stops casting rays
+// altogether -- differed by a mean of **19.3 of 255 over 53% of the frame**, permanently. See D397.
+//
+// It takes a BOX rather than a list of ops because the paste is not made of ops. The edit path
+// unions its group and hands the union over, which is what the light window already used.
+void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
     // And for a couple of seconds afterwards, every surface re-measures its shadow.
     //
     // A converged face stops tracing shadow rays and is only refreshed by a two per cent
@@ -2569,107 +2655,90 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
     edit_window_opened_ = true;   // see the member: the faces in the box drop their history once
     lights_dirty_ = true;   // a placed lamp is a light nothing can aim at until this is rebuilt
 
-    // And it says it to the region rather than to the world. Everything the edit could have
-    // changed the light of is inside its own bounds grown by the reach of a shadow; nothing
+    // And it says it to the region rather than to the world. Everything the change could have
+    // altered the light of is inside its own bounds grown by the reach of a shadow; nothing
     // outside that can have changed at all, so nothing outside is disturbed.
-    bool first = true;
-    for (const Op& raw : ops) {
-        Op op = raw;
-        op.normalise();
-        const i64 lo[3] = {op.x0, op.y0, op.z0};
-        const i64 hi[3] = {op.x1, op.y1, op.z1};
-        for (u32 axis = 0; axis < 3; ++axis) {
-            edit_lo_[axis] = first ? lo[axis] : std::min(edit_lo_[axis], lo[axis]);
-            edit_hi_[axis] = first ? hi[axis] : std::max(edit_hi_[axis], hi[axis]);
-        }
-        first = false;
-    }
     for (u32 axis = 0; axis < 3; ++axis) {
-        edit_lo_[axis] -= kEditShadowReach;
-        edit_hi_[axis] += kEditShadowReach;
+        edit_lo_[axis] = lo[axis] - kEditShadowReach;
+        edit_hi_[axis] = hi[axis] + kEditShadowReach;
     }
 
-    for (const Op& raw : ops) {
-        Op op = raw;
-        op.normalise();
-        for (i64 cz = chunk_of(op.z0); cz <= chunk_of(op.z1); ++cz) {
-            for (i64 cy = chunk_of(op.y0); cy <= chunk_of(op.y1); ++cy) {
-                for (i64 cx = chunk_of(op.x0); cx <= chunk_of(op.x1); ++cx) {
-                    const ChunkCoord coord{cx, cy, cz};
-                    // invalidate(), not request(): a request lives for one frame and is
-                    // dropped when that frame's upload budget runs out. A large edit touches
-                    // hundreds of chunks and the budget serves four, so all but the first
-                    // four were being forgotten ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and nothing ever asked again, because a
-                    // stale chunk is one the renderer can still find.
-                    if (!world_.has_chunk(coord)) continue;
-                    residency_.invalidate(coord);
+    for (i64 cz = chunk_of(lo[2]); cz <= chunk_of(hi[2]); ++cz) {
+        for (i64 cy = chunk_of(lo[1]); cy <= chunk_of(hi[1]); ++cy) {
+            for (i64 cx = chunk_of(lo[0]); cx <= chunk_of(hi[0]); ++cx) {
+                const ChunkCoord coord{cx, cy, cz};
+                // invalidate(), not request(): a request lives for one frame and is
+                // dropped when that frame's upload budget runs out. A large edit touches
+                // hundreds of chunks and the budget serves four, so all but the first
+                // four were being forgotten ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and nothing ever asked again, because a
+                // stale chunk is one the renderer can still find.
+                if (!world_.has_chunk(coord)) continue;
+                residency_.invalidate(coord);
 
-                    // And ask for it outright, which invalidate() alone does not do: it
-                    // refreshes a chunk that is already resident and drops one that is not.
-                    //
-                    // A chunk nobody has looked at closely is not resident, and a shadow ray
-                    // cannot be occluded by geometry that is not there. Shadow rays are also
-                    // the one kind that deliberately never request streaming, so a structure
-                    // built at a distance was never fetched by the rays that needed it: it
-                    // cast no shadow until the camera came close enough for *primary* rays to
-                    // pull it in, at which point the shadow was measured, cached, and stayed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
-                    // which is precisely the "shadows only appear when I get close, then fade
-                    // in and remain" that was reported. Measured: with the camera 400 m away,
-                    // an edited region was 0 of 101 chunks resident.
-                    //
-                    // A chunk the player just built is not a guess about what might be looked
-                    // at. It is the one thing on screen they are certain to care about.
-                    residency_.request(coord);
-                    // A summary is a summary of contents, so changing the contents makes it
-                    // wrong too ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and it is what this chunk draws as from a distance. The
-                    // tree first: it holds the node that every level above this chunk was
-                    // folded from, and the cache only reads its answers.
-                    summary_tree_.invalidate(coord);
-                    // The accumulated *image* is of a world that changed, so it restarts. The
-                    // camera moving does the same; the face cache does not, because it is
-                    // keyed to places in the world rather than to the screen.
-                    //
-                    // The face cache deliberately is *not* wiped. Wiping it meant every voxel
-                    // placed relit the entire scene at once, which is what the smearing while
-                    // building actually was ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not a settle but the whole room changing under
-                    // you. Entries average over a sliding window instead, so a face follows
-                    // what was built beside it within a few frames on its own and nothing
-                    // further away flinches. See kFaceWindow in pathtrace.comp.
-                    trace_samples_ = 0;
-                    for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
-                }
+                // And ask for it outright, which invalidate() alone does not do: it
+                // refreshes a chunk that is already resident and drops one that is not.
+                //
+                // A chunk nobody has looked at closely is not resident, and a shadow ray
+                // cannot be occluded by geometry that is not there. Shadow rays are also
+                // the one kind that deliberately never request streaming, so a structure
+                // built at a distance was never fetched by the rays that needed it: it
+                // cast no shadow until the camera came close enough for *primary* rays to
+                // pull it in, at which point the shadow was measured, cached, and stayed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
+                // which is precisely the "shadows only appear when I get close, then fade
+                // in and remain" that was reported. Measured: with the camera 400 m away,
+                // an edited region was 0 of 101 chunks resident.
+                //
+                // A chunk the player just built is not a guess about what might be looked
+                // at. It is the one thing on screen they are certain to care about.
+                residency_.request(coord);
+                // A summary is a summary of contents, so changing the contents makes it
+                // wrong too ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and it is what this chunk draws as from a distance. The
+                // tree first: it holds the node that every level above this chunk was
+                // folded from, and the cache only reads its answers.
+                summary_tree_.invalidate(coord);
+                // The accumulated *image* is of a world that changed, so it restarts. The
+                // camera moving does the same; the face cache does not, because it is
+                // keyed to places in the world rather than to the screen.
+                //
+                // The face cache deliberately is *not* wiped. Wiping it meant every voxel
+                // placed relit the entire scene at once, which is what the smearing while
+                // building actually was ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not a settle but the whole room changing under
+                // you. Entries average over a sliding window instead, so a face follows
+                // what was built beside it within a few frames on its own and nothing
+                // further away flinches. See kFaceWindow in pathtrace.comp.
+                trace_samples_ = 0;
+                for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
             }
         }
+    }
 
-        // And the node pool, which was never told at all.
-        //
-        // Every structure above is a chunk structure, and the marcher stopped reading those when
-        // the node pool became the default. So carving or placing changed the world, refreshed
-        // four things nothing was drawing from, and left the tree the renderer actually walks
-        // holding the world as it was before the edit -- which on screen is an edit that does
-        // nothing whatsoever. Reported by the player, and it is the plainest possible symptom of
-        // the seam R1e exists to remove.
-        //
-        // Per brick rather than per chunk, because that is the pool's leaf and `invalidate` drops
-        // the node and every ancestor folded from it. The op is normalised above, so these bounds
-        // are already the right way round.
-        //
-        // NOT accompanied by a request, and that is measured rather than assumed. An invalidated
-        // node is a node the pool does not have, and D302 makes a cell the pool does not have an
-        // OCCLUDER to a shadow ray -- so a freshly carved hole is opaque to the sun until the pool
-        // rebuilds it, and rebuilding is driven by feedback from PRIMARY rays. Asking for the
-        // bricks back here looks like the fix, and the chunk half of this function is written
-        // around exactly that argument. It was tried: it moved no number on the carved-skylight
-        // case in three hundred frames, while costing a request per brick per edit, and the pool's
-        // own counters showed nothing deferred and nothing starved. So it is not here.
-        //
-        // The case is real and is written up as open work -- see the shadow-latency section of
-        // documentation/13-decision-log.md.
-        for (i64 bz = op.z0 >> kLeafLevel; bz <= (op.z1 >> kLeafLevel); ++bz) {
-            for (i64 by = op.y0 >> kLeafLevel; by <= (op.y1 >> kLeafLevel); ++by) {
-                for (i64 bx = op.x0 >> kLeafLevel; bx <= (op.x1 >> kLeafLevel); ++bx) {
-                    node_pool_.invalidate(bx << kLeafLevel, by << kLeafLevel, bz << kLeafLevel);
-                }
+    // And the node pool, which was never told at all.
+    //
+    // Every structure above is a chunk structure, and the marcher stopped reading those when
+    // the node pool became the default. So carving or placing changed the world, refreshed
+    // four things nothing was drawing from, and left the tree the renderer actually walks
+    // holding the world as it was before the edit -- which on screen is an edit that does
+    // nothing whatsoever. Reported by the player, and it is the plainest possible symptom of
+    // the seam R1e exists to remove.
+    //
+    // Per brick rather than per chunk, because that is the pool's leaf and `invalidate` drops
+    // the node and every ancestor folded from it. The box arrives the right way round.
+    //
+    // NOT accompanied by a request, and that is measured rather than assumed. An invalidated
+    // node is a node the pool does not have, and D302 makes a cell the pool does not have an
+    // OCCLUDER to a shadow ray -- so a freshly carved hole is opaque to the sun until the pool
+    // rebuilds it, and rebuilding is driven by feedback from PRIMARY rays. Asking for the
+    // bricks back here looks like the fix, and the chunk half of this function is written
+    // around exactly that argument. It was tried: it moved no number on the carved-skylight
+    // case in three hundred frames, while costing a request per brick per edit, and the pool's
+    // own counters showed nothing deferred and nothing starved. So it is not here.
+    //
+    // The case is real and is written up as open work -- see the shadow-latency section of
+    // documentation/13-decision-log.md.
+    for (i64 bz = lo[2] >> kLeafLevel; bz <= (hi[2] >> kLeafLevel); ++bz) {
+        for (i64 by = lo[1] >> kLeafLevel; by <= (hi[1] >> kLeafLevel); ++by) {
+            for (i64 bx = lo[0] >> kLeafLevel; bx <= (hi[0] >> kLeafLevel); ++bx) {
+                node_pool_.invalidate(bx << kLeafLevel, by << kLeafLevel, bz << kLeafLevel);
             }
         }
     }
@@ -2914,6 +2983,7 @@ void Application::stream(f64 seconds) {
 
     last_faces_seen_ = faces_seen;
 
+
     // And give up the faces nobody asked for, which nothing did until now.
     //
     // `FaceStore::evict_cold` was written with the store, tested with the store, and never called.
@@ -2997,16 +3067,53 @@ void Application::update_lights() {
     if (!lights_dirty_) return;
     lights_dirty_ = false;
 
-    const std::vector<LightSource> lights = build_light_list(
-        world_, types_, camera_.chunk_x() * kChunkEdge + static_cast<i64>(camera_.local_x()),
-        camera_.chunk_y() * kChunkEdge + static_cast<i64>(camera_.local_y()),
-        camera_.chunk_z() * kChunkEdge + static_cast<i64>(camera_.local_z()));
+    // Nothing in this world can emit, so there is nothing to scan for.
+    //
+    // The list is rebuilt on every announced change to the world, and since D397 that includes
+    // every region the clip ladder pastes as the building sharpens -- hundreds of them on a cold
+    // load. The scan itself is cheap per brick, because a brick whose palette holds no emitter is
+    // rejected in a handful of comparisons, but "cheap per brick" over every brick of every chunk
+    // several hundred times is not free. A world whose material table contains no emissive record
+    // at all cannot contain an emissive voxel, and that is one pass over a few hundred records.
+    bool can_emit = false;
+    for (const VisualRecord& visual : types_.visuals()) {
+        if (visual.emissive != 0) {
+            can_emit = true;
+            break;
+        }
+    }
+
+    const std::vector<LightSource> lights =
+        can_emit ? build_light_list(
+                       world_, types_,
+                       camera_.chunk_x() * kChunkEdge + static_cast<i64>(camera_.local_x()),
+                       camera_.chunk_y() * kChunkEdge + static_cast<i64>(camera_.local_y()),
+                       camera_.chunk_z() * kChunkEdge + static_cast<i64>(camera_.local_z()))
+                 : std::vector<LightSource>{};
+
+    // Did anything the renderer can see actually change?
+    //
+    // This question is worth asking rather than assuming, and the reason is the cost on the other
+    // side: a changed list makes every face in the store throw its lamp confidence away and measure
+    // again, which is right when a lamp really has moved and is a second of wasted rays when it has
+    // not. An edit is announced for the whole box a shadow can reach, so most rebuilds return a
+    // list identical to the one already on the card.
+    const u64 hash = light_list_hash(lights);
+    const bool changed = hash != light_hash_;
+    light_hash_ = hash;
 
     light_count_ = static_cast<u32>(lights.size());
     if (light_count_ > 0 && light_buffer_.mapped != nullptr) {
         std::memcpy(light_buffer_.mapped, lights.data(), lights.size() * sizeof(LightSource));
     }
-    WS_LOG_INFO("light", "{} emitters", light_count_);
+
+    if (!changed) return;
+    // Sixteen bits is what a face record has room for beside its sample count, so the counter is
+    // kept inside them here rather than being masked at three different reading sites. Skipping
+    // nought keeps "a zeroed record" distinct from "a record measured under the first list".
+    light_version_ = (light_version_ % 0xFFFFu) + 1u;
+    light_changed_ = true;
+    WS_LOG_INFO("light", "{} emitters, list version {}", light_count_, light_version_);
 }
 
 // Measure this machine, then hold the frame rate on it.
@@ -3141,6 +3248,14 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     // Where the card may claim faces of its own, and R3e is the whole of why it may.
     push.provisional_base = face_buffers_.provisional_base();
     push.face_first = 0;
+
+    // The lamps. `light_reset` is the one-frame announcement, and it is the whole of what makes a
+    // placed or deleted lamp arrive instantly: a face whose lamp term has converged stops reading
+    // the word that would tell it, so nothing short of the host saying so can reopen it. Consumed
+    // by the frame that renders it, exactly as `edit_min.w == 2` is (D373).
+    push.light_count = light_count_;
+    push.light_version = light_version_;
+    push.light_reset = light_changed_ ? 1u : 0u;
     return push;
 }
 
@@ -4380,6 +4495,12 @@ void Application::record_frame(f32 time_seconds) {
                   VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, 0);
 
     profiler_.end_frame(cmd);
+
+    // The lamp announcement is delivered exactly once, and it is delivered HERE rather than where
+    // the parameter block is filled, because that fill runs before the passes that read it. Same
+    // discipline as `edit_window_opened_`: consumed by the frame that used it, not on a timer, so
+    // however long an upload takes the flag is seen by exactly the frames it belongs to.
+    light_changed_ = false;
 }
 
 int Application::run(const Options& options) {
@@ -4703,7 +4824,7 @@ int Application::run(const Options& options) {
         // The three sets between them bind the world twice, the type tables, the clip, the
         // face cache and the light list. Counted generously: running out of pool is a failure
         // at start-up with a message nobody connects to the binding they just added.
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 48},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 56},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 4},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -4806,11 +4927,14 @@ int Application::run(const Options& options) {
         }
         // Every slot the face pass may write: the store's capacity plus the card's provisional
         // tail. Not the watermark, which grows.
-        // Four words a slot: sky visibility, the near-field contact sum, and its gradient along
-        // each of the face's two axes. kFaceLightWords in shaders/node.glsl is the same four, and
-        // the shader bounds its writes against this length because a disagreement here is a write
-        // into whatever the allocator placed next (D332).
-        if (!face_light_.create(device_, 4 * (face_buffers_.provisional_base() +
+        // Nine words a slot: the two ambient sample counts packed in one word, the near-field
+        // contact sum, its gradient along each of the face's two axes, the far field's own count of
+        // rays that reached open sky, then three floats of accumulated lamp irradiance and one word
+        // holding the lamp sample count with the emitter-list version those samples were taken
+        // under. kFaceLightWords in shaders/node.glsl is the same nine, and the shader bounds its
+        // writes against this length because a disagreement here is a write into whatever the
+        // allocator placed next (D332).
+        if (!face_light_.create(device_, 9 * (face_buffers_.provisional_base() +
                                               FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;
@@ -4818,7 +4942,8 @@ int Application::run(const Options& options) {
         WS_LOG_INFO("load", "node buffers {:.0f} ms  [t+{:.0f} ms]",
                     ns_to_ms(now_ns() - t_node_buffers), ns_to_ms(now_ns() - load_began_ns_));
 
-        // 0-1 out images, 2-6 the pool, 7 feedback, 8 the parameter block, 9-10 the faces.
+        // 0-1 out images, 2-6 the pool, 7 feedback, 8 the parameter block, 9-10 the faces,
+        // 11 the face-slot image, 12 the card's provisional faces, 13 the face light, 14 the lamps.
         //
         // One set for both the marcher and the face shader. They need the same tree ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the shading
         // pass marches shadow rays through exactly the geometry the primary ray stopped on ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and
@@ -4830,8 +4955,11 @@ int Application::run(const Options& options) {
         // provisional face table (R3e), which is the store's shape minus the host.
         // Fourteen: 13 is the face light, which the card writes and the card reads and the host
         // never touches at all (R10a).
-        VkDescriptorSetLayoutBinding node_bindings[14]{};
-        for (u32 i = 0; i < 14; ++i) {
+        // Fifteen: 14 is the emitter list, so a FACE can aim at a lamp (R3c). It is the same buffer
+        // the path tracer reads at its own binding 18 -- one list, so the reference renderer and
+        // the real-time one cannot disagree about where the lamps are or how bright they are.
+        VkDescriptorSetLayoutBinding node_bindings[15]{};
+        for (u32 i = 0; i < 15; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -4842,7 +4970,7 @@ int Application::run(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 14;
+        node_layout_info.bindingCount = 15;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -4853,19 +4981,19 @@ int Application::run(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[10]{
+        const VkBuffer node_pool_buffers[11]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
-            face_light_.buffer(),
+            face_light_.buffer(),      light_buffer_.buffer,
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[10]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13};
-        VkDescriptorBufferInfo node_infos[10]{};
-        VkWriteDescriptorSet node_writes[11]{};
-        for (u32 i = 0; i < 10; ++i) {
+        const u32 node_bindings_for[11]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14};
+        VkDescriptorBufferInfo node_infos[11]{};
+        VkWriteDescriptorSet node_writes[12]{};
+        for (u32 i = 0; i < 11; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -4880,13 +5008,13 @@ int Application::run(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[10].dstSet = node_set_;
-        node_writes[10].dstBinding = 8;
-        node_writes[10].descriptorCount = 1;
-        node_writes[10].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[10].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 11, node_writes, 0, nullptr);
+        node_writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[11].dstSet = node_set_;
+        node_writes[11].dstBinding = 8;
+        node_writes[11].descriptorCount = 1;
+        node_writes[11].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[11].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 12, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -5666,6 +5794,24 @@ int Application::run(const Options& options) {
             // this exists for.
             if (use_node_pool_) {
                 node_buffers_.audit(node_pool_);
+                // And what the POOL holds against what the world holds, which is the half of that
+                // standard nothing was checking. `node_buffers_.audit` asks whether the card agrees
+                // with the pool; both can agree perfectly about a brick neither has looked at since
+                // the world rewrote it. That is not hypothetical: it is what the clip ladder did on
+                // every load, silently, for the life of the ladder -- and the picture it produced
+                // was of a building that had sharpened everywhere except in the tree the renderer
+                // walks. D397.
+                NodeKey first_stale{};
+                const u32 stale = node_pool_.stale_leaves(world_, &first_stale);
+                if (stale > 0) {
+                    WS_LOG_WARN("frame",
+                                "the node pool holds {} leaves the world no longer has that shape "
+                                "for; the first is the brick at ({}, {}, {})",
+                                stale, first_stale.x << kLeafLevel, first_stale.y << kLeafLevel,
+                                first_stale.z << kLeafLevel);
+                } else {
+                    WS_LOG_INFO("frame", "the node pool agrees with the world, leaf for leaf");
+                }
                 face_buffers_.audit(face_store_);
                 const FaceStoreStats face_stats = face_store_.stats();
                 WS_LOG_INFO("frame",

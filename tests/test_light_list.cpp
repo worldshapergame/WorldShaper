@@ -281,3 +281,112 @@ TEST_CASE("a scene past the cap keeps the strongest and drops the rest") {
     CHECK(kept_nearest);
     CHECK_FALSE(kept_furthest);
 }
+
+// ---- the list's identity, which is how a face knows a lamp changed ---------------------------
+//
+// The face pass accumulates lamp light per voxel face over hundreds of frames and then stops
+// casting rays at it altogether. A face that has gone silent cannot discover anything, so a lamp
+// placed, deleted, moved or dimmed after that would never arrive — unless the host says so, on the
+// frame it happens. `light_list_hash` is what decides whether it has to.
+//
+// These are the gate on "responsive". Every one of them is a case a player produces in a second of
+// play, and each has to come out with a different number from the list before it.
+
+TEST_CASE("an unchanged world produces an unchanged list identity") {
+    VoxelTypeTable types;
+    World world;
+    fill(world, 0, 0, 0, 3, 3, 3, make_lamp(types, 200));
+
+    const u64 first = light_list_hash(build_light_list(world, types, 0, 0, 0));
+    const u64 again = light_list_hash(build_light_list(world, types, 0, 0, 0));
+    CHECK(first == again);
+    // And it is not the trivially-equal answer a broken hash would also give.
+    CHECK(first != light_list_hash(std::vector<LightSource>{}));
+}
+
+TEST_CASE("placing a lamp changes the list identity") {
+    VoxelTypeTable types;
+    World world;
+    const VoxelTypeId lamp = make_lamp(types, 200);
+    fill(world, 0, 0, 0, 3, 3, 3, lamp);
+    const u64 before = light_list_hash(build_light_list(world, types, 0, 0, 0));
+
+    fill(world, 40, 0, 0, 43, 3, 3, lamp);
+    CHECK(light_list_hash(build_light_list(world, types, 0, 0, 0)) != before);
+}
+
+TEST_CASE("deleting the only lamp changes the list identity and empties it") {
+    VoxelTypeTable types;
+    World world;
+    fill(world, 0, 0, 0, 3, 3, 3, make_lamp(types, 200));
+    const u64 before = light_list_hash(build_light_list(world, types, 0, 0, 0));
+
+    fill(world, 0, 0, 0, 3, 3, 3, kAir);
+    const std::vector<LightSource> after = build_light_list(world, types, 0, 0, 0);
+    CHECK(after.empty());
+    CHECK(light_list_hash(after) != before);
+}
+
+TEST_CASE("dimming a lamp changes the list identity without changing its length") {
+    // The case a hash over the COUNT would miss, and the one a player produces by editing a
+    // material rather than by placing anything: same fitting, same place, different radiance.
+    VoxelTypeTable bright_types;
+    World bright;
+    fill(bright, 0, 0, 0, 3, 3, 3, make_lamp(bright_types, 200));
+
+    VoxelTypeTable dim_types;
+    World dim;
+    fill(dim, 0, 0, 0, 3, 3, 3, make_lamp(dim_types, 100));
+
+    const std::vector<LightSource> a = build_light_list(bright, bright_types, 0, 0, 0);
+    const std::vector<LightSource> b = build_light_list(dim, dim_types, 0, 0, 0);
+    REQUIRE(a.size() == 1);
+    REQUIRE(b.size() == a.size());
+    CHECK(light_list_hash(a) != light_list_hash(b));
+}
+
+TEST_CASE("carving a fitting smaller changes the list identity") {
+    // A chisel taken to the lamp itself rather than to anything around it. The box the fitting
+    // occupies shrinks, so its centre moves and the sphere the shader draws round it changes —
+    // and every face in the room measured its shadow against where the lamp used to be.
+    VoxelTypeTable types;
+    World world;
+    const VoxelTypeId lamp = make_lamp(types, 200);
+    fill(world, 0, 0, 0, 3, 3, 3, lamp);
+    const u64 before = light_list_hash(build_light_list(world, types, 0, 0, 0));
+
+    fill(world, 3, 0, 0, 3, 3, 3, kAir);   // one face of the cube taken off
+    CHECK(light_list_hash(build_light_list(world, types, 0, 0, 0)) != before);
+}
+
+TEST_CASE("an edit a fitting is unchanged by leaves the list identity alone") {
+    // The other side of the line, and it is drawn where the RECORD is rather than where the voxels
+    // are. Taking one corner voxel off a solid cube leaves the bounding box exactly where it was,
+    // and the record holds the box's middle, the mean radiance over the voxels present, and the
+    // sphere that covers the box — so all three come out identical.
+    //
+    // That is the right answer and not a missed change: the shader reads those three numbers and
+    // nothing else, so nothing it can see has moved, and re-measuring the whole store would spend a
+    // second of rays arriving back at the number it already held.
+    VoxelTypeTable types;
+    World world;
+    const VoxelTypeId lamp = make_lamp(types, 200);
+    fill(world, 0, 0, 0, 3, 3, 3, lamp);
+    const u64 before = light_list_hash(build_light_list(world, types, 0, 0, 0));
+
+    fill(world, 3, 3, 3, 3, 3, 3, kAir);
+    CHECK(light_list_hash(build_light_list(world, types, 0, 0, 0)) == before);
+}
+
+TEST_CASE("an edit that touches no emitter leaves the list identity alone") {
+    // The other half of the gate, and the half that decides what this COSTS. A changed identity
+    // makes every face in the store drop its lamp confidence and measure again; an edit twenty
+    // metres from the nearest sconce must not pay for that.
+    VoxelTypeTable types;
+    World world;
+    fill(world, 0, 0, 0, 3, 3, 3, make_lamp(types, 200));
+    const u64 before = light_list_hash(build_light_list(world, types, 0, 0, 0));
+
+    fill(world, 200, 0, 0, 231, 31, 31, make_stone(types));
+    CHECK(light_list_hash(build_light_list(world, types, 0, 0, 0)) == before);
+}

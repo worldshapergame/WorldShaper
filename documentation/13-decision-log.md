@@ -1201,6 +1201,164 @@ is what R5's spatial filter is for, and it is the only thing left that can help 
 The *origin* jitter across the face is also still white noise, and stratifying it against the same
 sequence is the same four lines.
 
+## Ambient occlusion converges instead of trickling — stage R10d
+
+*The user asked for ambient occlusion to "load 100× faster" and to "refine itself 100× faster", at
+"no performance drop, or negligible", and for it not to tank the frame rate when voxels are placed,
+removed or streamed in. D383–D387 took every bit of variance out of a sample; this takes the samples
+out of the calendar. **All figures are same-commit A/B, `--settle`, 1280×800, quality 7, RTX 5060
+Ti, scene content hash `766f2fd63f1a01c4` on both sides.***
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D388 | **The near field and the far field stopped sharing a ray, and that is what made the term affordable to converge** | measurement | One ray answered both halves of the ambient integral, which looks like the obvious economy and priced the cheap half at the dear half's rate. The **near field** is a falloff over `kContactMetres`: every answer past a metre is the same answer, so its ray is now **bounded at 32 voxels**. The **far field** asks whether a direction reaches sky, which is a question about the other end of the world and cannot be bounded at all. `node_march` therefore takes a `max_t`, the light record grew from four words to five so the two counts are kept apart, and `resolve.comp` gates them separately. Trap 7 is why they cannot share a count: a bounded ray that runs out of length and a ray that reached open sky both return `hit == false`, and only one of them means "sky" |
+| D389 | **A face measures its ambient term hard, once, and then stops for ever** | measurement | Ambient occlusion is a function of **geometry**, and the host already says on the exact frame when geometry changes (`edit_min.w == 2`, D373). So the steady-state cost of this term is **zero rays** — which `21-renderer-rewrite.md` §8 R10 claimed from the start and which nothing implemented. Every ray a converged face was casting re-derived a constant it already held, one a visit, per face, for the rest of the run. It stops at `kSkyConverged` now, and the rays it saves are what the burst is spent out of: **total rays over the life of a face go down**, 2,048 and then silence against 2,048 and then one every stride for ever. Enclosed camera, faces pass **1.238 → 0.790 ms** (−36%), total GPU **3.348 → 2.936 ms** (−12%), with every live face's ambient term finished by measured frame 120 |
+| D390 | **"Converged" has to be answerable from the record the pass has already read** | measurement | The first version asked the face-light array whether a face was finished, which is a scattered four-byte read per face per frame across a 21 MB buffer — half a million cache lines fetched to learn there is no work. The pass sat at **2.13 ms with every visible face converged and casting not one ray**. The answer is a bit in `photons`, which is GPU-owned and inside the thirty-two bytes the invocation reads anyway, coalesced across the workgroup. And it is **two** bits: `kFaceAmbientDone` (no rays ever again) and `kFaceAmbientIdle` (nothing to do on a frame the sun is not due). One bit for both meanings made the audit report the store as finished while the pass was plainly still paying — trap 7, in the instrument this time |
+| D391 | **The far field stops when it runs out of variance, not when it runs out of budget** | measurement | Sky visibility is a binomial proportion, so its error is p(1−p)/N — **nought on every surface in a sealed room and on every roof under open sky**, which is most of a building. It stops when its own measured error falls under `kSkyFarEps`, floored at 32 samples so the estimate of p is not itself noise and capped at 512 so a face at exactly a half still terminates. A plain unanimity test was tried first and stopped only **8,752 faces of 498,179** on the facade camera, because an exterior face is rarely unanimous and very often 0.9 and settled. Indoors the rule fires almost everywhere: at the enclosed camera the whole store is silent by frame 120 |
+| D392 | **A newly claimed face inherits the coarse face standing over it** | — | D308–D311's stand-in, applied to the other half of the ambient integral: a face with no samples reads as fully unoccluded, and indoors that is the worst answer available rather than a cautious one. The face three levels up is already claimed by the same host code, is converged long before its children are found because five hundred and twelve share it, and costs one hash to look up. Eight samples' worth, so the face's own first burst outvotes it. The **gradients are not inherited** — they are a fit over this face's extent and the ancestor's is over one eight times wider, and D386 measured what an invented tilt costs |
+| D393 | **The samples are one four-dimensional stratified sequence, not two two-dimensional ones** | — | D383 made the ray *direction* a stratified sequence and left the *position on the face* as white noise. Both come from one R₄ sequence now — the four-dimensional generalisation of the plastic constant D383 uses in two — because two R₂ sequences advanced by the same index are both affine in it, so where a sample stands on the face would predict which way it leaves. That pair is exactly what the gradient is a fit over, and it would have been drawn along a line through a 4D space instead of spread over it |
+| D394 | **What costs in this pass is the face, not the ray — so three ways of metering the burst all made it worse** | measurement | The burst is sixteen bounded rays in the visit where a face used to get one, so the obvious worry is a population that starts measuring all at once: a camera turned round, a region streaming in, a chisel. Three meters were built and measured against no meter at all, at cut+240 after a 180° turn: **fewer rays each, budget divided by the population — 3.17 ms**; **whole burst, one face in N per frame — 5.61 ms**, which also wrecks coherence, four bursting lanes in a workgroup of sixty-four and the other sixty waiting on them; **whole burst, one workgroup in N — 3.80 ms**; **no meter at all — 1.21 ms, everything converged.** Ninety thousand faces at thirty-two rays and two hundred and forty thousand at two cost about the same, because an unconverged face reads its record, builds its sampling frame and walks the branchy half of this shader whether it then casts thirty-two rays or two. **The cheapest thing to do with a face that has to measure is to let it measure, all at once, and be finished with it.** All the metering was removed, host side included |
+| D395 | **An edit resets only what an edit can change, and the two halves of the term have very different reaches** | measurement | `kEditShadowReach` is 512 voxels because a *shadow* cast by what you placed can land sixteen metres away. The **near field is blind past one metre**, so resetting it over sixteen metres made placing a single voxel cost every face within sixteen metres its full burst. The near field now resets within `kEditAmbientReach` — 64 voxels, the falloff and as much again — and the far field keeps the full reach, because opening a roof really does change how much sky a floor across the room can see, and the far field costs one ray a visit to put right. Measured, small carve at the enclosed camera: faces **1.279 → 0.827 ms**, which is *faster than the build it replaces* rather than a cost at all. The 36-million-voxel delete, which resets fifty thousand faces' near field by construction, is 1.690 against 1.242 for forty frames and back to 0.79 after |
+| D396 | **Padding the light record to a 32-byte stride bought nothing, and it was tried because it should have** | measurement | Five words is a 20-byte stride: unaligned, unvectorisable, and straddling a cache line three times in four — which is the reason `GpuFace` is thirty-two bytes. Padded to eight words it measured **2.185 ms against 2.185**, and 1.256 against 1.053 once converged, for 34 MB against 21. This record is touched a handful of times per *face*, not per *step*, so its stride is not where this pass spends anything. Not carried |
+
+**Measured, all A/B against a same-commit control.** Enclosed camera, settled, two runs each: faces
+**1.238/1.234 → 0.790/0.796 ms**, total GPU **3.348/3.344 → 2.936/2.962**. Facade camera once
+converged: faces **1.774 → 0.86**, total GPU **4.560 → 2.32**. Near-field error against the
+converged answer at the same frame after a hard 180° cut: cut+8 **21.4 → 9.7** of 255, cut+30
+**13.1 → 4.4**, cut+240 **3.50 → 0.95**. A face takes **sixteen ambient samples a frame instead of
+one every `face_stride` frames** — 32× to 96× the sampling rate depending on the camera — and then
+stops casting altogether. 458 tests, 18.0 M assertions, passing.
+
+**What it costs, stated rather than claimed away.** A screen that turns over completely puts ninety
+thousand faces into the burst at once, and for about a second the faces pass runs at **2.0 ms mean
+and 4.6 ms worst against the 1.14 and 2.03 of the build it replaces**, before dropping below it for
+good. `kSkyBurst` is the dial and the trade is exactly linear: thirty-two halves the time and
+doubles the peak, eight the reverse. Sixteen is where it is set, and the peak is bounded by that
+constant rather than by anything adaptive, for the reason D394 measures.
+
+**New instrument.** `--debug-mode 19` paints how far each face is through its ambient rays — green
+converged and silent, red held short of it by unbuilt geometry, grey the progress between, blue no
+samples, magenta no face. The audit line `ambient on the card: N of M live faces cast no more rays
+at all` is the same question over the whole store rather than over what is on screen, and it is
+counted over **live** faces: the first version counted dead slots below the watermark and reported
+21,679 faces still casting when the true number was three.
+
+## The world sharpens and nobody is told — stage R10d, the other half
+
+*R10d made a face measure its ambient term hard and then stop casting rays for ever, on the grounds
+that ambient occlusion is a function of geometry and **the host says on the exact frame when
+geometry changes**. That premise was true of edits and false of everything else. The clip ladder
+sharpens the building region by region in the background and pastes each box straight into the
+world's bricks, and for the whole life of the ladder that path told nothing downstream anything.
+All figures are same-commit A/B at the enclosed camera, 1280×800, quality 7, RTX 5060 Ti, both sides
+on scene content hash `1f4710eee4ee2585` — the same world, reached two ways.*
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D397 | **A region paste makes the same announcement an edit makes, because it is the same event** | measurement | `pump_refinement` rewrites a box of the world at four times the detail it held a moment ago. Nothing downstream can notice on its own, and the two that most needed to could not for opposite reasons: the node pool's feedback reports what a ray could not **find**, and a brick that is resident but out of date is found every time; a face's ambient term, since D389, has stopped taking the samples that would have told it. So the paste now calls `announce_world_change`, which is `invalidate_edited_chunks` with the ops taken out of it — the light window, the edited box, residency, the summary tree, the thumbnail tiers and the pool's bricks. **Measured, one run watching the world sharpen against one loading the identical world whole: the near field went from a mean of 19.10 of 255 over 547,411 pixels apart to 2.43 over 42,096**, against a run-to-run floor of about 1.5 and 14,000 for this camera. Sun visibility over the same pair, 0.1076 against the loaded run's 0.1282, and **20 faces in full sun against 14,506** |
+| D398 | **The pool was holding 7,497 of its 17,344 leaves in a shape the world had given up, and nothing anywhere said so** | measurement | The geometry half of the same fault, and the more alarming half: a leaf is a copy taken at build time, eviction is only under memory pressure (D247), so a brick built before a paste holds the blocky version for the rest of the run. `Resident::revision` has been sitting in `node_pool.hpp` unread since R1a — residency does exactly this check at `residency.cpp:660` and has consequently never had this bug. **It is an instrument that was missing, not a mechanism**: `node_buffers_.audit` asks whether the card agrees with the pool, and both agree perfectly about a brick neither has looked at since the world rewrote it. `NodePool::stale_leaves` asks the question that was not being asked — how many built leaves hold an occupancy the world no longer has — and the screenshot audit now prints either that count with the first offending brick's coordinate, or *the node pool agrees with the world, leaf for leaf*. Two headless tests pin it |
+| D399 | **The cost is charged where the change is, which is a paste that already measures in seconds** | measurement | Invalidating a region's bricks and reopening the light inside it is not free, and the honest place to look for it is the sharpening period, which `--settle` discards *by construction* (trap 14). Over 450 frames mid-ladder: faces **2.114 → 2.382 ms** mean and **4.160 → 4.590** worst, CPU node pool **0.065 → 1.002 ms** mean. The two runs are not on identical scenes — one got three regions further than the other before the shot — so these are the shape of the cost rather than a clean A/B. On a **settled** world, where no paste happens, there is nothing to charge and nothing is charged: CPU node pool **0.035 ms**, the same 0.025 the session opened with, and the pool agrees with the world leaf for leaf |
+| D400 | **`invalidate_edited_chunks` now unions its group and hands over one box** | — | It used to grow the light window from the union of the group's ops and then iterate chunks and bricks per op. Two shapes for one question, and only one of them could be handed to a writer that is not made of ops. The union is what the window already used; for the single-op cases that matter — a scripted `--edit`, the 36-million-voxel delete — it is the identical box. Checked on the delete: mean sun visibility **0.6405** against the 0.6350 §4b records, nought shadowed by ignorance, and the pool agreeing with the world afterwards |
+
+**What is left here, measured and not fixed.** A face whose ambient rays were stopped by geometry
+the pool has not built is held one sample short of converged and comes back at one bounded ray a
+visit (D389). **On a settled world that is 50,578 of 848,622 surface pixels — 6.0% — at
+`--debug-mode 19`**, and it is a real population rather than a corner case. The hold releases on the
+first ray that comes back clean, which takes the count to `kSkyConverged` and **freezes the mean
+with 2,047 samples in it that were measured through the shell**. That is a bound rather than
+garbage — `occlude_unknown` stops the ray at the shell's near face, so the sample is the earliest
+possible contact and errs dark — and the error it can carry has **not been measured**, because
+nothing counts ambient ignorance by level the way the sun's line does. Two things not to do without
+that number: collapsing the history on a clean ray oscillates for ever on a face that permanently
+borders unbuilt geometry, and dropping the tainted samples outright makes the face wrong-bright,
+which R10e is explicit about.
+
+## Lamps on the face — stage R3c, the second half
+
+*R3c was "sun and lamps in the face pass" and only the sun had landed. The real-time path had no
+lamp light at all: an emissive voxel drew as a pale block and lit nothing, and the constant
+`kIndirectFloor` in the composite stood in for every fitting in the building at once. This is the
+lamps, on the same one-invocation-per-face footing the sun and the ambient term already use — and
+the responsiveness the user asked for by name: **placed, deleted or tweaked, everything reacts at
+once.** All figures are A/B against a same-commit control built with `kLampConverged = 0`, which
+turns the term off and changes nothing else, at the enclosed camera, 1280×800, quality 7, RTX 5060
+Ti, `--settle`, both sides on scene content hash `766f2fd63f1a01c4`.*
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D401 | **A lamp is sampled once per FACE per frame, never once per pixel, and a face never loops over lights** | design | The estimator is the path tracer's own `pick_light`, moved off the pixel: `kLampCandidates` fittings are scored by what each would deliver here unshadowed — radiance × cosine × the solid angle of the sphere that *contains* the fitting — one is kept in proportion to that score, a direction is drawn inside its cone, and the sample is corrected by the density that produced it. Resampled importance sampling is not a refinement here: `clips/many_lamps.clip` holds eighty-four fittings and a face in one quarter of that hall is walled off from thirty of them, so a uniform draw makes one sample in eighty-four useful and gives it eighty-four times the weight. **A hall with a thousand sconces costs a face exactly what a hall with one costs**, which is R9g's promise arriving early. The same expression as the reference tracer's, deliberately — two renderers computing this differently would light the room one way and aim the rays another (D204's rule, in a third place) |
+| D402 | **What a face stores is irradiance, as a float sum, and not a fraction** | design | The sun and the ambient term store two counts and divide on read, because both are fractions in [0,1] and D293 is the standing measurement of what a narrow running mean does to one. A lamp's contribution is not a fraction: it is radiance over a solid angle divided by a density, unbounded above, and there is no scale a fixed-point record could be defined against. Three float words hold the running SUM and a fourth holds the count, so the mean is exact at any magnitude and readable from the first sample. `kFaceLightWords` goes 5 → 9 and the face-light buffer **21 MB → 38 MB** for a million slots; padding to sixteen was not done, for the reason D396 measured at five |
+| D403 | **The host says the lamps changed; the face does not infer it** | design | This is the whole of "instantly", and it is D373's lesson applied to a second accumulator. A converged face stops reading its own record, so nothing it could measure would ever tell it a lamp had gone out. So `light_list_hash` gives the emitter list an identity, a change bumps a version, and `light_reset` is 1 on the one frame it changes — which reopens every face in the store for that frame. Each face then compares the version its own samples were taken under against the current one and decides for itself, so the flag is the gate and the stamp is the decision. **Six headless tests pin the identity**: placing, deleting, dimming and carving a fitting all change it; an edit twenty metres from the nearest sconce does not, and that half decides what this costs |
+| D404 | **A changed list drops a face's CONFIDENCE, not its answer** | measurement | Throwing the accumulated mean away on a lamp edit is exact and it flashes: every surface in the frame would read one or two rays' worth of an unbiased estimator on the next frame, which is the variance of a coin toss applied to the whole picture at once. The mean is kept and the count dropped to `kLampSeedSamples` = 8, so the face's own next burst of 8 outvotes the prior on the very next frame and has buried it within three. **The one exception is the last lamp going out** — with no emitters there is nothing to measure and a kept mean would go on lighting the room for ever, so that case alone goes straight to nought |
+| D405 | **Measured: three quarters of a lamp change is on screen on the next frame, and it is at the noise floor by frame fifty** | measurement | The portico's fittings carved away at a measured frame (17.2 M voxels, 21 emitters → 17, list version 2 → 3), against the settled answer 150 frames later. **Lamp term alone (`--debug-mode 20`), against a total change of 32.965 of 255**: edit+1 **8.979 (73% arrived)**, edit+2 7.926, edit+5 4.927 (85%), edit+15 **0.819 (97.5%)**, edit+50 **0.220 (99.3%)**. The whole shaded frame, against a total change of 63.571 and a run-to-run floor of 1.16: edit+1 11.514, edit+15 2.087, edit+50 1.250. **Nothing here waits for the feedback round trip**, because these faces already exist — the two frames R3e could not remove are the cost of a face being *new*, not of its light being wrong |
+| D406 | **A converged face touches nothing — kept on the argument, because the number came out inside the noise and the first number was wrong** | measurement | The lamp block read the sample count and wrote it back on every visit, which is half a million scattered four-byte read-modify-writes a frame on a term whose answer has stopped changing. Gating it on the flag already in `photons` first measured as **0.89 ms**, and *that figure was an artefact*: the two builds were compared on runs whose stores had converged to different degrees, which is trap 8 in the instrument this session was building. Re-measured properly — three rounds, rebuilding between every run so drift hits both arms equally, both with lamps on — the gate reads **3.031 ms mean against 2.964 without it**, which is nothing, and **5.06 ms worst against 5.50**, which favours it by less than its own spread. **It is not measurable on this camera.** It is kept because it is the rule `kFaceAmbientDone` already states in full and because a removed load cannot become a cost, and it is written down here because the way it was first "measured" is a trap this project has now fallen into twice |
+| D407 | **What it costs, measured by interleaving the two builds because the machine drifts more than the effect** | measurement | The same build read **2.41 ms and 3.75 ms** on the faces pass across one session, on one scene, with the store converged in both — so nothing here is quoted from adjacent batches. Three rounds, rebuilding between every run, settled, 300 measured frames: faces **2.613 → 3.075 ms mean** (2.599/2.611/2.628 against 2.859/3.133/3.232) and 4.54 → 5.21 worst, total GPU **5.706 → 6.217** (+9%). So the settled term is **+0.46 ms, +18% of the pass**, inside its 4.40 ms budget — not free, as the first pass of this claimed, and not scaling with resolution either. The control's own spread is 0.03 ms and the lamp arm's is 0.37, which is the lamp arm's population of still-measuring faces rather than the machine. **The transient is the larger number and it is charged where the change is**: across the 80 frames after a 17.2-million-voxel carve, two interleaved rounds give faces **17.08 → 19.80 ms mean** and **24.25 → 28.83 worst**, so lamps add ~2.7/4.6 on top of a re-burst that is already 17 ms and is the ambient term reopening every face inside `kEditShadowReach`. `kLampConverged` = 512 at `kLampBurst` = 8 is sixty-four frames, and it is the dial; D394 says not to meter it |
+| D408 | **The picture: 21.78 of 255 over a quarter of the frame, and the portico stops being a black hole** | measurement | Against the control, the enclosed camera moves by a mean of **21.78 of 255 over 261,393 pixels of 1,024,000**. That is not a tint — the deep shade under the portico is the one place in this building the sun never reaches, and it was lit by a constant. It now has six flames in it casting real pools of light with real falloff, the columns cast lamp shadows across the floor, and the fittings themselves glow rather than reading as pale blocks (emission is added after the albedo multiply, because a lamp is bright whether or not anything shines on it). **The cost is reproducibility**: two runs of this build differ by 1.157 of 255 over 23,066 pixels where two runs of the control differ by 0.569 over 2,513, which is the Monte Carlo residual at 512 samples and is R5's to take, exactly as the ambient term's is. Anything gating on an image diff from here on has that floor |
+| D409 | **Open, and found by building this: the real-time composite's exposure is fixed, and a lamp-lit interior now says so** | measurement | `clips/many_lamps.clip` is a sealed hall lit by thirty-six sconces and nothing else. The face pass gets it right — the reference path tracer on the same camera draws the same distribution of light and is correctly exposed — and the real-time picture is **blown white**, because `kPreviewExposure` in `resolve.comp` is the constant 3.2 and says in its own comment that real exposure control is a later stage's job. Nothing was wrong with it while every interior was lit by a fraction of a sky constant. It is wrong now, it is the next thing the lamps make necessary, and it is deliberately **not** fixed here: adding auto-exposure changes the brightness of every screenshot in the project at once and would make every figure above incomparable with every figure before it |
+
+**Instrument.** `--debug-mode 20` is the lamp term on its own — tone mapped, because a lamp's
+contribution spans orders of magnitude between standing under a sconce and standing across a hall
+from one, and a linear ramp shows one end and clips the other. Magenta is a pixel with no face, blue
+a face that has not measured yet, green no geometry: black is a legitimate answer here and must not
+be shared with any of the three (trap 10). The audit line `lamps on the card: N of M live faces cast
+no more rays at all` is the same question over the whole store, and it is the number to read before
+believing any cost figure here — D406 is what happens when it is not.
+
+**The measurement lesson, because it is the more useful half of D406 and D407.** Two builds of this
+pass cannot be compared from adjacent batches. The faces pass is a function of how much of the store
+is still measuring, that state is not reproducible frame for frame, and the machine drifted by 55%
+of the pass over one session. Every figure above is from **interleaved rounds with a rebuild between
+every single run**, and the arms are checked against each other's `still bursting` and live-face
+counts before the numbers are read. Trap 8 says a measurement is against a scene; this adds that it
+is also against a *convergence state*, and the second is invisible in the `scene:` line.
+
+**Two rules kept rather than re-argued.** A lamp ray reports nothing and asks for nothing (D292,
+widened by R9h: no light path may cause streaming), and it stops short of the fitting it is aimed
+at by `kLampSurfaceMargin`, or every sample would be occluded by the thing it is sampling. A ray
+stopped by a cell the world claims and the pool has not built holds the face one short of converged
+and it comes back at one ray a visit, which is the ambient term's hold with the same bound and for
+the same reason.
+
+**One hazard written down rather than fixed.** `light_buffer_` is a single host-visible mapping
+written by `update_lights` while a frame in flight may be reading it. It predates this stage — the
+path tracer has always read it the same way — and the exposure is one frame of possibly torn lamp
+records on the frame a lamp changes, on a term that restarts its samples on that exact frame anyway.
+Double-buffering it is a descriptor change and belongs with whatever else next needs one.
+
+## The light pass while moving — the case the settled grid discards by construction
+
+*The user asked for the lights to be faster and for more frames while MOVING. The first thing that
+had to exist was a measurement of that, because there was not one: every figure in this file above
+this line is settled, and `--settle` discards transients on purpose. Nothing was changed in the
+engine here. What landed is the instrument and the diagnosis it produced, in that order, because a
+change measured against the wrong case is worse than no change at all.*
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D410 | **A moving camera is a measurement, and `baseline.ps1` structurally cannot take it** | design | `tools/_flybench.ps1` drives `--fly` along a fixed path at the fixed 1/60 step the flight already uses, and prints the pass table. It is not a refinement of the grid — the grid starts its window at refinement's fixed point, so by construction it measures the state where every face has converged and nothing is bursting. That is the right thing for comparing marchers and the wrong thing for comparing light. This is trap 14 again with the instrument on the other foot: the settled grid said the face pass costs 1.11 ms and the player was watching it cost eleven |
+| D411 | **Measured: the light pass is 11.75 ms of an 18.6 ms frame while moving, and 1.11 ms of a 3.3 ms frame standing still** | measurement | Close camera, `--fly 0,0,3,15`, 2560×1440, quality 7, `--settle`, 200 measured frames, RTX 5060 Ti. Three runs: faces **11.588 / 12.090 / 11.581 ms** mean, worst 15.3–17.4, against a **4.40 ms budget**; visibility 3.30, resolve 2.78, total GPU **18.6 ms**. The same camera standing still reads faces **1.110 ms** and total GPU 3.345. So the pass is **63% of a moving frame and ten times its own settled cost**, and every claim in `21-renderer-rewrite.md` §6 about lighting not scaling was measured on the standing-still half. **The spread is 4% and the convergence state is reproducible to 0.1%** — 280,551 / 280,887 / 280,695 faces still bursting across the three runs — so D407's warning is satisfied and two builds can be compared on this case |
+| D412 | **The cause, named and deliberately not fixed in this change: every ray throws the descent cache away** | measurement | A bursting face casts `kSkyBurst` 16 near rays + 1 far + `kLampBurst` 8 lamp rays + the sun's, and at 280k bursting faces that is about **6.3 M rays a frame**. `node_march` opens with `node_walk_reset()`, so each of those ~25 rays pays a hash probe and a full eleven-level descent from the 512 m root before its first step — for a near ray that is *bounded at one metre* and then takes a handful of steps. The cache is safe to keep: node.glsl's own argument for it says the pool is immutable for the whole dispatch and `node_locate` block-checks before trusting an entry, so a cached slot is a function of the tree and not of the path taken to it. Rays from one face share an origin cell, so rays 2..25 would enter at level 5 and descend two levels instead of eleven, **bit-identically**. It is left for the next change because it has not been measured yet, and R1h is the standing reminder of what happens when a descent cost is reasoned about rather than read |
+
+**The ranked plan this produced**, biggest first, each to be measured on its own against
+`_flybench.ps1` and interleaved per D407:
+
+1. **Drop `node_walk_reset()` from `node_march`.** The globals already carry their initialisers per
+   invocation, so nothing else has to change. Output identical.
+2. **A dedicated `node_occlude()`** returning `{hit, unknown, t, level, steps}` — everything the
+   three ray sites in `shade_faces.comp` read and nothing else. It drops `leaf_voxel_type`,
+   `node_face_coverage`, the normal tracking, `node_face_hit` and the whole `stand_in` branch, and
+   it keeps the `kFeedbackExact` report R9i needs. Three copies of the full marcher are inlined into
+   that shader today, and D181 is the standing measurement of what code size costs there.
+3. **Keep `photons` and `counters` in registers** through `shade_faces.comp`'s `main`. There are up
+   to five global read-modify-writes per face per frame on two words the invocation already holds —
+   which is the fault D406 fixed for the lamp count, in the same function, one term over.
+4. **A hierarchical skip inside a brick**, from the `mip_cell2` and `mip_cell4` the `LeafHeader`
+   already carries. The inner walk steps up to twenty-four single voxels with no mip test at all.
+   Same first hit, exactly.
+5. **The store churns while moving** — 545,310 evictions over 400 frames at 763,829 live of
+   1,048,576, so converged faces are being given up and re-bursting from nothing. A separate lever
+   with its own measurement, and it is R2's question rather than R3's.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

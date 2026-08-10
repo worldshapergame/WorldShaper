@@ -121,7 +121,7 @@ void main() {
                              (((uint(pixel.y) + face_phase.y) & face_mask) == 0u);
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
-                             report_used, report_face, true, false);
+                             report_used, report_face, true, false, kNodeUnbounded);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {

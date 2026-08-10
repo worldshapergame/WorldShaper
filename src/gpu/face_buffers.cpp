@@ -364,6 +364,45 @@ bool FaceBuffers::audit(const FaceStore& store) {
             u32 ignorance_level[16]{};
             u64 sample_sum = 0;
             f64 facing_sum = 0.0;
+            // How much of the store still owes the ambient term rays, which is the one thing the
+            // cost of this pass is a function of and the one thing no picture can show: a face that
+            // has finished and a face that is one sample short look identical in every view, and
+            // only the second is being paid for. Counted over the WHOLE store rather than over the
+            // settled faces below it, because the faces that keep this pass busy are overwhelmingly
+            // the ones nothing is looking at.
+            //
+            // Over the LIVE faces, not over the watermark. A slot below the watermark that has been
+            // evicted is not a face and has nothing to finish, and counting it as unfinished is
+            // trap 10 in the instrument: the first version of this line reported 21,679 faces still
+            // casting rays when the true number was three, because 21,675 slots were simply dead.
+            u32 ambient_live = 0;
+            u32 ambient_done = 0;
+            u32 ambient_idle = 0;
+            u32 lamp_idle = 0;
+            for (u32 slot = 0; slot < watermark; ++slot) {
+                if (!face_live(card[slot])) continue;
+                ++ambient_live;
+                if ((card[slot].photons & kFaceAmbientDone) != 0) ++ambient_done;
+                if ((card[slot].photons & kFaceAmbientIdle) != 0) ++ambient_idle;
+                if ((card[slot].photons & kFaceLampIdle) != 0) ++lamp_idle;
+            }
+            WS_LOG_INFO("faces",
+                        "ambient on the card: {} of {} live faces cast no more rays at all, {} are "
+                        "quiet except on the sun's own frames, {} still bursting",
+                        ambient_done, ambient_live, ambient_idle - ambient_done,
+                        ambient_live - ambient_idle);
+            // And the same question for the lamps, which is a different one and has to be asked
+            // separately: the two terms converge at different rates, are reopened by different
+            // announcements, and a face can be silent about the sky while still bursting at a
+            // sconce. Reporting one number for both would be trap 7 in the instrument -- "nothing
+            // to do" and "nothing to do about THIS" are not one answer.
+            //
+            // In a scene with no emitters in it every live face reads finished on the first frame
+            // it is shaded, and that is the number to check before believing any cost figure here:
+            // the facility has no lamps, so this pass owes the lamps nothing there and a change in
+            // its timing on that scene is not about this term.
+            WS_LOG_INFO("faces", "lamps on the card: {} of {} live faces cast no more rays at all",
+                        lamp_idle, ambient_live);
             for (u32 slot = 0; slot < watermark; ++slot) {
                 if (face_samples(card[slot]) < kFaceEager) continue;
                 ++settled;
@@ -379,7 +418,13 @@ bool FaceBuffers::audit(const FaceStore& store) {
                 if (visibility > 0.97f) ++bright;
                 if (visibility > brightest) brightest = visibility;
                 sample_sum += face_samples(card[slot]);
-                if (visibility > 0.03f && (card[slot].photons & 0x7FFFFFFFu) >= 500) ++exhausted;
+                // The STEP COUNT is bits 0-23 and nothing else. The mask used to be 0x7FFFFFFF,
+                // which is every bit but the ignorance flag -- so the level in bits 24-27 read as
+                // tens of millions of steps and any face that had ever been stopped by ignorance
+                // counted as exhausted. It did not show while those were the only other bits used;
+                // it would have the moment anything else was packed beside them, which is what
+                // kFaceAmbientDone now does.
+                if (visibility > 0.03f && (card[slot].photons & 0x00FFFFFFu) >= 500) ++exhausted;
                 if (visibility < 0.03f && (card[slot].photons & 0x80000000u) != 0) {
                     ++by_ignorance;
                     ++ignorance_level[(card[slot].photons >> 24) & 0xFu];

@@ -139,6 +139,21 @@ inline constexpr u32 kFaceTransmissive = 1u << 1; // light comes through it: gla
 //
 // A marker bit costs nothing and makes the question answerable rather than inferred.
 inline constexpr u32 kFaceLive = 1u << 7;
+
+// Bit 30 of `photons`: this face's ambient term has finished and is casting no more rays. Written
+// only by shaders/shade_faces.comp, where kFaceAmbientDone records why it lives in a word the host
+// never writes and the face pass has already read. The host reads it for one purpose -- the audit
+// line that says how much of the store is still costing rays -- and must never set or clear it.
+inline constexpr u32 kFaceAmbientDone = 1u << 30;
+
+// Bit 29: nothing to do on a frame the sun is not due, which is the weaker of the two claims. See
+// kFaceAmbientIdle in shaders/node.glsl for why both exist and what conflating them cost.
+inline constexpr u32 kFaceAmbientIdle = 1u << 29;
+
+// Bit 28: this face's LAMP term has finished and casts no more rays at the emitter list either.
+// Written only by shaders/shade_faces.comp, read here only by the audit line that says how much of
+// the store is still costing rays. Must match kFaceLampIdle in shaders/node.glsl.
+inline constexpr u32 kFaceLampIdle = 1u << 28;
 constexpr bool face_live(const GpuFace& f) { return (f.packed & (kFaceLive << 16)) != 0; }
 
 constexpr u32 pack_face(u32 level, u32 face, u32 flags) {

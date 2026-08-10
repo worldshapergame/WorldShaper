@@ -342,4 +342,16 @@ std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTab
     return lights;
 }
 
+u64 light_list_hash(const std::vector<LightSource>& lights) {
+    // Seeded with the length so that an empty list and a list of one lamp at the origin with no
+    // radiance cannot collide, and so that a truncated list is distinct from the same lamps
+    // untruncated.
+    u64 hash = hash_mix(static_cast<u64>(lights.size()) + 0x9E3779B97F4A7C15ull);
+    if (!lights.empty()) {
+        hash = hash_bytes(reinterpret_cast<const u8*>(lights.data()),
+                          lights.size() * sizeof(LightSource), hash);
+    }
+    return hash;
+}
+
 }  // namespace ws

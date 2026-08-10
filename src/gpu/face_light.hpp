@@ -20,11 +20,16 @@
 //
 // # What an entry holds
 //
-// One word, packed exactly as `GpuFace::counters` is: rays cast in the low sixteen bits, rays that
-// escaped in the high sixteen. Same packing means `face_accumulate` and `face_visibility_of` in
-// shaders/node.glsl serve both without a second pair of functions to drift apart, and the reason
-// it is two counts rather than a stored fraction is D293: an eight-bit running mean cannot
-// converge, because once it is within half a count of its target the update rounds back.
+// Nine words, and the layout is documented once beside the pass that writes it (kFaceLightWords in
+// shaders/node.glsl). In outline: the ambient term's two sample counts, its near field and the two
+// gradients under the voxel, its far field, then three floats of accumulated LAMP irradiance and a
+// word holding the lamp sample count with the emitter-list version those samples were taken under.
+//
+// Counts rather than stored fractions throughout, for the reason D293 records: an eight-bit running
+// mean cannot converge, because once it is within half a count of its target the update rounds back
+// to where it was. The lamps go further and keep a float SUM rather than any kind of mean, because
+// unlike the sun and the sky their answer is not a fraction in [0,1] — it is radiance over a solid
+// angle divided by the density that chose it, and there is no bound to scale it against.
 
 #include "gpu/buffer.hpp"
 #include "gpu/device.hpp"

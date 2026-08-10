@@ -505,7 +505,8 @@ checked. Tick the ledger in §8.0 when one lands.
 | R2 | c. proximity | **done** — D270–D272. Twenty metres at brick detail, asked of the world rather than of the volume, resumable and bounded, anchored two metres so walking cannot restart it forever. A background guarantee: standing still finishes it |
 | R3 | b. the face store | **done** — `src/world/face_store.{hpp,cpp}` and twelve tests; `src/gpu/face_buffers.{hpp,cpp}` mirrors it to the card with dirty ranges and an identity audit that also reports what the card wrote (D296). Uploads by exact region, never by coalesced range: the record has two owners (D295) |
 | R3 | a. split the frame | **done** — the marcher names the face each ray stopped on down the feedback buffer that already existed, AND resolves its slot into an R32_UINT image the composite reads (D290). The request lattice walks, or it samples the same 1/64 of the screen for ever (D291) |
-| R3 | c. sun and lamps in the face pass | **sun done, and now visible** — `shaders/shade_faces.comp`, one jittered shadow ray per face per frame across the face and the sun's disc (D294), two counts rather than a mean (D293), no standing in for unbuilt cells (D292). Deck realtime cost: enclosed 2.382 → 2.500 ms, outdoor 1.709 → 1.892, close 2.841 → 3.009 — 3–11% for a shadow the real-time path never had, with speckle falling close 98.3 → 24.6. Lamps and sky still to come |
+| R3 | c. sun and lamps in the face pass | **sun done, and now visible** — `shaders/shade_faces.comp`, one jittered shadow ray per face per frame across the face and the sun's disc (D294), two counts rather than a mean (D293), no standing in for unbuilt cells (D292). Deck realtime cost: enclosed 2.382 → 2.500 ms, outdoor 1.709 → 1.892, close 2.841 → 3.009 — 3–11% for a shadow the real-time path never had, with speckle falling close 98.3 → 24.6 |
+| R3 | c. lamps in the face pass | **done** — D401–D409. The path tracer's own next-event estimator, moved off the pixel: `kLampCandidates` fittings scored, one kept in proportion, one direction inside its cone, accumulated on the face as irradiance. **A face never loops over lights**, so a thousand sconces cost what one costs, and it converges at `kLampConverged` and then casts nothing — settled faces **2.613 → 3.075 ms**, +18% of the pass and inside its 4.40 ms budget, measured by interleaving the two builds because the machine drifts by more than the effect (D407). The picture moves by **21.78 of 255 over a quarter of the frame**: the portico, the one place in this building the sun never reaches, stops being lit by a constant. Instant response is the host's job, not the face's — `light_list_hash` gives the list an identity and one frame of `light_reset` reopens the store, so **73% of a lamp change is on screen on the next frame and 97.5% by frame fifteen**. Sky is R10's, and it landed first |
 | R3 | shadow latency, stage one | **done** — D312–D315. `--cut` first, because a smooth camera measures the rate the store converges at and hides what it does when handed a whole screen: a 180° cut showed **five frames of a completely unshadowed room**. The mirror was uploaded above the line that claims faces, and the composite would not read a face under four samples while showing full sun instead. Both free to fix; five frames became two |
 | R3 | e. claim on the card | **done** — D316–D318. A provisional table of stand-ins in the tail of the faces buffer, which the host never writes; the claim is one atomicCompSwap whose return value serves the pixel that lost it, so no fix-up pass was needed at all. The full-sun fallback is **0% of surface from the first frame after a 180° cut**, against 100% for two frames before it, and 0% at every frame of a cold start. Settled cost unchanged, `--validation` clean, two runs bit-identical |
 | R3 | d. delete the per-pixel light path | not started. Carries one debt from R3b: split `GpuFace` so the CPU's half and the card's half are never in one copy |
@@ -562,6 +563,23 @@ draws depends on whether it watched the world sharpen: cold and warm runs of one
 proven identical by that hash, differ on 87,357 pixels, because the node pool evicts nothing and the
 cold run holds nodes built from geometry that has since been replaced (D244). **Figures taken before
 this change are not comparable with figures taken after it.**
+
+#### And what a player is waiting for now, which §6 above was measuring on the wrong half
+
+§6 claims lighting stops scaling with resolution and shows the arithmetic for it. The claim is about
+the *settled* store, and until D410 there was no measurement of any other state — `tools/baseline.ps1`
+starts its window at refinement's fixed point, so every figure in this plan is taken with every face
+converged and nothing casting a ray.
+
+`tools/_flybench.ps1` measures the other state. Close camera, `--fly 0,0,3,15`, 2560×1440, quality 7,
+200 measured frames: the faces pass is **11.75 ms mean against its 4.40 ms budget and against 1.11 ms
+standing still**, in a frame of 18.6 ms it therefore owns 63% of. About 6.3 M rays a frame, from
+280,000 faces still bursting.
+
+That does not overturn §6 — the number still does not grow with pixels the way a per-pixel tracer's
+does — but it does say where the stage is unfinished. **The convergence transient is the cost now,
+not the steady state**, and R5's denoise is not what pays it: the ranked fixes are traversal ones and
+they are listed at the end of `13-decision-log.md`. D410–D412.
 
 #### R1h — the enclosed room, and why the answer took longer than the fix
 
@@ -791,8 +809,30 @@ output during a measurement, and write shader files with a writer that does not 
 - **R3b — the face store, written by one invocation per face.** `src/world/face_store.*`,
   `shaders/face_select.comp`, `shaders/shade_faces.comp`. Key is the node the marcher stopped on —
   one level, from the descent, used by both passes.
-- **R3c — sun and lamps in the face pass.** Shadow rays and next-event estimation move off the
-  pixel entirely.
+- **R3c — sun and lamps in the face pass. Done.** Shadow rays and next-event estimation move off the
+  pixel entirely. The sun landed first (D290–D303); the lamps are D401–D409 and are the same shape:
+  one invocation per voxel face, `kLampCandidates` fittings scored by what each would deliver
+  unshadowed, one kept in proportion to that score, one shadow ray inside its cone, accumulated into
+  the face's own record as irradiance. A face never loops over lights.
+
+  Three things in it are worth carrying forward rather than rediscovering:
+
+  - **The estimator is the reference tracer's**, expression for expression, because two renderers
+    computing the same light differently light the room one way and aim the rays another. D204's
+    rule about one constant in one place, applied to a formula.
+  - **"Instantly" is the host's job.** A converged face stops reading its own record, so nothing it
+    can measure will ever tell it a lamp went out. The emitter list has an identity
+    (`light_list_hash`), a change bumps a version, and one frame of `light_reset` reopens the store;
+    each face then compares the version its samples were taken under and decides for itself. A
+    reopened face keeps its mean and drops its confidence to eight samples, so the picture moves on
+    the next frame instead of exploding into noise — 73% of the change at edit+1, 97.5% by edit+15.
+  - **A converged face must touch nothing, and that includes the load that finds out** — the idle
+    flag lives in `photons` for exactly this reason and the first version of this block did not use
+    it. Kept on that argument and **not** on a number: the 0.89 ms it first appeared to save was two
+    builds compared at different convergence states, and re-measured by interleaving it is inside
+    its own spread. D406, which is worth reading for how the wrong number was produced.
+
+  *Still R3c's in name only: the sky, which R10 built first and better.*
 - **R3e — a face is claimed on the card, in the frame a ray first lands on it. Done — D316–D318,
   and the fix-up pass in step 3 below turned out not to be needed.** Stage two of shadow latency;
   stage one was D312–D315 and took a hard 180° cut from five frames of a completely unshadowed room

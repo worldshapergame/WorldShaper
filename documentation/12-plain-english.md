@@ -599,6 +599,148 @@ Three things about how it's planned, in plain terms:
   the sun moves. This doesn't: if you're not carving, the answer never changes, so it's worked out
   once and then stops using any time at all. Carving reopens it around what you carved.
 
+**All three of those are now built, and the third one is what made it fast.** It used to take one
+measurement per surface per frame and keep taking them forever — so a wall got quietly smoother for
+a minute and a half after you loaded, and it never stopped costing anything. Now a surface takes
+sixteen measurements a frame instead of one, arrives at its final answer in about two seconds, and
+then goes completely silent. Because the silence pays for the hurry, **the game is faster than it
+was, not slower**: on the inside-the-building view the lighting step went from 1.24 ms a frame to
+0.79, and the whole frame from 3.35 to 2.94.
+
+Three things you'd actually notice:
+
+- **A surface is right the moment you see it.** A new face starts from the answer of the bigger,
+  blurrier face covering the same spot, so it fades from *roughly right* to *exactly right* instead
+  of from *wrong* to *right*.
+- **Placing and removing voxels doesn't cost anything.** Carving used to tell every surface within
+  sixteen metres to start over. Sixteen metres is right for *shadows* — a shadow can land that far
+  away — but this term only sees about a metre, so now only surfaces within a metre start over.
+  Measured on a small carve, the lighting step is *faster* than the old build, not slower.
+- **The one time it costs more is spinning round on the spot**, when a whole screenful of new
+  surfaces all start measuring at once. That's about a second at roughly twice the old cost, and
+  then it drops below it for good. It could be spread out to remove even that, but three different
+  ways of spreading it were tried and measured and all three made it *worse* overall — the expensive
+  part is having a surface still working, so the cheapest thing is to let it finish.
+
+### The building sharpened and the lighting never found out
+
+Worth telling you plainly, because it explains something you may have half-noticed and put down to
+taste.
+
+The building doesn't arrive all at once. It's laid down blocky in a second and a half, and then
+sharpened region by region in the background while you walk around in it. That part has always
+worked. What was never wired up is **telling the renderer it happened.** So for the whole life of
+that feature, two things quietly went wrong on every fresh load:
+
+- the tree the renderer walks kept the blocky version of nearly half the bricks it had already
+  looked at — it holds *copies*, and nothing was telling it the copies had gone out of date;
+- the ambient shading, which now works itself out once and then stops, kept the answer it had
+  measured against the blocky version. Permanently. Standing still didn't fix it and walking away
+  and back didn't fix it, because there was nothing left running to fix it *with*.
+
+Measured on the same building at the same spot — one run watching it sharpen, one run loading the
+finished article — **more than half the screen was wrong, by an average of 19 shades out of 255.**
+Now it's 2.4, which is about as close as two runs of the same build ever get to each other.
+
+The fix is that sharpening a region now says so, in exactly the words carving a hole already said.
+It costs something, and it costs it during loading where a paste already takes seconds; once the
+world has settled it costs nothing at all, because nothing is changing.
+
+**The part worth keeping is the alarm rather than the fix.** There was no way to ask "does the
+renderer's copy of the world still match the world?", so nobody had asked, and the answer had been
+*no* for months. There is now, it runs with every test screenshot, and it names the first brick that
+disagrees. Anything else that changes the world without going through the undo system has the same
+bug today — the difference is that it will now say so out loud instead of just looking slightly off.
+
+### Lamps now actually light things
+
+Until now, a torch or a lamp in this building **did nothing**. It drew as a pale block and lit
+nothing around it. The room it stood in was lit by a flat number the renderer applied everywhere,
+which is why the deep shade under the front portico — the one place the sun genuinely never reaches
+— read as a black hole with a couple of white specks in it.
+
+Lamps are now real lights, worked out the same way everything else in this renderer is: **once per
+voxel face, not once per pixel on your screen.** A surface picks one fitting to ask about, aims a
+ray at it, and remembers the answer. Three things follow from that, and they're the point:
+
+- **The cost doesn't grow with how many lamps there are.** A surface never goes through a list of
+  lights — it picks one, weighted by how much light that one would actually deliver to it. A hall
+  with a thousand lamps in it costs exactly what a hall with one costs.
+- **The cost doesn't grow with your resolution either**, for the same reason shadows and ambient
+  don't: the lighting is on the surface, and the surface doesn't care how many pixels are looking
+  at it.
+- **It settles and then stops.** After about a second a surface has its answer and stops asking.
+  Measured on the front of the building, the lighting step goes from **2.61 ms a frame to 3.08** —
+  about 18% more for that step, and about 9% on the whole frame, which is well inside what that step
+  is allowed. Carving near a lamp costs more for a second or so and then goes back to nothing.
+
+What you'll see: real pools of light on the walls behind each flame, falling off with distance, with
+the columns casting proper shadows from them across the portico floor — and the fittings themselves
+now glow instead of reading as pale stone.
+
+**And they react the moment you touch them.** This was the hard part, and it's worth explaining why.
+A surface that has finished measuring stops looking at anything at all — that's what makes it free —
+so it can never *notice* on its own that you just smashed the lamp lighting it. So the game tells
+it, on the exact frame you do it: the list of lamps has a fingerprint, and when the fingerprint
+changes every surface in the world is tapped on the shoulder for one frame. Each one keeps the
+answer it had but stops trusting it, so the picture **moves immediately** rather than dissolving
+into speckle and re-forming. Measured, by deleting the portico's lamps mid-run: **73% of the change
+is on screen on the very next frame, 97% within a quarter of a second, and it's indistinguishable
+from the settled answer by half a second.** Placing, deleting, dimming, or chipping a lamp smaller
+all count.
+
+**One thing this exposed that isn't fixed.** There's a test room that's sealed shut and lit by
+thirty-six lamps and nothing else. The lighting in it is *correct* — the slow reference renderer
+draws the same room the same way — but the fast renderer draws it **blown out white**, because it
+has a fixed brightness setting chosen for standing outdoors in daylight and no automatic exposure
+yet. That never showed while every indoor room was lit by a fraction of a sky constant. It shows
+now. Fixing it changes the brightness of every screenshot ever taken of this project at once, so it
+wants to be its own job with its own before-and-after rather than being smuggled in with this one.
+
+## You said the lights should be faster when you're moving. Here's what I found first
+
+You asked for the lighting to be much faster and for a higher frame rate **while you're walking
+around**. Before changing anything I went looking for a number, and there wasn't one — which turned
+out to be the whole story.
+
+Every speed figure in this project so far is taken with the camera **standing still**. That's on
+purpose: the world sharpens itself in the background, so a measurement taken while it's still
+sharpening is a measurement of a different world each time, and years of confusion came out of that.
+The fix was to wait until everything settles and then measure. It works, and it has a blind spot the
+size of the thing you're complaining about — because "settled" is exactly the state where every
+surface has finished working out its own lighting and has gone quiet.
+
+So I built the missing instrument: it walks the camera along a fixed route and reports the same
+breakdown. Standing still and walking, same camera, same building, same settings:
+
+| | standing still | walking |
+|---|---|---|
+| working out what you can see | 1.1 ms | 3.3 ms |
+| **working out the lighting** | **1.1 ms** | **11.8 ms** |
+| putting the picture together | 0.9 ms | 2.8 ms |
+| **whole frame** | **3.3 ms** | **18.6 ms** |
+
+The lighting step is **ten times more expensive when you move**, and it's nearly two thirds of the
+frame. That is the thing you were feeling, and it now has a number and a repeatable test, which it
+did not have this morning.
+
+**Why it happens, in one line.** A surface works out its own light once and then stops for ever —
+that's the design and it's why standing still is cheap. Walk, and you keep revealing surfaces that
+have never done it yet, so at any moment about **280,000 of them are mid-calculation**, firing
+roughly six million light probes a frame between them.
+
+**And the biggest single waste is embarrassing and cheap to fix.** Each of those probes is a short
+ray — most of them stop within a metre. But every single one starts by walking the whole world
+index from the top, a half-kilometre box down to a single brick, before it takes its first step.
+Twenty-five probes leave the same spot on the same surface in the same frame, and all twenty-five do
+that walk from scratch. They can share it: same answer, same picture, pixel for pixel.
+
+**I stopped there rather than pushing the change in unmeasured.** That's this project's own rule and
+it has saved it repeatedly — a fix that looks obvious and isn't measured is how three separate
+"improvements" got written up here and later withdrawn. The instrument is built, the cause is named,
+the fix is written down along with four more behind it, and the next session starts by making them
+and proving each one on the walking test rather than the standing-still one.
+
 ## How we'll work
 
 - I write all the code. You never open a code file.

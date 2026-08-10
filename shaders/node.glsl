@@ -1,6 +1,6 @@
 // Walking the node pool: one sparse octree, at every scale, with one answer.
 //
-// This replaces the four addressing schemes shaders/world.glsl walks end to end â€” a wrapped chunk
+// This replaces the four addressing schemes shaders/world.glsl walks end to end Ã¢â‚¬â€ a wrapped chunk
 // grid, a per-chunk brick mask with popcount prefixes, a per-chunk brick-mask pyramid, and a
 // separate summary tier with its own grids. See src/world/node_pool.hpp for why they went.
 //
@@ -8,8 +8,8 @@
 //
 // One hash to enter the tree, and pure arithmetic below it: a node holds the base index of its
 // eight contiguous children, so descending is `children + octant`. The old walk paid two
-// *dependent* loads per chunk entered â€” the wrapped grid cell, then that record's own coordinate,
-// because the grid wraps and a cell may be held by a chunk from somewhere else â€” and did it up to
+// *dependent* loads per chunk entered Ã¢â‚¬â€ the wrapped grid cell, then that record's own coordinate,
+// because the grid wraps and a cell may be held by a chunk from somewhere else Ã¢â‚¬â€ and did it up to
 // thirty-two times along each axis a ray crossed, plus a coarse-grid fetch per skip. A dependent
 // load is the one thing a marcher cannot hide, and on a machine whose binding constraint is memory
 // bandwidth that difference is the point of the exercise.
@@ -19,14 +19,14 @@
 // A descent stops for one of three reasons and they drive three different behaviours:
 //
 //   HERE      a node covers this point at the level asked for. Draw it.
-//   EMPTY     the child cell one level down holds nothing. Jump the width of it â€” the coarse skip
+//   EMPTY     the child cell one level down holds nothing. Jump the width of it Ã¢â‚¬â€ the coarse skip
 //             falls out of the descent instead of needing five occupancy grids to carry it.
 //   WANTED    the world has something here and the pool does not. Report it; that is the only
 //             reason anything is ever streamed.
 //
 // Conflating EMPTY and WANTED is the fault this structure exists to make unrepresentable. An
 // unstreamed building that reads as open sky is never reported, so it is never streamed, so it
-// stays open sky â€” which is decision D133 and again D147, found twice by looking at photographs.
+// stays open sky Ã¢â‚¬â€ which is decision D133 and again D147, found twice by looking at photographs.
 //
 // # The stack, and why it costs nothing to keep
 //
@@ -38,14 +38,14 @@
 
 const uint kNoNode = 0xFFFFFFFFu;
 const int kLeafLevel = 3;       // a brick: 8 voxels
-const int kEntryLevel = 14;     // 16,384 voxels â€” 512 m. Must match src/world/node_pool.hpp.
+const int kEntryLevel = 14;     // 16,384 voxels Ã¢â‚¬â€ 512 m. Must match src/world/node_pool.hpp.
 
 const uint kNodeLeaf = 1u;
 const uint kNodeUniform = 2u;
 
 // Thirty-two bytes, declared as scalars rather than vectors on purpose. std430 aligns a uvec3 to
 // sixteen bytes, so declaring the coordinate the obvious way silently reads every node after the
-// first from the wrong offset â€” the same trap the light list documents in pathtrace.comp.
+// first from the wrong offset Ã¢â‚¬â€ the same trap the light list documents in pathtrace.comp.
 struct Node {
     int x;
     int y;
@@ -111,6 +111,10 @@ layout(push_constant) uniform NodeConstants {
     uint face_stride;   // face shader: shade one face in this many each frame, round robin
     uint provisional_base;  // where the card's own faces start in the same array. 0 disables them
     uint face_first;    // face shader: the first slot this dispatch owns
+    // The lamps. See "the emitter list" below for why a version and a reset flag are both here.
+    uint light_count;   // how many entries of `lights` are live. 0 means the scene has no lamps
+    uint light_version; // bumped whenever the list's CONTENTS change, not merely its length
+    uint light_reset;   // 1 on the one frame the list changed, which is what reopens an idle face
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }
@@ -146,7 +150,7 @@ uint node_entry_hash(ivec3 coord, uint level) {
 }
 
 // The root covering this point, or kNoNode. An empty bucket ends the run, exactly as it does on
-// the CPU â€” a probe that walked past one would find a root that a later insertion had displaced.
+// the CPU Ã¢â‚¬â€ a probe that walked past one would find a root that a later insertion had displaced.
 uint node_entry_lookup(ivec3 block) {
     uint bucket = node_entry_hash(block, uint(kEntryLevel)) & (node_push.entry_capacity - 1u);
     for (uint probe = 0u; probe < node_push.entry_probes; ++probe) {
@@ -192,36 +196,132 @@ layout(std430, binding = 12) buffer FaceProvisional { uint marks[]; } provisiona
 // remembering not to.
 layout(std430, binding = 13) buffer FaceLight { uint words[]; } face_light;
 
-// Two words a face, and they are two different quantities that must not be averaged into one.
+// Nine words a face, holding three different quantities that must not be averaged into one.
 //
-//   [0] the FAR field -- sky visibility. Unbounded. Rays cast and rays that escaped, packed as
-//       GpuFace::counters is, so face_accumulate serves it. It multiplies sky radiance, and it is
-//       the physically missing term in the ambient integral.
-//   [1] the NEAR field -- contact. The same ray's FIRST HIT DISTANCE through a falloff over about
-//       a metre, summed in fixed point at 255 a ray.
-//
-// One ray answers both: a hit at 0.3 m says "not sky" and "contact"; a ray that escapes says "sky"
-// and "no contact". They are separated because indoors the far field saturates -- every ray hits
-// something, so sky visibility is nought on every surface in the room and carries no shape at all.
-// Measured: 1,619 of 1,671 surface pixels in the enclosed view fell in the lowest tenth. The near
-// field is what varies there, and it is what reads as ambient occlusion.
+//   [0] the two SAMPLE COUNTS: near-field rays in the low sixteen bits, far-field rays in the high
+//       sixteen. They used to be one count because one ray answered both questions. They are not
+//       one count any more, and that is the whole of what made the ambient term converge: see
+//       "why the near field and the far field stopped sharing a ray" below.
+//   [1] the NEAR field -- contact. A ray's FIRST HIT DISTANCE through a falloff over about a metre,
+//       summed in fixed point at 255 a ray, over count [0].lo.
 //   [2] the near field's GRADIENT along the face's first axis, and [3] along its second.
+//   [4] the FAR field -- how many of count [0].hi reached open sky. It multiplies sky radiance, and
+//       it is the physically missing term in the ambient integral.
+//   [5][6][7] the LAMPS -- the running SUM of the irradiance estimator, one float a channel. Not a
+//       running mean and not a fixed-point count: D293 is the standing measurement of what a
+//       narrow running mean does to a quantity that has to converge, and unlike the sun and the
+//       sky a lamp's contribution is not a fraction in [0,1] -- it is radiance over a solid angle
+//       divided by a density, and it has no bound this record could scale itself against.
+//   [8] the lamp SAMPLE COUNT in the low sixteen bits, and in the high sixteen the LIGHT-LIST
+//       VERSION those samples were taken under. See kLampConverged.
 //
-// Those two are what make occlusion vary UNDER a voxel. Kept as first moments of the same samples
-// rather than fitted afterwards: the jitter is uniform over the sampled span, so the Legendre basis
-// on [-1, 1] is already orthogonal under it -- <P_i P_j> = d_ij/(2i+1) -- and every coefficient is
-// therefore an independent running mean of the sample weighted by a polynomial. No normal
-// equations, no least squares, no second pass, and no extra rays: the face pass already chooses a
-// point on the face and was throwing its position away.
+// Indoors the far field saturates -- every ray hits something, so sky visibility is nought on every
+// surface in the room and carries no shape at all. Measured: 1,619 of 1,671 surface pixels in the
+// enclosed view fell in the lowest tenth. The near field is what varies there, and it is what reads
+// as ambient occlusion.
+//
+// # Why the near field and the far field stopped sharing a ray
+//
+// They are the same integral over the same hemisphere, so one ray answering both looks like the
+// obviously right economy, and it was â€” until the question became how fast the term CONVERGES.
+// The two halves need wildly different rays:
+//
+// - the near field is a falloff over `kContactMetres`. Every answer past a metre is the same
+//   answer, so its ray can stop at 32 voxels and cost a fraction of a march;
+// - the far field asks whether a direction reaches the sky, which is a question about the other
+//   end of the world and cannot be bounded at all.
+//
+// Sharing one ray priced the near field at the far field's cost, and the near field is the term
+// that carries every crease in the building. Split, a face can afford `kSkyBurst` near rays in the
+// visit where it used to afford one, because a bounded ray is most of an order of magnitude cheaper
+// than an unbounded one â€” and the far field keeps exactly the one unbounded ray a frame it always
+// had, so nothing about it changed or regressed.
+//
+// # Those gradients
+//
+// They are what make occlusion vary UNDER a voxel. Kept as first moments of the same samples rather
+// than fitted afterwards: the sample position is uniform over the sampled span, so the Legendre
+// basis on [-1, 1] is already orthogonal under it -- <P_i P_j> = d_ij/(2i+1) -- and every
+// coefficient is therefore an independent running mean of the sample weighted by a polynomial. No
+// normal equations, no least squares, no second pass, and no extra rays.
 //
 // A plane fits to a constant, a corner to a gradient. Nothing in the code has to know which it is
 // looking at, because what is being fitted is the real visibility field.
-const uint kFaceLightWords = 4u;
+// Nine words a slot, and NOT padded to sixteen.
+//
+// Padding was the obvious thing to try at five -- a 20-byte stride is unaligned to everything,
+// cannot be loaded as a vector, and puts a slot's words across a cache line three times in four,
+// which is the reason `GpuFace` is thirty-two bytes ("two to a cache line", face_store.hpp). It was
+// tried and measured and it bought nothing: 2.185 ms against 2.185 on the facade camera and 1.256
+// against 1.053 once converged, for 34 MB against 21. This record is touched a handful of times per
+// face per frame, not per step, so its stride is not where this pass spends anything. The same
+// argument holds at nine, and padding to sixteen would cost 26 MB to buy the same nothing.
+const uint kFaceLightWords = 9u;
 // How far away geometry stops darkening, in METRES rather than voxels, so a coarse face at 200 m
 // and a level-0 face at arm's length darken over the same physical distance and a dolly-in shows
 // no transition.
 const float kContactMetres = 1.0;
 const float kVoxelsPerMetreF = 32.0;
+// The same distance in voxels, which is what a near ray is bounded by. Nothing beyond it changes
+// `contact`, so nothing beyond it is worth a step.
+const float kContactVoxels = kContactMetres * kVoxelsPerMetreF;
+
+// How far outside its own bounds an edit is announced. Must match kEditShadowReach in
+// src/app/main.cpp, and it is sized for the SUN: a shadow cast by what you just placed can land
+// sixteen metres away, so every face within sixteen metres has to look again.
+const int kEditShadowReach = 512;
+// How far an edit can move the NEAR field, which is a different and much smaller number: the near
+// field is a falloff over kContactMetres and is blind to anything past it. Two metres -- the
+// falloff plus as much again -- is generous.
+//
+// This is the difference between placing one voxel costing a handful of faces their ambient history
+// and costing every face within sixteen metres of it. The near field is the expensive half to
+// re-converge (kSkyBurst rays a face) and it is the half that is genuinely local, so the two
+// reaches are kept apart rather than the larger one being used for both. The FAR field keeps the
+// full reach, because opening a hole in a roof really does change how much sky a floor sixteen
+// metres away can see -- and the far field costs one ray a visit to put right.
+const int kEditAmbientReach = 64;
+const int kEditAmbientShrink = kEditShadowReach - kEditAmbientReach;
+
+// This face's ambient term is finished, in bit 30 of `photons` -- which is a GPU-owned word the
+// face pass already has in hand, and that is the entire reason it lives there rather than in the
+// face light beside the counts it describes.
+//
+// A converged face must cost NOTHING, and "nothing" has to include the load that finds out. The
+// face light is one word a slot in a 21 MB array, so asking it "are you done" is a scattered
+// four-byte read per face per frame across half a million faces -- 64 MB of cache lines a frame
+// fetched to learn that there is no work. Measured: the pass sat at 2.13 ms against the 1.75 ms of
+// the build it replaces, with every visible face converged and casting not one ray. `Face` is
+// thirty-two bytes and consecutive invocations read consecutive slots, so the same answer carried
+// there is coalesced and free.
+//
+// The host zeroes `photons` when it claims a slot, which is exactly right: a re-claimed slot is a
+// different face and owes the burst again. And if a record is ever re-uploaded over the card's, the
+// flag clears, the pass looks again, finds the counts already at the target, and sets it back --
+// the failure mode is one wasted lookup rather than a face that never converges.
+const uint kFaceAmbientDone = 1u << 30;
+
+// And bit 29: this face has nothing to do on a frame the SUN is not due, which is a weaker claim
+// and a different one. The far field takes its one unbounded ray on the sun's schedule, so a face
+// can be idle five frames in six while still owing rays on the sixth.
+//
+// Two bits rather than one because the first version of this used one for both meanings, and an
+// audit line built on it reported the store as finished while the pass was plainly still paying for
+// something. Trap 7: "nothing to do this frame" and "nothing to do ever" are not one answer, and a
+// counter that cannot tell them apart sends you looking in the wrong place -- which it did.
+const uint kFaceAmbientIdle = 1u << 29;
+
+// And bit 28: this face's LAMP term has finished and is casting no more rays at it either.
+//
+// The same argument as kFaceAmbientDone, and the same word for the same reason: a converged face
+// must cost nothing, and "nothing" has to include the load that finds out. It sits beside the
+// ambient flags rather than in the face light because `Face` is already in hand and coalesced,
+// while the face light is a scattered read into a 39 MB array.
+//
+// Bit 28 is the last free bit of `photons` -- 0-23 are the sun ray's step count, 24-27 the level a
+// shadow ray was stopped at, 29-31 the two ambient flags and the ignorance flag. Anything else that
+// wants a bit here has to widen the record rather than borrow one.
+const uint kFaceLampIdle = 1u << 28;
 
 const uint kNoFace = 0xFFFFFFFFu;
 const uint kFaceTombstone = 0xFFFFFFFEu;
@@ -256,22 +356,111 @@ const uint kFaceSettled = 1u;
 const uint kFaceEager = 4u;
 const uint kFaceWindow = 256u;   // where both counts halve, so the sun may move
 
-// The same, for the ambient term, and it is eight times longer for a reason that does not apply to
-// the sun: **ambient occlusion depends only on geometry**. The sun moves across the sky and a face
-// has to be able to forget where it used to be, which is what a 256-sample window buys. Geometry
-// moves only when somebody edits it, and since an edit now tells the faces inside it to start again
-// from nothing rather than leaving them to average their way back (cebf015), the ambient window is
-// not a forgetting mechanism at all -- it exists to stop the counters overflowing.
+// The same figure for the ambient term, and it is eight times larger for a reason that does not
+// apply to the sun: **ambient occlusion depends only on geometry**. The sun moves across the sky and
+// a face has to be able to forget where it used to be, which is what a 256-sample window buys.
+// Geometry moves only when somebody edits it, and an edit tells the faces inside it to start again
+// from nothing rather than leaving them to average their way back (cebf015) -- so this is not a
+// forgetting mechanism at all. It is where the answer is good enough to stop.
 //
-// So it can be as long as the counters allow, and length is variance: the error of a fraction over
-// N samples falls as one over the square root of N, and the window IS N. At 256 a contact fraction
-// near a half has a standard deviation of about 8 of 255, which is exactly the face-to-face
-// roughness measured on a flat wall -- the cap was the noise floor. At 2,048 it is under 3.
+// It can therefore be as large as the counters allow, and size is variance: the error of a fraction
+// over N samples falls as one over the square root of N, and the target IS N. At 256 a contact
+// fraction near a half has a standard deviation of about 8 of 255, which is exactly the face-to-face
+// roughness measured on a flat wall -- the old cap was the noise floor. At 2,048 it is under 3.
 //
-// The counters hold it: samples and the lit count are sixteen bits each and 2,048 is well inside
-// them, and the contact sum and its two gradients are full words at 255 a sample, which is 522,240
-// at the cap against four thousand million.
+// The counters hold it: the two sample counts are sixteen bits each and 2,048 is well inside them,
+// and the contact sum and its two gradients are full words at 255 a sample, which is 522,240 at the
+// target against four thousand million.
 const uint kSkyWindow = 2048u;
+
+// ---- how fast the ambient term converges, and why it costs nothing to converge it fast ---------
+//
+// The ambient term used to take one ray a face a frame, and a settled face is visited one frame in
+// `face_stride`, so 2,048 samples was six thousand frames â€” a hundred seconds of a wall visibly
+// sharpening, at the enclosed camera, on every load. Three things were true about that and each is
+// a lever:
+//
+// 1. **The ray was priced as a sun ray and is not one.** Bounded at `kContactVoxels`, the near ray
+//    stops after a metre because nothing past a metre changes its answer.
+// 2. **The face went on paying for ever.** Ambient occlusion is a function of GEOMETRY, and
+//    geometry does not move unless somebody edits it â€” at which point the host says so on the exact
+//    frame, in `edit_min.w`, and the record starts again from nothing. So a converged face needs no
+//    further rays AT ALL, and every one it was casting was re-measuring a constant. That is the
+//    budget the burst is spent out of, and it is why this is not a trade.
+// 3. **The far field was holding the near field's rate down.** Split, above.
+//
+// So: a face that has not converged spends its visit on `kSkyBurst` bounded rays instead of one
+// unbounded one; a face that has converged spends nothing. Total rays over the life of a face go
+// DOWN â€” 2,048 and then silence, against 2,048 and then one every stride for the rest of the run â€”
+// while the samples that decide what the player sees all land in the first few frames.
+//
+// The burst is the sampling rate, not a quality knob: `kSkyWindow` still decides where the answer
+// lands, and 32 was measured against 8 and 64 on the grid rather than chosen.
+const uint kSkyBurst = 16u;
+// Where the near field stops casting rays: the count the window was chosen for, reached and then
+// held rather than rolled over. There is no halving any more and there is nothing left for one to
+// do -- an edit announces itself and resets the record outright, a re-claimed slot is zeroed, and
+// the only other thing that can move the answer is the pool building or shedding what the rays
+// crossed, which the ignorance hold in shade_faces.comp is for. A window that never fires is a
+// branch that can only be wrong.
+const uint kSkyConverged = kSkyWindow;
+// And where the FAR field stops if it never makes up its mind, which is four times sooner and is
+// not a compromise.
+//
+// Sky visibility does not reach the picture raw: the composite mixes it over [kIndirectFloor, 1],
+// which halves it, and then multiplies it by the near field. So its standard error arrives at a
+// quarter strength. At 256 samples a fraction near a half has an error of 0.031, which lands at
+// 0.0085 of the ambient term against a renderer whose own run-to-run noise is 0.0098 -- under the
+// floor, and going further under it costs UNBOUNDED rays quadratically. 2,048 would be sixteen
+// times the rays for a difference nothing can see.
+const uint kSkyFarConverged = 256u;
+
+// ...and most faces stop long before it, because **a fraction's error depends on the fraction**,
+// and that is what makes the expensive half of this term affordable.
+//
+// Sky visibility is a binomial proportion, so after N rays its variance is p(1-p)/N. A face in a
+// sealed room measures p = 0 and a roof under open sky measures p = 1, and BOTH have an error of
+// nought after a handful of rays -- every further unbounded ray they cast re-derives a number
+// already in hand. Only faces that genuinely straddle an opening (a window reveal, the lip of a
+// soffit, the edge of the terrace) sit near a half, and those are exactly the faces where sky
+// visibility is worth spending rays on.
+//
+// So the far field stops when its own measured error falls under `kSkyFarEps`, floored at
+// `kSkyFarMin` samples so the estimate of p is not itself noise, and capped at kSkyFarConverged so
+// a face at exactly a half still terminates. Nothing here knows whether it is looking at a room or
+// a roof, which is the same property the near field's fit has.
+//
+// Measured on the facade camera, where this was first got wrong: a plain unanimity test -- all
+// thirty-two rays agreeing -- stopped 8,752 faces of 498,179, because an exterior face is rarely
+// unanimous and is very often 0.9 and settled. The pass sat at 2.15 ms against the 0.62 it costs
+// with the far field silent.
+const uint kSkyFarMin = 32u;
+// The error the far field is measured to, squared, so the test is a multiply rather than a divide.
+//
+// 0.02 of a fraction that is mixed over [kIndirectFloor, 1] and then multiplied by the near field
+// arrives as 0.0055 of the ambient term, against a renderer whose own run-to-run noise is 0.0098.
+// It is under the floor, and being further under it costs unbounded rays quadratically.
+const float kSkyFarEpsSq = 0.0004;
+// The far samples that are worth taking off the sun's schedule and having at once. `open_sky`
+// starts at one -- fully open, which indoors is the worst answer available -- and it is the first
+// few dozen rays that move it off that. It is the same number as kSkyFarMin on purpose: a face
+// whose answer is unanimous reaches it in thirty-two frames and then never casts an unbounded ray
+// again for the rest of its life, which is the whole of why the burst above is affordable.
+const uint kSkyFarEager = kSkyFarMin;
+// How many samples a face inherits from the coarse face standing over it when it is first shaded.
+//
+// A face with no samples reads as fully unoccluded, which indoors is the worst answer available â€”
+// the same fault D308-D311 fixed for the sun, arriving through the ambient door. The stand-in three
+// levels up is already claimed, is already converged, and covers this face: it is the best prior
+// available for nothing, and the R9d measurement says a stand-in is about a tenth off and sharpens.
+//
+// Eight samples' worth, so it is believed at once and is outvoted by the face's own first burst of
+// thirty-two. Not more: a prior that survives its own evidence is a bias, and the reason the sun's
+// stand-in is read rather than accumulated is precisely that.
+const uint kSkySeedSamples = 8u;
+// And the least the stand-in must have seen before it is worth inheriting. Seeding from four rays
+// of noise is not a prior, it is the noise arriving one level coarser.
+const uint kSkySeedMin = 64u;
 
 // How far above a face its STAND-IN sits: the coarse face the composite reads while the fine one
 // is still being discovered. Must match kFaceAncestorStep in src/world/face_store.hpp, which is
@@ -288,6 +477,90 @@ const uint kSkyWindow = 2048u;
 // Three is also the brick, which is what every face in the store was before D298, so the picture
 // has already been seen at this granularity: it read as blocky, not as wrong.
 const int kFaceAncestorStep = 3;
+
+// ---- the emitter list, and lamps on the face (R3c) -------------------------------------------
+//
+// Where the lamps are, so a FACE can ask one for light instead of a pixel doing it. The list is
+// built on the host by src/world/light_list.cpp, which merges emissive voxels into whole fittings:
+// a sconce is a few hundred voxels and sampling each of them separately would spend the whole
+// budget on one lamp.
+//
+// Declared field by field rather than as vectors on purpose. The buffer is a tightly packed
+// 28-byte record and std430 aligns an ivec3 to sixteen bytes -- declaring the coordinate the
+// obvious way silently reads every lamp after the first from the wrong offset. That trap has cost
+// this project two debugging sessions in two different files, so it is written down at every place
+// it could recur.
+struct LightSource {
+    int x;
+    int y;
+    int z;
+    float red;
+    float green;
+    float blue;
+    uint voxels;
+};
+layout(std430, binding = 14) readonly buffer Lights { LightSource items[]; } lights;
+
+// Must match kMaxLights in src/world/light_list.hpp. A list exactly this long has been TRUNCATED,
+// and a truncated list is one this cannot own: direct sampling owns emitters outright, so a lamp
+// past the end would be lit by nobody and simply go out. The host reports the overflow; this is
+// only the bound the shader clamps its index against.
+const uint kMaxLights = 1024u;
+
+// How many lamps are scored before one is kept. Resampled importance sampling, and it is not a
+// refinement -- it is the difference between this helping and hurting. clips/many_lamps.clip holds
+// eighty-four fittings and a face in one quarter of that hall is walled off from thirty of them;
+// picking one uniformly makes about one sample in eighty-four useful and gives it eighty-four
+// times the weight, which is unbiased and far noisier than doing nothing at all.
+//
+// The same figure and the same estimator the path tracer uses (kNeeCandidates), because the two
+// have to agree about how bright a room is or the reference stops being a reference.
+const uint kLampCandidates = 8u;
+
+// Rays a face casts at the lamps on a frame it has not finished, and the argument is D394's: what
+// this pass spends on an unconverged face is mostly the FACE and not the ray, so the cheapest thing
+// to do with a face that has to measure is to let it measure all at once and be finished with it.
+// Three ways of metering the ambient burst were built and all three made the transient worse.
+const uint kLampBurst = 8u;
+
+// And where it stops. A lamp is not the sun: it does not move, and unlike the ambient term it is
+// not a pure function of geometry either -- it is a function of geometry AND of the emitter list.
+// Both of those are announced exactly, on the frame they change (`light_reset` above, `edit_min.w`
+// for the world), so a converged face has nothing left to discover and every ray it casts after
+// this is re-measuring a constant it already holds.
+//
+// Five hundred and twelve rather than the ambient term's two thousand because the estimator is
+// importance sampled rather than uniform: the variance left in it is which fitting was kept and
+// whether the ray got there, not the whole hemisphere. At kLampBurst it is sixty-four frames, about
+// a second, and the running mean is readable from the first sample.
+const uint kLampConverged = 512u;
+
+// What a face inherits when the list changes under it, and this is the whole of "instantly".
+//
+// A lamp that is placed, deleted or dimmed invalidates every accumulated lamp sample in the store.
+// Throwing them away outright is exact and it FLASHES: the composite would read a mean of one or
+// two rays on the next frame, which is an unbiased estimate with the variance of a coin toss, on
+// every surface at once. So the mean is KEPT and its confidence is dropped to this -- the face's
+// own next burst outvotes the prior eight to eight on the very next frame and has buried it within
+// three, while the picture moves towards the new answer instead of exploding into noise.
+//
+// It is the same shape as kSkySeedSamples and for the same reason: a prior is believed only until
+// evidence arrives, and evidence arrives at kLampBurst a frame.
+const uint kLampSeedSamples = 8u;
+
+// The least a stand-in must have measured before a fine face is worth seeding from it. Same
+// argument as kSkySeedMin: seeding from a handful of rays is not a prior, it is the noise arriving
+// one level coarser.
+const uint kLampSeedMin = 64u;
+
+// Where a lamp shadow ray stops short of the fitting, in voxels.
+//
+// The ray is aimed INTO the lamp, and the lamp is made of matter: without this every sample would
+// be occluded by the thing it is sampling. `light_list.hpp` guarantees the sphere of radius
+// `0.87 * cbrt(voxels)` CONTAINS the fitting, so stopping a voxel short of that sphere can never
+// enter it. What it costs is any occluder in the last few centimetres before the lamp, which errs
+// bright by a hair and is the standard bargain.
+const float kLampSurfaceMargin = 1.0;
 
 // One more ray into a face's two counts. Halving at the window keeps the ratio exact -- both
 // counts are integers and the halving is a shift -- while stopping a face that has watched the
@@ -341,6 +614,25 @@ uint face_accumulate(uint counters, bool reached_the_sun) {
 float face_visibility_of(uint counters) {
     uint samples = face_samples_of(counters);
     return samples == 0u ? 1.0 : float(face_lit_of(counters)) / float(samples);
+}
+
+// The R_4 low-discrepancy sequence: one point of a four-dimensional stratified series per index.
+//
+// The ambient sampler needs four numbers a ray â€” where on the face it leaves from, and which way â€”
+// and it takes them from ONE sequence rather than from two 2D ones. That is not tidiness. Two R_2
+// sequences advanced by the same index are both affine in that index, so their points sit in a
+// fixed relative pattern for the life of the face: where a sample stands on the face would predict
+// which way it leaves, and the pair â€” which is exactly what the gradient is a fit over â€” would be
+// drawn along a line through a 4D space instead of spread over it. The pattern depends on the
+// per-face rotation, so it would appear on some faces and not others, which is structured error.
+// The eye finds structure and does not find noise.
+//
+// alpha_j = phi_4^-j, where phi_4 is the real root of x^5 = x + 1 -- the four-dimensional
+// generalisation of the plastic constant the 2D version uses.
+vec4 node_r4(uint index, vec4 rotation) {
+    const vec4 alpha = vec4(0.8566748838545029, 0.7338918566271259,
+                            0.6287067210378086, 0.5386328571121754);
+    return fract(alpha * float(index) + rotation);
 }
 
 // The slot a face lives in, or kNoFace. Never claims -- claiming is the CPU's, from the requests
@@ -446,7 +738,7 @@ struct Found {
 
 // The last root a ray entered, and nothing else.
 //
-// The first version kept the whole descent â€” a twelve-element array indexed by level, so a step
+// The first version kept the whole descent Ã¢â‚¬â€ a twelve-element array indexed by level, so a step
 // could restart from the deepest ancestor that still contained the point. The arithmetic for that
 // is free (two points share every ancestor above the highest bit in which they differ, so one XOR
 // and one findMSB says where to restart), and it looked like the obviously right thing.
@@ -457,8 +749,8 @@ struct Found {
 // a round trip to memory to save itself a handful of loads that were going to hit cache anyway.
 // Measured: 11.52 ms against the old marcher's 1.60 ms with the array, and see below without it.
 //
-// A single root, held in two scalars, costs registers and stays in them. It saves the hash â€” which
-// is the one genuinely expensive part, since a ray crosses few 512 m blocks â€” and the descent
+// A single root, held in two scalars, costs registers and stays in them. It saves the hash Ã¢â‚¬â€ which
+// is the one genuinely expensive part, since a ray crosses few 512 m blocks Ã¢â‚¬â€ and the descent
 // below it is a handful of dependent loads through nodes whose siblings share a cache line.
 //
 // # Why the root alone was not enough
@@ -603,7 +895,7 @@ Found node_locate(ivec3 p, int target) {
         //
         // Reporting this as wanted instead is D133 in a new structure. A ray crossing open sky
         // asks for nothing, the CPU has nothing to give it, and the same useless request repeats
-        // every frame while every counter reads calm â€” measured at 3.7 million requests a run
+        // every frame while every counter reads calm Ã¢â‚¬â€ measured at 3.7 million requests a run
         // against 367,000 hits, with the tree frozen and the scene undrawn.
         Found result;
         result.slot = kNoNode;
@@ -646,7 +938,7 @@ uint leaf_voxel_type(uint leaf, ivec3 local) {
 // ---- reporting ------------------------------------------------------------------------------------
 //
 // One node per ray: the first one it wanted and could not find. First rather than deepest, so
-// streaming converges front to back â€” which is also the order a player notices.
+// streaming converges front to back Ã¢â‚¬â€ which is also the order a player notices.
 
 void node_note(inout bool has_pending, inout ivec4 pending, ivec3 coord, int level) {
     if (has_pending) return;
@@ -864,8 +1156,27 @@ const uint kNodeMaxSteps = 512u;
 // sun shining in through a wall that has not finished streaming, and indoors -- where every
 // correct answer is full shadow -- it measured as 47,353 of 93,745 faces leaking about a tenth of
 // their rays, with not one pixel of the room above 0.9 for that light to have come from.
+// `max_t` is how far this ray is allowed to travel, in voxels, and it is a parameter rather than a
+// constant because one caller asks a question that is answered within a metre.
+//
+// The ambient near field darkens over `kContactMetres` and is flat beyond it, so a ray sent to
+// answer it has nothing left to learn after 32 voxels: everything past that returns the same
+// number. Marching on is not conservatism, it is spending the whole step budget to re-derive a
+// value already in hand â€” and D148 is the standing measurement of what a ray that keeps stepping
+// costs (0.78 ms to 23.7 ms from widening a clip). Pass `kNodeUnbounded` for a ray that really does
+// need to know what is at the other end of the world, which is the sun ray and the primary ray.
+//
+// A bounded ray that reaches its limit returns `hit == false`, exactly as a ray that reached open
+// sky does â€” and those are NOT the same fact. Trap 7 in the handover is this exact shape: "nothing
+// here" and "I stopped looking" must never be one answer. So a bounded ray may only be asked
+// questions whose answer is the same for both, which is what the near field is and what sky
+// visibility emphatically is not. The far field keeps an unbounded ray of its own for that reason,
+// and the two counts are kept apart in the record so neither can be read as the other.
+const float kNodeUnbounded = 3.4e38;
+
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
-                   bool report_used, bool report_face, bool stand_in, bool occlude_unknown) {
+                   bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
+                   float max_t) {
     NodeHit result;
     result.hit = false;
     result.unknown = false;
@@ -890,14 +1201,14 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
 
     // Clipped to the extent of the world, and this is not slack.
     //
-    // Nothing outside it can be hit, so stepping through it looking is pure loss — and the loss is
+    // Nothing outside it can be hit, so stepping through it looking is pure loss â€” and the loss is
     // not small, because a ray that will never hit anything keeps stepping until its budget runs
     // out. D148 measured exactly this on the old marcher: widening the clip took a frame from
     // 0.78 ms to 23.7 ms. This marcher shipped without the clip at all and cost 12.0 ms against
-    // the old one's 1.6, with the tell being that the cost scaled linearly with the step budget —
+    // the old one's 1.6, with the tell being that the cost scaled linearly with the step budget â€”
     // 12.0 ms at 512 steps, 3.3 at 128, 1.0 at 32. A marcher whose cost is proportional to its
     // budget is a marcher that never terminates.
-    float limit = push.lens.y;
+    float limit = min(push.lens.y, max_t);
     {
         vec3 box_min = vec3(push.bounds_min.xyz) * float(kNodeChunkEdge);
         vec3 box_max = (vec3(push.bounds_max.xyz) + 1.0) * float(kNodeChunkEdge);
@@ -946,8 +1257,8 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
         int march_level = max(level, kLeafLevel);
 
         if (march_level != outer_level) {
-            // Re-seed the DDA at the new granularity. A handful of times per ray â€” once per level
-            // boundary crossed â€” not once per step.
+            // Re-seed the DDA at the new granularity. A handful of times per ray Ã¢â‚¬â€ once per level
+            // boundary crossed Ã¢â‚¬â€ not once per step.
             outer_level = march_level;
             float size = float(1 << outer_level);
             vec3 p = origin + dir * t;
@@ -1004,7 +1315,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 return result;
             }
 
-            // Inside the brick, always at single voxels â€” deliberately, even when the pixel is
+            // Inside the brick, always at single voxels Ã¢â‚¬â€ deliberately, even when the pixel is
             // too small to resolve one. The level still decides the colour; what it must not
             // decide is the shape, and when it did, a cell straddling a surface stood half a cell
             // proud of it and a grazing ray clipped its side. That read on screen as faint dotted
@@ -1065,7 +1376,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     // was 25 cm and flat stone came out in blocks. Debug view 11 has been keying
                     // on the voxel at the pixel's level since long before this marcher existed
                     // and counts 609,592 faces on the same view, which is the number the plan's
-                    // arithmetic is written against (§6: a voxel covers a whole pixel at 22.5 m,
+                    // arithmetic is written against (Â§6: a voxel covers a whole pixel at 22.5 m,
                     // so everything nearer is at level 0).
                     //
                     // `voxel` is brick-aligned and `inner` is under eight, so at level 3 and
@@ -1089,7 +1400,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
         } else {
             if (found.state == kFoundWanted) {
                 // The world has something here and the pool does not. Report the node at the
-                // level the descent stopped at, which is the coarsest thing that is missing â€” so
+                // level the descent stopped at, which is the coarsest thing that is missing Ã¢â‚¬â€ so
                 // streaming fills in from near to far rather than from the leaves up.
                 // Report the node at the level this pixel actually WANTS, not the coarsest one
                 // that happens to be missing. `NodePool::refine` walks the whole path in one
@@ -1195,7 +1506,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
             //
             // The jump is only worth taking when it is BIGGER than the step the DDA was going to
             // take anyway. Near geometry the descent usually reaches the marching level, so the
-            // empty cell is exactly one marching cell â€” and taking the analytic path for that
+            // empty cell is exactly one marching cell Ã¢â‚¬â€ and taking the analytic path for that
             // recomputes three boundary intersections, re-seeds the whole DDA and nudges `t`,
             // to move exactly as far as one ordinary step would have. That was most steps of
             // most rays, and it is why this marcher was seven times slower than the one it

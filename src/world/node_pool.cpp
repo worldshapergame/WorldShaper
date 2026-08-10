@@ -344,6 +344,49 @@ VoxelTypeId NodePool::mirror_voxel(i64 x, i64 y, i64 z) const {
     return decode_voxel(header, base, index);
 }
 
+u32 NodePool::stale_leaves(const World& world, NodeKey* first) const {
+    u32 stale = 0;
+    for (u32 slot = 0; slot < next_free_; ++slot) {
+        const GpuNode& node = nodes_[slot];
+        // A free slot is reset to GpuNode{}, whose level is nought, so this is also the live test.
+        if (node_level(node) != kLeafLevel || (node_flags(node) & kNodeLeaf) == 0) continue;
+        const u32 leaf = node.children;
+        if (leaf == kNoNode || leaf >= leaves_.size()) continue;
+
+        const i64 vx = static_cast<i64>(node.x) << kLeafLevel;
+        const i64 vy = static_cast<i64>(node.y) << kLeafLevel;
+        const i64 vz = static_cast<i64>(node.z) << kLeafLevel;
+        const Chunk* chunk = world.chunk(chunk_coord_of(vx, vy, vz));
+        const Brick* brick =
+            (chunk == nullptr) ? nullptr
+                               : chunk->brick(static_cast<u32>((vx >> kLeafLevel) & 31),
+                                              static_cast<u32>((vy >> kLeafLevel) & 31),
+                                              static_cast<u32>((vz >> kLeafLevel) & 31));
+
+        bool disagrees = false;
+        if (brick == nullptr) {
+            // The world has given the brick up and the pool is still drawing it. This is the shape
+            // of D357-D361 arriving through a writer instead of through an edit.
+            disagrees = true;
+        } else {
+            u64 bits[kBrickWords]{};
+            brick->occupancy(bits);
+            for (u32 word = 0; word < kBrickWords; ++word) {
+                if (occupancy_[static_cast<usize>(leaf) * kBrickWords + word] != bits[word]) {
+                    disagrees = true;
+                    break;
+                }
+            }
+        }
+        if (!disagrees) continue;
+        if (stale == 0 && first != nullptr) {
+            *first = NodeKey{node.x, node.y, node.z, kLeafLevel};
+        }
+        ++stale;
+    }
+    return stale;
+}
+
 // ---- building --------------------------------------------------------------------------------
 
 u32 NodePool::build_leaf(const World& world, const NodeKey& key, u32& budget) {

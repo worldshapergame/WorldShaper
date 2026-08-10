@@ -88,4 +88,25 @@ inline constexpr usize kMaxLights = 1024;
 std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTable& types,
                                           i64 centre_x, i64 centre_y, i64 centre_z);
 
+// The identity of a list, so that "the lamps changed" is a fact rather than an inference.
+//
+// The face pass accumulates each face's lamp light over hundreds of frames and then stops casting
+// rays at all, so a lamp placed, deleted, moved or dimmed after that would never be noticed: a
+// silent face has nothing left that could discover it. The host therefore has to SAY so, on the
+// exact frame it happens, which is D373's lesson generalised — an accumulator that infers "the
+// world changed" from its own samples cannot see a change that arrives before the last one
+// finished.
+//
+// Over the whole record and not over the count, because the interesting edits do not change the
+// length: dimming a sconce, retinting it, or carving one voxel off a fitting so its centre moves
+// all leave a list of exactly the same size. Over the bytes rather than field by field because
+// `LightSource` is a packed 28-byte POD with no padding — the static_assert above is what makes
+// that safe, and it is why the assert is worth keeping.
+//
+// Ordering counts, deliberately. The list is sorted by contribution at the camera, so it can be
+// reordered by the camera moving with no lamp having changed at all; that costs one extra
+// re-measure of a term that re-measures in about a second, and the alternative — an
+// order-independent hash — would hide a genuine change that happened to be a permutation.
+u64 light_list_hash(const std::vector<LightSource>& lights);
+
 }  // namespace ws

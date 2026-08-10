@@ -661,3 +661,58 @@ TEST_CASE("negative coordinates work at every level") {
         }
     }
 }
+
+// A writer that changes the world and does not say so, which is what the clip ladder was.
+//
+// The pool's own machinery cannot notice this and is not supposed to: feedback reports what a ray
+// could not FIND, and a brick that is resident but out of date is found every time. So the fault
+// is silent by construction -- the GPU mirror matches, the node count is healthy, and the tree the
+// renderer walks holds a shape the world gave up seconds ago. `stale_leaves` is the instrument
+// that says so, and this is the case it was written against. D397.
+TEST_CASE("a leaf the world has rewritten behind the pool's back is reported, and invalidate fixes it") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 15, 15, 15);
+    f.want_box(0, 0, 0, 15, 15, 15);
+    f.serve(1);
+    REQUIRE(f.pool.validate());
+    REQUIRE(f.pool.stale_leaves(f.world) == 0);
+
+    // The world changes and nobody tells the pool -- a paste, not an edit.
+    f.world.set(4, 4, 4, kAir);
+    f.serve(2);
+
+    NodeKey first{};
+    CHECK(f.pool.stale_leaves(f.world, &first) == 1);
+    CHECK(first.level == kLeafLevel);
+    CHECK(first.x == 0);
+    // ...and the pool is still drawing the voxel the world gave up, which is the fault the count
+    // is standing in for.
+    CHECK(f.pool.mirror_voxel(4, 4, 4) == f.stone);
+
+    // Told, it agrees again.
+    f.pool.invalidate(4, 4, 4);
+    f.want_box(0, 0, 0, 15, 15, 15);
+    f.serve(3);
+    CHECK(f.pool.stale_leaves(f.world) == 0);
+    CHECK(f.pool.mirror_voxel(4, 4, 4) == kAir);
+    CHECK(f.pool.validate());
+}
+
+// The other half of it: a brick the world has given up entirely, which is what a paste that
+// empties a region leaves behind. Occupancy cannot be compared against a brick that is not there,
+// so this is the branch that has to answer "gone" rather than "different".
+TEST_CASE("a leaf whose brick the world has dropped is reported as stale") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 7, 7, 7);
+    f.want_box(0, 0, 0, 7, 7, 7);
+    f.serve(1);
+    REQUIRE(f.pool.stale_leaves(f.world) == 0);
+
+    for (i64 z = 0; z < 8; ++z) {
+        for (i64 y = 0; y < 8; ++y) {
+            for (i64 x = 0; x < 8; ++x) f.world.set(x, y, z, kAir);
+        }
+    }
+    f.serve(2);
+    CHECK(f.pool.stale_leaves(f.world) == 1);
+}

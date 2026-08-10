@@ -51,8 +51,14 @@ layout(std430, binding = 6) readonly buffer Faces { Face items[]; } faces;
 layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
 // The card's own light, which the host never touches. See src/gpu/face_light.hpp.
 layout(std430, binding = 8) readonly buffer FaceLight { uint words[]; } face_light;
-// Two words a face: [0] sky visibility as counts, [1] the near-field contact sum. See node.glsl.
-const uint kFaceLightWords = 4u;
+// Nine, and the layout is documented once in shaders/node.glsl beside the pass that writes it.
+// Word 0 holds two counts -- near-field rays low, far-field rays high -- because the two halves of
+// the ambient integral stopped sharing a ray when the near field's was bounded at a metre. Words
+// 5-7 are the lamps' accumulated irradiance and word 8 their sample count and list version.
+const uint kFaceLightWords = 9u;
+// Must match kSkyConverged in shaders/node.glsl. Read by debug view 19 only -- the shaded path
+// never asks whether a face has finished, it asks what the face says.
+const uint kSkyConverged = 2048u;
 
 const uint kNoFace = 0xFFFFFFFFu;
 
@@ -221,10 +227,37 @@ void main() {
     uint steps = hit ? ((packed.x >> 16u) & 0xFFu) : packed.z;
 
     vec3 colour;
+    // What this surface gives off itself, which is not light it received and is therefore not
+    // shaded, occluded or divided by pi. A lamp that lights the room and does not itself glow reads
+    // as a grey block with a halo round it, which is the one thing about lamps a player notices
+    // before any of the shading.
+    //
+    // A material read, not a light calculation: no ray, no accumulation, nothing per pixel that
+    // scales with the window -- the same lookup the albedo on the line above already is. Emission
+    // is a property of the voxel, so it is available wherever the voxel is, and it is available at
+    // level 0 only for the same reason the albedo is: a coarse node carries a folded colour and no
+    // material. R9f's fold is where a distant fitting's glow will come from.
+    vec3 emission = vec3(0.0);
     if (hit) {
         if (level == 0u) {
-            uint visual_id = types.items[packed.y].x;
-            colour = unpack_rgb(visuals.items[visual_id].x);
+            // Clamped, because an out-of-range index into an SSBO is not a wrong colour -- it is
+            // whatever the driver decides out-of-bounds means, and this pass has already cost one
+            // device loss to exactly that (see material_of in pt_material.glsl).
+            uint type_id = min(packed.y, uint(types.items.length()) - 1u);
+            uint visual_id = min(types.items[type_id].x, uint(visuals.items.length()) - 1u);
+            uvec4 visual = visuals.items[visual_id];
+            colour = unpack_rgb(visual.x);
+            // The same unpacking as material_of: the scale is byte 3 of word 1 and the tint is
+            // RGB565 in the low half of word 3, squared and scaled by 64 so a torch and a furnace
+            // are not one step apart on a linear ramp. Two places computing this differently would
+            // light the scene one way and draw the lamp another.
+            float emissive = float((visual.y >> 24u) & 0xFFu) / 255.0;
+            if (emissive > 0.0) {
+                uint tint = visual.w & 0xFFFFu;
+                emission = vec3(float((tint >> 11u) & 0x1Fu) / 31.0,
+                                float((tint >> 5u) & 0x3Fu) / 63.0,
+                                float(tint & 0x1Fu) / 31.0) * (emissive * emissive * 64.0);
+            }
         } else {
             colour = unpack_rgb(packed.z);
         }
@@ -292,11 +325,39 @@ void main() {
         // dark, which is the same discipline the sun's own fallback follows.
         float open_sky = 1.0;
         float unoccluded = 1.0;
+        // What the lamps deliver here, measured on the face by shade_faces.comp (R3c).
+        //
+        // IRRADIANCE, already carrying the cosine and already divided by the density that chose
+        // each fitting, so it goes into the same bracket as the sun and the sky and is divided by
+        // pi with them. Nothing is traced here, nothing is looped over, and a hall with a thousand
+        // sconces costs this pass exactly what a hall with one costs -- which is the whole of why
+        // lamps moved onto the face.
+        //
+        // Nought before any samples, and that direction is deliberate. An unsampled face reading
+        // full sun is the sun's worst answer because the sun is bright everywhere; an unsampled
+        // face reading no lamp is merely a surface not yet lit by a lamp, and the stand-in three
+        // levels above it (kLampSeedMin) is what covers the frames in between.
+        vec3 lamp = vec3(0.0);
         if (face_slot < faces.items.length()) {
+            uint lamp_n = face_light.words[face_slot * kFaceLightWords + 8u] & 0xFFFFu;
+            if (lamp_n > 0u) {
+                lamp = vec3(uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 5u]),
+                            uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 6u]),
+                            uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 7u])) /
+                       float(lamp_n);
+            }
             uint sky_counters = face_light.words[face_slot * kFaceLightWords];
-            uint sky_samples = sky_counters & 0xFFFFu;
+            uint sky_samples = sky_counters & 0xFFFFu;          // near-field rays
+            uint far_samples = (sky_counters >> 16u) & 0xFFFFu;  // far-field rays
             if (sky_samples >= kShadowSettled) {
-                open_sky = float((sky_counters >> 16u) & 0xFFFFu) / float(sky_samples);
+                // The far field has its own count and its own ray, and the near field converges
+                // far faster, so the two are gated separately. A face with contact measured and no
+                // sky ray yet keeps `open_sky` at one, which is what it read before this term
+                // existed -- the near field is already darkening it correctly in the meantime.
+                if (far_samples > 0u) {
+                    open_sky = float(face_light.words[face_slot * kFaceLightWords + 4u]) /
+                               float(far_samples);
+                }
                 // And the near field, which is the term that actually carries shape. Indoors the
                 // far field is nought on every surface in the room -- measured, 1,619 of 1,671
                 // pixels in the lowest tenth -- so on its own it shifts the whole interior by a
@@ -395,7 +456,11 @@ void main() {
         // sky, which is already radiance and needs no such conversion. The exposure then has to be
         // pulled down to stop the walls saturating, and pulling it down is what left the sky navy.
         // The two are the same fault seen twice.
-        colour *= (sun_radiance() * lambert + sky_radiance(normal) * sees_sky) * (1.0 / kPi);
+        colour *= (sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) * (1.0 / kPi);
+
+        // And what the surface gives off, added AFTER the albedo multiply because emission is not
+        // reflected light: a lamp's own face is bright whether or not anything is shining on it.
+        colour += emission;
 
         // The distance fade that used to be here is gone. It mixed towards the sky by a hand-picked
         // curve over four thousand voxels, which is aerial perspective done by eye -- and the air
@@ -478,6 +543,7 @@ void main() {
             } else {
                 uint counters = face_light.words[slot * kFaceLightWords];
                 uint samples = counters & 0xFFFFu;
+                uint far_samples = (counters >> 16u) & 0xFFFFu;
                 if (samples < kShadowSettled) {
                     colour = vec3(0.0, 0.3, 1.0);
                 } else if (push.resolution.z == 18u) {
@@ -487,8 +553,72 @@ void main() {
                     // invisible once the two terms are multiplied together.
                     float near_sum = float(face_light.words[slot * kFaceLightWords + 1u]);
                     colour = vec3(1.0 - clamp(near_sum / (float(samples) * 255.0), 0.0, 1.0));
+                } else if (far_samples == 0u) {
+                    // Blue for the far field too, and it means the same thing it means for the sun:
+                    // this pixel is being lit by the fallback. Painting it white would make "fully
+                    // open sky" and "no sky ray yet" the same colour, which is trap 10.
+                    colour = vec3(0.0, 0.3, 1.0);
                 } else {
-                    colour = vec3(float((counters >> 16u) & 0xFFFFu) / float(samples));
+                    colour = vec3(float(face_light.words[slot * kFaceLightWords + 4u]) /
+                                  float(far_samples));
+                }
+            }
+        }
+    } else if (push.resolution.z == 19u) {
+        // How far through its ambient rays each face is, which is the instrument for the one
+        // question a picture of ambient occlusion cannot answer: is this face still costing rays?
+        //
+        // The pass's cost is a function of how many faces have NOT converged, and a converged face
+        // and a face that is one sample short look identical in every shaded view -- so without
+        // this, "the pass costs more than it should" and "the answer is wrong" are the same
+        // symptom, which is trap 10 exactly. GREEN is converged and silent. RED is held short of
+        // convergence because its rays were stopped by geometry the pool has not built, which is
+        // the one state that can cost rays for ever. Grey is progress towards kSkyConverged.
+        // MAGENTA is a pixel with no face, and BLUE a face with no ambient samples at all.
+        colour = vec3(0.0);
+        if (hit) {
+            uint slot = imageLoad(in_face, pixel).x;
+            if (slot >= faces.items.length()) {
+                colour = vec3(1.0, 0.0, 1.0);
+            } else {
+                uint near_n = face_light.words[slot * kFaceLightWords] & 0xFFFFu;
+                if (near_n == 0u) {
+                    colour = vec3(0.0, 0.3, 1.0);
+                } else if (near_n >= kSkyConverged) {
+                    colour = vec3(0.0, 1.0, 0.0);
+                } else if (near_n == kSkyConverged - 1u) {
+                    colour = vec3(1.0, 0.0, 0.0);
+                } else {
+                    colour = vec3(clamp(float(near_n) / float(kSkyConverged), 0.02, 1.0));
+                }
+            }
+        }
+    } else if (push.resolution.z == 20u) {
+        // The lamp term on its own, and it exists for the reason every other view in this list
+        // does: a shaded picture cannot tell "this surface is not lit by a lamp" from "this surface
+        // has not been asked yet", and only the second is a bug. MAGENTA is a pixel with no face,
+        // BLUE a face with no lamp samples at all, GREEN no geometry -- black is a legitimate
+        // answer here and must not be shared with any of the three.
+        //
+        // The irradiance itself is tone mapped rather than scaled by a number picked to make this
+        // scene look right: a lamp's contribution spans several orders of magnitude between
+        // standing under a sconce and standing across a hall from one, and a linear ramp shows one
+        // of those and clips the other.
+        colour = vec3(0.0, 0.35, 0.0);
+        if (hit) {
+            uint slot = imageLoad(in_face, pixel).x;
+            if (slot >= faces.items.length()) {
+                colour = vec3(1.0, 0.0, 1.0);
+            } else {
+                uint lamp_n = face_light.words[slot * kFaceLightWords + 8u] & 0xFFFFu;
+                if (lamp_n == 0u) {
+                    colour = vec3(0.0, 0.3, 1.0);
+                } else {
+                    vec3 e = vec3(uintBitsToFloat(face_light.words[slot * kFaceLightWords + 5u]),
+                                  uintBitsToFloat(face_light.words[slot * kFaceLightWords + 6u]),
+                                  uintBitsToFloat(face_light.words[slot * kFaceLightWords + 7u])) /
+                             float(lamp_n);
+                    colour = pow(tonemap_aces(e * (1.0 / kPi)), vec3(1.0 / 2.2));
                 }
             }
         }
