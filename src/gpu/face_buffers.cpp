@@ -1,3 +1,5 @@
+#include <string>
+
 #include "gpu/face_buffers.hpp"
 
 #include <cstring>
@@ -359,6 +361,7 @@ bool FaceBuffers::audit(const FaceStore& store) {
             f32 brightest = 0.0f;
             u32 exhausted = 0;
             u32 by_ignorance = 0;
+            u32 ignorance_level[16]{};
             u64 sample_sum = 0;
             f64 facing_sum = 0.0;
             for (u32 slot = 0; slot < watermark; ++slot) {
@@ -377,7 +380,10 @@ bool FaceBuffers::audit(const FaceStore& store) {
                 if (visibility > brightest) brightest = visibility;
                 sample_sum += face_samples(card[slot]);
                 if (visibility > 0.03f && (card[slot].photons & 0x7FFFFFFFu) >= 500) ++exhausted;
-                if (visibility < 0.03f && (card[slot].photons & 0x80000000u) != 0) ++by_ignorance;
+                if (visibility < 0.03f && (card[slot].photons & 0x80000000u) != 0) {
+                    ++by_ignorance;
+                    ++ignorance_level[(card[slot].photons >> 24) & 0xFu];
+                }
             }
             if (settled > 0) {
                 WS_LOG_INFO("faces",
@@ -392,6 +398,16 @@ bool FaceBuffers::audit(const FaceStore& store) {
                             facing > 0 ? facing_sum / facing : 0.0, brightest, dark, bright,
                             facing > 0 ? static_cast<f64>(sample_sum) / facing : 0.0, exhausted,
                             by_ignorance);
+                if (by_ignorance > 0) {
+                    std::string levels;
+                    for (u32 level = 0; level < 16; ++level) {
+                        if (ignorance_level[level] == 0) continue;
+                        if (!levels.empty()) levels += "  ";
+                        levels += std::to_string(level) + ":" +
+                                  std::to_string(ignorance_level[level]);
+                    }
+                    WS_LOG_INFO("faces", "shadowed by ignorance, by level  {}", levels);
+                }
             }
 
             vkDestroyCommandPool(device_->handle(), face_pool, nullptr);

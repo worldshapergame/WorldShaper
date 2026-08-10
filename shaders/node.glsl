@@ -1101,6 +1101,26 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 // Occlusion stops here, with no colour and no conditions. Everything below this
                 // is about what to DRAW, and a ray that draws nothing has no use for any of it.
                 if (occlude_unknown) {
+                    // Report the cell that stopped it, whatever `report` says. This is R9i's
+                    // second half and the narrowing D292 has always needed.
+                    //
+                    // D292 forbids a shadow ray from dragging residency towards whatever it
+                    // crosses, and that rule is right: a ray that reported everything it passed
+                    // through would ask for the world behind every surface. But it is one node
+                    // here, not a path -- the single cell the ray was STOPPED by -- and without
+                    // it the pool never learns that anything needs building there, so the cell
+                    // stays unbuilt, stays opaque, and casts a shadow for ever.
+                    //
+                    // Measured before this: on the close camera the same step reads fully lit on
+                    // its left and fully shadowed on its right, with nothing between the two to
+                    // cast anything. The boundary is the edge of what the camera has caused to be
+                    // built. 18,820 faces shadowed by ignorance with no edit at all, and 54,933
+                    // after deleting the roof off the building -- which is the reported bug: the
+                    // shadow of a thing that is not there any more.
+                    //
+                    // It costs one entry per shadow ray that stops on an unbuilt cell, and that
+                    // number falls to nothing as the pool fills, exactly as a miss report does.
+                    node_flush(true, has_pending, pending);
                     result.hit = true;
                     result.unknown = true;
                     result.t = t;

@@ -218,8 +218,16 @@ void main() {
         // And whether what stopped it was matter or ignorance. Bit 31, beside the step count,
         // because "this face is in shadow" and "this face is in shadow because the pool has not
         // built what is above it" are the same picture and only the second is a bug.
-        if (hit.hit && hit.unknown) faces.items[slot].photons |= 0x80000000u;
-        else if (hit.hit) faces.items[slot].photons &= 0x7FFFFFFFu;
+        // ...and at what LEVEL it stopped, in bits 24-27. A ray stopped by an unbuilt brick has
+        // lost 25 cm of sky; one stopped by a shed 512 m subtree has lost a quarter of the county,
+        // and the counter cannot tell them apart without this.
+        if (hit.hit && hit.unknown) {
+            faces.items[slot].photons =
+                (faces.items[slot].photons & 0x00FFFFFFu) | 0x80000000u |
+                ((uint(hit.level) & 0xFu) << 24);
+        } else if (hit.hit) {
+            faces.items[slot].photons &= 0x00FFFFFFu;
+        }
     }
 
     // ---- ambient occlusion (R10a) ---------------------------------------------------------

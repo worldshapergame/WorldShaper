@@ -492,6 +492,18 @@ void main() {
                     colour = vec3(0.0, 0.3, 1.0);
                 } else {
                     colour = vec3(float((counters >> 16u) & 0xFFFFu) / float(samples));
+                    // RED where the last shadow ray was stopped by a cell the pool has not built
+                    // rather than by matter. A grey shadow and a shadow cast by ignorance are the
+                    // same picture, and only one of the two is a bug.
+                    // Gated on the face actually being dark, not merely on its last ray having
+                    // been blocked. Without that a face lit nine times in ten paints red on the
+                    // one frame its ray happened to be stopped, and the view reports the whole
+                    // frame as broken -- which is what it did, and it is the same over-reading
+                    // that a mean hid in D329.
+                    float lit_fraction = float((counters >> 16u) & 0xFFFFu) / float(samples);
+                    if (lit_fraction < 0.03 && (faces.items[slot].photons & 0x80000000u) != 0u) {
+                        colour = vec3(1.0, 0.1, 0.1);
+                    }
                 }
             }
         }
