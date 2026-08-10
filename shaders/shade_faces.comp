@@ -283,8 +283,26 @@ void main() {
     // Cosine-weighted about the normal, which is the weighting the integral carries, so every ray
     // counts the same and the average IS the answer. Malley's method: a disc sampled uniformly and
     // lifted onto the hemisphere.
-    const uint sky_seed = node_hash_mix(seed ^ 0xC2B2AE35u);
-    const vec2 hemi = vec2(float(sky_seed & 0xFFFFu), float((sky_seed >> 16) & 0xFFFFu)) / 65536.0;
+    // Stratified over the face's OWN samples, not random per frame.
+    //
+    // Each face was drawing a fresh pair of white-noise numbers every time it was shaded, so its
+    // two hundred samples were two hundred independent draws and the error fell as one over the
+    // square root of them. They are one sequence instead: the R2 low-discrepancy series, indexed
+    // by how many samples this face has already taken, which spreads them over the disc evenly
+    // rather than in clumps and gaps. Same ray, same cost, less variance.
+    //
+    // Rotated by a per-FACE constant, and the constant must not include the frame. Without the
+    // rotation every face walks the identical sequence and their errors line up into something
+    // structured, which is worse than noise because the eye finds it. With the frame in it the
+    // rotation changes every sample and the stratification is thrown away again -- the sequence
+    // has to be a sequence, so the offset is fixed for the life of the face.
+    const uint sky_rot = node_hash_mix(slot * 0x9E3779B9u ^ 0xC2B2AE35u);
+    const vec2 rotation =
+        vec2(float(sky_rot & 0xFFFFu), float((sky_rot >> 16) & 0xFFFFu)) / 65536.0;
+    // 1/phi and 1/phi^2 for the plastic constant, which is what makes R2 low-discrepancy in 2D.
+    const uint sky_index = face_samples_of(face_light.words[light_at]);
+    const vec2 hemi =
+        fract(vec2(0.7548776662466927, 0.5698402909980532) * float(sky_index) + rotation);
     const float radius = sqrt(hemi.x);
     const float around = hemi.y * 6.28318530718;
 
