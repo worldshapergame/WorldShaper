@@ -34,7 +34,11 @@ public:
 
     // Takes the store by reference rather than by const reference because a successful upload
     // clears what it sent. Nothing else about it is touched.
-    void upload(VkCommandBuffer cmd, FaceStore& store);
+    //
+    // `frame_index` picks this frame's region of the staging ring, and it is not optional: the
+    // host writes those bytes while recording and the card reads them when it reaches the copy.
+    // See the note over the allocation in create().
+    void upload(VkCommandBuffer cmd, FaceStore& store, u32 frame_index);
 
     // Decodes what the card holds and compares it against the store, byte for byte.
     //
@@ -77,8 +81,13 @@ private:
     GpuBuffer provisional_;
     u32 provisional_base_ = 0;
     GpuBuffer staging_;
+    // What ONE frame in flight may stage. `staging_.size` is the whole ring, which holds
+    // kFramesInFlight of these end to end.
     u64 staging_capacity_ = 0;
+    // Offset within the frame's region, never an absolute offset into the buffer.
     u64 staging_cursor_ = 0;
+    // Where this frame's region starts. Set at the top of every upload from the frame index.
+    u64 staging_frame_base_ = 0;
     u32 entry_capacity_ = 0;
     // Kept between frames so a few hundred regions a frame is not a few hundred allocations.
     std::vector<VkBufferCopy> regions_;

@@ -54,7 +54,12 @@ public:
     //
     // The batch is no longer an argument. It describes what the pool decided to do; what has to
     // be copied is what actually changed, and only the pool's dirty sets know that.
-    void upload(VkCommandBuffer cmd, NodePool& pool);
+    //
+    // `frame_index` picks which region of the staging ring this frame writes through, and it is
+    // not optional: the host writes those bytes while recording and the card reads them when it
+    // reaches the copy, so a frame sharing a region with one still in flight overwrites its
+    // source. See the note over the allocation in create().
+    void upload(VkCommandBuffer cmd, NodePool& pool, u32 frame_index);
 
     // Decodes what the card actually holds and compares it against the pool, byte for byte.
     //
@@ -78,9 +83,10 @@ public:
     const NodeBufferStats& stats() const { return stats_; }
 
 private:
-    // One staging copy per array, all through one ring. Sized for the largest single upload the
-    // pool can produce rather than grown on demand: a reallocation mid-play is a hitch, and a
-    // hitch is the one thing streaming is never allowed to cause.
+    // One staging copy per array, all through one ring -- which holds kFramesInFlight regions,
+    // one per frame that may be in flight, because the host writes it at record time and the card
+    // reads it at execute time. Sized once rather than grown on demand: a reallocation mid-play is
+    // a hitch, and a hitch is the one thing streaming is never allowed to cause.
     bool stage(VkCommandBuffer cmd, const void* source, u64 bytes, GpuBuffer& destination);
     bool stage_at(VkCommandBuffer cmd, const void* source, u64 bytes, u64 destination_offset,
                   GpuBuffer& destination);
@@ -94,8 +100,13 @@ private:
     GpuBuffer staging_;
 
     u32 entry_capacity_ = 0;
+    // What ONE frame in flight may stage. The buffer is kFramesInFlight of these end to end, so
+    // `staging_.size` is the whole ring and this is a frame's share of it.
     u64 staging_capacity_ = 0;
+    // Offset within the frame's region, never an absolute offset into the buffer.
     u64 staging_cursor_ = 0;
+    // Where this frame's region starts. Set at the top of every upload from the frame index.
+    u64 staging_frame_base_ = 0;
     NodeBufferStats stats_;
 };
 

@@ -659,7 +659,23 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
 
     // Back up the chain, so a node that gained a child gains its share of the colour with it.
     // Folding on the way down would fold from children that did not exist yet.
-    for (u32 i = depth; i > 0; --i) fold_children(chain[i - 1]);
+    //
+    // And STAMPED on the way up, which is a residency fact rather than a colour one and is the
+    // other half of what D247 settled. `node_last_read_` was written in exactly one place a ray
+    // could reach -- `touch_slot`, from the slot a ray STOPPED on -- so a node that is wanted by
+    // something other than a stopping ray aged out on a six-hundred-frame timer while it was being
+    // asked for. The proximity radius is the case that makes it plain: twenty metres of world is
+    // pushed through `request` every frame precisely so that collision, physics and editing can
+    // touch what is behind you (D199), every one of those requests lands here, and every one of
+    // those nodes was evicted anyway and rebuilt on the next sweep. A node the pool has been told
+    // to keep must not be a candidate for eviction.
+    //
+    // It costs nothing: the chain is already in hand, and the array is the one the erode sweep
+    // reads first precisely because it is four bytes and sequential.
+    for (u32 i = depth; i > 0; --i) {
+        fold_children(chain[i - 1]);
+        node_last_read_[chain[i - 1]] = static_cast<u32>(touch_frame_);
+    }
     return slot;
 }
 
@@ -871,12 +887,58 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
                 ++depth;
             }
 
-            // The brick itself, when it was built at all.
+            // The brick itself, when it was built at all -- dropped and then IMMEDIATELY re-derived
+            // from the world, into the slot it already occupies.
+            //
+            // Dropping alone is what this used to do, and it leaves the brick at level nought,
+            // which is the pool's spelling of "the world has this and I have not built it". That is
+            // the right answer for a node nobody has asked about; it is the wrong one for a node
+            // that was resident a microsecond ago, because "not built" is answered by the marcher's
+            // stand-in (R2d) -- it paints an ANCESTOR's folded colour as a flat cube over the whole
+            // cell until a ray reports the gap and the request comes back, which is the feedback
+            // round trip: report on frame N, host reads it on N+2, builds, uploads. Three frames of
+            // a hard-edged slab of the wrong colour sitting where the geometry is.
+            //
+            // Photographed on the enclosed camera one frame after a 4,913-voxel chisel: the cell
+            // and its neighbours painted in flat black, cream and sky-blue rectangles, resolving to
+            // the correct stone by edit+60. That is the reported fault in as many words -- "the
+            // brick I placed that voxel on becomes a grey cube whatever material it might be" --
+            // and the colours are arbitrary because a fold is only ever over the children that
+            // happen to exist.
+            //
+            // Nothing has to be discovered here: `dirty_` already names the exact brick, and the
+            // world already holds the answer. Re-deriving it costs one `encode_brick`, which is the
+            // same work the request path would do two frames later, moved to the frame that knows
+            // it is needed. It also repairs the ancestors for free -- the fold below now averages a
+            // child that is THERE, where before it averaged around a hole.
+            //
+            // Bounded by the frame's build budget, so a carve of a hundred thousand bricks degrades
+            // to exactly the old behaviour on whatever it cannot afford rather than blowing the
+            // frame. The set is bricks that were RESIDENT, which is the set the screen was looking
+            // at, and an emptied brick costs almost nothing: `build_leaf` finds no occupancy and
+            // returns before it encodes anything.
             if (node_level(nodes_[slot]) == kLeafLevel) {
                 release_contents(slot);
                 nodes_[slot] = GpuNode{};
                 dirty_nodes_.mark(slot);
                 --depth;   // a node is not its own ancestor
+
+                // Built into a slot of its own and then MOVED here, which is what `refine` does for
+                // the same reason: `build_leaf` allocates, and the destination is a member of its
+                // parent's run of eight rather than a separate allocation. Both ends are marked --
+                // marking only the build leaves the card holding whatever was in `slot` before,
+                // which is the fault NodeBuffers::audit caught at byte 18,240.
+                if (budget > 0) {
+                    const u32 rebuilt = build_leaf(world, leaf_key, budget);
+                    if (rebuilt != kNoNode) {
+                        nodes_[slot] = nodes_[rebuilt];
+                        nodes_[rebuilt] = GpuNode{};
+                        dirty_nodes_.mark(slot);
+                        dirty_nodes_.mark(rebuilt);
+                        node_last_read_[slot] = static_cast<u32>(touch_frame_);
+                        free_singles_.push_back(rebuilt);
+                    }
+                }
             }
 
             for (u32 i = 0; i < depth; ++i) {

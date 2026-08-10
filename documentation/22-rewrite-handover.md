@@ -597,6 +597,65 @@ under repair is invisible; add `-Chisel "8,16"` or the *worst* case is invisible
 an A/B must be **two flags of one build**, not two builds (D407): `--no-face-gate`,
 `--no-face-worklist`, `--no-face-prolong` exist for exactly that.
 
+### Closed, half of it: an edit flashed a slab of the wrong colour — and standing still still does
+
+Reported in two halves (D421–D425). *"Whenever I modify a voxel, either place it or carve it, I can
+see for a brief moment how the brick I placed that voxel on becomes a grey cube whatever material it
+might be"* — **closed**. *"Sometimes when I stay still I see bricks flashing with different geometry
+and with the colours the facility is made of, they even cast shadows"* — **measured, open, and the
+next thing to do here.**
+
+**Photograph the deterministic half before theorising about the other.** `--chisel 300,8` fires
+exactly one 4,913-voxel edit, so edit+1 against edit+60 is a controlled pair:
+
+```powershell
+.\build\bin\WorldShaper.exe --screenshot out.png --screenshot-frame 61 --settle `
+  --width 1280 --height 800 --cam "0,2,-20,90,0" --quality 7 --chisel 300,8 `
+  --no-vsync --no-update-check --no-auto-quality --max-seconds 0
+```
+
+At edit+1 the edited cell and its neighbours came out as **flat, hard-edged rectangles of black,
+cream, sky-blue and tan**; at edit+60, a clean stone cube. Those rectangles are `node.glsl`'s R2d
+stand-in painting an *ancestor's* folded colour over the whole cell, and the colours are arbitrary
+because a fold is only ever over the children that happen to exist. **The stand-in is not the bug** —
+drawing the parent while waiting is right, and the alternative is a hole. The bug is that anything
+was waiting: `NodePool::update` dropped the brick `dirty_` named and left the only route back as the
+feedback round trip, which is three frames. It re-derives it from the world in place now, in the
+frame that knows it changed. The ancestors come right for free, because the fold below it averages a
+child that is there instead of averaging around a hole. It is **cheaper**: node-pool CPU 0.196 /
+0.195 / 0.219 → **0.141 ms** at 4K under `--chisel 8,16`, because a brick that is never missing is
+never missed, reported, re-descended from the root and rebuilt.
+
+**The half that is still open, with its numbers.** On a settled, static, **un-edited** camera at
+frame 2400 the pool reports `built 14 evicted 8` in one frame. A converged tree should report
+neither, and D247 is supposed to have closed exactly this. Consecutive frames of `--debug-mode 3`
+differ on **92 pixels of 3,686,400 at 1440p and 2,112 of 8,294,400 at 4K, worst 153 of 255** — a
+whole detail level moving, on a camera that is not. Every one of those is the same absent-node state
+the photograph above shows, arriving through eviction instead of an edit, and it paints the same
+slab.
+
+The hole is named and not yet measured. **`touch_slot` stamps the node a ray STOPPED on**, so a brick
+a ray passes *through* — a mostly-air brick at the edge of geometry, which is most of a facade seen
+at a grazing angle — is read every frame and stamped never. `NodePool::touch_slot`'s own comment
+says *"a ray READ this node"*; that is not what the code does. **Build the instrument first**: a count
+of evicted nodes that were on screen that frame. The two candidate fixes — report every node a ray
+touches, or refuse to evict anything in the frustum — cost very differently, and nothing has
+measured which is needed. `refine` now stamps the chain it walks, which closes the same hole for the
+proximity radius (twenty metres that is *requested* every frame and was evicted anyway), and it
+**measured nothing** on the close camera, which is sixty metres out and holds almost no proximity
+set. D424.
+
+**One latent fault found on the way and deliberately reported as not-the-cause** (D425): the node and
+face staging rings were a single region reset to offset zero every frame, against `kFramesInFlight`
+of 2 — so a frame could overwrite bytes a pending `vkCmdCopyBuffer` was still sourcing.
+`WorldBuffers` has partitioned per frame in flight since the chunk path was written; the two arrays
+the rewrite added did not. Fixed by splitting the ring rather than doubling it, so the allocation is
+unchanged. **Both arms were built and run three times each at 800p and 4K under `--chisel 8,16` and
+the control reported `GPU mirror matches` every time**, so it is not what the player saw on this
+machine: the copies are the first commands in the frame, so the window is only open when the card is
+a whole frame behind. It is kept because the window is real and machine-dependent, and because what
+it fails as is arbitrary bytes read as node records.
+
 ### R3 comes before R1e, deliberately
 
 R1e's bulk is moving `pathtrace.comp` from `world.glsl` onto the node pool — and §9 of the plan

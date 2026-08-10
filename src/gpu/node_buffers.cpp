@@ -40,13 +40,35 @@ bool NodeBuffers::create(Device& device, const NodePoolBudget& budget) {
     // Big enough for the largest single frame's worth: every array's used prefix at once, in the
     // worst case where the whole pool has just been built. Sized once, never grown — a
     // reallocation mid-play is the hitch streaming exists to avoid.
-    staging_capacity_ = node_bytes + leaf_bytes + occupancy_bytes + entry_bytes;
-    if (staging_capacity_ > budget.payload_bytes) {
-        staging_capacity_ += budget.payload_bytes;
-    } else {
-        staging_capacity_ += budget.payload_bytes;
-    }
-    staging_ = create_staging_buffer(device, staging_capacity_, "node staging");
+    //
+    // ONE REGION PER FRAME IN FLIGHT, and that is not a tidy-up.
+    //
+    // `upload` memcpys into this buffer on the CPU while RECORDING a frame, and the
+    // `vkCmdCopyBuffer` that reads those bytes runs later, when the card reaches that command
+    // buffer. `kFramesInFlight` is 2 and the loop waits on the slot it is about to record, so at
+    // the moment frame N writes here, frame N-1's copies may not have executed yet. A single ring
+    // reset to offset zero every frame therefore hands frame N-1's copy whatever frame N has just
+    // written -- into frame N-1's destination offsets, which is another array entirely.
+    //
+    // What that looks like from outside is the bug it was found from: bricks flickering with
+    // geometry and colours belonging to somewhere else in the building, shadows and all, and an
+    // edited brick reading as a plain grey cube for a moment whatever it is made of. Both are node
+    // records assembled out of the bytes of a neighbouring copy -- the facility's own palette when
+    // the source was payload, greys and whites when it was occupancy bitmasks. Nothing reports it:
+    // the pool is right, the dirty sets are right, and `audit` stalls the device before it looks,
+    // so the one instrument aimed at exactly this cannot see it.
+    //
+    // `WorldBuffers` has had the partition since the chunk path was written and says why in the
+    // same words. This is that, on the arrays the rewrite added.
+    //
+    // The allocation is unchanged: the ring is SPLIT rather than doubled, so a frame may stage half
+    // of what it could before. That is still far more than any frame produces -- the pool builds at
+    // most `max_builds_per_frame` nodes -- and a frame that did overrun keeps its ranges marked and
+    // sends them next frame, which is what `staging_exhausted` is for.
+    const u64 staging_bytes =
+        node_bytes + leaf_bytes + occupancy_bytes + entry_bytes + budget.payload_bytes;
+    staging_capacity_ = staging_bytes / kFramesInFlight;
+    staging_ = create_staging_buffer(device, staging_bytes, "node staging");
 
     stats_ = NodeBufferStats{};
     stats_.device_bytes =
@@ -83,10 +105,14 @@ bool NodeBuffers::stage_at(VkCommandBuffer cmd, const void* source, u64 bytes, u
         return false;
     }
 
-    std::memcpy(static_cast<u8*>(staging_.mapped) + staging_cursor_, source, bytes);
+    // Inside THIS frame's region of the ring. `staging_cursor_` is an offset within the region and
+    // never an absolute one; the two were the same thing while there was only one region, and that
+    // is precisely what let a frame overwrite bytes its predecessor's copies were still sourcing.
+    const u64 at = staging_frame_base_ + staging_cursor_;
+    std::memcpy(static_cast<u8*>(staging_.mapped) + at, source, bytes);
 
     VkBufferCopy copy{};
-    copy.srcOffset = staging_cursor_;
+    copy.srcOffset = at;
     copy.dstOffset = destination_offset;
     copy.size = bytes;
     vkCmdCopyBuffer(cmd, staging_.buffer, destination.buffer, 1, &copy);
@@ -97,9 +123,13 @@ bool NodeBuffers::stage_at(VkCommandBuffer cmd, const void* source, u64 bytes, u
     return true;
 }
 
-void NodeBuffers::upload(VkCommandBuffer cmd, NodePool& pool) {
+void NodeBuffers::upload(VkCommandBuffer cmd, NodePool& pool, u32 frame_index) {
     stats_.uploaded_this_frame = 0;
     stats_.staging_exhausted = false;
+    // The frame's own region. See the note over the allocation: writing outside it is a data race
+    // against the copies of the frame still in flight, and it produces geometry rather than an
+    // error.
+    staging_frame_base_ = static_cast<u64>(frame_index % kFramesInFlight) * staging_capacity_;
     staging_cursor_ = 0;
 
     // Nothing changed, so nothing is copied. This is the steady state: the tree converges and
@@ -242,9 +272,12 @@ bool NodeBuffers::audit(const NodePool& pool) {
         range.offset = cursor;
         cursor += range.bytes;
     }
-    if (cursor > staging_capacity_) {
-        WS_LOG_ERROR("nodes", "audit needs {} bytes of staging, have {}", cursor,
-                     staging_capacity_);
+    // The WHOLE ring, not one frame's region of it. This has already stalled the device twice by
+    // the time it gets here, so there is no frame in flight whose region it could tread on -- and
+    // measuring it against the per-frame capacity would halve the world this check can look at,
+    // which is a check that quietly stops covering the large trees. Those are the ones it is for.
+    if (cursor > staging_.size) {
+        WS_LOG_ERROR("nodes", "audit needs {} bytes of staging, have {}", cursor, staging_.size);
         return false;
     }
 

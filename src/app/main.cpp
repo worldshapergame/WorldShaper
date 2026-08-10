@@ -3547,7 +3547,7 @@ void Application::record_frame(f32 time_seconds) {
         last_node_built_ = node_batch.built;
         last_node_evicted_ = node_batch.evicted;
         last_node_deferred_ = node_batch.deferred;
-        node_buffers_.upload(cmd, node_pool_);
+        node_buffers_.upload(cmd, node_pool_, swapchain_.frame_index());
         profiler_.add_bytes(node_buffers_.stats().uploaded_this_frame);
         profiler_.end_pass(cmd);
     }
@@ -3563,7 +3563,7 @@ void Application::record_frame(f32 time_seconds) {
     // the picture it produces is the one that arrives anyway a frame later. `shade_faces` is
     // dispatched far below this point, so the only thing that ever needed the earlier position was
     // the audit, which reads the CPU's copy and not the card's.
-    face_buffers_.upload(cmd, face_store_);
+    face_buffers_.upload(cmd, face_store_, swapchain_.frame_index());
     profiler_.add_bytes(face_buffers_.stats().uploaded_this_frame);
     const u64 residency_start = now_ns();
     const UploadBatch& batch = residency_.update(world_, frame_counter_);

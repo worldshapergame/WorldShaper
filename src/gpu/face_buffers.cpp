@@ -65,8 +65,20 @@ bool FaceBuffers::create(Device& device, const FaceStoreBudget& budget) {
     // upload of a full store would send. Sized once and never grown: a reallocation mid-play is
     // the hitch streaming exists to avoid. The provisional tail is not staged and not audited, so
     // it is not in here.
-    staging_capacity_ = static_cast<u64>(budget.max_faces) * sizeof(GpuFace) + entry_bytes;
-    staging_ = create_staging_buffer(device, staging_capacity_, "face staging");
+    //
+    // One region per frame in flight, for the reason node_buffers.cpp sets out in full over its
+    // own allocation: the host writes this while RECORDING and the card reads it when it reaches
+    // the copy, so a frame sharing a region with one still in flight overwrites its source. Here
+    // the corruption lands in face records, where the CPU owns the key -- so a slot ends up naming
+    // a different surface than the light in it was measured for, and the picture is a shadow in
+    // the wrong place rather than anything that reads as an upload fault.
+    //
+    // The allocation is split rather than doubled. A frame's claims are bounded by the feedback
+    // buffer, which is 131,072 entries, so half of this is still several times the worst frame.
+    const u64 staging_bytes =
+        static_cast<u64>(budget.max_faces) * sizeof(GpuFace) + entry_bytes;
+    staging_capacity_ = staging_bytes / kFramesInFlight;
+    staging_ = create_staging_buffer(device, staging_bytes, "face staging");
 
     stats_ = FaceBufferStats{};
     stats_.device_bytes = face_bytes + entry_bytes + provisional_bytes;
@@ -92,10 +104,13 @@ bool FaceBuffers::stage_at(VkCommandBuffer cmd, const void* source, u64 bytes,
         return false;
     }
 
-    std::memcpy(static_cast<u8*>(staging_.mapped) + staging_cursor_, source, bytes);
+    // Inside THIS frame's region: `staging_cursor_` is an offset within the region, not into the
+    // buffer. See the note over the allocation.
+    const u64 at = staging_frame_base_ + staging_cursor_;
+    std::memcpy(static_cast<u8*>(staging_.mapped) + at, source, bytes);
 
     VkBufferCopy copy{};
-    copy.srcOffset = staging_cursor_;
+    copy.srcOffset = at;
     copy.dstOffset = destination_offset;
     copy.size = bytes;
     vkCmdCopyBuffer(cmd, staging_.buffer, destination.buffer, 1, &copy);
@@ -118,10 +133,11 @@ void FaceBuffers::stage_regions(VkCommandBuffer cmd, const FaceStore& store) {
             stats_.staging_exhausted = true;
             break;
         }
-        std::memcpy(static_cast<u8*>(staging_.mapped) + staging_cursor_,
+        const u64 at = staging_frame_base_ + staging_cursor_;
+        std::memcpy(static_cast<u8*>(staging_.mapped) + at,
                     store.faces().data() + run.first, static_cast<usize>(bytes));
         VkBufferCopy copy{};
-        copy.srcOffset = staging_cursor_;
+        copy.srcOffset = at;
         copy.dstOffset = run.first * sizeof(GpuFace);
         copy.size = bytes;
         regions_.push_back(copy);
@@ -135,9 +151,12 @@ void FaceBuffers::stage_regions(VkCommandBuffer cmd, const FaceStore& store) {
     }
 }
 
-void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store) {
+void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store, u32 frame_index) {
     stats_.uploaded_this_frame = 0;
     stats_.staging_exhausted = false;
+    // The frame's own region of the ring. Writing outside it races the copies of the frame still
+    // in flight, and the result is a wrong picture rather than an error.
+    staging_frame_base_ = static_cast<u64>(frame_index % kFramesInFlight) * staging_capacity_;
     staging_cursor_ = 0;
 
     if (store.nothing_dirty()) return;
@@ -237,8 +256,12 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
         range.offset = cursor;
         cursor += range.bytes;
     }
-    if (cursor > staging_capacity_) {
-        WS_LOG_ERROR("faces", "audit needs {} bytes of staging, have {}", cursor, staging_capacity_);
+    // The WHOLE ring rather than one frame's region of it: this has stalled the device before it
+    // got here, so no frame in flight owns any of it, and measuring against the per-frame capacity
+    // would silently halve the store this check can cover. Trap 10 in the instrument -- a check
+    // that stops looking is indistinguishable from a check that finds nothing.
+    if (cursor > staging_.size) {
+        WS_LOG_ERROR("faces", "audit needs {} bytes of staging, have {}", cursor, staging_.size);
         return false;
     }
 
@@ -299,7 +322,7 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
     const u32 watermark = store.watermark();
     if (matched && watermark > 0) {
         const u64 face_bytes = static_cast<u64>(watermark) * sizeof(GpuFace);
-        if (face_bytes <= staging_capacity_) {
+        if (face_bytes <= staging_.size) {
             VkCommandPoolCreateInfo face_pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
             face_pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
             face_pool_info.queueFamilyIndex = device_->graphics_family();
@@ -323,7 +346,7 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             // number that describes neither frame.
             const u64 seen_bytes = static_cast<u64>(watermark) * sizeof(u32);
             const bool seen_fits = seen != VK_NULL_HANDLE &&
-                                   face_bytes + seen_bytes <= staging_capacity_;
+                                   face_bytes + seen_bytes <= staging_.size;
             if (seen_fits) {
                 VkBufferCopy seen_copy{};
                 seen_copy.dstOffset = face_bytes;

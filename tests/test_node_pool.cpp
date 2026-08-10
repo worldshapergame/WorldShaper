@@ -231,7 +231,7 @@ TEST_CASE("a child mask bit is set exactly where a child exists") {
     CHECK((node_child_mask(node) & (1u << 7)) != 0);
 }
 
-TEST_CASE("an edit drops the brick it touched, and not the half kilometre around it") {
+TEST_CASE("an edit refreshes the brick it touched, and not the half kilometre around it") {
     Fixture f;
     f.fill_box(0, 0, 0, 7, 7, 7);
     f.want_box(0, 0, 0, 7, 7, 7);
@@ -240,18 +240,55 @@ TEST_CASE("an edit drops the brick it touched, and not the half kilometre around
 
     f.world.set(0, 0, 0, kAir);
     f.pool.invalidate(0, 0, 0);
+    // Deliberately NOT wanted again: no request is made on this frame, so nothing but the edit
+    // path itself can put the brick back.
     f.serve(2);
 
-    // Dropped rather than refreshed: nothing asked for it on this frame, so nothing rebuilt it.
-    // What matters is that the stale copy is gone — a resident-but-wrong node is the one thing
-    // feedback can never discover, because a ray that finds it does not report it (D131).
-    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) == kNoNode);
+    // Present, and holding what the world holds.
+    //
+    // This asserted `== kNoNode` and passed for a reason the comment beside it named honestly: the
+    // property under test is that the STALE copy is gone -- a resident-but-wrong node is the one
+    // thing feedback can never discover, because a ray that finds it does not report it (D131) --
+    // and absence was standing in for that. Absence is a weaker claim than correctness AND it is a
+    // visible fault: while a brick is missing the marcher paints an ancestor's folded colour over
+    // the whole cell (R2d), so an edit flashed a flat slab of the wrong colour for the three frames
+    // the feedback round trip takes to ask for it back. The edit path knows the brick and the world
+    // holds the answer, so it re-derives it in place and the stand-in never runs.
+    //
+    // Checked through `mirror_voxel`, which reads the way the shader reads -- entry hash, descent,
+    // child mask, leaf payload -- so this is the stale-copy guarantee itself rather than a proxy
+    // for it.
+    REQUIRE(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
+    CHECK(f.pool.mirror_voxel(0, 0, 0) == kAir);
+    CHECK(f.pool.mirror_voxel(1, 0, 0) == f.stone);
 
     // And that the root above it survived, which is the other half and used not to be true. This
     // asserted the ROOT was gone, which passed for the wrong reason: an edit dropped the entry
-    // node and every ancestor, so one voxel cost everything within 512 m. The stale-copy
-    // guarantee above is what the test was for; the root was standing in for it.
+    // node and every ancestor, so one voxel cost everything within 512 m.
     CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) != kNoNode);
+    CHECK(f.pool.validate());
+}
+
+// The same thing when the edit empties the brick outright, which is the case the refresh must NOT
+// answer by keeping a node: a brick with nothing in it is not a node, it is the absence of one, and
+// the parent's child mask is where that is said. Getting this wrong is D133 -- a bit left set over
+// nothing is a ray reporting a node the world does not have, every frame, for ever.
+TEST_CASE("an edit that empties a brick leaves no node behind") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 7, 7, 7);
+    f.want_box(0, 0, 0, 7, 7, 7);
+    f.serve(1);
+    REQUIRE(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
+
+    for (i64 z = 0; z < 8; ++z) {
+        for (i64 y = 0; y < 8; ++y) {
+            for (i64 x = 0; x < 8; ++x) f.world.set(x, y, z, kAir);
+        }
+    }
+    f.pool.invalidate(0, 0, 0);
+    f.serve(2);
+
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) == kNoNode);
     CHECK(f.pool.validate());
 }
 
