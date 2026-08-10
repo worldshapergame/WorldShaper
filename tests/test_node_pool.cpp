@@ -68,6 +68,69 @@ struct Fixture {
 
 }  // namespace
 
+// The reported bug, with no renderer in the way: delete geometry and the pool should stop saying
+// the world has something there.
+//
+// It matters because of what WANTED means to light. Occlusion treats a cell the pool has not built
+// as opaque (D302, D324), which is right while a wall is still streaming and wrong for ever once
+// the wall has been deleted -- the shadow outlives what cast it. Three fixes were tried against
+// the renderer and all three were wrong (D340, D345, D346), and the last of them said why: the
+// answers `world_has` gives are themselves suspect, and every child mask in the tree is derived
+// from them. This asks the pool the question directly.
+// SKIPPED, and the reason is the point: this fails today, the one-line fix is known, and the fix
+// costs more than the bug.
+//
+// `NodePool::world_has` asks `chunk->brick(...) != nullptr`, which is whether a brick is
+// ALLOCATED. A brick is not freed when its last voxel goes, so an emptied region answers "the
+// world has something here" for ever. Every child mask is derived from that, so the descent
+// answers WANTED over open air, occlusion reads WANTED as opaque (D302, D324), and the shadow
+// outlives what cast it. Changing it to `!= nullptr && !brick->empty()` makes this test pass at
+// every level.
+//
+// And it takes the frame rate to about one. The old answer was fast BECAUSE it was wrong: a
+// shadow or ambient ray crossing an emptied region used to stop at the first unbuilt cell, and
+// with the region correctly empty it marches on -- through the hole, to the far plane, at 512
+// steps a ray, for every face in the store. Measured: 500 frames of the edited camera did not
+// finish in seven minutes, against 4.977 ms a frame reverted. The resident tree also grows 4.5x,
+// 41,882 leaves to 187,377, because the pool now builds what those longer rays ask for.
+//
+// So the fix waits on bounding what a gathering ray may cost -- R10b's near-field falloff gives
+// the ambient ray a natural stop at about a metre, and a shadow ray wants a step budget of its
+// own. Un-skip this the moment that lands; it is the gate for it. D348.
+TEST_CASE("a region emptied by an edit stops being wanted" * doctest::skip()) {
+    Fixture f;
+    f.fill_box(0, 0, 0, 63, 63, 63);
+    for (u64 frame = 1; frame < 8; ++frame) {
+        f.want_box(0, 0, 0, 63, 63, 63);
+        f.serve(frame);
+    }
+    REQUIRE(f.pool.find(node_key_of(0, 40, 0, kLeafLevel)) != kNoNode);
+
+    // Empty the top half, brick-aligned so nothing straddles, and tell the pool exactly what the
+    // renderer's edit path tells it.
+    for (i64 z = 0; z <= 63; ++z) {
+        for (i64 y = 32; y <= 63; ++y) {
+            for (i64 x = 0; x <= 63; ++x) f.world.set(x, y, z, kAir);
+        }
+    }
+    for (i64 z = 0; z <= 63; z += 8) {
+        for (i64 y = 32; y <= 63; y += 8) {
+            for (i64 x = 0; x <= 63; x += 8) f.pool.invalidate(x, y, z);
+        }
+    }
+    f.serve(8);
+
+    // Nothing is there, so nothing may be wanted there. A ray crossing it must be told the cell is
+    // EMPTY -- open sky -- and not that the pool merely has not built it yet.
+    const NodeFind found = f.pool.locate(node_key_of(0, 40, 0, kLeafLevel));
+    CHECK_FALSE(found.wanted);
+    CHECK(f.pool.find(node_key_of(0, 40, 0, kLeafLevel)) == kNoNode);
+
+    // And the half that was left alone is untouched.
+    CHECK(f.pool.find(node_key_of(0, 8, 0, kLeafLevel)) != kNoNode);
+    CHECK(f.pool.validate());
+}
+
 TEST_CASE("a node key is the voxel coordinate shifted, and negatives round down") {
     // Arithmetic shift, not division. A voxel at -1 belongs to node -1: getting this wrong puts
     // every negative coordinate one node out, which is the trap chunk_of already documents.
