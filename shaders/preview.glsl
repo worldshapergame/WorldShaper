@@ -132,18 +132,22 @@ vec3 draw_face_marks(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, v
     if (along < -bound || dot(to_centre, to_centre) - along * along > bound * bound) return colour;
 
     for (int a = 0; a < 3; ++a) {
-        // Only faces you are actually looking at.
+        // How square-on this face is, and it FADES rather than being cut off.
         //
-        // A face's normal is its own axis, so this dot product is just the ray's component along
-        // it. Near zero the face is edge-on, and a circle or a cross drawn on a face seen edge-on
-        // flattens into a short line lying along the voxel's silhouette — three of those and the
-        // marker gains a partial box around it, which reads as an outline nobody asked for and
-        // hides which face is actually being marked.
+        // A face's normal is its own axis, so this is just the ray's component along it. Near zero
+        // the face is edge-on, and a circle or a cross drawn on one flattens into a short line
+        // lying along the voxel's silhouette — three of those and the marker gains a partial box
+        // around it, which reads as an outline nobody asked for.
         //
-        // A fifth keeps the two or three faces a corner view shows (a cube diagonal gives every
-        // axis 0.577) and drops the ones that have degenerated. It also costs less, which is
-        // incidental: the point is that a shape too foreshortened to be a shape is not one.
-        if (abs(dir[a]) < 0.2) continue;
+        // The first version cut them off at a fifth, and that was the wrong shape for the problem:
+        // a hard threshold makes a face vanish outright while it is still perfectly legible, so
+        // turning slowly past a marked voxel loses a face with a snap. What is actually wanted is
+        // that a shape too foreshortened to be a shape stops SHOUTING, not that it stops existing.
+        // A ramp does that and needs no threshold anyone has to defend: full strength by about 17
+        // degrees off the face, gone only when within two degrees of exactly edge-on, where the
+        // face is a hairline and there is nothing left to draw.
+        float strength = smoothstep(0.03, 0.30, abs(dir[a]));
+        if (strength <= 0.0) continue;
         float inv = 1.0 / dir[a];
         for (int side = 0; side < 2; ++side) {
             float t = ((side == 0 ? lo[a] : hi[a]) - origin[a]) * inv;
@@ -180,7 +184,7 @@ vec3 draw_face_marks(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, v
             }
             if (!on_shape) continue;
 
-            colour = mix(colour, tint, 0.95);
+            colour = mix(colour, tint, 0.95 * strength);
         }
     }
     return colour;
@@ -188,11 +192,26 @@ vec3 draw_face_marks(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, v
 
 vec3 draw_one_box(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, vec3 hi, int state,
                   float wash, float face_fill) {
+    // Does this ray touch the box at all? Asked FIRST, and it is most of what this function costs.
+    //
+    // The six-face loop below reconstructs a point and runs two range tests per face, so a pixel
+    // nowhere near the box used to pay for six of those before discovering it was nowhere near the
+    // box. A slab test is three divides and some min/max, it is needed for the volume wash anyway,
+    // and on any preview smaller than the screen it answers "no" for the overwhelming majority of
+    // pixels. This is the difference between a preview that costs something and one that does not.
+    // ONLY the miss test. Not depth: a preview box is deliberately drawn THROUGH geometry, because
+    // carving happens inside rock and a box you cannot see the far side of is one you have to guess
+    // the size of. Rejecting on depth here was tried and it deleted the box from every pixel where
+    // it was buried -- which is most of them, and precisely the case the tool exists for. Depth is
+    // decided per face below, and it decides how strongly to draw rather than whether to.
+    Slab box = ray_box(origin, dir, lo, hi);
+    if (box.far_t < max(box.near_t, 0.0)) return colour;
+
     // A constant line width in pixels: the world width a pixel covers grows with distance.
     float per_pixel = 2.0 * push.lens.x / float(push.resolution.y);
 
     // Refusal keeps the one colour the style document grants outright (documentation/14
-    // Â§"The five permitted colours"): a decision that will not go through is red. The other
+    // §"The five permitted colours"): a decision that will not go through is red. The other
     // states take their colour from the material, or from the backdrop.
     vec3 tint = (push.tint_visible.w > 0.5) ? push.tint_visible.xyz : ink_over(colour);
     vec3 tint_hidden = (push.tint_occluded.w > 0.5) ? push.tint_occluded.xyz : ink_over(colour);
@@ -203,7 +222,7 @@ vec3 draw_one_box(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, vec3
 
     // All six faces, not just the two the ray enters and leaves through. Those two give
     // eight of the twelve edges, and the four they miss are exactly the ones running along
-    // the view direction â€” which, looking down into a box from above, is its entire
+    // the view direction — which, looking down into a box from above, is its entire
     // silhouette. The box then reads as a solid pale slab with a rectangle drawn on top of
     // it rather than as a wireframe.
     for (int a = 0; a < 3; ++a) {
@@ -247,9 +266,10 @@ vec3 draw_one_box(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, vec3
 
     // A wash over the volume, so a box drawn in open air is visible as a volume and not
     // only as its outline. Deliberately slight: it sits over whatever the player is trying
-    // to line the edit up against.
-    Slab box = ray_box(origin, dir, lo, hi);
-    if (box.far_t >= max(box.near_t, 0.0) && !preview_behind(max(box.near_t, 0.0), depth)) {
+    // to line the edit up against. The slab was computed at the top; this is the one part of the
+    // box that IS depth-gated, because a wash over something standing in front of the box would
+    // be fog rather than information.
+    if (!preview_behind(max(box.near_t, 0.0), depth)) {
         colour = mix(colour, tint, (state == 3) ? 0.20 : wash);
     }
     return colour;
@@ -510,11 +530,24 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
     //
     // Drawn last, over the boxes, because a constraint is what the box has to reach and the box
     // grows to meet it — so it must be legible against the box's own tint.
-    for (int m = 0; m < 8; ++m) {
-        if (push.marks[m].w == 0) continue;
-        vec3 mlo = vec3(push.marks[m].xyz);
-        colour = draw_face_marks(colour, origin, dir, depth, mlo, mlo + vec3(1.0),
-                                 tool_ink(colour), true);
+    // One slab test for all of them before any of them.
+    //
+    // Sixty-four marks tested per pixel is sixty-four rejections a pixel does not need: a mark is
+    // one voxel, and almost every pixel on the screen is nowhere near any of them. The host hands
+    // over the box they all fit in, so a pixel that misses it pays for a single ray_box and leaves.
+    // Without this the limit could not have been raised past a handful at all -- the cost is per
+    // pixel per mark, and that is what bounds it rather than the size of the array.
+    const int live_marks = push.marks_min.w;
+    if (live_marks > 0) {
+        Slab all = ray_box(origin, dir, vec3(push.marks_min.xyz), vec3(push.marks_max.xyz));
+        if (all.far_t >= max(all.near_t, 0.0) && !preview_behind(max(all.near_t, 0.0), depth)) {
+            for (int m = 0; m < live_marks; ++m) {
+                if (push.marks[m].w == 0) continue;
+                vec3 mlo = vec3(push.marks[m].xyz);
+                colour = draw_face_marks(colour, origin, dir, depth, mlo, mlo + vec3(1.0),
+                                         tool_ink(colour), true);
+            }
+        }
     }
     return colour;
 }

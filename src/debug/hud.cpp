@@ -336,9 +336,12 @@ void Hud::draw(const FrameStats& stats, const GpuProfiler& profiler,
         }
         ImGui::Text("mode: %s", tool_.dragging ? (tool_.carving ? "carving" : "placing")
                                                : "idle");
-        ImGui::Text("P overwrite: %s   O first point: %s",
+        // "acts on" rather than "first point": O moves carving as well as placing now, so naming
+        // one of the two would be describing half of what the key does.
+        ImGui::Text("P overwrite: %s   O acts on: %s",
                     tool_.overwrite ? "replaces what is there" : "fills empty space only",
-                    tool_.against_face ? "against the face" : "the voxel you look at");
+                    tool_.against_face ? "the empty voxel against the face"
+                                       : "the voxel you look at");
         if (tool_.snapping) {
             ImGui::TextUnformatted("distance: snapped to the aimed voxel");
         } else {

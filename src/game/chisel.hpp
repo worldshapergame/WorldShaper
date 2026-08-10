@@ -111,10 +111,12 @@ public:
     // so you can drop a beam through a wall without eating the wall.
     bool overwrites() const { return overwrite_; }
 
-    // O. On (the default), placing puts the first point on the empty voxel against the face
-    // you are looking at — a block lands *on* the surface. Off, it puts it on the surface
-    // voxel itself, so the placement replaces what you aimed at. Carving always takes the
-    // voxel you aimed at; carving the air in front of it is not a thing anyone wants.
+    // O. Off (the default), the tool acts on the voxel under the crosshair — the one the cursor
+    // marker rings. On, it acts on the empty voxel against the face you are looking at, so a
+    // placement lands *on* a surface rather than replacing it.
+    //
+    // It applies to carving as well as to placing. A setting that says where the tool acts and
+    // then only half applies is one nobody can predict from.
     bool places_against_face() const { return against_face_; }
 
     const ChiselPreview& preview() const { return preview_; }
@@ -129,23 +131,31 @@ public:
     // the edit lands — which is worse than no mark.
     bool cursor(const World& world, const f64 origin[3], const f64 direction[3],
                 i64 out[3]) const {
-        return resolve_point(world, against_face_ ? ChiselMode::Place : ChiselMode::Carve, origin,
-                             direction, out);
+        return resolve_point(world, origin, direction, out);
     }
 
     const std::vector<std::array<i64, 3>>& constraints() const { return constraints_; }
     void clear_constraints() { constraints_.clear(); }
 
 private:
-    bool resolve_point(const World& world, ChiselMode mode, const f64 origin[3],
-                       const f64 direction[3], i64 out[3]) const;
+    bool resolve_point(const World& world, const f64 origin[3], const f64 direction[3],
+                       i64 out[3]) const;
 
     VoxelTypeId material_ = 1;
     f64 distance_ = 0.0;        // starts in snap mode, which is what a new player expects
     f64 reach_ = 4096.0;        // 128 metres
     ChiselMode mode_ = ChiselMode::None;
     bool overwrite_ = true;
-    bool against_face_ = true;
+    // O, and it starts OFF: the tool acts on the voxel under the crosshair rather than on the
+    // empty one against its face.
+    //
+    // It defaulted the other way, which is the convention a block game teaches -- you point at a
+    // surface and the block lands on top of it. This is not that game. Here the crosshair is on a
+    // 3 cm voxel, the cursor marker draws a ring around exactly the one it means, and having the
+    // tool act on a DIFFERENT voxel from the one being marked is a contradiction the player has to
+    // hold in their head on every stroke. Acting where you are pointing is the answer that needs
+    // no explaining; O is there for when a placement genuinely has to go in front of a surface.
+    bool against_face_ = false;
     bool dragging_ = false;
     i64 anchor_[3]{};
     std::vector<std::array<i64, 3>> constraints_;

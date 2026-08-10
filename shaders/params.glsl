@@ -31,7 +31,11 @@
     ivec4 box_min[16];
     // w: bits 0-7 outline flag, 8-15 shell thickness, 16-23 how strongly to fill the faces
     ivec4 box_max[16];
-    ivec4 marks[8];       // constraint points, w = 1 when used
+    ivec4 marks[64];      // constraint points, w = 1 when used
+    // The box every live mark fits in, and how many there are in marks_min.w. One slab test against
+    // this rejects the whole marks loop for a pixel that cannot be looking at any of them.
+    ivec4 marks_min;
+    ivec4 marks_max;
     uvec4 clip_slot[16];    // per ghost box: x first cell, yzw size. Size 0 means unused
     uvec4 clip_coarse[16];  // its occupancy mask: x first entry, yzw size in 8-blocks
     // What was just edited and how far its shadow reaches, in voxels relative to the camera

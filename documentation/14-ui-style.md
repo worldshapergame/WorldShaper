@@ -130,8 +130,11 @@ Four rules that fall out of it, all of which were learned by building the other 
   than a sample flickers, and thickening it changes nothing about what the shape encloses.
 - **On the faces, in world space.** Not billboarded. A shape painted on the cube foreshortens, goes
   edge-on, and is carried by whichever faces you can see, so it says which voxel *and* which way it
-  is turned. A face seen closer than about 78° to edge-on is skipped, because a circle drawn on one
-  flattens into a line along the silhouette and three of those give the marker a box around it.
+  is turned. A face **fades** as it turns edge-on — full strength by about 17° off it, gone only
+  within two degrees of exactly edge-on — because a circle drawn on an edge-on face flattens into a
+  line along the silhouette and three of those give the marker a box around it. A fade and not a
+  threshold: a cut-off makes a face vanish while it is still legible, so turning slowly past a
+  marked voxel loses it with a snap.
 - **Hollow.** The surface being marked stays visible through the middle of its own marker, which is
   the whole job: saying "this one" without hiding the thing being lined up against.
 - **A mark is depth-tested; a box is not.** A preview box is deliberately drawn through geometry,

@@ -523,6 +523,21 @@ going.
   and after that the picture is closer to the never-edited one than two identical runs of the game
   are to each other.
 
+- **The chisel acts where you are pointing now, and O moves both tools instead of one.** Placing
+  used to land the block on the *empty* voxel in front of whatever you aimed at — the convention
+  every block game teaches. That made sense when the marker was a vague cube; it doesn't now that
+  there's a ring drawn around the exact voxel you're on, because the tool would then act on a
+  different voxel from the one it was showing you. So it acts on the one you're pointing at, and
+  O switches to the old behaviour when a block genuinely has to go in front of a surface.
+
+  O also only ever moved *placing*. Carving ignored it, so the two modes disagreed about which
+  voxel the crosshair meant. It moves both now.
+
+- **You can drop sixty-four constraint points instead of eight**, and the ones past the limit are
+  now reported rather than silently vanishing. And the previews cost nothing again: an ordinary
+  chisel box measures the same as no preview at all, because the code now asks "is this pixel
+  anywhere near the box" before doing the work, instead of after.
+
 ### What's next, and what it's for
 
 The path tracer — the pretty, slow, accurate lighting on F4 — is the big one and is **under way**.

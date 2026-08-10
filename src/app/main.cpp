@@ -1073,6 +1073,10 @@ private:
     // case it was written for.
     bool edit_window_opened_ = false;
 
+    // How many constraint points the last frame wanted to draw, so the overflow warning is said
+    // once when it changes rather than sixty times a second while it holds.
+    u32 last_marks_reported_ = 0;
+
     // Where the last edit was, in absolute world voxels, grown by how far its shadow can fall.
     // Faces inside are made to re-measure at once; faces outside carry on as they were.
     i64 edit_lo_[3]{};
@@ -3961,11 +3965,22 @@ void Application::record_frame(f32 time_seconds) {
             (toolbelt_.active() == ToolKind::Clipboard) ? clipboard_.constraints()
                                                         : chisel_.constraints();
         u32 slot = 0;
+        u32 wanted = 0;
+        i32 mark_lo[3] = {0, 0, 0};
+        i32 mark_hi[3] = {0, 0, 0};
         const auto add_mark = [&](const i64 point[3]) {
+            ++wanted;
             if (slot >= kMaxPreviewMarks) return;
-            params.marks[slot][0] = static_cast<i32>(point[0] - base[0]);
-            params.marks[slot][1] = static_cast<i32>(point[1] - base[1]);
-            params.marks[slot][2] = static_cast<i32>(point[2] - base[2]);
+            for (u32 axis = 0; axis < 3; ++axis) {
+                const i32 at = static_cast<i32>(point[axis] - base[axis]);
+                params.marks[slot][axis] = at;
+                // The box the shader culls against. A mark covers its whole voxel, so the high
+                // corner is one past it -- getting that wrong clips the marks on the far faces of
+                // the outermost points and nothing else, which is the sort of thing that reads as
+                // "some of them are missing".
+                mark_lo[axis] = (slot == 0) ? at : std::min(mark_lo[axis], at);
+                mark_hi[axis] = (slot == 0) ? at + 1 : std::max(mark_hi[axis], at + 1);
+            }
             params.marks[slot][3] = 1;
             ++slot;
         };
@@ -3975,6 +3990,22 @@ void Application::record_frame(f32 time_seconds) {
             parse_numbers(scripted, at, 3);
             add_mark(at);
         }
+        for (u32 axis = 0; axis < 3; ++axis) {
+            params.marks_min[axis] = mark_lo[axis];
+            params.marks_max[axis] = mark_hi[axis];
+        }
+        params.marks_min[3] = static_cast<i32>(slot);
+
+        // Said out loud when it overflows, because a point that is dropped, grows the box to reach
+        // it, and is not drawn anywhere is a tool that works and looks broken -- trap 7 in the
+        // interface rather than in the pool. Once per change rather than once per frame.
+        if (wanted > kMaxPreviewMarks && wanted != last_marks_reported_) {
+            WS_LOG_WARN("tool",
+                        "{} constraint points, and only {} can be drawn -- the rest still shape "
+                        "the box, they are just not marked",
+                        wanted, kMaxPreviewMarks);
+        }
+        last_marks_reported_ = wanted;
     }
 
     // The slot stride is the device's alignment, not sizeof ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the dynamic offset passed at

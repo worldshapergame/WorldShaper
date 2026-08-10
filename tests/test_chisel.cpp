@@ -22,30 +22,34 @@ bool step(Chisel& chisel, const World& world, ChiselInput input, Op& out,
 
 }  // namespace
 
-TEST_CASE("the idle preview sits where the block would actually go") {
-    // O decides whether a placement lands against the face you are aiming at or replaces the
-    // voxel itself. The preview has to agree with it: marking the solid voxel under the
-    // crosshair while the block appears in the empty one next to it means the one thing the
-    // preview exists to show — where matter is about to be — is the one thing it gets wrong.
+TEST_CASE("the idle preview sits where the tool would actually act") {
+    // O decides whether the tool acts on the voxel under the crosshair or on the empty one against
+    // its face. The preview has to agree with it: marking one voxel while the edit lands in the
+    // other means the one thing the preview exists to show is the one thing it gets wrong.
     World world;
     world.set(10, 0, 0, kRock);
     Chisel chisel;
     REQUIRE(chisel.snapping());
+    REQUIRE_FALSE(chisel.places_against_face());   // off by default: act where you point
 
     Op op;
     ChiselInput idle;
     CHECK_FALSE(step(chisel, world, idle, op));
     REQUIRE(chisel.preview().active);
-    CHECK(chisel.preview().min[0] == 9);   // against the face, on the near side
-    CHECK(chisel.preview().max[0] == 9);
+    CHECK(chisel.preview().min[0] == 10);   // the voxel being aimed at
+    CHECK(chisel.preview().max[0] == 10);
+    REQUIRE(chisel.preview().has_cursor);
+    CHECK(chisel.preview().cursor[0] == 10);
 
-    // Turn it off and the preview moves onto the voxel itself, which is what will be replaced.
+    // Turn it on and everything moves onto the empty neighbour together.
     ChiselInput toggle;
     toggle.toggle_anchor = true;
     CHECK_FALSE(step(chisel, world, toggle, op));
     REQUIRE(chisel.preview().active);
-    CHECK(chisel.preview().min[0] == 10);
-    CHECK(chisel.preview().max[0] == 10);
+    CHECK(chisel.places_against_face());
+    CHECK(chisel.preview().min[0] == 9);
+    CHECK(chisel.preview().max[0] == 9);
+    CHECK(chisel.preview().cursor[0] == 9);
 }
 
 TEST_CASE("snapped carving picks the aimed voxel") {
@@ -70,22 +74,71 @@ TEST_CASE("snapped carving picks the aimed voxel") {
     CHECK(op.volume() == 1);
 }
 
-TEST_CASE("snapped placing lands against the face, not inside it") {
+TEST_CASE("O moves where the tool acts, and it moves BOTH modes") {
+    // It used to move placing only, with carving always taking the aimed voxel. A setting that
+    // says where the tool acts and then applies to half of it is one nobody can predict from, and
+    // it made the two modes disagree about which voxel the crosshair means.
     World world;
     world.set(10, 0, 0, kRock);
-    Chisel chisel;
-    chisel.set_material(kBrickType);
 
-    Op op;
-    ChiselInput input;
-    input.right = true;
-    step(chisel, world, input, op);
-    input.right = false;
-    REQUIRE(step(chisel, world, input, op));
-    CHECK(op.type == kBrickType);
-    CHECK(op.reason == MatterReason::PlayerPlace);
-    CHECK(op.x0 == 9);   // the empty voxel in front of the rock
-    CHECK(op.x1 == 9);
+    SUBCASE("off, the default: both act on the voxel under the crosshair") {
+        Chisel chisel;
+        chisel.set_material(kBrickType);
+        REQUIRE_FALSE(chisel.places_against_face());
+
+        Op op;
+        ChiselInput place;
+        place.right = true;
+        step(chisel, world, place, op);
+        place.right = false;
+        REQUIRE(step(chisel, world, place, op));
+        CHECK(op.type == kBrickType);
+        CHECK(op.x0 == 10);   // replaces what was aimed at
+        CHECK(op.x1 == 10);
+
+        Chisel carver;
+        Op cut;
+        ChiselInput carve;
+        carve.left = true;
+        step(carver, world, carve, cut);
+        carve.left = false;
+        REQUIRE(step(carver, world, carve, cut));
+        CHECK(cut.type == kAir);
+        CHECK(cut.x0 == 10);
+        CHECK(cut.x1 == 10);
+    }
+
+    SUBCASE("on: both act on the empty voxel against the face") {
+        Chisel chisel;
+        chisel.set_material(kBrickType);
+        Op op;
+        ChiselInput on;
+        on.toggle_anchor = true;
+        step(chisel, world, on, op);
+        REQUIRE(chisel.places_against_face());
+
+        ChiselInput place;
+        place.right = true;
+        step(chisel, world, place, op);
+        place.right = false;
+        REQUIRE(step(chisel, world, place, op));
+        CHECK(op.x0 == 9);   // the empty voxel in front of the rock
+        CHECK(op.x1 == 9);
+
+        Chisel carver;
+        Op cut;
+        ChiselInput carve_on;
+        carve_on.toggle_anchor = true;
+        step(carver, world, carve_on, cut);
+        ChiselInput carve;
+        carve.left = true;
+        step(carver, world, carve, cut);
+        carve.left = false;
+        REQUIRE(step(carver, world, carve, cut));
+        CHECK(cut.type == kAir);
+        CHECK(cut.x0 == 9);   // the same voxel a placement would have used
+        CHECK(cut.x1 == 9);
+    }
 }
 
 TEST_CASE("a drag sweeps a box between where the button went down and came up") {

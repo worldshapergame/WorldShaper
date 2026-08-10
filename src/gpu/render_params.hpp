@@ -15,9 +15,20 @@
 
 namespace ws {
 
-// How many constraint points the preview can draw. More than this can exist; they simply
-// stop being marked, which is a display limit rather than a tool limit.
-inline constexpr u32 kMaxPreviewMarks = 8;
+// How many constraint points the preview can draw.
+//
+// Eight, and the note here used to shrug that "more than this can exist; they simply stop being
+// marked, which is a display limit rather than a tool limit". That is precisely the shrug trap 7
+// is about: the ninth point was dropped, the box grew to reach it, and nothing on screen said
+// where it was — so the tool worked and looked broken.
+//
+// Sixty-four now, and the ceiling is a real one rather than an oversight. Each mark is tested
+// against the ray in the composite, so the cost is per pixel per mark, and the marks' own bounding
+// box is culled first (see `marks_min` below) so the overwhelming majority of pixels pay for none
+// of them. What stops it going further is that inside that box every pixel pays for all of them.
+//
+// Overflow is REPORTED rather than silently dropped, which is the half that was actually missing.
+inline constexpr u32 kMaxPreviewMarks = 64;
 
 // How many preview boxes can be on screen at once. The clipboard's copies are the reason
 // there is more than one; beyond this they still stamp, they just stop being drawn.
@@ -85,6 +96,16 @@ struct RenderParams {
     // Constraint markers, w = 1 when the slot is used.
     i32 marks[kMaxPreviewMarks][4];
 
+    // The box every live mark fits inside, in the same camera-relative voxels, and how many there
+    // are in `marks_min[3]`.
+    //
+    // One slab test against this rejects the whole marks loop for any pixel that cannot be looking
+    // at one of them, which is nearly all of them — so sixty-four marks cost about what eight did
+    // everywhere except the small part of the screen they occupy. Computed on the host because it
+    // is one box for the frame and the alternative is every pixel deriving it again.
+    i32 marks_min[4];
+    i32 marks_max[4];
+
     // Per ghost box: where its clip starts in the cell buffer, and how big that clip is.
     // Ghost boxes (state 5) are marched against this rather than outlined, which is what
     // makes a paste preview show the voxels instead of the space they will go in.
@@ -136,7 +157,8 @@ struct RenderParams {
     // altitude and veered, which is both true and what makes a sky read as deep.
     f32 sky_wind[4];
 };
-static_assert(sizeof(RenderParams) == 1520 + 80 + 32 + 16,
+// 8 marks -> 64 is 56 more ivec4, and the two bounds vectors are another two.
+static_assert(sizeof(RenderParams) == 1520 + 80 + 32 + 16 + (56 * 16) + 32,
               "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,

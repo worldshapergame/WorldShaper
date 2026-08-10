@@ -60,8 +60,8 @@ u64 box_volume(const i64 lo[3], const i64 hi[3]) {
 
 }  // namespace
 
-bool Chisel::resolve_point(const World& world, ChiselMode mode, const f64 origin[3],
-                           const f64 direction[3], i64 out[3]) const {
+bool Chisel::resolve_point(const World& world, const f64 origin[3], const f64 direction[3],
+                           i64 out[3]) const {
     if (distance_ >= 1.0) {
         for (int a = 0; a < 3; ++a) out[a] = floor_i64(origin[a] + direction[a] * distance_);
         return true;
@@ -71,10 +71,15 @@ bool Chisel::resolve_point(const World& world, ChiselMode mode, const f64 origin
                                direction[1], direction[2], reach_);
     if (!hit.hit) return false;   // snapping at the sky has nothing to snap to
 
-    // Carving wants the voxel itself; placing wants the empty one against the face, or the
-    // new block would appear buried inside what you aimed at — unless O has turned that
-    // off, in which case a placement lands on the surface voxel and replaces it.
-    if (mode == ChiselMode::Place && against_face_) {
+    // O decides where the tool acts, and it decides it for BOTH modes -- which is why there is no
+    // longer a mode parameter to get wrong.
+    //
+    // It used to be consulted for placing only, with carving always taking the voxel aimed at, on
+    // the argument that "carving the air in front of it is not a thing anyone wants". That is true
+    // of the air and false of the toggle: a setting that says where the tool acts and then applies
+    // to half of it is a setting nobody can predict from, and the two modes then disagreed about
+    // which voxel the crosshair means -- including in the marker that now draws it.
+    if (against_face_) {
         out[0] = hit.place_x();
         out[1] = hit.place_y();
         out[2] = hit.place_z();
@@ -114,7 +119,7 @@ bool Chisel::update(const World& world, const ChiselInput& input, const f64 orig
     if (!dragging_ && (left_pressed || right_pressed)) {
         const ChiselMode mode = left_pressed ? ChiselMode::Carve : ChiselMode::Place;
         i64 point[3];
-        if (resolve_point(world, mode, origin, direction, point)) {
+        if (resolve_point(world, origin, direction, point)) {
             mode_ = mode;
             dragging_ = true;
             anchor_[0] = point[0];
@@ -124,30 +129,18 @@ bool Chisel::update(const World& world, const ChiselInput& input, const f64 orig
     }
 
     if (input.add_point) {
-        // Constraints resolve the same way the current action does, so a constraint dropped
-        // during a place lands against a face rather than inside it.
-        // Idle, a point lands on the voxel aimed at, whatever O says. O decides where matter
-        // goes; a constraint is a mark on something that is already there, and moving it to
-        // the empty neighbour would make it impossible to mark a surface you can see.
-        const ChiselMode mode = dragging_ ? mode_ : ChiselMode::Carve;
+        // A constraint lands wherever the tool would act, which is what O decides -- so a point
+        // dropped mid-place lands against the face, exactly where the matter is going.
         i64 point[3];
-        if (resolve_point(world, mode, origin, direction, point)) {
+        if (resolve_point(world, origin, direction, point)) {
             constraints_.push_back({point[0], point[1], point[2]});
         }
     }
 
-    // Work out what the box would be right now, which is both the preview and — if the
-    // button came up this frame — the edit.
-    //
-    // Idle, the preview follows what O is set to. With it on, a placement lands against the
-    // face you are aiming at, so the single-voxel preview belongs on that empty neighbour and
-    // not on the solid voxel under the crosshair — otherwise the preview marks one voxel and
-    // the block appears in a different one.
-    const ChiselMode shown = dragging_ ? mode_
-                                       : (against_face_ ? ChiselMode::Place
-                                                        : ChiselMode::Carve);
+    // Work out what the box would be right now, which is both the preview and -- if the
+    // button came up this frame -- the edit.
     i64 cursor[3];
-    const bool have_cursor = resolve_point(world, shown, origin, direction, cursor);
+    const bool have_cursor = resolve_point(world, origin, direction, cursor);
 
     preview_ = ChiselPreview{};
     preview_.mode = dragging_ ? mode_ : ChiselMode::None;
