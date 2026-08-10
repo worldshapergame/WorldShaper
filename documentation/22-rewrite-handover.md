@@ -583,6 +583,10 @@ Nothing has been deleted yet.
 ```powershell
 .\build.bat                          # build; NEVER pipe this to Out-Null while measuring
 .\build\bin\ws_tests.exe             # the whole suite - not a name filter, which silently skips
+# --max-seconds N on ANY scripted run. A frame count cannot bound a run whose frames are the thing
+# that got slow, and a change that makes the renderer ten times slower is exactly the one that most
+# needs to report it. Use it on every measurement of a change that touches ray length or how much
+# the pool builds.
 .\tools\baseline.ps1 -Out docs.csv   # the fixed grid; -Compare <csv> to diff a previous run
 .\tools\facecount.ps1                # distinct visible faces per view and resolution
 ```
