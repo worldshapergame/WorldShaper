@@ -358,6 +358,7 @@ bool FaceBuffers::audit(const FaceStore& store) {
             u32 bright = 0;
             f32 brightest = 0.0f;
             u32 exhausted = 0;
+            u32 by_ignorance = 0;
             u64 sample_sum = 0;
             f64 facing_sum = 0.0;
             for (u32 slot = 0; slot < watermark; ++slot) {
@@ -375,7 +376,8 @@ bool FaceBuffers::audit(const FaceStore& store) {
                 if (visibility > 0.97f) ++bright;
                 if (visibility > brightest) brightest = visibility;
                 sample_sum += face_samples(card[slot]);
-                if (visibility > 0.03f && card[slot].photons >= 500) ++exhausted;
+                if (visibility > 0.03f && (card[slot].photons & 0x7FFFFFFFu) >= 500) ++exhausted;
+                if (visibility < 0.03f && (card[slot].photons & 0x80000000u) != 0) ++by_ignorance;
             }
             if (settled > 0) {
                 WS_LOG_INFO("faces",
@@ -384,10 +386,12 @@ bool FaceBuffers::audit(const FaceStore& store) {
                             // "stays at 0.0000": at two, a mean of 0.0049 -- one face in a
                             // thousand wrongly in full sun -- prints as 0.00 and reads as passing.
                             "visibility {:.4f}, brightest {:.4f}, {} fully shadowed, {} fully lit, "
-                            "{:.0f} samples each, {} lit only by a ray that ran out of steps",
+                            "{:.0f} samples each, {} lit only by a ray that ran out of steps, "
+                            "{} shadowed by a cell the pool has not built",
                             settled, watermark, facing,
                             facing > 0 ? facing_sum / facing : 0.0, brightest, dark, bright,
-                            facing > 0 ? static_cast<f64>(sample_sum) / facing : 0.0, exhausted);
+                            facing > 0 ? static_cast<f64>(sample_sum) / facing : 0.0, exhausted,
+                            by_ignorance);
             }
 
             vkDestroyCommandPool(device_->handle(), face_pool, nullptr);

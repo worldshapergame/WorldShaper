@@ -699,6 +699,10 @@ void node_flush_read(bool enabled, uint slot) {
 
 struct NodeHit {
     bool hit;
+    // Whether it stopped on a cell the pool has NOT built, rather than on matter it can see. Both
+    // are `hit` for occlusion, and telling them apart is the difference between a shadow cast by
+    // something and a shadow cast by ignorance.
+    bool unknown;
     float t;
     ivec3 normal;
     uint type_id;    // valid when level == kLeafLevel and the voxel resolved
@@ -837,6 +841,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                    bool report_used, bool report_face, bool stand_in, bool occlude_unknown) {
     NodeHit result;
     result.hit = false;
+    result.unknown = false;
     result.t = push.lens.y;
     result.normal = ivec3(0, 1, 0);
     result.type_id = 0u;
@@ -1097,6 +1102,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 // is about what to DRAW, and a ray that draws nothing has no use for any of it.
                 if (occlude_unknown) {
                     result.hit = true;
+                    result.unknown = true;
                     result.t = t;
                     result.normal = last_normal;
                     result.level = min(outer_level, kNodeMaxDetail);

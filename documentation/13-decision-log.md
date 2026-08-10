@@ -996,6 +996,23 @@ The quadratics stay written down here rather than in the code: if a face ever sp
 voxel again — a coarse face at distance is exactly that — they become worth re-testing, and the
 accumulation is four lines beside the ones already there.
 
+## The renderer rewrite — a shadow that outlives what cast it
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D338 | **Deleting geometry does not clear its shadow, and the cause is D302's rule meeting an edit** | user report, measurement | Reported as *"shadows still don't react when I delete a part of the facility"*. Reproduced with `--edit "-600,96,-600,600,640,600,0" --edit-frame 300` on the close camera — everything above three metres removed, **36,163,624 voxels**, solid count 127.2M → 91.0M, and 39% of the picture changes, so the renderer does react. The **terrace under the deleted roof does not**: sun visibility reads **0.0056 at a hundred frames after the edit and 0.0045 at six hundred**. Not slow — stale. Against the same frame built with unbuilt cells not blocking, it reads **0.3608**. So what casts the shadow is not matter; it is cells the pool has not built, which occlusion treats as opaque (D302, D324) |
+| D339 | **The instrument: a face records whether its sun ray stopped on matter or on ignorance** | — | Both are `hit` for occlusion, and in a picture they are the same shadow. `NodeHit` now carries `unknown`, the face pass keeps it in bit 31 beside the step count, and the audit reports it. **Control: 18,789 of 105,931 fully shadowed faces are shadowed by a cell the pool has not built. After the edit: 54,941 of 94,576** — so after an edit the *majority* of the shadow in the frame is cast by ignorance rather than by geometry. That number is what any fix has to move, and without it "the room is dark" and "the room is dark for a reason that no longer exists" are one observation |
+| D340 | **An attempted fix that did not work, recorded so it is not tried twice** | measurement | An edited brick is wanted by construction, so the dirty pass was made to re-request every invalidated brick the world still has matter in. It changed nothing: 0.0056 and 0.0045, to the digit. The pool loses about **6,100 bricks** to this edit — level 3 goes 13,651 → 7,555 — and they do not come back, but re-requesting them at the point of invalidation is not what brings them back either. The budget is 16,384 builds a frame and the request is queued before the serving loop, so the obvious explanation is ruled out and the real one is not yet known. Reverted |
+
+**Where to start next.** Three candidates, in the order they are worth testing. The counter in D339
+is how each is judged, not the picture. **(1)** Find why the re-requested bricks are not rebuilt —
+`world_has` may be answering false for them, in which case the parent's mask is cleared and the cell
+should read EMPTY rather than WANTED, and the fault is upstream of occlusion entirely. **(2)** A
+WANTED cell whose parent has a folded coverage should occlude *by that coverage* rather than
+absolutely; the parent was just re-folded by the same dirty pass, so the number is to hand. **(3)**
+Failing both, an edit could mark its region as "known thin" for a bounded number of frames, which is
+a rule rather than a mechanism and should be the last resort, not the first.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
