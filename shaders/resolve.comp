@@ -50,7 +50,9 @@ struct Face {
 layout(std430, binding = 6) readonly buffer Faces { Face items[]; } faces;
 layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
 // The card's own light, which the host never touches. See src/gpu/face_light.hpp.
-layout(std430, binding = 8) readonly buffer FaceLight { uint sky[]; } face_light;
+layout(std430, binding = 8) readonly buffer FaceLight { uint words[]; } face_light;
+// Two words a face: [0] sky visibility as counts, [1] the near-field contact sum. See node.glsl.
+const uint kFaceLightWords = 2u;
 
 const uint kNoFace = 0xFFFFFFFFu;
 
@@ -289,11 +291,19 @@ void main() {
         // before this stage existed. A new surface fades into its occlusion rather than flashing
         // dark, which is the same discipline the sun's own fallback follows.
         float open_sky = 1.0;
+        float unoccluded = 1.0;
         if (face_slot < faces.items.length()) {
-            uint sky_counters = face_light.sky[face_slot];
+            uint sky_counters = face_light.words[face_slot * kFaceLightWords];
             uint sky_samples = sky_counters & 0xFFFFu;
             if (sky_samples >= kShadowSettled) {
                 open_sky = float((sky_counters >> 16u) & 0xFFFFu) / float(sky_samples);
+                // And the near field, which is the term that actually carries shape. Indoors the
+                // far field is nought on every surface in the room -- measured, 1,619 of 1,671
+                // pixels in the lowest tenth -- so on its own it shifts the whole interior by a
+                // constant and changes nothing anybody can see. This is how close the nearest
+                // thing is, and it varies across every crease and alcove in the building.
+                float near_sum = float(face_light.words[face_slot * kFaceLightWords + 1u]);
+                unoccluded = 1.0 - clamp(near_sum / (float(sky_samples) * 255.0), 0.0, 1.0);
             }
         }
         // The sky term is occluded; the bounce term is not, because it is not the sky.
@@ -310,7 +320,12 @@ void main() {
         // with a name and an expiry rather than a fudge: R3c's lamps and R9's bounce replace it
         // with light that is actually computed, and when they do this term goes to zero and the
         // line above it stops needing a comment this long.
-        float sees_sky = kSkyAmbient * mix(kIndirectFloor, 1.0, open_sky) + kGroundBounce;
+        // Multiplied, not averaged, and each appears exactly once. The far field says how much of
+        // the dome is there to be seen; the near field says how much of what is left is shut out
+        // by whatever is within a metre. Applying either twice double-darkens every crease, and
+        // that failure looks like a taste problem rather than like a bug.
+        float sees_sky = kSkyAmbient * mix(kIndirectFloor, 1.0, open_sky) * unoccluded +
+                         kGroundBounce * unoccluded;
         // Over PI, and leaving it out is what blew the building white while the sky stayed dark.
         //
         // A Lambertian surface lit by an irradiance E reflects albedo * E / PI as RADIANCE. Dropping
@@ -387,7 +402,7 @@ void main() {
         // detail, shading toward red as cells get coarser.
         float l = hit ? float(level) / 7.0 : 0.0;
         colour = hit ? mix(vec3(0.1, 0.9, 0.2), vec3(0.9, 0.2, 0.1), l) : vec3(0.0);
-    } else if (push.resolution.z == 17u) {
+    } else if (push.resolution.z == 17u || push.resolution.z == 18u) {
         // Sky visibility on its own, which is the quantity R10 gates on and the one a shaded
         // picture cannot show: darker AO and a lower exposure look identical through a tone curve,
         // so "the room got darker" is not evidence that anything was measured. Grey is the
@@ -399,10 +414,17 @@ void main() {
             if (slot >= faces.items.length()) {
                 colour = vec3(1.0, 0.0, 1.0);
             } else {
-                uint counters = face_light.sky[slot];
+                uint counters = face_light.words[slot * kFaceLightWords];
                 uint samples = counters & 0xFFFFu;
                 if (samples < kShadowSettled) {
                     colour = vec3(0.0, 0.3, 1.0);
+                } else if (push.resolution.z == 18u) {
+                    // The near field on its own. White is unoccluded; the gate for this term is
+                    // that a flat wall in the open reads white everywhere, because a falloff that
+                    // darkens a plane against itself is the classic self-occlusion bug and it is
+                    // invisible once the two terms are multiplied together.
+                    float near_sum = float(face_light.words[slot * kFaceLightWords + 1u]);
+                    colour = vec3(1.0 - clamp(near_sum / (float(samples) * 255.0), 0.0, 1.0));
                 } else {
                     colour = vec3(float((counters >> 16u) & 0xFFFFu) / float(samples));
                 }

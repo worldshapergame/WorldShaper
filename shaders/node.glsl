@@ -190,7 +190,27 @@ layout(std430, binding = 12) buffer FaceProvisional { uint marks[]; } provisiona
 // face_accumulate and face_visibility_of serve both. The host never writes it and there is no path
 // by which it could -- see src/gpu/face_light.hpp for why that is a stronger guarantee than
 // remembering not to.
-layout(std430, binding = 13) buffer FaceLight { uint sky[]; } face_light;
+layout(std430, binding = 13) buffer FaceLight { uint words[]; } face_light;
+
+// Two words a face, and they are two different quantities that must not be averaged into one.
+//
+//   [0] the FAR field -- sky visibility. Unbounded. Rays cast and rays that escaped, packed as
+//       GpuFace::counters is, so face_accumulate serves it. It multiplies sky radiance, and it is
+//       the physically missing term in the ambient integral.
+//   [1] the NEAR field -- contact. The same ray's FIRST HIT DISTANCE through a falloff over about
+//       a metre, summed in fixed point at 255 a ray.
+//
+// One ray answers both: a hit at 0.3 m says "not sky" and "contact"; a ray that escapes says "sky"
+// and "no contact". They are separated because indoors the far field saturates -- every ray hits
+// something, so sky visibility is nought on every surface in the room and carries no shape at all.
+// Measured: 1,619 of 1,671 surface pixels in the enclosed view fell in the lowest tenth. The near
+// field is what varies there, and it is what reads as ambient occlusion.
+const uint kFaceLightWords = 2u;
+// How far away geometry stops darkening, in METRES rather than voxels, so a coarse face at 200 m
+// and a level-0 face at arm's length darken over the same physical distance and a dolly-in shows
+// no transition.
+const float kContactMetres = 1.0;
+const float kVoxelsPerMetreF = 32.0;
 
 const uint kNoFace = 0xFFFFFFFFu;
 const uint kFaceTombstone = 0xFFFFFFFEu;

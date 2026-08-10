@@ -962,6 +962,20 @@ Speckle rises with it — enclosed 3.8 → 5.2, close 19.3 → 29.8 — because 
 estimate per face and starts un-converged. **R5 (face denoise) is what that stage is for**, and this
 is the second measurement telling it how much work it has.
 
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D329 | **R10a on its own is not ambient occlusion in any room, and the claim that it was is withdrawn** | user report | D325 reported the gate met — enclosed mean sky visibility 1.00 → 0.019 — and said the occlusion "spends itself on contrast". The first half is true and the second is false, and the mean is what hid it: **1,619 of 1,671 enclosed surface pixels fall in the lowest tenth**. An unbounded ray indoors always hits something, so the far field saturates at nought on every surface in the room, every one of them gets the identical `kIndirectFloor`, and the whole interior shifts by a constant — which is a change of exposure, not of shape, and is the exact failure the stage's own gate names. It was reported by the player as *"I don't see any ambient occlusion"*, correctly. **A mean is not evidence of variation, and this stage is about variation** |
+| D330 | **The near field is the term that carries shape, and it is the same ray** | measurement | A ray that dies 5 cm away in the corner of an alcove and one that crosses the room before hitting the far wall are both "not sky" and are not remotely the same occlusion. So the ray's **first hit distance** goes through a falloff over a metre and accumulates beside the far field: `[0]` sky visibility as counts, `[1]` the contact sum in fixed point, halving together so the fraction cannot drift against the count it is divided by. Enclosed near field spreads across the whole range — 45,310 pixels fully open, 42,686 in 0.6–0.7, 12,342 in 0.4–0.5, 60 fully occluded — where the far field had everything in one bucket. In **metres and not voxels**, so a coarse face at 200 m and a level-0 face at arm's length darken over the same physical distance. It costs 3.430 → **3.455 ms** enclosed on top of R10a: one ray, two answers |
+| D331 | **The far field multiplies the sky, the near field multiplies both, and each appears once** | — | `kSkyAmbient * mix(kIndirectFloor, 1, open_sky) * unoccluded + kGroundBounce * unoccluded`. The dome term says how much sky is there to be seen; the contact term says how much of what is left is shut out by whatever is within a metre — and the ground bounce is occluded too, because a crease does not receive bounced light either. Applying either twice double-darkens every crease, and that failure looks like a taste problem rather than a bug |
+
+**Not yet verified: the self-occlusion gate.** The stage requires the contact term alone to read
+white everywhere on a flat wall in the open, because a falloff that darkens a plane against itself
+is the classic form of this bug and is invisible once the two terms are multiplied. The band
+measured read 2,080 of 6,459 pixels fully unoccluded — but that band contains the portico's columns
+and their recesses, where occlusion is correct, so it is **not a clean test of a flat wall** and the
+gate should be treated as open. Debug view 18 shows the term on its own, which is what to read it
+from.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

@@ -233,7 +233,11 @@ void main() {
     // this array is never uploaded and so is never cleared by a claim the way `counters` is. The
     // host zeroes `counters` when it claims, so a sample count of nought is exactly "this slot is
     // new" -- read before the sun wrote to it, above.
-    if (samples == 0u) face_light.sky[slot] = 0u;
+    const uint light_at = slot * kFaceLightWords;
+    if (samples == 0u) {
+        face_light.words[light_at] = 0u;
+        face_light.words[light_at + 1u] = 0u;
+    }
 
     // Cosine-weighted about the normal, which is the weighting the integral carries, so every ray
     // counts the same and the average IS the answer. Malley's method: a disc sampled uniformly and
@@ -255,5 +259,33 @@ void main() {
     // make a sealed room read as open sky exactly as it did for shadows (D302, D324).
     NodeHit sky_hit = node_march(origin, sky_dir, pixel_angle, 0.0, false, false, false, false,
                                  true);
-    face_light.sky[slot] = face_accumulate(face_light.sky[slot], !sky_hit.hit);
+
+    // Two answers from the one ray.
+    //
+    // The far field alone is not ambient occlusion in any room: every ray indoors hits something,
+    // so sky visibility is nought on every surface and the whole interior shifts by a constant --
+    // which is a change of exposure, not of shape, and is exactly the failure this stage's gate
+    // names. What carries shape is HOW FAR the ray got. A ray that dies 5 cm away in the corner of
+    // an alcove and one that crosses the room before hitting the far wall are both "not sky" and
+    // are not remotely the same amount of occlusion.
+    //
+    // In metres, so the falloff is a physical distance and not a number of cells: a coarse face far
+    // away and a voxel face at arm's length darken over the same span.
+    const float reach_m = (sky_hit.hit ? sky_hit.t : 1e9) / kVoxelsPerMetreF;
+    const float contact = clamp(1.0 - reach_m / kContactMetres, 0.0, 1.0);
+
+    // Both counts halve together at the window, or the near field's sum would drift against the
+    // sample count it is divided by and the fraction would climb on its own.
+    uint counts = face_light.words[light_at];
+    uint near_sum = face_light.words[light_at + 1u];
+    uint sky_samples = face_samples_of(counts);
+    uint sky_open = face_lit_of(counts);
+    if (sky_samples >= kFaceWindow) {
+        sky_samples >>= 1u;
+        sky_open >>= 1u;
+        near_sum >>= 1u;
+    }
+    face_light.words[light_at] =
+        ((sky_samples + 1u) & 0xFFFFu) | ((sky_open + (sky_hit.hit ? 0u : 1u)) << 16);
+    face_light.words[light_at + 1u] = near_sum + uint(contact * 255.0 + 0.5);
 }

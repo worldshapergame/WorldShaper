@@ -4453,8 +4453,10 @@ int Application::run(const Options& options) {
         }
         // Every slot the face pass may write: the store's capacity plus the card's provisional
         // tail. Not the watermark, which grows.
-        if (!face_light_.create(device_, face_buffers_.provisional_base() +
-                                             FaceBuffers::provisional_count())) {
+        // Two words a slot: sky visibility and the near-field contact sum. kFaceLightWords in
+        // shaders/node.glsl is the same two.
+        if (!face_light_.create(device_, 2 * (face_buffers_.provisional_base() +
+                                              FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;
         }
