@@ -542,6 +542,11 @@ Found node_locate(ivec3 p, int target) {
         // root for every entry block the world occupies, whether anything has looked at it or not.
         // See the note in NodePool::update.
         //
+        // That invariant is load-bearing, and it was broken once: root eviction used to remove the
+        // entry as well, so a block whose root had gone cold read as open sky and a shadow ray flew
+        // straight out of a sealed room. A cold root now sheds its children and keeps its entry, so
+        // the only thing that clears one is the world not being there (D324).
+        //
         // Reporting this as wanted instead is D133 in a new structure. A ray crossing open sky
         // asks for nothing, the CPU has nothing to give it, and the same useless request repeats
         // every frame while every counter reads calm â€” measured at 3.7 million requests a run

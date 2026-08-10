@@ -380,7 +380,10 @@ bool FaceBuffers::audit(const FaceStore& store) {
             if (settled > 0) {
                 WS_LOG_INFO("faces",
                             "sun on the card: {} of {} settled, {} face the sun -- of those, mean "
-                            "visibility {:.2f}, brightest {:.2f}, {} fully shadowed, {} fully lit, "
+                            // Four decimals because the gate this instrument exists to check is
+                            // "stays at 0.0000": at two, a mean of 0.0049 -- one face in a
+                            // thousand wrongly in full sun -- prints as 0.00 and reads as passing.
+                            "visibility {:.4f}, brightest {:.4f}, {} fully shadowed, {} fully lit, "
                             "{:.0f} samples each, {} lit only by a ray that ran out of steps",
                             settled, watermark, facing,
                             facing > 0 ? facing_sum / facing : 0.0, brightest, dark, bright,

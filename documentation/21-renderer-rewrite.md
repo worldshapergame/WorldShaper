@@ -513,7 +513,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R3 | the store recycles | **fixed** — D304–D306. `evict_cold` was written, tested and never called, so the store filled and then refused every face after it: the shadowed set froze and everything new was lit by the fallback. A slice a frame now, with the threshold halving when the table is full |
 | R9 | d. coarse light for a face that has none | **done, early** — D308–D311. A face with no light of its own reads the face three levels above it, which 512 faces share and the request lattice cannot miss. Falling back to full sun: under 1% of the enclosed room at frame 30 against frame 78, and 2,978 wrong pixels against 283,291 at frame 40. GPU unchanged still and moving, settled picture bit-identical, store +3.0% |
 | R10 | ambient occlusion, per face and under it | **planned, not started.** The composite applies an ambient term with no occlusion in it at all, so the interior is lit as though it stood in the open. Same integral as the sun over a different domain; sub-voxel from a Legendre fit over the face that the existing jitter already pays for; converges once and then costs nothing. §8 R10 |
-| R9 | i. the geometry a shadow ray needs | **planned, not started, and the biggest open fault in the renderer.** A sealed room fills with sunlight as the pool sheds — 442,968 nodes and 0.0000 at frame 500, 6,972 nodes and 0.0458 at frame 700, 0.0596 at 900, static camera, no edit. Residency is driven by what a pixel can see, and a shadow ray reads the roof and the outer walls, which it cannot. D322, D323; §8 R9i has the two candidate shapes and which to do first |
+| R9 | i. the geometry a shadow ray needs | **half done: the leak is stopped, the mechanism is not built.** A sealed room filled with sunlight as the pool shed — 0.0000 at frame 500, 0.0458 at 700, 0.0596 at 900, static camera, no edit — because a cold root cleared its node and entry and so read as EMPTY rather than WANTED. A cold root now sheds its subtree and stands as a shell: frame 900 goes 1,163 fully lit faces → **0**, mean 0.02 → **0.0000**, four of eight roots → **eight**, holding to frame 5,000, and the 42-run grid moves **+0.46%** with speckle identical in every cell against a same-commit control (D324). Still open: 9 faces read lit at frame 500 at full residency for an unrelated reason, and residency still does not count what a shadow ray reads. D322, D323, D324; §8 R9i |
 | R9 | the off-screen set | **planned, not started** — §8's new stage. The face store holds what the camera can see, so light is a screen-space set in world-space clothing. Prerequisite for R4c/R4d being worth measuring |
 | R9 | light from what is not loaded | **planned, not started** — R9f–R9h. Light folds up the tree as colour does and outlives its children, so eviction stops being a lighting decision; the emitter list persists per region and loads with the index rather than the voxels; no light path may cause streaming |
 | R4–R8 | | not started |
@@ -1040,6 +1040,39 @@ worse than a leak that darkens, and because it is a rule and not a mechanism.
 *Gate: enclosed camera, static, no edit — mean sun visibility stays at 0.0000 from frame 500 to
 frame 5,000 while the pool sheds to its resident minimum; the reveal case (`--cut`) still reads 0%
 on the fallback at cut+1; the grid does not move.*
+
+**(1) is done, and it was not a rule in the shader — it was a bug in eviction.** The shader already
+said the right thing; the pool was not leaving it a shell to say it about. A cold root freed its
+subtree *and* cleared its node, its entry and its `live_` record, so a whole 512 m block stopped
+reading as WANTED and started reading as EMPTY, which occlusion treats as open sky. A cold root now
+sheds only `children` and stands as a shell. **D324** has the reasoning, the entry-table probe-chain
+fault it also repairs, and the full table; the gate reads:
+
+| enclosed, static, no edit | frame 500 | frame 900 | frame 5,000 |
+|---|---|---|---|
+| mean sun visibility, before | 0.00 | **0.02** | — |
+| mean sun visibility, after | 0.0002 | **0.0000** | **0.0000** |
+| fully lit faces, before → after | 9 → 9 | **1,163 → 0** | — → **0** |
+| roots at level 14, before → after | 8 → 8 | **4 → 8** | — → **8** |
+
+Two of the three clauses are met outright: 0.0000 holds at 900 and at 5,000 while the pool sheds to
+its resident minimum of 7,168 nodes and holds there with `built 0 evicted 0`, and the `--cut` reveal
+reads 0% on the fallback at cut+1. The third — **the grid does not move** — is met: the whole 42-run
+grid was measured on this build and again on a control built from the same commit with the change
+stashed out, and the total across all 42 cells moved 1,672.5 ms → 1,680.3 ms, **+0.46%**. Speckle is
+identical to two decimals in every one of the 42 cells, which is the stronger half of that result:
+the pictures are the same pictures. Three cells moved more than 5% on a single pass and all three
+were machine noise, shown by re-running them: realtime/sky/high 11.162 → 15.274 → **11.183** on a
+repeat, pathtrace/close/deck 41.418 → 45.555 → **40.803**, and realtime/distant/high moved 6.6% the
+*other* way. **The "from frame 500" wording is not met at four decimals**: the
+frame-500 shot reads 0.0002 with 9 faces in full sun, at *full* residency, identically in the
+control. That residual is not eviction and this change does not touch it. It is the next thing to
+find. One qualification on the reveal clause, recorded because it reads better than it is: at cut+1
+out of a fully shed pool there is no revealed surface yet — the shot is sky — so 0% is true and
+uninformative. The room is back and pixel-identical to the settled shot by cut+30.
+
+**(2) is still open** and is still the answer: a shadow ray's occluders counting as use is what makes
+the room *right* rather than merely dark.
 
 **Why this is the performant shape and not merely the correct one.** Every term above is bounded by
 something that is not the size of the world: coarse faces by the pyramid, lamp sampling by one

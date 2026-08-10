@@ -254,7 +254,67 @@ TEST_CASE("a tree nothing reads is evicted, and that is the point") {
     // high-water mark of everything ever looked at. The companion test below is the other half:
     // a tree something IS reading stays, and that is what stops this becoming the churn of D247.
     for (u64 frame = 20; frame < 200; ++frame) f.serve(frame);
-    CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) == kNoNode);
+    // What goes is the subtree, which is where the memory is. This line used to read
+    // `find(kEntryLevel) == kNoNode` -- the root itself gone -- and that was the fault of D324, not
+    // the point of this test: a removed root says "nothing is here" and a shadow ray flies through
+    // it. The root stays as a shell now, so the assertion moved down to the level that actually
+    // holds the bytes. The test below is the other half of that.
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) == kNoNode);
+    CHECK(f.pool.validate());
+}
+
+// What a cold root leaves behind, which is not nothing.
+//
+// The memory is in the subtree, so shedding it recovers effectively all of it — but the node
+// itself has to stay, because removing it changes the pool's answer from "something is here that
+// I have not built" to "nothing is here", and those are the two answers this whole structure
+// exists to keep apart (D133, D147).
+//
+// It mattered for light. Occlusion treats an unbuilt cell as opaque and an empty one as open sky
+// (D302), and a sealed room's roof is never on screen, so it always goes cold: once its root was
+// removed the shadow rays flew straight out through it and the room filled with sunlight. Measured
+// with the enclosed camera before the fix, frame 900 against frame 500: four of eight roots gone,
+// 1,163 faces reading fully lit where every correct answer is nought (D324).
+//
+// `find` answers this from two directions and both are needed. Asked for the root itself it returns
+// the slot, because at the entry level the table lookup IS the answer and a shell has a slot; asked
+// for anything under it, the descent hits `children == kNoNode` and reports a miss. So "root present,
+// subtree gone" is exactly `find(entry) != kNoNode && find(leaf) == kNoNode`.
+TEST_CASE("a cold root sheds its subtree and stays standing") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 63, 63, 63);
+    NodePoolBudget budget;
+    budget.max_nodes = 1u << 16;
+    budget.max_occupancy_leaves = 1u << 14;
+    budget.payload_bytes = 4ull * 1024 * 1024;
+    budget.proximity_voxels = 0;
+    budget.cold_frames = 4;
+    f.pool.create(budget, f.types);
+
+    for (u64 frame = 1; frame < 10; ++frame) { f.want_box(0, 0, 0, 63, 63, 63); f.serve(frame); }
+    const u32 built = f.pool.stats().nodes;
+    REQUIRE(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
+    REQUIRE(f.pool.stats().per_level[kEntryLevel] == 1);
+
+    for (u64 frame = 10; frame < 300; ++frame) f.serve(frame);
+
+    const NodePoolStats shed = f.pool.stats();
+    INFO("nodes built " << built << ", after shedding " << shed.nodes);
+    CHECK(shed.nodes < built / 4);                          // the subtree went
+    CHECK(shed.per_level[kEntryLevel] == 1);                // the root did not
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kEntryLevel)) != kNoNode);   // it is still findable
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) == kNoNode);    // and it is a shell
+
+    // The answer a ray gets is "wanted", never "empty". This is the property the light depends on:
+    // an occlusion ray stops at a wanted cell, so an evicted room goes dark rather than sunlit.
+    const NodeFind found = f.pool.locate(node_key_of(0, 0, 0, kLeafLevel));
+    CHECK(found.wanted);
+
+    // And it rebuilds in place: `refine` allocates a run whenever a node's children are missing,
+    // so the root that stayed is the root that fills again.
+    for (u64 frame = 300; frame < 310; ++frame) { f.want_box(0, 0, 0, 63, 63, 63); f.serve(frame); }
+    CHECK(f.pool.find(node_key_of(0, 0, 0, kLeafLevel)) != kNoNode);
+    CHECK(f.pool.stats().per_level[kEntryLevel] == 1);      // rebuilt, not duplicated
     CHECK(f.pool.validate());
 }
 

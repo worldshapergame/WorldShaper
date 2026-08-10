@@ -646,17 +646,8 @@ void NodePool::release_contents(u32 slot) {
             dirty_leaves_.mark(leaf);
             free_leaves_.push_back(leaf);
         }
-    } else if (node.children != kNoNode) {
-        for (u32 octant = 0; octant < 8; ++octant) {
-            const u32 child = node.children + octant;
-            // A mask bit with a level of nought is a child the world has and the pool never
-            // built. There is nothing under it to give back.
-            if (node_level(nodes_[child]) == 0) continue;
-            release_contents(child);
-            nodes_[child] = GpuNode{};
-            dirty_nodes_.mark(child);
-        }
-        free_runs_.push_back(node.children);
+    } else {
+        release_children(slot);
     }
 
     node = GpuNode{};
@@ -666,6 +657,34 @@ void NodePool::release_contents(u32 slot) {
     // which is not cold costs nothing but the timestamp.
     node_last_read_[slot] = static_cast<u32>(touch_frame_);
     ++evictions_;
+}
+
+// Sheds the subtree and keeps the node. What is left is exactly what `build_shell` makes: a node
+// at its own level, with its coordinates and its child mask, and no children. Both sides read that
+// as WANTED rather than EMPTY, so a ray that crosses it stops instead of passing through, and a
+// later request rebuilds it in place — `refine` allocates a run whenever `children` is kNoNode.
+//
+// It does not count an eviction: each child that was actually freed counted itself inside
+// `release_contents`, and the node this is called on is still standing.
+void NodePool::release_children(u32 slot) {
+    GpuNode& node = nodes_[slot];
+    // A leaf's `children` is an index into `leaves_`, not a run, and it has no subtree to shed.
+    if ((node_flags(node) & kNodeLeaf) != 0 || node.children == kNoNode) return;
+
+    for (u32 octant = 0; octant < 8; ++octant) {
+        const u32 child = node.children + octant;
+        // A mask bit with a level of nought is a child the world has and the pool never built.
+        // There is nothing under it to give back.
+        if (node_level(nodes_[child]) == 0) continue;
+        release_contents(child);
+        nodes_[child] = GpuNode{};
+        dirty_nodes_.mark(child);
+    }
+    free_runs_.push_back(node.children);
+
+    node.children = kNoNode;
+    dirty_nodes_.mark(slot);
+    node_last_read_[slot] = static_cast<u32>(touch_frame_);
 }
 
 // A root: its slot came from the singles list, so that is where it goes back.
@@ -1147,21 +1166,31 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // What makes this safe now is that a miss is no longer the only thing that says "wanted". If
     // that ever stops being true the symptom is the churn D247 describes, and the test beside
     // this one -- a root a ray keeps reading survives -- is what catches it.
-    for (auto it = live_.begin(); it != live_.end();) {
-        if (frame - it->second.last_wanted <= budget_.cold_frames) {
-            ++it;
-            continue;
-        }
-        const u32 slot = it->second.slot;
-        release(slot);
-        for (usize index = 0; index < entries_.size(); ++index) {
-            if (entries_[index] == slot) {
-                entries_[index] = kNoNode;
-                dirty_entries_.mark(index);
-            }
-        }
+    //
+    // A cold root sheds its subtree and stays: the entry, the `live_` record and the node itself
+    // are all kept, and only `children` goes. The memory is in the subtree, so shedding recovers
+    // effectively all of it, and what is left says "something is here that I have not built" —
+    // which is the truth, and which both a ray and `locate` already know how to answer.
+    //
+    // Removing the root instead said "nothing is here", and a shadow ray believed it. Occlusion
+    // treats an unbuilt cell as opaque (D302) but an empty one as open sky, so a sealed room whose
+    // roof had gone cold — the roof is never on screen, so it always goes cold — filled with
+    // sunlight as the pool shed. Measured with the enclosed camera, frame 900 against frame 500:
+    // four of eight roots gone, 1,163 faces reading fully lit where every correct answer is nought
+    // (D324).
+    //
+    // Keeping the entry also repairs a latent fault of its own. The entry table is open addressing
+    // with linear probing, and both `find` and `locate` stop at the first empty bucket; clearing a
+    // cell in the middle of a probe run cuts every root behind it out of the table, which then
+    // rebuilds as a second copy of a root that is already resident.
+    for (auto& [key, resident] : live_) {
+        (void)key;
+        if (frame - resident.last_wanted <= budget_.cold_frames) continue;
+        const u32 slot = resident.slot;
+        if (slot == kNoNode || slot >= nodes_.size()) continue;
+        if (nodes_[slot].children == kNoNode) continue;   // shed already; nothing under it
+        release_children(slot);
         ++batch_.evicted;
-        it = live_.erase(it);
     }
 
     return batch_;

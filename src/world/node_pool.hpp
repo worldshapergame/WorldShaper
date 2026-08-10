@@ -451,6 +451,12 @@ private:
     // Frees what a node owns; the caller decides what happens to its own slot, because a
     // node inside a run is not separately allocated and must not be freed as though it were.
     void release_contents(u32 slot);
+    // Frees the subtree under a node and leaves the node itself standing as a shell: its level,
+    // its coordinates and its child mask are kept, and `children` becomes kNoNode. A shell is a
+    // node that says "something is here, I do not yet know what", which is the answer an evicted
+    // root has to give. Clearing the node instead makes the pool say "nothing is here", and a
+    // shadow ray believes it and flies out of a sealed room (D324).
+    void release_children(u32 slot);
     void release(u32 slot);
     u32 allocate_node();
     u32 allocate_children();

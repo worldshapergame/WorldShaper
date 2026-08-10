@@ -494,6 +494,22 @@ two candidate shapes and says which to do first: make an evicted subtree read as
 occlusion ray (a rule, cheap, fails towards dark), then make a shadow ray's occluder count as use (a
 mechanism, correct, and the one D292 has to be narrowed for). D322, D323.
 
+**The first of the two is done and the leak is stopped (D324).** It turned out not to need a shader
+rule at all: the shader was already right and the pool was not leaving it a shell to be right about.
+A cold root freed its subtree *and* cleared its node, its entry and its `live_` record, so a 512 m
+block that had gone cold answered "nothing is here" instead of "something is here I have not built",
+and occlusion reads the first as open sky (D302). A cold root now sheds only its children and stands.
+Enclosed camera, frame 900: **1,163 faces in full sun → 0**, mean 0.02 → **0.0000**, four of eight
+roots evicted → **all eight standing**, and it holds to frame 5,000 at a steady 7,168 nodes. The
+memory still goes — the subtree is where the memory was. It costs nothing: the 42-run grid was run on
+this build and on a same-commit control with the change stashed out, and the total moved **+0.46%**
+with speckle identical to two decimals in all 42 cells.
+
+**It is not finished.** At frame 500, on full residency, 9 faces still read fully lit and the mean is
+0.0002; the control reads the same, so that residual has nothing to do with eviction and is the next
+thing to find. And the second shape — a shadow ray's occluders counting as use — is still open and
+is still what makes the room *right* rather than merely dark.
+
 The answer is correct from the first frame, not merely present: at cut+1 the enclosed room reads
 identically to the same camera 120 frames later. Where the answer is not uniformly black, the
 stand-in is about a tenth too bright and sharpens — against a fallback that was twenty times too

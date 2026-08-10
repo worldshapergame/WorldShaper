@@ -872,6 +872,56 @@ has to count a shadow ray's needs as use. The second is the honest one and is wh
 set is for: light is a world-space quantity and the set that keeps it resident cannot be the set the
 camera can see.
 
+**Done, and it was the first of the two.**
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D324 | **A cold root sheds its subtree and stays standing as a shell** | measurement | Root eviction used to free the subtree, clear the node, clear its entry and drop its `live_` record. That changed the pool's answer for a whole 512 m block from *"something is here I have not built"* to *"nothing is here"* — the one distinction this structure exists to make unrepresentable (D133, D147) — and occlusion believes it: an unbuilt cell is opaque, an empty one is open sky (D302). A sealed room's roof is never on screen, so it always goes cold, and the room filled with sunlight. **A cold root now keeps its entry, its `live_` record and its node, and only `children` goes.** What is left is exactly what `build_shell` makes, both sides already read it as WANTED, and `refine` rebuilds it in place because it allocates a run whenever `children` is `kNoNode`. Effectively all the memory is in the subtree, so shedding recovers it anyway: the enclosed view still settles to **7,168 nodes**. Keeping the entry repairs a second, latent fault — the entry table is open addressing with linear probing and both `find` and `locate` stop at the first empty bucket, so clearing a cell mid-probe-run cut every root behind it out of the table, which then rebuilt as a *second* copy of a root already resident |
+
+**Measured, enclosed camera, 1280×800, quality 7, static, no edit.** The instrument is the faces
+audit at the screenshot frame, printed at four decimals — two was not enough, because a mean of
+0.0049 is one face in a thousand wrongly in full sun and prints as `0.00`.
+
+| | frame 500 before | frame 900 before | frame 500 after | frame 900 after | frame 5,000 after |
+|---|---|---|---|---|---|
+| mean sun visibility | 0.00 | **0.02** | 0.0002 | **0.0000** | **0.0000** |
+| brightest face | — | — | 0.9910 | **0.0000** | **0.0000** |
+| fully lit faces | 9 | **1,163** | 9 | **0** | **0** |
+| fully shadowed | 96,323 | 90,567 | 96,324 | **92,337** | **92,342** |
+| roots (level 14) | 8 | **4** | 8 | **8** | **8** |
+
+Half the roots were being thrown away and the leak is exactly that. It holds to frame 5,000 with
+`built 0 evicted 0` — a steady state, not a slower version of the same collapse — and the screenshot
+shows the room dark: a studded far door and two lit urn alcoves where before it was sunlit.
+
+**It costs nothing measurable.** The whole 42-run grid (7 views × 3 sizes × 2 modes) was measured on
+this build and again on a control built from the same commit with the change stashed out, because the
+committed baselines under `documentation/baselines/` are dozens of commits old and a move against
+those would prove nothing about *this*. The grid total moved **1,672.5 ms → 1,680.3 ms, +0.46%**, and
+**speckle is identical to two decimals in all 42 cells** — the same pictures, not merely the same
+frame times. Three cells moved over 5% on one pass and all three were noise: realtime/sky/high read
+11.162 → 15.274 and **11.183** on a repeat, pathtrace/close/deck 41.418 → 45.555 and **40.803**, and
+realtime/distant/high moved 6.6% the *other* way. This is what one expects from the change — it
+removes work from eviction rather than adding any, and the extra resident nodes are eight shells.
+
+**Three things this does not claim.** The **9 fully lit faces at frame 500 are unchanged by it** —
+they are there at full residency, identical in the control, so the R9i gate's literal *"stays at
+0.0000 from frame 500"* is met at 900 and at 5,000 but not at 500, and the residual is a separate
+leak and the obvious next target. The **`--cut` reveal case reads 0% on the fallback at cut+1
+because there is no surface to read**: one frame after a 180° turn out of a fully shed pool the
+newly revealed wall is not resident, so the shot is sky and a horizon. It is back and pixel-identical
+to the settled image by **cut+30**. That is streaming latency, not a lighting leak, and it was not
+measured on the control, so it is not known to be new. Finally the control's frame-900 mean read
+**0.02** here against D322's **0.0596** on the same camera; different instrument (the faces audit,
+not `--debug-mode 16`) is the likely reason and it was not chased, so treat the two columns above as
+comparable to each other and not to D322.
+
+**The test that used to assert the fault.** `a tree nothing reads is evicted, and that is the point`
+checked `find(kEntryLevel) == kNoNode` — the root itself gone. That assertion *was* the bug. It now
+checks `find(kLeafLevel) == kNoNode`, which is where the memory actually is and what the test's own
+prose always said it was about; the companion case `a cold root sheds its subtree and stays standing`
+asserts the other half, including that the rebuilt root is not a duplicate.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).
