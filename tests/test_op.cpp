@@ -87,6 +87,75 @@ TEST_CASE("carving is an op like any other and is accounted for") {
     CHECK(ledger.audit(world));
 }
 
+// What the renderer reads is whether a brick and a chunk EXIST, not whether they hold anything
+// (NodePool::world_has). So an edit that erases has to leave the world's shape honest at the moment
+// it finishes, not at the next sweep -- otherwise a deleted wall goes on casting its shadow and a
+// deleted region fades back in black. D357, D358.
+TEST_CASE("an edit that erases leaves nothing allocated behind it") {
+    World world;
+    MatterLedger ledger;
+
+    // Two chunks: one that will be emptied outright, and one holding two bricks side by side of
+    // which the erase takes exactly the first.
+    apply_op(world, Op::fill_box(1, 1, 0, 0, 0, 255, 255, 255, 6, MatterReason::PlayerPlace),
+             ledger);
+    apply_op(world, Op::fill_box(2, 1, 256, 0, 0, 271, 7, 7, 6, MatterReason::PlayerPlace),
+             ledger);
+    REQUIRE(world.chunk_count() == 2);
+    REQUIRE(world.chunk(ChunkCoord{1, 0, 0})->brick_count() == 2);
+
+    apply_op(world, Op::fill_box(3, 1, 0, 0, 0, 263, 255, 255, kAir, MatterReason::PlayerBreak),
+             ledger);
+
+    CHECK(world.chunk_count() == 1);                 // the emptied chunk is gone entirely
+    const Chunk* kept = world.chunk(ChunkCoord{1, 0, 0});
+    REQUIRE(kept != nullptr);
+    CHECK(kept->brick_count() == 1);                 // and the emptied brick went with the rest
+    CHECK(world.get(264, 0, 0) == 6);
+    CHECK(world.get(263, 0, 0) == kAir);
+    CHECK(world.get(0, 0, 0) == kAir);
+    CHECK(ledger.audit(world));
+    CHECK(world.validate());
+}
+
+// A carve that empties nothing must not remove anything, which is the other half of the same
+// contract: "nothing here" and "I have not looked" are different answers (trap 7).
+TEST_CASE("a carve that leaves matter behind leaves the chunk and its bricks alone") {
+    World world;
+    MatterLedger ledger;
+    apply_op(world, Op::fill_box(1, 1, 0, 0, 0, 7, 7, 7, 6, MatterReason::PlayerPlace), ledger);
+    REQUIRE(world.chunk_count() == 1);
+
+    apply_op(world, Op::fill_box(2, 1, 0, 0, 0, 6, 7, 7, kAir, MatterReason::PlayerBreak),
+             ledger);
+    CHECK(world.chunk_count() == 1);
+    REQUIRE(world.chunk(ChunkCoord{0, 0, 0}) != nullptr);
+    CHECK(world.chunk(ChunkCoord{0, 0, 0})->brick_count() == 1);
+    CHECK(world.get(7, 0, 0) == 6);
+    CHECK(world.validate());
+}
+
+// The identity two peers compare (documentation/06 §4). It skips empty bricks, so a world that was
+// carved and a world that was built already carved are meant to agree -- and before the bricks were
+// freed where they empty, they did not: the carved one carried thirty phantom chunks into its hash.
+TEST_CASE("a carved world hashes the same as one that was never filled") {
+    World carved;
+    World direct;
+    MatterLedger ledger;
+
+    apply_op(carved, Op::fill_box(1, 1, 0, 0, 0, 255, 255, 255, 6, MatterReason::PlayerPlace),
+             ledger);
+    apply_op(carved, Op::fill_box(2, 1, 0, 0, 0, 255, 255, 255, kAir, MatterReason::PlayerBreak),
+             ledger);
+    apply_op(carved, Op::fill_box(3, 1, 300, 4, 4, 300, 4, 4, 6, MatterReason::PlayerPlace),
+             ledger);
+    apply_op(direct, Op::fill_box(4, 1, 300, 4, 4, 300, 4, 4, 6, MatterReason::PlayerPlace),
+             ledger);
+
+    CHECK(carved.chunk_count() == direct.chunk_count());
+    CHECK(carved.content_hash() == direct.content_hash());
+}
+
 TEST_CASE("replaying the same log onto the same start gives the same world") {
     // This is the entire multiplayer design in one test: peers exchange intent, not
     // voxels, and arrive at identical state.

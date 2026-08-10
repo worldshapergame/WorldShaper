@@ -78,6 +78,18 @@ public:
     // Frees empty bricks and then any chunk left with nothing in it.
     void compact();
 
+    // Removes one chunk if nothing is left in it. O(1) — a brick count and a hash erase, with no
+    // sweep of the chunk and no sweep of the world.
+    //
+    // The counterpart of Chunk::drop_brick_if_empty, one level up, and it exists for the same
+    // reason. `NodePool::world_has` answers level 8 and above out of an index keyed by which
+    // chunks EXIST, rebuilt only when that set changes — so a chunk emptied by an edit goes on
+    // claiming occupancy at every level above the chunk for the rest of the run. Below level 8 the
+    // answer is now honest and above it, it was not: the descent stops at the coarse node, reads a
+    // child mask bit set over nothing, reports WANTED, is served, finds nothing to build, and
+    // reports again next frame for ever (D344's phantom). Returns true when the chunk went.
+    bool drop_chunk_if_empty(const ChunkCoord& coord);
+
     u64 chunk_hash(const ChunkCoord& coord) const;   // 0 for a chunk that does not exist
     u64 content_hash() const;
     WorldStats stats() const;

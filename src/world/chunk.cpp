@@ -71,6 +71,49 @@ u32 Chunk::find_brick(u32 bx, u32 by, u32 bz) const {
     return nodes_[node].child[child_index(bx, by, bz, kChunkDepth - 1)];
 }
 
+u32 Chunk::find_brick_path(u32 bx, u32 by, u32 bz, u32 path[kChunkDepth]) const {
+    u32 node = 0;
+    for (u32 depth = 0; depth < kChunkDepth - 1; ++depth) {
+        path[depth] = node;
+        const u32 slot = child_index(bx, by, bz, depth);
+        const u32 next = nodes_[node].child[slot];
+        if (next == kNoChild) return kNoChild;
+        node = next;
+    }
+    path[kChunkDepth - 1] = node;
+    return nodes_[node].child[child_index(bx, by, bz, kChunkDepth - 1)];
+}
+
+// Unlinks a brick that is known to be empty, and then every ancestor that has just lost
+// its last child. The root always stands: a chunk has one whether it holds anything or not.
+void Chunk::unlink_brick(u32 bx, u32 by, u32 bz, const u32 path[kChunkDepth], u32 index) {
+    free_brick(index);
+    --brick_count_;
+
+    for (u32 depth = kChunkDepth; depth-- > 0;) {
+        const u32 node = path[depth];
+        nodes_[node].child[child_index(bx, by, bz, depth)] = kNoChild;
+        if (depth == 0) break;
+
+        bool any_child = false;
+        for (u32 slot = 0; slot < 8 && !any_child; ++slot) {
+            any_child = nodes_[node].child[slot] != kNoChild;
+        }
+        if (any_child) break;
+        free_node(node);
+    }
+}
+
+bool Chunk::drop_brick_if_empty(u32 bx, u32 by, u32 bz) {
+    WS_ASSERT(bx < kBricksPerAxis && by < kBricksPerAxis && bz < kBricksPerAxis,
+              "brick coordinate out of range");
+    u32 path[kChunkDepth];
+    const u32 index = find_brick_path(bx, by, bz, path);
+    if (index == kNoChild || !bricks_[index].empty()) return false;
+    unlink_brick(bx, by, bz, path, index);
+    return true;
+}
+
 const Brick* Chunk::brick(u32 bx, u32 by, u32 bz) const {
     WS_ASSERT(bx < kBricksPerAxis && by < kBricksPerAxis && bz < kBricksPerAxis,
               "brick coordinate out of range");
@@ -123,11 +166,17 @@ bool Chunk::set(u32 x, u32 y, u32 z, VoxelTypeId type) {
     if (type == kAir) {
         // Carving where nothing is allocated is free and must not allocate anything —
         // otherwise digging through open air would materialise a brick per step.
-        const u32 index = find_brick(bx, by, bz);
+        u32 path[kChunkDepth];
+        const u32 index = find_brick_path(bx, by, bz, path);
         if (index == kNoChild) return false;
         const bool changed = bricks_[index].set(x % kEdge, y % kEdge, z % kEdge, kAir);
-        if (changed) ++revision_;
-        return changed;
+        if (!changed) return false;
+        ++revision_;
+        // The last voxel going is what frees the brick. See drop_brick_if_empty: an empty
+        // brick left allocated is the renderer being told the world still holds matter
+        // here, which is a shadow that outlives what cast it (D348).
+        if (bricks_[index].empty()) unlink_brick(bx, by, bz, path, index);
+        return true;
     }
 
     const bool changed = brick_for_write(bx, by, bz).set(x % kEdge, y % kEdge, z % kEdge, type);

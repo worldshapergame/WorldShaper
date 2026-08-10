@@ -33,6 +33,13 @@ bool World::has_chunk(const ChunkCoord& coord) const {
     return chunks_.find(coord) != chunks_.end();
 }
 
+bool World::drop_chunk_if_empty(const ChunkCoord& coord) {
+    const auto found = chunks_.find(coord);
+    if (found == chunks_.end() || !found->second.empty()) return false;
+    chunks_.erase(found);
+    return true;
+}
+
 void World::compact() {
     for (auto it = chunks_.begin(); it != chunks_.end();) {
         it->second.compact();

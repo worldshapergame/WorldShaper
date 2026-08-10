@@ -169,6 +169,12 @@ OpResult apply_op(World& world, const Op& op, MatterLedger& ledger) {
                                     result.voxels_changed += entry.count;
                                 }
                                 chunk.brick_for_write(bux, buy, buz).fill(box.type);
+                                // Erasing a whole brick is the commonest way one empties,
+                                // and it is the one the chunk cannot see for itself: this
+                                // goes around set() to avoid 512 read-modify-writes. An
+                                // empty brick left allocated keeps casting the shadow of
+                                // what was just deleted (D348).
+                                if (box.type == kAir) chunk.drop_brick_if_empty(bux, buy, buz);
                                 touched = true;
                                 continue;
                             }
@@ -184,6 +190,11 @@ OpResult apply_op(World& world, const Op& op, MatterLedger& ledger) {
                                     ledger.record_bulk(entry.type, box.type, entry.count,
                                                        box.reason, box.player);
                                 }
+                                // A partial erase can take the last voxel with it, the
+                                // same as the whole-brick case above.
+                                if (box.type == kAir) {
+                                    chunk.drop_brick_if_empty(bux, buy, buz);
+                                }
                                 result.voxels_changed += changed;
                                 touched = true;
                             }
@@ -192,6 +203,13 @@ OpResult apply_op(World& world, const Op& op, MatterLedger& ledger) {
                 }
 
                 if (touched) chunk.mark_modified();
+
+                // And if that was the last of it, the chunk goes too. The reference above is dead
+                // after this line, which is why it is the last thing done with it.
+                //
+                // Only worth asking when the edit could have emptied it, and only affordable at
+                // all because the bricks were freed as they emptied: `empty()` is a counter.
+                if (touched && box.type == kAir) world.drop_chunk_if_empty(coord);
             }
         }
     }

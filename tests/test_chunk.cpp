@@ -76,20 +76,84 @@ TEST_CASE("a full chunk allocates the whole tree and no more") {
     CHECK(chunk.validate());
 }
 
-TEST_CASE("compact frees bricks that became air, and the nodes above them") {
+// The renderer asks whether a brick is ALLOCATED and takes that for "the world has matter
+// here" (NodePool::world_has). So a brick that outlives its last voxel is a wall that goes
+// on casting a shadow after it is deleted, and a region that fades back in black. It has to
+// go at the moment it empties, not at the next sweep — D348.
+TEST_CASE("clearing the last voxel frees the brick and the nodes above it") {
     Chunk chunk;
     for (u32 i = 0; i < 256; ++i) chunk.set(i, i, i, 9);
     REQUIRE(chunk.brick_count() == 32);
     const u32 nodes_before = chunk.node_count();
 
     for (u32 i = 0; i < 256; ++i) chunk.set(i, i, i, kAir);
-    CHECK(chunk.brick_count() == 32);        // set() never frees, by design
-
-    chunk.compact();
     CHECK(chunk.brick_count() == 0);
     CHECK(chunk.empty());
-    CHECK(chunk.node_count() == 1);
+    CHECK(chunk.node_count() == 1);          // the path above each brick goes with it
     CHECK(chunk.node_count() < nodes_before);
+    CHECK(chunk.validate());
+
+    // And compact has nothing left to do, rather than being what did it.
+    chunk.compact();
+    CHECK(chunk.brick_count() == 0);
+    CHECK(chunk.validate());
+}
+
+TEST_CASE("a brick with anything left in it is kept, and so is its path") {
+    Chunk chunk;
+    chunk.set(0, 0, 0, 9);
+    chunk.set(1, 0, 0, 9);
+    REQUIRE(chunk.brick_count() == 1);
+
+    chunk.set(0, 0, 0, kAir);
+    CHECK(chunk.brick_count() == 1);
+    CHECK(chunk.node_count() == kChunkDepth);
+    CHECK(chunk.get(1, 0, 0) == 9);
+
+    chunk.set(1, 0, 0, kAir);
+    CHECK(chunk.brick_count() == 0);
+    CHECK(chunk.node_count() == 1);
+    CHECK(chunk.validate());
+}
+
+// Freeing a brick unlinks its ancestors, and an ancestor is shared. Emptying one of two
+// bricks under the same node must not take the node — or its sibling becomes unreachable
+// while brick_count_ still counts it, which validate() is what catches.
+TEST_CASE("freeing one brick leaves a sibling under the same node alone") {
+    Chunk chunk;
+    chunk.set(0, 0, 0, 1);     // brick 0,0,0
+    chunk.set(8, 0, 0, 2);     // brick 1,0,0 — same parent at every depth but the last
+    REQUIRE(chunk.brick_count() == 2);
+    const u32 nodes_before = chunk.node_count();
+
+    chunk.set(0, 0, 0, kAir);
+    CHECK(chunk.brick_count() == 1);
+    CHECK(chunk.node_count() == nodes_before);   // the shared path is still needed
+    CHECK(chunk.brick(0, 0, 0) == nullptr);
+    REQUIRE(chunk.brick(1, 0, 0) != nullptr);
+    CHECK(chunk.get(8, 0, 0) == 2);
+    CHECK(chunk.validate());
+}
+
+// A brick emptied by a bulk writer that never goes through set(). The chunk cannot see
+// those writes, so the writer has to say so; op.cpp does, and this is the contract.
+TEST_CASE("a brick filled with air outright is dropped when asked") {
+    Chunk chunk;
+    chunk.set(100, 100, 100, 7);
+    REQUIRE(chunk.brick_count() == 1);
+
+    chunk.brick_for_write(12, 12, 12).fill(kAir);
+    CHECK(chunk.brick_count() == 1);             // the chunk saw nothing to react to
+    CHECK(chunk.drop_brick_if_empty(12, 12, 12));
+    CHECK(chunk.brick_count() == 0);
+    CHECK(chunk.node_count() == 1);
+    CHECK(chunk.validate());
+
+    // Asking about a brick that is not there, or is not empty, is not an error.
+    CHECK_FALSE(chunk.drop_brick_if_empty(12, 12, 12));
+    chunk.set(0, 0, 0, 3);
+    CHECK_FALSE(chunk.drop_brick_if_empty(0, 0, 0));
+    CHECK(chunk.brick_count() == 1);
     CHECK(chunk.validate());
 }
 

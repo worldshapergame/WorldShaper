@@ -43,9 +43,26 @@ public:
     usize bytes() const;
 
     // Frees bricks that have become entirely air, then frees the nodes left with no
-    // children. Called after bulk edits — carving a tunnel leaves a trail of empty bricks
-    // that would otherwise be paid for forever.
+    // children. A sweep of the whole chunk: for bulk writers that fill or assign a brick
+    // outright, and for re-encoding after an edit. Nothing on an edit path should need it
+    // any more — see drop_brick_if_empty.
     void compact();
+
+    // Frees one brick if its last voxel has gone, and the nodes above it that lose their
+    // last child with it. One descent, no scan: O(1) in the size of the chunk.
+    //
+    // This is not an optimisation. `NodePool::world_has` asks whether a brick is
+    // ALLOCATED, and every child mask in the render tree is derived from that answer, so a
+    // brick left behind empty tells the renderer the world still holds matter there — the
+    // shadow of a deleted wall outlives the wall, and the region fades back in black
+    // (D348). Making the reader test emptiness instead is correct and costs a scan past
+    // every emptied brick, measured at 726 ms of CPU a frame after a large deletion;
+    // freeing it at the moment it empties costs nothing and asks nothing of the reader.
+    //
+    // set() calls this itself. A bulk writer that goes through brick_for_write() and
+    // fills or assigns the whole brick has to say so, because the chunk never sees the
+    // individual writes. Returns true when the brick was freed.
+    bool drop_brick_if_empty(u32 bx, u32 by, u32 bz);
 
     // Encoding-independent: two chunks holding the same voxels hash the same however
     // they were built. This is what network reconciliation compares
@@ -76,6 +93,10 @@ private:
 
     static u32 child_index(u32 bx, u32 by, u32 bz, u32 depth);
     u32 find_brick(u32 bx, u32 by, u32 bz) const;   // kNoChild when absent
+    // The same descent, keeping the node it passed through at each depth. Unlinking a
+    // brick needs its ancestors, and finding them a second time is the same walk twice.
+    u32 find_brick_path(u32 bx, u32 by, u32 bz, u32 path[kChunkDepth]) const;
+    void unlink_brick(u32 bx, u32 by, u32 bz, const u32 path[kChunkDepth], u32 index);
     u32 allocate_node();
     u32 allocate_brick();
     void free_brick(u32 index);

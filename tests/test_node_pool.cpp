@@ -77,27 +77,18 @@ struct Fixture {
 // the renderer and all three were wrong (D340, D345, D346), and the last of them said why: the
 // answers `world_has` gives are themselves suspect, and every child mask in the tree is derived
 // from them. This asks the pool the question directly.
-// SKIPPED, and the reason is the point: this fails today, the one-line fix is known, and the fix
-// costs more than the bug.
-//
 // `NodePool::world_has` asks `chunk->brick(...) != nullptr`, which is whether a brick is
-// ALLOCATED. A brick is not freed when its last voxel goes, so an emptied region answers "the
-// world has something here" for ever. Every child mask is derived from that, so the descent
-// answers WANTED over open air, occlusion reads WANTED as opaque (D302, D324), and the shadow
-// outlives what cast it. Changing it to `!= nullptr && !brick->empty()` makes this test pass at
-// every level.
+// ALLOCATED. A brick used not to be freed when its last voxel went, so an emptied region answered
+// "the world has something here" for ever. Every child mask is derived from that, so the descent
+// answered WANTED over open air, occlusion reads WANTED as opaque (D302, D324), and the shadow
+// outlived what cast it.
 //
-// And it takes the frame rate to about one. The old answer was fast BECAUSE it was wrong: a
-// shadow or ambient ray crossing an emptied region used to stop at the first unbuilt cell, and
-// with the region correctly empty it marches on -- through the hole, to the far plane, at 512
-// steps a ray, for every face in the store. Measured: 500 frames of the edited camera did not
-// finish in seven minutes, against 4.977 ms a frame reverted. The resident tree also grows 4.5x,
-// 41,882 leaves to 187,377, because the pool now builds what those longer rays ask for.
-//
-// So the fix waits on bounding what a gathering ray may cost -- R10b's near-field falloff gives
-// the ambient ray a natural stop at about a metre, and a shadow ray wants a step budget of its
-// own. Un-skip this the moment that lands; it is the gate for it. D348.
-TEST_CASE("a region emptied by an edit stops being wanted" * doctest::skip()) {
+// The reader is not what changed. Making `world_has` test emptiness is correct and costs a scan
+// past every emptied brick -- 726 ms of CPU a frame after a large deletion, and the test was left
+// skipped for it (D348, D349). The brick is now freed inside `Chunk::set`, at the moment its last
+// voxel is cleared, so `!= nullptr` is both correct and the O(1) answer it always was. This test
+// does not care which of the two it is: it asks the pool the question the renderer asks.
+TEST_CASE("a region emptied by an edit stops being wanted") {
     Fixture f;
     f.fill_box(0, 0, 0, 63, 63, 63);
     for (u64 frame = 1; frame < 8; ++frame) {
