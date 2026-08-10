@@ -99,6 +99,34 @@ inline constexpr u32 kProximityAnchorLevel = 6;
 // slices costs eight frames of latency on an eviction and saves seven eighths of the scan.
 inline constexpr u32 kErodeSlices = 8;
 
+// How soon after an eviction a request for the same node counts as the pool having thrown away
+// something it needed.
+//
+// Two seconds at sixty frames. A node that is asked for again this quickly was never unwanted:
+// the six-hundred-frame cold window is meant to be long enough that turning round and back does
+// not cost a rebuild, so anything coming straight back is a node whose "wanted" signal was lost
+// rather than a node that genuinely went out of use. This is the harm the eviction instrument
+// measures, and it is mechanism-independent -- it does not care WHY the signal was lost.
+inline constexpr u32 kChurnWindow = 120;
+
+// Who asked for a node. Instrument only: the pool serves every request the same way.
+//
+// A node coming back tells you the pool was wrong to drop it; WHO asks for it back tells you which
+// signal was missing. A ray reporting a miss is the renderer noticing a hole in what it is drawing;
+// a dilated neighbour is a guess about where the next hole will be; the proximity sweep is not
+// about the screen at all.
+enum RequestSource : u8 {
+    kRequestRay = 0,        // a primary ray could not find something it was drawing
+    kRequestDilated = 1,    // a neighbour of one of those, streamed on the guess that it is next
+    kRequestProximity = 2,  // the twenty-metre radius, which is not about the screen at all
+    // A shadow, ambient or lamp ray stopped by a cell the pool has not built. D292 forbids a light
+    // path from dragging residency towards what it CROSSES; this is the one cell that stopped it,
+    // which R9i narrowed the rule for, because otherwise the cell stays unbuilt, stays opaque, and
+    // casts a shadow for ever.
+    kRequestOcclusion = 3,
+    kRequestSourceCount = 4,
+};
+
 struct NodeKey {
     i64 x = 0;
     i64 y = 0;
@@ -292,9 +320,41 @@ struct NodeUploadBatch {
     u64 payload_bytes = 0;
     u32 built = 0;
     u32 evicted = 0;
+    // Eviction EVENTS above -- one per slot the erosion sweep took and one per root that shed --
+    // and nodes below. A root sheds a whole subtree through one event, so the two are not the same
+    // number and must not be compared with each other. The two below are commensurate with one
+    // another, and with `NodePoolStats::evictions`, which counts nodes.
+    u32 evicted_nodes = 0;
+    // ...of which this many were inside the view frustum when they went.
+    //
+    // The question eviction cannot answer for itself. `node_last_read_` decides what is cold, it
+    // is stamped from feedback, and feedback is the thing under suspicion -- so a count taken from
+    // it would agree with itself no matter how wrong it was. The frustum is an independent
+    // witness: it is built from the same four vectors the marcher builds its rays from, and it
+    // knows nothing about what any ray reported. See D426.
+    u32 evicted_on_screen = 0;
+    // Nodes requested within kChurnWindow frames of this pool evicting them. The harm itself,
+    // rather than a proxy for it.
+    u32 churned = 0;
     u32 deferred = 0;              // wanted, but the frame's budget ran out
     bool out_of_memory = false;
     void clear();
+};
+
+// Where the camera is and what it can see, in absolute voxel coordinates.
+//
+// Passed in rather than derived, because the pool must not grow a second opinion about where the
+// camera is pointing: these are the same vectors that go into the parameter block the marcher
+// reads, so the frustum this describes is the frustum the rays actually swept. Trap 13 is what
+// happens when two structures answer one question.
+struct NodeView {
+    f64 origin[3] = {0.0, 0.0, 0.0};
+    f32 forward[3] = {0.0f, 0.0f, 1.0f};
+    f32 right[3] = {1.0f, 0.0f, 0.0f};
+    f32 up[3] = {0.0f, 1.0f, 0.0f};
+    f32 tan_half_fov = 0.0f;   // lens.x, the vertical half-angle
+    f32 aspect = 1.0f;         // width / height, which is how the marcher widens it
+    bool valid = false;        // false disables the test rather than making it always true
 };
 
 struct NodePoolStats {
@@ -315,6 +375,29 @@ struct NodePoolStats {
     u64 screen_bytes = 0;
     u64 builds = 0;
     u64 evictions = 0;
+    // Over the run: how many evictions took a node that was inside the view, and how many nodes
+    // came straight back. Lifetime rather than per frame, because a settled camera evicts a
+    // handful a frame and a single frame of either is noise.
+    u64 evictions_on_screen = 0;
+    u64 churn = 0;
+    // Which kind of request brought each churned node back.
+    u64 churn_by_source[kRequestSourceCount]{};
+    // How full the bricks involved are, out of 512 voxels, and the same figure over every leaf
+    // the pool is holding. This is what tells the two candidate causes apart: a brick a ray
+    // STOPS on is a wall and is nearly full, while a brick a ray passes THROUGH on its way to
+    // one is mostly air. If the leaves coming back are much emptier than the leaves the pool
+    // holds, the signal that was lost is "a ray read this", not "a ray was sampled here".
+    f64 churn_fill = 0.0;
+    f64 evicted_fill = 0.0;
+    f64 resident_fill = 0.0;
+    // ...and how many of them no ray had EVER reported reading. The other discriminator, and the
+    // sharper one: a node that was read and went quiet is a sampling problem, and a node no ray
+    // ever reported is a reporting problem.
+    u64 evictions_never_read = 0;
+    u64 churn_never_read = 0;
+    // What level the churned nodes were at. A leaf coming back is a brick flickering; a level-8
+    // node coming back is eight metres of building doing it.
+    u32 churn_per_level[32]{};
     // Resident nodes by level, which is the shape a total cannot show.
     //
     // R2b's rule is that halving the resolution moves every ray's stopping point exactly one
@@ -336,7 +419,7 @@ public:
     //
     // A node smaller than a pixel is never requested, because the descent stops at the pixel
     // footprint — so it is never fetched, never uploaded, and does not exist (D190).
-    void request(const NodeKey& key);
+    void request(const NodeKey& key, u8 source = kRequestRay);
 
     // A ray READ this node, so it is wanted whether or not anything is missing under it.
     //
@@ -364,7 +447,11 @@ public:
 
     // Serves this frame's requests, holds the proximity radius, evicts what has gone cold, and
     // returns what the GPU layer must copy.
-    const NodeUploadBatch& update(const World& world, const f64 camera_voxel[3], u64 frame);
+    //
+    // `view` is for the eviction instrument only and nothing in the policy reads it: a null view
+    // costs the tests nothing and leaves every other answer identical.
+    const NodeUploadBatch& update(const World& world, const f64 camera_voxel[3], u64 frame,
+                                  const NodeView* view = nullptr);
 
     // The slot holding a node, or kNoNode. Walks the same path the shader walks: hash the entry
     // ancestor, then descend by octant.
@@ -487,6 +574,19 @@ private:
     bool world_has(const World& world, const NodeKey& key) const;
     void index_world(const World& world);
 
+    // Does any part of this node's box fall inside the camera's frustum?
+    //
+    // Conservative on purpose -- a node straddling an edge counts as visible -- and it does not
+    // ask about occlusion, so a node behind a wall inside the frustum counts too. Both make the
+    // number an UPPER bound on what is really on screen, which is the direction an instrument
+    // about wrongly-evicted nodes has to err in: an over-count says "look here", an under-count
+    // says nothing at all. It is also exactly the set a "do not evict what the camera is looking
+    // at" rule would have to hold resident, so the same number prices that fix.
+    bool in_view(const GpuNode& node) const;
+
+    // Remembers that this node was evicted, so a request for it can be recognised as a rebuild.
+    void note_eviction(const GpuNode& node, u64 frame, u32 slot);
+
     NodePoolBudget budget_;
     const VoxelTypeTable* types_ = nullptr;
     // The same segregated-fit pool residency uses for brick payloads, for the same
@@ -540,6 +640,7 @@ private:
 
     std::unordered_map<NodeKey, Resident, NodeKeyHash> live_;
     std::vector<NodeKey> requested_;
+    std::vector<u8> requested_source_;   // instrument only, parallel to `requested_`
     std::vector<NodeKey> dirty_;
 
     // A bump pointer plus two free lists, and never a search for a contiguous run.
@@ -564,6 +665,42 @@ private:
     u64 evictions_ = 0;
     u64 requests_ = 0;
     u64 hits_ = 0;
+
+    // ---- the eviction instrument ---------------------------------------------------------------
+    //
+    // Kept apart from the pool's own state and read by nothing that decides anything. D425 left
+    // the standing-still flicker measured but not explained, and named the instrument to build
+    // first: a count of evictions of nodes that were on screen. The two candidate fixes -- report
+    // every node a ray TOUCHES rather than only the one it stops on, and refuse to evict anything
+    // inside the frustum -- cost very differently, and nothing had measured which is needed.
+    NodeView view_;
+    // True while the pool is giving a node up because it has gone cold, as against re-deriving one
+    // an edit touched. Only the first is an eviction, and only the first is counted.
+    bool evicting_ = false;
+    // When each recently evicted node went, keyed by its coordinate as the record carries it.
+    // Entries leave on the request that matches them, and the rest are swept when the erosion
+    // cursor wraps, so this cannot grow without bound over a long run.
+    struct Evicted {
+        u32 frame = 0;
+        u16 fill = 0;    // occupied voxels of 512, or 0 for a node that is not a leaf
+        bool never_read = false;
+    };
+    std::unordered_map<NodeKey, Evicted, NodeKeyHash> evicted_at_;
+    u64 evictions_on_screen_ = 0;
+    u64 churn_ = 0;
+    u32 churn_per_level_[32]{};
+    u64 churn_fill_sum_ = 0;
+    u64 churn_leaves_ = 0;
+    u64 evicted_fill_sum_ = 0;
+    u64 evicted_leaves_ = 0;
+    // How many times a RAY has reported reading each slot since it was allocated. Separate from
+    // `node_last_read_`, which is stamped by builds and by the proximity sweep as well, so it
+    // cannot tell "a ray stopped reporting this six hundred frames ago" from "no ray has ever
+    // reported it at all". Those are the two candidate causes, and they need different fixes.
+    std::vector<u32> node_reads_;
+    u64 evicted_never_read_ = 0;
+    u64 churn_never_read_ = 0;
+    u64 churn_by_source_[kRequestSourceCount]{};
 };
 
 }  // namespace ws

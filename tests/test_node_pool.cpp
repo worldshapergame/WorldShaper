@@ -49,6 +49,19 @@ struct Fixture {
         return pool.update(world, camera, frame);
     }
 
+    // The same, with a camera at the origin looking down +z through a 90 degree field.
+    const NodeUploadBatch& serve_looking(u64 frame) {
+        const f64 camera[3] = {0.0, 0.0, 0.0};
+        NodeView view;
+        view.forward[0] = 0.0f; view.forward[1] = 0.0f; view.forward[2] = 1.0f;
+        view.right[0] = 1.0f;   view.right[1] = 0.0f;   view.right[2] = 0.0f;
+        view.up[0] = 0.0f;      view.up[1] = 1.0f;      view.up[2] = 0.0f;
+        view.tan_half_fov = 1.0f;
+        view.aspect = 1.0f;
+        view.valid = true;
+        return pool.update(world, camera, frame, &view);
+    }
+
     // Ask for a region at brick resolution.
     //
     // The pool is depth-bounded: it builds to the level that was asked for and no finer, which is
@@ -556,6 +569,97 @@ TEST_CASE("a node a ray keeps reading is not evicted") {
         f.pool.touch_slot(leaf_slot);
     }
     CHECK(f.pool.find(root) != kNoNode);
+    CHECK(f.pool.validate());
+}
+
+// The instrument D425 asked for, which is what found D427: a count of evictions that took a node
+// the camera was looking at.
+//
+// It has to be an independent witness or it is worth nothing. `node_last_read_` decides what is
+// cold, it is stamped from feedback, and feedback was the thing under suspicion -- a count taken
+// from that signal would have agreed with the policy however wrong the policy was. So the test is
+// that the frustum, and only the frustum, decides which side of the count an eviction lands on.
+TEST_CASE("the eviction instrument counts what the camera could see, and nothing else") {
+    Fixture f;
+    // Two boxes, one in front of a camera looking down +z and one directly behind it. Both are
+    // asked for, both go cold, and both are evicted -- the policy does not know the difference and
+    // must not start to.
+    f.fill_box(64, -32, 256, 127, 31, 319);      // ahead
+    f.fill_box(64, -32, -320, 127, 31, -257);    // behind
+    NodePoolBudget budget;
+    budget.max_nodes = 1u << 16;
+    budget.max_occupancy_leaves = 1u << 14;
+    budget.payload_bytes = 4ull * 1024 * 1024;
+    budget.proximity_voxels = 0;
+    budget.cold_frames = 4;
+    f.pool.create(budget, f.types);
+
+    for (u64 frame = 1; frame < 20; ++frame) {
+        f.want_box(64, -32, 256, 127, 31, 319);
+        f.want_box(64, -32, -320, 127, 31, -257);
+        f.serve_looking(frame);
+    }
+    REQUIRE(f.pool.find(node_key_of(64, 0, 256, kLeafLevel)) != kNoNode);
+    REQUIRE(f.pool.find(node_key_of(64, 0, -320, kLeafLevel)) != kNoNode);
+
+    u32 evicted = 0;
+    u32 on_screen = 0;
+    for (u64 frame = 20; frame < 200; ++frame) {
+        const NodeUploadBatch& batch = f.serve_looking(frame);
+        evicted += batch.evicted_nodes;
+        on_screen += batch.evicted_on_screen;
+    }
+    // Both halves went, and only one of them was ever on screen. Half the box behind the camera
+    // shares no plane with the one in front, so the split is not a near miss.
+    CHECK(evicted > 0);
+    CHECK(on_screen > 0);
+    CHECK(on_screen < evicted);
+    CHECK(f.pool.validate());
+}
+
+// The other half of the instrument, and the one that measures the harm rather than a proxy for it:
+// a node the pool evicted and then had to build again straight away.
+//
+// D427's whole finding is this number being large on a camera that is not moving -- 37,606 leaves
+// at 1280x800 over one settled run, none of which any ray had ever reported reading.
+TEST_CASE("a node evicted and immediately wanted again is counted as churn") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 63, 63, 63);
+    NodePoolBudget budget;
+    budget.max_nodes = 1u << 16;
+    budget.max_occupancy_leaves = 1u << 14;
+    budget.payload_bytes = 4ull * 1024 * 1024;
+    budget.proximity_voxels = 0;
+    budget.cold_frames = 4;
+    f.pool.create(budget, f.types);
+
+    for (u64 frame = 1; frame < 20; ++frame) {
+        f.want_box(0, 0, 0, 63, 63, 63);
+        f.serve(frame);
+    }
+    REQUIRE(f.pool.stats().churn == 0);   // nothing has been evicted yet, so nothing can come back
+
+    // Silence long enough to go cold, which evicts it...
+    for (u64 frame = 20; frame < 60; ++frame) f.serve(frame);
+    REQUIRE(f.pool.stats().evictions > 0);
+
+    // ...and then ask for exactly what was thrown away. That is the loop, and this is the number
+    // that names it: a rebuild is invisible in `built`, which cannot tell a node arriving for the
+    // first time from one arriving for the fifth.
+    f.want_box(0, 0, 0, 63, 63, 63);
+    const NodeUploadBatch& batch = f.serve(61);
+    CHECK(batch.churned > 0);
+    CHECK(f.pool.stats().churn == batch.churned);
+
+    // And a node that comes back long after it went is not churn: the cold window is meant to be
+    // long enough that turning round and back costs nothing, so a return outside kChurnWindow is
+    // the policy working rather than failing.
+    for (u64 frame = 62; frame < 100; ++frame) f.serve(frame);
+    const u64 settled = f.pool.stats().churn;
+    for (u64 frame = 100; frame < 100 + kChurnWindow + 40; ++frame) f.serve(frame);
+    f.want_box(0, 0, 0, 63, 63, 63);
+    f.serve(100 + kChurnWindow + 40);
+    CHECK(f.pool.stats().churn == settled);
     CHECK(f.pool.validate());
 }
 

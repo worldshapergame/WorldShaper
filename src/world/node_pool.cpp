@@ -1,6 +1,7 @@
 #include "world/node_pool.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 
 #include "core/assert.hpp"
@@ -53,6 +54,9 @@ void NodeUploadBatch::clear() {
     payload_bytes = 0;
     built = 0;
     evicted = 0;
+    evicted_nodes = 0;
+    evicted_on_screen = 0;
+    churned = 0;
     deferred = 0;
     out_of_memory = false;
 }
@@ -79,6 +83,7 @@ void NodePool::create(const NodePoolBudget& budget, const VoxelTypeTable& types)
     // Sized to the arrays they track. Nothing is marked: both sides start empty, and everything
     // built from here marks itself on the way in.
     node_last_read_.assign(budget_.max_nodes, 0);
+    node_reads_.assign(budget_.max_nodes, 0);
     dirty_nodes_.create(budget_.max_nodes);
     dirty_leaves_.create(budget_.max_occupancy_leaves);
     dirty_entries_.create(entries_.size());
@@ -103,6 +108,20 @@ void NodePool::create(const NodePoolBudget& budget, const VoxelTypeTable& types)
     evictions_ = 0;
     requests_ = 0;
     hits_ = 0;
+
+    view_ = NodeView{};
+    evicted_at_.clear();
+    evictions_on_screen_ = 0;
+    churn_ = 0;
+    for (u32& count : churn_per_level_) count = 0;
+    churn_fill_sum_ = 0;
+    churn_leaves_ = 0;
+    evicted_fill_sum_ = 0;
+    evicted_leaves_ = 0;
+    evicted_never_read_ = 0;
+    churn_never_read_ = 0;
+    for (u64& count : churn_by_source_) count = 0;
+    requested_source_.clear();
 }
 
 // ---- allocation ----------------------------------------------------------------------------
@@ -122,6 +141,7 @@ u32 NodePool::allocate_node() {
         nodes_[slot] = GpuNode{};
         dirty_nodes_.mark(slot);
         node_last_read_[slot] = static_cast<u32>(touch_frame_);
+        node_reads_[slot] = 0;
         return slot;
     }
     if (next_free_ >= budget_.max_nodes) {
@@ -132,6 +152,7 @@ u32 NodePool::allocate_node() {
     nodes_[slot] = GpuNode{};
     dirty_nodes_.mark(slot);
     node_last_read_[slot] = static_cast<u32>(touch_frame_);
+    node_reads_[slot] = 0;
     return slot;
 }
 
@@ -142,6 +163,7 @@ u32 NodePool::allocate_children() {
         for (u32 i = 0; i < 8; ++i) nodes_[base + i] = GpuNode{};
         dirty_nodes_.mark_range(base, 8);
         for (u32 i = 0; i < 8; ++i) node_last_read_[base + i] = static_cast<u32>(touch_frame_);
+        for (u32 i = 0; i < 8; ++i) node_reads_[base + i] = 0;
         return base;
     }
     if (next_free_ + 8 > budget_.max_nodes) {
@@ -156,6 +178,7 @@ u32 NodePool::allocate_children() {
     // already older than the threshold and is evicted before a ray has had the chance to read it
     // once -- built and thrown away in the same breath, for ever.
     for (u32 i = 0; i < 8; ++i) node_last_read_[base + i] = static_cast<u32>(touch_frame_);
+    for (u32 i = 0; i < 8; ++i) node_reads_[base + i] = 0;
     return base;
 }
 
@@ -694,6 +717,19 @@ u32 NodePool::refine(const World& world, const NodeKey& key, u32 root_slot, u32&
 void NodePool::release_contents(u32 slot) {
     GpuNode& node = nodes_[slot];
 
+    // The instrument, here rather than at the two eviction sites, because this is the single place
+    // a node's contents are given up and a root shedding its subtree frees a whole tree of them
+    // through one call. Gated on `evicting_` so the edit path -- which calls this to re-derive a
+    // brick in place (D422) -- is not counted as the pool throwing something away. D426.
+    if (evicting_) {
+        ++batch_.evicted_nodes;
+        if (in_view(node)) {
+            ++batch_.evicted_on_screen;
+            ++evictions_on_screen_;
+        }
+        note_eviction(node, touch_frame_, slot);
+    }
+
     if ((node_flags(node) & kNodeLeaf) != 0) {
         const u32 leaf = node.children;
         if (leaf != kNoNode && leaf < leaves_.size()) {
@@ -715,6 +751,7 @@ void NodePool::release_contents(u32 slot) {
     // as cold on every sweep, and the whole point of testing the timestamp first is that a slot
     // which is not cold costs nothing but the timestamp.
     node_last_read_[slot] = static_cast<u32>(touch_frame_);
+    if (slot < node_reads_.size()) node_reads_[slot] = 0;
     ++evictions_;
 }
 
@@ -755,9 +792,10 @@ void NodePool::release(u32 slot) {
 
 // ---- the frame -------------------------------------------------------------------------------
 
-void NodePool::request(const NodeKey& key) {
+void NodePool::request(const NodeKey& key, u8 source) {
     ++requests_;
     requested_.push_back(key);
+    requested_source_.push_back(source);
 }
 
 // Read by a ray, so it is wanted. Deliberately NOT a request: there is nothing to build, and
@@ -765,6 +803,93 @@ void NodePool::request(const NodeKey& key) {
 // frame for a tree that is already complete.
 void NodePool::touch_slot(u32 slot) {
     if (slot < node_last_read_.size()) node_last_read_[slot] = static_cast<u32>(touch_frame_);
+    // Instrument, and the ONLY place it is written: this array counts what a ray said, where
+    // `node_last_read_` above also carries builds and the proximity sweep. D426.
+    if (slot < node_reads_.size() && node_reads_[slot] != 0xFFFFFFFFu) ++node_reads_[slot];
+}
+
+// ---- the eviction instrument -------------------------------------------------------------------
+//
+// D425 left the standing-still half of the flicker measured and unexplained, and named this as the
+// first thing to build: a count of evictions of nodes that were on screen when they went. Nothing
+// here decides anything -- the policy is untouched -- because the point is to price two candidate
+// fixes that cost very differently, and a measurement taken from the same signal the policy uses
+// would agree with the policy however wrong the policy was.
+//
+// Five planes and no far plane: `lens.y` is 125 km and is past anything the world contains, so a
+// far test would reject nothing and cost a plane. The near plane is the camera itself, which is
+// what `forward` gives.
+bool NodePool::in_view(const GpuNode& node) const {
+    if (!view_.valid) return false;
+    const u32 level = node_level(node);
+    if (level == 0 || level > kMaxNodeLevel) return false;
+
+    // The node's box in absolute voxels, moved into camera-relative space. f64 throughout: a
+    // level-14 coordinate times 16,384 is past a float's exact integer range and the whole test
+    // is a set of sign comparisons that must not wobble.
+    const f64 size = static_cast<f64>(1ull << level);
+    const f64 lo[3] = {static_cast<f64>(node.x) * size - view_.origin[0],
+                       static_cast<f64>(node.y) * size - view_.origin[1],
+                       static_cast<f64>(node.z) * size - view_.origin[2]};
+    const f64 hi[3] = {lo[0] + size, lo[1] + size, lo[2] + size};
+
+    // The four side planes, derived from the ray the marcher would build at each edge of the
+    // screen: dir = forward + right * uv.x * tan * aspect - up * uv.y * tan, with uv in [-1, 1].
+    // A plane through the camera containing the left edge has inward normal tan*aspect*forward +
+    // right, and so round. Unnormalised, because only the sign is read.
+    const f64 tx = static_cast<f64>(view_.tan_half_fov) * static_cast<f64>(view_.aspect);
+    const f64 ty = static_cast<f64>(view_.tan_half_fov);
+    const f64 f[3] = {view_.forward[0], view_.forward[1], view_.forward[2]};
+    const f64 r[3] = {view_.right[0], view_.right[1], view_.right[2]};
+    const f64 u[3] = {view_.up[0], view_.up[1], view_.up[2]};
+
+    f64 planes[5][3];
+    for (u32 axis = 0; axis < 3; ++axis) {
+        planes[0][axis] = f[axis];                 // in front of the camera at all
+        planes[1][axis] = tx * f[axis] + r[axis];  // left edge
+        planes[2][axis] = tx * f[axis] - r[axis];  // right edge
+        planes[3][axis] = ty * f[axis] + u[axis];  // bottom edge
+        planes[4][axis] = ty * f[axis] - u[axis];  // top edge
+    }
+
+    // The corner furthest along each normal. If even that one is behind the plane, no part of the
+    // box is in front of it and the box is out.
+    for (const f64* normal : planes) {
+        f64 best = 0.0;
+        for (u32 axis = 0; axis < 3; ++axis) {
+            best += normal[axis] * ((normal[axis] > 0.0) ? hi[axis] : lo[axis]);
+        }
+        if (best < 0.0) return false;
+    }
+    return true;
+}
+
+// Keyed by the coordinate as the RECORD carries it -- 32-bit, truncated at build time -- so the
+// request side has to truncate the same way or the two never match. The request loop does.
+//
+// The fill is carried with it because it is the discriminator: a brick a ray stops on is a wall
+// and is nearly solid, and a brick a ray passes through on the way to a wall is mostly air. Read
+// here rather than at the match, because by then the leaf has been freed and reused.
+void NodePool::note_eviction(const GpuNode& node, u64 frame, u32 slot) {
+    const u32 level = node_level(node);
+    if (level == 0) return;
+
+    Evicted record;
+    record.frame = static_cast<u32>(frame);
+    record.never_read = (slot < node_reads_.size()) && node_reads_[slot] == 0;
+    if (record.never_read) ++evicted_never_read_;
+    if ((node_flags(node) & kNodeLeaf) != 0 && node.children != kNoNode &&
+        node.children < leaves_.size()) {
+        u32 bits = 0;
+        const usize base = static_cast<usize>(node.children) * kBrickWords;
+        for (u32 word = 0; word < kBrickWords; ++word) {
+            bits += static_cast<u32>(std::popcount(occupancy_[base + word]));
+        }
+        record.fill = static_cast<u16>(bits);
+        evicted_fill_sum_ += bits;
+        ++evicted_leaves_;
+    }
+    evicted_at_[NodeKey{node.x, node.y, node.z, level}] = record;
 }
 
 void NodePool::touch(const NodeKey& key) {
@@ -779,12 +904,15 @@ void NodePool::invalidate(i64 x, i64 y, i64 z) {
     dirty_.push_back(node_key_of(x, y, z, kLeafLevel));
 }
 
-const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_voxel[3],
-                                        u64 frame) {
+const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_voxel[3], u64 frame,
+                                        const NodeView* view) {
     // What `touch` stamps. It is called from the feedback loop before this runs, so it needs the
     // frame from somewhere; keeping it here rather than passing it through every call site means
     // a hit reported this frame is stamped with the frame it was reported in.
     touch_frame_ = frame;
+    // Instrument only. A caller that passes nothing gets a view that answers "no" to everything,
+    // which is what the tests want and what makes this free where it is not asked for.
+    view_ = (view != nullptr) ? *view : NodeView{};
     batch_.clear();
     out_of_room_ = false;
     u32 budget = budget_.max_builds_per_frame;
@@ -1062,7 +1190,7 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
                                         static_cast<u32>((vz >> 3) & 31)) == nullptr) {
                     continue;
                 }
-                requested_.push_back(NodeKey{bx, by, bz, kLeafLevel});
+                request(NodeKey{bx, by, bz, kLeafLevel}, kRequestProximity);
             }
             if (proximity_cursor_ >= static_cast<u64>(total)) proximity_done_ = true;
         }
@@ -1081,8 +1209,35 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // A set costs one hash per request against eleven dependent loads, and the duplicates are the
     // overwhelming majority rather than an edge case.
     seen_requests_.clear();
-    for (const NodeKey& key : requested_) {
+    for (usize asked = 0; asked < requested_.size(); ++asked) {
+        const NodeKey& key = requested_[asked];
         if (!seen_requests_.insert(key).second) continue;
+        const u8 source =
+            (asked < requested_source_.size()) ? requested_source_[asked] : kRequestRay;
+
+        // Instrument: is this a node this pool threw away a moment ago?
+        //
+        // Truncated to 32 bits to match what the record carried when it was evicted, and erased on
+        // the match so one eviction can only be counted once however many rays report it.
+        if (!evicted_at_.empty()) {
+            const auto churn = evicted_at_.find(NodeKey{static_cast<i32>(key.x),
+                                                        static_cast<i32>(key.y),
+                                                        static_cast<i32>(key.z), key.level});
+            if (churn != evicted_at_.end()) {
+                if (static_cast<u32>(frame) - churn->second.frame <= kChurnWindow) {
+                    ++batch_.churned;
+                    ++churn_;
+                    if (key.level < 32) ++churn_per_level_[key.level];
+                    if (key.level == kLeafLevel) {
+                        churn_fill_sum_ += churn->second.fill;
+                        ++churn_leaves_;
+                    }
+                    if (churn->second.never_read) ++churn_never_read_;
+                    if (source < kRequestSourceCount) ++churn_by_source_[source];
+                }
+                evicted_at_.erase(churn);
+            }
+        }
 
         const u32 enter_level = std::max(key.level, kEntryLevel);
         const u32 up = enter_level - key.level;
@@ -1157,6 +1312,7 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         ++batch_.built;
     }
     requested_.clear();
+    requested_source_.clear();
 
     // The tree erodes from the leaves, so that memory follows the screen.
     //
@@ -1229,12 +1385,24 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
                     if (any_built) continue;   // something below is still in use
                 }
 
+                evicting_ = true;
                 release_contents(slot);
+                evicting_ = false;
                 nodes_[slot] = GpuNode{};
                 dirty_nodes_.mark(slot);
                 ++batch_.evicted;
             }
             if (batch_.evicted == before_pass) break;   // nothing both cold and childless left
+        }
+
+        // The churn table, swept when the erosion cursor wraps -- once every kErodeSlices frames.
+        // Entries normally leave on the request that matches them; these are the ones nothing
+        // asked for again, which is the answer the instrument wanted and is now noise.
+        if (erode_cursor_ >= next_free_ && !evicted_at_.empty()) {
+            for (auto it = evicted_at_.begin(); it != evicted_at_.end();) {
+                it = (now - it->second.frame > kChurnWindow) ? evicted_at_.erase(it)
+                                                            : std::next(it);
+            }
         }
     }
 
@@ -1294,7 +1462,9 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
         const u32 slot = resident.slot;
         if (slot == kNoNode || slot >= nodes_.size()) continue;
         if (nodes_[slot].children == kNoNode) continue;   // shed already; nothing under it
+        evicting_ = true;
         release_children(slot);
+        evicting_ = false;
         ++batch_.evicted;
     }
 
@@ -1318,6 +1488,36 @@ NodePoolStats NodePool::stats() const {
     }
     s.builds = builds_;
     s.evictions = evictions_;
+    s.evictions_on_screen = evictions_on_screen_;
+    s.churn = churn_;
+    s.evictions_never_read = evicted_never_read_;
+    s.churn_never_read = churn_never_read_;
+    for (u32 i = 0; i < kRequestSourceCount; ++i) s.churn_by_source[i] = churn_by_source_[i];
+    for (u32 level = 0; level < 32; ++level) s.churn_per_level[level] = churn_per_level_[level];
+    if (churn_leaves_ > 0) {
+        s.churn_fill = static_cast<f64>(churn_fill_sum_) / static_cast<f64>(churn_leaves_);
+    }
+    if (evicted_leaves_ > 0) {
+        s.evicted_fill = static_cast<f64>(evicted_fill_sum_) / static_cast<f64>(evicted_leaves_);
+    }
+    // The baseline: every leaf the pool is holding right now. Walked rather than tracked, because
+    // this is read once at an audit and tracking it would be a running total to keep in step with
+    // every build and every free -- which is the shape of half the faults in this file.
+    {
+        u64 sum = 0;
+        u64 count = 0;
+        for (u32 slot = 0; slot < next_free_; ++slot) {
+            const GpuNode& node = nodes_[slot];
+            if ((node_flags(node) & kNodeLeaf) == 0 || node_level(node) == 0) continue;
+            if (node.children == kNoNode || node.children >= leaves_.size()) continue;
+            const usize base = static_cast<usize>(node.children) * kBrickWords;
+            for (u32 word = 0; word < kBrickWords; ++word) {
+                sum += static_cast<u64>(std::popcount(occupancy_[base + word]));
+            }
+            ++count;
+        }
+        if (count > 0) s.resident_fill = static_cast<f64>(sum) / static_cast<f64>(count);
+    }
     s.requests = requests_;
     s.hits = hits_;
     return s;

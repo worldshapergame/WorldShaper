@@ -793,6 +793,129 @@ neighbouring surfaces be worked on together so they share the same slice of the 
 smoothing pass that would let each surface get away with a quarter of the probes it takes now.
 Neither is guesswork now — both have a number attached.
 
+## "Standing still, bricks flash into plain cubes" — found, and it was one line
+
+You reported this twice, in two halves. The half that happens *when you edit* was fixed last time.
+This is the other half: standing perfectly still, doing nothing, bricks briefly turn into flat
+coloured cubes — sometimes the wrong colour entirely — and they even cast shadows while they do it.
+
+**What was happening.** The game only keeps the bit of the world you're actually looking at, and it
+decides that by listening to the rays it fires at the screen. Every ray says *"I stopped here"* when
+it lands on something. Nothing said *"I went through here"*. So a brick a ray passes through on its
+way to the wall behind it — the edge of a step, the side of a window reveal, anything you're seeing
+at a shallow angle — was being read sixty times a second and, as far as the game was concerned,
+never touched at all. Ten seconds later it was thrown away as unwanted, and the next frame something
+noticed it was missing and built it again. Over and over, for ever.
+
+While a brick is missing, the game draws the *next size up* over the space it left, which is a flat
+cube in an averaged colour — and that colour is averaged over whatever happened to be nearby, which
+is why it can come out as sky blue in the middle of a wall. That is exactly what you saw.
+
+**How big it was.** On one camera standing still for forty seconds: **249,454 bricks thrown away,
+229,000 of them things the camera was pointing straight at, and 37,000 asked for again within two
+seconds of being binned.** And the number that named the cause: **249,414 of those 249,454 had never
+once been reported as read by anything.** Not "read rarely" — never.
+
+**The fix is one line**, and it says the obvious thing: a ray reports the bricks it goes through as
+well as the one it stops on. What it bought:
+
+- the flicker is gone: I photographed pairs of consecutive frames on a still camera four times, and
+  where before they differed by up to fifty pixels, now they are **identical every time**;
+- the game got *steadier* generally. Run the outdoor view twice and compare the two pictures: before,
+  they disagreed on 12,484 pixels; now, on 674. That matters beyond this bug, because "run it twice
+  and compare" is how I check every change I make;
+- it costs nothing measurable — every timing moved less than the same build moves against itself.
+
+**There was a second version of the same loop, and it is fixed too.** The *lighting* rays also ask
+for pieces of world — the far side of a wall, the roof over a room — and those pieces are somewhere
+no screen ray ever goes, so nothing ever spoke up for them and they were thrown away and asked for
+again on the same ten-second cycle. That is where the "and they even cast shadows" part of your
+report came from: a piece of world that is missing counts as *solid* to the lighting, so it throws
+a shadow of something that isn't there.
+
+The rule already said a lighting ray may point at the one thing that blocked it. What it could only
+ever say was *"that thing is missing"*. It can now also say *"I am using that thing"* — same one
+piece of world, nothing new asked for. Rebuilds went from **29,017 to 4,660**, and every timing I
+took moved less than the same build moves against itself.
+
+**Two things I built for this and then removed, because they measured badly:**
+
+- reporting from every ray instead of once per piece of world. Standing still it looked like a
+  success; flying and carving it produced **1.5 million messages down a channel that holds 131,072**
+  and threw away 1.4 million of them — including the messages that ask for new world to be loaded.
+  So the cure was starving the thing it was meant to help, and it only showed up because I measured
+  the moving case as well as the still one;
+- a cheaper version that only checked a piece of world once every sixteen frames. It kept most of
+  the cost and lost most of the benefit, and it was chasing a slowdown that turned out not to exist
+  — two measurements said it was there and four said it wasn't.
+
+**One thing I guessed and was wrong about.** I thought this would explain why about 6% of surfaces
+never quite finish working out their shading. It doesn't — I can't reproduce that 6% on this camera
+at all now, in any configuration, so it stays on the list as unexplained rather than quietly getting
+credit here.
+
+## "The light goes square and flickers, and what I place looks corrupted for a moment"
+
+You reported three things at once. Two of them turned out to be **the same bug**, and the third
+turned out not to be a bug at all — which is worth saying plainly, because I went looking for the
+wrong one first.
+
+**How I found it.** The light on a surface is made of four separate things: the sun, the sky, the
+darkening in creases and corners, and the lamps. Each has a debug view that shows it on its own. So
+instead of arguing about the picture, I set the game carving one block a second — which is roughly
+what building feels like — took two frames in a row, and asked which of the four *changed between
+them*. The sun: not by a single pixel. The sky: 791 pixels. The creases: 6,253. **The lamps: 442,227
+pixels of a million.** Four screenshots, and the argument was over.
+
+**What was wrong.** When you change the world, the game has to tell every surface nearby "look
+again". How far "nearby" reaches ought to depend on what you are asking about. A shadow from the sun
+can land sixteen metres away, so the sun's answer has to be re-checked out to sixteen metres. The
+darkening in a crease fades out after about a metre, and the game already knew that — it only
+re-checks that one within two metres. **The lamps had no such rule, so they used the sun's sixteen
+metres.** Place one block and every surface in the room threw away everything it knew about the
+lamps and started counting again from scratch — a second's work — and if you were still building, the
+next block landed before it finished. So the lamps were *permanently* half-measured. That is what
+"squares" is: each little square is one voxel face working it out on its own. That is what
+"flickering" is: it never finishes.
+
+**The fix.** A lamp can only change what a surface sees if the thing you built stands *between* the
+surface and the lamp. So that is now the question the game asks, once, on the frame you make the
+edit: for each fitting in the room, does the block you just placed sit on the line between it and
+this surface? If not, the surface keeps everything it already knew. It costs a few sums on one
+frame, and it does not loop over lamps on any other frame, which is a rule this renderer is built on.
+
+What it bought, measured against the same build with the fix switched off:
+
+- **surfaces that had finished working out their lamp light: 0 out of 120,833, now 89,408 out of 121,026;**
+- the picture between two consecutive frames while you build: **302,797 pixels changing, now 79,949**
+  — and 70,649 is what the same camera does when you are not building at all, so it is essentially
+  at the floor;
+- **two frames after placing a block, the picture is already what it will look like**: it used to be
+  wrong on 578,934 pixels of a million and is now wrong on 84,023. That is your "what I place looks
+  corrupted for a while";
+- and it got **faster**, which I did not expect: at 2560×1440 while building, the lighting pass went
+  from 11.1 ms a frame to 7.6, and the whole frame from 18.8 to 15.3. Its worst frame — the one you
+  feel as a hitch — went from 25.9 ms to 18.4.
+
+Nothing is lost by asking the narrower question: I let both versions run until they had fully worked
+themselves out after a two-million-voxel placement, and the two pictures are the same to within the
+noise the game has against itself.
+
+**Undo.** I could not reproduce voxels being left behind. I placed 2,146,689 voxels, pressed undo,
+and the world came back **identical to the byte** — the game computes a fingerprint of the whole
+world and it matched a run that never edited at all — with the renderer's own copy of the world
+agreeing with it brick for brick, and the worst pixel in the picture differing by 35 out of 255 with
+no block-shaped ghost anywhere in it. What *is* left after an undo of something that big is the same
+lamp re-measuring as above, spread over the whole room, and it lasts about a second. So "chunks of
+them remain, only visually" is light catching up, not matter left behind.
+
+**One thing I should flag rather than quietly close**: if a single stroke of the tool produced more
+than one entry in the history, pressing undo once would take back only the last of them, and that
+would look exactly like "undo only deleted part of it". Nothing I ran does that — one stroke made one
+entry every time — but it is the one reading of your report I have not been able to rule out. If it
+happens again, tell me what you were doing when it did (one drag, or several clicks) and that will
+settle it.
+
 ## How we'll work
 
 - I write all the code. You never open a code file.

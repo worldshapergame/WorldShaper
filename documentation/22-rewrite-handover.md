@@ -135,7 +135,7 @@ written for the person the work is for, so it is the one to keep current.
 |---|---|---|
 | R0 instruments | S | a–c done. **R0d** outstanding — record the grid; now 6.6 s a run rather than 133 |
 | R1 node pool | XL | a–d, f–i done. **R1e** outstanding, and it is most of what remains of R1 |
-| R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit |
+| R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit. **A ray now reports what it READS and not only where it stopped** (D427), which is what "wanted" was supposed to mean since D247 |
 | R3 the face pass | XL | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
 | R9 the off-screen set | L | **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). The rest **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
@@ -307,6 +307,19 @@ failure, not a compile error.
     transients *by construction*, since that is what `--settle` is for. The overlay's three numbers
     (GPU 0.92 ms, frame 247.51 ms, 99th 2,234 ms) named the culprit immediately, and it was not the
     pass under rewrite. D239, D240.
+15. **A clean measurement and a measurement that never ran look identical, so check it against
+    something that should NOT be clean.** The consecutive-frame pair for D427 was written
+    `@($Frame, $Frame + 1)`, and PowerShell binds the comma tighter than the plus: that is
+    `(2400, 2400) + 1`, three shots whose first two are the *same frame*. Both arms reported nought
+    pixels of difference, which is exactly what a working fix looks like. What gave it away was the
+    eviction counter printed beside it also reading nought, on a run that had certainly evicted a
+    quarter of a million nodes. Traps 2 and 4 and D420 are the same shape three more times; the
+    portable half is not about PowerShell. D428.
+16. **When a signal is suspect, do not measure it against itself — count the events that produced
+    it.** Four fixes were reasoned about for the flicker before an instrument existed and three were
+    wrong, because every one of them asked how a report was *used*. The question that answered it in
+    one line was whether a report had ever been *made*: 99.9% of evictions were of nodes no ray had
+    ever mentioned. D426, and D345 says the same thing from the other end.
 
 ---
 
@@ -597,13 +610,14 @@ under repair is invisible; add `-Chisel "8,16"` or the *worst* case is invisible
 an A/B must be **two flags of one build**, not two builds (D407): `--no-face-gate`,
 `--no-face-worklist`, `--no-face-prolong` exist for exactly that.
 
-### Closed, half of it: an edit flashed a slab of the wrong colour — and standing still still does
+### Closed: an edit flashed a slab of the wrong colour, and so did standing still
 
-Reported in two halves (D421–D425). *"Whenever I modify a voxel, either place it or carve it, I can
+Reported in two halves (D421–D429). *"Whenever I modify a voxel, either place it or carve it, I can
 see for a brief moment how the brick I placed that voxel on becomes a grey cube whatever material it
-might be"* — **closed**. *"Sometimes when I stay still I see bricks flashing with different geometry
-and with the colours the facility is made of, they even cast shadows"* — **measured, open, and the
-next thing to do here.**
+might be"* — **closed** (D422). *"Sometimes when I stay still I see bricks flashing with different
+geometry and with the colours the facility is made of, they even cast shadows"* — **closed for the
+picture** (D426, D427); the light-side loop behind the last clause is measured, named and open, and
+it is [the next thing to do](#open-a-light-ray-keeps-asking-for-what-the-pool-keeps-throwing-away).
 
 **Photograph the deterministic half before theorising about the other.** `--chisel 300,8` fires
 exactly one 4,913-voxel edit, so edit+1 against edit+60 is a controlled pair:
@@ -626,35 +640,167 @@ child that is there instead of averaging around a hole. It is **cheaper**: node-
 0.195 / 0.219 → **0.141 ms** at 4K under `--chisel 8,16`, because a brick that is never missing is
 never missed, reported, re-descended from the root and rebuilt.
 
-**The half that is still open, with its numbers.** On a settled, static, **un-edited** camera at
-frame 2400 the pool reports `built 14 evicted 8` in one frame. A converged tree should report
-neither, and D247 is supposed to have closed exactly this. Consecutive frames of `--debug-mode 3`
-differ on **92 pixels of 3,686,400 at 1440p and 2,112 of 8,294,400 at 4K, worst 153 of 255** — a
-whole detail level moving, on a camera that is not. Every one of those is the same absent-node state
-the photograph above shows, arriving through eviction instead of an edit, and it paints the same
-slab.
+**The standing-still half, and the instrument that closed it.** D425 said what to build first — a
+count of evictions of nodes that were on screen — and that instrument is now the useful part of this
+whole section, because it can be pointed at the next residency question without being rebuilt.
+**It cannot be made out of `node_last_read_`**: that array decides what is cold, it is stamped from
+feedback, and feedback was the suspect. A count taken from the signal under suspicion agrees with the
+policy however wrong the policy is. So there are two witnesses that owe it nothing:
 
-The hole is named and not yet measured. **`touch_slot` stamps the node a ray STOPPED on**, so a brick
-a ray passes *through* — a mostly-air brick at the edge of geometry, which is most of a facade seen
-at a grazing angle — is read every frame and stamped never. `NodePool::touch_slot`'s own comment
-says *"a ray READ this node"*; that is not what the code does. **Build the instrument first**: a count
-of evicted nodes that were on screen that frame. The two candidate fixes — report every node a ray
-touches, or refuse to evict anything in the frustum — cost very differently, and nothing has
-measured which is needed. `refine` now stamps the chain it walks, which closes the same hole for the
-proximity radius (twenty metres that is *requested* every frame and was evicted anyway), and it
-**measured nothing** on the close camera, which is sixty metres out and holds almost no proximity
-set. D424.
+- **the frustum**, built in `NodePool::in_view` from the same four vectors that fill the parameter
+  block the marcher reads, so it cannot disagree about where the rays went. It over-counts, since it
+  says nothing about occlusion — the right direction for an instrument about wrongly-evicted nodes,
+  and it doubles as the price of the "refuse to evict anything on screen" fix;
+- **churn**, a node requested again within `kChurnWindow` of being evicted. That is the harm itself,
+  and it needs no theory about *why* the signal was lost.
 
-**One latent fault found on the way and deliberately reported as not-the-cause** (D425): the node and
-face staging rings were a single region reset to offset zero every frame, against `kFramesInFlight`
-of 2 — so a frame could overwrite bytes a pending `vkCmdCopyBuffer` was still sourcing.
-`WorldBuffers` has partitioned per frame in flight since the chunk path was written; the two arrays
-the rewrite added did not. Fixed by splitting the ring rather than doubling it, so the allocation is
-unchanged. **Both arms were built and run three times each at 800p and 4K under `--chisel 8,16` and
-the control reported `GPU mirror matches` every time**, so it is not what the player saw on this
-machine: the copies are the first commands in the frame, so the window is only open when the card is
-a whole frame behind. It is kept because the window is real and machine-dependent, and because what
-it fails as is arbitrary bytes read as node records.
+Hanging off churn are the three that actually decided it: the node's level, the brick's fill, and
+**whether any ray had ever reported reading it at all**. Close camera, 1280×800, settled, static,
+un-edited, frame 2400: **249,454 evictions over the run, 228,964 inside the frustum, 37,213 asked for
+again within two seconds — and 249,414 of them nodes no ray had EVER reported reading.** Three
+resolutions barely move it (37k / 43k / 50k while the reporting lattice's period goes 64 → 256 →
+1,024 frames against a 600-frame window), which is what killed "the sampling is too sparse".
+
+**The cause was the one `touch_slot`'s comment already claimed was impossible.** It stamps the node a
+ray STOPPED on, so every brick in front of that one — the ones a ray walks voxel by voxel to get
+past, which is most of a facade at a grazing angle and every window reveal, cornice and step — was
+read every frame and stamped never. One call after the inner walk falls out without hitting solid
+fixes it (D427), on the same lattice the stop report already uses.
+
+**Measured, against a same-build control** (`--no-node-crossings`; two flags, never two builds):
+
+| close camera, 1280×800, settled | control | crossings on |
+|---|---|---|
+| churn over the run | 37,213 | **29,077** |
+| ...asked for by a primary ray's miss | 1,177 | **0** |
+| ...by a dilated neighbour | 6,313 | **313** |
+| resident leaves | 21,747 | 20,382 |
+| consecutive frames of `--debug-mode 3` at 1440p, seven pairs | 13 / 0 / 3 / 50 / 0 / 2 / 59 px, worst 153 | **nought on every pair** |
+| outdoor camera, two runs of the SAME arm | 12,484 px at 0.480 | **674 px at 0.081** |
+
+That last row is the one to keep: the change does not merely stop a flicker, it makes the outdoor
+camera **reproducible**, which is what every image diff in this file is measured against. Cost is
+nothing measurable — interleaved on `_flybench.ps1` at 1440p, visibility 3.700 against 3.643 ms and
+total GPU 11.36 against 11.65, inside a control that spans 3.456–3.777 by itself.
+
+`refine` also stamps the chain it walks, which closes the same hole for the proximity radius (twenty
+metres that is *requested* every frame and was evicted anyway), and it **measured nothing** on the
+close camera, which is sixty metres out and holds almost no proximity set. D424.
+
+### Closed: a light ray keeps the cell that stopped it
+
+**With D427 in, 28,695 of the 29,017 remaining rebuilds were asked for by a light ray stopped by
+ignorance, and none by a primary ray.** It was a closed loop with a period of exactly `cold_frames`:
+a shadow, ambient or lamp ray is stopped by a cell the pool has not built and reports it (D292's
+narrowing, R9i) → the pool builds it → **no primary ray ever reads it**, because it is an occluder
+and not a visible surface → six hundred frames later the erosion sweep takes it → the next light ray
+to reach it reports it again. The bricks are solid (283 of 512 against a resident average of 253),
+and an unbuilt cell is opaque to occlusion (D302), which is where *"and they even cast shadows"*
+comes from.
+
+**The fix is the second half of a sentence D292 had only written the first half of.** That rule says
+a light path may name *the one cell that stopped it* and nothing it merely crossed. Naming it as
+**missing** was the only thing a light ray could ever say about it; it can now say it is **using**
+it, on the same one cell. Same set, both directions, and it asks for nothing. D430.
+
+| close camera, 1280×800, settled | control | light keeps it |
+|---|---|---|
+| rebuilt within two seconds of eviction | 29,017 | **4,660** |
+| evictions over the run | 242,794 | 204,973 |
+| resident leaves | 20,368 | 20,746 |
+| feedback, 4K flying and chiselling | 61,736, none dropped | **65,505, none dropped** |
+| faces pass, 1440p flying and chiselling | 7.78 ms (7.46–8.01) | 7.88 ms (7.81–7.99) |
+
+**Three things to know before touching it**, and two of them are things that were built and removed:
+
+1. **One entry per RAY is not a throttle.** The first version reported from every ray stopped by the
+   brick, on a per-slot schedule. That bounds the rate per node and says nothing about the total —
+   thousands of rays are stopped by the same brick, and at 4K flying and chiselling it measured
+   **1,538,219 reports against a 131,072 capacity, 1,407,147 dropped**. What gets dropped includes
+   the *miss* reports that stream geometry, so the cure starves what it was meant to help, and it
+   reads as a settled-camera success and a moving-camera disaster. `node_seen` — a card-owned word a
+   slot, exactly what `face_seen` is to the pixel's reads (D414) — makes it one entry per node per
+   window however many rays hit it. D431.
+2. **Nothing cheaper may stand in front of that array.** A slot-hash pre-gate, so the load lands on
+   a sixteenth of the reads, costs most of the benefit — churn **8,651 against 1,028** — because a
+   brick is then only reported if a ray happens to read it on the one frame it is eligible, and a
+   converged face casts nothing on most frames. It was chasing a +6% that did not exist: two
+   interleaved rounds said so and four rounds put the arms inside each other's spread. D432.
+3. **Stamping what a light ray CROSSES is not the same rule and is not carried.** It is worth
+   churn 4,606 → 1,028 and costs the faces pass 7.88 → 8.25 ms flying and chiselling, outside a
+   spread stop-only sits inside — but the deciding argument is that "keep everything a shadow ray
+   crosses" is the thing D292 exists to forbid. D432.
+
+The levers are `--no-light-keeps-geometry` and `--light-read-period N`, the second being the window
+in frames (a power of two; 0 is off), because the trade this rule makes is the window against the
+feedback entries and a trade nobody can sweep at run time is a trade somebody guesses at.
+
+**What is left**: 4,660 rebuilds over a settled run, which are faces genuinely reopening — seen,
+dropped from the gate, seen again. None of it moves a pixel between consecutive frames on any camera
+measured. **And one thing that did not survive contact**: the guess that this was behind R10's open
+item — *6.0% of surface held short of convergence by unbuilt geometry* — is not reproducible on this
+camera at all. The held-short count reads nought in every arm, including one with both rules off, so
+that open item is still open and still unexplained.
+
+### Closed: an edit relit the whole room, so the lamps never converged again
+
+Reported in three parts — *"after playing for a short while the light becomes like squares and they
+flicker rapidly"*, *"placing voxels makes them look like an incorrect corrupted version of what I
+placed for a while"*, and *"undo doesn't delete all voxels"*. The first two are **one cause and it is
+closed** (D433, D434). The third is not a geometry fault at all (D436).
+
+**Photograph the terms separately before theorising about the picture.** Two consecutive frames of a
+static camera under `--chisel 60,16` — one edit a second, which is what building feels like — diffed
+in each debug view:
+
+| ten frames after an edit | sun (16) | sky (17) | near field (18) | **lamps (20)** |
+|---|---|---|---|---|
+| pixels differing between two consecutive frames | **0** | 791 | 6,253 | **442,227** |
+
+and the audit line says it without a picture: never edited, `lamps on the card: 111,372 of 111,373
+live faces cast no more rays at all`; with one edit a second, **`0 of 121,013`**.
+
+**The cause.** An edit is announced for the reach a SHADOW has — sixteen metres — and every term
+inside that box was reopened on it. The near field already had its own two-metre reach for exactly
+this reason (`kEditAmbientReach`); the lamps had none. So a one-metre chisel stroke restarted the
+lamp estimator on every face in the room, 64 frames of burst apiece, and the next stroke landed
+first. Per face, so it reads as squares; every frame, so it flickers.
+
+**The fix is a geometric question asked exactly**: a face's lamp light can only change if the moved
+geometry stands *between* it and a fitting. `lamp_path_crosses_edit` slab-tests the segment from the
+face to each fitting against the edited box, on the one frame the edit is announced, capped at
+`kLampEditProbe` fittings. R9g's *a face never loops over lights* is about the per-sample cost and is
+not broken by it — see D434.
+
+**Measured against `--no-lamp-edit-scope`, which is the control arm and is the same build:**
+
+| enclosed camera, 1280×800, `--settle`, `--chisel 60,16` | control | scoped |
+|---|---|---|
+| faces holding a settled lamp term | 0 of 120,833 | **89,408 of 121,026** |
+| lamp term, two consecutive frames | 242,842 px at 4.86 | **36,747 at 2.15** (floor 27,072 at 1.97) |
+| the shaded picture, two consecutive frames | 302,797 px at 5.84 | **79,949 at 3.03** (floor 70,649 at 2.92) |
+| two frames after a placement, against the same scene converged | 578,934 px at 11.42 | **84,023 at 3.33** |
+| faces pass at 1440p, one edit a second | 11.116 ms mean, 17.468 worst | **7.560, 11.073** |
+| total GPU at 1440p, one edit a second | 18.788 ms mean, 25.902 worst | **15.332, 18.438** |
+
+Nothing is lost: 440 frames after a 2.1-million-voxel placement the two arms' converged lamp
+pictures differ by 28,718 pixels at 2.23 against that 27,072 floor, with the identical converged
+count; a never-edited settled run is inside the run-to-run floor. 470 tests.
+
+**Undo is not what it looked like** (D436). Place 2,146,689 voxels, undo, and the world comes back to
+the byte — same content hash as a run that never edited — with `the node pool agrees with the world,
+leaf for leaf` and a worst pixel difference of 35 of 255, with no block-shaped residue in the
+difference image. What is left is the lamp term re-measuring across the room, which for a box that
+large is honest work: **64 frames**, `kLampConverged / kLampBurst`. **Still open**: nothing has
+measured what a larger `kLampBurst` costs, and D394 is the standing warning against metering it.
+**Also unexplained**: the first half of that report — an undo leaving voxels *in the world* — which
+no run here reproduces.
+
+**One change kept although it measured nothing** (D435). `edit_min.w == 2` set a face's counters to
+nought, which is the one thing `face_accumulate`'s comment promises never happens; it now drops to
+`kFaceEditSeed` at the same ratio. Measured neutral on every case that could be photographed, because
+the visibility pass reads the counters before the shading pass writes them. Kept for the case no
+screenshot reaches — a face reopened while nobody is looking at it takes no sample at all.
 
 ### R3 comes before R1e, deliberately
 
@@ -993,7 +1139,14 @@ for what happens when the harness itself gets it wrong):
 
 `--no-face-gate` lights every face in the store again whether or not a pixel has read it;
 `--no-face-worklist` dispatches the shading pass over every live slot again;
-`--no-face-prolong` is the third and is already the default (D417). `--chisel EVERY,RADIUS` carves
+`--no-face-prolong` is the third and is already the default (D417);
+`--no-node-crossings` restores residency hearing only about the brick a ray stopped on, which is the
+control arm for D427 and the state everything above this section was measured in;
+`--no-light-keeps-geometry` stops a light ray saying it is using the cell that stopped it, which is
+D430's control arm, and `--light-read-period N` is the window that rule reports on, in frames;
+`--no-lamp-edit-scope` reopens the lamp term of every face within sixteen metres of an edit again,
+which is D434's control arm, and `--face-edit-seed N` is how many samples an announced face keeps,
+where 0 is D435's control arm and restores the wipe. `--chisel EVERY,RADIUS` carves
 and fills alternately at whatever the camera is looking at, through the same code path the mouse
 button takes, and prints what it changed — **read that line before reading any time from a chisel
 run**, because a run that missed every time and a run that never fired print the same pass table.

@@ -118,6 +118,20 @@ layout(push_constant) uniform NodeConstants {
     uint from_worklist; // shading: take the slot from face_work.slots rather than from the index
     uint seen_window;   // how many frames a face keeps being lit after the last pixel that read it
     uint prolong;       // 1: a subdivided face inherits its parent's fit. 0: the old stand-in seed
+    // 1: a ray reports the bricks it passes THROUGH as read, not only the one it stops on.
+    // A run-time lever rather than a build, because D407 and D420 are both about what happens
+    // when the two arms of an A/B are two binaries. Off restores the behaviour D426 measured.
+    uint report_crossings;
+    // How often a light ray may stamp a node it reads, in frames, as a power of two. 0 is off.
+    // A period rather than a switch because it is the whole trade in this rule -- see node_light_due.
+    uint light_read_period;
+    // How many samples a face keeps when the host announces that the world under it changed.
+    // 0 is the old wipe and is the control arm for that change. See kFaceEditSeed.
+    uint edit_seed;
+    // 1: an edit reopens a face's LAMP term only where it can stand between that face and a
+    // fitting. 0 reopens the whole sixteen-metre box, which is the control arm and is what made a
+    // room full of lamps flicker for as long as somebody was building in it.
+    uint lamp_edit_scope;
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }
@@ -227,6 +241,22 @@ layout(std430, binding = 13) buffer FaceLight { uint words[]; } face_light;
 // visibility pass, on the other hand, looks a face up for EVERY pixel, so it knows exactly, this
 // frame, with no lattice and no round trip. It is already holding the record it would stamp.
 layout(std430, binding = 15) buffer FaceSeen { uint frames[]; } face_seen;
+
+// When a node was last REPORTED as read, one word a slot, card-owned exactly as face_seen is.
+//
+// This is a deduplicator and nothing else. Without it, a light ray keeping the geometry it reads
+// (D429) is one feedback entry per RAY, and thousands of rays are stopped by the same brick: at 4K
+// while flying and chiselling that measured 1,538,219 reports against a 131,072 capacity, of which
+// 1,407,147 were dropped -- and what gets dropped is not only the new stamps but the miss reports
+// that stream geometry, so the cure was worse than the fault by a wide margin. With it, a node
+// produces at most one entry per `light_read_period` frames however many rays hit it, so the volume
+// is a function of how much DISTINCT world the light is touching rather than of how many rays it
+// takes to touch it. D430.
+//
+// The host never writes it, which is what makes it safe to be stale: a slot reused by a different
+// node keeps an old stamp and is merely reported a few frames late, and the host stamps a node it
+// builds anyway. Two invocations racing both report, which costs one duplicate entry.
+layout(std430, binding = 17) buffer NodeSeen { uint frames[]; } node_seen;
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
 // live value is `node_push.seen_window`, so `--face-gate` can widen it to the whole run and give
@@ -654,6 +684,15 @@ const uint kLampSeedSamples = 8u;
 // place. Quartered per level of separation, as the ambient one is.
 const uint kLampProlong = 384u;
 
+// How many fittings an edit may ask about before it gives up and reopens the face anyway.
+//
+// The one place a face looks at the whole emitter list -- see lamp_path_crosses_edit, which runs on
+// the single frame an edit is announced and decides whether that edit can have moved this face's
+// lamp light at all. A cap is what keeps the cost of an edit bounded in a scene the size of
+// clips/many_lamps.clip: past it the answer is the old conservative one, which is the behaviour
+// that was there before and is never wrong, only wasteful.
+const uint kLampEditProbe = 64u;
+
 // The least a stand-in must have measured before a fine face is worth seeding from it. Same
 // argument as kSkySeedMin: seeding from a handful of rays is not a prior, it is the noise arriving
 // one level coarser.
@@ -712,6 +751,41 @@ uint face_accumulate(uint counters, bool reached_the_sun) {
         lit >>= 1u;
     }
     return ((samples + 1u) & 0xFFFFu) | ((lit + (reached_the_sun ? 1u : 0u)) << 16);
+}
+
+// How much confidence a face keeps when the HOST announces that the world under it changed, as
+// against how much it keeps when one of its own samples contradicts it (two, above).
+//
+// Not nought, and that is the whole of this constant. The paragraph above says it in as many words:
+// a contradicted face keeps its answer and loses its confidence, "so the composite keeps reading it
+// throughout and no pixel ever falls back to full sun on account of an edit". The edit announcement
+// -- `edit_min.w == 2`, which arrived later -- then zeroed the counters outright, which is the one
+// thing that sentence promises never happens. A face at nought samples is not answerable, so every
+// pixel standing on it reads the coarse face three levels up; that stand-in is inside the same
+// sixteen-metre box, so it has been zeroed too; so the pixel ends on a provisional face with no
+// light at all. What a player sees is the whole room turning to eight-voxel blocks and flashing,
+// once per edit, for as long as they keep building -- which is exactly how it was reported.
+//
+// Eight, the same figure and the same argument as kLampSeedSamples: a burst of new rays outvotes a
+// prior of eight within a handful of frames, and the face sits under kFaceEager throughout, so it
+// is shaded every frame until it has caught up rather than one frame in `face_stride`. D373's
+// measurement is what the wipe was for -- a face mid-transition has no unanimity to contradict and
+// averages back down inside a 256-sample window -- and a window of eight is not that window.
+//
+// The live value is `node_push.edit_seed`, so `--face-edit-seed 0` is the old behaviour exactly and
+// the two arms of the A/B are one build (D407).
+const uint kFaceEditSeed = 8u;
+
+// A pair of counts scaled down to at most `seed` samples, keeping the ratio. The same arithmetic
+// face_light_seed already does to a stand-in's history, applied to a face's own.
+uint face_reseed(uint counters, uint seed) {
+    const uint had = face_samples_of(counters);
+    if (had <= seed) return counters;
+    const uint lit = face_lit_of(counters);
+    // Rounded rather than truncated, so a face at 255 of 256 does not come back at 7 of 8 and read
+    // as a shade darker every time somebody places a voxel across the room.
+    const uint kept = (lit * seed + had / 2u) / had;
+    return (seed & 0xFFFFu) | ((kept & 0xFFFFu) << 16);
 }
 
 // What fraction of this face's rays reached the sun. One before any have been cast, so a face
@@ -779,7 +853,9 @@ FaceWork face_work_of(uint slot, Face face, bool provisional_face) {
     // Nothing to do at all: nobody is looking at it and the host has announced nothing.
     if (!w.may_cast && !w.edit_reset && node_push.light_reset == 0u) return w;
 
-    w.counters = w.edit_reset ? 0u : face.counters;
+    // An announcement lowers a face's confidence; it does not erase its answer. See kFaceEditSeed:
+    // zeroing this is what made every edit turn the room into flashing blocks.
+    w.counters = w.edit_reset ? face_reseed(face.counters, node_push.edit_seed) : face.counters;
     w.samples = face_samples_of(w.counters);
     w.sun_due = !(node_push.face_stride > 1u && w.samples >= kFaceEager && !w.near_edit &&
                   ((slot + node_push.frame) % node_push.face_stride) != 0u);
@@ -1187,6 +1263,53 @@ const int kFeedbackFace = 0x40000;
 // seven on the request volume, which is where the node pool's CPU goes (D351).
 const int kFeedbackExact = 0x80000;
 
+// A light ray keeps the geometry it is standing on, and asks for nothing new.
+//
+// D292 forbids a light path from dragging residency towards whatever it crosses, and that rule is
+// right: a ray that REQUESTED everything it passed through would ask for the world behind every
+// surface. This is not that. It is a stamp on a node that is already built, saying the node is in
+// use -- and without it the pool cannot tell a brick nothing wants from a brick that occludes half
+// the room, because the only thing a light ray has ever said is "this cell is MISSING".
+//
+// What that silence costs is a closed loop with a period of exactly `cold_frames`: a light ray is
+// stopped by an unbuilt cell and reports it, the pool builds it, no primary ray ever reads it
+// because it is an occluder and not a visible surface, six hundred frames later the erosion sweep
+// takes it, and the next light ray to reach it reports it again. Measured on the close camera after
+// D427 closed the primary-ray half: 28,764 of the 29,077 remaining rebuilds in a settled, static,
+// un-edited run, none of them asked for by a primary ray. D429.
+//
+// Throttled per NODE rather than per ray, which is the difference between a guarantee and a sample:
+// a brick occluding anything at all is reported within `light_read_period` frames whatever hits it,
+// against a six-hundred-frame cold window. Throttling per ray instead reports a busy brick hundreds
+// of times and a quiet one never, which is the wrong way round -- the quiet one is the one at risk.
+//
+// The period is a push constant and `--light-read-period N` sets it, because it is the whole of the
+// trade this rule makes -- feedback entries against how long a silent occluder survives -- and a
+// trade nobody can sweep at run time is a trade somebody guesses at.
+//
+// Unsigned arithmetic on purpose, exactly as node_face_recently_seen does it: a slot never stamped
+// reads nought, and `frame - 0` is past any period from the first frames of the run.
+bool node_light_due(bool enabled, uint slot) {
+    if (!enabled || slot == kNoNode || node_push.light_read_period == 0u) return false;
+    const uint period = node_push.light_read_period;
+    if (slot >= node_seen.frames.length()) return false;
+
+    // The array IS the throttle, and nothing cheaper may stand in front of it. A slot-hash pre-gate
+    // was tried here to keep the load off the memory bus -- eligible one frame in `period`, decided
+    // by arithmetic -- and it cost most of the benefit: churn 1,028 against 8,651 on the settled
+    // close camera, because a brick is only reported if a light ray happens to read it on the one
+    // frame it is eligible, and a converged face casts nothing on most frames. What it was bought
+    // for turned out not to exist: the +6% it was chasing on the faces pass was two rounds of
+    // noise, and four interleaved rounds put the two arms inside each other's spread. D430.
+    //
+    // So: reported the first time a ray reads it after `period` frames, whenever that is. Every one
+    // of the thousands of rays stopped by the same brick after that reads `frame - frame`, which is
+    // nought, and falls out here -- which is the whole job.
+    if ((node_push.frame - node_seen.frames[slot]) < period) return false;
+    node_seen.frames[slot] = node_push.frame;
+    return true;
+}
+
 void node_flush_used(bool enabled, ivec3 block) {
     if (!enabled) return;
     uint index = atomicAdd(feedback.count, 1u);
@@ -1435,6 +1558,12 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
         limit = min(limit, exit);
     }
 
+    // This ray treats an unbuilt cell as an occluder, which is exactly the property that makes it
+    // need the geometry to exist -- so it is also the ray that must say it is using it. The two
+    // are one fact and are deliberately not two flags: a ray that reads ignorance as matter and
+    // does not keep what it reads is the loop D429 measured.
+    bool keeps_geometry = occlude_unknown && node_push.light_read_period != 0u;
+
     bool has_pending = false;
     ivec4 pending = ivec4(0);
     ivec3 last_normal = ivec3(0);
@@ -1514,7 +1643,8 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 result.level = min(found.level, kNodeMaxDetail);
                 node_flush(report, has_pending, pending);
                 node_flush_used(report_used, g_node_block);
-                node_flush_read(report_used, found.slot);
+                node_flush_read(report_used || node_light_due(keeps_geometry, found.slot),
+                                found.slot);
                 node_face_hit(result, report_face, voxel, outer_level, last_normal);
                 return result;
             }
@@ -1569,7 +1699,8 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     }
                     node_flush(report, has_pending, pending);
                     node_flush_used(report_used, g_node_block);
-                    node_flush_read(report_used, found.slot);
+                    node_flush_read(report_used || node_light_due(keeps_geometry, found.slot),
+                                    found.slot);
                     // The VOXEL the ray stopped on, at the level the PIXEL resolves -- not the
                     // brick the outer walk was stepping.
                     //
@@ -1601,6 +1732,34 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 }
                 if (t_inner > limit) break;
             }
+
+            // The ray crossed this brick and came out the other side. It READ it, and until now
+            // nothing anywhere said so.
+            //
+            // `node_flush_read` above fires only where the march STOPS, so residency only ever
+            // heard about the last brick of a path -- and every brick in front of it, which the ray
+            // has to walk voxel by voxel to get past, aged out on a six-hundred-frame timer while
+            // it was being read every frame. Measured on the close camera at 1280x800: 249,454
+            // evictions over a settled, static run, 228,964 of them inside the frustum, 249,414 of
+            // them nodes no ray had EVER reported reading, and 37,213 requested again within two
+            // seconds of going -- 1,177 of those by a primary ray's own miss, which this line takes
+            // to nought and which was the visible half of it. That churn is what a player
+            // sees as bricks flickering to plain cubes while standing still: an evicted node reads
+            // as unbuilt-but-occupied, so the marcher paints an ancestor's folded colour over the
+            // whole cell (D421) and occlusion treats it as opaque, which is why the flicker casts a
+            // shadow. D426, D427.
+            //
+            // It is one report per crossed brick per reporting ray, on the same lattice the stop
+            // report already uses, so the traffic follows the same screen area it always did.
+            //
+            // A LIGHT ray deliberately says nothing here, and that is D292 rather than an omission.
+            // The rule it narrows is "a light path may name the one cell that STOPPED it, and
+            // nothing it merely crossed"; keeping what it crosses is the other half of the same
+            // sentence, and dragging residency along every shadow ray is what that rule exists to
+            // prevent. Measured both ways: stamping crossings too takes settled churn from 4,606 to
+            // 1,028, and costs the faces pass 7.88 -> 8.25 ms while flying and chiselling, which is
+            // outside its spread where stop-only is inside it. Not carried. D430.
+            node_flush_read(report_used && node_push.report_crossings != 0u, found.slot);
         } else {
             if (found.state == kFoundWanted) {
                 // The world has something here and the pool does not. Report the node at the

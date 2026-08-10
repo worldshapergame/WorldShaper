@@ -379,6 +379,72 @@ float lamp_target(uint index, vec3 from, vec3 normal, out vec3 centre, out float
     return lamp_luminance(radiance) * cos_surface * solid;
 }
 
+// Can the box the host has just announced have moved this face's lamp light at all?
+//
+// It can only do so by standing between the face and a fitting. A lamp's contribution is radiance
+// times visibility; the fittings have not moved and the radiance has not changed, so a face whose
+// every lamp path misses the edited box is holding exactly the answer it held before, and throwing
+// that answer away is pure loss.
+//
+// # Why this is worth a loop over the emitter list
+//
+// The face pass reopened the lamp term over the whole sixteen-metre box an edit is announced for --
+// the SUN's reach, because a placed block casts a long shadow. Lamps do not work like that: they
+// are point sources in a room, and a block placed across the hall shadows almost nothing. Measured
+// on the enclosed camera with one edit a second: `lamps on the card: 0 of 121,013 live faces cast
+// no more rays at all` -- not one face in the room held a settled lamp term for the whole run --
+// and 43% of the frame changed between two consecutive frames, against 2.9% never edited. Per face,
+// so it reads as squares, and every frame, so it flickers. That is the reported bug.
+//
+// R9g's rule is that a face NEVER loops over lights, and it is not broken here. That rule is about
+// the per-SAMPLE cost -- it is what makes a hall of a thousand fittings cost a face what a hall of
+// one costs, on every frame, for ever. This loop runs on the single frame an edit is announced, for
+// the faces inside that edit's box, and it is what stops the same edit reopening a hundred thousand
+// converged faces. Bounded twice over: at kLampEditProbe fittings, past which the answer is the old
+// conservative one, so the cost of an edit is bounded whatever the scene holds.
+//
+// The box tested is the EDIT, not the sixteen metres it was announced for: `edit_min` arrives grown
+// by kEditShadowReach, and shrinking it back is what the near field already does.
+bool lamp_path_crosses_edit(vec3 from) {
+    const uint count = min(node_push.light_count, kMaxLights);
+    if (count == 0u) return false;
+    if (count > kLampEditProbe) return true;   // too many to ask; keep the old answer
+
+    const vec3 lo = vec3(push.edit_min.xyz) + vec3(float(kEditShadowReach)) - g_sky_chunk_origin;
+    const vec3 hi = vec3(push.edit_max.xyz) - vec3(float(kEditShadowReach)) - g_sky_chunk_origin;
+
+    for (uint i = 0u; i < count; ++i) {
+        const LightSource lamp = lights.items[i];
+        const vec3 centre =
+            vec3(float(lamp.x), float(lamp.y), float(lamp.z)) + 0.5 - g_sky_chunk_origin;
+        const vec3 to = centre - from;
+
+        // The slab test, over the segment rather than the ray: an occluder past the fitting is not
+        // between anything. Grown by the margin the sample itself is allowed to wander over the
+        // face, so a box that only just misses the centre line is not called a miss.
+        float t0 = 0.0;
+        float t1 = 1.0;
+        bool crosses = true;
+        for (uint axis = 0u; axis < 3u; ++axis) {
+            const float d = to[axis];
+            const float low = lo[axis] - g_sky_size - from[axis];
+            const float high = hi[axis] + g_sky_size - from[axis];
+            if (abs(d) < 1e-6) {
+                if (low > 0.0 || high < 0.0) { crosses = false; break; }
+                continue;
+            }
+            const float inv = 1.0 / d;
+            const float a = min(low * inv, high * inv);
+            const float b = max(low * inv, high * inv);
+            t0 = max(t0, a);
+            t1 = min(t1, b);
+            if (t0 > t1) { crosses = false; break; }
+        }
+        if (crosses) return true;
+    }
+    return false;
+}
+
 // One lamp sample: irradiance arriving at this face from one fitting chosen in proportion to what
 // it would deliver, corrected by the density that chose it, and multiplied by whether the ray got
 // there. `unknown` says the ray was stopped by a cell the world claims and the pool has not built,
@@ -563,13 +629,19 @@ void main() {
     // nothing, so it keeps averaging and takes hundreds of frames to come back. Measured: fully
     // shadowed faces flat at ~42,000 against 105,848 for the same camera never edited.
     //
-    // edit_min.w == 2 is the one frame the edited region opened on. Faces inside it start again
-    // from nothing, which is exact rather than a guess and leaves D319's rule alone for the case it
-    // was written for. What it costs is that a face inside the box whose light did NOT change
-    // re-converges too -- a handful of frames, on faces that are being shaded every frame anyway.
+    // edit_min.w == 2 is the one frame the edited region opened on. Faces inside it drop to
+    // `kFaceEditSeed` samples at the ratio they held, which is exact rather than a guess and leaves
+    // D319's rule alone for the case it was written for. What it costs is that a face inside the box
+    // whose light did NOT change re-converges too -- a handful of frames, on faces that are being
+    // shaded every frame anyway.
+    //
+    // It used to drop to NOUGHT, and that is what a player was seeing as the room turning to blocks
+    // and flashing on every edit: a face with no samples is not answerable, so the composite reads
+    // the coarse face three levels above it, and indoors that stand-in is inside the same box and
+    // has been zeroed by the same line. See kFaceEditSeed for the whole of it.
     const bool edit_reset = work.edit_reset;
-    const uint counters = work.counters;
-    if (edit_reset) faces.items[slot].counters = 0u;
+    const uint counters = work.counters;   // already reseeded by face_work_of when edit_reset
+    if (edit_reset) faces.items[slot].counters = counters;
 
     // ---- if the camera cannot see it, it is not lit -------------------------------------------
     //
@@ -858,32 +930,71 @@ void main() {
         //
         // That distinction is the difference between placing a single voxel costing a handful of
         // faces their thirty-two-ray burst and costing every face within sixteen metres of it one.
-        if (near_edit_contact) {
-            for (uint w = 0u; w < 5u; ++w) face_light.words[light_at + w] = 0u;
-        } else {
-            face_light.words[light_at] &= 0xFFFFu;   // keep the near counts, drop the far ones
-            face_light.words[light_at + 4u] = 0u;
+        //
+        // Neither half is thrown away, for the reason kFaceEditSeed sets out for the sun: a count of
+        // nought is not a cautious answer here either. An ambient record with no samples reads as
+        // fully unoccluded and a far field with none reads as open sky, so wiping them lit every
+        // crease in the room white for the frames it took to measure them again -- on every edit.
+        // Both keep their mean and drop to kFaceEditSeed, which the next burst outvotes at once.
+        const uint seed = node_push.edit_seed;
+        uint near_n = face_light.words[light_at] & 0xFFFFu;
+        uint far_n = (face_light.words[light_at] >> 16) & 0xFFFFu;
+        if (near_edit_contact && near_n > seed) {
+            const float scale = float(seed) / float(near_n);
+            face_light.words[light_at + 1u] =
+                uint(float(face_light.words[light_at + 1u]) * scale + 0.5);
+            // Signed: a corner's gradient is negative on one side of the face, and the bit pattern
+            // is what carries it. Scaled through int, not through the unsigned word.
+            face_light.words[light_at + 2u] =
+                uint(int(round(float(int(face_light.words[light_at + 2u])) * scale)));
+            face_light.words[light_at + 3u] =
+                uint(int(round(float(int(face_light.words[light_at + 3u])) * scale)));
+            near_n = seed;
         }
+        if (far_n > seed) {
+            face_light.words[light_at + 4u] =
+                (face_light.words[light_at + 4u] * seed + far_n / 2u) / far_n;
+            far_n = seed;
+        }
+        face_light.words[light_at] = (near_n & 0xFFFFu) | ((far_n & 0xFFFFu) << 16);
         // ...and it is measuring again, so it is neither finished nor idle.
         faces.items[slot].photons &= ~(kFaceAmbientDone | kFaceAmbientIdle);
 
-        // The LAMPS keep the full reach, and they keep their mean. What moved is geometry, so what
-        // a lamp ray would find on the way to a fitting is not what it found before -- but the
-        // fittings themselves have not moved, so the old answer is a good prior and a bad fact.
-        // Confidence is dropped to kLampSeedSamples, for the reason that constant sets out:
-        // throwing the mean away is exact and it flashes, and the next burst outvotes a prior of
-        // eight on the very next frame.
-        const uint had = face_light.words[light_at + 8u] & 0xFFFFu;
-        const uint keep = min(had, kLampSeedSamples);
-        if (had > keep) {
-            const float scale = float(keep) / float(had);
-            for (uint w = 5u; w < 8u; ++w) {
-                face_light.words[light_at + w] =
-                    floatBitsToUint(uintBitsToFloat(face_light.words[light_at + w]) * scale);
+        // The LAMPS keep their mean and lose their confidence -- but only where the edit can have
+        // reached them, which for a lamp is not the sun's sixteen metres.
+        //
+        // A face's lamp light changes only if the moved geometry stands between it and a fitting,
+        // so that is what is asked, once, on this frame: `lamp_path_crosses_edit`. Without it every
+        // edit reopened the lamp term of every face in the room, the estimator restarted from eight
+        // samples on all of them, and a player building anything watched the whole interior turn to
+        // per-face squares and flicker for the sixty-four frames it takes to reach kLampConverged
+        // -- then did it again on the next edit. Measured: `0 of 121,013 live faces cast no more
+        // rays at all`, and 43% of the frame changing between two consecutive frames.
+        //
+        // Inside kEditAmbientReach it is reopened regardless: there the geometry under the face has
+        // genuinely moved, the face's own position on the world has changed, and the box test is
+        // beside the point.
+        const bool lamp_edit =
+            near_edit_contact ||
+            (node_push.lamp_edit_scope == 0u) ||
+            lamp_path_crosses_edit(face_point(corner, across, down, normal, size, vec2(0.0)) -
+                                   chunk_origin);
+        if (lamp_edit) {
+            // Confidence dropped to kLampSeedSamples, for the reason that constant sets out:
+            // throwing the mean away is exact and it flashes, and the next burst outvotes a prior
+            // of eight on the very next frame.
+            const uint had = face_light.words[light_at + 8u] & 0xFFFFu;
+            const uint keep = min(had, kLampSeedSamples);
+            if (had > keep) {
+                const float scale = float(keep) / float(had);
+                for (uint w = 5u; w < 8u; ++w) {
+                    face_light.words[light_at + w] =
+                        floatBitsToUint(uintBitsToFloat(face_light.words[light_at + w]) * scale);
+                }
             }
+            face_light.words[light_at + 8u] = keep | ((node_push.light_version & 0xFFFFu) << 16);
+            faces.items[slot].photons &= ~kFaceLampIdle;
         }
-        face_light.words[light_at + 8u] = keep | ((node_push.light_version & 0xFFFFu) << 16);
-        faces.items[slot].photons &= ~kFaceLampIdle;
     } else if (samples == 0u) {
         for (uint w = 0u; w < kFaceLightWords; ++w) face_light.words[light_at + w] = 0u;
         faces.items[slot].photons &= ~kFaceLampIdle;

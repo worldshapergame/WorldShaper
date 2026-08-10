@@ -171,6 +171,41 @@ struct Options {
     // correct is worth having written down; it is not on because nothing has measured it helping.
     bool face_prolong = false;
 
+    // A ray tells residency about every brick it crosses, not only the one it stops on.
+    //
+    // On, because off is the fault: `--no-node-crossings` is the control arm, and it restores what
+    // D426 measured -- 92% of all evictions taking nodes that were inside the frustum, 99.94% of
+    // them nodes no ray had ever reported reading, and 37,606 of them requested again within two
+    // seconds. Switchable rather than two builds for the reason the three above are (D407).
+    bool node_crossings = true;
+
+    // A light ray says it is using the geometry it is stopped by, rather than only ever saying
+    // that a cell is missing.
+    //
+    // On, because off is the loop D429 measured: 28,764 of 29,077 rebuilds on a settled, static
+    // camera, all of them occluders no primary ray ever reads, each one thrown away and asked for
+    // again on a six-hundred-frame cycle. `--no-light-keeps-geometry` is the control arm, and
+    // `--light-read-period N` sweeps the trade: how many frames a node may go unstamped, against
+    // the feedback entries the stamping costs. A power of two; 0 is off.
+    u32 light_read_period = 16;
+
+    // How much confidence a face keeps when an edit announces that the world under it changed.
+    //
+    // Eight, and `--face-edit-seed 0` is the control arm: it restores the wipe, which is what a
+    // player was seeing as the room turning to eight-voxel blocks and flashing on every edit. A
+    // face at nought samples is not answerable, so every pixel on it falls to the coarse stand-in
+    // three levels up -- and indoors that stand-in is inside the same sixteen-metre box and has
+    // been wiped by the same line. See kFaceEditSeed in shaders\node.glsl.
+    u32 face_edit_seed = 8;
+
+    // An edit reopens a face's LAMP term only where it can stand between that face and a fitting.
+    //
+    // On, because off is the reported bug: the lamps were reopened over the sun's sixteen-metre box,
+    // so every edit restarted the lamp estimator on every face in the room. Measured at the enclosed
+    // camera with one edit a second, `--no-lamp-edit-scope` against the default: not one face of
+    // 121,013 held a settled lamp term, and 43% of the frame changed between two consecutive frames.
+    bool lamp_edit_scope = true;
+
     // Press undo, or redo, once, on this frame. Zero is off.
     //
     // The whole point is that they go through the same code the key does. Undo was reported twice
@@ -402,6 +437,27 @@ Options parse_options(int argc, char** argv) {
             options.face_worklist = false;
         } else if (arg == "--no-face-prolong") {
             options.face_prolong = false;
+        } else if (arg == "--no-node-crossings") {
+            options.node_crossings = false;
+        } else if (arg == "--no-light-keeps-geometry") {
+            options.light_read_period = 0;
+        } else if (arg == "--light-read-period" && i + 1 < argc) {
+            // Rounded UP to a power of two, because the shader tests a mask. Saying so beats a
+            // silent floor: `-Extra "--light-read-period 24"` would otherwise measure 16 and be
+            // written down as 24.
+            const u32 asked = static_cast<u32>(std::atoll(argv[++i]));
+            u32 period = 1;
+            while (period < asked) period <<= 1;
+            options.light_read_period = (asked == 0) ? 0 : period;
+            if (options.light_read_period != asked) {
+                WS_LOG_WARN("app", "--light-read-period {} rounded up to {}, which is what the "
+                                   "shader's mask can express",
+                            asked, options.light_read_period);
+            }
+        } else if (arg == "--face-edit-seed" && i + 1 < argc) {
+            options.face_edit_seed = static_cast<u32>(std::atoll(argv[++i]));
+        } else if (arg == "--no-lamp-edit-scope") {
+            options.lamp_edit_scope = false;
         } else if (arg == "--chisel" && i + 1 < argc) {
             // EVERY[,RADIUS] -- carve and fill in front of the camera, for ever.
             i64 values[2]{0, 16};
@@ -493,6 +549,12 @@ void print_help() {
         "  --undo-frame N        press undo once on frame N; --redo-frame N the same for redo.\n"
         "                        Raw frames, like --edit-frame, and through the same code the\n"
         "                        key takes\n"
+        "  --face-edit-seed N    samples a face keeps when an edit says the world under it moved\n"
+        "                        (default 8). 0 restores the wipe, which is the control arm for\n"
+        "                        the blocky flashing an edit used to cause\n"
+        "  --no-lamp-edit-scope  an edit reopens the lamp term of every face within sixteen metres\n"
+        "                        again, rather than only those it can stand in the light of. The\n"
+        "                        control arm for the flicker while building\n"
         "  --max-seconds N       wall-clock deadline for a scripted run. Every run that ends by\n"
         "                        itself has one (default 180 s): it reports where it got to\n"
         "                        rather than running until somebody closes it. 0 for none\n"
@@ -1370,6 +1432,16 @@ private:
         u32 from_worklist;
         u32 seen_window;      // frames a face keeps being lit after the last pixel that read it
         u32 prolong;          // a subdivided face inherits its parent's fit rather than remeasuring
+        // A ray reports the bricks it crosses as read, not only the one it stops on (D427).
+        u32 report_crossings;
+        // How often a light ray may stamp a node it reads, in frames, a power of two. 0 is off.
+        u32 light_read_period;
+        // How many samples a face keeps when the host announces the world under it changed.
+        // 0 restores the wipe, which is this change's control arm. See kFaceEditSeed.
+        u32 edit_seed;
+        // An edit reopens a face's lamp term only where it can stand between that face and a
+        // fitting. 0 reopens the whole sixteen-metre box, which is the control arm.
+        u32 lamp_edit_scope;
     };
     NodePush make_node_push(u32 face_count) const;
 
@@ -1386,6 +1458,9 @@ private:
     // by the shading pass, and the reason the light pass stopped shading the six hundred frames of
     // scenery behind the camera. See `face_seen` in shaders/node.glsl.
     FaceLight face_seen_;
+    // One word a node slot: when the card last REPORTED that node as read by a light ray. A
+    // deduplicator, and the reason D429's rule fits down the feedback buffer at all (D430).
+    FaceLight node_seen_;
     // The compacted dispatch: three words of VkDispatchIndirectCommand, a count, then the slots
     // that owe work. Written by `face_worklist.comp` and read by the shading pass, both on the
     // card; the host only ever zeroes the header. See face_worklist.comp for why it exists.
@@ -1408,6 +1483,9 @@ private:
     bool use_node_pool_ = false;
     u32 last_node_built_ = 0;
     u32 last_node_evicted_ = 0;
+    u32 last_node_evicted_nodes_ = 0;
+    u32 last_node_evicted_on_screen_ = 0;
+    u32 last_node_churned_ = 0;
     u32 last_node_deferred_ = 0;
     FrameStats stats_;
     // A device that dies of a timeout and a device that dies of a bad address leave exactly the
@@ -3116,7 +3194,8 @@ void Application::stream(f64 seconds) {
             const bool exact = (entry.level & kFeedbackExact) != 0;
             const u32 level = static_cast<u32>(entry.level & ~kFeedbackExact);
             if (level < kLeafLevel || level > kMaxNodeLevel) continue;
-            node_pool_.request(NodeKey{entry.x, entry.y, entry.z, level});
+            node_pool_.request(NodeKey{entry.x, entry.y, entry.z, level},
+                               exact ? kRequestOcclusion : kRequestRay);
             if (exact) continue;
 
             // And the six face neighbours, for the same reason the chunk path dilates: a ray
@@ -3130,7 +3209,9 @@ void Application::stream(f64 seconds) {
             };
             // Not `near`: windows.h still defines it as an empty macro, so a loop variable
             // by that name is a syntax error with no mention of macros anywhere in it.
-            for (const NodeKey& adjacent : around) node_pool_.request(adjacent);
+            for (const NodeKey& adjacent : around) {
+                node_pool_.request(adjacent, kRequestDilated);
+            }
         }
     }
 
@@ -3415,6 +3496,10 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.from_worklist = 0;   // set by the dispatch that uses the list
     push.seen_window = options_.face_gate;
     push.prolong = options_.face_prolong ? 1u : 0u;
+    push.report_crossings = options_.node_crossings ? 1u : 0u;
+    push.light_read_period = options_.light_read_period;
+    push.edit_seed = options_.face_edit_seed;
+    push.lamp_edit_scope = options_.lamp_edit_scope ? 1u : 0u;
     return push;
 }
 
@@ -3537,8 +3622,27 @@ void Application::record_frame(f32 time_seconds) {
             static_cast<f64>(camera_.chunk_y()) * 256.0 + camera_.local_y(),
             static_cast<f64>(camera_.chunk_z()) * 256.0 + camera_.local_z(),
         };
+        // What the camera can see, for the eviction instrument and for nothing else. Built from
+        // the camera itself rather than from `params`, which is filled further down the frame --
+        // but from the same four accessors that fill it, so the frustum described here is the one
+        // the rays sweep. D426.
+        NodeView node_view;
+        node_view.origin[0] = camera_voxel[0];
+        node_view.origin[1] = camera_voxel[1];
+        node_view.origin[2] = camera_voxel[2];
+        camera_.forward_vector(node_view.forward);
+        camera_.right_vector(node_view.right);
+        camera_.up_vector(node_view.up);
+        node_view.tan_half_fov = camera_.tan_half_fov();
+        node_view.aspect = (render_extent.height > 0)
+                               ? static_cast<f32>(render_extent.width) /
+                                     static_cast<f32>(render_extent.height)
+                               : 1.0f;
+        node_view.valid = true;
+
         const u64 node_start = now_ns();
-        const NodeUploadBatch& node_batch = node_pool_.update(world_, camera_voxel, frame_counter_);
+        const NodeUploadBatch& node_batch =
+            node_pool_.update(world_, camera_voxel, frame_counter_, &node_view);
         node_ms_ = ns_to_ms(now_ns() - node_start);
         if (node_ms_ > worst_node_ms_) {
             worst_node_ms_ = node_ms_;
@@ -3546,6 +3650,9 @@ void Application::record_frame(f32 time_seconds) {
         }
         last_node_built_ = node_batch.built;
         last_node_evicted_ = node_batch.evicted;
+        last_node_evicted_nodes_ = node_batch.evicted_nodes;
+        last_node_evicted_on_screen_ = node_batch.evicted_on_screen;
+        last_node_churned_ = node_batch.churned;
         last_node_deferred_ = node_batch.deferred;
         node_buffers_.upload(cmd, node_pool_, swapchain_.frame_index());
         profiler_.add_bytes(node_buffers_.stats().uploaded_this_frame);
@@ -5165,6 +5272,13 @@ int Application::run(const Options& options) {
             WS_LOG_FATAL("app", "could not create the face seen buffer");
             return 1;
         }
+        // And one word a NODE slot, for the same job on the other array: which nodes the light has
+        // already said it is using this window. Sized to the pool's capacity rather than its
+        // watermark, because a slot the pool has not reached yet is a slot it will reach.
+        if (!node_seen_.create(device_, node_budget.max_nodes, "node seen")) {
+            WS_LOG_FATAL("app", "could not create the node seen buffer");
+            return 1;
+        }
         // The work list: a dispatch command, a count, and one slot per face in the store. Only the
         // store's own range is ever compacted -- the card's provisional tail is a separate, small,
         // contiguous dispatch -- so it is sized to the store and not to the store plus the tail.
@@ -5202,8 +5316,11 @@ int Application::run(const Options& options) {
         // shading pass, which is how the light pass finally stopped lighting what nobody can see.
         // Seventeen: 16 is the compacted work list, so the shading dispatch is sized by how many
         // faces owe work rather than by how many exist.
-        VkDescriptorSetLayoutBinding node_bindings[17]{};
-        for (u32 i = 0; i < 17; ++i) {
+        // Eighteen: 17 is the node SEEN stamp, which is to the light's reads what 15 is to the
+        // pixel's -- a card-owned word a slot that turns one entry per ray into one per node per
+        // window. D430.
+        VkDescriptorSetLayoutBinding node_bindings[18]{};
+        for (u32 i = 0; i < 18; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -5214,7 +5331,7 @@ int Application::run(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 17;
+        node_layout_info.bindingCount = 18;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -5225,20 +5342,20 @@ int Application::run(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[13]{
+        const VkBuffer node_pool_buffers[14]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
             face_light_.buffer(),      light_buffer_.buffer,    face_seen_.buffer(),
-            face_work_.buffer,
+            face_work_.buffer,         node_seen_.buffer(),
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[13]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16};
-        VkDescriptorBufferInfo node_infos[13]{};
-        VkWriteDescriptorSet node_writes[14]{};
-        for (u32 i = 0; i < 13; ++i) {
+        const u32 node_bindings_for[14]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16, 17};
+        VkDescriptorBufferInfo node_infos[14]{};
+        VkWriteDescriptorSet node_writes[15]{};
+        for (u32 i = 0; i < 14; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -5253,13 +5370,13 @@ int Application::run(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[13].dstSet = node_set_;
-        node_writes[13].dstBinding = 8;
-        node_writes[13].descriptorCount = 1;
-        node_writes[13].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[13].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 14, node_writes, 0, nullptr);
+        node_writes[14].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[14].dstSet = node_set_;
+        node_writes[14].dstBinding = 8;
+        node_writes[14].descriptorCount = 1;
+        node_writes[14].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[14].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 15, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -6139,6 +6256,55 @@ int Application::run(const Options& options) {
                         last_node_built_,
                         last_node_evicted_, node_stats.requests, node_stats.hits,
                         last_node_deferred_);
+            // What eviction is actually throwing away.
+            //
+            // `evicted` alone cannot tell a pool shedding what nobody is looking at -- which is
+            // the whole of R2 working correctly -- from a pool dropping the wall in front of you
+            // and rebuilding it three frames later, which is the flicker D421 reported and D425
+            // left open. Two independent numbers say which: how many of the evicted nodes were
+            // inside the frustum when they went, and how many came straight back. The second is
+            // the harm and needs no theory about why the pool thought they were cold; the first
+            // is also the size of the set a "do not evict what the camera can see" rule would
+            // have to hold, so it prices that fix at the same time. D426.
+            WS_LOG_INFO("frame",
+                        "node eviction: {} lifetime, {} of them inside the view; {} came back "
+                        "within {} frames. This frame: {} nodes given up, {} in view, {} back",
+                        node_stats.evictions, node_stats.evictions_on_screen, node_stats.churn,
+                        kChurnWindow, last_node_evicted_nodes_, last_node_evicted_on_screen_,
+                        last_node_churned_);
+            if (node_stats.churn > 0) {
+                std::string churn_levels;
+                for (u32 level = 0; level < 32; ++level) {
+                    if (node_stats.churn_per_level[level] == 0) continue;
+                    if (!churn_levels.empty()) churn_levels += "  ";
+                    churn_levels += std::to_string(level) + ":" +
+                                    std::to_string(node_stats.churn_per_level[level]);
+                }
+                WS_LOG_INFO("frame", "evicted and wanted again, by level  {}", churn_levels);
+                // And how full those bricks are, against every brick the pool holds. A brick a
+                // ray STOPS on is a wall; a brick it passes THROUGH on the way to one is mostly
+                // air, and only the first kind is ever stamped as read.
+                WS_LOG_INFO("frame",
+                            "brick fill of 512: {:.1f} came back, {:.1f} evicted, {:.1f} resident",
+                            node_stats.churn_fill, node_stats.evicted_fill,
+                            node_stats.resident_fill);
+                // The sharper of the two discriminators. A node that was reported read and then
+                // went quiet is a sampling problem and wants a denser or longer window; a node no
+                // ray EVER reported is a reporting problem and wants the marcher to say more.
+                WS_LOG_INFO("frame",
+                            "no ray ever reported reading: {} of {} evicted, {} of {} that came "
+                            "back",
+                            node_stats.evictions_never_read, node_stats.evictions,
+                            node_stats.churn_never_read, node_stats.churn);
+                WS_LOG_INFO("frame",
+                            "what asked for them back: {} a primary ray's miss, {} a light ray "
+                            "stopped by ignorance, {} a dilated neighbour, {} the proximity radius",
+                            node_stats.churn_by_source[kRequestRay],
+                            node_stats.churn_by_source[kRequestOcclusion],
+                            node_stats.churn_by_source[kRequestDilated],
+                            node_stats.churn_by_source[kRequestProximity]);
+            }
+
             // Resident nodes by level. A total says memory fell and cannot say which levels
             // failed to move, and R2b's whole rule is that halving the resolution shifts every
             // ray's stopping point exactly one level coarser.
@@ -6187,6 +6353,7 @@ int Application::run(const Options& options) {
     face_buffers_.destroy();
     face_light_.destroy();
     face_seen_.destroy();
+    node_seen_.destroy();
     face_worklist_.destroy();
     destroy_buffer(device_, face_work_);
     node_buffers_.destroy();
