@@ -154,6 +154,10 @@ inline constexpr i32 kFeedbackRead = 0x20000;
 // shaders/node.glsl.
 inline constexpr i32 kFeedbackFace = 0x40000;
 
+// The coordinate is exact and must not be dilated to its neighbours. Must match kFeedbackExact in
+// shaders/node.glsl, where the reasoning is.
+inline constexpr i32 kFeedbackExact = 0x80000;
+
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.
 // One report per sampled pixel worst case, and sampling is one pixel in 64 — so this has

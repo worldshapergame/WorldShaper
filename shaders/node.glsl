@@ -665,6 +665,16 @@ const int kFeedbackRead = 0x20000;   // ...and this one carries a slot in x, not
 // capacity, one readback and one barrier to get right instead of two.
 const int kFeedbackFace = 0x40000;
 
+// This coordinate is EXACT: do not dilate it to its neighbours.
+//
+// A miss report is a guess about where geometry might be, so the consumer grows it by one face in
+// each direction and streams the neighbours too -- without which only the cells some ray happened
+// to land on are ever built and the edges of what has streamed show notches. A shadow ray's report
+// is not a guess: it is the one cell that stopped the ray. Dilating it asks for six cells nobody
+// has any reason to want, and at about fifty thousand such reports a frame that is a factor of
+// seven on the request volume, which is where the node pool's CPU goes (D351).
+const int kFeedbackExact = 0x80000;
+
 void node_flush_used(bool enabled, ivec3 block) {
     if (!enabled) return;
     uint index = atomicAdd(feedback.count, 1u);
@@ -1120,7 +1130,13 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     //
                     // It costs one entry per shadow ray that stops on an unbuilt cell, and that
                     // number falls to nothing as the pool fills, exactly as a miss report does.
-                    node_flush(true, has_pending, pending);
+                    if (has_pending) {
+                        uint index = atomicAdd(feedback.count, 1u);
+                        if (index < push.resolution.w) {
+                            feedback.entries[index].coord =
+                                ivec4(pending.xyz, pending.w | kFeedbackExact);
+                        }
+                    }
                     result.hit = true;
                     result.unknown = true;
                     result.t = t;

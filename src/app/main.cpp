@@ -2608,7 +2608,7 @@ void Application::stream(f64 seconds) {
         // A used-report is not a request for anything; chunk residency has nothing to do with
         // it, and its level field carries a flag that would shift the coordinate into nonsense.
         if (node_feedback &&
-            (entry.level & (kFeedbackUsed | kFeedbackRead | kFeedbackFace)) != 0) {
+            (entry.level & (kFeedbackUsed | kFeedbackRead | kFeedbackFace | kFeedbackExact)) != 0) {
             continue;
         }
 
@@ -2727,9 +2727,16 @@ void Application::stream(f64 seconds) {
                 continue;
             }
 
-            const u32 level = static_cast<u32>(entry.level);
+            // An EXACT report names the one cell that stopped a shadow ray, so it is requested and
+            // nothing around it is. The dilation below exists because a miss report is a guess and
+            // its neighbours are probably wanted too; this is not a guess, and at about fifty
+            // thousand of them a frame the six spare requests each are where the node pool's CPU
+            // was going (D351).
+            const bool exact = (entry.level & kFeedbackExact) != 0;
+            const u32 level = static_cast<u32>(entry.level & ~kFeedbackExact);
             if (level < kLeafLevel || level > kMaxNodeLevel) continue;
             node_pool_.request(NodeKey{entry.x, entry.y, entry.z, level});
+            if (exact) continue;
 
             // And the six face neighbours, for the same reason the chunk path dilates: a ray
             // reports one node, so only the nodes some ray happened to land on would ever be
