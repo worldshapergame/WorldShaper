@@ -513,6 +513,7 @@ checked. Tick the ledger in §8.0 when one lands.
 | R3 | the store recycles | **fixed** — D304–D306. `evict_cold` was written, tested and never called, so the store filled and then refused every face after it: the shadowed set froze and everything new was lit by the fallback. A slice a frame now, with the threshold halving when the table is full |
 | R9 | d. coarse light for a face that has none | **done, early** — D308–D311. A face with no light of its own reads the face three levels above it, which 512 faces share and the request lattice cannot miss. Falling back to full sun: under 1% of the enclosed room at frame 30 against frame 78, and 2,978 wrong pixels against 283,291 at frame 40. GPU unchanged still and moving, settled picture bit-identical, store +3.0% |
 | R10 | ambient occlusion, per face and under it | **planned, not started.** The composite applies an ambient term with no occlusion in it at all, so the interior is lit as though it stood in the open. Same integral as the sun over a different domain; sub-voxel from a Legendre fit over the face that the existing jitter already pays for; converges once and then costs nothing. §8 R10 |
+| R9 | i. the geometry a shadow ray needs | **planned, not started, and the biggest open fault in the renderer.** A sealed room fills with sunlight as the pool sheds — 442,968 nodes and 0.0000 at frame 500, 6,972 nodes and 0.0458 at frame 700, 0.0596 at 900, static camera, no edit. Residency is driven by what a pixel can see, and a shadow ray reads the roof and the outer walls, which it cannot. D322, D323; §8 R9i has the two candidate shapes and which to do first |
 | R9 | the off-screen set | **planned, not started** — §8's new stage. The face store holds what the camera can see, so light is a screen-space set in world-space clothing. Prerequisite for R4c/R4d being worth measuring |
 | R9 | light from what is not loaded | **planned, not started** — R9f–R9h. Light folds up the tree as colour does and outlives its children, so eviction stops being a lighting decision; the emitter list persists per region and loads with the index rather than the voxels; no light path may cause streaming |
 | R4–R8 | | not started |
@@ -1002,6 +1003,43 @@ exception, deliberately: it reports the face a ray *landed on*, which is one fac
 never the geometry along the way. Without that line, GI becomes a streaming amplifier — every
 surface asks for the world behind every other surface — and the cost is unbounded in exactly the
 way this rewrite exists to stop.
+
+**R9i — geometry a shadow ray needs is not geometry the camera can see, and residency currently
+only knows about the second.** The one measured fault in this stage rather than a predicted one, and
+the biggest open fault in the renderer: **a sealed room fills with sunlight as the node pool sheds**,
+on a static camera with nothing edited. Against the pool's own node count on the enclosed view —
+frame 500, 442,968 nodes, mean sun visibility 0.0000; frame 660, 266,840 nodes, 0.0000; frame 700,
+**6,972 nodes, 0.0458**; frame 900, **0.0596 and still climbing**. Every correct answer in that room
+is nought (D302: 93,741 of 93,745 faces fully shadowed). Reproduced before any of the shadow-latency
+work: 0.0266 at `f902a00`. D322, D323.
+
+The shedding is R2 doing exactly what §3 tells it to — *if you cannot see it, it is not processed
+and does not exist*. The roof over your head and the outer wall behind you are not on screen, so
+they go. **They are also the only reason the room is dark.** So the rule in §3 is right for what a
+pixel needs and incomplete for what a *ray* needs, and this sub-step is where that gets stated
+properly rather than discovered again:
+
+> Residency is driven by what the renderer READS, and a shadow ray reads geometry. What a pixel can
+> see decides what is *drawn*; it cannot be the whole of what is *kept*.
+
+Two candidate shapes, and they are not equivalent:
+
+1. **An evicted subtree keeps reading as WANTED to an occlusion ray.** Cheap, and it fails safe:
+   D302 already says a shell is opaque, and this is the same sentence applied to a node the pool has
+   given up rather than never built. A room whose walls have been evicted goes *dark*, which is
+   wrong in the harmless direction. It does not fix the light — it stops the leak.
+2. **A shadow ray's occluders count as use.** Correct, and it is the one that costs: D292 forbids a
+   shadow ray from dragging streaming, for the good reason that it would fetch the world along every
+   ray. The narrow version — *a ray that was STOPPED by a node has used that node* — reports one node
+   per ray rather than everything it crossed, which is the same shape as R9a's single exception and
+   the same argument for why it is affordable.
+
+They compose: (1) is the floor, (2) is the answer. Do (1) first, because a leak that brightens is
+worse than a leak that darkens, and because it is a rule and not a mechanism.
+
+*Gate: enclosed camera, static, no edit — mean sun visibility stays at 0.0000 from frame 500 to
+frame 5,000 while the pool sheds to its resident minimum; the reveal case (`--cut`) still reads 0%
+on the fallback at cut+1; the grid does not move.*
 
 **Why this is the performant shape and not merely the correct one.** Every term above is bounded by
 something that is not the size of the world: coarse faces by the pyramid, lamp sampling by one

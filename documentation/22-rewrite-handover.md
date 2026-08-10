@@ -489,9 +489,10 @@ one is what the control exposed instead, and it is the biggest open fault in the
 > predates this session (0.0266 at `f902a00`) and D314/D319 amplify it, because a leaked ray now
 > moves a wall to a third instead of to 1/257.
 
-Do not respond by reverting D319. The fix is that residency has to count a shadow ray's needs as
-use, which is what R9's off-screen set exists for: light is world space, and the set that keeps it
-resident cannot be the set the camera can see. D322, D323.
+Do not respond by reverting D319. **Planned as R9i** in `21-renderer-rewrite.md` §8, which has the
+two candidate shapes and says which to do first: make an evicted subtree read as WANTED to an
+occlusion ray (a rule, cheap, fails towards dark), then make a shadow ray's occluder count as use (a
+mechanism, correct, and the one D292 has to be narrowed for). D322, D323.
 
 The answer is correct from the first frame, not merely present: at cut+1 the enclosed room reads
 identically to the same camera 120 frames later. Where the answer is not uniformly black, the
