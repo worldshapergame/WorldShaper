@@ -47,8 +47,19 @@ public:
     OpResult apply_group(World& world, MatterLedger& ledger, OpLog& log,
                          const std::vector<Op>& ops);
 
-    bool undo(World& world, MatterLedger& ledger, OpLog& log, u64 tick, u32 player);
-    bool redo(World& world, MatterLedger& ledger, OpLog& log, u64 tick, u32 player);
+    // `applied` receives the ops that were actually put into the world, which the caller needs and
+    // used to have no way of getting.
+    //
+    // An undo is an edit. It changes the world exactly as a chisel stroke does, and everything
+    // downstream of an edit has to be told the same way — the node pool the renderer marches, the
+    // chunk residency, and the face store's relight window. Returning only a bool meant the caller
+    // could refresh the coarse grids and nothing else, so the world went back and the picture did
+    // not: undo read as a key that does nothing. It is the seam D225 describes, reached through
+    // the one edit path that was not carrying its ops with it.
+    bool undo(World& world, MatterLedger& ledger, OpLog& log, u64 tick, u32 player,
+              std::vector<Op>& applied);
+    bool redo(World& world, MatterLedger& ledger, OpLog& log, u64 tick, u32 player,
+              std::vector<Op>& applied);
 
     bool can_undo(u32 player) const { return undo_depth(player) > 0; }
     bool can_redo(u32 player) const { return redo_depth(player) > 0; }

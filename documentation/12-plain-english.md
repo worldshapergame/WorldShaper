@@ -457,6 +457,59 @@ going.
   You get a chunky shadow at once that sharpens into the real one over the next half second, instead
   of no shadow that appears. It costs nothing measurable and the final picture is identical.
 
+- **Deleting something now deletes its shadow, and the deleted part stops coming back black.** This
+  was three complaints from you and they turned out to be one thing. When you carved a hole, the
+  game kept a little empty box where the cubes had been — the cubes were gone, the box was not. And
+  everything the renderer asks about the world goes through one question: *is there a box here?*
+  Not *is there anything in it*. So a wall you had just deleted still answered "yes, something is
+  here", and the sun went on being blocked by nothing at all. Same reason a deleted region faded
+  back in solid black when you pulled away: the game averaged the colour of cubes that no longer
+  existed, which is black. And the same reason bricks flickered to plain cubes while you stood
+  still — the game switching between two answers that disagreed.
+
+  The box is now thrown away the moment its last cube goes, and an 8-metre region is thrown away
+  the moment its last box goes. Measured on the building with everything above three metres
+  deleted: **62,756 surfaces were being shadowed by things that no longer existed, and now none
+  are.** The room went from about a tenth as bright as it should be to right. It also runs faster
+  than before rather than slower — the deleted-but-remembered boxes were being asked about, and
+  asked about again, thousands of times a frame: **11.4 milliseconds of work per frame down to
+  0.3**. Nothing about an unedited world changed at all, which was checked across seven cameras
+  and three screen sizes.
+
+- **A test run that gets slow now stops and tells you, instead of hanging.** Not something you see
+  in the game, but you felt it: four times during this hunt I handed you a build that ran at one
+  frame a second, because the measurement that would have caught it was still running when I sent
+  it. The automated runs used to finish after a fixed number of frames — which is no protection at
+  all when the frames are what got slow. They now stop after three minutes whatever happens, save
+  the picture, and print "this build was too slow to reach where it was asked to go", which is the
+  answer.
+
+- **The tool previews say what they are now.** The voxel you're pointing at used to be drawn as a
+  little cube, which looked exactly like the cube that means "this is what I'm about to build" —
+  two completely different statements in the same shape. It's now a hollow **ring** drawn on each
+  face of that voxel, in the colour of the material you're holding. Hollow, so you can still see
+  the surface you're lining the edit up against; on the faces rather than floating in front of
+  them, so it's obvious which voxel and which way round. Constraint points (the X key) are an **X**
+  on each face, same rules. And the preview boxes now tint their faces as well as their outline,
+  so you can tell which way a box is turned instead of guessing from a wireframe — the material's
+  colour where you can see it, the opposite where it's buried, and the other way round for
+  carving so a delete never looks like a build.
+
+- **Two keys that weren't working, and neither was the key's fault.** E and Q cycle materials, and
+  they did nothing: the world was loading its list of materials from the saved file, that file was
+  written before the list was part of it, so the list came back with **one** thing in it. Cycling a
+  list of one goes nowhere. It now reads the list from the building's own description, which is
+  where the materials are actually declared — 550 of them.
+
+  And Ctrl+Z. Undo was putting the world back correctly every time; it just never told the
+  *renderer*, so nothing on screen changed and it looked dead. Also found while fixing it: X was
+  secretly bound to "redo" as well as to dropping a constraint point, so every point you dropped
+  quietly put back an edit you had deliberately undone.
+
+  One thing is still wrong there and is written down rather than glossed over: after undoing a very
+  large delete the shape comes back perfectly, but the **light** doesn't fully — a terrace stays
+  sunlit for a while where the roof you just restored should be shading it. That's next.
+
 ### What's next, and what it's for
 
 The path tracer — the pretty, slow, accurate lighting on F4 — is the big one and is **under way**.

@@ -1,8 +1,11 @@
 # 22 — Renderer rewrite: handover
 
-*Written 2026-08-09, for somebody picking this up with no memory of the rewrite **or of the game**.
-Everything needed to continue is here or named here. Read §0 for what the project is, §1 for what
-was asked, §3 for what exists, §4 for the traps, and start work at §5.*
+*Written 2026-08-09, revised 2026-08-10, for somebody picking this up with no memory of the rewrite
+**or of the game**. Everything needed to continue is here or named here. Read §0 for what the
+project is, §1 for what was asked, §3 for what exists, §4 for the traps, and start work at §5.*
+
+*The bug §4b used to open with — a deleted wall's shadow outliving it — is closed (D357–D361).
+§4b now records how, because the shape of it is the useful part. **Start work at §5.***
 
 ---
 
@@ -288,7 +291,16 @@ failure, not a compile error.
     lands with an mtime *older* than the SPIR-V built from the edit, so ninja skips it and the
     "after" run measures the "before" build. It reads as five frames agreeing to the digit. Touch
     the file, or restore with `git stash pop`, which stamps it. Trap 2 with a different cause. D311.
-12. **When somebody says it is slow, look at their overlay before your grid.** Four exchanges went
+13. **Two indexes answering one question will be wrong together, and fixing one of them measures
+    nothing.** `world_has` answers below level 8 by walking bricks and at level 8 and above out of a
+    cached set of chunks. Both were stale after an edit. Correcting the coarse half alone moved 42
+    faces of 50,967 and was reverted as "a plausible latent fault, but not this one" (D345);
+    correcting the fine half alone left the frame at one frame a second (D358). Together they took
+    the fault to nothing. **A null result on half of a redundant pair is not evidence about that
+    half** — it is evidence that the pair has to be tested as a pair. Trap 7 and the whole premise of
+    `node_pool.hpp` say the same thing from the other end: the cure is one structure with one
+    answer, and until R1e that is not what exists.
+14. **When somebody says it is slow, look at their overlay before your grid.** Four exchanges went
     on quoting settled per-pass means at a report of stalls — and the settled grid discards
     transients *by construction*, since that is what `--settle` is for. The overlay's three numbers
     (GPU 0.92 ms, frame 247.51 ms, 99th 2,234 ms) named the culprit immediately, and it was not the
@@ -296,29 +308,51 @@ failure, not a compile error.
 
 ---
 
-## 4b. The open bug, and the one line it comes from
+## 4b. The bug that was open here — closed, and what it teaches
 
-**Start here.** A player deletes part of the building and its shadow stays; pull away and the
-deleted part fades back in, black; standing still, bricks flicker to plain cubes. Three symptoms,
-one cause.
+A player deletes part of the building and its shadow stays; pull away and the deleted part fades
+back in, black; standing still, bricks flicker to plain cubes. Three symptoms, one cause, and it is
+**fixed** (D357–D361). What is left here is the shape of it, because the same shape will happen
+again.
 
 `NodePool::world_has` asks whether a brick is **allocated**, not whether it holds anything, and a
-brick is not freed when its last voxel goes. Every child mask in the render tree comes from that
-answer, so an emptied region claims matter for ever — the descent says unbuilt-but-occupied,
-occlusion reads that as opaque, and the ancestor folds a colour from freed children and draws it
+brick was not freed when its last voxel went. Every child mask in the render tree comes from that
+answer, so an emptied region claimed matter for ever — the descent said unbuilt-but-occupied,
+occlusion reads that as opaque, and the ancestor folded a colour from freed children and drew it
 black.
 
-- The reproduction is headless: `tests/test_node_pool.cpp`, *a region emptied by an edit stops
-  being wanted*. It is **skipped** because it fails. Un-skip it as the gate.
-- Five fixes were tried and measured; all are recorded in `13-decision-log.md` under *one root
-  cause behind three symptoms*, with what each one moved. Do not repeat them.
-- The likely answer is to free an emptied brick **inside `Chunk::set`**, at the moment the last
-  voxel is cleared — `set` already has the brick in hand, and `Chunk::prune` shows how to unlink
-  one. Then `world_has` needs no change at all.
-- **Measure with `--max-seconds`, and rebuild the last good commit before reporting.** Five builds
-  in that investigation reached the player at about one frame a second, each time because the
-  change was handed over before its own timing had been read. The binary on disk is the one being
-  played.
+**The reader never changed.** Making `world_has` test emptiness is correct and costs 726 ms of CPU
+a frame, because `!= nullptr` stops at the first allocated brick and `!empty()` must scan past
+every emptied one — that is D348/D349 and it is why the fix sat parked for a session. The world is
+made honest instead, at the moment it changes:
+
+- `Chunk::set` unlinks a brick when the write clears its last voxel, and the ancestors that lose
+  their last child go with it. One descent that was being walked anyway. `drop_brick_if_empty` is
+  the same thing for the bulk writers in `op.cpp` that fill a whole brick and that the chunk cannot
+  see for itself.
+- `World::drop_chunk_if_empty`, called from `apply_op`, is the counterpart one level up — **and it
+  is most of the fault**, not a tidy-up. `world_has` answers level 8 and above out of an index
+  keyed by which chunks *exist*, so about thirty chunks the edit had emptied went on claiming
+  occupancy at every level above the chunk. With only the brick half in, the edited camera still
+  ran at **one frame a second**, all of it CPU. D345 had tested the chunk half alone years of
+  reasoning ago and measured nothing, because the fine half was wrong at the same time. **Neither
+  half is worth anything without the other**, and that is the lesson: an index that is derived from
+  a second index is only as true as the worse of the two.
+- The gate is headless and passing: `tests/test_node_pool.cpp`, *a region emptied by an edit stops
+  being wanted*, plus three in `test_chunk.cpp` and three in `test_op.cpp`.
+- Five earlier fixes were tried and measured; all are in `13-decision-log.md` under *one root cause
+  behind three symptoms*. Do not repeat them. Four of the five assumed `world_has` was the
+  authority and asked how its answer was *used*.
+
+**Measured, close camera, against a same-commit control, after deleting 36 million voxels:** faces
+shadowed by ignorance **62,756 → 0**, mean sun visibility **0.1222 → 0.6350**, node-pool CPU
+**11.426 → 0.336 ms**, GPU **4.610 → 3.749 ms**, the run **120 s without finishing → 9.0 s**. On an
+unedited world the seven-camera grid at three resolutions moves nothing over 3%.
+
+**One thing did not survive the measurement.** The gathering-ray bound (D350, D356) was built again
+on top of this and is still neutral, and now the reason is known: the **512-step cap binds long
+before sixty metres does**, because a ray near the camera marches single voxels. A distance bound on
+a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
@@ -349,8 +383,39 @@ Two fixes, in the order they pay:
    here: the first run on a cold cache still pastes for up to **17.4 s at a time** with the main
    thread blocked, and the fourteen seconds of stall in a first load is still fourteen seconds.
 
+   **A large chisel is the same fault and is measurable on demand**, which the paste is not: the
+   36-million-voxel delete used throughout §4b costs **one frame of 1,209 ms**, of which the op
+   itself is 68 ms, the undo capture is 240 ms into 841,944 inverse ops, and the rest is everything
+   downstream re-deriving itself. Whatever slices the paste should slice this, and this one can be
+   reproduced with a flag rather than by watching a load.
+
 Until the second lands, nobody can judge the renderer by playing a *first* load, because what they
 are judging is the paste. Every load after the first is now the renderer.
+
+### The open one: undo restores the world and not its light
+
+**Found by the instrument built for it** (D372), and the shortest path back to it is:
+
+```powershell
+.\build\bin\WorldShaper.exe --screenshot out.png --screenshot-frame 660 --settle `
+  --width 1280 --height 800 --cam "0,2,-20,90,0" --quality 7 --no-vsync --no-update-check `
+  --no-auto-quality --edit "-600,96,-600,600,640,600,0" --edit-frame 400 --undo-frame 500
+```
+
+The world comes back exactly — same content hash as a run that never edited, to the digit. The
+picture does not: 400 frames after undoing a 36-million-voxel delete, geometry is fully restored and
+**16.6% of pixels still differ from the never-edited frame, mean 20.9/255**, against 45.3% and 72.7
+for the edited frame. So most of it returned and what is left is *light*: the terrace reads as full
+sun where the restored roof should shadow it.
+
+`kEditShadowReach` is 512 voxels and does cover the terrace, so the region is not the suspect;
+`kShadowRefreshFrames` is 120 and had closed 280 frames before the shot. Note that D319's rule — a
+sample contradicting a unanimous history resets the face to two samples — is meant to handle exactly
+this, so if the window is not the cause then that rule is not firing here and *that* is the finding.
+Measure it with `--debug-mode 16`, which is the instrument for anything about shadows.
+
+It is **pre-existing rather than caused by D370**: before that fix undo did nothing at all, so
+there was nothing left stale to notice.
 
 ### R3 comes before R1e, deliberately
 
@@ -607,13 +672,42 @@ Nothing has been deleted yet.
 ```powershell
 .\build.bat                          # build; NEVER pipe this to Out-Null while measuring
 .\build\bin\ws_tests.exe             # the whole suite - not a name filter, which silently skips
-# --max-seconds N on ANY scripted run. A frame count cannot bound a run whose frames are the thing
-# that got slow, and a change that makes the renderer ten times slower is exactly the one that most
-# needs to report it. Use it on every measurement of a change that touches ray length or how much
-# the pool builds.
 .\tools\baseline.ps1 -Out docs.csv   # the fixed grid; -Compare <csv> to diff a previous run
 .\tools\facecount.ps1                # distinct visible faces per view and resolution
 ```
+
+**Every scripted run ends on the clock, at 180 s, and says so at startup** (D362). A frame count
+cannot bound a run whose frames are the thing that got slow, and it is the slow build that most
+needs to report. The shot is still taken and the pass table still printed, with a warning saying
+the frame it was asked for was not reached — which is itself the result. `--max-seconds N` moves
+the deadline; `--max-seconds 0` removes it, and that has to be said out loud. Note that a **cold**
+clip cache is about 133 s of sampling before any frame runs, so the first run against a new clip
+may want more than the default.
+
+The edited case, which is what the shadow work is judged on:
+
+```powershell
+.\build\bin\WorldShaper.exe --screenshot out.png --screenshot-frame 660 --settle `
+  --width 1280 --height 800 --cam "0,2,-20,90,0" --quality 7 --no-vsync --no-update-check `
+  --no-auto-quality --edit "-600,96,-600,600,640,600,0" --edit-frame 400
+```
+
+`--edit-frame` counts RAW frames and `--screenshot-frame` counts MEASURED ones, so under `--settle`
+the edit frame has to be past where the world settles — it prints `world settled at frame N`.
+
+The tool previews and the history are scriptable too, and both hooks exist because the thing they
+drive could not otherwise be photographed (D368, D372):
+
+```powershell
+--preview x0,y0,z0,x1,y1,z1,s   # s: 1 carve, 2 place, 3 refused, 6 the cursor marker
+--preview-mark x,y,z            # a constraint cross, repeatable
+--undo-frame N  --redo-frame N  # press undo or redo once, on the same path the key takes
+```
+
+**Serialise measurement runs.** Trap 9's corollary, learned the hard way in D367: a previous run
+still shutting down holds the GPU, and the next run reads 1.4 ms where it should read 0.70. Wait for
+the process to exit between runs — three configurations were misattributed before a control that
+should have matched a known baseline gave it away.
 
 Compare the two marchers on one camera:
 

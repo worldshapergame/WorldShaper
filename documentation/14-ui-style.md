@@ -108,6 +108,43 @@ And the deliberate silences, written down because "we forgot" and "we decided no
 - Silent on purpose: hovering, typing a character (the character appearing is the feedback), scrolling, dragging a window, resizing, and escaping out of a value you were typing.
 - **Off is exactly silent** — zero samples, verified by a test, not merely quiet.
 
+## Marks in the world: the shape vocabulary
+
+The tool previews are the one part of the interface that is drawn *in the scene* rather than on a
+panel, and the rule that governs them is the same one as everywhere else stated for geometry: a
+statement is told apart by its **shape**, not by its shade. Three statements, three shapes, and no
+two of them can be confused at a glance (D363–D366):
+
+| Shape | Statement |
+|---|---|
+| A hollow **ring** on each face of one voxel | *You are pointing here.* The cursor, on screen every frame, whatever tool is in hand and whatever it is in the middle of |
+| An **X** on each face of one voxel | *You dropped a constraint point here* — the shape is the key that drops it |
+| An outlined **box** with tinted faces | *This is what is about to happen.* The only one of the three that is a decision |
+
+Four rules that fall out of it, all of which were learned by building the other way first:
+
+- **Bounded by the voxel.** Never grown to a legible size in pixels. A marker with a floor in
+  pixels stops being part of the world and becomes an overlay: at range it covers voxels it does
+  not mean, and a mark that lies about which voxel it means is worse than one you cannot see. The
+  only thing measured in pixels is line *width*, which is a different quantity — a line thinner
+  than a sample flickers, and thickening it changes nothing about what the shape encloses.
+- **On the faces, in world space.** Not billboarded. A shape painted on the cube foreshortens, goes
+  edge-on, and is carried by whichever faces you can see, so it says which voxel *and* which way it
+  is turned. A face seen closer than about 78° to edge-on is skipped, because a circle drawn on one
+  flattens into a line along the silhouette and three of those give the marker a box around it.
+- **Hollow.** The surface being marked stays visible through the middle of its own marker, which is
+  the whole job: saying "this one" without hiding the thing being lined up against.
+- **A mark is depth-tested; a box is not.** A preview box is deliberately drawn through geometry,
+  because carving happens inside rock and a box you cannot see the far side of is one you have to
+  guess the size of. A mark on a single voxel is the opposite case — it is telling you what you are
+  pointing at, and one that shines through a wall points at something you cannot reach.
+
+Colour still follows the ink rule, with one addition: a marker takes the **material in hand**,
+plainly, because it is not a decision about that material. A box takes a decision — the material's
+own colour where it can be seen and the inverse where it is buried when placing, and the reverse
+when carving, so the two halves of one box are never the same shade and a delete never looks like a
+build. Refusal keeps red, as granted above.
+
 ---
 
 ## What this means for our implementation (Stage 15)

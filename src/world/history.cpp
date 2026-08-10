@@ -76,7 +76,9 @@ OpResult EditHistory::apply_group(World& world, MatterLedger& ledger, OpLog& log
     return result;
 }
 
-bool EditHistory::undo(World& world, MatterLedger& ledger, OpLog& log, u64 tick, u32 player) {
+bool EditHistory::undo(World& world, MatterLedger& ledger, OpLog& log, u64 tick, u32 player,
+                       std::vector<Op>& applied) {
+    applied.clear();
     Stack& stack = stack_for(player);
     if (stack.past.empty()) return false;
 
@@ -87,13 +89,18 @@ bool EditHistory::undo(World& world, MatterLedger& ledger, OpLog& log, u64 tick,
         op.tick = tick;
         apply_op(world, op, ledger);
         log.append(op);
+        // Reported, because an undo is an edit and everything downstream of an edit has to be
+        // told which region moved. See the note on the declaration.
+        applied.push_back(op);
     }
 
     stack.future.push_back(std::move(record));
     return true;
 }
 
-bool EditHistory::redo(World& world, MatterLedger& ledger, OpLog& log, u64 tick, u32 player) {
+bool EditHistory::redo(World& world, MatterLedger& ledger, OpLog& log, u64 tick, u32 player,
+                       std::vector<Op>& applied) {
+    applied.clear();
     Stack& stack = stack_for(player);
     if (stack.future.empty()) return false;
 
@@ -104,6 +111,7 @@ bool EditHistory::redo(World& world, MatterLedger& ledger, OpLog& log, u64 tick,
         op.tick = tick;
         apply_op(world, op, ledger);
         log.append(op);
+        applied.push_back(op);
     }
 
     stack.past.push_back(std::move(record));

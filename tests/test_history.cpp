@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <vector>
+
 #include "core/hash.hpp"
 #include "world/history.hpp"
 #include "world/ledger.hpp"
@@ -13,6 +15,27 @@ namespace {
 constexpr VoxelTypeId kRock = 3;
 constexpr VoxelTypeId kWood = 4;
 constexpr VoxelTypeId kGlass = 5;
+
+// undo/redo report the ops they applied, because a caller has to know which region to refresh --
+// see the note on the declaration. These tests do not care what came back, only that it happened,
+// so they go through here rather than each declaring a vector nobody reads.
+bool undo_step(EditHistory& history, World& world, MatterLedger& ledger, OpLog& log, u64 tick,
+               u32 player) {
+    std::vector<Op> applied;
+    const bool did = history.undo(world, ledger, log, tick, player, applied);
+    // The contract, checked everywhere undo is used rather than in one test: a step that happened
+    // reports what it did, and a step that did not reports nothing.
+    CHECK(did == !applied.empty());
+    return did;
+}
+
+bool redo_step(EditHistory& history, World& world, MatterLedger& ledger, OpLog& log, u64 tick,
+               u32 player) {
+    std::vector<Op> applied;
+    const bool did = history.redo(world, ledger, log, tick, player, applied);
+    CHECK(did == !applied.empty());
+    return did;
+}
 
 Op box(i64 x0, i64 y0, i64 z0, i64 x1, i64 y1, i64 z1, VoxelTypeId type) {
     return Op::fill_box(1, 1, x0, y0, z0, x1, y1, z1, type,
@@ -85,12 +108,12 @@ TEST_CASE("undo and redo restore the world exactly") {
     CHECK(after_carve != before);
     CHECK(history.undo_depth(1) == 1);
 
-    REQUIRE(history.undo(world, ledger, log, 2, 1));
+    REQUIRE(undo_step(history, world, ledger, log, 2, 1));
     CHECK(world.content_hash() == before);
     CHECK(history.undo_depth(1) == 0);
     CHECK(history.redo_depth(1) == 1);
 
-    REQUIRE(history.redo(world, ledger, log, 3, 1));
+    REQUIRE(redo_step(history, world, ledger, log, 3, 1));
     CHECK(world.content_hash() == after_carve);
 }
 
@@ -124,14 +147,14 @@ TEST_CASE("undo depth is unlimited and every step is reversible") {
     CHECK(history.undo_depth(1) == 200);
 
     for (i32 i = 199; i >= 0; --i) {
-        REQUIRE(history.undo(world, ledger, log, 1000 + i, 1));
+        REQUIRE(undo_step(history, world, ledger, log, 1000 + i, 1));
         REQUIRE(world.content_hash() == hashes[static_cast<usize>(i)]);
     }
     CHECK(history.undo_depth(1) == 0);
     CHECK(history.redo_depth(1) == 200);
 
     for (i32 i = 0; i < 200; ++i) {
-        REQUIRE(history.redo(world, ledger, log, 2000 + i, 1));
+        REQUIRE(redo_step(history, world, ledger, log, 2000 + i, 1));
         REQUIRE(world.content_hash() == hashes[static_cast<usize>(i) + 1]);
     }
 }
@@ -152,9 +175,9 @@ TEST_CASE("the matter ledger survives undo and redo") {
 
     history.apply(world, ledger, log, box(3, 3, 3, 30, 30, 30, kGlass));
     CHECK(ledger.audit(world));
-    REQUIRE(history.undo(world, ledger, log, 5, 1));
+    REQUIRE(undo_step(history, world, ledger, log, 5, 1));
     CHECK(ledger.audit(world));
-    REQUIRE(history.redo(world, ledger, log, 6, 1));
+    REQUIRE(redo_step(history, world, ledger, log, 6, 1));
     CHECK(ledger.audit(world));
 }
 
@@ -166,12 +189,12 @@ TEST_CASE("a new edit discards the redo branch") {
 
     history.apply(world, ledger, log, box(0, 0, 0, 7, 7, 7, kRock));
     history.apply(world, ledger, log, box(4, 4, 4, 11, 11, 11, kWood));
-    REQUIRE(history.undo(world, ledger, log, 3, 1));
+    REQUIRE(undo_step(history, world, ledger, log, 3, 1));
     CHECK(history.redo_depth(1) == 1);
 
     history.apply(world, ledger, log, box(20, 20, 20, 27, 27, 27, kGlass));
     CHECK(history.redo_depth(1) == 0);
-    CHECK_FALSE(history.redo(world, ledger, log, 4, 1));
+    CHECK_FALSE(redo_step(history, world, ledger, log, 4, 1));
 }
 
 TEST_CASE("an edit that changes nothing is not an undo step") {
@@ -203,7 +226,7 @@ TEST_CASE("undo is per player") {
     CHECK(history.undo_depth(1) == 1);
     CHECK(history.undo_depth(2) == 1);
 
-    REQUIRE(history.undo(world, ledger, log, 3, 1));
+    REQUIRE(undo_step(history, world, ledger, log, 3, 1));
     CHECK(world.get(0, 0, 0) == kAir);
     CHECK(world.get(64, 0, 0) == kWood);   // the other player's edit stands
 }
@@ -219,10 +242,10 @@ TEST_CASE("every op the history produces is replayable") {
     history.apply(world, ledger, log, box(0, 0, 0, 31, 31, 31, kRock));
     history.apply(world, ledger, log, box(8, 8, 8, 20, 20, 20, kAir));
     history.apply(world, ledger, log, box(10, 10, 10, 12, 40, 12, kGlass));
-    REQUIRE(history.undo(world, ledger, log, 10, 1));
+    REQUIRE(undo_step(history, world, ledger, log, 10, 1));
     history.apply(world, ledger, log, box(0, 40, 0, 5, 45, 5, kWood));
-    REQUIRE(history.undo(world, ledger, log, 11, 1));
-    REQUIRE(history.redo(world, ledger, log, 12, 1));
+    REQUIRE(undo_step(history, world, ledger, log, 11, 1));
+    REQUIRE(redo_step(history, world, ledger, log, 12, 1));
 
     World replayed;
     MatterLedger replay_ledger;

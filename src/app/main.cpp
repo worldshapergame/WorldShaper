@@ -70,6 +70,18 @@ namespace {
 // outline instead of as voxels. Thirty-two megabytes each side of the copy.
 inline constexpr u64 kMaxClipPoolCells = 8ull * 1024ull * 1024ull;
 
+// How long a scripted run may take before it stops and reports where it got to, in seconds.
+//
+// Three minutes, measured from the start of the load, because a cold clip cache is 133 s of
+// sampling on its own (D241) and a settled run of any camera on this grid is under ten. So a run
+// that reaches this is either cold - in which case its figures were never comparable with anything
+// anyway - or slow, which is the finding.
+//
+// It is a default rather than an option somebody remembers to pass, because the runs that most
+// need it are the ones nobody expected to be slow. `--max-seconds 0` turns it off, deliberately
+// and out loud.
+inline constexpr f64 kDefaultMaxSeconds = 180.0;
+
 struct Options {
     bool headless = false;
     bool stream_audit = false;
@@ -118,6 +130,16 @@ struct Options {
     bool no_auto_quality = false;
     bool benchmark = false;       // re-run the machine measurement and save the result
     u64 edit_frame = 0;           // apply --edit on this frame instead of frame 100
+
+    // Press undo, or redo, once, on this frame. Zero is off.
+    //
+    // The whole point is that they go through the same code the key does. Undo was reported twice
+    // as "does nothing", and both times the world had gone back correctly and only the picture had
+    // not -- which no test could see, because every test asked the World what it held and the
+    // fault was in what the renderer had been told. With this the question is a screenshot: edit,
+    // undo, and the frame must come back to what it was before the edit.
+    u64 undo_frame = 0;
+    u64 redo_frame = 0;
     i32 quality_level = -1;       // -1 means "decide it"
 
     // A clip authored as a file. With no --screenshot it builds the clip, measures it and
@@ -151,9 +173,17 @@ struct Options {
     u64 screenshot_frame = 30;
     u32 debug_mode = 0;   // 0 shaded, 1 step count, 2 face normals
     u32 face_budget = 0;  // faces the store may hold; 0 keeps FaceStoreBudget's own figure
-    // Wall-clock deadline for a scripted run, in seconds. 0 is off. A frame count cannot bound a
-    // run whose frames are the thing that got slow.
-    f64 max_seconds = 0.0;
+    // Wall-clock deadline for a scripted run, in seconds. A frame count cannot bound a run whose
+    // frames are the thing that got slow, so every scripted run has one whether it asked or not:
+    // this is filled in from kDefaultMaxSeconds after parsing when a screenshot, a tick audit, a
+    // stream audit or a benchmark was asked for. `--max-seconds 0` is the way to say "no deadline",
+    // and it has to be said out loud.
+    //
+    // It is not a safety net, it is the reporting path. A build that makes the renderer ten times
+    // slower is exactly the one whose measurement matters most, and it is the one that used to
+    // hang until somebody closed the window - five times in this rewrite, each time destroying the
+    // measurement that would have said so (D355, D357).
+    f64 max_seconds = -1.0;   // -1 means "not asked for"; resolved below
 
     // "x,y,z,yaw,pitch" in metres and degrees. Lets a measurement be repeated exactly,
     // which is what makes frame times comparable between builds.
@@ -190,6 +220,14 @@ struct Options {
     // 2 place, 3 refused) and forces the preview box on. Both are in voxels.
     std::string edit;
     std::string preview;
+
+    // Constraint points, "x,y,z" in voxels, repeatable up to kMaxPreviewMarks.
+    //
+    // Here for the same reason --preview is: the marks are drawn as crosses in the material's
+    // colour and there is otherwise no way to put one on screen without a hand on the keyboard,
+    // which makes the one preview element that cannot be checked from a screenshot. A shape
+    // nobody can photograph is a shape nobody notices has stopped being drawn.
+    std::vector<std::string> preview_marks;
     u32 material = 0;   // which entry of the chisel's palette starts selected
 
     // Scripted clipboard: --clip "x0,y0,z0,x1,y1,z1,dx,dy,dz,copies,turn" captures that box
@@ -268,6 +306,8 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.edit = argv[++i];
         } else if (arg == "--preview") {
             if (i + 1 < argc) options.preview = argv[++i];
+        } else if (arg == "--preview-mark") {
+            if (i + 1 < argc) options.preview_marks.push_back(argv[++i]);
         } else if (arg == "--clip") {
             if (i + 1 < argc) options.clip = argv[++i];
         } else if (arg == "--fog") {
@@ -308,6 +348,10 @@ Options parse_options(int argc, char** argv) {
             options.target_fps = static_cast<f32>(std::atof(argv[++i]));
         } else if (arg == "--max-seconds" && i + 1 < argc) {
             options.max_seconds = std::atof(argv[++i]);
+        } else if (arg == "--undo-frame" && i + 1 < argc) {
+            options.undo_frame = static_cast<u64>(std::atoll(argv[++i]));
+        } else if (arg == "--redo-frame" && i + 1 < argc) {
+            options.redo_frame = static_cast<u64>(std::atoll(argv[++i]));
         } else if (arg == "--edit-frame" && i + 1 < argc) {
             options.edit_frame = static_cast<u64>(std::atoll(argv[++i]));
         } else if (arg == "--benchmark") {
@@ -349,6 +393,14 @@ Options parse_options(int argc, char** argv) {
             WS_LOG_WARN("app", "unknown argument '{}'", arg);
         }
     }
+
+    // Every scripted run ends on the clock. See Options::max_seconds: a run bounded only by a
+    // frame count cannot report the one thing it most needs to - that the frames got slow.
+    if (options.max_seconds < 0.0) {
+        const bool scripted = !options.screenshot.empty() || options.ticks > 0 ||
+                              options.stream_frames > 0 || options.benchmark;
+        options.max_seconds = scripted ? kDefaultMaxSeconds : 0.0;
+    }
     return options;
 }
 
@@ -375,6 +427,15 @@ void print_help() {
         "  --settle              start the measurement window once the world stops sharpening,\n"
         "                        rather than at frame nought. Any figure to be compared with\n"
         "                        another run needs this\n"
+        "  --preview x0,..,z1,s  force a preview box on: six voxel coordinates then a state\n"
+        "                        (1 carve, 2 place, 3 refused, 6 the cursor marker)\n"
+        "  --preview-mark x,y,z  drop a constraint cross, repeatable\n"
+        "  --undo-frame N        press undo once on frame N; --redo-frame N the same for redo.\n"
+        "                        Raw frames, like --edit-frame, and through the same code the\n"
+        "                        key takes\n"
+        "  --max-seconds N       wall-clock deadline for a scripted run. Every run that ends by\n"
+        "                        itself has one (default 180 s): it reports where it got to\n"
+        "                        rather than running until somebody closes it. 0 for none\n"
         "  --target-fps N        frame rate to hold (default: the monitor's refresh rate)\n"
         "  --quality N           pin the quality level 0-7 instead of deciding it\n"
         "  --no-auto-quality     leave quality where it is and never adjust it\n"
@@ -513,6 +574,13 @@ int run_headless(const Options& options) {
     const u64 build_start = now_ns();
     u64 voxels_written = 0;
     for (u64 step = 0; step < op_count; ++step) {
+        // On the clock, like every other scripted run. See Options::max_seconds.
+        if (options.max_seconds > 0.0 &&
+            ns_to_ms(now_ns() - build_start) > options.max_seconds * 1000.0) {
+            WS_LOG_WARN("audit", "deadline: {:.0f} s elapsed at op {} of {}; auditing what exists",
+                        options.max_seconds, step, op_count);
+            break;
+        }
         const u64 h = hash_cell(static_cast<i64>(step), 17, 23, step, 0x57534831ull);
         const i64 x = static_cast<i64>(hash_range(h, 512)) - 256;
         const i64 y = static_cast<i64>(hash_range(hash_mix(h + 1), 256)) - 128;
@@ -719,6 +787,14 @@ int run_stream_audit(const Options& options) {
     f64 total_update_ms = 0.0;
 
     for (u64 frame = 1; frame <= frames; ++frame) {
+        // On the clock, like every other scripted run. See Options::max_seconds.
+        if (options.max_seconds > 0.0 &&
+            ns_to_ms(now_ns() - build_start) > options.max_seconds * 1000.0) {
+            WS_LOG_WARN("stream",
+                        "deadline: {:.0f} s elapsed at frame {} of {}; reporting from here",
+                        options.max_seconds, frame, frames);
+            break;
+        }
         const f64 seconds = static_cast<f64>(frame) / 60.0;
         const f64 angle = seconds * 0.25;
         const i64 focus_x = static_cast<i64>(std::cos(angle) * 700.0);
@@ -2061,10 +2137,33 @@ void Application::build_world() {
 
             if (read_world_cache(cache_path, key, cache, &jobs)) {
                 progress_.enter(LoadStage::Uploading);
-                materials_ = cache.materials;
-                if (materials_.empty()) materials_.push_back(1);
+                // The palette comes from the SCRIPT, not from the cache.
+                //
+                // The clip is what declares the materials -- twenty-five of them in the facility --
+                // and it has been parsed by this point regardless, because the cache key is hashed
+                // from it. The cache carries a copy so that a world can come back complete without
+                // one, and that copy is only as good as the build that wrote the file: the one on
+                // disk here was written before the field existed and reads back empty, which fell
+                // through to a palette of ONE. Q and E then cycled a list with nowhere to go, and
+                // the report was "I cannot change materials" -- a key that looks broken because the
+                // thing it steps through has one entry.
+                //
+                // Preferring the script fixes every stale cache in existence rather than the next
+                // one written, and it cannot go stale itself.
+                materials_ = script.material_types.empty() ? cache.materials
+                                                           : script.material_types;
+                const char* palette_from =
+                    script.material_types.empty() ? "the cache" : "the clip";
+                if (materials_.empty()) {
+                    materials_.push_back(1);
+                    palette_from = "nowhere -- neither the clip nor the cache had one";
+                }
                 material_index_ = options_.material % materials_.size();
                 chisel_.set_material(materials_[material_index_]);
+                // Logged because a palette of one is indistinguishable from a key that does not
+                // work, and the two have different fixes. That is how this was found.
+                WS_LOG_INFO("tool", "palette: {} materials from {}", materials_.size(),
+                            palette_from);
                 // What came off the disk may be a world that stopped short ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â see
                 // resume_refinement. The script has to be handed over here rather than
                 // rebuilt later, because it owns the field the background sampler reads and
@@ -2155,6 +2254,7 @@ void Application::build_world() {
             if (materials_.empty()) materials_.push_back(1);
             material_index_ = options_.material % materials_.size();
             chisel_.set_material(materials_[material_index_]);
+            WS_LOG_INFO("tool", "palette: {} materials from the clip", materials_.size());
             const WorldStats clip_stats = world_.stats();
             WS_LOG_INFO("world", "'{}' built in {:.0f} ms: {} chunks, {} solid voxels", path,
                         ns_to_ms(now_ns() - start), clip_stats.chunks, clip_stats.solid_voxels);
@@ -2280,32 +2380,54 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
                     clipboard_.baking_truncated() ? ", TRUNCATED" : "");
     }
 
-    if (input.was_pressed(Key::Q) && !materials_.empty()) {
-        material_index_ = (material_index_ + materials_.size() - 1) % materials_.size();
+    if ((input.was_pressed(Key::Q) || input.was_pressed(Key::E)) && !materials_.empty()) {
+        const usize step = input.was_pressed(Key::E) ? usize{1} : materials_.size() - 1;
+        material_index_ = (material_index_ + step) % materials_.size();
         chisel_.set_material(materials_[material_index_]);
-    }
-    if (input.was_pressed(Key::E) && !materials_.empty()) {
-        material_index_ = (material_index_ + 1) % materials_.size();
-        chisel_.set_material(materials_[material_index_]);
+        // Said out loud, because "nothing happened" and "it happened and nothing shows it" are the
+        // same report from the other side of the screen, and the palette is not on screen unless
+        // the developer panel is open. One line per keypress costs nothing.
+        WS_LOG_INFO("tool", "material {} of {} (type {})", material_index_ + 1, materials_.size(),
+                    chisel_.material());
     }
 
-    // Undo on Z or Ctrl+Z, redo on X, Y or Ctrl+Y ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and all of them repeat while held.
+    // Undo on Z or Ctrl+Z, redo on Y or Ctrl+Y, and both repeat while held.
     //
-    // Undoing thirty steps should be one long press, not thirty presses. The repeat is the
-    // same time-based one the clipboard's counters use: a pause before it starts, so a single
-    // tap is still a single step, then steadily.
-    const bool ctrl = input.is_down(Key::Ctrl);
-    const bool undo_down = input.is_down(Key::Z);
-    const bool redo_down = input.is_down(Key::X) || input.is_down(Key::Y) ||
-                           (ctrl && input.is_down(Key::Y));
+    // Undoing thirty steps should be one long press, not thirty presses. The repeat is the same
+    // time-based one the clipboard's counters use: a pause before it starts, so a single tap is
+    // still a single step, then steadily.
+    //
+    // X is NOT redo, and used to be. X drops a constraint point (chisel.hpp), so every point
+    // dropped also redid a step of history -- and a redo that has something to redo puts back an
+    // edit the player had deliberately undone. One key with two meanings, where the meaning nobody
+    // asked for is silent until the history is non-empty, which is exactly when it does harm.
+    // Scripted, on exactly the same path the key takes -- not a second implementation beside it,
+    // which is how the two would drift and how this fault would come back invisible. See
+    // Options::undo_frame.
+    const bool scripted_undo = options_.undo_frame > 0 && frame_counter_ == options_.undo_frame;
+    const bool scripted_redo = options_.redo_frame > 0 && frame_counter_ == options_.redo_frame;
+    const bool undo_down = input.is_down(Key::Z) || scripted_undo;
+    const bool redo_down = input.is_down(Key::Y) || scripted_redo;
+    //
+    // Both take the SAME two steps a chisel stroke does: refresh the coarse grids, then tell the
+    // renderer which region changed. Only the first was here, so an undo put the world back and
+    // left the picture alone -- the node pool is what the game marches and nothing had told it,
+    // which is the seam D225 describes reached through the one edit path not carrying its ops.
+    std::vector<Op> stepped;
     if (repeat_undo_.poll(undo_down, dt) > 0) {
-        if (history_.undo(world_, ledger_, op_log_, tick_++, kLocalPlayer)) {
+        const bool did = history_.undo(world_, ledger_, op_log_, tick_++, kLocalPlayer, stepped);
+        WS_LOG_INFO("tool", "undo: {}", did ? "one step back" : "nothing to undo");
+        if (did) {
             rebuild_coarse_grids();
+            invalidate_edited_chunks(stepped);
         }
     }
     if (repeat_redo_.poll(redo_down, dt) > 0) {
-        if (history_.redo(world_, ledger_, op_log_, tick_++, kLocalPlayer)) {
+        const bool did = history_.redo(world_, ledger_, op_log_, tick_++, kLocalPlayer, stepped);
+        WS_LOG_INFO("tool", "redo: {}", did ? "one step forward" : "nothing to redo");
+        if (did) {
             rebuild_coarse_grids();
+            invalidate_edited_chunks(stepped);
         }
     }
 
@@ -3658,9 +3780,28 @@ void Application::record_frame(f32 time_seconds) {
             out[3] = 1.0f;
         };
 
+        // The material in hand, untouched. The two tints below carry a decision about it; the
+        // cursor marker and the constraint marks want the colour itself. See RenderParams.
+        if (!materials_.empty()) {
+            const VisualRecord& held = types_.visual_of(chisel_.material());
+            params.tool_colour[0] = static_cast<f32>(held.red) / 255.0f;
+            params.tool_colour[1] = static_cast<f32>(held.green) / 255.0f;
+            params.tool_colour[2] = static_cast<f32>(held.blue) / 255.0f;
+            params.tool_colour[3] = 1.0f;
+        }
+
+        // How strongly a box tints its faces, as a fraction. A box previously showed only its
+        // outline plus a faint wash over the whole volume, which says where an edit is and not
+        // which way it is turned — a wireframe seen straight on is ambiguous about that.
+        //
+        // A quarter for the clipboard's selection, which is a region being measured out, and
+        // rather less for the chisel, whose box is usually inside rock and is looked *through*.
+        constexpr f32 kSelectionFaceFill = 0.25f;
+        constexpr f32 kChiselFaceFill = 0.14f;
+
         u32 box = 0;
-        const auto add_box = [&](const i64 lo[3], const i64 hi[3], i32 state,
-                                 bool outline = true) {
+        const auto add_box = [&](const i64 lo[3], const i64 hi[3], i32 state, bool outline = true,
+                                 f32 face_fill = 0.0f) {
             if (box >= kMaxPreviewBoxes) return;
             for (int axis = 0; axis < 3; ++axis) {
                 params.box_min[box][axis] = static_cast<i32>(lo[axis] - base[axis]);
@@ -3668,15 +3809,34 @@ void Application::record_frame(f32 time_seconds) {
             }
             params.box_min[box][3] = state;
             // Low byte is the outline flag, next byte is the shell thickness, so the
-            // preview can draw the void a hollow placement will leave.
-            params.box_max[box][3] = (outline ? 1 : 0) | (static_cast<i32>(hollow_ & 0xFFu) << 8);
+            // preview can draw the void a hollow placement will leave. Third byte is how
+            // hard to fill the faces, which is per box because a selection and the ghost it
+            // becomes want different answers and can share a frame.
+            const i32 fill =
+                std::clamp(static_cast<i32>(face_fill * 255.0f + 0.5f), 0, 255);
+            params.box_max[box][3] =
+                (outline ? 1 : 0) | (static_cast<i32>(hollow_ & 0xFFu) << 8) | (fill << 16);
             ++box;
+        };
+
+        // The cursor marker, added by every branch below. State 6, drawn as a ring rather than a
+        // cube: it is on screen every frame of the game, so it has to say "here" and nothing else,
+        // and it must not be mistakable for the box that says what is about to happen.
+        const auto add_cursor = [&](const i64 at[3]) {
+            const i64 same[3] = {at[0], at[1], at[2]};
+            add_box(same, same, 6, false, 0.0f);
         };
 
         if (toolbelt_.active() == ToolKind::Clipboard) {
             const ClipboardPreview& ghost = clipboard_.preview();
             if (ghost.selecting) {
-                add_box(ghost.select_min, ghost.select_max, ghost.too_large ? 3 : 1);
+                // Faces filled while the region is being measured out — a selection is a volume
+                // and the whole question is how much of the building is inside it. Once it is
+                // captured the ghost shows its own voxels and the box goes back to an outline,
+                // because a coloured pane over the thing you are lining up is the one thing a
+                // paste preview must not do.
+                add_box(ghost.select_min, ghost.select_max, ghost.too_large ? 3 : 1, true,
+                        kSelectionFaceFill);
             }
             // State 5: march the clip inside this box rather than outlining it, so the
             // ghost shows the voxels that are about to land instead of the space they will
@@ -3689,7 +3849,9 @@ void Application::record_frame(f32 time_seconds) {
                 // each; the voxels are what says where the others are.
                 const bool outline = !voxel_ghost || (n + 1 == ghost.instances);
                 const u32 index = box;
-                add_box(ghost.min[n], ghost.max[n], voxel_ghost ? 5 : 2, outline);
+                // No face fill: a held clip is drawn as its own voxels, and its bounding box is
+                // only there to say which copy the wheel is steering.
+                add_box(ghost.min[n], ghost.max[n], voxel_ghost ? 5 : 2, outline, 0.0f);
                 if (voxel_ghost && index < kMaxPreviewBoxes) {
                     const ClipSlot& used = clip_slots_[shape];
                     params.clip_slot[index][0] = used.first_cell;
@@ -3701,31 +3863,49 @@ void Application::record_frame(f32 time_seconds) {
                 }
             }
             // A ghost is a copy of real voxels rather than one material, so there is no
-            // single colour to outline it in. Both tints stay at zero, which the shader
+            // single colour to outline it in. Both tints stay at zero (see below), which the shader
             // reads as "invert the backdrop" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the neutral answer, and the one that reads
             // over anything.
+            //
+            // A selection in progress is different: it is not a copy of anything yet, so it takes
+            // the material in hand the same way a placement does — its own colour where it can be
+            // seen and the inverse where it is buried, which is what keeps a box running into a
+            // wall legible on both sides of the wall.
+            if (ghost.selecting && !ghost.too_large) {
+                set_tint(params.tint_visible, types_.visual_of(chisel_.material()), false);
+                set_tint(params.tint_occluded, types_.visual_of(chisel_.material()), true);
+            }
+            if (ghost.has_cursor) add_cursor(ghost.cursor);
         } else {
             const ChiselPreview& preview = chisel_.preview();
-            if (preview.active) {
-                // Idle ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â just the voxel under the crosshair ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â is not a decision yet, so it
-                // gets its own state and stays neutral.
+            // Only while a drag is in progress. Idle, the box and the cursor are the same voxel,
+            // and drawing both puts a cube around the ring for no information at all -- the marker
+            // below already says where the crosshair is.
+            if (preview.active && preview.dragging) {
                 add_box(preview.min, preview.max,
-                        (preview.mode == ChiselMode::Carve)
-                            ? 1
-                            : ((preview.mode == ChiselMode::Place) ? 2 : 4));
+                        (preview.mode == ChiselMode::Carve) ? 1 : 2, true, kChiselFaceFill);
 
                 if (preview.mode == ChiselMode::Place) {
                     // The material's own colour in the open, its inverse where it is buried.
                     set_tint(params.tint_visible, types_.visual_of(chisel_.material()), false);
                     set_tint(params.tint_occluded, types_.visual_of(chisel_.material()), true);
-                } else if (preview.mode == ChiselMode::Carve && preview.removing != kAir) {
-                    // Inverted backdrop in the open (w stays 0), the doomed material where
-                    // it is buried.
-                    set_tint(params.tint_occluded, types_.visual_of(preview.removing), false);
+                } else if (preview.mode == ChiselMode::Carve) {
+                    // The other way round, and deliberately so: a carve is drawn in the colour of
+                    // what it is about to remove, so the shape buried in the rock reads as the rock
+                    // that is going to leave -- and inverted where it stands in open air. The two
+                    // halves of one box are then never the same shade, and a carve and a placement
+                    // are never mistaken for one another whichever side of a wall they are on.
+                    //
+                    // The colour comes from what was under the anchor. Carving in open air has
+                    // nothing to remove, so it falls back to the material in hand rather than to
+                    // nothing, which would leave the box invisible against the sky.
+                    const VoxelTypeId doomed =
+                        (preview.removing != kAir) ? preview.removing : chisel_.material();
+                    set_tint(params.tint_visible, types_.visual_of(doomed), true);
+                    set_tint(params.tint_occluded, types_.visual_of(doomed), false);
                 }
-                // Everything else leaves both at zero, which the shader reads as "invert
-                // the backdrop" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the right answer when there is no material to speak of.
             }
+            if (preview.has_cursor) add_cursor(preview.cursor);
         }
         if (!options_.preview.empty()) {
             i64 values[7]{0, 0, 0, 0, 0, 0, 2};
@@ -3733,24 +3913,44 @@ void Application::record_frame(f32 time_seconds) {
             const i64 lo[3] = {values[0], values[1], values[2]};
             const i64 hi[3] = {values[3], values[4], values[5]};
             box = 0;   // the scripted box replaces whatever the tool wanted to show
-            add_box(lo, hi, static_cast<i32>(values[6]));
+            add_box(lo, hi, static_cast<i32>(values[6]), true, kChiselFaceFill);
             // Same colour rules as the live tool, so a scripted screenshot shows what a
             // player would see rather than a stand-in.
             if (values[6] == 2 && !materials_.empty()) {
                 set_tint(params.tint_visible, types_.visual_of(chisel_.material()), false);
                 set_tint(params.tint_occluded, types_.visual_of(chisel_.material()), true);
             } else if (values[6] == 1 && !materials_.empty()) {
+                // Carve, the same way round as the live tool: inverted in the open, the doomed
+                // material where it is buried.
+                set_tint(params.tint_visible, types_.visual_of(materials_[0]), true);
                 set_tint(params.tint_occluded, types_.visual_of(materials_[0]), false);
             }
         }
+        // The constraint points. Drawn as crosses in the material's colour rather than as filled
+        // cells in the inverse of whatever is behind them -- a filled cell is indistinguishable
+        // from a one-voxel preview box, and an inverted backdrop is a different colour on every
+        // surface it lands on, so a row of them did not read as a row of anything.
+        //
+        // Asked of the tool that is actually in hand. The clipboard's points live on its own
+        // selector, and showing the chisel's while the clipboard is out would mark places the
+        // selection box is not going to reach.
+        const std::vector<std::array<i64, 3>>& points =
+            (toolbelt_.active() == ToolKind::Clipboard) ? clipboard_.constraints()
+                                                        : chisel_.constraints();
         u32 slot = 0;
-        for (const std::array<i64, 3>& point : chisel_.constraints()) {
-            if (slot >= kMaxPreviewMarks) break;
+        const auto add_mark = [&](const i64 point[3]) {
+            if (slot >= kMaxPreviewMarks) return;
             params.marks[slot][0] = static_cast<i32>(point[0] - base[0]);
             params.marks[slot][1] = static_cast<i32>(point[1] - base[1]);
             params.marks[slot][2] = static_cast<i32>(point[2] - base[2]);
             params.marks[slot][3] = 1;
             ++slot;
+        };
+        for (const std::array<i64, 3>& point : points) add_mark(point.data());
+        for (const std::string& scripted : options_.preview_marks) {
+            i64 at[3]{0, 0, 0};
+            parse_numbers(scripted, at, 3);
+            add_mark(at);
         }
     }
 
@@ -5156,6 +5356,16 @@ int Application::run(const Options& options) {
         // started the window in the middle of the build: two runs measured 82,718 and 95,638 nodes
         // and disagreed on 65,316 pixels, and a longer window made it worse rather than better,
         // which is the signature of a world still changing rather than a picture still converging.
+        // The clock, read once and used by everything below that has to be able to give up.
+        //
+        // Before the settle block rather than after it, because a wait measured in FRAMES is not a
+        // wait at all when the frames are what got slow: kSettleGiveUp is thirty thousand of them,
+        // which at the one frame a second a bad build runs at is eight hours of a run that was
+        // asked to take three minutes.
+        const bool out_of_time =
+            options_.max_seconds > 0.0 &&
+            ns_to_ms(now_ns() - load_began_ns_) > options_.max_seconds * 1000.0;
+
         if (options_.settle && !settled_seen_) {
             if (refine_settled_ && !refine_running_) {
                 ++settle_streak_;
@@ -5169,13 +5379,14 @@ int Application::run(const Options& options) {
             // was rejecting. So a run that edits can reset the streak repeatedly and never reach
             // its screenshot frame at all, which is not a slow measurement, it is a measurement
             // that never returns. Two of them ran until they were killed and wrote nothing.
-            if (!settled_seen_ && frame_counter_ > kSettleGiveUp) {
+            if (!settled_seen_ && (frame_counter_ > kSettleGiveUp || out_of_time)) {
                 settled_seen_ = true;
                 settle_frame_ = frame_counter_;
                 WS_LOG_WARN("frame",
-                            "gave up waiting for the world to settle after {} frames; measuring "
-                            "from here anyway, and this figure is not comparable with a settled "
-                            "one", kSettleGiveUp);
+                            "gave up waiting for the world to settle after {} frames and {:.0f} s; "
+                            "measuring from here anyway, and this figure is not comparable with a "
+                            "settled one",
+                            frame_counter_, ns_to_ms(now_ns() - load_began_ns_) / 1000.0);
             }
             if (settle_streak_ >= kSettleFrames) {
                 settled_seen_ = true;
@@ -5206,14 +5417,13 @@ int Application::run(const Options& options) {
         //
         // The shot is still taken, so a slow build is diagnosed from a picture and a log rather
         // than from nothing at all, and the log says plainly that the frame target was not met.
-        const bool out_of_time =
-            options_.max_seconds > 0.0 &&
-            ns_to_ms(now_ns() - load_began_ns_) > options_.max_seconds * 1000.0;
+        // `out_of_time` is read above the settle block, which needs it too.
         if (!options_.screenshot.empty() && measuring && out_of_time &&
             measured < options_.screenshot_frame) {
             WS_LOG_WARN("app",
                         "deadline: {:.0f} s elapsed at frame {} of {} Ã¢â‚¬â€ the build is too slow to "
-                        "reach the frame it was asked for, which is itself the result",
+                        "reach the frame it was asked for, which is itself the result. Raise it "
+                        "with --max-seconds N, or --max-seconds 0 for none",
                         options_.max_seconds, measured, options_.screenshot_frame);
         }
 
@@ -5809,6 +6019,13 @@ int main(int argc, char** argv) {
     if (!options.crash_test.empty() && options.crash_test != "frame") {
         return ws::run_crash_test(options.crash_test);
     }
+    // Said out loud, because a run that stops early has to be recognisable as having stopped
+    // early rather than as having finished.
+    if (options.max_seconds > 0.0) {
+        WS_LOG_INFO("app", "deadline {:.0f} s; the run reports where it got to when it expires",
+                    options.max_seconds);
+    }
+
     if (options.stream_audit) return ws::run_stream_audit(options);
     if (options.headless) return ws::run_headless(options);
 
