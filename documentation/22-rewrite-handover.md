@@ -478,13 +478,20 @@ changed, so the face keeps its ratio and drops to two samples; and faces inside 
 skip the shading stride, using the box the path tracer has had in the parameter block all along.
 Detection in one frame, 93% of the converged shadow by edit+30.
 
-**Still open: light through a hole just carved**, which reads nought until somewhere past edit+200.
-Two hypotheses are already disproved and both are the ones a reasonable person tries first — asking
-the pool for the invalidated bricks (D321, moved nothing, nothing deferred), and the unbuilt-cell
-occluder rule (D302; turning it off for shadow rays leaks the sun through unstreamed walls exactly
-as advertised and *still* does not deliver the beam). The onset instead lands on the 600-frame cold
-window, which points at faces that are visible but sampled too rarely to be kept warm, so they are
-never corrected — only recycled. Read that entry before spending a session on it.
+**The carved-skylight case that was written up here was not real** — a control with no edit
+reproduces the number to three decimal places (D322). Three hypotheses died on the way; the useful
+one is what the control exposed instead, and it is the biggest open fault in the renderer right now:
+
+> **A sealed room fills with sunlight as the node pool sheds. Static camera, no edit.** Frame 500,
+> 442,968 nodes: visibility 0.0000. Frame 700, 6,972 nodes: 0.0458. Frame 900: 0.0596, still
+> climbing. The shedding is R2 working correctly — pixel-driven residency keeps what the screen
+> needs — and a shadow ray needs the roof and the outer walls, which the screen does not. It
+> predates this session (0.0266 at `f902a00`) and D314/D319 amplify it, because a leaked ray now
+> moves a wall to a third instead of to 1/257.
+
+Do not respond by reverting D319. The fix is that residency has to count a shadow ray's needs as
+use, which is what R9's off-screen set exists for: light is world space, and the set that keeps it
+resident cannot be the set the camera can see. D322, D323.
 
 The answer is correct from the first frame, not merely present: at cut+1 the enclosed room reads
 identically to the same camera 120 frames later. Where the answer is not uniformly black, the

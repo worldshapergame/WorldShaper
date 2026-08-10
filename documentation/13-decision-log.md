@@ -844,31 +844,33 @@ grid, still, at 3% tolerance; **speckle is unchanged** at 3.8 / 19.3 / 9.9 enclo
 outdoor, which is the figure that would have moved if the demotion were firing on ordinary faces;
 450 tests pass; and the R3e reveal case still reads 0% on the fallback at cut+1.
 
-**Open: light through a hole the player has just carved.** Carving a skylight over the enclosed
-camera reads a mean visibility of **nought** until somewhere between edit+200 and edit+300, then
-0.0457 against a converged 0.0604. Neither D319 nor D320 moves it, and the placement case above —
-same build, same rules — is fixed, so whatever this is, it is not the accumulation and not the
-shading queue.
+**The carved-skylight case was never real, and the control says so.** Three hypotheses were raised
+about why light through a freshly carved hole "arrived at edit+300"; the fourth measurement was the
+one that should have been first. **A run with no edit at all reads the same number**: mean visibility
+0.0458 with 68,142 partial pixels at frame 700, against the carve's 0.0457 and 68,048. Whatever was
+being watched had nothing to do with the edit.
 
-**Two hypotheses tried and disproved, which is most of what is known:**
-
-| Tried | Result |
+| Hypothesis | How it died |
 |---|---|
-| The pool is slow to rebuild the carved bricks, so ask for them outright (D321) | No number moved in 300 frames. The pool's counters read **nothing deferred, nothing starved** |
-| An unbuilt cell is an occluder (D302), so the hole is opaque to the sun while transparent to the eye | Turning `occlude_unknown` off for shadow rays as a diagnostic makes the sun leak through unstreamed walls exactly as D302 says (0.0000 → 0.0092 *before* any edit) and **still does not deliver the beam** — 0.0094 at edit+1, 0.0109 at edit+10 |
+| The pool is slow to rebuild the carved bricks; ask for them outright | No number moved in 300 frames, nothing deferred, nothing starved (D321) |
+| An unbuilt cell occludes (D302), so the hole is opaque to the sun and transparent to the eye | Turning `occlude_unknown` off leaks the sun through unstreamed walls exactly as D302 says (0.0000 → 0.0092 *before* any edit) and still does not deliver the beam |
+| The onset is the 600-frame cold window recycling stale faces | **Predicted**: quartering `cold_frames` to 150 moves the onset by the same factor. **Measured**: the onset does not move at all — still nought at edit+220, present at edit+300 |
+| — | **Control with no edit reproduces the number to three decimal places** |
 
-**What the timing points at instead.** The onset lands on the 600-frame cold window: faces claimed
-in the opening frames of the run reach that age around frame 650, and `evict_cold` recycles the ones
-nothing has re-requested. A recycled face is claimed fresh and measures the world as it now is. That
-would mean the affected faces are **visible but too rarely sampled by the request lattice to be kept
-warm**, so they are never corrected — only replaced. If that is right, the fault is not in shading
-at all, and the fix is on the request side rather than the accumulation side. It is a hypothesis: it
-has a testable prediction — shortening `cold_frames` should move the onset by the same amount — and
-that test has not been run.
+**What was actually found, and it is worth more than the question that led to it.**
 
-Recorded this way deliberately. The two disproofs above are worth more than the guess: both were
-things a reasonable person would try first, and one of them was written into this document as the
-likely cause before it was measured and turned out to be wrong.
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D322 | **A sealed room fills with sunlight as the node pool sheds, with a static camera and no edit at all** | measurement | Enclosed camera, nothing touched, `--debug-mode 16` mean sun visibility against the pool's own node count: frame 500 **442,968 nodes → 0.0000**; frame 660 **266,840 → 0.0000**; frame 700 **6,972 → 0.0458**; frame 900 **6,972 → 0.0596**, still climbing. The room is sealed and every correct answer in it is nought (D302 measured 93,741 of 93,745 faces fully shadowed). The shedding itself is R2 doing its job — pixel-driven residency keeps what the screen needs — so the fault is that **a shadow ray gets a different answer from geometry the pool has given up than from geometry it holds**, which is D302's rule arriving from the eviction side rather than the streaming side. Reproduced on `f902a00`, *before* any of this session's work: **0.0266** at frame 900 on the same camera, same collapse |
+| D323 | **D314 and D319 amplify it, and that is the right way round** | measurement | Same camera, same frame 900: **0.0266 before this session, 0.0596 after.** A face may now be read at one sample (D314) and a unanimous face demotes to two on a contradicting ray (D319) — so a single leaked "reached the sun" moves a wall from 0.00 to about 0.33 where it used to move it to 1/257. Both rules are doing exactly what they were built to do; what they are amplifying is a wrong ray, and the answer is to stop the ray leaking rather than to go back to hiding it. Written down because the tempting response to the number going up is to revert the change that made it visible |
+
+**Where to start on it.** The pool sheds to 6,972 nodes for the enclosed view while the roof, the
+outer walls and everything else the camera cannot see are given up — and a shadow ray needs exactly
+that geometry. Either an evicted subtree must keep reading as WANTED to an occlusion ray (which is
+what D302 already says a *shell* must do, and would make it dark rather than bright), or residency
+has to count a shadow ray's needs as use. The second is the honest one and is what R9's off-screen
+set is for: light is a world-space quantity and the set that keeps it resident cannot be the set the
+camera can see.
 
 ## Open items carried forward
 
