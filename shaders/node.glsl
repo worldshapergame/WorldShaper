@@ -256,6 +256,23 @@ const uint kFaceSettled = 1u;
 const uint kFaceEager = 4u;
 const uint kFaceWindow = 256u;   // where both counts halve, so the sun may move
 
+// The same, for the ambient term, and it is eight times longer for a reason that does not apply to
+// the sun: **ambient occlusion depends only on geometry**. The sun moves across the sky and a face
+// has to be able to forget where it used to be, which is what a 256-sample window buys. Geometry
+// moves only when somebody edits it, and since an edit now tells the faces inside it to start again
+// from nothing rather than leaving them to average their way back (cebf015), the ambient window is
+// not a forgetting mechanism at all -- it exists to stop the counters overflowing.
+//
+// So it can be as long as the counters allow, and length is variance: the error of a fraction over
+// N samples falls as one over the square root of N, and the window IS N. At 256 a contact fraction
+// near a half has a standard deviation of about 8 of 255, which is exactly the face-to-face
+// roughness measured on a flat wall -- the cap was the noise floor. At 2,048 it is under 3.
+//
+// The counters hold it: samples and the lit count are sixteen bits each and 2,048 is well inside
+// them, and the contact sum and its two gradients are full words at 255 a sample, which is 522,240
+// at the cap against four thousand million.
+const uint kSkyWindow = 2048u;
+
 // How far above a face its STAND-IN sits: the coarse face the composite reads while the fine one
 // is still being discovered. Must match kFaceAncestorStep in src/world/face_store.hpp, which is
 // where the stand-in is actually claimed.

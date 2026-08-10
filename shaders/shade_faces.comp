@@ -367,7 +367,7 @@ void main() {
     int grad_w = int(face_light.words[light_at + 3u]);
     uint sky_samples = face_samples_of(counts);
     uint sky_open = face_lit_of(counts);
-    if (sky_samples >= kFaceWindow) {
+    if (sky_samples >= kSkyWindow) {
         sky_samples >>= 1u;
         sky_open >>= 1u;
         near_sum >>= 1u;

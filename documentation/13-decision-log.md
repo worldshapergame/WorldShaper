@@ -1175,10 +1175,19 @@ a rule rather than a mechanism and should be the last resort, not the first.
 | D383 | **A face's ambient samples are one stratified sequence, not two hundred independent draws** | measurement | D382 named what was left of the ambient occlusion's look — per-face Monte Carlo variance — and handed it to R5, the face denoise. Most of it did not need a denoiser. Each face was drawing a fresh pair of white-noise numbers every time it was shaded, so its samples clumped and gapped and the error fell as one over the square root of them. They are one **R2 low-discrepancy sequence** now, indexed by how many samples that face has already taken, which spreads them evenly over the disc for the same ray and the same cost. Face-to-face roughness on the terrace, mean second difference along a scanline: **8.975 → 5.130 of 255**, with the mean unmoved at 219.1 → 219.2 — the answer is the same, the noise around it is not. GPU 3.961 → 3.940 ms on that camera and 3.430 enclosed, inside D382's own control range |
 | D384 | **The rotation is per face and must not include the frame** | — | Two ways to get this wrong and both were considered. Every face walking the identical sequence lines their errors up into something structured, which is worse than noise because the eye finds a pattern and cannot find grain — so each face is offset by a Cranley-Patterson rotation of its own. And that offset is hashed from the **slot alone**: put the frame in it and the rotation changes every sample, which throws the stratification away and returns white noise wearing a low-discrepancy costume. A sequence has to be a sequence, so the offset is fixed for the life of the face |
 
-**What is left of it.** Roughness is down 43% and is no longer the dominant term; what remains is
-the same estimator's variance at a couple of hundred samples, and R5 still owes that. Worth trying
-before R5: the *origin* jitter across the face is still white noise, and stratifying it against the
-same sequence is the same four lines.
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D385 | **The ambient window was the noise floor, and it is eight times longer because ambient occlusion depends only on geometry** | measurement | The arithmetic says it outright: a contact fraction near a half, averaged over N samples, has a standard deviation of √(0.25/N), and at the 256-sample window that is **8 of 255 — which is the face-to-face roughness that was measured on a flat wall**. The cap *was* the floor. The sun needs a short window because the sun moves and a face has to be able to forget where it used to be. **Geometry does not move on its own**, and since an edit now tells the faces inside it to start again from nothing rather than leaving them to average their way back (cebf015), the ambient window is not a forgetting mechanism at all — it only stops the counters overflowing. `kSkyWindow` is 2,048, which the sixteen-bit counts and the full-word sums hold with room to spare. Roughness **5.130 → 3.752 of 255**, GPU unchanged at 3.940 ms, `--validation` clean and both mirrors matching |
+
+**Where the ambient look now stands.** Face-to-face roughness on the same flat surface, over the
+three changes: **8.975 → 5.130 → 3.752 of 255**, at no cost in either — 3.940 ms against 3.961
+before any of it. What is left is honest and is stated rather than claimed away: the long window is
+a *ceiling*, not an instant improvement. A face reaches 2,048 samples after some thousands of
+frames, so the picture keeps getting smoother while a player stands still and a face that has just
+come into view is exactly as noisy as it ever was. Converging the first two hundred samples faster
+is what R5's spatial filter is for, and it is the only thing left that can help a moving camera.
+The *origin* jitter across the face is also still white noise, and stratifying it against the same
+sequence is the same four lines.
 
 ## Open items carried forward
 
