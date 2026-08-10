@@ -41,7 +41,13 @@ class FaceLight {
 public:
     // `slots` is every slot the face pass may write, which is the store's own capacity plus the
     // card's provisional tail -- not the watermark, which grows.
-    bool create(Device& device, u32 slots);
+    //
+    // `name` is what the allocator and the log call it, because there is now a second array with
+    // exactly these properties -- a word a slot, device local, zeroed once, written and read by the
+    // card and by nothing else. That is the face SEEN stamp (`face_seen` in shaders/node.glsl), and
+    // sharing this class rather than copying it is the point: the guarantee being relied on is "the
+    // host cannot write this", and there should be one piece of code that provides it.
+    bool create(Device& device, u32 slots, const char* name = "face light");
     void destroy();
 
     VkBuffer buffer() const { return buffer_.buffer; }

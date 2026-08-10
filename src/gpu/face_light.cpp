@@ -4,7 +4,7 @@
 
 namespace ws {
 
-bool FaceLight::create(Device& device, u32 slots) {
+bool FaceLight::create(Device& device, u32 slots, const char* name) {
     device_ = &device;
     bytes_ = static_cast<u64>(slots) * sizeof(u32);
 
@@ -12,12 +12,17 @@ bool FaceLight::create(Device& device, u32 slots) {
     // a spare value: an entry with no samples reads as fully open sky, which is what every surface
     // was assumed to have before this stage existed. Starting from anything else would darken the
     // world by whatever the allocator happened to leave behind.
+    // TRANSFER_SRC as well, because the seen stamps are read back at the screenshot audit -- the
+    // count of faces the frame is actually lighting is the number every cost figure in this pass
+    // has to be read against, and an undeclared copy source is the unsound-instrument trap the
+    // face buffers already record.
     buffer_ = create_device_buffer(device, bytes_,
                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                   "face light");
+                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                       VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                   name);
     if (buffer_.buffer == VK_NULL_HANDLE) {
-        WS_LOG_ERROR("faces", "could not allocate {} bytes of face light", bytes_);
+        WS_LOG_ERROR("faces", "could not allocate {} bytes of {}", bytes_, name);
         return false;
     }
 
@@ -52,7 +57,7 @@ bool FaceLight::create(Device& device, u32 slots) {
     device.wait_idle();
     vkDestroyCommandPool(device.handle(), pool, nullptr);
 
-    WS_LOG_INFO("faces", "face light {} KB for {} slots", bytes_ / 1024, slots);
+    WS_LOG_INFO("faces", "{} {} KB for {} slots", name, bytes_ / 1024, slots);
     return true;
 }
 

@@ -131,6 +131,46 @@ struct Options {
     bool benchmark = false;       // re-run the machine measurement and save the result
     u64 edit_frame = 0;           // apply --edit on this frame instead of frame 100
 
+    // A player chiselling CONTINUOUSLY, which is the worst case this engine has and the one no
+    // instrument could reach.
+    //
+    // `--edit` fires once, at a known frame, so it measures how an already-converged picture
+    // recovers from one change. That is not what a player does. A player flies along holding the
+    // button down, carving and placing as they go, and every one of those edits reopens every face
+    // within `kEditShadowReach` while the camera is still revealing new ones. The two costs land on
+    // the same frames and nothing measured them together.
+    //
+    // Every `chisel_every` frames a cube of half-width `chisel_radius` voxels is carved or filled a
+    // few metres in front of the eye, alternating, through the same `apply_group` and the same
+    // `invalidate_edited_chunks` the mouse button uses -- so what is being measured is the game and
+    // not a parallel implementation of it.
+    u64 chisel_every = 0;         // 0 is off
+    i64 chisel_radius = 16;       // voxels: half a metre
+
+    // The two levers the light pass gained, as switches, so an A/B is one build with two runs.
+    //
+    // D407 is why they are switches and not two builds: this pass is a function of how much of the
+    // face store is still measuring, that state is not reproducible between batches, and the same
+    // build has read 2.41 ms and 3.75 ms on it in one session. Arms that are two builds are not
+    // comparable; arms that are two flags are.
+    //
+    //   --face-gate N       how many frames a face keeps being lit after the last pixel that read
+    //                       it. `--no-face-gate` widens it to the whole run, which is the control.
+    //   --no-face-worklist  dispatch the shading pass over every live slot again, rather than over
+    //                       the compacted list of the ones that owe work.
+    //   --no-face-prolong   a newly subdivided face measures its ambient term from nothing again,
+    //                       instead of inheriting the fit of the face it came out of.
+    u32 face_gate = 4;
+    bool face_worklist = true;
+    // OFF by default, and that is a measurement rather than a preference. See the prolongation
+    // block in shaders/shade_faces.comp: on the facility there are no intermediate levels for a
+    // face to inherit from -- the store holds level 0 and its level-3 stand-ins and nothing between
+    // -- so it has nothing to do here and measured as nothing (4.92 against 5.05 flying, 8.25
+    // against 8.26 while chiselling, both inside the spread). It is kept, switchable, because the
+    // case it is for is real in a scene with mid-distance geometry, and because a prior that is
+    // correct is worth having written down; it is not on because nothing has measured it helping.
+    bool face_prolong = false;
+
     // Press undo, or redo, once, on this frame. Zero is off.
     //
     // The whole point is that they go through the same code the key does. Undo was reported twice
@@ -354,6 +394,20 @@ Options parse_options(int argc, char** argv) {
             options.redo_frame = static_cast<u64>(std::atoll(argv[++i]));
         } else if (arg == "--edit-frame" && i + 1 < argc) {
             options.edit_frame = static_cast<u64>(std::atoll(argv[++i]));
+        } else if (arg == "--face-gate" && i + 1 < argc) {
+            options.face_gate = static_cast<u32>(std::atoll(argv[++i]));
+        } else if (arg == "--no-face-gate") {
+            options.face_gate = 0x7FFFFFFFu;
+        } else if (arg == "--no-face-worklist") {
+            options.face_worklist = false;
+        } else if (arg == "--no-face-prolong") {
+            options.face_prolong = false;
+        } else if (arg == "--chisel" && i + 1 < argc) {
+            // EVERY[,RADIUS] -- carve and fill in front of the camera, for ever.
+            i64 values[2]{0, 16};
+            parse_numbers(argv[++i], values, 2);
+            options.chisel_every = static_cast<u64>(values[0] > 0 ? values[0] : 0);
+            options.chisel_radius = values[1] > 0 ? values[1] : 16;
         } else if (arg == "--benchmark") {
             options.benchmark = true;
         } else if (arg == "--no-auto-quality") {
@@ -1311,6 +1365,11 @@ private:
         u32 light_count;      // live entries of the emitter list. 0 means the scene has no lamps
         u32 light_version;    // bumped when the list's CONTENTS change (light_list_hash)
         u32 light_reset;      // 1 on the one frame it changed, which reopens every idle face
+        // Read the slot out of the compacted work list rather than from the invocation index.
+        // Off for the provisional dispatch, which is its own small contiguous range.
+        u32 from_worklist;
+        u32 seen_window;      // frames a face keeps being lit after the last pixel that read it
+        u32 prolong;          // a subdivided face inherits its parent's fit rather than remeasuring
     };
     NodePush make_node_push(u32 face_count) const;
 
@@ -1323,7 +1382,26 @@ private:
     FaceStore face_store_;
     FaceBuffers face_buffers_;
     FaceLight face_light_;
+    // One word a slot: the frame a pixel last read that face. Written by the visibility pass, read
+    // by the shading pass, and the reason the light pass stopped shading the six hundred frames of
+    // scenery behind the camera. See `face_seen` in shaders/node.glsl.
+    FaceLight face_seen_;
+    // The compacted dispatch: three words of VkDispatchIndirectCommand, a count, then the slots
+    // that owe work. Written by `face_worklist.comp` and read by the shading pass, both on the
+    // card; the host only ever zeroes the header. See face_worklist.comp for why it exists.
+    GpuBuffer face_work_;
+    ComputePipeline face_worklist_;
     u32 last_faces_seen_ = 0;
+    // What `--chisel` actually did, so a run that carved nothing cannot be read as a run that
+    // carved and cost nothing.
+    u64 chisels_fired_ = 0;
+    u64 chisel_voxels_ = 0;
+    // Firings where the camera was looking at nothing within reach. Counted rather than ignored:
+    // a run that missed every time and a run that never fired print the same pass table.
+    u64 chisels_missed_ = 0;
+    u64 chisel_apply_ns_ = 0;
+    u64 chisel_coarse_ns_ = 0;
+    u64 chisel_invalidate_ns_ = 0;
     ComputePipeline node_visibility_;
     VkDescriptorSetLayout node_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet node_set_ = VK_NULL_HANDLE;
@@ -2430,6 +2508,81 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         }
     }
 
+    // ---- the player who is chiselling while they fly ------------------------------------------
+    //
+    // The worst case the renderer has, and until now there was no way to photograph it. `--fly`
+    // measures a camera revealing new faces; `--edit` measures one change to a settled picture.
+    // Held together they are what a player actually does, and the two costs are not independent:
+    // an edit reopens every face within `kEditShadowReach` of it, and a moving camera is claiming
+    // new faces in the same region on the same frames.
+    //
+    // Deliberately in front of the CAMERA rather than at a fixed box. An edit behind you reopens
+    // faces nothing can see, which is a measurement of the wrong thing now that light stops at
+    // what a pixel read; an edit in front of you reopens exactly the faces the frame is made of,
+    // which is the case that costs and the case a player is in.
+    if (options_.chisel_every > 0 && frame_counter_ > 0 &&
+        (frame_counter_ % options_.chisel_every) == 0) {
+        // AT THE SURFACE THE CAMERA IS LOOKING AT, found by the same `raycast` the Chisel tool
+        // uses, and not at a fixed distance in front of the eye.
+        //
+        // The first version put the box three metres along the forward vector, which is what a
+        // hand-held tool looks like and is not what it does. On this flight path the camera is
+        // outside the building for most of the run, so three metres ahead is open air: every
+        // "carve" changed nothing and every "fill" hung a one-metre cube in the sky and took it
+        // down again eight frames later. The counters said 1,437,480 voxels changed and the
+        // screen showed an untouched facade, which is the handover's trap 1 in a new place -- a
+        // number responding to the edits while the picture responds to nothing.
+        //
+        // Aimed at the surface, the edits land on the wall the frame is made of, which is also the
+        // only version of this that measures the right thing: what an edit costs is every face
+        // within kEditShadowReach of it, and those faces are only expensive when they are the ones
+        // on screen.
+        f32 forward[3];
+        camera_.forward_vector(forward);
+        // `Camera::position_*` is already in VOXELS, not metres -- see the note at the top of
+        // game/camera.hpp about why the position is kept in voxel doubles. Scaling it again put
+        // the ray origin thirty-two times too far out, so it hit nothing, and the fixed-distance
+        // version this replaced was filling one-metre cubes into empty space a kilometre away:
+        // 1,437,480 voxels changed, ninety-four chunks created, and an untouched facade on screen.
+        const f64 eye[3] = {camera_.position_x(), camera_.position_y(), camera_.position_z()};
+        const RayHit look = raycast(world_, eye[0], eye[1], eye[2], forward[0], forward[1],
+                                    forward[2], chisel_.reach());
+        if (look.hit) {
+            const i64 r = options_.chisel_radius;
+            // Carve, then fill the same box back on the next firing: the two halves of what a
+            // player does, and the fill returns matter so a long run does not dissolve the
+            // building and end up measuring an empty room. The box is centred on the voxel that
+            // was hit, so a carve always removes something and the fill always puts something
+            // back in the same place -- which is what makes the two visible as one action.
+            const bool carve = ((frame_counter_ / options_.chisel_every) & 1ull) == 0ull;
+            const VoxelTypeId type = carve ? kAir : materials_[0];
+            const Op op =
+                Op::fill_box(tick_++, kLocalPlayer, look.x - r, look.y - r, look.z - r,
+                             look.x + r, look.y + r, look.z + r, type,
+                             carve ? MatterReason::PlayerBreak : MatterReason::PlayerPlace);
+            std::vector<Op> scripted{op};
+            // Split three ways, because an edit's cost is three unrelated things and the frame
+            // time cannot tell them apart: the op and its undo capture, the coarse grids, and
+            // everything downstream re-deriving itself. The handover says the third is most of it
+            // for a large chisel and nothing had ever measured it for a small one.
+            const u64 t_apply = now_ns();
+            const OpResult result = history_.apply_group(world_, ledger_, op_log_, scripted);
+            const u64 t_coarse = now_ns();
+            if (result.voxels_changed > 0) {
+                rebuild_coarse_grids();
+                const u64 t_invalidate = now_ns();
+                invalidate_edited_chunks({op});
+                chisel_coarse_ns_ += t_invalidate - t_coarse;
+                chisel_invalidate_ns_ += now_ns() - t_invalidate;
+            }
+            chisel_apply_ns_ += t_coarse - t_apply;
+            ++chisels_fired_;
+            chisel_voxels_ += result.voxels_changed;
+        } else {
+            ++chisels_missed_;
+        }
+    }
+
     if (!options_.clip.empty() && frame_counter_ == kScriptedEditFrame) {
         i64 values[12]{0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0};
         parse_numbers(options_.clip, values, 12);
@@ -3256,6 +3409,12 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.light_count = light_count_;
     push.light_version = light_version_;
     push.light_reset = light_changed_ ? 1u : 0u;
+    // The two levers this stage added, both switchable at run time so the arms of an A/B are one
+    // build. D407 is the standing reason: this pass is a function of a convergence state that is
+    // not reproducible between batches, so two builds cannot be compared and two flags can.
+    push.from_worklist = 0;   // set by the dispatch that uses the list
+    push.seen_window = options_.face_gate;
+    push.prolong = options_.face_prolong ? 1u : 0u;
     return push;
 }
 
@@ -4374,16 +4533,76 @@ void Application::record_frame(f32 time_seconds) {
         const u32 face_count = face_store_.watermark();
         const u32 provisional_base = face_buffers_.provisional_base();
         const u32 provisional_count = FaceBuffers::provisional_count();
+        // ---- which faces owe work, packed ---------------------------------------------------
+        //
+        // The shading dispatch is sized by this rather than by the store, so every workgroup it
+        // launches is full. See shaders/face_worklist.comp for the measurement that made it worth
+        // a pass, a barrier and an indirect dispatch.
+        //
+        // The header is zeroed here rather than by the pass itself: a compaction pass cannot clear
+        // the counter it is about to atomicAdd into, because there is no ordering between its own
+        // workgroups. Sixteen bytes of fill.
+        const bool use_worklist = options_.face_worklist && face_count > 0;
+        if (use_worklist) {
+            profiler_.begin_pass(cmd, "face list", 0.30);
+            // {groups_x, groups_y, groups_z, count}. Y and Z are ONE, not nought: a fill of zeroes
+            // over all four words leaves a dispatch of (n, 0, 0), which launches nothing at all and
+            // reads as the face pass suddenly costing a tenth of what it did.
+            const u32 header[4]{0, 1, 1, 0};
+            vkCmdUpdateBuffer(cmd, face_work_.buffer, 0, sizeof(header), header);
+            VkMemoryBarrier2 clear_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            clear_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            clear_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            clear_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            clear_barrier.dstAccessMask =
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            VkDependencyInfo clear_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            clear_dependency.memoryBarrierCount = 1;
+            clear_dependency.pMemoryBarriers = &clear_barrier;
+            vkCmdPipelineBarrier2(cmd, &clear_dependency);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, face_worklist_.pipeline());
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, face_worklist_.layout(),
+                                    0, 1, &node_set_, 1, &params_offset);
+            const NodePush list_push = make_node_push(face_count);
+            vkCmdPushConstants(cmd, face_worklist_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                               sizeof(list_push), &list_push);
+            vkCmdDispatch(cmd, (face_count + 63) / 64, 1, 1);
+            profiler_.end_pass(cmd);
+
+            // The list is both read as data and consumed as a dispatch command, and those are two
+            // different destination stages. Naming only the shader stage leaves the command fetch
+            // unordered against the write that produced it, which is a dispatch of whatever the
+            // buffer held last frame -- and last frame's count is plausible, so it would have read
+            // as a mysterious few thousand faces going unlit rather than as a fault.
+            VkMemoryBarrier2 list_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            list_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            list_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+            list_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+            list_barrier.dstAccessMask =
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+            VkDependencyInfo list_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            list_dependency.memoryBarrierCount = 1;
+            list_dependency.pMemoryBarriers = &list_barrier;
+            vkCmdPipelineBarrier2(cmd, &list_dependency);
+        }
+
         if (face_count > 0 || provisional_count > 0) {
             profiler_.begin_pass(cmd, "faces", 4.4);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.pipeline());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.layout(), 0,
                                     1, &node_set_, 1, &params_offset);
             if (face_count > 0) {
-                const NodePush shade_push = make_node_push(face_count);
+                NodePush shade_push = make_node_push(face_count);
+                shade_push.from_worklist = use_worklist ? 1u : 0u;
                 vkCmdPushConstants(cmd, shade_faces_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                    sizeof(shade_push), &shade_push);
-                vkCmdDispatch(cmd, (face_count + 63) / 64, 1, 1);
+                if (use_worklist) {
+                    vkCmdDispatchIndirect(cmd, face_work_.buffer, 0);
+                } else {
+                    vkCmdDispatch(cmd, (face_count + 63) / 64, 1, 1);
+                }
             }
 
             // And the card's own faces, as a second dispatch rather than a longer first one.
@@ -4824,7 +5043,7 @@ int Application::run(const Options& options) {
         // The three sets between them bind the world twice, the type tables, the clip, the
         // face cache and the light list. Counted generously: running out of pool is a failure
         // at start-up with a message nobody connects to the binding they just added.
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 56},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 60},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 4},
     };
     VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
@@ -4939,6 +5158,27 @@ int Application::run(const Options& options) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;
         }
+        // And one word a slot for when a pixel last read that face, over exactly the same range.
+        if (!face_seen_.create(device_,
+                               face_buffers_.provisional_base() + FaceBuffers::provisional_count(),
+                               "face seen")) {
+            WS_LOG_FATAL("app", "could not create the face seen buffer");
+            return 1;
+        }
+        // The work list: a dispatch command, a count, and one slot per face in the store. Only the
+        // store's own range is ever compacted -- the card's provisional tail is a separate, small,
+        // contiguous dispatch -- so it is sized to the store and not to the store plus the tail.
+        const u64 work_bytes =
+            (4ull + face_buffers_.provisional_base()) * sizeof(u32);
+        face_work_ = create_device_buffer(device_, work_bytes,
+                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                              VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                          "face work list");
+        if (!face_work_.valid()) {
+            WS_LOG_FATAL("app", "could not create the face work list");
+            return 1;
+        }
         WS_LOG_INFO("load", "node buffers {:.0f} ms  [t+{:.0f} ms]",
                     ns_to_ms(now_ns() - t_node_buffers), ns_to_ms(now_ns() - load_began_ns_));
 
@@ -4958,8 +5198,12 @@ int Application::run(const Options& options) {
         // Fifteen: 14 is the emitter list, so a FACE can aim at a lamp (R3c). It is the same buffer
         // the path tracer reads at its own binding 18 -- one list, so the reference renderer and
         // the real-time one cannot disagree about where the lamps are or how bright they are.
-        VkDescriptorSetLayoutBinding node_bindings[15]{};
-        for (u32 i = 0; i < 15; ++i) {
+        // Sixteen: 15 is the face SEEN stamp, written by the visibility pass and read by the
+        // shading pass, which is how the light pass finally stopped lighting what nobody can see.
+        // Seventeen: 16 is the compacted work list, so the shading dispatch is sized by how many
+        // faces owe work rather than by how many exist.
+        VkDescriptorSetLayoutBinding node_bindings[17]{};
+        for (u32 i = 0; i < 17; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -4970,7 +5214,7 @@ int Application::run(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 15;
+        node_layout_info.bindingCount = 17;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -4981,19 +5225,20 @@ int Application::run(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[11]{
+        const VkBuffer node_pool_buffers[13]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
-            face_light_.buffer(),      light_buffer_.buffer,
+            face_light_.buffer(),      light_buffer_.buffer,    face_seen_.buffer(),
+            face_work_.buffer,
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[11]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14};
-        VkDescriptorBufferInfo node_infos[11]{};
-        VkWriteDescriptorSet node_writes[12]{};
-        for (u32 i = 0; i < 11; ++i) {
+        const u32 node_bindings_for[13]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16};
+        VkDescriptorBufferInfo node_infos[13]{};
+        VkWriteDescriptorSet node_writes[14]{};
+        for (u32 i = 0; i < 13; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -5008,13 +5253,13 @@ int Application::run(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[11].dstSet = node_set_;
-        node_writes[11].dstBinding = 8;
-        node_writes[11].descriptorCount = 1;
-        node_writes[11].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[11].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 12, node_writes, 0, nullptr);
+        node_writes[13].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[13].dstSet = node_set_;
+        node_writes[13].dstBinding = 8;
+        node_writes[13].descriptorCount = 1;
+        node_writes[13].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[13].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 14, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -5059,6 +5304,17 @@ int Application::run(const Options& options) {
                                  sizeof(NodePush))) {
             WS_LOG_FATAL("app", "could not create the face shading pipeline: {}",
                          shade_faces_.last_error());
+            return 1;
+        }
+
+        // The compaction pass that decides which slots the shading dispatch covers.
+        const std::filesystem::path worklist_spirv = shaders / "face_worklist.comp.spv";
+        const std::filesystem::path worklist_source =
+            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "face_worklist.comp";
+        if (!face_worklist_.create(device_, worklist_source, worklist_spirv, node_layout_,
+                                   sizeof(NodePush))) {
+            WS_LOG_FATAL("app", "could not create the face work list pipeline: {}",
+                         face_worklist_.last_error());
             return 1;
         }
 
@@ -5812,7 +6068,9 @@ int Application::run(const Options& options) {
                 } else {
                     WS_LOG_INFO("frame", "the node pool agrees with the world, leaf for leaf");
                 }
-                face_buffers_.audit(face_store_);
+                // The live gate, not the default, so the audit describes the run that was made.
+                face_buffers_.audit(face_store_, face_seen_.buffer(),
+                                    static_cast<u32>(frame_counter_), options_.face_gate);
                 const FaceStoreStats face_stats = face_store_.stats();
                 WS_LOG_INFO("frame",
                             "faces: {} live, {} seen this frame, {} claims {} already there, "
@@ -5841,6 +6099,23 @@ int Application::run(const Options& options) {
                     face_levels += std::to_string(level) + ":" + std::to_string(by_level[level]);
                 }
                 WS_LOG_INFO("frame", "faces by level  {}", face_levels);
+                // And what the scripted chisel did, if it was asked for. A run that changed no
+                // voxels is a run that measured the flight and not the edit, and the two figures
+                // look identical from the pass table alone.
+                if (options_.chisel_every > 0) {
+                    WS_LOG_INFO("frame",
+                                "chisel: {} edits fired, {} voxels changed, {} missed for want of "
+                                "anything to aim at, one every {} frames at radius {}",
+                                chisels_fired_, chisel_voxels_, chisels_missed_,
+                                options_.chisel_every, options_.chisel_radius);
+                    const f64 fired = static_cast<f64>(std::max<u64>(chisels_fired_, 1));
+                    WS_LOG_INFO("frame",
+                                "chisel CPU per edit: apply and undo {:.2f} ms, coarse grids "
+                                "{:.2f} ms, invalidation downstream {:.2f} ms",
+                                ns_to_ms(chisel_apply_ns_) / fired,
+                                ns_to_ms(chisel_coarse_ns_) / fired,
+                                ns_to_ms(chisel_invalidate_ns_) / fired);
+                }
 
                 // A full table is a fact about the table and never about the world, and it has to
                 // be said out loud. Faces became voxels rather than bricks, which multiplied the
@@ -5911,6 +6186,9 @@ int Application::run(const Options& options) {
     shade_faces_.destroy();
     face_buffers_.destroy();
     face_light_.destroy();
+    face_seen_.destroy();
+    face_worklist_.destroy();
+    destroy_buffer(device_, face_work_);
     node_buffers_.destroy();
     if (node_layout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device_.handle(), node_layout_, nullptr);

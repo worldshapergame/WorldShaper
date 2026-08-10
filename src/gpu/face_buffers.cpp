@@ -186,7 +186,7 @@ void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store) {
     vkCmdPipelineBarrier2(cmd, &dependency);
 }
 
-bool FaceBuffers::audit(const FaceStore& store) {
+bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 seen_window) {
     if (device_ == nullptr) return false;
 
     // Nothing may still be owed to the card, or this compares a host that has moved on against a
@@ -318,6 +318,18 @@ bool FaceBuffers::audit(const FaceStore& store) {
             VkBufferCopy face_copy{};
             face_copy.size = face_bytes;
             vkCmdCopyBuffer(face_cmd, faces_.buffer, staging_.buffer, 1, &face_copy);
+            // And the seen stamps behind them, in the same submit, because the two have to be read
+            // at the same instant: a face counted as live here and as unseen a moment later is a
+            // number that describes neither frame.
+            const u64 seen_bytes = static_cast<u64>(watermark) * sizeof(u32);
+            const bool seen_fits = seen != VK_NULL_HANDLE &&
+                                   face_bytes + seen_bytes <= staging_capacity_;
+            if (seen_fits) {
+                VkBufferCopy seen_copy{};
+                seen_copy.dstOffset = face_bytes;
+                seen_copy.size = seen_bytes;
+                vkCmdCopyBuffer(face_cmd, seen, staging_.buffer, 1, &seen_copy);
+            }
             WS_VK(vkEndCommandBuffer(face_cmd));
             VkCommandBufferSubmitInfo face_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
             face_info.commandBuffer = face_cmd;
@@ -379,12 +391,27 @@ bool FaceBuffers::audit(const FaceStore& store) {
             u32 ambient_done = 0;
             u32 ambient_idle = 0;
             u32 lamp_idle = 0;
+            // And how many of them the frame in front of you can actually SEE, which is the
+            // number the other three have to be read against. A store six hundred frames deep and
+            // a screen are very different populations, and the pass used to shade the first while
+            // the picture is made of the second.
+            u32 seen_now = 0;
+            u32 seen_bursting = 0;
+            const u32* stamps =
+                seen_fits ? reinterpret_cast<const u32*>(static_cast<const u8*>(staging_.mapped) +
+                                                         face_bytes)
+                          : nullptr;
             for (u32 slot = 0; slot < watermark; ++slot) {
                 if (!face_live(card[slot])) continue;
                 ++ambient_live;
-                if ((card[slot].photons & kFaceAmbientDone) != 0) ++ambient_done;
+                const bool done = (card[slot].photons & kFaceAmbientDone) != 0;
+                if (done) ++ambient_done;
                 if ((card[slot].photons & kFaceAmbientIdle) != 0) ++ambient_idle;
                 if ((card[slot].photons & kFaceLampIdle) != 0) ++lamp_idle;
+                if (stamps != nullptr && (frame - stamps[slot]) <= seen_window) {
+                    ++seen_now;
+                    if (!done) ++seen_bursting;
+                }
             }
             WS_LOG_INFO("faces",
                         "ambient on the card: {} of {} live faces cast no more rays at all, {} are "
@@ -403,6 +430,15 @@ bool FaceBuffers::audit(const FaceStore& store) {
             // its timing on that scene is not about this term.
             WS_LOG_INFO("faces", "lamps on the card: {} of {} live faces cast no more rays at all",
                         lamp_idle, ambient_live);
+            // The one that says whether the pass is working on the picture or on the store's
+            // memory of it. Everything outside `seen` is costing nothing now and is why: light
+            // stops at the edge of what a pixel read, and residency does not.
+            if (stamps != nullptr) {
+                WS_LOG_INFO("faces",
+                            "seen on the card: {} of {} live faces were read by a pixel in the "
+                            "last {} frames; {} of those still owe ambient rays",
+                            seen_now, ambient_live, seen_window + 1, seen_bursting);
+            }
             for (u32 slot = 0; slot < watermark; ++slot) {
                 if (face_samples(card[slot]) < kFaceEager) continue;
                 ++settled;

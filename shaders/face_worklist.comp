@@ -1,0 +1,79 @@
+#version 450
+// Which faces owe work this frame, packed into a list the shading pass is dispatched over.
+//
+// # Why a pass of its own
+//
+// `shade_faces.comp` was dispatched over every live slot, and an invocation with nothing to do read
+// thirty-two bytes and stopped. That was the right trade while most of the store was working: what
+// costs is the march, not the record.
+//
+// It stopped being the right trade the moment light stopped at what a pixel had read. Then the
+// store held 772,000 live faces of which 220,000 owed anything -- about eighteen busy lanes in a
+// workgroup of sixty-four -- and a workgroup runs for as long as its slowest lane, so five sixths
+// of the machine sat waiting on the other sixth. The idle invocations cost almost no bandwidth and
+// most of the occupancy.
+//
+// Packing them is the whole of this pass. It reads the same thirty-two bytes the shading pass would
+// have read, decides with the same function (`face_work_of`, in node.glsl, so the two cannot answer
+// differently), and appends the slot. The shading pass is then dispatched indirectly over the
+// count, and every workgroup it launches is full.
+//
+// # The atomic is per workgroup, not per face
+//
+// Two hundred thousand atomicAdds on one word a frame would serialise on that word. Each workgroup
+// counts its own owed slots in shared memory, takes ONE atomicAdd for the whole block, and writes
+// its members at that base. The order faces end up in is therefore arbitrary between workgroups
+// and ascending within one, which nothing downstream depends on -- a face's answer is a function
+// of the face.
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+
+#include "node.glsl"
+
+// One counter and one base per workgroup.
+shared uint g_block_count;
+shared uint g_block_base;
+// Where each lane's slot goes within the block, so the write is one store with no second scan.
+shared uint g_offsets[64];
+
+void main() {
+    const uint index = gl_LocalInvocationID.x;
+    if (index == 0u) {
+        g_block_count = 0u;
+        g_block_base = 0u;
+    }
+    barrier();
+
+    const uint slot = gl_GlobalInvocationID.x;
+    bool owed = false;
+    if (slot < node_push.face_count) {
+        // The same read the shading pass would have made, and the same decision. `false` for
+        // `provisional_face` because this pass only ever covers the store's own range -- the card's
+        // provisional tail is a separate, small, contiguous dispatch and is never compacted.
+        const Face face = faces.items[slot];
+        owed = face_work_of(slot, face, false).owed;
+    }
+
+    // Where this lane sits in the block. An atomicAdd on a shared word is cheap and its ordering
+    // between lanes does not matter.
+    if (owed) g_offsets[index] = atomicAdd(g_block_count, 1u);
+    barrier();
+
+    if (index == 0u && g_block_count > 0u) {
+        g_block_base = atomicAdd(face_work.count, g_block_count);
+        // And the dispatch size, as a maximum over the blocks rather than a second pass.
+        //
+        // Every workgroup knows its own base and its own count, so the largest
+        // ceil((base + count) / 64) any of them computes IS ceil(total / 64). One extra atomic per
+        // workgroup, against a whole extra dispatch and a whole extra barrier to work out one
+        // number the card already holds.
+        atomicMax(face_work.groups_x, (g_block_base + g_block_count + 63u) / 64u);
+    }
+    barrier();
+
+    if (!owed) return;
+    const uint at = g_block_base + g_offsets[index];
+    if (at >= face_work.slots.length()) return;   // the list is sized for the store; never hit
+    face_work.slots[at] = slot;
+}

@@ -115,6 +115,9 @@ layout(push_constant) uniform NodeConstants {
     uint light_count;   // how many entries of `lights` are live. 0 means the scene has no lamps
     uint light_version; // bumped whenever the list's CONTENTS change, not merely its length
     uint light_reset;   // 1 on the one frame the list changed, which is what reopens an idle face
+    uint from_worklist; // shading: take the slot from face_work.slots rather than from the index
+    uint seen_window;   // how many frames a face keeps being lit after the last pixel that read it
+    uint prolong;       // 1: a subdivided face inherits its parent's fit. 0: the old stand-in seed
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }
@@ -195,6 +198,46 @@ layout(std430, binding = 12) buffer FaceProvisional { uint marks[]; } provisiona
 // by which it could -- see src/gpu/face_light.hpp for why that is a stronger guarantee than
 // remembering not to.
 layout(std430, binding = 13) buffer FaceLight { uint words[]; } face_light;
+
+// ---- what the camera can actually see ---------------------------------------------------------
+//
+// One word a face slot: the frame a pixel last READ this face. The card's outright, like the face
+// light beside it, for the same reason -- there is no host path that could overwrite it.
+//
+// # Why the light pass needs this at all
+//
+// "If you cannot see it, it is not processed and does not exist" is the rule the whole rewrite was
+// asked for under, and the light pass was the one place still ignoring it. The store keeps a face
+// for `cold_frames` after anything last asked for it, which is six hundred frames, and every one of
+// those faces was being shaded every frame it owed a ray. Measured on the flight: 763,800 live
+// faces, of which the frame in front of you reads a fraction -- and 281,244 of them still bursting
+// sixteen ambient rays, eight lamp rays and a sun ray apiece. That is most of a moving frame spent
+// on surfaces nobody is looking at.
+//
+// Residency is NOT what to fix. A face has to stay in the store while it is off screen, or the
+// composite has nothing to read when it comes back and the whole R9d stand-in argument starts
+// again. What has to stop is the RAYS. So the store keeps its six hundred frames and the light
+// stops at this window, and the two questions are asked separately because they are separate.
+//
+// # Why a stamp rather than the store's own idea of recency
+//
+// The host knows which faces the request lattice reported, which is one pixel in sixteen to
+// sixty-four with a phase that takes stride^2 frames to come round -- so its idea of "seen" is
+// stale by up to sixty-four frames and would have to be believed for at least that long. The
+// visibility pass, on the other hand, looks a face up for EVERY pixel, so it knows exactly, this
+// frame, with no lattice and no round trip. It is already holding the record it would stamp.
+layout(std430, binding = 15) buffer FaceSeen { uint frames[]; } face_seen;
+
+// How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
+// live value is `node_push.seen_window`, so `--face-gate` can widen it to the whole run and give
+// an exact same-commit control for this change (D407: two builds of this pass cannot be compared
+// from adjacent batches, so the arms have to be one build).
+//
+// It can be small because the stamp is exact and arrives in the same frame: the visibility pass
+// writes it, a barrier follows, and the shading pass reads it. Not one, because a face at a
+// grazing angle can drop out of the frame for a frame at a time as the camera moves, and a face
+// that stops and restarts its burst converges no faster for the pause.
+const uint kFaceSeenWindow = 4u;
 
 // Nine words a face, holding three different quantities that must not be averaged into one.
 //
@@ -325,6 +368,29 @@ const uint kFaceLampIdle = 1u << 28;
 
 const uint kNoFace = 0xFFFFFFFFu;
 const uint kFaceTombstone = 0xFFFFFFFEu;
+
+// Say that a pixel read this face on this frame. See `face_seen` above for why this exists.
+//
+// Conditional, and that is the whole of what makes it affordable: a face covers many pixels, so
+// after the first one the word already says this frame and the rest are cache hits with no write
+// and no dirty line. The record it belongs to has already been fetched by `node_face_lookup` to
+// compare the key against, so there is no traffic here the lookup was not paying anyway.
+//
+// Two pixels racing to write the same value is not a race worth ordering.
+void node_face_seen(uint slot) {
+    if (slot == kNoFace || slot == kFaceTombstone) return;
+    if (slot >= face_seen.frames.length()) return;
+    if (face_seen.frames[slot] != node_push.frame) face_seen.frames[slot] = node_push.frame;
+}
+
+// Was this face read by a pixel recently enough to be worth a ray?
+//
+// Unsigned arithmetic on purpose: a slot that has never been stamped reads nought, and
+// `frame - 0` is the frame number itself, which is past the window from the fifth frame of the run.
+bool node_face_recently_seen(uint slot) {
+    if (slot >= face_seen.frames.length()) return true;   // cannot tell, so light it
+    return (node_push.frame - face_seen.frames[slot]) <= node_push.seen_window;
+}
 
 uint face_level_of(uint packed) { return packed & 0xFFu; }
 uint face_dir_of(uint packed) { return (packed >> 8) & 0xFFu; }
@@ -458,6 +524,40 @@ const uint kSkyFarEager = kSkyFarMin;
 // thirty-two. Not more: a prior that survives its own evidence is a bias, and the reason the sun's
 // stand-in is read rather than accumulated is precisely that.
 const uint kSkySeedSamples = 8u;
+
+// ---- and how much of it is worth INHERITING, which is a different question ---------------------
+//
+// The one above is a prior for a face that has appeared out of nowhere. This is for the case that
+// dominates a moving camera, and it was being treated as if it were the same thing.
+//
+// **A face is keyed by the level the pixel resolves**, so walking towards a wall does not refine a
+// face -- it retires one and claims eight new ones. Each of those then spent `kSkyConverged` = 2,048
+// samples measuring occlusion that the face it came out of had already measured, over the same
+// geometry, in the same place, to the same 2,048 samples. Measured on the flight: about two thousand
+// faces claimed a frame, times 2,048 samples, is **four million ambient rays a frame that re-derive
+// something already in hand** -- which is D389's fault ("every ray a converged face was casting
+// re-derived a constant it already held") happening at the moment of subdivision instead of after it.
+//
+// So a child inherits its parent's answer PROLONGED rather than copied, which is the part D392 was
+// right to refuse:
+//
+//   - the mean is the parent's linear fit EVALUATED AT THE CHILD'S CENTRE, not the parent's mean.
+//     A child sits at the edge of the parent's sampled span, so the difference is the whole of the
+//     variation the gradient was fitted to carry;
+//   - the gradient is rescaled by the change of extent -- half per level -- because a coefficient
+//     against a coordinate means nothing without the coordinate's range. Copying it unchanged is
+//     what D386 measured as 71% of all the roughness in the picture, and this is not that;
+//   - both are shrunk by `c^2/(c^2 + noise)` first, exactly as resolve.comp shrinks them on read
+//     (D386, D387), so a parent's noise is not prolonged into a child as invented tilt.
+//
+// The child still measures for itself -- `kSkyConverged` minus this is its own budget -- so the
+// detail that is genuinely new at the finer scale is still measured, and the answer converges to
+// the same place. What is bought is the part that was never new.
+//
+// It falls by a factor of four per level of separation, because a coarser ancestor covers a wider
+// area and its fit says correspondingly less about any one child: one level up is worth nearly all
+// of it, three levels up is the old stand-in and is worth about what the old stand-in was worth.
+const uint kSkyProlong = 1536u;
 // And the least the stand-in must have seen before it is worth inheriting. Seeding from four rays
 // of noise is not a prior, it is the noise arriving one level coarser.
 const uint kSkySeedMin = 64u;
@@ -548,6 +648,12 @@ const uint kLampConverged = 512u;
 // evidence arrives, and evidence arrives at kLampBurst a frame.
 const uint kLampSeedSamples = 8u;
 
+// And the same for the lamps, on the same argument: a face that has just been subdivided out of a
+// converged one is looking at the same fittings through the same geometry. Three quarters of
+// kLampConverged, so a child spends a quarter of the samples its parent did and lands in the same
+// place. Quartered per level of separation, as the ambient one is.
+const uint kLampProlong = 384u;
+
 // The least a stand-in must have measured before a fine face is worth seeding from it. Same
 // argument as kSkySeedMin: seeding from a handful of rays is not a prior, it is the noise arriving
 // one level coarser.
@@ -615,6 +721,93 @@ float face_visibility_of(uint counters) {
     uint samples = face_samples_of(counters);
     return samples == 0u ? 1.0 : float(face_lit_of(counters)) / float(samples);
 }
+
+// ---- what a face owes this frame, decided in one place ----------------------------------------
+//
+// Two passes ask this question and they must not answer it differently. `face_worklist.comp` asks
+// it to decide whether a slot goes in the compacted dispatch at all; `shade_faces.comp` asks it to
+// decide what to do with the slot it was handed. If the two ever disagree in the direction of the
+// worklist being the stricter, a face silently stops being lit and nothing anywhere says so -- the
+// exact shape of trap 7 and of the five bugs R3c's chain produced.
+//
+// So it is one function returning everything either caller needs, rather than one predicate copied
+// twice. It reads the record, the seen stamp and the push block, and touches nothing else.
+struct FaceWork {
+    bool owed;               // is this slot worth an invocation at all
+    bool may_cast;           // ...and is it worth a RAY, which is the narrower question
+    bool near_edit;
+    bool near_edit_contact;
+    bool edit_reset;
+    bool sun_due;
+    bool ambient_idle;
+    bool lamp_idle;
+    uint counters;           // nought when the edit reset it
+    uint samples;
+};
+
+FaceWork face_work_of(uint slot, Face face, bool provisional_face) {
+    FaceWork w;
+    w.owed = false;
+    w.may_cast = false;
+    w.near_edit = false;
+    w.near_edit_contact = false;
+    w.edit_reset = false;
+    w.sun_due = false;
+    w.ambient_idle = false;
+    w.lamp_idle = false;
+    w.counters = 0u;
+    w.samples = 0u;
+    if (!face_live_of(face.packed)) return w;
+
+    // Is this face inside the box the host says it has just changed, and inside the much smaller
+    // box the NEAR field can have been changed by. See kEditAmbientReach.
+    if (push.edit_min.w != 0) {
+        const float extent = float(1 << face_level_of(face.packed));
+        const vec3 low = vec3(ivec3(face.x, face.y, face.z)) * extent -
+                         vec3(push.camera_chunk.xyz * 256);
+        w.near_edit = all(greaterThanEqual(low + vec3(extent), vec3(push.edit_min.xyz))) &&
+                      all(lessThanEqual(low, vec3(push.edit_max.xyz)));
+        const vec3 tight_min = vec3(push.edit_min.xyz) + vec3(float(kEditAmbientShrink));
+        const vec3 tight_max = vec3(push.edit_max.xyz) - vec3(float(kEditAmbientShrink));
+        w.near_edit_contact = w.near_edit &&
+                              all(greaterThanEqual(low + vec3(extent), tight_min)) &&
+                              all(lessThanEqual(low, tight_max));
+    }
+    w.edit_reset = (push.edit_min.w == 2) && w.near_edit;
+    w.may_cast = provisional_face || node_face_recently_seen(slot);
+
+    // Nothing to do at all: nobody is looking at it and the host has announced nothing.
+    if (!w.may_cast && !w.edit_reset && node_push.light_reset == 0u) return w;
+
+    w.counters = w.edit_reset ? 0u : face.counters;
+    w.samples = face_samples_of(w.counters);
+    w.sun_due = !(node_push.face_stride > 1u && w.samples >= kFaceEager && !w.near_edit &&
+                  ((slot + node_push.frame) % node_push.face_stride) != 0u);
+    w.ambient_idle = (face.photons & kFaceAmbientIdle) != 0u && !w.edit_reset;
+    w.lamp_idle = (face.photons & kFaceLampIdle) != 0u && !w.edit_reset &&
+                  node_push.light_reset == 0u;
+    w.owed = w.sun_due || !w.ambient_idle || !w.lamp_idle;
+    return w;
+}
+
+// ---- the compacted dispatch --------------------------------------------------------------------
+//
+// The slots that owe work, packed, with a dispatch command in front of them.
+//
+// The shading pass used to be dispatched over every live slot, and by the time light stopped at
+// what a pixel had read that was 220,000 faces of work spread over 772,000 invocations -- about
+// eighteen busy lanes in every workgroup of sixty-four, and a workgroup runs for as long as its
+// slowest lane. The idle five sixths cost nothing in bandwidth and everything in occupancy.
+//
+// Words 0-2 are a VkDispatchIndirectCommand, so the host never has to know the count; word 3 is
+// that count for the shader to bound itself against; the slots follow.
+layout(std430, binding = 16) buffer FaceWorkList {
+    uint groups_x;
+    uint groups_y;
+    uint groups_z;
+    uint count;
+    uint slots[];
+} face_work;
 
 // The R_4 low-discrepancy sequence: one point of a four-dimensional stratified series per index.
 //
@@ -779,21 +972,31 @@ struct Found {
 const int kMidLevel = 8;    // 256 voxels - 8 m
 const int kFineLevel = 5;   // 32 voxels - 1 m
 
+// # The cache belongs to the INVOCATION, not to the ray, and that is worth more than it looks
+//
+// These are declared with initialisers, and a global initialiser in GLSL runs once per invocation
+// before main. So an invocation that marches many rays enters the tree cold ONCE, and there is
+// nothing left for a reset to do -- which is why there is no longer a node_walk_reset() to call.
+//
+// `node_march` used to call one at the top of every march, on the reasonable-sounding grounds that
+// a ray should start from a known state. It cost the whole of this cache to every ray after the
+// first. The face pass casts about twenty-five rays per unconverged face -- kSkyBurst near rays,
+// one far ray, kLampBurst lamp rays and the sun's -- and every one of them paid a hash probe and an
+// eleven-level descent from the 512 m root before its first step, on rays that are BOUNDED AT ONE
+// METRE and then take a handful of steps. At the flight camera that is about 6.3 M descents a
+// frame (D412).
+//
+// Keeping it is not an approximation. The pool is immutable for the whole dispatch, so a cached
+// slot is a function of the tree and not of the path taken to it, and `node_locate` block-checks
+// every entry before trusting it: an entry whose cell still contains the point is the same node a
+// walk from the root would have found. Rays leaving one face share an origin cell, so rays 2..25
+// enter at level 5 and descend two levels instead of eleven -- bit-identically.
 uint g_node_root = kNoNode;
 ivec3 g_node_block = ivec3(0x7FFFFFFF);
 uint g_node_mid = kNoNode;
 ivec3 g_node_mid_block = ivec3(0x7FFFFFFF);
 uint g_node_fine = kNoNode;
 ivec3 g_node_fine_block = ivec3(0x7FFFFFFF);
-
-void node_walk_reset() {
-    g_node_root = kNoNode;
-    g_node_block = ivec3(0x7FFFFFFF);
-    g_node_mid = kNoNode;
-    g_node_mid_block = ivec3(0x7FFFFFFF);
-    g_node_fine = kNoNode;
-    g_node_fine_block = ivec3(0x7FFFFFFF);
-}
 
 // The walk itself, from wherever it is entered. Split out from node_locate so that the entry can be
 // the root or a cached ancestor without two copies of the loop drifting apart.
@@ -1191,7 +1394,8 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     result.level = kLeafLevel;
     result.steps = 0u;
 
-    node_walk_reset();
+    // No walk reset here. The descent cache is the invocation's, and it survives from one ray to
+    // the next on purpose -- see the globals it lives in for why that is exact rather than close.
 
     vec3 inv_dir = 1.0 / max(abs(dir), vec3(1e-9));
     ivec3 step_dir = ivec3(sign(dir));

@@ -86,32 +86,109 @@ vec3 face_point(vec3 corner, vec3 across, vec3 down, ivec3 normal, float size, v
 // The ancestor's words may be written by another invocation in this same dispatch, and nothing
 // orders the two. What that can cost is one frame of a prior that is one burst stale, on a quantity
 // that is a prior in the first place -- so it is read plainly rather than guarded.
+// The two axes the samples are spread along, as INDICES into a node coordinate, chosen the same way
+// `across` and `down` are chosen from the normal. One place, because the position a sample is taken
+// at, the position the gradient is fitted against and the position it is prolonged to all have to
+// agree, and three copies of "which axis is u" is three chances for one of them to be the other.
+ivec2 face_axes(uint dir) {
+    if (dir < 2u) return ivec2(1, 2);   // +-x: across is y, down is z
+    if (dir < 4u) return ivec2(0, 2);   // +-y: across is x, down is z
+    return ivec2(0, 1);                 // +-z: across is x, down is y
+}
+
 void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
-    const uint anc = node_face_lookup(node >> kFaceAncestorStep,
-                                      level + uint(kFaceAncestorStep), dir);
+    // The NEAREST ancestor that has something to say, not the one three levels up.
+    //
+    // Three levels was the right distance for a stand-in, which is a face claimed for a region the
+    // store has never seen: five hundred and twelve fine faces share one, so the request lattice
+    // cannot miss it (D308-D311). It is the wrong distance for INHERITANCE, where the case that
+    // matters is a face that has just been subdivided out of the one immediately above it -- and
+    // that one covers the same place, has already converged, and is worth sixteen times what the
+    // one three levels up is worth.
+    const bool prolong = node_push.prolong != 0u;
+    int step = prolong ? 1 : kFaceAncestorStep;
+    uint anc = kNoFace;
+    uint anc_at = 0u;
+    uint anc_near = 0u;
+    for (; step <= kFaceAncestorStep; ++step) {
+        const uint at_level = level + uint(step);
+        const uint found = node_face_lookup(node >> step, at_level, dir);
+        if (found == kNoFace) continue;
+        const uint words_at = found * kFaceLightWords;
+        if (words_at + kFaceLightWords - 1u >= face_light.words.length()) continue;
+        // Seeding from four rays of noise is not a prior; it is the noise arriving one level
+        // coarser.
+        const uint near_n = face_light.words[words_at] & 0xFFFFu;
+        if (near_n < kSkySeedMin) continue;
+        anc = found;
+        anc_at = words_at;
+        anc_near = near_n;
+        break;
+    }
     if (anc == kNoFace) return;
-    const uint anc_at = anc * kFaceLightWords;
-    if (anc_at + kFaceLightWords - 1u >= face_light.words.length()) return;
 
-    const uint anc_counts = face_light.words[anc_at];
-    const uint anc_near = anc_counts & 0xFFFFu;
-    const uint anc_far = (anc_counts >> 16) & 0xFFFFu;
-    // Seeding from four rays of noise is not a prior; it is the noise arriving one level coarser.
-    if (anc_near < kSkySeedMin) return;
+    // How much of the ancestor's answer is worth taking, and where in it this face sits.
+    //
+    // A quarter per level of separation: one level up is nearly the whole thing, three levels up is
+    // the old stand-in. See kSkyProlong.
+    const uint shift = uint(2 * (step - 1));
+    const uint near_seed =
+        prolong ? min(anc_near, max(kSkyProlong >> shift, kSkySeedSamples)) : kSkySeedSamples;
 
-    const uint near_mean = face_light.words[anc_at + 1u] / anc_near;   // 0..255
+    // Where this face's centre falls in the ancestor's own sampled coordinates.
+    //
+    // The ancestor spreads its samples over the MIDDLE HALF of itself (see face_point), so its
+    // `at` runs over [-1, 1] across half its extent -- one unit is a quarter of the ancestor. A
+    // child of a parent one level up therefore sits at exactly +-1, which is the edge of the fit's
+    // own domain; further-removed children sit outside it and are clamped, because extrapolating a
+    // linear fit past the data it was fitted to is how a corner invents a tilt.
+    const ivec2 axes = face_axes(dir);
+    const int within_mask = (1 << step) - 1;
+    const ivec3 within = node & ivec3(within_mask);
+    const float span = exp2(float(2 - step));
+    const float u_c = clamp((float(within[axes.x]) + 0.5) * span - 2.0, -1.0, 1.0);
+    const float w_c = clamp((float(within[axes.y]) + 0.5) * span - 2.0, -1.0, 1.0);
+
+    const float inv = 1.0 / (float(anc_near) * 255.0);
+    const float mean_p = float(face_light.words[anc_at + 1u]) * inv;
+    const float cu_p = float(int(face_light.words[anc_at + 2u])) * inv;
+    const float cw_p = float(int(face_light.words[anc_at + 3u])) * inv;
+
+    // Believed only as far as it clears its own error, which is the same shrinkage resolve.comp
+    // applies when it READS a gradient (D386, D387). Without it a parent's noise arrives in every
+    // one of its children as a tilt they all agree about, which is worse than noise because it is
+    // structured -- and structured at the scale of the parent, which is exactly the blockiness this
+    // whole term exists to remove.
+    const float noise_power = 1.0 / (3.0 * float(anc_near));
+    const float keep_u = (cu_p * cu_p) / (cu_p * cu_p + noise_power);
+    const float keep_w = (cw_p * cw_p) / (cw_p * cw_p + noise_power);
+    const float mean_c =
+        prolong ? clamp(mean_p + 3.0 * (cu_p * keep_u * u_c + cw_p * keep_w * w_c), 0.0, 1.0)
+                : mean_p;
+
+    // And the gradient RESCALED, not copied. A coefficient against a coordinate is meaningless
+    // without the coordinate's range: this face's `at` unit is a quarter of ITS extent, which is
+    // half the ancestor's unit per level of separation.
+    const float extent_scale = prolong ? exp2(-float(step)) : 0.0;
+    const float cu_c = cu_p * keep_u * extent_scale;
+    const float cw_c = cw_p * keep_w * extent_scale;
+
+    const float seed_f = float(near_seed);
+    face_light.words[light_at + 1u] = uint(mean_c * 255.0 * seed_f + 0.5);
+    face_light.words[light_at + 2u] = uint(int(round(cu_c * 255.0 * seed_f)));
+    face_light.words[light_at + 3u] = uint(int(round(cw_c * 255.0 * seed_f)));
+
+    // The FAR field, which needs no prolongation because it has no gradient: it is one number for
+    // the whole face, and how much sky a place can see does not change when you halve the patch you
+    // are asking about. Seeded at kSkyFarMin so its own variance test decides on the next visit
+    // whether it is finished -- which for a sealed room or an open roof it is, after one ray.
+    const uint anc_far = (face_light.words[anc_at] >> 16) & 0xFFFFu;
     const bool far_worth = anc_far >= kSkySeedMin;
-    face_light.words[light_at] =
-        kSkySeedSamples | ((far_worth ? kSkySeedSamples : 0u) << 16);
-    face_light.words[light_at + 1u] = near_mean * kSkySeedSamples;
-    // The gradients are NOT inherited. They are a fit over this face's own extent and the
-    // ancestor's is over one eight times wider, so copying the coefficient across a change of scale
-    // is a tilt invented rather than measured -- and D383 already measured what an invented tilt
-    // costs: 71% of all the roughness in the picture.
-    face_light.words[light_at + 2u] = 0u;
-    face_light.words[light_at + 3u] = 0u;
+    const uint far_seed =
+        far_worth ? (prolong ? min(anc_far, kSkyFarMin) : kSkySeedSamples) : 0u;
+    face_light.words[light_at] = (near_seed & 0xFFFFu) | ((far_seed & 0xFFFFu) << 16);
     face_light.words[light_at + 4u] =
-        far_worth ? (face_light.words[anc_at + 4u] * kSkySeedSamples + anc_far / 2u) / anc_far : 0u;
+        far_worth ? (face_light.words[anc_at + 4u] * far_seed + anc_far / 2u) / anc_far : 0u;
 
     // And the lamps, which need it more than the ambient term does.
     //
@@ -121,15 +198,18 @@ void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
     // flash R9d removed for the sun, arriving through the third door.
     //
     // The mean transfers across the change of scale where the gradient could not: irradiance from a
-    // fitting eight metres away is very nearly the same over a face and over the five hundred and
-    // twelve of them that share this ancestor, which is exactly the claim the stand-in already
-    // makes for the sun's visibility. Stamped with the CURRENT version, because what is being
-    // inherited is a measurement of the list as it stands now.
+    // fitting eight metres away is very nearly the same over a face and over the ones that share
+    // this ancestor, which is exactly the claim the stand-in already makes for the sun's visibility.
+    // Stamped with the CURRENT version, because what is being inherited is a measurement of the
+    // list as it stands now.
     const uint anc_lamp = face_light.words[anc_at + 8u];
     const uint anc_lamp_n = anc_lamp & 0xFFFFu;
     if (anc_lamp_n >= kLampSeedMin &&
         ((anc_lamp >> 16) & 0xFFFFu) == (node_push.light_version & 0xFFFFu)) {
-        const float scale = float(kLampSeedSamples) / float(anc_lamp_n);
+        const uint lamp_seed =
+            prolong ? min(anc_lamp_n, max(kLampProlong >> shift, kLampSeedSamples))
+                    : kLampSeedSamples;
+        const float scale = float(lamp_seed) / float(anc_lamp_n);
         face_light.words[light_at + 5u] =
             floatBitsToUint(uintBitsToFloat(face_light.words[anc_at + 5u]) * scale);
         face_light.words[light_at + 6u] =
@@ -137,7 +217,7 @@ void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
         face_light.words[light_at + 7u] =
             floatBitsToUint(uintBitsToFloat(face_light.words[anc_at + 7u]) * scale);
         face_light.words[light_at + 8u] =
-            kLampSeedSamples | ((node_push.light_version & 0xFFFFu) << 16);
+            lamp_seed | ((node_push.light_version & 0xFFFFu) << 16);
     }
 }
 
@@ -396,7 +476,16 @@ void main() {
     // `face_first` is nought for the store and the provisional base for the card's own faces, which
     // are dispatched separately because they sit in the tail of the same array rather than after the
     // watermark -- and a dispatch spanning the gap would be a million invocations returning at once.
-    const uint slot = node_push.face_first + gl_GlobalInvocationID.x;
+    //
+    // ...and for the store's own dispatch the index is into the COMPACTED list rather than into
+    // the store, so every workgroup this launches is full. See face_worklist.comp.
+    uint slot;
+    if (node_push.from_worklist != 0u) {
+        if (gl_GlobalInvocationID.x >= face_work.count) return;
+        slot = face_work.slots[gl_GlobalInvocationID.x];
+    } else {
+        slot = node_push.face_first + gl_GlobalInvocationID.x;
+    }
     if (slot >= node_push.face_count) return;
 
     // A card-claimed face is only worth a ray on the frame it was claimed.
@@ -427,11 +516,19 @@ void main() {
     // shaded, never settled, and the composite showed full sun on it for ever. See kFaceLive.
     if (!face_live_of(face.packed)) return;
 
-    // Whether this face is due a ray this frame.
+    // Whether this face is due a ray this frame, and everything else that can be decided from the
+    // record alone -- worked out by `face_work_of` in node.glsl, which is also what
+    // `face_worklist.comp` decides the compacted dispatch with.
     //
-    // The selection, and the reason it is here rather than in a compaction pass of its own: what
-    // costs is the march, not the record. An invocation that is not due has read thirty-two bytes
-    // and stops, and the lanes beside it that ARE due march at full width.
+    // One function rather than one predicate copied twice, and that is not tidiness: if the
+    // worklist were ever the stricter of the two, a face would silently stop being lit and nothing
+    // anywhere would say so.
+    //
+    // This USED to argue that selection belongs here rather than in a compaction pass of its own,
+    // because what costs is the march and not the record. That was true while most of the store was
+    // working. Once light stopped at what a pixel had read it stopped being true: 220,000 faces of
+    // work spread over 772,000 invocations is eighteen busy lanes in a workgroup of sixty-four, and
+    // a workgroup runs for as long as its slowest lane.
     //
     // A face that has not settled is never held back, so a surface that has just come into view
     // converges in a few frames however large the store is. Only the refresh rate of settled
@@ -450,22 +547,11 @@ void main() {
     // What it costs is bounded by the box: those faces are shaded every frame instead of one frame
     // in three, for the hundred and twenty frames the window is open, and nothing outside it is
     // disturbed at all.
-    bool near_edit = false;
+    const FaceWork work = face_work_of(slot, face, provisional_face);
     // The same test against a box shrunk to the reach of the NEAR field, which is the only part of
     // the ambient term an edit at that distance can have moved. See kEditAmbientReach.
-    bool near_edit_contact = false;
-    if (push.edit_min.w != 0) {
-        const float extent = float(1 << face_level_of(face.packed));
-        const vec3 low = vec3(ivec3(face.x, face.y, face.z)) * extent -
-                         vec3(push.camera_chunk.xyz * 256);
-        near_edit = all(greaterThanEqual(low + vec3(extent), vec3(push.edit_min.xyz))) &&
-                    all(lessThanEqual(low, vec3(push.edit_max.xyz)));
-        const vec3 tight_min = vec3(push.edit_min.xyz) + vec3(float(kEditAmbientShrink));
-        const vec3 tight_max = vec3(push.edit_max.xyz) - vec3(float(kEditAmbientShrink));
-        near_edit_contact = near_edit &&
-                            all(greaterThanEqual(low + vec3(extent), tight_min)) &&
-                            all(lessThanEqual(low, tight_max));
-    }
+    const bool near_edit = work.near_edit;
+    const bool near_edit_contact = work.near_edit_contact;
 
     // The world changed under this face on this exact frame, and the host said so rather than
     // leaving it to be inferred.
@@ -481,11 +567,57 @@ void main() {
     // from nothing, which is exact rather than a guess and leaves D319's rule alone for the case it
     // was written for. What it costs is that a face inside the box whose light did NOT change
     // re-converges too -- a handful of frames, on faces that are being shaded every frame anyway.
-    const bool edit_reset = (push.edit_min.w == 2) && near_edit;
-    const uint counters = edit_reset ? 0u : face.counters;
+    const bool edit_reset = work.edit_reset;
+    const uint counters = work.counters;
     if (edit_reset) faces.items[slot].counters = 0u;
 
-    const uint samples = face_samples_of(counters);
+    // ---- if the camera cannot see it, it is not lit -------------------------------------------
+    //
+    // Two different questions, and separating them is what makes an edit affordable:
+    //
+    //   `may_cast`  -- is this face worth a RAY. No, if no pixel has read it recently: the
+    //                  measurement would be of light nothing is going to look at, and it can be
+    //                  made when the face is next seen, at no cost to any picture.
+    //   the return below -- is there anything at all to do. Only when nothing has been announced.
+    //
+    // An edit reopens every face within `kEditShadowReach`, which is sixteen metres and indoors is
+    // most of the store, and it does so whether or not those faces are on screen -- it has to, or a
+    // wall deleted behind your back keeps its old shadow. Before this, "reopen" also meant "burst
+    // now", and a player carving while flying paid a **75 ms** face pass on every edit frame. The
+    // reset itself is a handful of word writes and is kept exactly as it was; only the rays wait.
+    const bool may_cast = work.may_cast;
+    //
+    // The rule the whole rewrite was asked for under, arriving in the one pass that was still
+    // ignoring it. The store holds a face for six hundred frames after anything last asked for it,
+    // and every one of those faces was casting its full burst every frame: measured on the flight,
+    // 763,800 live faces with 281,244 of them still bursting, against a frame that reads a fraction
+    // of that. Most of a moving frame was light for surfaces nobody was looking at.
+    //
+    // The stamp is exact and it is this frame's: `node_visibility.comp` writes it for every face a
+    // pixel resolves to, there is a barrier between that pass and this one, and `kFaceSeenWindow`
+    // is the small amount of hysteresis a grazing face needs. Nothing about RESIDENCY changes --
+    // the face keeps its slot, its key and its accumulated answer, so the composite reads exactly
+    // what it read before and a face coming back into view carries on from where it stopped rather
+    // than starting again. What stops is the rays.
+    //
+    // # The two exceptions, and they are what makes this exact rather than nearly right
+    //
+    // A skipped face must never miss an announcement, because an announcement is the only thing
+    // that can tell it its answer is now wrong. Both of them are one-frame flags from the host and
+    // both are read from the push block, so testing them costs no memory at all:
+    //
+    //   `edit_min.w == 2` -- the frame an edited region opens (D373). Faces inside the box start
+    //   again from nothing whether or not anybody can see them, or a wall deleted behind your back
+    //   would still be casting its ambient occlusion when you turned round.
+    //
+    //   `light_reset` -- the frame the emitter list changed (D403). A converged face compares the
+    //   version its own samples were taken under, and it can only do that on a frame it runs.
+    //
+    // Anything else that can invalidate a face reaches it through one of those two, so there is no
+    // third case to miss and no need for a "has it just come back" test on the way in.
+    if (!may_cast && !edit_reset && node_push.light_reset == 0u) return;
+
+    const uint samples = work.samples;
     // Whether the SUN is due a ray this frame. The ambient term used to be gated by this same test
     // and no longer is, and that is a third of why it converges.
     //
@@ -495,8 +627,7 @@ void main() {
     // of the term that is watching a sun which has not moved. A face that is not due still returns
     // immediately once its ambient term has converged, which is the ordinary case and is the same
     // thirty-two bytes read it was before.
-    const bool sun_due = !(node_push.face_stride > 1u && samples >= kFaceEager && !near_edit &&
-                           ((slot + node_push.frame) % node_push.face_stride) != 0u);
+    const bool sun_due = work.sun_due;
 
     // Nothing at all is owed to this face this frame: the sun is not due and the ambient term is
     // finished. Out here, before anything is fetched.
@@ -504,7 +635,7 @@ void main() {
     // The flag is in the record that has already been read, and the point of that is measured
     // rather than assumed -- see kFaceAmbientDone. Asking the face light instead cost 0.38 ms a
     // frame in scattered loads on a store of half a million faces that had no work to do.
-    const bool ambient_idle = (face.photons & kFaceAmbientIdle) != 0u && !edit_reset;
+    const bool ambient_idle = work.ambient_idle;
 
     // And the same question for the lamps, with one extra term that is the whole of "instantly".
     //
@@ -516,8 +647,7 @@ void main() {
     // flag is the gate and the stamp is the decision, which is the arrangement D373's general
     // lesson calls for: an accumulator that infers "the world changed" from its own samples cannot
     // see a change that arrives before the last one finished.
-    const bool lamp_idle = (face.photons & kFaceLampIdle) != 0u && !edit_reset &&
-                           node_push.light_reset == 0u;
+    const bool lamp_idle = work.lamp_idle;
 
     // Nothing owed at all this frame: the sun is not due and the ambient term has finished. Out
     // here, before anything is fetched. The flag is in the record that has already been read, and
@@ -557,7 +687,7 @@ void main() {
     // sun is currently lit by the entire sky dome regardless of what stands in front of it.
     const float facing = dot(vec3(normal), node_push.sun.xyz);
     const bool sun_possible = facing > 0.0;
-    if (!sun_possible && sun_due) {
+    if (!sun_possible && sun_due && may_cast) {
         // Counted as a ray that did not reach the sun, which is what it is. The fraction then
         // falls as the samples come in rather than snapping to nought, and this is the same
         // arithmetic a lit face does with one term different.
@@ -610,7 +740,7 @@ void main() {
     // than both being plausible. Without it every sample of a face asks the same question and a
     // contact shadow has an edge one voxel wide at any distance from what casts it.
     const float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
-    if (sun_possible && sun_due) {
+    if (sun_possible && sun_due && may_cast) {
         const uint cone_seed = node_hash_mix(seed ^ 0x85EBCA6Bu);
         const vec2 disc = vec2(float(cone_seed & 0xFFFFu), float((cone_seed >> 16) & 0xFFFFu)) /
                           65536.0;
@@ -819,7 +949,11 @@ void main() {
         // rather than a burst, which is the bound the ambient hold is built on for the same reason.
         const bool lamp_held = lamp_n == kLampConverged - 1u;
         const bool lamp_done = node_push.light_count == 0u || lamp_n >= kLampConverged;
-        const uint lamp_burst = lamp_done ? 0u : (lamp_held ? (sun_due ? 1u : 0u) : kLampBurst);
+        // ...and nothing at all for a face no pixel has read. The bookkeeping above it still runs,
+        // so a face reopened by a lamp change while it was off screen has already dropped its
+        // confidence and cleared its idle bit, and takes its burst on the frame it is next seen.
+        const uint lamp_burst =
+            !may_cast ? 0u : (lamp_done ? 0u : (lamp_held ? (sun_due ? 1u : 0u) : kLampBurst));
 
         if (lamp_burst > 0u) {
             // A rotation fixed for the life of the face and NOT including the frame: the samples
@@ -966,10 +1100,11 @@ void main() {
     // before it is read again is the one place a burst buys strictly nothing. Missing this is what
     // would have made the cheapest faces in the frame the most expensive.
     const uint burst =
-        provisional_face
+        (provisional_face || !may_cast)
             ? 0u
             : (near_n >= kSkyConverged ? 0u : (held ? (sun_due ? 1u : 0u) : kSkyBurst));
-    const bool far_due = provisional_face || (!far_done && (sun_due || far_n < kSkyFarEager));
+    const bool far_due =
+        may_cast && (provisional_face || (!far_done && (sun_due || far_n < kSkyFarEager)));
     if (burst == 0u && !far_due) return;
 
     uint near_sum = face_light.words[light_at + 1u];

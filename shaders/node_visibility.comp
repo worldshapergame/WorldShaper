@@ -171,6 +171,11 @@ void main() {
     uint face_slot = kNoFace;
     if (hit.hit && hit.face_level != kNoFaceLevel) {
         face_slot = node_face_lookup(hit.face_node, hit.face_level, hit.face_dir);
+        // A pixel is reading this face, so it is worth lighting. Stamped whether or not the
+        // composite ends up USING it: a face that is not answerable yet is precisely the one that
+        // has to keep casting rays, and gating the stamp on answerability would be a face that can
+        // never become answerable because it is never lit because it is not answerable.
+        node_face_seen(face_slot);
         bool answerable = face_slot != kNoFace &&
                           face_samples_of(faces.items[face_slot].counters) >= kFaceSettled;
         if (!answerable) {
@@ -179,6 +184,11 @@ void main() {
                                        hit.face_node.z >> kFaceAncestorStep);
             const uint coarse_level = hit.face_level + uint(kFaceAncestorStep);
             uint stand_in = node_face_lookup(coarse, coarse_level, hit.face_dir);
+            // And the coarse face standing over it, on the same argument. It is only looked up
+            // when the fine face cannot answer, which is exactly when it is being read -- so a
+            // stand-in whose children have all settled stops being stamped, stops casting, and
+            // keeps the mean it had, which is all `face_light_seed` ever wanted of it.
+            node_face_seen(stand_in);
             if (stand_in != kNoFace &&
                 face_samples_of(faces.items[stand_in].counters) >= kFaceSettled) {
                 face_slot = stand_in;

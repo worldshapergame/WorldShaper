@@ -741,6 +741,58 @@ it has saved it repeatedly — a fix that looks obvious and isn't measured is ho
 the fix is written down along with four more behind it, and the next session starts by making them
 and proving each one on the walking test rather than the standing-still one.
 
+## And here's what happened when I made it — including the bit where you were right twice
+
+**The short version.** Flying around, the lighting step is now a bit over **twice** as fast. Flying
+around *while carving and placing blocks the whole time* — which is what you actually do — it is
+nearly **six times** faster, and the whole frame went from eighteen frames a second to sixty-seven.
+The picture is unchanged: I photographed the same three views before and after and the difference is
+smaller than the difference between two runs of the *same* build.
+
+| | before | after |
+|---|---|---|
+| **flying** — the lighting step | 10.4 ms | **4.9 ms** |
+| **flying** — whole frame | 17.0 ms | **12.3 ms** |
+| **flying and chiselling** — the lighting step | 48.6 ms | **8.3 ms** |
+| **flying and chiselling** — whole frame | 55.5 ms (18 fps) | **15.0 ms (67 fps)** |
+
+**The change that did nearly all of it.** The game remembers a surface's lighting for about ten
+seconds after anything last looked at it, so that when you turn back it's still there. That part is
+right and I didn't touch it. What was wrong is that it was still *working on* all of them — 763,000
+surfaces being lit, for a picture made of about 218,000. It now works only on the ones a pixel
+actually looked at, this frame. Everything else keeps the answer it already had and costs nothing.
+That is the rule you asked for at the start of the whole rewrite — *if you can't see it, it doesn't
+get processed* — arriving in the one place that was still ignoring it.
+
+**And the same rule for editing.** When you carve, everything within sixteen metres has to be told
+its shadows may have changed — including things behind you, or a wall you deleted would keep its
+shadow when you turn round. That part still happens everywhere. What waits is the *re-measuring*: a
+surface nobody is looking at is marked as out of date and re-measures when you next look at it. That
+one change took the worst single frame of a carve from **75 ms to 20 ms**.
+
+**You were right twice and both times it changed the result.**
+
+You said *"the true worst scenario is flying while continuously editing"* — and there was no way to
+test that at all. I built one, and it was five times worse than flying alone. Every number above for
+that case exists because you asked for it.
+
+Then you said *"I didn't see the chisel doing anything"*. You were looking at the screen and I was
+looking at a counter that said 1.4 million blocks changed. The counter was right and meaningless:
+the test was carving *empty sky three metres in front of the camera* and quietly creating ninety-four
+new chunks of world a kilometre away. Two separate mistakes, both mine, and the only thing that
+caught them was somebody looking at the picture. Fixed, it demolishes the front of the building as
+it flies past, which is what it was supposed to do.
+
+**One thing I want to be straight about: this isn't the hundredfold you asked for.** Six times on the
+worst case, twice on the ordinary one. I went looking for the hundred and it isn't there in one
+piece — I built and measured five separate ideas that each looked like it should be worth a lot, and
+three of them measured as *nothing at all*, including the one the previous session had ranked first.
+The cost that's left isn't one mistake; it's the light probes themselves, and there are the right
+number of them. The two things that could still take a big bite are written down: making
+neighbouring surfaces be worked on together so they share the same slice of the world index, and the
+smoothing pass that would let each surface get away with a quarter of the probes it takes now.
+Neither is guesswork now — both have a number attached.
+
 ## How we'll work
 
 - I write all the code. You never open a code file.

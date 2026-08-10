@@ -37,7 +37,14 @@ public:
     void upload(VkCommandBuffer cmd, FaceStore& store);
 
     // Decodes what the card holds and compares it against the store, byte for byte.
-    bool audit(const FaceStore& store);
+    //
+    // `seen` is the face SEEN buffer and `frame` the frame that has just been rendered, and they
+    // are here because the number of live faces the frame is actually LIGHTING is the figure every
+    // cost in this pass has to be read against -- the same argument as the ambient and lamp lines
+    // below, which exist because a face that has finished and a face that is still paying look
+    // identical in every picture. Pass VK_NULL_HANDLE to skip it.
+    bool audit(const FaceStore& store, VkBuffer seen = VK_NULL_HANDLE, u32 frame = 0,
+               u32 seen_window = 0);
 
     VkBuffer faces() const { return faces_.buffer; }
     VkBuffer entries() const { return entries_.buffer; }

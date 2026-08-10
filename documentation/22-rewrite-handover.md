@@ -501,9 +501,59 @@ both known-bad without it: collapsing the history on a clean ray oscillates for 
 permanently borders unbuilt geometry (D394's table is about exactly that state), and dropping the
 tainted samples makes the face wrong-bright, which R10e forbids.
 
-### The open one, and it is the biggest number in the renderer: the light pass while moving
+### Closed: the light pass while moving, and while moving AND editing
 
-**Start here.** The user asked for the lights to be much faster and for more frames *while moving*.
+**This was the biggest number in the renderer and it is now 2.1× smaller flying and 5.9× smaller
+while flying and chiselling.** D413–D420. The section below records how it was measured and what it
+was; read it before touching the pass, and read D417 and D418 before believing any theory about
+where the time goes, because two of the three causes the previous session ranked measured as nothing.
+
+**The case that mattered was not the one being measured.** The player named it: *"the test of flying
+while continuously editing by erasing and placing, that's the true worst scenario which causes a lot
+of lag"*. It is now an instrument — `--chisel EVERY,RADIUS` — and it was worth every minute:
+
+| | face pass | total GPU | CPU |
+|---|---|---|---|
+| flying | 10.43 → **4.94 ms** | 16.95 → **12.26** | 18.96 → 16.27 |
+| flying **and chiselling** | 48.57 → **8.30 ms** | 55.52 → **15.02** | 57.13 → 23.45 |
+
+Eighteen frames a second to sixty-seven, on the GPU, in the case a player is actually in. The
+settled picture does not move: on-against-off is 2.836 / 1.286 / 0.077 of 255 at the enclosed, close
+and outdoor cameras against a run-to-run floor of 2.728 / 1.161 / 0.096, with speckle identical to
+two decimals. 467 tests, 18.0 M assertions, passing.
+
+**Three changes, and the first is the one that matters.**
+
+1. **Light stops at what a pixel has read** (D414). The store keeps a face for six hundred frames
+   after anything last asked for it, and every one of them was casting its full burst: 763,800 live
+   faces against a frame made of 218,000. `node_visibility.comp` resolves a face for *every* pixel,
+   so it stamps the slot it read into a card-owned array (`face_seen`, binding 15); `shade_faces`
+   skips a face no pixel has read for `seen_window` frames. **Residency is untouched** — the face
+   keeps its slot and its accumulated answer, so the composite reads what it always read.
+2. **An edit reaches every face; only a face somebody is looking at re-measures now** (D415). The
+   reset still runs everywhere inside `kEditShadowReach`, because a wall deleted behind your back
+   must not keep its shadow; the rays wait. Worst frame 75.0 → 19.8 ms.
+3. **The dispatch is sized by the work** (D416). `face_worklist.comp` packs the slots that owe
+   anything and the shading pass runs indirectly over the count, so no workgroup is eighteen lanes
+   busy out of sixty-four. 0.096 ms for itself.
+
+**Two rules before touching any of it.** Both levers are **run-time flags**, so the arms of an A/B
+are one build and D407's warning is satisfied by construction: `--no-face-gate`,
+`--no-face-worklist`, `--no-face-prolong`. And `face_work_of` in `node.glsl` is the single place
+that decides whether a face owes work — the worklist pass and the shading pass both call it, and if
+they ever disagree in the direction of the worklist being stricter, faces stop being lit and nothing
+says so.
+
+**What is left, in the order it looks worth doing**: sorting the work list by Morton code so the
+sixty-four lanes of a workgroup walk one neighbourhood of the tree instead of sixty-four (it cannot
+change a pixel — it only reorders the same invocations — and nothing has measured it); R5's face
+denoise, which is what would let `kSkyConverged` fall from 2,048 and was measured as worth 5.05 →
+3.55 ms at 512; and `rebuild_coarse_grids`, which is **3.55 ms of CPU per edit**, is O(world) for a
+change one metre across, and is now the largest single thing an edit costs.
+
+### How the moving case was measured, and why the grid could not see it
+
+**The user asked for the lights to be much faster and for more frames *while moving*.**
 There was no measurement of that case at all — every figure in this file above this line is settled,
 and `--settle` discards transients by construction, which is what it is for. D410–D412.
 
@@ -528,20 +578,24 @@ reproducible to 0.1% — 280,551 / 280,887 / 280,695 faces still bursting. **Tha
 case usable as a gate**, and it is the thing D407 says to check before reading any time from this
 pass.
 
-So the light pass is **63% of a moving frame and ten times its own settled cost**, and §6 of the plan
+So the light pass was **63% of a moving frame and ten times its own settled cost**, and §6 of the plan
 — "lighting stops scaling with resolution" — was only ever measured on the standing-still half.
 
-**The cause is named and is not fixed.** About 6.3 M rays a frame, and each one opens with
-`node_walk_reset()` in `node_march`: a hash probe and an eleven-level descent from the 512 m root
-before the first step, on rays that are *bounded at one metre*. Keeping the cache across a face's
-twenty-five rays is bit-identical by node.glsl's own argument for it — the pool is immutable for the
-dispatch and `node_locate` block-checks before trusting an entry. The ranked plan, with the other
-four items and what each is worth, is at the end of `13-decision-log.md`.
+**The cause that was named there was not the cause.** D412 ranked `node_walk_reset()` first — 6.3 M
+rays a frame each paying an eleven-level descent from the 512 m root before their first step, on
+rays bounded at one metre. It was removed, it is bit-identical, and it measured **11.85 against
+11.77**, inside the spread (D417). The descent is cache-resident and instructions are not what this
+pass is short of. It is kept because a removed load cannot become a cost, and it is recorded because
+the reasoning was sound and the answer was still no.
+
+**And the worst case was not on the list at all**: flying *while editing*, which the player named and
+which `--chisel` now measures. It read **48.57 ms** on the face pass — five times the flying figure
+above, on the same camera.
 
 **Two rules before touching any of it.** Measure on `_flybench.ps1`, not on the grid, or the case
-under repair is invisible. And interleave the arms with a rebuild between every run (D407): the same
-build has read 2.41 and 3.75 ms on this pass in one session, because it is a function of a
-convergence state the `scene:` line does not show.
+under repair is invisible; add `-Chisel "8,16"` or the *worst* case is invisible too. And the arms of
+an A/B must be **two flags of one build**, not two builds (D407): `--no-face-gate`,
+`--no-face-worklist`, `--no-face-prolong` exist for exactly that.
 
 ### R3 comes before R1e, deliberately
 
@@ -848,7 +902,8 @@ R7 the primary ray, R8 infinite detail.
 **New:** `src/world/node_pool.{hpp,cpp}`, `src/world/face_store.{hpp,cpp}`,
 `src/gpu/node_buffers.{hpp,cpp}`, `src/gpu/face_buffers.{hpp,cpp}`, `src/core/pass_ledger.{hpp,cpp}`,
 `src/core/dirty_set.hpp`, `shaders/node.glsl`, `shaders/node_visibility.comp`,
-`shaders/shade_faces.comp`, `tests/test_node_pool.cpp`, `tests/test_face_store.cpp`,
+`shaders/shade_faces.comp`, `shaders/face_worklist.comp`,
+`tests/test_node_pool.cpp`, `tests/test_face_store.cpp`,
 `tests/test_pass_ledger.cpp`, `tests/test_world_cache.cpp`,
 `tools/{baseline,facecount,_grid,_measure}.ps1`, `documentation/21-renderer-rewrite.md`, this file.
 
@@ -866,7 +921,23 @@ Nothing has been deleted yet.
 .\tools\baseline.ps1 -Out docs.csv   # the fixed grid; -Compare <csv> to diff a previous run
 .\tools\facecount.ps1                # distinct visible faces per view and resolution
 .\tools\_flybench.ps1 -Rounds 3      # the MOVING case, which the grid cannot see (D410)
+.\tools\_flybench.ps1 -Chisel 8,16   # ...and the WORST case: moving while editing (D413)
 ```
+
+**The two arms of an A/B on the light pass are two flags, never two builds** (D407, and now D420
+for what happens when the harness itself gets it wrong):
+
+```powershell
+.\tools\_flybench.ps1 -Tag before -Chisel 8,16 -Extra "--no-face-gate --no-face-worklist"
+.\tools\_flybench.ps1 -Tag after  -Chisel 8,16
+```
+
+`--no-face-gate` lights every face in the store again whether or not a pixel has read it;
+`--no-face-worklist` dispatches the shading pass over every live slot again;
+`--no-face-prolong` is the third and is already the default (D417). `--chisel EVERY,RADIUS` carves
+and fills alternately at whatever the camera is looking at, through the same code path the mouse
+button takes, and prints what it changed — **read that line before reading any time from a chisel
+run**, because a run that missed every time and a run that never fired print the same pass table.
 
 **The grid and `_flybench.ps1` answer different questions and neither substitutes for the other.**
 The grid starts its window at refinement's fixed point, so it measures a store in which every face
