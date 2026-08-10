@@ -976,6 +976,10 @@ and their recesses, where occlusion is correct, so it is **not a clean test of a
 gate should be treated as open. Debug view 18 shows the term on its own, which is what to read it
 from.
 
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D332 | **The face pass bounds its own writes, because a stride the host and the shader agree on by comment is not an agreement** | `--validation` | R10b doubled the face light to two words a slot. Run against a binary where the host had allocated one — a stale build, not the committed source — the pass wrote past the end of its buffer and into whatever the allocator had placed next, which was the node pool. It surfaced as the **node** mirror disagreeing in `nodes`, `leaves` and `occupancy` at scattered offsets: three buffers this pass has no business touching, reported by the one check that would notice, with nothing anywhere pointing at the face light. Three runs in three, and clean on the parent commit, so it bisected straight to a change that had not caused it. The index is bounded against `words.length()` now: a stride mismatch is a write that does not happen instead of a corruption somewhere else in the frame. **The audit earned its keep again** — this is the fifth stale-byte fault it has named, and the first one from a shader writing outside its own allocation |
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

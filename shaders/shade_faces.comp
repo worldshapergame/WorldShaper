@@ -233,7 +233,17 @@ void main() {
     // this array is never uploaded and so is never cleared by a claim the way `counters` is. The
     // host zeroes `counters` when it claims, so a sample count of nought is exactly "this slot is
     // new" -- read before the sun wrote to it, above.
+    // Bounded, because the host and this shader agree about `kFaceLightWords` by comment alone.
+    //
+    // When they disagreed -- a binary where the host had allocated one word a slot while this wrote
+    // two -- the face pass wrote past the end of its own buffer and into whatever the allocator had
+    // placed next, which was the node pool. It surfaced as the node mirror disagreeing in `nodes`,
+    // `leaves` and `occupancy` at scattered offsets: three buffers this pass has no business
+    // touching, reported by the one check that would notice, and nothing anywhere pointing at the
+    // face light. A stride mismatch is now a write that does not happen instead of a corruption
+    // somewhere else in the frame.
     const uint light_at = slot * kFaceLightWords;
+    if (light_at + 1u >= face_light.words.length()) return;
     if (samples == 0u) {
         face_light.words[light_at] = 0u;
         face_light.words[light_at + 1u] = 0u;
