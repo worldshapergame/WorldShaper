@@ -428,6 +428,26 @@ The general lesson is worth more than the fix: **an accumulator that infers "the
 its own samples cannot see a change that arrives before the last one finished.** Anything else in
 this renderer that decides to forget based on agreement between samples has the same hole.
 
+### The open one: ambient occlusion is grainy face to face, and R5 is the answer
+
+Reported as *"as if the sub-voxel smoothness of the shadowing of the faces was misaligned or
+rotated instead of being smooth."* One real bug came out of it and is fixed (D381): an ambient ray
+grazing its own wall was counted as contact, so a flat facade read 129–246 of 255 in blocks. It now
+has to rise clear of the face's own plane, and the banding goes.
+
+**What is left is variance and it is at the noise floor.** Face-to-face roughness on a flat wall —
+the mean second difference along a scanline, which removes any smooth trend and leaves the steps —
+is 2.5/255, against the renderer's own run-to-run noise of 2.50/255. Two suspects were eliminated
+on the way, both worth not re-checking: the R10c gradient (0.529/255 in a dark room) and coarse
+stand-in faces (49,108 level-0 against 1,301 level-3 at the camera in question).
+
+So this is not a fault to find; it is a couple of hundred Monte Carlo samples per face, made
+visible because a dark interior is lit by this term alone and the exposure pushes it hard. **R5,
+the face denoise, is the stage that owes it** — filtering across neighbouring faces is exactly its
+shape, and it is the first thing in the plan that pays here. Measure with `--debug-mode 18`, which
+is the near field on its own, and with the roughness figure rather than a standard deviation: a
+plain sd counts the genuine falloff under a soffit as though it were noise. D381, D382.
+
 ### R3 comes before R1e, deliberately
 
 R1e's bulk is moving `pathtrace.comp` from `world.glsl` onto the node pool — and §9 of the plan

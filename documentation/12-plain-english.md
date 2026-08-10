@@ -552,6 +552,21 @@ going.
   at all, because the code asks "is this pixel anywhere near the box" *before* doing the work
   rather than after.
 
+- **A wall that should be evenly shaded was coming out as a patchwork, and one bug was most of
+  it.** Each cube face works out how much light reaches it by firing rays into the room and seeing
+  how far they get — a ray that dies 5 cm away means a tight corner, one that crosses the room
+  means open space. The trouble was rays fired almost *sideways* along a flat wall: they skim it,
+  clip the corner of a neighbouring cube, and report "something is 3 cm away" when the something is
+  the wall the ray started on. Whether a face got unlucky depended on its random ray directions, so
+  a perfectly flat wall came out blotchy. A ray now has to actually clear the surface it left
+  before anything it hits counts. Costs nothing, and the banding goes.
+
+  What's left is graininess, and it's honest graininess: each face has only a couple of hundred
+  measurements to average, and in a dark room where this is the *only* light the eye is looking at
+  a heavily amplified picture. Smoothing that out between neighbouring faces is a planned stage of
+  its own and hasn't been built yet. Two other suspects were checked and cleared on the way, so
+  nobody re-checks them later.
+
 ### What's next, and what it's for
 
 The path tracer — the pretty, slow, accurate lighting on F4 — is the big one and is **under way**.

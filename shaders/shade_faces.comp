@@ -312,7 +312,27 @@ void main() {
     //
     // In metres, so the falloff is a physical distance and not a number of cells: a coarse face far
     // away and a voxel face at arm's length darken over the same span.
-    const float reach_m = (sky_hit.hit ? sky_hit.t : 1e9) / kVoxelsPerMetreF;
+    // ...but a hit that has not risen clear of this face's OWN plane is this face's own wall, and
+    // counting it is the classic self-occlusion bug arriving through the near field.
+    //
+    // A cosine-weighted ray leaving a flat wall cannot geometrically hit that wall: the hemisphere
+    // is on the outside of it. What it can do is graze. At a shallow angle the ray travels many
+    // voxels sideways while rising almost nothing, and the DDA lets it clip the shared edge of two
+    // cells in the surface layer -- the same leak the sun's jitter comment describes from the other
+    // side. That returns a hit a few centimetres away, `contact` reads nearly one, and the face goes
+    // dark. Which faces get unlucky depends on their jitter, so a FLAT WALL comes out as a
+    // patchwork of blocks: measured on the facade at 0.75 m, the near field ran 129 to 246 of 255
+    // with a standard deviation of 13 across a surface whose correct answer is one number.
+    //
+    // The rise is free: `sky_dir` is built with `up * sqrt(1 - hemi.x)`, so its component along the
+    // normal is that square root and nothing has to be dotted. Three quarters of a voxel is well
+    // under anything that occludes a measurable part of the hemisphere and well over the grazing
+    // clip, and a real occluder in a crease stands proud of the plane by design -- a ray that
+    // reaches the far wall of an alcove has risen metres by the time it gets there.
+    const float rise = sky_hit.t * sqrt(max(1.0 - hemi.x, 0.0));
+    const bool grazed_own_plane = sky_hit.hit && rise < 0.75;
+    const float reach_m =
+        (sky_hit.hit && !grazed_own_plane) ? sky_hit.t / kVoxelsPerMetreF : 1e9;
     const float contact = clamp(1.0 - reach_m / kContactMetres, 0.0, 1.0);
 
     // Both counts halve together at the window, or the near field's sum would drift against the
