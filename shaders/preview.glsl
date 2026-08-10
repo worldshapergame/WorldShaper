@@ -64,8 +64,130 @@ vec3 ink_over(vec3 backdrop) {
     return mix(inverted, vec3(away), 0.45);
 }
 
+// The colour the cursor marker and the constraint marks are drawn in: the material itself, not a
+// decision about it. Falls back to the ink rule when nothing is in hand.
+vec3 tool_ink(vec3 backdrop) {
+    return (push.tool_colour.w > 0.5) ? push.tool_colour.xyz : ink_over(backdrop);
+}
+
+// Markers are bounded by the voxel they stand for, and are never grown to a legible size in pixels.
+//
+// That was tried and it is wrong. A marker with a floor in pixels stops being part of the world and
+// becomes part of the interface: it hangs in front of geometry at a size that has nothing to do
+// with anything, and at range it covers voxels it does not mean. What these say is "this voxel",
+// and the honest way to say it is to be exactly that big and to go small when the voxel does.
+//
+// The only thing measured in pixels is LINE WIDTH, which is a different quantity: a line thinner
+// than a sample is a line that flickers, and thickening it does not change what the shape encloses.
+float line_width(float along, float pixels) {
+    return 2.0 * push.lens.x / float(push.resolution.y) * along * pixels;
+}
+
+// Is a preview surface at `t` behind the world surface at `depth`?
+//
+// With a bias, because the interesting previews are drawn EXACTLY on world geometry and without one
+// the comparison is a coin toss per pixel. A marker on the face of a solid voxel is at the same
+// distance as that face to the last bit, so half the pixels of the ring decide "in front" and half
+// decide "behind" and the shape breaks up into speckle that crawls as the camera moves — the
+// classic z-fight, arrived at through a marcher rather than a depth buffer.
+//
+// Relative rather than absolute, because the error being covered is a relative one: it comes from
+// two different pieces of arithmetic arriving at the same surface, and the disagreement scales with
+// the distance. A thousandth is five millimetres at five metres, which is well inside a voxel and
+// well outside the noise.
+bool preview_behind(float t, float depth) { return t > depth * 1.001 + 1e-4; }
+
+// A hollow shape on every face of one voxel: six of them, each lying in the plane of its own face.
+// A ring for the cursor marker, a cross for a constraint point.
+//
+// On the faces rather than billboarded at the camera, because both of these are marks ON something.
+// Painted onto the cube they belong to they are unambiguous about which voxel they mean and which
+// way it is turned, and they behave like the surface they are on: they foreshorten, they go
+// edge-on, and whichever faces you can see carry them. A billboard stays the same size and
+// square-on from every angle, which reads as a screen overlay hovering near the voxel rather than
+// as a mark on it -- and at range it covers voxels it does not mean.
+//
+// Hollow, so the surface being marked is still visible through the middle of its own marker. That
+// is the whole job of the cursor: it says "this one" without hiding the thing you are lining an
+// edit up against.
+//
+// Depth-tested, unlike the preview BOX. A box is deliberately drawn through geometry because
+// carving happens inside rock and a box you cannot see the far side of is one you have to guess the
+// size of. A mark on a single voxel is the opposite case: it is telling you what you are pointing
+// at, and one that shines through a wall is pointing at something you cannot reach.
+vec3 draw_face_marks(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, vec3 hi, vec3 tint,
+                     bool cross_shape) {
+    vec3 centre = (lo + hi) * 0.5;
+    vec3 half_size = (hi - lo) * 0.5;
+
+    // Reject the whole cell before testing six faces of it.
+    //
+    // Eight marks at six faces each is forty-eight plane tests a pixel, and all but a handful of
+    // pixels on the screen are nowhere near any of them. This is the ray's closest approach to the
+    // centre against the cell's circumradius: a dozen instructions that answer "not this one" for
+    // almost every pixel, and it cannot reject a cell the ray does cross.
+    vec3 to_centre = centre - origin;
+    float along = dot(to_centre, dir);
+    float bound = length(half_size);
+    if (along < -bound || dot(to_centre, to_centre) - along * along > bound * bound) return colour;
+
+    for (int a = 0; a < 3; ++a) {
+        // Only faces you are actually looking at.
+        //
+        // A face's normal is its own axis, so this dot product is just the ray's component along
+        // it. Near zero the face is edge-on, and a circle or a cross drawn on a face seen edge-on
+        // flattens into a short line lying along the voxel's silhouette — three of those and the
+        // marker gains a partial box around it, which reads as an outline nobody asked for and
+        // hides which face is actually being marked.
+        //
+        // A fifth keeps the two or three faces a corner view shows (a cube diagonal gives every
+        // axis 0.577) and drops the ones that have degenerated. It also costs less, which is
+        // incidental: the point is that a shape too foreshortened to be a shape is not one.
+        if (abs(dir[a]) < 0.2) continue;
+        float inv = 1.0 / dir[a];
+        for (int side = 0; side < 2; ++side) {
+            float t = ((side == 0 ? lo[a] : hi[a]) - origin[a]) * inv;
+            // Behind the eye, or behind the world. Biased, because a mark drawn on the face of a
+            // solid voxel is at exactly the distance of that face — see preview_behind.
+            if (t < 0.0 || preview_behind(t, depth)) continue;
+            vec3 point = origin + dir * t;
+
+            // The two axes that are not the face normal, which are the face's own u and v.
+            int au = (a + 1) % 3;
+            int av = (a + 2) % 3;
+            float u = point[au] - centre[au];
+            float v = point[av] - centre[av];
+            if (abs(u) > half_size[au] || abs(v) > half_size[av]) continue;
+
+            bool on_shape;
+            if (cross_shape) {
+                // Rotated into the diagonals, so the two arms are one axis test each rather than a
+                // pair of line-segment tests. Corner to corner: the half-DIAGONAL of the face.
+                float arm_a = (u + v) * 0.70710678;
+                float arm_b = (u - v) * 0.70710678;
+                float reach = length(vec2(half_size[au], half_size[av]));
+                float width = max(line_width(t, 1.0), reach * 0.10);
+                on_shape = (abs(arm_a) < width && abs(arm_b) < reach) ||
+                           (abs(arm_b) < width && abs(arm_a) < reach);
+            } else {
+                // The circle inscribed in the face, and inscribed means the OUTSIDE of the line
+                // touches the edge — not the centre of it. Setting the radius to the half-width
+                // puts half the line's thickness past the face, so the ring reads as slightly
+                // larger than the voxel it is marking and overhangs whatever is next to it.
+                float width = max(line_width(t, 1.0), min(half_size[au], half_size[av]) * 0.14);
+                float ring = max(min(half_size[au], half_size[av]) - width, width);
+                on_shape = abs(length(vec2(u, v)) - ring) < width;
+            }
+            if (!on_shape) continue;
+
+            colour = mix(colour, tint, 0.95);
+        }
+    }
+    return colour;
+}
+
 vec3 draw_one_box(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, vec3 hi, int state,
-                  float wash) {
+                  float wash, float face_fill) {
     // A constant line width in pixels: the world width a pixel covers grows with distance.
     float per_pixel = 2.0 * push.lens.x / float(push.resolution.y);
 
@@ -102,9 +224,23 @@ vec3 draw_one_box(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, vec3
             // happens *inside* rock, so an outline that respected depth would be invisible
             // in exactly the case the tool exists for; and a shape you cannot see the far
             // side of is one you have to guess the size of.
+            // Biased, because a preview box lined up against a surface — which is most of what a
+            // player does with one — has a face at exactly that surface's distance, and an
+            // unbiased test speckles it. See preview_behind.
+            bool hidden = preview_behind(t, depth);
             if (edge_distance(point, lo, hi, a) < width) {
-                bool hidden = t > depth;
                 colour = mix(colour, hidden ? tint_hidden : tint, hidden ? 0.55 : 0.9);
+            } else if (face_fill > 0.0) {
+                // The face itself, in the same two colours the outline uses and by the same
+                // rule. An outline says where the box is; the faces say which way it is
+                // turned, and a wireframe seen straight on is ambiguous about that in a way
+                // that has cost a misplaced edit more than once.
+                //
+                // Every face the ray crosses, near and far, so the tint deepens where the box
+                // is thick. That is a depth cue for free and it is what stops six planes at
+                // one opacity reading as a flat card.
+                colour = mix(colour, hidden ? tint_hidden : tint,
+                             hidden ? face_fill * 0.6 : face_fill);
             }
         }
     }
@@ -113,7 +249,7 @@ vec3 draw_one_box(vec3 colour, vec3 origin, vec3 dir, float depth, vec3 lo, vec3
     // only as its outline. Deliberately slight: it sits over whatever the player is trying
     // to line the edit up against.
     Slab box = ray_box(origin, dir, lo, hi);
-    if (box.far_t >= max(box.near_t, 0.0) && max(box.near_t, 0.0) < depth) {
+    if (box.far_t >= max(box.near_t, 0.0) && !preview_behind(max(box.near_t, 0.0), depth)) {
         colour = mix(colour, tint, (state == 3) ? 0.20 : wash);
     }
     return colour;
@@ -275,6 +411,9 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
     best.type = 0u;
     best.face = 0;
 
+    // How strongly each box fills its faces, packed a byte at a time beside the outline flag and
+    // the shell thickness. Per box rather than one setting for the frame: a clipboard selection
+    // wants a quarter and the ghost it becomes wants none, and both can be on screen in one frame.
     for (int b = 0; b < 16; ++b) {
         int state = push.box_min[b].w;
         if (state == 0) continue;
@@ -282,6 +421,16 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
         // exclusive.
         vec3 lo = vec3(push.box_min[b].xyz);
         vec3 hi = vec3(push.box_max[b].xyz) + vec3(1.0);
+        float face_fill = float((push.box_max[b].w >> 16) & 0xFF) / 255.0;
+
+        // The cursor marker: where the crosshair is pointing, on screen whatever tool is in hand
+        // and whatever it is in the middle of. A hollow ring on each face of the voxel rather than
+        // a filled cube, and the material's own colour rather than a decision about it. See
+        // draw_face_marks.
+        if (state == 6) {
+            colour = draw_face_marks(colour, origin, dir, depth, lo, hi, tool_ink(colour), false);
+            continue;
+        }
 
         if (state == 5 && push.clip_slot[b].y != 0u) {
             ++g_ghost_boxes;
@@ -292,8 +441,12 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
             // Only the copy being steered is outlined; the rest are their own voxels. See
             // the note where these boxes are filled in â€” six plane tests a pixel, sixteen
             // times over, was most of what put this pass over its budget.
+            // A held clip shows its own voxels, so its bounding box is only an outline: filling
+            // the faces as well would put a coloured pane in front of the very thing the ghost
+            // exists to let you line up. face_fill is nought for these and this passes it on
+            // rather than hard-coding it, so the two agree by construction.
             if ((push.box_max[b].w & 0xFF) != 0) {
-                colour = draw_one_box(colour, origin, dir, depth, lo, hi, 2, 0.02);
+                colour = draw_one_box(colour, origin, dir, depth, lo, hi, 2, 0.02, face_fill);
             }
             ++drawn;
             continue;
@@ -302,7 +455,7 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
         // Sixteen ghosts each washing the frame at full strength would fog the world out,
         // so the wash thins as the row gets longer while the outlines stay crisp.
         float wash = 0.07 / (1.0 + 0.35 * float(drawn));
-        colour = draw_one_box(colour, origin, dir, depth, lo, hi, state, wash);
+        colour = draw_one_box(colour, origin, dir, depth, lo, hi, state, wash, face_fill);
 
         // The shell, drawn as a second outline set in by its thickness.
         //
@@ -316,8 +469,12 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
             vec3 inner_hi = hi - vec3(float(shell));
             // Only when there is an inside left to draw; below that the placement is solid
             // anyway and a second outline would be a lie.
+            // Outline only. The shell is a line drawn *inside* a box whose faces are already
+            // tinted, and filling it too would double the tint over the whole inner volume and
+            // hide the very difference it exists to show.
             if (all(greaterThan(inner_hi, inner_lo))) {
-                colour = draw_one_box(colour, origin, dir, depth, inner_lo, inner_hi, state, 0.0);
+                colour =
+                    draw_one_box(colour, origin, dir, depth, inner_lo, inner_hi, state, 0.0, 0.0);
             }
         }
         ++drawn;
@@ -341,13 +498,23 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
         colour = mix(colour, ghost, 0.62);
     }
 
+    // The constraint points, as crosses in the material's colour.
+    //
+    // They used to be solid cells washed in the inverse of the backdrop, which had two faults and
+    // both were reported as the same complaint — that you could not tell what you had dropped. A
+    // filled cell is indistinguishable from a one-voxel preview box, and an inverted backdrop is a
+    // different colour on every surface it lands on, so eight of them across a wall did not read as
+    // eight of anything. An X is a shape rather than a shade: it is the key that drops it, it is
+    // nothing else the tool draws, and it leaves the middle of the cell visible so the surface
+    // being marked can still be seen.
+    //
+    // Drawn last, over the boxes, because a constraint is what the box has to reach and the box
+    // grows to meet it — so it must be legible against the box's own tint.
     for (int m = 0; m < 8; ++m) {
         if (push.marks[m].w == 0) continue;
         vec3 mlo = vec3(push.marks[m].xyz);
-        Slab mark = ray_box(origin, dir, mlo, mlo + vec3(1.0));
-        float t = max(mark.near_t, 0.0);
-        if (mark.far_t < t || t > depth) continue;
-        colour = mix(colour, ink_over(colour), 0.75);
+        colour = draw_face_marks(colour, origin, dir, depth, mlo, mlo + vec3(1.0),
+                                 tool_ink(colour), true);
     }
     return colour;
 }

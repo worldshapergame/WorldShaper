@@ -153,6 +153,14 @@ bool Chisel::update(const World& world, const ChiselInput& input, const f64 orig
     preview_.mode = dragging_ ? mode_ : ChiselMode::None;
     preview_.dragging = dragging_;
 
+    // Recorded before the early return below, because the cursor marker is drawn whenever the
+    // crosshair is on something — including mid-drag, where the box is anchored elsewhere, and
+    // including when there is no preview box at all.
+    preview_.has_cursor = have_cursor;
+    if (have_cursor) {
+        for (int a = 0; a < 3; ++a) preview_.cursor[a] = cursor[a];
+    }
+
     if (!have_cursor && !dragging_) {
         return false;   // nothing aimed at and nothing in progress: no preview
     }

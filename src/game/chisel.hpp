@@ -64,6 +64,15 @@ struct ChiselPreview {
     i64 max[3]{};
     u64 volume = 0;
 
+    // Where the crosshair is pointing right now, on its own.
+    //
+    // Separate from the box because the two stop being the same thing the moment a drag starts:
+    // the box is anchored where the button went down and the cursor has moved on, and the marker
+    // that says "here" has to follow the second. Reported even when there is no preview to draw —
+    // aiming at the sky is still aiming somewhere.
+    bool has_cursor = false;
+    i64 cursor[3]{};
+
     // What a carve is about to remove, sampled where the drag was anchored. The preview is
     // drawn in this colour where it is buried, so a shape inside the ground reads as the
     // material that is going to leave. kAir when the box starts in open space.
@@ -109,6 +118,21 @@ public:
     bool places_against_face() const { return against_face_; }
 
     const ChiselPreview& preview() const { return preview_; }
+
+    // Where the crosshair is pointing, resolved the way this tool resolves it — honouring the
+    // distance override and the against-face toggle.
+    //
+    // Public because the cursor marker is drawn whatever tool is in hand, including while a
+    // clipboard ghost is being steered and this tool is not being updated at all. A second
+    // implementation of the same question would drift from this one the first time either the
+    // distance rule or the face rule changed, and the mark would then be a voxel away from where
+    // the edit lands — which is worse than no mark.
+    bool cursor(const World& world, const f64 origin[3], const f64 direction[3],
+                i64 out[3]) const {
+        return resolve_point(world, against_face_ ? ChiselMode::Place : ChiselMode::Carve, origin,
+                             direction, out);
+    }
+
     const std::vector<std::array<i64, 3>>& constraints() const { return constraints_; }
     void clear_constraints() { constraints_.clear(); }
 

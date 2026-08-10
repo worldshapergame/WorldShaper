@@ -60,6 +60,17 @@ struct RenderParams {
     f32 tint_visible[4];
     f32 tint_occluded[4];
 
+    // The material in hand, plainly, with nothing done to it.
+    //
+    // Separate from the two tints above because those carry a *decision* — they are already
+    // inverted or not according to whether the box is a carve or a place and whether the pixel is
+    // in front of geometry. The cursor marker and the constraint marks are not decisions; they are
+    // "here is where you are pointing" and "here is a point you dropped", and both want the
+    // material's own colour whatever the tool is about to do with it.
+    //
+    // w = 1 when there is a material to speak of.
+    f32 tool_colour[4];
+
     // The preview boxes, in voxels relative to the camera chunk corner — the same space as
     // `origin`, so the resolve pass can intersect them with the ray it already has without
     // knowing anything about 64-bit world coordinates.
@@ -125,7 +136,8 @@ struct RenderParams {
     // altitude and veered, which is both true and what makes a sky read as deep.
     f32 sky_wind[4];
 };
-static_assert(sizeof(RenderParams) == 1520 + 80 + 32, "RenderParams must match the GLSL block");
+static_assert(sizeof(RenderParams) == 1520 + 80 + 32 + 16,
+              "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

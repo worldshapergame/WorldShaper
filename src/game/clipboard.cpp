@@ -383,6 +383,8 @@ bool Clipboard::update(const World& world, const ClipboardInput& input, const f6
             preview_.select_min[a] = drag_preview.min[a];
             preview_.select_max[a] = drag_preview.max[a];
         }
+        preview_.has_cursor = drag_preview.has_cursor;
+        for (u32 a = 0; a < 3; ++a) preview_.cursor[a] = drag_preview.cursor[a];
         prev_right_ = input.right;
         prev_middle_ = input.middle;
         if (!finished) return false;
@@ -535,6 +537,18 @@ bool Clipboard::update(const World& world, const ClipboardInput& input, const f6
     }
 
     refresh_preview();
+
+    // After refresh_preview, which starts from a blank record. The selector is not being updated
+    // while a clip is held, so it is asked outright — the marker follows the crosshair whatever
+    // the tool is doing, and steering a ghost is exactly when knowing what you are pointing at
+    // matters.
+    {
+        i64 at[3];
+        preview_.has_cursor = selector_.cursor(world, origin, direction, at);
+        if (preview_.has_cursor) {
+            for (u32 a = 0; a < 3; ++a) preview_.cursor[a] = at[a];
+        }
+    }
 
     const bool pressed = input.left && !prev_left_;
     prev_left_ = input.left;

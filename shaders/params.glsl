@@ -22,7 +22,14 @@
     ivec4 thumb_tiers[8];
     vec4 tint_visible;    // xyz colour, w = 1 to use it, 0 to invert the backdrop instead
     vec4 tint_occluded;
-    ivec4 box_min[16];    // xyz voxels relative to the camera chunk; w: 0 unused 1 carve 2 place 3 refused 4 idle
+    // The material in hand with nothing done to it. The two tints above carry a decision -- already
+    // inverted or not by carve/place and by depth -- and the cursor marker and the marks are not
+    // decisions, so they take this instead. w = 1 when there is a material.
+    vec4 tool_colour;
+    // xyz voxels relative to the camera chunk.
+    // w: 0 unused 1 carve 2 place 3 refused 4 idle 5 clip ghost 6 cursor sphere
+    ivec4 box_min[16];
+    // w: bits 0-7 outline flag, 8-15 shell thickness, 16-23 how strongly to fill the faces
     ivec4 box_max[16];
     ivec4 marks[8];       // constraint points, w = 1 when used
     uvec4 clip_slot[16];    // per ghost box: x first cell, yzw size. Size 0 means unused

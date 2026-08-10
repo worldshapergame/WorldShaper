@@ -87,6 +87,13 @@ struct ClipboardPreview {
     // The selection box while the drag is still going.
     i64 select_min[3]{};
     i64 select_max[3]{};
+
+    // Where the crosshair is pointing, in both states. While selecting it comes from the selector,
+    // which *is* the chisel; while a clip is held the selector is not being updated, so it is
+    // asked directly. Either way it is the same question answered by the same code, because a
+    // marker a voxel away from where the tool would act is worse than no marker.
+    bool has_cursor = false;
+    i64 cursor[3]{};
 };
 
 // There is no cap on how large a clip may be, how far it may be resized, or how many copies
@@ -189,6 +196,11 @@ public:
     // Where instance `n` of `count` lands. Exposed for the tests, which are the only way to
     // check the spacing without a camera.
     void instance_origin(u32 n, i64 out[3]) const;
+
+    // The constraint points dropped while a selection is being dragged. They live on the selector
+    // because selecting *is* the chisel; the renderer draws them for whichever tool is in hand, so
+    // it has to be able to ask this one for its own rather than showing the other tool's.
+    const std::vector<std::array<i64, 3>>& constraints() const { return selector_.constraints(); }
 
     void refresh_preview();
 
