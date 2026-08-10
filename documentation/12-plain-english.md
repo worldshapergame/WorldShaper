@@ -506,9 +506,22 @@ going.
   secretly bound to "redo" as well as to dropping a constraint point, so every point you dropped
   quietly put back an edit you had deliberately undone.
 
-  One thing is still wrong there and is written down rather than glossed over: after undoing a very
-  large delete the shape comes back perfectly, but the **light** doesn't fully — a terrace stays
-  sunlit for a while where the roof you just restored should be shading it. That's next.
+- **And the shadows come back with it, in about a fifth of a second.** You noticed the shape came
+  back instantly after an undo but the *light* took forever — a terrace still sunlit under a roof
+  you'd just restored. Here's why, and it's a nice one.
+
+  Every surface remembers what it has seen of the sun, and it only throws that memory away when a
+  new answer flatly contradicts an unbroken run of old ones. That's deliberate: one odd reading
+  shouldn't make a surface forget everything it knows. But it means a surface caught **halfway
+  through changing its mind** has no unbroken run to contradict. Delete the roof and the terrace
+  starts creeping from dark towards bright; undo before it gets there and it's halfway, certain of
+  nothing, so it just drifts slowly back. Four hundred frames later it was still wrong.
+
+  The fix is that the game stops guessing. It *knows* you edited, and it knows exactly where, so it
+  now tells those surfaces outright: forget what you saw, start again. Measured on the same
+  terrace: what took more than four hundred frames and never finished now finishes in **twenty** —
+  and after that the picture is closer to the never-edited one than two identical runs of the game
+  are to each other.
 
 ### What's next, and what it's for
 

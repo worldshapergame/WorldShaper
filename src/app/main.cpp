@@ -1055,6 +1055,24 @@ private:
     u32 shadow_refresh_frames_ = 0;
     static constexpr u32 kShadowRefreshFrames = 120;
 
+    // Set on the frame an edit lands, cleared as soon as the shader has been told once.
+    //
+    // Re-measuring faster is not enough on its own, and the second report of "undo is slow" is what
+    // showed why. A face keeps two counts, and `face_accumulate` only throws its history away when
+    // a sample contradicts a UNANIMOUS one (D319) -- which is the right conservative test for a
+    // sample that might be noise, and no test at all for a face that was still mid-transition when
+    // the next edit arrived. Delete the roof and a terrace face starts climbing from black towards
+    // white; undo before it gets there and it is unanimous about nothing, so it has no history to
+    // throw away and simply averages back down over hundreds of frames. Measured: fully shadowed
+    // faces flat at ~42,000 against the 105,848 the same camera has when it was never edited, with
+    // the mean drifting 0.44 -> 0.35 -> 0.31 over four hundred frames.
+    //
+    // The host does not have to INFER that the world changed. It knows, and it knows exactly where.
+    // So faces inside the edited box are told outright to drop their history, once, on the frame it
+    // happens -- exact information instead of a guess, and it leaves D319's rule untouched for the
+    // case it was written for.
+    bool edit_window_opened_ = false;
+
     // Where the last edit was, in absolute world voxels, grown by how far its shadow can fall.
     // Faces inside are made to re-measure at once; faces outside carry on as they were.
     i64 edit_lo_[3]{};
@@ -2535,6 +2553,7 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
     // tried and it is the smearing, every voxel placed relighting the whole scene at once.
     // This keeps every measured value and simply re-measures faster for a moment.
     shadow_refresh_frames_ = kShadowRefreshFrames;
+    edit_window_opened_ = true;   // see the member: the faces in the box drop their history once
     lights_dirty_ = true;   // a placed lamp is a light nothing can aim at until this is rebuilt
 
     // And it says it to the region rather than to the world. Everything the edit could have
@@ -3692,7 +3711,11 @@ void Application::record_frame(f32 time_seconds) {
             params.edit_max[axis] = static_cast<i32>(
                 std::clamp(edit_hi_[axis] - base, i64{-1} << 30, i64{1} << 30));
         }
-        params.edit_min[3] = 1;
+        // 1 means "the window is open, keep re-measuring"; 2 adds "and this is the frame it opened
+        // on, so every face in the box throws its history away". Consumed here rather than on a
+        // timer, so it is delivered exactly once however many frames the upload takes.
+        params.edit_min[3] = edit_window_opened_ ? 2 : 1;
+        edit_window_opened_ = false;
     }
     params.grid_dims[0] = residency_budget_.grid_width;
     params.grid_dims[1] = residency_budget_.grid_height;

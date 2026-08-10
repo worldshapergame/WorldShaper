@@ -392,7 +392,7 @@ Two fixes, in the order they pay:
 Until the second lands, nobody can judge the renderer by playing a *first* load, because what they
 are judging is the paste. Every load after the first is now the renderer.
 
-### The open one: undo restores the world and not its light
+### Closed: undo restored the world and not its light
 
 **Found by the instrument built for it** (D372), and the shortest path back to it is:
 
@@ -402,20 +402,31 @@ are judging is the paste. Every load after the first is now the renderer.
   --no-auto-quality --edit "-600,96,-600,600,640,600,0" --edit-frame 400 --undo-frame 500
 ```
 
-The world comes back exactly — same content hash as a run that never edited, to the digit. The
-picture does not: 400 frames after undoing a 36-million-voxel delete, geometry is fully restored and
-**16.6% of pixels still differ from the never-edited frame, mean 20.9/255**, against 45.3% and 72.7
-for the edited frame. So most of it returned and what is left is *light*: the terrace reads as full
-sun where the restored roof should shadow it.
+The world came back exactly — same content hash as a run that never edited, to the digit — and the
+picture did not: 400 frames later, geometry fully restored, **16.6% of pixels still differed at a
+mean of 20.9/255**, all of it light. The player's words were "they do come back, just extremely
+slowly", and that is what named it.
 
-`kEditShadowReach` is 512 voxels and does cover the terrace, so the region is not the suspect;
-`kShadowRefreshFrames` is 120 and had closed 280 frames before the shot. Note that D319's rule — a
-sample contradicting a unanimous history resets the face to two samples — is meant to handle exactly
-this, so if the window is not the cause then that rule is not firing here and *that* is the finding.
-Measure it with `--debug-mode 16`, which is the instrument for anything about shadows.
+**It was neither the region nor the window.** `kEditShadowReach` is 512 voxels and covers the
+terrace, and `kShadowRefreshFrames` re-measures every face in the box for 120 frames. What re-
+measuring cannot fix is *what it accumulates into*: `face_accumulate` throws a history away only
+when a sample contradicts a **unanimous** one (D319), and a face that was still mid-transition when
+the second edit landed is unanimous about nothing. Delete the roof and a terrace face starts
+climbing from black towards white; undo before it arrives and it has nothing to discard, so it
+averages back down inside a 256-sample window. **Fully shadowed faces sat flat at ~42,000 for four
+hundred frames against the 105,848 that camera has when it was never edited** — flat, not climbing,
+which is the whole tell.
 
-It is **pre-existing rather than caused by D370**: before that fix undo did nothing at all, so
-there was nothing left stale to notice.
+The fix is that the host **says so** instead of leaving it to be inferred: `edit_min.w` is 2 on the
+one frame an edited region opens, and faces inside the box drop their history. Exact information
+rather than a guess, and D319's rule is left alone for the case it was written for. **0.4427 at
+undo+60 → 0.1278 at undo+20**, against a never-edited 0.1304; in pixels, undo+400 goes from 20.9/255
+and 16.6% to **1.916 and 2.81%**, where two never-edited runs of this camera differ by 1.493 and
+1.42%. D373, D374.
+
+The general lesson is worth more than the fix: **an accumulator that infers "the world changed" from
+its own samples cannot see a change that arrives before the last one finished.** Anything else in
+this renderer that decides to forget based on agreement between samples has the same hole.
 
 ### R3 comes before R1e, deliberately
 

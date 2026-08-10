@@ -98,7 +98,25 @@ void main() {
                     all(lessThanEqual(low, vec3(push.edit_max.xyz)));
     }
 
-    const uint samples = face_samples_of(face.counters);
+    // The world changed under this face on this exact frame, and the host said so rather than
+    // leaving it to be inferred.
+    //
+    // `face_accumulate` throws a history away only when a sample contradicts a UNANIMOUS one, which
+    // is the right conservative test for a sample that might be noise and no test at all for a face
+    // that was still mid-transition when the next edit landed. Delete a roof and the terrace under
+    // it starts climbing from black towards white; undo before it arrives and it is unanimous about
+    // nothing, so it keeps averaging and takes hundreds of frames to come back. Measured: fully
+    // shadowed faces flat at ~42,000 against 105,848 for the same camera never edited.
+    //
+    // edit_min.w == 2 is the one frame the edited region opened on. Faces inside it start again
+    // from nothing, which is exact rather than a guess and leaves D319's rule alone for the case it
+    // was written for. What it costs is that a face inside the box whose light did NOT change
+    // re-converges too -- a handful of frames, on faces that are being shaded every frame anyway.
+    const bool edit_reset = (push.edit_min.w == 2) && near_edit;
+    const uint counters = edit_reset ? 0u : face.counters;
+    if (edit_reset) faces.items[slot].counters = 0u;
+
+    const uint samples = face_samples_of(counters);
     if (node_push.face_stride > 1u && samples >= kFaceEager && !near_edit &&
         ((slot + node_push.frame) % node_push.face_stride) != 0u) {
         return;
@@ -119,7 +137,7 @@ void main() {
         // Counted as a ray that did not reach the sun, which is what it is. The fraction then
         // falls as the samples come in rather than snapping to nought, and this is the same
         // arithmetic a lit face does with one term different.
-        faces.items[slot].counters = face_accumulate(face.counters, false);
+        faces.items[slot].counters = face_accumulate(counters, false);
     }
 
     // A point ON the face, somewhere different every frame.
@@ -205,7 +223,7 @@ void main() {
         // The penumbra resolves over samples on the FACE, which is what takes it off the pixel: a
         // soft edge costs the face a few frames instead of costing every pixel that looks at it a
         // ray of its own, every frame, for ever.
-        faces.items[slot].counters = face_accumulate(face.counters, !hit.hit);
+        faces.items[slot].counters = face_accumulate(counters, !hit.hit);
 
         // How far the ray got before it gave up, for the rays that reached nothing. `photons` is
         // GPU-owned and unwritten until the photon pass exists, so this borrows it rather than
