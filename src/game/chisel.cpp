@@ -131,8 +131,18 @@ bool Chisel::update(const World& world, const ChiselInput& input, const f64 orig
     if (input.add_point) {
         // A constraint lands wherever the tool would act, which is what O decides -- so a point
         // dropped mid-place lands against the face, exactly where the matter is going.
+        //
+        // Held, X repeats, so a line of points can be swept out with the mouse instead of tapped
+        // out one at a time. That makes the same voxel arrive many frames running whenever the
+        // crosshair is still, so a repeat that lands where the last one did is dropped: the list is
+        // a set of places, and a place recorded fourteen times a second is fourteen times the cost
+        // for nothing. Only the immediately previous one is compared, which is all a swept line can
+        // produce and costs nothing to check -- crossing an earlier point deliberately still marks
+        // it again, and that is harmless.
         i64 point[3];
-        if (resolve_point(world, origin, direction, point)) {
+        if (resolve_point(world, origin, direction, point) &&
+            (constraints_.empty() || constraints_.back()[0] != point[0] ||
+             constraints_.back()[1] != point[1] || constraints_.back()[2] != point[2])) {
             constraints_.push_back({point[0], point[1], point[2]});
         }
     }

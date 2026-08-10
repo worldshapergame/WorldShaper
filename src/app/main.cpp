@@ -1073,9 +1073,14 @@ private:
     // case it was written for.
     bool edit_window_opened_ = false;
 
-    // How many constraint points the last frame wanted to draw, so the overflow warning is said
-    // once when it changes rather than sixty times a second while it holds.
+    // How many constraint points the last frame drew, so the refusal warning is said once when it
+    // changes rather than sixty times a second while it holds.
     u32 last_marks_reported_ = 0;
+    // The points, camera-relative, sorted and grouped for the shader. Kept between frames so it is
+    // not reallocated on every one.
+    std::vector<std::array<i32, 3>> mark_points_;
+    u64 mark_upload_words_ = 0;   // what this frame packed into the clip buffer's tail
+    u32 mark_upload_at_ = 0;
 
     // Where the last edit was, in absolute world voxels, grown by how far its shadow can fall.
     // Faces inside are made to re-measure at once; faces outside carry on as they were.
@@ -1193,6 +1198,10 @@ private:
     KeyRepeat repeat_more_;
     KeyRepeat repeat_fewer_;
     KeyRepeat repeat_turn_[4];   // left, right, up, down
+    // X. Held, it drops a constraint point steadily instead of one per press, so a line of them can
+    // be swept out with the mouse rather than tapped out one at a time. The chisel refuses a point
+    // on the voxel it just marked, so holding it still adds one and then nothing.
+    KeyRepeat repeat_add_point_;
     EditHistory history_;
     OpLog op_log_;
     std::vector<VoxelTypeId> materials_;
@@ -2470,7 +2479,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         tool.left = left;
         tool.right = right;
         tool.middle = middle;
-        tool.add_point = input.was_pressed(Key::X);
+        tool.add_point = repeat_add_point_.poll(input.is_down(Key::X), dt) > 0;
         tool.wheel = clipboard_has_wheel ? input.wheel : 0.0f;
         tool.big_step = input.is_down(Key::Shift);
         tool.adjust_distance = chisel_has_wheel;
@@ -2493,7 +2502,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         ChiselInput tool{};
         tool.left = left;
         tool.right = right;
-        tool.add_point = input.was_pressed(Key::X);
+        tool.add_point = repeat_add_point_.poll(input.is_down(Key::X), dt) > 0;
         tool.wheel = chisel_has_wheel ? input.wheel : 0.0f;
         tool.adjust_distance = chisel_has_wheel;
         tool.clear_points = input.was_pressed(Key::R);
@@ -3964,25 +3973,14 @@ void Application::record_frame(f32 time_seconds) {
         const std::vector<std::array<i64, 3>>& points =
             (toolbelt_.active() == ToolKind::Clipboard) ? clipboard_.constraints()
                                                         : chisel_.constraints();
-        u32 slot = 0;
-        u32 wanted = 0;
-        i32 mark_lo[3] = {0, 0, 0};
-        i32 mark_hi[3] = {0, 0, 0};
+
+        // Gathered camera-relative, then sorted and grouped. No cap: see kMarkGroup.
+        mark_points_.clear();
+        mark_points_.reserve(points.size() + options_.preview_marks.size());
         const auto add_mark = [&](const i64 point[3]) {
-            ++wanted;
-            if (slot >= kMaxPreviewMarks) return;
-            for (u32 axis = 0; axis < 3; ++axis) {
-                const i32 at = static_cast<i32>(point[axis] - base[axis]);
-                params.marks[slot][axis] = at;
-                // The box the shader culls against. A mark covers its whole voxel, so the high
-                // corner is one past it -- getting that wrong clips the marks on the far faces of
-                // the outermost points and nothing else, which is the sort of thing that reads as
-                // "some of them are missing".
-                mark_lo[axis] = (slot == 0) ? at : std::min(mark_lo[axis], at);
-                mark_hi[axis] = (slot == 0) ? at + 1 : std::max(mark_hi[axis], at + 1);
-            }
-            params.marks[slot][3] = 1;
-            ++slot;
+            mark_points_.push_back({static_cast<i32>(point[0] - base[0]),
+                                    static_cast<i32>(point[1] - base[1]),
+                                    static_cast<i32>(point[2] - base[2])});
         };
         for (const std::array<i64, 3>& point : points) add_mark(point.data());
         for (const std::string& scripted : options_.preview_marks) {
@@ -3990,22 +3988,111 @@ void Application::record_frame(f32 time_seconds) {
             parse_numbers(scripted, at, 3);
             add_mark(at);
         }
-        for (u32 axis = 0; axis < 3; ++axis) {
-            params.marks_min[axis] = mark_lo[axis];
-            params.marks_max[axis] = mark_hi[axis];
-        }
-        params.marks_min[3] = static_cast<i32>(slot);
+        params.marks_min[3] = 0;
+        params.marks_max[3] = 0;
 
-        // Said out loud when it overflows, because a point that is dropped, grows the box to reach
-        // it, and is not drawn anywhere is a tool that works and looks broken -- trap 7 in the
-        // interface rather than in the pool. Once per change rather than once per frame.
-        if (wanted > kMaxPreviewMarks && wanted != last_marks_reported_) {
-            WS_LOG_WARN("tool",
-                        "{} constraint points, and only {} can be drawn -- the rest still shape "
-                        "the box, they are just not marked",
-                        wanted, kMaxPreviewMarks);
+        if (!mark_points_.empty()) {
+            // Sorted so a group is a NEIGHBOURHOOD rather than an arbitrary thirty-two.
+            //
+            // The groups exist to be rejected wholesale, and a group whose members are scattered
+            // across the building has a bounding box the size of the building and rejects nothing.
+            // Sorting by a coarse cell first puts points that are near each other in the same
+            // group, which is the entire difference between the hierarchy working and being an
+            // extra test per pixel. Two metres a cell: fine enough to separate distinct clusters,
+            // coarse enough that a swept line stays in a handful of them.
+            constexpr i32 kSortCell = 64;
+            std::sort(mark_points_.begin(), mark_points_.end(),
+                      [](const std::array<i32, 3>& l, const std::array<i32, 3>& r) {
+                          const i32 lz = l[2] / kSortCell, rz = r[2] / kSortCell;
+                          if (lz != rz) return lz < rz;
+                          const i32 ly = l[1] / kSortCell, ry = r[1] / kSortCell;
+                          if (ly != ry) return ly < ry;
+                          const i32 lx = l[0] / kSortCell, rx = r[0] / kSortCell;
+                          if (lx != rx) return lx < rx;
+                          return l < r;
+                      });
+
+            const u32 count = static_cast<u32>(mark_points_.size());
+            const u32 groups = (count + kMarkGroup - 1) / kMarkGroup;
+            // Eight words a header, three a mark. Packed into the tail of the clip buffer, which
+            // clips fill from the other end.
+            const u64 words = static_cast<u64>(groups) * 8 + static_cast<u64>(count) * 3;
+            if (words <= kMarkReserveCells) {
+                const u32 header_at = static_cast<u32>(kMaxClipPoolCells - words);
+                const u32 marks_at = header_at + groups * 8;
+                u32* out = static_cast<u32*>(clip_staging_.mapped);
+
+                i32 all_lo[3]{}, all_hi[3]{};
+                for (u32 g = 0; g < groups; ++g) {
+                    const u32 first = g * kMarkGroup;
+                    const u32 members = std::min<u32>(kMarkGroup, count - first);
+                    i32 lo[3], hi[3];
+                    for (u32 axis = 0; axis < 3; ++axis) {
+                        lo[axis] = mark_points_[first][axis];
+                        hi[axis] = lo[axis] + 1;
+                    }
+                    for (u32 m = 0; m < members; ++m) {
+                        const std::array<i32, 3>& at = mark_points_[first + m];
+                        for (u32 axis = 0; axis < 3; ++axis) {
+                            lo[axis] = std::min(lo[axis], at[axis]);
+                            // A mark covers its whole voxel, so the high corner is one past it.
+                            hi[axis] = std::max(hi[axis], at[axis] + 1);
+                            out[marks_at + (first + m) * 3 + axis] = static_cast<u32>(at[axis]);
+                        }
+                    }
+                    for (u32 axis = 0; axis < 3; ++axis) {
+                        out[header_at + g * 8 + axis] = static_cast<u32>(lo[axis]);
+                        out[header_at + g * 8 + 3 + axis] = static_cast<u32>(hi[axis]);
+                        all_lo[axis] = (g == 0) ? lo[axis] : std::min(all_lo[axis], lo[axis]);
+                        all_hi[axis] = (g == 0) ? hi[axis] : std::max(all_hi[axis], hi[axis]);
+                    }
+                    out[header_at + g * 8 + 6] = marks_at + first * 3;
+                    out[header_at + g * 8 + 7] = members;
+                }
+
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    params.marks_min[axis] = all_lo[axis];
+                    params.marks_max[axis] = all_hi[axis];
+                }
+                params.marks_min[3] = static_cast<i32>(groups);
+                params.marks_max[3] = static_cast<i32>(header_at);
+                mark_upload_words_ = words;
+                mark_upload_at_ = header_at;
+            } else if (count != last_marks_reported_) {
+                // The one case that can still refuse, and it says so rather than dropping them
+                // silently -- trap 7. It needs about forty thousand points to reach.
+                WS_LOG_WARN("tool", "{} constraint points is past what the preview buffer holds",
+                            count);
+            }
         }
-        last_marks_reported_ = wanted;
+        last_marks_reported_ = static_cast<u32>(mark_points_.size());
+    }
+
+    // The marks, into the tail of the clip buffer, every frame.
+    //
+    // Every frame rather than on a revision, unlike the clip itself: these are camera-RELATIVE, so
+    // they move whenever the camera crosses a chunk boundary even if the player has dropped
+    // nothing. A few kilobytes of a copy is cheaper than the bookkeeping to know when it is not
+    // needed. The region cannot overlap the clip's, which packs up from zero while this packs down
+    // from the top, and the barrier below already covers both.
+    if (mark_upload_words_ > 0) {
+        VkBufferCopy copy{};
+        copy.srcOffset = static_cast<VkDeviceSize>(mark_upload_at_) * sizeof(u32);
+        copy.dstOffset = copy.srcOffset;
+        copy.size = mark_upload_words_ * sizeof(u32);
+        vkCmdCopyBuffer(cmd, clip_staging_.buffer, clip_buffer_.buffer, 1, &copy);
+        profiler_.add_bytes(copy.size);
+        mark_upload_words_ = 0;
+
+        VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.memoryBarrierCount = 1;
+        dep.pMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(cmd, &dep);
     }
 
     // The slot stride is the device's alignment, not sizeof ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the dynamic offset passed at

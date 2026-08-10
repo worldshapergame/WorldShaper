@@ -15,20 +15,34 @@
 
 namespace ws {
 
-// How many constraint points the preview can draw.
+// Constraint points are not capped, and getting there took three goes worth recording.
 //
-// Eight, and the note here used to shrug that "more than this can exist; they simply stop being
-// marked, which is a display limit rather than a tool limit". That is precisely the shrug trap 7
-// is about: the ninth point was dropped, the box grew to reach it, and nothing on screen said
-// where it was — so the tool worked and looked broken.
+// Eight, in the parameter block, with a note shrugging that "more than this can exist; they simply
+// stop being marked, which is a display limit rather than a tool limit" — the shrug trap 7 is
+// about, because the ninth point was dropped, the box grew to reach it, and nothing on screen said
+// where it was. Then sixty-four, which is a bigger number and the same shape of answer. Now none:
+// the marks live in a storage buffer and any number can be drawn.
 //
-// Sixty-four now, and the ceiling is a real one rather than an oversight. Each mark is tested
-// against the ray in the composite, so the cost is per pixel per mark, and the marks' own bounding
-// box is culled first (see `marks_min` below) so the overwhelming majority of pixels pay for none
-// of them. What stops it going further is that inside that box every pixel pays for all of them.
+// What had to be solved to remove the cap is COST, because each mark is tested against the ray in
+// the composite and that is per pixel. Two bounds do it, and neither is a limit:
 //
-// Overflow is REPORTED rather than silently dropped, which is the half that was actually missing.
-inline constexpr u32 kMaxPreviewMarks = 64;
+//   the whole set has one box, so a pixel that cannot be looking at any mark pays one slab test;
+//   the set is sorted spatially and split into groups of kMarkGroup, each with its own box, so a
+//   pixel inside the outer box still only opens the handful of groups it actually crosses.
+//
+// A thousand points scattered over a building therefore cost a pixel a few dozen tests rather than
+// a thousand. See `mark_groups` in main.cpp for the packing and preview.glsl for the walk.
+inline constexpr u32 kMarkGroup = 32;
+
+// Where the marks live in the clip cell buffer, counted from its far end.
+//
+// They ride in that buffer rather than in one of their own because it is already bound to both
+// shaders that draw previews and is already the place preview data goes — adding a binding to two
+// pipelines to carry twelve bytes a point is more moving parts than the problem has. Clips pack
+// upward from zero and marks pack downward from the top, so the two can only meet if a clip and a
+// hundred thousand constraint points are live at once, and that meeting is checked for rather than
+// assumed.
+inline constexpr u32 kMarkReserveCells = 512u * 1024u;
 
 // How many preview boxes can be on screen at once. The clipboard's copies are the reason
 // there is more than one; beyond this they still stamp, they just stop being drawn.
@@ -93,16 +107,14 @@ struct RenderParams {
     i32 box_min[kMaxPreviewBoxes][4];
     i32 box_max[kMaxPreviewBoxes][4];
 
-    // Constraint markers, w = 1 when the slot is used.
-    i32 marks[kMaxPreviewMarks][4];
-
-    // The box every live mark fits inside, in the same camera-relative voxels, and how many there
-    // are in `marks_min[3]`.
+    // The box every live mark fits inside, in the same camera-relative voxels.
     //
-    // One slab test against this rejects the whole marks loop for any pixel that cannot be looking
-    // at one of them, which is nearly all of them — so sixty-four marks cost about what eight did
-    // everywhere except the small part of the screen they occupy. Computed on the host because it
-    // is one box for the frame and the alternative is every pixel deriving it again.
+    // One slab test against this rejects the whole marks walk for any pixel that cannot be looking
+    // at one of them, which is nearly all of them. Computed on the host because it is one box for
+    // the frame and the alternative is every pixel deriving it again.
+    //
+    // marks_min[3] is how many GROUPS there are and marks_max[3] is where their headers start in
+    // the clip cell buffer. The marks themselves follow the headers. Nought groups means none.
     i32 marks_min[4];
     i32 marks_max[4];
 
@@ -157,8 +169,9 @@ struct RenderParams {
     // altitude and veered, which is both true and what makes a sky read as deep.
     f32 sky_wind[4];
 };
-// 8 marks -> 64 is 56 more ivec4, and the two bounds vectors are another two.
-static_assert(sizeof(RenderParams) == 1520 + 80 + 32 + 16 + (56 * 16) + 32,
+// The marks array left the block entirely (it is unbounded now and lives in the clip buffer);
+// what stays is tool_colour and the two bounds vectors.
+static_assert(sizeof(RenderParams) == 1520 + 80 + 32 + 16 - (8 * 16) + 32,
               "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,

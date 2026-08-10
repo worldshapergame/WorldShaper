@@ -533,10 +533,24 @@ going.
   O also only ever moved *placing*. Carving ignored it, so the two modes disagreed about which
   voxel the crosshair meant. It moves both now.
 
-- **You can drop sixty-four constraint points instead of eight**, and the ones past the limit are
-  now reported rather than silently vanishing. And the previews cost nothing again: an ordinary
-  chisel box measures the same as no preview at all, because the code now asks "is this pixel
-  anywhere near the box" before doing the work, instead of after.
+- **There is no limit on constraint points any more, and you can hold X to lay down a line of
+  them.** It was eight, then sixty-four, and now none — drop as many as you like and they all get
+  drawn.
+
+  Storage was never the problem; the cost was. Every marker has to be checked against every pixel
+  on the screen, so a thousand of them naively means a thousand checks per pixel. Two tricks fix
+  that: the game works out one box that contains all of them, so a pixel nowhere near any marker
+  answers "no" once and stops; and it sorts them into local clumps of thirty-two, each with its own
+  box, so a pixel that *is* near some of them only checks the clumps it's actually looking at.
+  Three hundred markers crammed into one dense block — the hardest case for that trick — costs
+  three hundredths of a millisecond.
+
+  Holding X also means the same voxel gets marked over and over while you hold still, so a repeat
+  landing where the last one did is ignored.
+
+- **The previews cost nothing again.** An ordinary chisel box now measures the same as no preview
+  at all, because the code asks "is this pixel anywhere near the box" *before* doing the work
+  rather than after.
 
 ### What's next, and what it's for
 

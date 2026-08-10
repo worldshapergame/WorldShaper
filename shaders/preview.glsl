@@ -530,22 +530,42 @@ vec3 draw_preview(vec3 colour, vec3 origin, vec3 dir, float depth) {
     //
     // Drawn last, over the boxes, because a constraint is what the box has to reach and the box
     // grows to meet it — so it must be legible against the box's own tint.
-    // One slab test for all of them before any of them.
+    // Two levels of bound before any mark is looked at, which is what lets there be no limit on
+    // how many there are.
     //
-    // Sixty-four marks tested per pixel is sixty-four rejections a pixel does not need: a mark is
-    // one voxel, and almost every pixel on the screen is nowhere near any of them. The host hands
-    // over the box they all fit in, so a pixel that misses it pays for a single ray_box and leaves.
-    // Without this the limit could not have been raised past a handful at all -- the cost is per
-    // pixel per mark, and that is what bounds it rather than the size of the array.
-    const int live_marks = push.marks_min.w;
-    if (live_marks > 0) {
+    // Testing every point against the ray is per pixel per point, and a point is one voxel: almost
+    // every pixel on the screen is nowhere near any of them, and a pixel that IS near one is near a
+    // handful rather than near all of them. So the host hands over the box they all fit in, and the
+    // points sorted into spatial groups each with a box of their own. A pixel that misses the outer
+    // box pays one slab test. A pixel inside it opens only the groups it actually crosses.
+    //
+    // The points live in the clip cell buffer rather than the parameter block, because a parameter
+    // block has to have a size and this must not. See kMarkGroup in src/gpu/render_params.hpp.
+    const int mark_groups = push.marks_min.w;
+    if (mark_groups > 0) {
         Slab all = ray_box(origin, dir, vec3(push.marks_min.xyz), vec3(push.marks_max.xyz));
         if (all.far_t >= max(all.near_t, 0.0) && !preview_behind(max(all.near_t, 0.0), depth)) {
-            for (int m = 0; m < live_marks; ++m) {
-                if (push.marks[m].w == 0) continue;
-                vec3 mlo = vec3(push.marks[m].xyz);
-                colour = draw_face_marks(colour, origin, dir, depth, mlo, mlo + vec3(1.0),
-                                         tool_ink(colour), true);
+            const vec3 ink = tool_ink(colour);
+            const uint header = uint(push.marks_max.w);
+            for (int g = 0; g < mark_groups; ++g) {
+                const uint at = header + uint(g) * 8u;
+                vec3 glo = vec3(ivec3(int(clip.items[at]), int(clip.items[at + 1u]),
+                                      int(clip.items[at + 2u])));
+                vec3 ghi = vec3(ivec3(int(clip.items[at + 3u]), int(clip.items[at + 4u]),
+                                      int(clip.items[at + 5u])));
+                Slab box = ray_box(origin, dir, glo, ghi);
+                if (box.far_t < max(box.near_t, 0.0)) continue;
+                if (preview_behind(max(box.near_t, 0.0), depth)) continue;
+
+                const uint first = clip.items[at + 6u];
+                const uint members = clip.items[at + 7u];
+                for (uint m = 0u; m < members; ++m) {
+                    const uint p = first + m * 3u;
+                    vec3 mlo = vec3(ivec3(int(clip.items[p]), int(clip.items[p + 1u]),
+                                          int(clip.items[p + 2u])));
+                    colour = draw_face_marks(colour, origin, dir, depth, mlo, mlo + vec3(1.0),
+                                             ink, true);
+                }
             }
         }
     }
