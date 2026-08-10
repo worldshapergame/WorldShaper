@@ -52,7 +52,7 @@ layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
 // The card's own light, which the host never touches. See src/gpu/face_light.hpp.
 layout(std430, binding = 8) readonly buffer FaceLight { uint words[]; } face_light;
 // Two words a face: [0] sky visibility as counts, [1] the near-field contact sum. See node.glsl.
-const uint kFaceLightWords = 2u;
+const uint kFaceLightWords = 4u;
 
 const uint kNoFace = 0xFFFFFFFFu;
 
@@ -302,8 +302,41 @@ void main() {
                 // pixels in the lowest tenth -- so on its own it shifts the whole interior by a
                 // constant and changes nothing anybody can see. This is how close the nearest
                 // thing is, and it varies across every crease and alcove in the building.
-                float near_sum = float(face_light.words[face_slot * kFaceLightWords + 1u]);
-                unoccluded = 1.0 - clamp(near_sum / (float(sky_samples) * 255.0), 0.0, 1.0);
+                float inv = 1.0 / (float(sky_samples) * 255.0);
+                float mean = float(face_light.words[face_slot * kFaceLightWords + 1u]) * inv;
+
+                // And where on the face THIS pixel is, so the occlusion varies under the voxel
+                // instead of being flat across it.
+                //
+                // Without this a face is one number however close you stand, and AO gets blockier
+                // the nearer you get -- the exact failure D298 fixed for shadows, arriving again
+                // through a different door. The coefficients are first moments of the same samples
+                // the mean is made of, so this costs two multiply-adds and no extra fetch: the
+                // record is the one already being read.
+                Face f = faces.items[face_slot];
+                float extent = float(1u << (f.packed & 0xFFu));
+                vec3 fcorner = vec3(ivec3(f.x, f.y, f.z)) * extent -
+                               vec3(push.camera_chunk.xyz * kChunkEdge);
+                vec3 offset = (push.origin.xyz + dir * t) - (fcorner + vec3(extent * 0.5));
+
+                // The same two axes shade_faces.comp spreads its samples along, chosen the same
+                // way from the same normal, or the gradient is read against the wrong axis.
+                vec3 across = abs(normal.x) != 0.0 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+                vec3 down = abs(normal.z) != 0.0 ? vec3(0, 1, 0) : vec3(0, 0, 1);
+                // Against a quarter of the face, because the samples span half of it. Clamped
+                // because a pixel near the rim is outside the sampled span, and a linear fit
+                // extrapolated a little is what darkens an edge that meets a wall.
+                float inv_half = 4.0 / extent;
+                float fu = clamp(dot(offset, across) * inv_half, -1.0, 1.0);
+                float fw = clamp(dot(offset, down) * inv_half, -1.0, 1.0);
+
+                // Legendre P1 on [-1,1] has <P1 P1> = 1/3, so the coefficient is three times the
+                // first moment. Nothing here solves anything: the basis is orthogonal under the
+                // sampling distribution, which is the whole reason this is affordable.
+                float cu = float(int(face_light.words[face_slot * kFaceLightWords + 2u])) * inv;
+                float cw = float(int(face_light.words[face_slot * kFaceLightWords + 3u])) * inv;
+                float occluded = mean + 3.0 * (cu * fu + cw * fw);
+                unoccluded = 1.0 - clamp(occluded, 0.0, 1.0);
             }
         }
         // The sky term is occluded; the bounce term is not, because it is not the sky.

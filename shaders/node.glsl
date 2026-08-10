@@ -205,7 +205,18 @@ layout(std430, binding = 13) buffer FaceLight { uint words[]; } face_light;
 // something, so sky visibility is nought on every surface in the room and carries no shape at all.
 // Measured: 1,619 of 1,671 surface pixels in the enclosed view fell in the lowest tenth. The near
 // field is what varies there, and it is what reads as ambient occlusion.
-const uint kFaceLightWords = 2u;
+//   [2] the near field's GRADIENT along the face's first axis, and [3] along its second.
+//
+// Those two are what make occlusion vary UNDER a voxel. Kept as first moments of the same samples
+// rather than fitted afterwards: the jitter is uniform over the sampled span, so the Legendre basis
+// on [-1, 1] is already orthogonal under it -- <P_i P_j> = d_ij/(2i+1) -- and every coefficient is
+// therefore an independent running mean of the sample weighted by a polynomial. No normal
+// equations, no least squares, no second pass, and no extra rays: the face pass already chooses a
+// point on the face and was throwing its position away.
+//
+// A plane fits to a constant, a corner to a gradient. Nothing in the code has to know which it is
+// looking at, because what is being fitted is the real visibility field.
+const uint kFaceLightWords = 4u;
 // How far away geometry stops darkening, in METRES rather than voxels, so a coarse face at 200 m
 // and a level-0 face at arm's length darken over the same physical distance and a dolly-in shows
 // no transition.

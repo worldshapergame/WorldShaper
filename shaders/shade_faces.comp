@@ -243,10 +243,9 @@ void main() {
     // face light. A stride mismatch is now a write that does not happen instead of a corruption
     // somewhere else in the frame.
     const uint light_at = slot * kFaceLightWords;
-    if (light_at + 1u >= face_light.words.length()) return;
+    if (light_at + kFaceLightWords - 1u >= face_light.words.length()) return;
     if (samples == 0u) {
-        face_light.words[light_at] = 0u;
-        face_light.words[light_at + 1u] = 0u;
+        for (uint w = 0u; w < kFaceLightWords; ++w) face_light.words[light_at + w] = 0u;
     }
 
     // Cosine-weighted about the normal, which is the weighting the integral carries, so every ray
@@ -286,16 +285,31 @@ void main() {
 
     // Both counts halve together at the window, or the near field's sum would drift against the
     // sample count it is divided by and the fraction would climb on its own.
+    // Where on the face this sample was taken, over the SAMPLED span rather than over the whole
+    // face, so the jitter is uniform on [-1, 1] and the basis stays orthogonal. `span` is half the
+    // face (the leak fix above), so the half-extent these coordinates measure against is size/4 --
+    // and the composite has to divide by exactly that or the gradient is read at the wrong scale.
+    const vec2 fit = (jitter - 0.5) * 2.0;
+
     uint counts = face_light.words[light_at];
     uint near_sum = face_light.words[light_at + 1u];
+    int grad_u = int(face_light.words[light_at + 2u]);
+    int grad_w = int(face_light.words[light_at + 3u]);
     uint sky_samples = face_samples_of(counts);
     uint sky_open = face_lit_of(counts);
     if (sky_samples >= kFaceWindow) {
         sky_samples >>= 1u;
         sky_open >>= 1u;
         near_sum >>= 1u;
+        // Arithmetic, not logical: these are signed and a corner's gradient is negative on one
+        // side of the face. A logical shift would fold a small negative into a huge positive
+        // exactly once every kFaceWindow samples, which reads as a face flashing bright.
+        grad_u >>= 1;
+        grad_w >>= 1;
     }
     face_light.words[light_at] =
         ((sky_samples + 1u) & 0xFFFFu) | ((sky_open + (sky_hit.hit ? 0u : 1u)) << 16);
     face_light.words[light_at + 1u] = near_sum + uint(contact * 255.0 + 0.5);
+    face_light.words[light_at + 2u] = uint(grad_u + int(round(contact * fit.x * 255.0)));
+    face_light.words[light_at + 3u] = uint(grad_w + int(round(contact * fit.y * 255.0)));
 }

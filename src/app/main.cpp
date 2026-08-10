@@ -4453,9 +4453,11 @@ int Application::run(const Options& options) {
         }
         // Every slot the face pass may write: the store's capacity plus the card's provisional
         // tail. Not the watermark, which grows.
-        // Two words a slot: sky visibility and the near-field contact sum. kFaceLightWords in
-        // shaders/node.glsl is the same two.
-        if (!face_light_.create(device_, 2 * (face_buffers_.provisional_base() +
+        // Four words a slot: sky visibility, the near-field contact sum, and its gradient along
+        // each of the face's two axes. kFaceLightWords in shaders/node.glsl is the same four, and
+        // the shader bounds its writes against this length because a disagreement here is a write
+        // into whatever the allocator placed next (D332).
+        if (!face_light_.create(device_, 4 * (face_buffers_.provisional_base() +
                                               FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;
