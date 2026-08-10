@@ -1047,6 +1047,52 @@ accumulation is four lines beside the ones already there.
 |---|---|---|---|
 | D356 | **The gathering-ray bound is neutral on the build that exists, so it is not in it** | measurement | D350 measured it against the corrected `world_has` and it was the difference between not finishing and 8.55 ms — but that configuration is parked (D354). Measured on its own, against a same-commit control on the seven-camera grid: **nothing moved over 3% in either direction**, and the picture moved by 0.15 to 2.29 of 765 on three cameras against a run-to-run noise floor of about 7.5. It earns nothing today because rays already stop early on the unbuilt cells the bug leaves lying about — the bound only pays once those stop being there. It also caps shadow reach at sixty metres, which is a real restriction in a world meant to be large and would go unnoticed until someone built something big. **Parked with D348**, to land in the same change or not at all, on the same principle that removed the quadratic AO terms (D336): a change that cannot be measured is not carried |
 
+## The renderer rewrite — one root cause behind three symptoms, and five failed fixes
+
+**Read this before touching the edit path.** It is the state of an unfinished investigation, and
+every avenue below was measured rather than reasoned about.
+
+**The three symptoms are one fault.** The player reported them separately over several sessions:
+
+1. delete part of the building and **its shadow stays**, for ever;
+2. pull away from the deleted region and **it fades back in, entirely black**;
+3. standing still, **bricks flicker to simpler geometry, often plain cubes**.
+
+All three follow from one line. `NodePool::world_has` asks `chunk->brick(...) != nullptr`, which
+tests whether a brick is **allocated**, and a brick is not freed when its last voxel goes. So an
+emptied region answers "there is matter here" for ever. Every child mask in the render tree is
+derived from that answer, and from there: the descent reports the cell as unbuilt-but-occupied,
+which occlusion treats as opaque (D302, D324) — **symptom 1**; the ancestor above it folds a colour
+from children that *have* been freed, giving nought, and draws that at any distance where a pixel
+resolves the coarse level — **symptom 2**; and it appears and disappears as the level dither
+crosses a boundary — **symptom 3**.
+
+**The reproduction is headless** and in the tree: `tests/test_node_pool.cpp`, *a region emptied by
+an edit stops being wanted*, currently **skipped** because it fails. Un-skip it as the gate.
+
+| Attempt | Result |
+|---|---|
+| Re-request invalidated bricks (D340) | No change, to the digit |
+| Re-index `occupied_` on every edit (D345) | Moved 42 faces of 50,967 |
+| Refuse requests the world says are empty (D346) | **Worse**: starved the tree, control ignorance 0 → 2,696 |
+| `world_has` tests emptiness (D348, D349) | **Correct** — ignorance 50,967 → 3,079, lit faces 13,575 → 41,878 — but 726 ms of CPU a frame after a deletion, because `!= nullptr` stopped at the first allocated brick while `!empty()` must scan past every emptied one. Free on an unedited world: 0.140 ms |
+| Free the emptied bricks, so `!= nullptr` is both correct and cheap | The right shape and **not yet working**. `Chunk::compact()` is unusable on an edit frame — it walks the whole chunk and re-encodes every brick. A targeted `drop_brick_if_empty` over only the bricks the edit touched was written and also came out slow; it was reverted before its own measurement landed |
+
+**What is almost certainly the answer**, and what the next session should do: free an emptied brick
+**at the point the last voxel is cleared**, inside `Chunk::set`, rather than sweeping for empties
+afterwards. `set` already finds the brick and already knows the write emptied it; the free is then
+O(1) per edit and no scan of any kind is added. `Chunk::prune` shows exactly how to unlink one
+(free the brick, clear the child slot, decrement `brick_count_`), and the only care needed is that
+the parent nodes above it are unlinked too when they lose their last child, which `prune` also
+shows. With that, `world_has` needs no change at all and all three symptoms go together.
+
+**Do not measure this on the machine the game is being played on.** Five separate builds in this
+investigation reached the player at about one frame a second, every time because the change was
+handed over before its own timing had been read. `--max-seconds` now exists for exactly this: it
+gives a scripted run a wall-clock deadline so a slow build reports itself instead of hanging.
+Rebuild the last good commit before saying anything, because the binary on disk is the one being
+played.
+
 **What has to land first.** Bounding what a gathering ray may cost, which is owed anyway. R10b's
 near-field falloff already gives the ambient ray a natural stop at about a metre and is currently
 not used to end the march; a shadow ray wants a step budget of its own. Both are small, both are

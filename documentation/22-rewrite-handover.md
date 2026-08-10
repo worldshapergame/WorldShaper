@@ -296,6 +296,30 @@ failure, not a compile error.
 
 ---
 
+## 4b. The open bug, and the one line it comes from
+
+**Start here.** A player deletes part of the building and its shadow stays; pull away and the
+deleted part fades back in, black; standing still, bricks flicker to plain cubes. Three symptoms,
+one cause.
+
+`NodePool::world_has` asks whether a brick is **allocated**, not whether it holds anything, and a
+brick is not freed when its last voxel goes. Every child mask in the render tree comes from that
+answer, so an emptied region claims matter for ever — the descent says unbuilt-but-occupied,
+occlusion reads that as opaque, and the ancestor folds a colour from freed children and draws it
+black.
+
+- The reproduction is headless: `tests/test_node_pool.cpp`, *a region emptied by an edit stops
+  being wanted*. It is **skipped** because it fails. Un-skip it as the gate.
+- Five fixes were tried and measured; all are recorded in `13-decision-log.md` under *one root
+  cause behind three symptoms*, with what each one moved. Do not repeat them.
+- The likely answer is to free an emptied brick **inside `Chunk::set`**, at the moment the last
+  voxel is cleared — `set` already has the brick in hand, and `Chunk::prune` shows how to unlink
+  one. Then `world_has` needs no change at all.
+- **Measure with `--max-seconds`, and rebuild the last good commit before reporting.** Five builds
+  in that investigation reached the player at about one frame a second, each time because the
+  change was handed over before its own timing had been read. The binary on disk is the one being
+  played.
+
 ## 5. What to do next
 
 ### Before anything else: the paste, which is what a player actually feels
