@@ -922,6 +922,46 @@ checks `find(kLeafLevel) == kNoNode`, which is where the memory actually is and 
 prose always said it was about; the companion case `a cold root sheds its subtree and stays standing`
 asserts the other half, including that the rebuilt root is not a duplicate.
 
+## The renderer rewrite — R10a, the ambient term gets its visibility
+
+| # | Decision | Source | Notes |
+|---|---|---|---|
+| D325 | **Ambient occlusion is one cosine-weighted hemisphere ray per face per frame, and nothing else is new** | — | `resolve.comp` applied `kSkyAmbient * (0.5 + 0.5 * normal.y)` to every surface in the frame: how much sky a surface sees, decided from which way it points and from nothing else, so a wall at the back of a corridor received the whole dome. It is not an effect being added — it is the missing visibility on a term already being applied, and the reason it was never there is that visibility used to mean a per-pixel gather. Same face, same one writer, same two counts, same round robin, same `face_accumulate` as the sun: **a different set of directions and nothing else.** Malley's method, so the cosine weight is carried by the sampling and the mean IS the answer. `occlude_unknown` is on for the reason D324 gives — an unbuilt cell is matter, or a sealed room reads as open sky again |
+| D326 | **It lives in a card-only array, not in `GpuFace`** | D295 | That record has two owners and D295 cost a session to it: the uploader sent the CPU's zeroed bytes over light the card had written. AO is written by the card, read by the card, and never looked at by the host, so it goes in `src/gpu/face_light.*` — allocated with the store, zeroed once at creation, never uploaded, never mirrored, never audited, never in a dirty range. There is no code path by which the host can overwrite it, which is a stronger guarantee than remembering not to. It also starts paying down R3d's standing debt rather than adding to it. A recycled slot is caught by the sun's sample count being nought, which is the host's own "this slot is new" signal |
+| D327 | **The ambient constant was standing in for two things, and only one of them is occluded** | picture | Multiplying the whole of `kSkyAmbient` by measured sky visibility took the enclosed room to near black — correct about the sky, wrong about the room, and wrong in the direction that looks like the feature is broken. A windowless room gets no sky and is still not black, because its walls light each other. `kIndirectFloor` is the share of that constant which was never sky. Its value is **chosen, not tuned**: the orientation heuristic it replaces averaged 0.5 over a surface whose normals point every way, so 0.5 holds the enclosed room at the mean brightness it already had and the occlusion spends itself on **contrast** instead. Anything lower darkens the whole room uniformly, and a uniform darkening is indistinguishable from a lower exposure — the one failure the R10 gate names. It goes to zero when R3c's lamps and R9's bounce compute that light instead of assuming it |
+| D328 | **Debug view 17: sky visibility on its own** | D296 | A shaded picture cannot tell a darker AO from a lower exposure, so "the room got darker" is not evidence that anything was measured. Grey is the fraction of the hemisphere reaching sky, magenta a pixel with no face, blue one not yet sampled. It is what the gate below is read from |
+
+**Measured against a same-commit control**, built by stashing the change out — the committed
+baselines are dozens of commits old and a move against those would prove nothing about this.
+
+*The gate.* Enclosed mean sky visibility **1.00 → 0.019**; outdoor keeps a large population at open
+sky — **656 pixels at exactly 1.00 and 2,039 in 0.9–1.0**, grading down through the colonnade. Both
+halves matter: a change that darkens everything is indistinguishable from one that darkens nothing
+but the exposure.
+
+*The cost*, deck realtime, mean ms, control → R10a:
+
+| view | control | R10a | |
+|---|---|---|---|
+| enclosed | 2.809 | 3.430 | +22% |
+| outdoor | 1.752 | 1.981 | +13% |
+| close | 3.211 | 4.539 | **+41%** |
+| mid | 1.127 | 1.169 | +3.7% |
+| far | 1.383 | 1.435 | +3.8% |
+| distant | 1.407 | 1.416 | +0.6% |
+| sky | 1.283 | 1.274 | −0.7% |
+
+**The plan predicted the enclosed room would be the *cheapest* case here — "an AO ray dies at the
+first thing it meets" — and that is not what happened.** It is the second dearest. The prediction
+was about ray *length* and the cost is dominated by ray *count*: before this, a face pointing away
+from the sun returned without tracing anything, which is about half of every building, and now every
+face traces one ray whatever it faces. Enclosed is where faces are densest. The `faces` pass goes
+0.50 → 1.26 ms there and becomes the dominant pass for the first time.
+
+Speckle rises with it — enclosed 3.8 → 5.2, close 19.3 → 29.8 — because AO is a second Monte Carlo
+estimate per face and starts un-converged. **R5 (face denoise) is what that stage is for**, and this
+is the second measurement telling it how much work it has.
+
 ## Open items carried forward
 
 - **O21.** Link to the deprecated WorldShaper repository (UI style reference only).

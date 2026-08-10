@@ -49,6 +49,8 @@ struct Face {
 };
 layout(std430, binding = 6) readonly buffer Faces { Face items[]; } faces;
 layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
+// The card's own light, which the host never touches. See src/gpu/face_light.hpp.
+layout(std430, binding = 8) readonly buffer FaceLight { uint sky[]; } face_light;
 
 const uint kNoFace = 0xFFFFFFFFu;
 
@@ -156,6 +158,17 @@ vec3 to_display(vec3 radiance) {
 // building reads as a paper model.
 const float kSkyAmbient = 0.55;
 const float kGroundBounce = 0.12;
+// What is left of the ambient term where no sky reaches at all. Not an occlusion parameter: it is
+// the share of `kSkyAmbient` that was always standing in for light bounced off other surfaces, and
+// it goes to zero when R3c and R9 compute that light instead of assuming it.
+// Its value is chosen, not tuned: the orientation heuristic it replaces averaged 0.5 over a
+// surface whose normals point every way, so a floor of 0.5 leaves the enclosed room at the mean
+// brightness it already had. That matters because of what this stage is FOR. Indoors every surface
+// is occluded, so any floor below that darkens the whole room uniformly — and a uniform darkening
+// is indistinguishable from a lower exposure, which is the one failure the R10 gate calls out by
+// name. At 0.5 the mean is held and the occlusion spends itself on contrast instead: creases,
+// soffits and alcove interiors go dark against walls that do not.
+const float kIndirectFloor = 0.5;
 
 vec3 unpack_rgb(uint packed) {
     return vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
@@ -253,7 +266,51 @@ void main() {
             }
         }
         lambert *= sun_visible;
-        float sees_sky = kSkyAmbient * (0.5 + 0.5 * normal.y) + kGroundBounce;
+
+        // How much sky this surface can actually see, measured on the face (R10a).
+        //
+        // What was here decided it from which way the surface points and from nothing else:
+        //
+        //     kSkyAmbient * (0.5 + 0.5 * normal.y) + kGroundBounce
+        //
+        // A wall at the back of a corridor, a floor under a ceiling, the whole inside of the
+        // building -- every one of them received the entire dome. That is why the interior read as
+        // a model of a room rather than as a room even once the sun cast real shadows, and it is
+        // the single largest thing left wrong with the picture. The occlusion was never missing
+        // because it was hard; it was missing because visibility used to mean a per-pixel gather,
+        // which this renderer does not do.
+        //
+        // The face pass now measures it with one cosine-weighted hemisphere ray per face per
+        // frame, so this is a lookup. The orientation term is gone rather than kept alongside:
+        // it was standing in for exactly this quantity, and multiplying by both would darken every
+        // crease twice -- the failure that looks like a taste problem rather than like a bug.
+        //
+        // One before any rays have landed, so a face nobody has shaded yet is lit as it was
+        // before this stage existed. A new surface fades into its occlusion rather than flashing
+        // dark, which is the same discipline the sun's own fallback follows.
+        float open_sky = 1.0;
+        if (face_slot < faces.items.length()) {
+            uint sky_counters = face_light.sky[face_slot];
+            uint sky_samples = sky_counters & 0xFFFFu;
+            if (sky_samples >= kShadowSettled) {
+                open_sky = float((sky_counters >> 16u) & 0xFFFFu) / float(sky_samples);
+            }
+        }
+        // The sky term is occluded; the bounce term is not, because it is not the sky.
+        //
+        // `kSkyAmbient` was standing in for two different things at once: light arriving from the
+        // dome, and light that has bounced off something else in the room. Occlusion applies to
+        // the first and emphatically not to the second — a windowless room gets no sky and is
+        // still not black, because its walls light each other. Multiplying the whole constant by
+        // measured sky visibility takes both away, and the enclosed camera goes to near black:
+        // correct about the sky, wrong about the room, and wrong in the direction that looks like
+        // the feature is broken.
+        //
+        // So `kIndirectFloor` is the part of that constant which was never sky. It is a stand-in
+        // with a name and an expiry rather than a fudge: R3c's lamps and R9's bounce replace it
+        // with light that is actually computed, and when they do this term goes to zero and the
+        // line above it stops needing a comment this long.
+        float sees_sky = kSkyAmbient * mix(kIndirectFloor, 1.0, open_sky) + kGroundBounce;
         // Over PI, and leaving it out is what blew the building white while the sky stayed dark.
         //
         // A Lambertian surface lit by an irradiance E reflects albedo * E / PI as RADIANCE. Dropping
@@ -330,6 +387,27 @@ void main() {
         // detail, shading toward red as cells get coarser.
         float l = hit ? float(level) / 7.0 : 0.0;
         colour = hit ? mix(vec3(0.1, 0.9, 0.2), vec3(0.9, 0.2, 0.1), l) : vec3(0.0);
+    } else if (push.resolution.z == 17u) {
+        // Sky visibility on its own, which is the quantity R10 gates on and the one a shaded
+        // picture cannot show: darker AO and a lower exposure look identical through a tone curve,
+        // so "the room got darker" is not evidence that anything was measured. Grey is the
+        // fraction of the hemisphere that reaches sky. Magenta is a pixel with no face, blue one
+        // whose face has not been sampled enough to be believed.
+        colour = vec3(0.0);
+        if (hit) {
+            uint slot = imageLoad(in_face, pixel).x;
+            if (slot >= faces.items.length()) {
+                colour = vec3(1.0, 0.0, 1.0);
+            } else {
+                uint counters = face_light.sky[slot];
+                uint samples = counters & 0xFFFFu;
+                if (samples < kShadowSettled) {
+                    colour = vec3(0.0, 0.3, 1.0);
+                } else {
+                    colour = vec3(float((counters >> 16u) & 0xFFFFu) / float(samples));
+                }
+            }
+        }
     } else if (push.resolution.z == 16u) {
         // The sun term on its own, with nothing else in the frame.
         //

@@ -186,6 +186,12 @@ layout(std430, binding = 10) readonly buffer FaceEntries { uint slots[]; } face_
 // and src/gpu/face_buffers.hpp for why this table is separate from the one above.
 layout(std430, binding = 12) buffer FaceProvisional { uint marks[]; } provisional;
 
+// Light the card owns outright: one word a face slot, packed exactly as GpuFace::counters is, so
+// face_accumulate and face_visibility_of serve both. The host never writes it and there is no path
+// by which it could -- see src/gpu/face_light.hpp for why that is a stronger guarantee than
+// remembering not to.
+layout(std430, binding = 13) buffer FaceLight { uint sky[]; } face_light;
+
 const uint kNoFace = 0xFFFFFFFFu;
 const uint kFaceTombstone = 0xFFFFFFFEu;
 

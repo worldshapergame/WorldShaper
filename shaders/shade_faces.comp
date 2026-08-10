@@ -109,13 +109,17 @@ void main() {
 
     // Back-facing to the sun is nought without tracing anything, which is most of a building: a
     // cube has six faces and the sun reaches at most three of them.
+    //
+    // It no longer returns here, though, because the ambient ray below is owed to EVERY face and a
+    // wall in shade needs it most: the whole point of R10 is that a surface which cannot see the
+    // sun is currently lit by the entire sky dome regardless of what stands in front of it.
     const float facing = dot(vec3(normal), node_push.sun.xyz);
-    if (facing <= 0.0) {
+    const bool sun_possible = facing > 0.0;
+    if (!sun_possible) {
         // Counted as a ray that did not reach the sun, which is what it is. The fraction then
         // falls as the samples come in rather than snapping to nought, and this is the same
         // arithmetic a lit face does with one term different.
         faces.items[slot].counters = face_accumulate(face.counters, false);
-        return;
     }
 
     // A point ON the face, somewhere different every frame.
@@ -195,18 +199,61 @@ void main() {
                                bitangent * (sin_theta * sin(phi)));
 
     const float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
-    NodeHit hit = node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true);
+    if (sun_possible) {
+        NodeHit hit = node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true);
 
-    // The penumbra resolves over samples on the FACE, which is what takes it off the pixel: a soft
-    // edge costs the face a few frames instead of costing every pixel that looks at it a ray of
-    // its own, every frame, for ever.
-    faces.items[slot].counters = face_accumulate(face.counters, !hit.hit);
+        // The penumbra resolves over samples on the FACE, which is what takes it off the pixel: a
+        // soft edge costs the face a few frames instead of costing every pixel that looks at it a
+        // ray of its own, every frame, for ever.
+        faces.items[slot].counters = face_accumulate(face.counters, !hit.hit);
 
-    // How far the ray got before it gave up, for the rays that reached nothing. `photons` is
-    // GPU-owned and unwritten until the photon pass exists, so this borrows it rather than
-    // widening the record. A ray that "reached the sun" after running out of its step budget is
-    // indistinguishable, in the visibility alone, from one that reached it through open air --
-    // and indoors, where the only correct answer is full shadow, that difference is the whole
-    // question.
-    if (!hit.hit) faces.items[slot].photons = max(faces.items[slot].photons, hit.steps);
+        // How far the ray got before it gave up, for the rays that reached nothing. `photons` is
+        // GPU-owned and unwritten until the photon pass exists, so this borrows it rather than
+        // widening the record. A ray that "reached the sun" after running out of its step budget is
+        // indistinguishable, in the visibility alone, from one that reached it through open air --
+        // and indoors, where the only correct answer is full shadow, that difference is the whole
+        // question.
+        if (!hit.hit) faces.items[slot].photons = max(faces.items[slot].photons, hit.steps);
+    }
+
+    // ---- ambient occlusion (R10a) ---------------------------------------------------------
+    //
+    // The same integral as the sun over a different domain, and that is the whole of it: same
+    // face, same one writer, same two counts, same round robin, same accumulation. A different set
+    // of directions and nothing else. Anything here that needed its own pass or its own budget
+    // would be a sign of having got it wrong.
+    //
+    // `resolve.comp` applies an ambient term to every surface in the frame with no visibility in
+    // it at all -- how much sky a surface sees, decided from which way it points and from nothing
+    // else -- so a wall at the back of a corridor receives the whole dome and the interior is lit
+    // as though the building were a cut-out standing in the open. This is not an effect being
+    // added. It is the missing visibility on a term that is already being applied.
+    //
+    // A slot the store has just handed out carries whatever the face before it left here, because
+    // this array is never uploaded and so is never cleared by a claim the way `counters` is. The
+    // host zeroes `counters` when it claims, so a sample count of nought is exactly "this slot is
+    // new" -- read before the sun wrote to it, above.
+    if (samples == 0u) face_light.sky[slot] = 0u;
+
+    // Cosine-weighted about the normal, which is the weighting the integral carries, so every ray
+    // counts the same and the average IS the answer. Malley's method: a disc sampled uniformly and
+    // lifted onto the hemisphere.
+    const uint sky_seed = node_hash_mix(seed ^ 0xC2B2AE35u);
+    const vec2 hemi = vec2(float(sky_seed & 0xFFFFu), float((sky_seed >> 16) & 0xFFFFu)) / 65536.0;
+    const float radius = sqrt(hemi.x);
+    const float around = hemi.y * 6.28318530718;
+
+    const vec3 up = vec3(normal);
+    const vec3 side = normalize(abs(up.y) < 0.9 ? cross(up, vec3(0, 1, 0)) : cross(up, vec3(1, 0, 0)));
+    const vec3 other = cross(up, side);
+    const vec3 sky_dir = normalize(side * (radius * cos(around)) +
+                                   other * (radius * sin(around)) +
+                                   up * sqrt(max(1.0 - hemi.x, 0.0)));
+
+    // `occlude_unknown` is on for the same reason the sun ray has it on: a cell the world says is
+    // occupied and the pool has not built is matter, and letting an ambient ray through it would
+    // make a sealed room read as open sky exactly as it did for shadows (D302, D324).
+    NodeHit sky_hit = node_march(origin, sky_dir, pixel_angle, 0.0, false, false, false, false,
+                                 true);
+    face_light.sky[slot] = face_accumulate(face_light.sky[slot], !sky_hit.hit);
 }

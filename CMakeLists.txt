@@ -150,6 +150,7 @@ add_library(ws_gpu STATIC
     src/gpu/vma_impl.cpp
     src/gpu/node_buffers.cpp
     src/gpu/face_buffers.cpp
+    src/gpu/face_light.cpp
     src/gpu/world_buffers.cpp
     src/gpu/screenshot.cpp
     src/gpu/feedback.cpp)
@@ -172,7 +173,7 @@ set(WS_APP_SOURCES
     src/app/updater.cpp
     src/debug/hud.cpp)
 
-# The icon and the version block. Windows only — on other platforms the icon is the .png in
+# The icon and the version block. Windows only â€” on other platforms the icon is the .png in
 # assets/ and the desktop environment picks it up from a .desktop file instead.
 if(WIN32)
     set(WS_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.ico")
