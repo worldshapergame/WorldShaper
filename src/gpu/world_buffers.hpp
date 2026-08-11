@@ -16,7 +16,6 @@
 #include "gpu/buffer.hpp"
 #include "gpu/swapchain.hpp"
 #include "world/residency.hpp"
-#include "world/thumb_cache.hpp"
 
 namespace ws {
 
@@ -44,15 +43,6 @@ public:
                 u32 thumb_grid_cells, u64 staging_bytes);
     void destroy();
 
-    // Copies whatever the thumbnail cache says changed. Separate from upload() because the
-    // two tiers are filled by different mechanisms — one follows the view, the other follows
-    // the camera — but it shares the same staging ring, so it must be called after upload()
-    // within a frame and takes whatever room is left.
-    // Returns false when it did not all fit, in which case the caller must offer the same
-    // batch again — a copy that is dropped and forgotten is how a chunk ends up drawing
-    // something that is not there.
-    bool upload_thumbnails(VkCommandBuffer cmd, const ThumbnailCache& cache,
-                           const ThumbnailBatch& batch);
 
     // Records the copies for everything the batch says changed. Must be called inside a
     // command buffer, before anything reads the buffers.

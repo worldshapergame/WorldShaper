@@ -94,9 +94,6 @@ add_library(ws_world STATIC
     src/world/gpu_brick.cpp
     src/world/residency.cpp
     src/world/light_list.cpp
-    src/world/thumbnail.cpp
-    src/world/thumb_cache.cpp
-    src/world/summary_tree.cpp
     src/world/node_pool.cpp
     src/world/face_store.cpp)
 target_include_directories(ws_world PUBLIC src)
@@ -312,9 +309,6 @@ add_executable(ws_tests
     tests/test_toolbelt.cpp
     tests/test_serialize.cpp
     tests/test_residency.cpp
-    tests/test_thumbnail.cpp
-    tests/test_thumb_cache.cpp
-    tests/test_summary_tree.cpp
     tests/test_hollow.cpp
     tests/test_log_ring.cpp
     tests/test_quality.cpp

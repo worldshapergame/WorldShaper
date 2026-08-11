@@ -1520,11 +1520,6 @@ private:
     MatterLedger ledger_;
     Updater updater_;
     ResidencyManager residency_;
-    SummaryTree summary_tree_;
-    ThumbnailCache thumb_tiers_[kSummaryTiers];
-    ThumbnailBudget thumb_budgets_[kSummaryTiers];
-    u32 thumb_total_slots_ = 0;
-    u32 thumb_total_grid_ = 0;
     ChunkCoord world_min_{};
     ChunkCoord world_max_{};
     bool world_bounds_valid_ = false;
@@ -1557,9 +1552,6 @@ private:
     u32 last_feedback_truncated_ = 0;
     u32 last_feedback_accepted_ = 0;
     u32 last_feedback_rejected_ = 0;   // reported, but the world has no chunk there
-    u32 last_thumbs_resident_ = 0;
-    u32 last_thumbs_wanted_ = 0;
-    u32 last_thumbs_built_ = 0;
     f64 residency_ms_ = 0.0;
     f64 worst_residency_ms_ = 0.0;
     // The same, for the pool. The chunk path has been timed since Stage 2 and the node path never
@@ -3191,7 +3183,6 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
                 // wrong too ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and it is what this chunk draws as from a distance. The
                 // tree first: it holds the node that every level above this chunk was
                 // folded from, and the cache only reads its answers.
-                summary_tree_.invalidate(coord);
                 // The accumulated *image* is of a world that changed, so it restarts. The
                 // camera moving does the same; the face cache does not, because it is
                 // keyed to places in the world rather than to the screen.
@@ -3202,7 +3193,6 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
                 // you. Entries average over a sliding window instead, so a face follows
                 // what was built beside it within a few frames on its own and nothing
                 // further away flinches. See kFaceWindow in pathtrace.comp.
-                for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
             }
         }
     }
@@ -3252,7 +3242,6 @@ void Application::rebuild_coarse_grids() {
         world_, ChunkCoord{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()});
     // Every path that changes which chunks exist already comes through here, which makes it
     // the one place the thumbnail cache needs telling that its work list is stale.
-    for (ThumbnailCache& tier : thumb_tiers_) tier.mark_world_changed();
 
     // Deliberately *not* clearing the face cache here any more.
     //
@@ -4132,29 +4121,6 @@ void Application::record_frame(f32 time_seconds) {
     // the dirty flag over an upload that never happened is what left holes in the world.
     if (world_buffers_.stats().coarse_incomplete) residency_.mark_coarse_dirty();
 
-    // The other tier. Pushed from the camera rather than pulled from the view, so it never
-    // waits on a round trip and cannot deadlock on what a ray did or did not reach.
-    {
-        const ChunkCoord centre{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
-        last_thumbs_resident_ = 0;
-        last_thumbs_wanted_ = 0;
-        last_thumbs_built_ = 0;
-        for (u32 level = 0; level < kSummaryTiers; ++level) {
-            const ThumbnailBatch& thumbs =
-                thumb_tiers_[level].update(world_, centre, frame_counter_);
-            if (!world_buffers_.upload_thumbnails(cmd, thumb_tiers_[level], thumbs)) {
-                thumb_tiers_[level].defer_last_batch();
-            }
-            last_thumbs_resident_ += thumb_tiers_[level].resident_count();
-            if (options_.stream_log && frame_counter_ % 300 == 0) {
-                WS_LOG_INFO("diag", "  level {} holds {} blocks", level,
-                            thumb_tiers_[level].resident_count());
-            }
-            last_thumbs_wanted_ += thumbs.wanted;
-            last_thumbs_built_ += thumbs.built;
-        }
-    }
-
     // Geometry arriving or leaving means the samples already in the accumulator were taken of
     // a different world, so the average has to start again.
     //
@@ -4210,13 +4176,12 @@ void Application::record_frame(f32 time_seconds) {
         if (options_.stream_log && (frame_counter_ % 60 == 0)) {
             WS_LOG_INFO("diag",
                         "f{} resident {}/{} added {} refreshed {} evicted {} deferred {} "
-                        "bricks {} oom {} feedback {} accepted {} phantom {} thumbs {} want {}",
+                        "bricks {} oom {} feedback {} accepted {} phantom {}",
                         frame_counter_, report.resident_chunks, report.world_chunks,
                         batch.chunks_added, batch.chunks_refreshed, batch.chunks_evicted,
                         batch.chunks_deferred, report.resident_bricks,
                         batch.out_of_memory ? 1 : 0, last_feedback_, last_feedback_accepted_,
-                        last_feedback_rejected_, last_thumbs_resident_,
-                        last_thumbs_wanted_);
+                        last_feedback_rejected_);
         }
 
         const ChiselPreview& preview = chisel_.preview();
@@ -4582,16 +4547,9 @@ void Application::record_frame(f32 time_seconds) {
     // so this is set past anything a world will contain rather than being a quality knob.
     params.lens[1] = 4000000.0f;   // voxels: 125 km
     params.lens[2] = detail_bias_;
-    params.thumb_dims[0] = static_cast<i32>(thumb_budgets_[0].grid_width);
-    params.thumb_dims[1] = static_cast<i32>(thumb_budgets_[0].grid_height);
-    params.thumb_dims[2] = static_cast<i32>(thumb_budgets_[0].grid_depth);
-    params.thumb_dims[3] = static_cast<i32>(kSummaryTiers);
-    for (u32 level = 0; level < kSummaryTiers; ++level) {
-        params.thumb_tiers[level][0] = static_cast<i32>(thumb_budgets_[level].grid_offset);
-        params.thumb_tiers[level][1] = static_cast<i32>(thumb_budgets_[level].slot_base);
-        params.thumb_tiers[level][2] = static_cast<i32>(summary_span(level));
-        params.thumb_tiers[level][3] = 0;
-    }
+    // The thumbnail tiers went with R1e. `params.thumb_dims` and `params.thumb_tiers` are still
+    // in the parameter block and are now written by nothing and read by nothing; they go when the
+    // block itself is trimmed.
 
     // The chisel's preview, moved into the camera-relative space the shader works in. The
     // camera chunk corner is the origin of that space, so the same subtraction that the
@@ -5284,7 +5242,6 @@ int Application::play(const Options& options) {
     // working set on one scene and is what it had before any of this existed. R1e deletes the rest
     // of it; this stops it being paid for by everybody in the meantime.
     const u64 chunk_share = 10;
-    const u64 thumb_bytes = vram_budget * 15 / 100 * chunk_share / 100;
     residency_budget_.payload_bytes = vram_budget * 45 / 100 * chunk_share / 100;
     residency_budget_.max_bricks =
         static_cast<u32>((vram_budget * 40 / 100 * chunk_share / 100) / kSlotBytes);
@@ -5297,44 +5254,6 @@ int Application::play(const Options& options) {
     progress_.within(0.15);
     draw_loading();
 
-    // One cache per level of the summary octree, all sharing one pair of GPU buffers at
-    // their own base offsets. Half the memory goes to level 0 and each level above halves
-    // again ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the area a level covers grows as the square of its reach, and its cost per
-    // unit of area falls by eight, so the far levels reach enormously further for very
-    // little. The reach printed below is what that works out to.
-    constexpr u64 kThumbBytes = kThumbSlotWords * sizeof(u32);
-    summary_tree_.create(types_);
-
-    u32 slot_base = 0;
-    u32 grid_offset = 0;
-    f64 tier_ms = 0.0;
-    u64 share = thumb_bytes / 2;
-    for (u32 level = 0; level < kSummaryTiers; ++level) {
-        ThumbnailBudget budget;
-        budget.level = level;
-        budget.slot_base = slot_base;
-        budget.grid_offset = grid_offset;
-        budget.max_thumbs = static_cast<u32>(std::max<u64>(2048, share / kThumbBytes));
-        budget.radius_chunks = 96;   // in blocks, so 2^level times further each level up
-        budget.max_builds_per_frame = (level == 0) ? 32u : 8u;
-        thumb_budgets_[level] = budget;
-        const u64 t_tier = now_ns();
-        thumb_tiers_[level].create(budget, summary_tree_);
-        tier_ms += ns_to_ms(now_ns() - t_tier);
-
-        slot_base += budget.max_thumbs;
-        grid_offset += budget.grid_width * budget.grid_height * budget.grid_depth;
-        if (level + 1 < kSummaryTiers) share /= 2;
-
-        WS_LOG_INFO("app", "summary level {}: {} chunks/block, {} slots, {} MB, reach {:.1f} km",
-                    level, summary_span(level), budget.max_thumbs,
-                    (static_cast<u64>(budget.max_thumbs) * kThumbBytes) >> 20,
-                    static_cast<f64>(budget.radius_chunks * summary_span(level) * 8) / 1000.0);
-    }
-    WS_LOG_INFO("load", "thumbnail tiers {:.0f} ms  [t+{:.0f} ms]", tier_ms,
-                ns_to_ms(now_ns() - load_began_ns_));
-    thumb_total_slots_ = slot_base;
-    thumb_total_grid_ = grid_offset;
 
     // Coarse occupancy comes from the world, so the marcher can tell "nothing here" from
     // "something here that you have not streamed yet". Without it, feedback never fires.
@@ -5342,7 +5261,7 @@ int Application::play(const Options& options) {
     progress_.within(0.45);
     draw_loading();
     const u64 t_world_buffers = now_ns();
-    if (!world_buffers_.create(device_, residency_budget_, thumb_total_slots_, thumb_total_grid_,
+    if (!world_buffers_.create(device_, residency_budget_, 0, 0,
                                32ull << 20)) {
         return 1;
     }
