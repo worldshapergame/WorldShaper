@@ -114,10 +114,18 @@ function Invoke-Run([string]$mode, [string]$view, [string]$size) {
         fly = $Fly
         total_ms = 0.0; worst_ms = 0.0; cpu_ms = 0.0
         dominant = ""; dominant_ms = 0.0
-        resident = 0; world_chunks = 0; bricks = 0
+        nodes = 0; leaves = 0; world_chunks = 0
         # What the figures on this row were measured against. Two rows are comparable only if these
         # match; before D231 there was no way to tell, and they frequently did not.
-        solid_voxels = 0; regions = ""
+        #
+        # The CONTENT HASH is the scene's identity (D243) and the columns beside it are a
+        # description of it. Until R1e's fifth slice this row recorded only the voxel count and the
+        # region tally, and the regex for those wanted the ladder's "N of M regions" -- which a
+        # settled world does not print. So twenty-one rows of the last baseline recorded a scene of
+        # nought voxels, every comparison against them passed the "same scene?" gate by comparing
+        # nought with nought, and the one row that did carry a count was the only one that ever
+        # objected. Trap 10 in the harness rather than in the engine.
+        content = ""; solid_voxels = 0; regions = ""
         speckle = 0.0; fireflies = 0
         frames = 0
     }
@@ -128,14 +136,20 @@ function Invoke-Run([string]$mode, [string]$view, [string]$size) {
         $row.frames = [int]$Matches[3]
     }
     if ($log -match "CPU\s+([0-9.]+)\s+ms") { $row.cpu_ms = [double]$Matches[1] }
-    if ($log -match "resident\s+(\d+)\s+of\s+(\d+)\s+chunks,\s+(\d+)\s+bricks") {
-        $row.resident = [int]$Matches[1]
-        $row.world_chunks = [int]$Matches[2]
-        $row.bricks = [int]$Matches[3]
+    # What the pool holds, where this used to read what chunk residency held. The line is the
+    # one the engine already prints at every screenshot; a second line saying the same thing is a
+    # second thing to keep in step with the harness.
+    if ($log -match "node pool:\s+(\d+)\s+nodes,\s+(\d+)\s+leaves") {
+        $row.nodes = [int]$Matches[1]
+        $row.leaves = [int]$Matches[2]
     }
-    if ($log -match "scene: \d+ chunks, (\d+) solid voxels, (\d+ of \d+) regions") {
-        $row.solid_voxels = [long]$Matches[1]
-        $row.regions = $Matches[2]
+    # Two forms: "N of M regions" while the clip ladder is still climbing, and a sentence saying
+    # it has finished when it has. Both end with the content hash, which is the thing to compare.
+    if ($log -match "scene: (\d+) chunks, (\d+) solid voxels, (.+?), content ([0-9a-f]+)") {
+        $row.world_chunks = [int]$Matches[1]
+        $row.solid_voxels = [long]$Matches[2]
+        $row.regions = $Matches[3]
+        $row.content = $Matches[4]
     }
 
     # The pass that costs the most, which is the only one worth naming in a summary. Nested
@@ -251,15 +265,25 @@ if ($Compare -ne "") {
         # This is the check that was missing rather than failing. A csv taken before D231 has no
         # scene columns at all, which is itself the warning: those rows were taken against whatever
         # had been sharpened by the time the run reached its screenshot frame.
-        if ($null -eq $then.solid_voxels -or $then.solid_voxels -eq "") {
+        #
+        # The hash first, because it IS the scene rather than a description of it, and a row with
+        # no hash is refused outright rather than falling through to a voxel count that may itself
+        # be nought for a reason nobody meant. A missing scene has to be louder than a matching
+        # one, or a harness that has stopped reading the log reads exactly like a clean run.
+        $thenContent = if ($null -ne $then.PSObject.Properties['content']) { $then.content } else { "" }
+        if ([string]::IsNullOrEmpty($thenContent)) {
             Write-Host ("  {0,-10} {1,-9} {2,-5} {3}" -f $now.mode, $now.view, $now.size,
-                        "the old row records no scene - not comparable (D231)") -ForegroundColor Yellow
+                        "the old row records no scene - not comparable (D231, D243)") -ForegroundColor Yellow
             continue
         }
-        if ([long]$then.solid_voxels -ne [long]$now.solid_voxels) {
-            Write-Host ("  {0,-10} {1,-9} {2,-5} was {3} solid voxels, now {4} - not comparable" -f
-                        $now.mode, $now.view, $now.size, $then.solid_voxels,
-                        $now.solid_voxels) -ForegroundColor Yellow
+        if ([string]::IsNullOrEmpty($now.content)) {
+            Write-Host ("  {0,-10} {1,-9} {2,-5} {3}" -f $now.mode, $now.view, $now.size,
+                        "this run printed no scene line - the harness read nothing") -ForegroundColor Red
+            continue
+        }
+        if ($thenContent -ne $now.content) {
+            Write-Host ("  {0,-10} {1,-9} {2,-5} was world {3}, now {4} - not comparable" -f
+                        $now.mode, $now.view, $now.size, $thenContent, $now.content) -ForegroundColor Yellow
             continue
         }
 
