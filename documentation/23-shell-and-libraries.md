@@ -43,6 +43,17 @@ easiest place in a game to break it.
 
 - **Leaving** is the window's own close button and Escape. A third button saying "quit" would be a
   third of the interface spent on the one action every player already knows how to do.
+- **In a world, Escape is one press and it opens both windows** (D476). It used to be two — the
+  first gave the mouse back, the second opened the library — so the key everybody presses to reach
+  the settings had to be pressed twice before anything appeared, and what appeared was the other
+  half of the interface. Both halves of that were wrong for one reason. Giving the mouse back is not
+  a state anybody asked to be in; it is what opening the menu *costs*, so it belongs to the same
+  press. And the two families are one state, not two: what a player wants when they press Escape is
+  *the menu*, and the interface cannot know which side of it they meant. So there are two states and
+  no third — **menu** (both windows up, the pointer free, the game deaf) and **playing** (no
+  windows, the mouse captured, every binding live) — and Escape swaps them. A press in the middle of
+  the screen, the part a window may never cover, does the same thing, because an interface a child
+  who cannot read can use is not allowed to require a key.
 - **The logo is the one surface allowed a hue of its own** (`14-ui-style.md`, the five permitted
   colours), and it is animated, because it is a picture rather than furniture. It is drawn from a
   **seed** — chosen when it is pressed, and again on its own when nobody has touched anything for a
@@ -64,7 +75,7 @@ easiest place in a game to break it.
 | Family | Where it opens | What it holds |
 |---|---|---|
 | **Settings and parameters** | the **left** edge | numbers and switches: game settings, a tool's parameters, a node's parameters, a material's |
-| **Libraries** | the **right** edge | things you can pick: worlds, clips, materials, mods, characters, scripts |
+| **Libraries** | the **right** edge | things you can pick: worlds, clips (characters among them), materials, mods (loose Lua among them) |
 
 **Every window is docked, resizable, and re-dockable to any edge.** The sides above are where each
 family *opens*; a player can drag either to any edge and it stays there.
@@ -117,14 +128,64 @@ one — the folders are folders on disk and the files are files, under
 `%LOCALAPPDATA%\WorldShaper\`:
 
 ```
-worlds\      .wsworld     one file per world (answer K1)
-clips\       .wsclip      creations, procedural or not (answers H2, H4)
+worlds\      .wsworld     one file per world (answer K1) -- ONE file, D493
+clips\       .wsclip      creations, procedural or not (answers H2, H4) -- and characters
 materials\   .wsmat       pattern generators
-mods\        .wsmod       Lua and native packages (answers K5, O17)
-characters\  .wsclip      the same format; a different shelf
-scripts\     .wslua
-trash\                    where a delete goes
+mods\        .wsmod       Lua and native packages (answers K5, O17) -- and loose .wslua
+cache\                    what this machine built from a world. Not a shelf, not the player's
+crashes\                  reports. Not a shelf either
+settings.txt              all of them, in one file, written whenever they change (D496)
 ```
+
+**There is no `scripts\` and no `trash\`.** Loose Lua is a mod that is not finished (D492), and a
+delete goes to the system's own recycle bin (D491) — every player already has one, knows where it is
+and how to empty it, and it outlives the game not running. A delete that cannot be recycled is
+refused rather than done.
+
+**A world is one file** (D493). It was three: the `.wsworld`, the world already built from it, and
+the timings of that build. A library is a file manager over a real folder, so everything in that
+folder is on the screen — and two of those three are not the player's work, are worthless on any
+other machine, and were nineteen megabytes beside a five-kilobyte file. They live under `cache\`
+now, keyed by a hash of the world's full path, so two worlds of one name in two folders are two
+caches rather than one they take turns evicting.
+
+**What the game ships with stays with the game** (D494), in `clips\` beside the executable, and is
+never copied anywhere. The shelf lists it alongside the player's own, marked as built in: it can be
+opened and duplicated, not renamed or deleted, and a duplicate lands on the player's shelf — which
+is what makes *duplicate* the way to edit something the game shipped. An `include` that is not
+beside its own file falls back to there, **beside always winning**, so a world assembled out of
+twenty-two pieces is one file that cannot be broken by deleting a folder. That bluntness is earned:
+the facility's parts were copied onto the player's shelf, looked like an ordinary folder, and were
+deleted three times, each time leaving a world that opened as an empty sky.
+
+**There is no characters shelf** (D479). There was one, holding `.wsclip` files — the same format on
+a different shelf — and what made it a different shelf was the idea that a character is a different
+*kind* of thing. It is not. A character is a clip you can **wear** as well as one you can **stamp
+into the world**, and which of those you do with it is a decision made when you use it rather than
+a fact about the file. A shelf per use is a decision the player has to make on the way *in*, before
+they know: save a figure to `clips\` and you could not wear it, save it to `characters\` and you
+could not place it, and neither of those was a rule anybody wrote down — it was the consequence of
+two folders holding one format. Two shelves for one thing also cost twice over: a duplicate landed
+in one of them, a search found half of what was there, and every operation in the library had two
+places to look. Anything already on the old shelf is moved to `clips\` once, on the first run that
+finds it, because a shelf that stops existing must not take a player's files off the screen with it.
+
+**A world is not one file, and the library shows all of it.** A large one is a `.wsworld` that says
+`include "its own folder/piece.clip"` twenty times, plus that folder, plus the world already built
+from the two (`.world`, `.load`). That is what a file manager over a real folder means, and it has
+one edge that had to be handled rather than documented away (D478): a player can delete the pieces
+and keep the world, and what they get is a world that opens as an empty sky.
+
+- **Deleting a folder a world is built out of is refused**, and the refusal names the world — unless
+  that world is in the same selection, because deleting a world together with its own parts is
+  exactly right.
+- **Deleting a world takes its parts folder and its built copy with it**, into the trash, under the
+  same name, so putting it back is a rename of three things that still agree with each other. Left
+  behind they are a shelf that fills with megabytes nothing can open.
+- **A piece that is missing refuses the build in one line.** It used to be a warning: the document
+  was parsed with a hole in it, produced forty cascading complaints about names declared in the file
+  that was gone, and built to nothing. The one line that said what had actually happened was the
+  first of the forty, which is the same as not saying it.
 
 A player can drag a clip in from Explorer and it appears; a player can back up their work by copying
 a folder. Nothing in the game may keep state about a file that the file does not carry, because the
@@ -137,8 +198,41 @@ file can move without the game watching.
 | **new folder**, and folders inside folders, to any depth | the library is how a player organises, and nobody's shelf looks like anybody else's |
 | **rename, duplicate, delete, move** | drag to move; a delete goes to `trash\` rather than away, because a delete a player cannot undo is not what they pressed |
 | **bulk select** by dragging a box over the icons, plus shift for a range and ctrl for adding one | exactly what a file explorer does, because that is what a player already knows |
+| **the world you are standing in is bold** (D499) | the listing looks the same from inside a world as from the title, so this was the one question it could not answer |
 | **sort** by name, by date, by author, by size | |
 | **open** — the double-click, which means "use this": a world loads, a clip goes to the cursor, a material goes in hand |
+| **a right-click** opens the same operations at the pointer, on the selection under it (D482) |
+
+**A right-click is the only way to reach an operation, and there is no toolbar** (D482, D488). The
+toolbar was seven drawings and six of them are what the menu now puts under the pointer; two ways to
+do one thing is two places for it to be wrong, and the row they took is a row of the listing back.
+*Up* is the exception and stays, because it is not an operation on a selection — it is *where you
+are*, it sits beside the breadcrumb that says so, and a folder you are inside is not an entry in its
+own listing to right-click. The cost is real and worth naming: this trades a control that can be
+seen for one that has to be shown, which is a step away from the second constraint in
+`14-ui-style.md`. What holds it: the breadcrumb row answers a right-click as well as the empty space
+below the listing does, so the folder's own menu has a target even when a full folder has left no
+empty space at all. Every operation is on the toolbar as
+well, and the toolbar is the one a child who cannot read can find; this is the one somebody who has
+used a computer will try first, and it is one gesture instead of aim-at-the-row-then-aim-at-the-bar.
+It carries the same items in the same order, so the two can never disagree about what a library can
+do. On something already selected it keeps the selection, so *delete* over four files is one
+gesture; on anything else it selects that one first, because a menu about a thing you did not point
+at acts on the wrong file. Each item **says how many things it is about** — *delete 4* and *delete*
+are different decisions and only one of them needs thinking about — and an item that cannot act on
+this selection is drawn faint rather than left out, because a menu whose length changes with the
+selection is a menu whose items are never twice in the same place. Right-clicking the empty space
+below the listing is the menu about the **folder** instead: new folder, new one of these, sort.
+
+**Opening a world does not need the title** (D483). The library is the same window in a world as it
+is on the title and it lists the same worlds, so opening one from inside another is something a
+player will obviously try, and what used to happen was nothing — going out to the title to come back
+in was not a step anybody wanted, it was a step the code needed because the only thing that could
+open a world was the loop the title runs in. It now ends the way leaving does, with the world torn
+down and every pool with it, and hands the next one out instead of handing out nothing. **Entering a
+world closes the interface**, both windows: it is a departure rather than a setting, the windows
+that were up were about choosing where to go, and once you are going they are over the thing you
+went to look at. That is the same *playing* state Escape's toggle is made of (§1).
 
 **Every file carries who made it** (D447). The author's chosen username is written into the file when
 it is created and travels with every copy of it. A clip you downloaded says who made it, for ever,
@@ -186,10 +280,13 @@ design:
 - **A download count with no server is a claim, not a fact.** Trending is computed from what peers
   report about themselves and is therefore approximate and gameable. It is presented as what it is —
   an ordering, not a number on a scoreboard — and *newest* stays the default for that reason.
-- **Being online is being browsable.** Everything in your library is offered while you are, which is
-  what was asked for. There is one switch in settings that stops it, and a per-folder *keep private*
-  flag; both default to sharing. A player who has not thought about it shares; a player who has
-  thought about it has somewhere to go.
+- **Being online is being browsable, and there is no switch** (D495). Everything in your library is
+  offered while you are online, full stop. D450 kept a switch for the player who had thought about
+  it; what it actually was is a switch that ships on, that nobody turns off, and that every peer has
+  to be asked about — whose only real effect is a browser that is sometimes mysteriously empty.
+  *Online* and *browsable* being one state is what makes this work without a server at all: being
+  reachable **is** the publishing, and a flag able to contradict that is a second source of truth
+  about who is offering what.
 
 ### 5c. editor — the two views of one thing
 
@@ -235,13 +332,64 @@ detail:
 a cap. A node's parameters are a parameters window: they open on the left while its node is
 selected, which is why the two families exist.
 
+## 5d. A parameters window folds, and every value can be put back
+
+Two rules that arrive with the settings window and apply to every parameters window after it.
+
+**Sections fold, and a section can hold sections** (D485). A panel that shows every control it has
+at once is a panel a player reads rather than uses, and the first constraint in `14-ui-style.md` is
+*as little of everything as possible while staying legible*. So settings are *you*, *interface*
+(holding *colour*), *sound*, *picture* (holding *resolution* and *camera*) and *data*, and a fold is
+how a control exists without being on the screen. **They open closed, every time the window opens**
+and not only the first: what a settings panel opens as is its answer to *what can I change here*,
+and five words with five triangles is that answer where four screens of rows is the question asked
+again in more detail.
+
+**The data section is where the files are** (D497). One button opens the folder everything lives in,
+because a folder somebody has to be told the path of is a folder they cannot find. One button puts
+every setting back and sends every world, clip and mod the player made to the recycle bin — in **two
+presses**, the second being the decision: the button becomes a different button that says what it is
+about to destroy and goes back on its own after a few seconds, so it cannot be pressed by accident
+and cannot be pressed by habit either.
+
+**Every value has a reset beside it, and a heading has one when anything under it is changed**
+(D486). The gutter it sits in is reserved on every row whether or not the button is drawn, because a
+column that moved when a value changed would jump as it was used. The button is drawn **only when
+that value is off its default**, which makes its absence the other half of what it says: an empty
+gutter down the side of a panel means *every one of these is as it shipped*, and a heading carrying
+one means *something under here is not* — which is what makes a changed value findable while it is
+folded out of sight. Defaults come from the one place they are written down, the in-class
+initialisers of `Preferences` and `Knobs`, so there is no second copy of them to drift.
+
+One value has no reset by design: **detail, while the quality controller owns it**. That row shows
+what the machine decided this second, and a button offering to put it back is a button offering to
+undo a measurement.
+
 ## 6. What the interface is made of
 
 Restating from `14-ui-style.md` only what this document adds:
 
 - **Symbols and animated icons carry the meaning; words confirm it.** An icon animates to say what
   it *does* — the duplicate icon splits, the delete icon opens — and never to say that the pointer
-  is over it (`14-ui-style.md`: motion answers a press and nothing else).
+  is over it (`14-ui-style.md`: motion answers a press and nothing else). The drawings themselves
+  are distance fields rather than a grid, the press curve overshoots, and the whole vocabulary is
+  photographable with `--icon-sheet`; all three are `14-ui-style.md`, D474–D475.
+- **The performance overlay is the shell's, not the developer HUD's** (D484). Everything drawn by
+  ImGui is rendered onto the swapchain *after* the interface has been composited, so the overlay was
+  drawn over the docked windows — which is right for the developer panel, because that is a tool
+  being used, and backwards for a readout about the world, because a window is in front of the
+  world. It is now a mark like any other: drawn before the windows, lettered in the game's own face,
+  inverting against whatever is behind it, and under the glass of anything opened over it.
+- **While the menu is up, the game gets no input at all** (D477). The windows are a mode, not an
+  overlay: the pointer is free and the mouse is not captured, but every key the game binds went on
+  reaching the world anyway, because only the *mouse* was ever asked about. Dragging a slider on the
+  left of the screen also flew the camera with the other hand, the wheel over a value also changed
+  the flight speed, a digit typed into a field also swapped the tool in your hand, and Z was undo
+  while you were reading the settings. That is one bug and not eight, and the fix is one line: the
+  game is handed an *empty* input for those frames rather than being asked to remember, binding by
+  binding, who each key was for. The developer keys are deliberately outside it — they are not bound
+  to anything in the world, and a panel that cannot be opened while looking at the menu is a panel
+  that cannot be opened while looking at the menu.
 - **Words are the three-by-five typeface** (D437) and a description is markdown (D439), which is
   what lets a clip carry a paragraph about itself without inventing a second notation.
 - **The ink rule is unchanged**: every window is the world behind it, blurred, and its text is the
@@ -282,7 +430,7 @@ Two structural notes worth writing down before either is built:
 | Sliders with type-in, uncapped | **15** — **DONE** | nothing |
 | The worlds library, over real folders, with bulk select | **15** — **DONE** | nothing |
 | The settings window, over what `19-auto-quality.md` already stores | **15** — **DONE** | nothing |
-| Clip, material, character and mod libraries | **15** | the formats: `.wsclip` is Stage 15's own, `.wsmat` is Stage 6's, `.wsmod` is Stage 14's |
+| Clip, material and mod libraries | **15** | the formats: `.wsclip` is Stage 15's own, `.wsmat` is Stage 6's, `.wsmod` is Stage 14's. There is no character library: see §4 |
 | The editor tab, **script view only** | **15** | the clip language exists today (`20-clip-forge.md`); the live parse is new |
 | The editor tab, **visual view**, and the live link between the two | **20** | the node editor is Stage 20's, and answer O19 says there is only one of them. Building a second one here to throw away would be the one thing the roadmap's ordering rationale exists to prevent |
 | The community tab | **16** | it is a multiplayer feature and there is no transport before Stage 16 |
@@ -343,7 +491,7 @@ src/gpu/shell_pass.* the surface, the buffers, and the two ways it is presented
   what it will use, so it lands underneath the interface rather than through it.
 - **The community tab** — Stage 16, and the tab says so.
 - **The editor's visual view** — Stage 20, and the sub-tab says so and refuses with a line.
-- **Clip, material, character and mod libraries** are on the shelf and list their own kind, but
+- **Clip, material and mod libraries** are on the shelf and list their own kind, but
   *open* on them goes to the editor rather than to a tool, because the tools are their own stages.
 - **A selection is not dragged between folders yet.** *move* exists in the library and has no
   gesture on it; the rest of §4's operations do.

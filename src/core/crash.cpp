@@ -24,6 +24,9 @@ namespace ws {
 namespace {
 
 std::string g_dir;
+// Where reports go. A folder of its own under `g_dir`, because two files per crash in the root
+// buried the six things a player has reason to open under a hundred and fifty they do not.
+std::string g_report_dir;
 std::string g_log_path;
 std::atomic<bool> g_dialog{true};
 
@@ -296,9 +299,10 @@ std::string build_report(EXCEPTION_POINTERS* pointers, const char* reason) {
     emit_recent_log();
 
     const std::string stamp = timestamp();
-    const std::string report_path = g_dir + "crash-" + stamp + ".log";
+    const std::string& into = g_report_dir.empty() ? g_dir : g_report_dir;
+    const std::string report_path = into + "crash-" + stamp + ".log";
     write_file(report_path, g_report, g_report_used);
-    write_minidump(g_dir + "crash-" + stamp + ".dmp", pointers);
+    write_minidump(into + "crash-" + stamp + ".dmp", pointers);
     return report_path;
 }
 
@@ -382,9 +386,39 @@ void crash_set_context(std::string_view key, std::string_view value) {
 
 #if defined(_WIN32)
 
+// Everything the old layout left in the root, moved once, on the first run that finds it. A folder
+// that only tidies what it makes from now on leaves the mess that made it necessary.
+static void sweep_old_reports_into(const std::string& from, const std::string& into) {
+    WIN32_FIND_DATAA found{};
+    const std::string pattern = from + "crash-*";
+    HANDLE handle = FindFirstFileA(pattern.c_str(), &found);
+    if (handle == INVALID_HANDLE_VALUE) return;
+    unsigned moved = 0;
+    do {
+        if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) continue;
+        const std::string was = from + found.cFileName;
+        const std::string now = into + found.cFileName;
+        if (MoveFileExA(was.c_str(), now.c_str(), MOVEFILE_REPLACE_EXISTING) != 0) ++moved;
+    } while (FindNextFileA(handle, &found) != 0);
+    FindClose(handle);
+    if (moved > 0) {
+        std::fprintf(stderr, "[info ] crash    moved %u old reports into crashes\\\n", moved);
+    }
+}
+
 void crash_install(std::string_view log_name) {
     g_dir = local_app_data_dir();
     if (g_dir.empty()) return;
+    // Reports go in a folder of their own, and the folder is swept of what was there before it
+    // existed.
+    //
+    // A crash writes two files and a session that crashes repeatedly writes two more each time, so
+    // the root filled with them — a hundred and fifty `crash-*.dmp` and `.log` beside the six
+    // things a player actually has reason to open. The shelves are already folders and the log is
+    // one file; this was the only thing in there with no home.
+    g_report_dir = g_dir + "crashes\\";
+    CreateDirectoryA(g_report_dir.c_str(), nullptr);
+    sweep_old_reports_into(g_dir, g_report_dir);
     g_log_path = g_dir + std::string(log_name);
     // Keep one generation back. A player who crashes and relaunches before saying anything
     // would otherwise have already overwritten the log that explains it.

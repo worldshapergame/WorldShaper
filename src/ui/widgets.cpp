@@ -29,12 +29,39 @@ constexpr f32 kChaseRate = 22.0f;
 
 // How long a press animation runs. It is the drawing saying what it did, so it outlasts the click
 // and not much more.
-constexpr f32 kPressSeconds = 0.28f;
+constexpr f32 kPressSeconds = 0.34f;
 
 f32 chase(f32 have, f32 want, f32 dt) {
     const f32 t = std::min(1.0f, dt * kChaseRate);
     return have + (want - have) * t;
 }
+
+// What the drawing is actually given, out of the linear countdown the press keeps.
+//
+// `press` falls from 1 to 0 at a constant rate, and handing that straight to an icon was the whole
+// of the animation: a drawing snapped to its pressed pose and then slid back at one speed, which
+// on the screen reads as a slide rather than as an answer. The eye reads *acceleration*, not
+// position — a thing that stops dead did not move, it was moved.
+//
+// So the countdown is eased, and the ease overshoots: the drawing leaves fast, comes home slowing,
+// goes a tenth of the way PAST home and settles back. The overshoot is the part that costs nothing
+// and does all the work, because it is the only part of the motion that says something elastic
+// happened rather than something linear.
+//
+// The value returned is the MOTION — 1 on the press, 0 at rest, and briefly about -0.10 on the way
+// home. `phase` is one minus it, so `phase` runs a little past 1 and every drawing in
+// shaders/shell.comp is written to take a small negative motion as a counter-swing.
+f32 press_motion(f32 press) {
+    if (press <= 0.0f) return 0.0f;
+    const f32 u = 1.0f - press;            // 0 the instant it was pressed, 1 when it is over
+    const f32 s = u - 1.0f;
+    // The standard back-ease, whose constant is the one that overshoots by about a tenth.
+    constexpr f32 kBack = 1.70158f;
+    return -((kBack + 1.0f) * s * s * s + kBack * s * s);
+}
+
+// And what the shader is handed: 1 at rest, 0 at the press, a little over 1 on the way home.
+f32 press_phase(f32 press) { return 1.0f - press_motion(press); }
 
 std::string trim_zeros(std::string text) {
     if (text.find('.') == std::string::npos) return text;
@@ -59,6 +86,19 @@ void Ui::begin(const InputState& input, u32 width, u32 height, f64 seconds, f32 
     metrics_.scale = std::max(1.0f, scale);
     ++frame_;
 
+    // A drag with no button held is not a drag.
+    //
+    // Every control that takes `active_` gives it back when it sees the release — and a control
+    // that stopped being DRAWN never sees one. That is not a hypothetical: opening a world from the
+    // library closes the windows on the press, so the release of that very double-click arrived
+    // with the listing gone, and the rubber band it had started stayed active for the rest of the
+    // process. The next time the windows came up, in the world, a selection box was already being
+    // dragged by a mouse with nothing held down — which is what it looked like, because it was.
+    //
+    // Not the release frame: on that frame the button is already up and the control it belongs to
+    // has to be allowed to see it. One frame later there is nothing left to see.
+    if (active_ != 0 && !input.mouse_left && !input.mouse_left_released) active_ = 0;
+
     was_hot_ = hot_;
     hot_ = 0;
     wants_mouse_ = false;
@@ -68,6 +108,7 @@ void Ui::begin(const InputState& input, u32 width, u32 height, f64 seconds, f32 
 
     draw_.begin(width, height);
     scroll_stack_.clear();
+    claims_.clear();
 
     // A control that has not been drawn for a while is a control that no longer exists; its
     // animation goes with it. Pruned lazily rather than per frame, because the map is tens of
@@ -132,6 +173,15 @@ bool Ui::hovering(u64 id, const Rect& rect) {
     const bool inside = rect.holds(input_.mouse_x, input_.mouse_y) &&
                         draw_.clip().holds(input_.mouse_x, input_.mouse_y);
     if (!inside) return false;
+    // Something drawn later is over this point, so this is not what is being pointed at. The
+    // pointer is still CLAIMED — the press belongs to the interface either way, and letting it
+    // through to the world would be the same bug one layer down.
+    for (const Rect& claimed : claims_) {
+        if (claimed.holds(input_.mouse_x, input_.mouse_y)) {
+            wants_mouse_ = true;
+            return false;
+        }
+    }
     hot_ = id;
     wants_mouse_ = true;
     if (was_hot_ != id) hover_since_ = seconds_;
@@ -204,7 +254,9 @@ f32 Ui::shared_size(const Rect& rect, const std::string_view* labels, u32 count)
 void Ui::icon_and_label(const Rect& rect, Icon icon, std::string_view text, f32 phase,
                         f32 coverage, bool centred, f32 forced_size) {
     const f32 pad = metrics_.px(6.0f);
-    const f32 nominal = std::min(metrics_.icon(), rect.height() - pad);
+    // The drawing may come within half the padding of the row's own edges. A whole pad either side
+    // was costing it six of its twenty-two pixels to keep clear of a boundary nothing is drawn on.
+    const f32 nominal = std::min(metrics_.icon(), rect.height() - pad * 0.5f);
     f32 size = (forced_size > 0.0f) ? forced_size : metrics_.text();
 
     if (centred) {
@@ -282,7 +334,7 @@ bool Ui::button(u64 id, const Rect& rect, Icon icon, std::string_view text,
     // runs because of `a.press`.
     const bool held = (active_ == id && input_.mouse_left);
     if (over || held) draw_.ink(rect, held ? 0.16f : 0.07f);
-    icon_and_label(rect, icon, text, 1.0f - a.press, 1.0f, stacked);
+    icon_and_label(rect, icon, text, press_phase(a.press), 1.0f, stacked);
 
     if (over && seconds_ - hover_since_ > kRestSeconds) tooltip(rect, hint);
     return fired;
@@ -304,10 +356,12 @@ bool Ui::icon_button(u64 id, const Rect& rect, Icon icon, std::string_view hint)
 
     const bool held = (active_ == id && input_.mouse_left);
     if (over || held) draw_.ink(rect, held ? 0.16f : 0.07f);
-    const f32 cell = std::min(rect.width(), rect.height()) * 0.72f;
+    // A square button is nothing BUT its drawing — there is no word beside it to leave room for —
+    // so the drawing takes the room a word would have had.
+    const f32 cell = std::min(rect.width(), rect.height()) * 0.86f;
     draw_.icon(Rect{rect.mid_x() - cell * 0.5f, rect.mid_y() - cell * 0.5f, rect.mid_x() + cell * 0.5f,
                     rect.mid_y() + cell * 0.5f},
-               icon, 1.0f, 1.0f - a.press);
+               icon, 1.0f, press_phase(a.press));
     if (over && seconds_ - hover_since_ > kRestSeconds) tooltip(rect, hint);
     return fired;
 }
@@ -401,7 +455,7 @@ bool Ui::choice(u64 id, const Rect& rect, std::string_view row_label, const Icon
         a.press = std::max(0.0f, a.press - dt_ / kPressSeconds);
         if (value == i) draw_.ink(cell, 0.20f);
         else if (over) draw_.ink(cell, 0.07f);
-        icon_and_label(cell, icons[i], labels[i], 1.0f - a.press, 1.0f, false);
+        icon_and_label(cell, icons[i], labels[i], press_phase(a.press), 1.0f, false);
 
         // One of several answers say their own sentence: three buttons on a row are three
         // questions, and the row's description can only answer the first. An option with nothing
@@ -452,10 +506,153 @@ bool Ui::tabs(u64 id, const Rect& rect, const Icon* icons, const std::string_vie
         } else if (over) {
             draw_.ink(cell, 0.07f);
         }
-        icon_and_label(cell, icons[i], labels[i], 1.0f - a.press, active == i ? 1.0f : 0.75f, false,
+        icon_and_label(cell, icons[i], labels[i], press_phase(a.press), active == i ? 1.0f : 0.75f, false,
                        size);
     }
     return changed;
+}
+
+bool Ui::section_open(u64 id) const {
+    const auto at = folds_.find(id);
+    return at != folds_.end() && at->second;
+}
+
+void Ui::close_all_sections() {
+    for (auto& fold : folds_) fold.second = false;
+}
+
+Ui::Fold Ui::section(u64 id, const Rect& row, std::string_view name, bool dirty, u32 depth) {
+    Fold out;
+    // Sections start CLOSED, and the window that owns them folds them again every time it opens.
+    // A panel that opens showing everything is the wall of rows the fold exists to replace; five
+    // words and five triangles is what *what can I change here* actually looks like as an answer.
+    auto at = folds_.find(id);
+    if (at == folds_.end()) at = folds_.emplace(id, false).first;
+
+    const f32 indent = metrics_.px(10.0f) * static_cast<f32>(depth);
+    const Rect head{row.x0 + indent, row.y0, row.x1, row.y1};
+    // The gutter is reserved whether or not the reset is drawn in it, so a heading's word sits in
+    // the same place as every other row's and the column does not move when a value is changed.
+    const Rect gutter{head.x1 - metrics_.row(), head.y0, head.x1, head.y1};
+    const Rect grip{head.x0, head.y0, gutter.x0, head.y1};
+
+    const bool over = hovering(id, grip);
+    if (over && input_.mouse_left_pressed) {
+        active_ = id;
+        press_started(id);
+    }
+    if (active_ == id && input_.mouse_left_released) {
+        if (over) {
+            at->second = !at->second;
+            sound_.say(at->second ? Cue::Open : Cue::Close);
+        }
+        active_ = 0;
+    }
+    Anim& a = anim(id);
+    a.press = std::max(0.0f, a.press - dt_ / kPressSeconds);
+    if (over) draw_.ink(grip, 0.07f);
+
+    const f32 cell = std::min(metrics_.icon(), grip.height());
+    draw_.icon(Rect{grip.x0, grip.mid_y() - cell * 0.5f, grip.x0 + cell, grip.mid_y() + cell * 0.5f},
+               at->second ? Icon::Expanded : Icon::Collapsed, 1.0f, press_phase(a.press));
+    // A heading is BOLD and at full strength: a heavier letter that is also fainter than the rows
+    // under it reads as a row that has been disabled rather than as a heading.
+    label(Rect{grip.x0 + cell + metrics_.px(5.0f), grip.y0, grip.x1, grip.y1}, name, Align::Left,
+          kBold, 1.0f);
+    draw_.ink(Rect{head.x0, head.y1 - metrics_.px(1.0f), head.x1, head.y1}, 0.18f);
+
+    out.open = at->second;
+    out.reset = reset_button(hash_combine(id, 0x9E3779B9ull), gutter, dirty,
+                             "Put everything under this heading back to how it shipped");
+    return out;
+}
+
+bool Ui::reset_button(u64 id, const Rect& cell, bool changed, std::string_view hint) {
+    // Nothing is drawn when nothing has changed, and that absence is the second thing this says:
+    // an empty gutter down the side of a panel is *every one of these is as it shipped*, which is
+    // a question a player would otherwise have to ask a wiki.
+    if (!changed) return false;
+    const f32 size = std::min(cell.width(), cell.height()) * 0.72f;
+    const Rect box{cell.mid_x() - size * 0.5f, cell.mid_y() - size * 0.5f, cell.mid_x() + size * 0.5f,
+                   cell.mid_y() + size * 0.5f};
+    const bool over = hovering(id, box);
+    bool fired = false;
+    if (over && input_.mouse_left_pressed) {
+        active_ = id;
+        press_started(id);
+    }
+    if (active_ == id && input_.mouse_left_released) {
+        fired = over;
+        if (fired) sound_.say(Cue::Commit, 0.8f);
+        active_ = 0;
+    }
+    Anim& a = anim(id);
+    a.press = std::max(0.0f, a.press - dt_ / kPressSeconds);
+    if (over) draw_.ink(box, 0.12f);
+    draw_.icon(box, Icon::Reset, over ? 1.0f : 0.55f, press_phase(a.press));
+    if (over && seconds_ - hover_since_ > kRestSeconds) tooltip(box, hint);
+    return fired;
+}
+
+void Ui::open_menu(u64 id, f32 x, f32 y) {
+    menu_ = id;
+    menu_x_ = x;
+    menu_y_ = y;
+    menu_opened_frame_ = frame_;
+    sound_.say(Cue::Open);
+}
+
+i32 Ui::menu(u64 id, const MenuItem* items, u32 count) {
+    if (menu_ != id || count == 0) return -1;
+
+    const f32 row = metrics_.row();
+    const f32 pad = metrics_.px(4.0f);
+    f32 widest = metrics_.px(40.0f);
+    for (u32 i = 0; i < count; ++i) {
+        widest = std::max(widest, DrawList::measure(items[i].label, metrics_.text()));
+    }
+    const f32 width = widest + metrics_.icon() + metrics_.px(24.0f);
+    const f32 height = row * static_cast<f32>(count) + pad * 2.0f;
+    // Flipped rather than clamped when it would run off: a menu whose last item is under the edge
+    // of the screen is a menu missing the item somebody was reaching for.
+    f32 x = menu_x_;
+    f32 y = menu_y_;
+    if (x + width > static_cast<f32>(width_)) x = std::max(0.0f, menu_x_ - width);
+    if (y + height > static_cast<f32>(height_)) y = std::max(0.0f, menu_y_ - height);
+    const Rect box{x, y, x + width, y + height};
+
+    // Over everything, because a menu belongs to the screen rather than to the window that raised
+    // it — the same rule as the tooltip, for the same reason.
+    draw_.push_clip(screen());
+    draw_.glass(box);
+    draw_.edge(box, 0.6f);
+
+    i32 chosen = -1;
+    for (u32 i = 0; i < count; ++i) {
+        const Rect cell{box.x0 + pad, box.y0 + pad + row * static_cast<f32>(i), box.x1 - pad,
+                        box.y0 + pad + row * static_cast<f32>(i + 1)};
+        const u64 own = hash_combine(id, i + 1);
+        const bool over = hovering(own, cell) && items[i].enabled;
+        if (over) draw_.ink(cell, 0.14f);
+        if (over && input_.mouse_left_released) chosen = static_cast<i32>(i);
+        // An item that cannot act is drawn at less ink rather than left out: a menu whose length
+        // changes with the selection is a menu whose items are never in the same place twice.
+        icon_and_label(cell, items[i].icon, items[i].label, 1.0f, items[i].enabled ? 1.0f : 0.35f,
+                       false);
+    }
+    draw_.pop_clip();
+
+    // Anything else closes it. The frame it opened on is excluded, or the press that opened it
+    // would also be the press that dismissed it.
+    const bool elsewhere = (input_.mouse_left_pressed || input_.mouse_right_pressed) &&
+                           !box.holds(input_.mouse_x, input_.mouse_y);
+    if (chosen >= 0 || input_.was_pressed(Key::Escape) ||
+        (elsewhere && frame_ != menu_opened_frame_)) {
+        menu_ = 0;
+    }
+    // While it is up it owns the pointer, so a click meant for it never also reaches the world.
+    wants_mouse_ = true;
+    return chosen;
 }
 
 bool Ui::pressable(u64 id, const Rect& rect, std::string_view hint) {
@@ -528,6 +725,15 @@ bool Ui::number(u64 id, const Rect& rect, const Number& about, f64& value) {
         grab_value_ = value;
         press_started(id);
     }
+
+    // A press anywhere else puts the row back to being a slider.
+    //
+    // It used to take enter or escape and nothing else, so a row typed into stayed a field for the
+    // rest of the session however far away you clicked — and a slider that has quietly stopped
+    // being a slider is a control that ignores the next drag. Clicking away is escape rather than
+    // enter: `14-ui-style.md` already says escaping out of a value you were typing is silent and
+    // keeps what it had, and a click somewhere else is not somebody committing a number.
+    if (typing_ == id && input_.mouse_left_pressed && !over) stop_typing();
 
     if (typing_ == id) {
         for (char c : input_.typed) {
@@ -861,6 +1067,36 @@ bool Ui::band(u64 id, const Rect& rect, Rect& box, bool& finished) {
     }
     wants_mouse_ = true;
     return true;
+}
+
+f32 Ui::scroll_overflow(u64 id, const Rect& room, std::string_view text) {
+    const f32 wide = DrawList::measure(text, metrics_.text());
+    const f32 over = wide - room.width();
+    if (over <= 0.5f) return 0.0f;
+
+    // Only the one under the pointer travels. A listing where every long name is moving at once is
+    // a listing nobody can read any of, and the row somebody is pointing at is the row they are
+    // trying to read — which makes this the same *asking* a tooltip is, answered without words.
+    if (!room.holds(input_.mouse_x, input_.mouse_y) ||
+        !draw_.clip().holds(input_.mouse_x, input_.mouse_y)) {
+        anim(id).shown = 0.0f;
+        return 0.0f;
+    }
+
+    // Held at the start, travelling, held at the end, then cut back. The speed is per second of
+    // TEXT rather than per second of row, so a name twice as long takes twice as long to read
+    // rather than going twice as fast.
+    constexpr f32 kWait = 0.9f;          // seconds at each end
+    constexpr f32 kSpeed = 46.0f;        // interface pixels a second
+    const f32 travel = over / (metrics_.scale * kSpeed);
+    const f32 cycle = kWait + travel + kWait;
+    Anim& a = anim(id);
+    a.shown = (a.shown <= 0.0f) ? 0.0001f : a.shown + dt_;
+    if (a.shown > cycle) a.shown -= cycle;
+    const f32 at = a.shown;
+    if (at <= kWait) return 0.0f;
+    if (at >= kWait + travel) return -over;
+    return -over * ((at - kWait) / std::max(travel, 0.0001f));
 }
 
 f32 Ui::markdown(const Rect& box, std::string_view text, bool measure_only) {

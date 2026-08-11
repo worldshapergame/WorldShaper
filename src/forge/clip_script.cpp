@@ -1360,7 +1360,7 @@ Script parse_clip_script(const std::string& text, VoxelTypeTable& types, const T
 }
 
 std::string expand_includes(const std::string& path, std::vector<SourceLine>& origin,
-                            std::vector<ScriptError>& errors) {
+                            std::vector<ScriptError>& errors, const std::string& beside) {
     std::vector<std::string> open;   // the include stack, for cycle detection
     std::string out;
 
@@ -1412,7 +1412,34 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
                 const std::string named = line.substr(quote + 1, close - quote - 1);
                 std::filesystem::path target = std::filesystem::path(named);
                 if (target.is_relative()) target = here / target;
-                pull(target.lexically_normal().string(), depth + 1);
+                std::string resolved = target.lexically_normal().string();
+                std::error_code missing;
+                // Next to the file always wins; the folder the game ships is where it looks when
+                // there is nothing there (D494). That order is the whole design: a player who
+                // copies the facility's parts beside their own world and edits them gets their
+                // edits, and one who never copies anything still opens the world.
+                if ((!std::filesystem::exists(resolved, missing) || missing) && !beside.empty()) {
+                    missing.clear();
+                    const std::filesystem::path fallback =
+                        (std::filesystem::path(beside) / named).lexically_normal();
+                    if (std::filesystem::exists(fallback, missing) && !missing) {
+                        resolved = fallback.string();
+                    }
+                }
+                // Said HERE, with the line that asked for it and the name it asked for, rather
+                // than as "could not open <absolute path>" from inside the recursion. A piece
+                // going missing is the one include failure a player can actually cause — by
+                // deleting or moving the folder a building is assembled out of — and the sentence
+                // has to be the one that tells them that.
+                missing.clear();
+                if (!std::filesystem::exists(resolved, missing) || missing) {
+                    errors.push_back(ScriptError{
+                        number, "there is no '" + named + "' beside '" +
+                                    std::filesystem::path(file).filename().string() +
+                                    "': this file is built out of pieces and one of them is gone"});
+                    continue;
+                }
+                pull(resolved, depth + 1);
                 continue;
             }
 
@@ -1424,6 +1451,20 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
     };
 
     pull(std::filesystem::path(path).lexically_normal().string(), 0);
+    // A document with a hole in it is not a document, and every caller has to agree about that.
+    //
+    // Returning the lines that DID load was the old behaviour, and what it produced was a building
+    // whose twenty pieces were nineteen: forty cascading complaints about names declared in the
+    // file that is gone, then a shape with nothing in it, then an empty sky. The one line that says
+    // what actually happened is the first of the forty, which is the same as not saying it.
+    //
+    // The rule lives HERE rather than in `load_clip_script`, because that is not the only caller —
+    // the application splices the world's source itself, so that the cache key covers the whole
+    // assembly, and a rule stated in one of two call sites is a rule the other one does not have.
+    if (!errors.empty()) {
+        out.clear();
+        origin.clear();
+    }
     return out;
 }
 
@@ -1431,7 +1472,19 @@ Script load_clip_script(const std::string& path, VoxelTypeTable& types, const Ta
     std::vector<SourceLine> origin;
     std::vector<ScriptError> trouble;
     const std::string text = expand_includes(path, origin, trouble);
-    if (!trouble.empty() && text.empty()) {
+    // A document with a hole in it is not parsed at all.
+    //
+    // It used to be parsed anyway, on the grounds that the lines that ARE there might still say
+    // something. They do not: a building assembled out of twenty pieces, with one of them missing,
+    // parses into forty cascading complaints about names that were declared in the file that is
+    // gone — and the one line that says what actually happened is the first of the forty, which
+    // is the same as not saying it. It then builds to nothing and opens as an empty sky, which
+    // reads as the renderer having broken rather than as a file having been deleted.
+    //
+    // So any trouble at the include level ends it here, and what comes back is the cause on its
+    // own. This is `14-ui-style.md`'s rule about refusals applied to a file: a refusal that does
+    // not explain itself is indistinguishable from a bug.
+    if (!trouble.empty()) {
         Script script;
         script.errors = trouble;
         return script;

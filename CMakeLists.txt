@@ -136,7 +136,8 @@ target_link_libraries(ws_forge PUBLIC ws_core ws_world ws_game)
 # --------------------------------------------------------------------------------------
 add_library(ws_platform STATIC
     src/platform/window.cpp
-    src/platform/audio.cpp)
+    src/platform/audio.cpp
+    src/platform/desktop.cpp)
 target_include_directories(ws_platform PUBLIC src)
 target_link_libraries(ws_platform PUBLIC ws_core SDL3::SDL3)
 

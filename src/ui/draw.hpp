@@ -102,6 +102,9 @@ enum class Icon : u32 {
     Script,      // a page with a chevron on it
     Tick,        // the mark a switch makes when it is on
     Play,        // enter this world
+    Reset,       // an arrow going back round: put this value back where it started
+    Collapsed,   // a section that is folded away, pointing at what would open
+    Expanded,    // and one that is open, pointing at what is under it
     Count,
 };
 
@@ -146,7 +149,14 @@ public:
     void ink(const Rect& rect, f32 coverage = 1.0f);
     void edge(const Rect& rect, f32 coverage = 1.0f, f32 thickness = 1.0f);
     void hue(const Rect& rect, u32 rgb, f32 coverage = 1.0f);
-    void icon(const Rect& cell, Icon which, f32 coverage = 1.0f, f32 phase = 0.0f);
+    // `phase` is 1 at REST and 0 at the press, and it is 1 by default because most icons in this
+    // interface are not on a control at all — a window's header, the kind of a file in a listing —
+    // and those must be drawn standing still. It defaulted to 0, which is the fully pressed pose,
+    // so every icon that was not on a button has been drawn mid-animation since the shell existed:
+    // the header's bin had its lid open, the folder in a row was ajar, and the tick was a tick that
+    // had not been drawn yet. None of it looked like a bug because nothing ever showed the two
+    // poses side by side, which is exactly what `--icon-sheet` is for.
+    void icon(const Rect& cell, Icon which, f32 coverage = 1.0f, f32 phase = 1.0f);
     // The mark, animated by the clock. There is exactly one of these on screen at a time and it is
     // on the title.
     //

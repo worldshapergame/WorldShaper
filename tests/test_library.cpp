@@ -55,7 +55,82 @@ TEST_CASE("the shelves are folders, and they are made if they are missing") {
     for (const Kind& kind : shipped_kinds()) {
         CHECK(std::filesystem::is_directory(scratch.root / kind.folder));
     }
-    CHECK(std::filesystem::is_directory(scratch.root / "trash"));
+    // And the one folder that is not a shelf: where a built world is kept, so that a `.wsworld` is
+    // one file and the shelf shows one thing (D493).
+    CHECK(std::filesystem::is_directory(scratch.root / "cache"));
+    // There is no trash of our own any more (D491) and no shelf for either of the two that were
+    // folded away (D479, D492).
+    CHECK(!std::filesystem::is_directory(scratch.root / "trash"));
+    CHECK(!std::filesystem::is_directory(scratch.root / "characters"));
+    CHECK(!std::filesystem::is_directory(scratch.root / "scripts"));
+}
+
+TEST_CASE("what the game ships with is listed in place, and is not the player's to lose") {
+    // D494. The built-in clips live beside the executable and are never copied to the player's
+    // shelf — which is what stopped the facility's parts being deletable out from under it.
+    Scratch scratch("shipped");
+    const std::filesystem::path game = scratch.root / "game";
+    std::error_code error;
+    std::filesystem::create_directories(game / "clips", error);
+    { std::ofstream(game / "clips" / "facility.clip") << "# built in\n"; }
+
+    Library library(scratch.root);
+    library.ensure_folders();
+    library.set_shipped_root(game);
+    library.open(clips_kind());
+    CHECK(library.create("mine", "ada").empty());
+    library.refresh(true);
+
+    const Entry* built_in = find(library, "facility");
+    const Entry* mine = find(library, "mine");
+    REQUIRE(built_in != nullptr);
+    REQUIRE(mine != nullptr);
+    CHECK(built_in->shipped);
+    CHECK(!mine->shipped);
+
+    // Not renameable and not deletable: it is not theirs to lose, and a delete that came back on
+    // the next launch would look like the delete had failed.
+    CHECK(!library.rename(*built_in, "borrowed").empty());
+    CHECK(!library.erase({*built_in}).empty());
+    CHECK(std::filesystem::exists(game / "clips" / "facility.clip"));
+
+    // A duplicate of one lands on the PLAYER's shelf, never back in the game's folder. That is
+    // what makes *duplicate* the way to edit something the game shipped.
+    CHECK(library.duplicate({*built_in}).empty());
+    CHECK(std::filesystem::exists(scratch.root / "clips" / "facility.wsclip"));
+    CHECK((std::filesystem::directory_iterator(game / "clips"), true));
+    u32 in_game_folder = 0;
+    for (const auto& item : std::filesystem::directory_iterator(game / "clips", error)) {
+        (void)item;
+        ++in_game_folder;
+    }
+    CHECK(in_game_folder == 1);
+}
+
+TEST_CASE("a shelf that was retired hands its files to the one that took over") {
+    // D479 and D492: characters were clips you can wear, and loose Lua is a mod that is not
+    // finished. A shelf going away must not take a player's files off the screen with it.
+    Scratch scratch("retired");
+    std::error_code error;
+    std::filesystem::create_directories(scratch.root / "characters", error);
+    std::filesystem::create_directories(scratch.root / "scripts", error);
+    { std::ofstream(scratch.root / "characters" / "walker.wsclip") << "# a person\n"; }
+    { std::ofstream(scratch.root / "scripts" / "greet.wslua") << "-- hello\n"; }
+
+    Library library(scratch.root);
+    library.ensure_folders();
+    CHECK(std::filesystem::exists(scratch.root / "clips" / "walker.wsclip"));
+    CHECK(std::filesystem::exists(scratch.root / "mods" / "greet.wslua"));
+    CHECK(!std::filesystem::exists(scratch.root / "characters"));
+    CHECK(!std::filesystem::exists(scratch.root / "scripts"));
+
+    // And the mods shelf lists the Lua it just took in, which is the whole point of the move: a
+    // file that arrives somewhere it is not listed has been lost with extra steps.
+    for (const Kind& kind : shipped_kinds()) {
+        if (kind.folder != "mods") continue;
+        library.open(kind);
+        CHECK(find(library, "greet") != nullptr);
+    }
 }
 
 TEST_CASE("a file the game makes carries who made it, and a copy carries it too") {
@@ -189,28 +264,36 @@ TEST_CASE("a delete goes to the trash, not away") {
     REQUIRE(spire != nullptr);
     const std::filesystem::path was = spire->path;
 
+    // Where it went is the SYSTEM's recycle bin now (D491), which is not a path this can look in —
+    // so what is asserted is the part that is this class's contract: the shelf no longer lists it,
+    // the file is no longer where it was, and the operation said nothing went wrong. That a
+    // recycled file can be restored is the operating system's promise rather than one of ours.
     CHECK(library.erase({*spire}).empty());
     library.refresh(true);
     CHECK(find(library, "spire") == nullptr);
     CHECK(!std::filesystem::exists(was));
-    CHECK(std::filesystem::exists(library.trash() / "spire.wsclip"));
 }
 
-TEST_CASE("two deletes of the same name are two files in the trash") {
+TEST_CASE("deleting two files of the same name in turn both succeed") {
     Scratch scratch("trash-names");
     Library library(scratch.root);
     library.ensure_folders();
     library.open(clips_kind());
 
+    // The second one used to need a free name in `trash\` — the recycle bin keeps its own record
+    // of where each thing came from, so two files of one name are two entries in it and nothing
+    // here has to invent a name for either.
     for (u32 round = 0; round < 2; ++round) {
         CHECK(library.create("tower", "ada").empty());
         library.refresh(true);
         const Entry* tower = find(library, "tower");
         REQUIRE(tower != nullptr);
+        const std::filesystem::path was = tower->path;
         CHECK(library.erase({*tower}).empty());
+        CHECK(!std::filesystem::exists(was));
     }
-    CHECK(std::filesystem::exists(library.trash() / "tower.wsclip"));
-    CHECK(std::filesystem::exists(library.trash() / "tower 2.wsclip"));
+    library.refresh(true);
+    CHECK(find(library, "tower") == nullptr);
 }
 
 TEST_CASE("rename keeps the extension, and refuses a name a file cannot have") {

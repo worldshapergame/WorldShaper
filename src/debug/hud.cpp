@@ -136,22 +136,12 @@ void Hud::draw(const FrameStats& stats, const GpuProfiler& profiler,
         }
     }
 
-    if (show_overlay_) {
-        // The shipped overlay: small, corner-anchored, no interaction.
-        ImGui::SetNextWindowPos(ImVec2(12.0f, 12.0f), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.35f);
-        ImGui::Begin("##overlay", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove);
-        const f64 fps = (stats.last_ms() > 0.0) ? 1000.0 / stats.last_ms() : 0.0;
-        ImGui::Text("%.0f FPS   %.2f ms", fps, stats.last_ms());
-        ImGui::Text("99th %.2f ms   max %.2f ms", stats.percentile_ms(0.99), stats.max_ms());
-        ImGui::Text("GPU  %.2f ms   %s", profiler.total_gpu_ms(),
-                    format_bytes(profiler.total_bytes(), buffer, sizeof(buffer)));
-        ImGui::Text("%ux%u", swapchain.extent().width, swapchain.extent().height);
-        ImGui::End();
-    }
+    // The player-facing performance readout used to be here, as an ImGui window, and it is now the
+    // shell's (`Shell::draw_overlay`). Everything in this file is rendered onto the swapchain after
+    // the interface has already been composited, so anything drawn here is drawn OVER the docked
+    // windows — which is right for the developer panel, because that is a tool being used, and
+    // wrong for a readout about the world, because a window is in front of the world. The numbers
+    // are the same numbers; `show_overlay_` still decides, and the application copies it across.
 
     // The update notice. Top centre, out of the way, and it never acts on its own — the
     // download starts only when the player presses the key. A game that replaced itself

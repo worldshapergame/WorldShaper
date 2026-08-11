@@ -75,11 +75,12 @@ struct Preferences {
     bool sound = true;
     f32 volume = 0.6f;
 
-    // Everything in a library is offered while you are online, with one switch and a per-folder
-    // flag, both defaulting to shared (D450). The reservation is recorded in the decision: *online*
-    // and *browsable* being the same state means a player who has not thought about it is sharing,
-    // and this switch is where a player who HAS thought about it goes.
-    bool share = true;
+    // There is no share switch (D495). Everything in a library is offered while you are online,
+    // full stop. D450 kept a switch for the player who had thought about it — and a switch that
+    // ships on, that nobody turns off, and that the community tab has to check on every peer is a
+    // setting whose only real effect is that the browser is sometimes mysteriously empty. *Online*
+    // and *browsable* being one state is what makes the community tab work at all without a server
+    // (`23-shell-and-libraries.md` §5b): being reachable IS the publishing.
 
     // 0 means "work it out from the window", which is what almost everybody wants.
     f32 interface_scale = 0.0f;
@@ -97,11 +98,32 @@ struct Knobs {
     f64 target_fps = 0.0;        // 0 is the monitor's own refresh rate
     f64 quality_level = 7.0;
     f64 render_scale = 1.0;
-    f64 field_of_view = 70.0;
+    // The camera's own shipped value (src/game/camera.hpp), not a number of this struct's own.
+    // These defaults are what *reset* puts a row back to, so one that disagreed with the game
+    // would be a button that changes a setting to something the game never had.
+    f64 field_of_view = 90.0;
     bool vsync = true;
     bool motion_blur = true;
     bool overlay = false;        // the player-facing performance overlay
     bool changed = false;        // set by the shell, cleared by whoever applies it
+};
+
+// The player-facing performance readout, as numbers rather than as a window.
+//
+// It was an ImGui window, and ImGui is rendered onto the swapchain after the interface has been
+// composited — so it was drawn OVER the docked windows, which is backwards: a readout of what the
+// frame costs is about the world, and a window is in front of the world. Handing the numbers to
+// the shell instead puts it in the interface's own compositing order, so a panel covers it the way
+// a panel covers anything, and it is lettered in the game's own face and inverts against whatever
+// is behind it like every other mark.
+struct Overlay {
+    bool on = false;
+    f64 fps = 0.0;
+    f64 frame_ms = 0.0;
+    f64 worst_ms = 0.0;
+    f64 gpu_ms = 0.0;
+    u32 width = 0;
+    u32 height = 0;
 };
 
 // What the editor tab learned from the last keystroke. A script that does not parse is NOT an
@@ -124,11 +146,17 @@ public:
     Preferences& preferences() { return preferences_; }
     Knobs& knobs() { return knobs_; }
     Library& library() { return library_; }
+    Overlay& overlay() { return overlay_; }
 
     // Where the layout and the preferences are kept. Under the same root the libraries are, so a
     // player who copies that folder has copied their whole setup.
-    void load(const std::filesystem::path& root);
+    // `root` is where the player's own files are; `game` is the folder the executable sits in,
+    // which is where the clips the game ships with are read from, in place, for ever (D494).
+    void load(const std::filesystem::path& root, const std::filesystem::path& game);
     void save() const;
+    // Written whenever it has changed, at most once a second, rather than only on the way out — a
+    // settings file that a crash throws away is a settings file (D496).
+    void save_if_changed();
 
     // Puts the worlds the game ships with on the shelf, once, if the shelf is empty.
     //
@@ -148,16 +176,49 @@ public:
     // Everything the shell decided comes back in the verdict.
     Verdict frame(const InputState& input, u32 width, u32 height, f64 seconds);
 
-    // In the world, this is what opens and closes the shell's windows. The first Escape gives the
-    // mouse back — the caller's business — and the second is this.
+    // In the world, this is what Escape reaches: **both** windows at once, in one press.
+    //
+    // It was three steps — give the mouse back, then open the library, then close it again — so the
+    // key everybody presses to reach the settings had to be pressed twice before anything appeared,
+    // and what appeared was the other half of the interface. The two families are one STATE (D443):
+    // what a player wants when they press Escape is the menu, not one side of it. So one press puts
+    // parameters on the left and the library on the right, and the next takes both away.
+    void open_windows();
+    // The settings window, with every section folded away again — which is what it is supposed to
+    // open as, every time and not only the first.
+    void open_settings();
+    void close_windows();
+    // The same without the sound, for the paths that have one of their own. It also puts down the
+    // keyboard and any menu, because a control that stops being drawn never gets to let go itself.
+    void shut_windows();
     void toggle_windows();
     bool windows_open() const;
+    // What is left in the middle: the world, which a window may never cover. A press in here while
+    // the windows are up means *back to what I was doing*, and the caller is the only thing that
+    // can act on that because it owns the mouse.
+    const Rect& centre() const { return dock_.centre(); }
     // What a scripted photograph of the shell needs: open a named window without a click. Nothing
     // else opens one, so this is the whole of the harness's reach into the interface.
     void open_window(std::string_view which, bool open);
+    // Which shelf the library window is showing, by folder name. `--shelf clips` is the only thing
+    // that calls it: the shelves other than *worlds* were reachable in the interface and by nothing
+    // a run could photograph, so "the built-in clips are not in the library" was a report that
+    // could only be answered by clicking.
+    bool open_shelf(std::string_view folder);
 
     // What is being played, so the worlds library can say so and offer the way out.
     void set_playing(std::string name) { playing_ = std::move(name); }
+
+    // One line, at the bottom of the screen, for a few seconds. The application uses it to say why
+    // a world came up empty — which used to be a line in a log file and is therefore a thing no
+    // player has ever seen.
+    void say(std::string line, f64 seconds);
+
+    // `--icon-sheet`: draw the whole vocabulary instead of the title — every drawing at four sizes
+    // and across five steps of its own animation. The smallest of the four is the size a row
+    // actually sets an icon at on a small desktop, which is where a drawing stops being legible and
+    // is the one size nothing ever looked at them at.
+    void show_icons(bool on) { icons_ = on; }
 
     // `--logo-seed N`: fix which combination the mark draws, so a photograph of the title can be
     // compared with the last one. Nothing changes it after this, including a press on the mark.
@@ -169,9 +230,18 @@ public:
 
 private:
     void draw_title(Verdict& verdict);
+    void draw_overlay();
+    void draw_icon_sheet();
     void draw_settings(const Rect& rect);
     void draw_library(const Rect& rect, Verdict& verdict);
     void draw_library_tab(const Rect& rect, Verdict& verdict);
+    // The menu a right-click opens, drawn after the listing so it sits over it.
+    void draw_library_menu(Verdict& verdict);
+    // What *use this* means for one entry, wherever it was asked for.
+    void open_entry(const Entry& entry, Verdict& verdict);
+    void make_new_file();
+    // Every setting back to how it shipped and every file the player made to the recycle bin.
+    std::string wipe_everything();
     void draw_community_tab(const Rect& rect);
     void draw_editor_tab(const Rect& rect);
     void draw_header(const Rect& rect, u32 window, Icon icon, std::string_view title);
@@ -192,10 +262,24 @@ private:
     LogoSeed logo_;
     Preferences preferences_;
     Knobs knobs_{};
+    Overlay overlay_{};
     Stage stage_ = Stage::Title;
     std::filesystem::path root_;
     std::string playing_;
 
+    bool icons_ = false;
+    // How tall the settings came out last frame. See draw_settings for why it is measured rather
+    // than counted now that a section can be folded away.
+    f32 settings_height_ = 0.0f;
+    // When *reset everything* stops being armed. A destructive button that is one press is a
+    // button somebody presses by accident; one that needs a second press within a few seconds is
+    // one that cannot be pressed by habit either.
+    f64 wipe_armed_until_ = 0.0;
+    // What was last written, and when to next bother comparing.
+    mutable std::string saved_;
+    f64 save_check_at_ = 0.0;
+    std::string snapshot() const;
+    void adopt_old_settings_files();
     u32 window_settings_ = 0;
     u32 window_worlds_ = 0;
     u32 tab_ = 0;               // library, community, editor
@@ -204,6 +288,11 @@ private:
 
     std::vector<std::string> chosen_;   // the selection, by file name
     std::string last_clicked_;
+    // What the open menu is ABOUT, captured when it opened. Not re-read from the selection every
+    // frame: a menu whose items change while it is up is a menu whose indices mean something else
+    // by the time one is chosen.
+    std::vector<Entry> menu_of_;
+    std::string search_;                // what the library's search box holds
     std::string message_;               // one line, from the last operation that had something to say
     f64 message_until_ = 0.0;
 

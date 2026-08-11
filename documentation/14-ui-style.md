@@ -75,6 +75,34 @@ A colour that appears in exactly one place cannot be read as a theme. There are 
 ## Icons, words and layout
 
 - **The icon is the control; the label is the fallback.**
+- **A drawing has no resolution** (D474). Every icon is a signed distance field in a continuous
+  64-unit cell, sampled at whatever the screen has, so one source is a clean shape at sixteen device
+  pixels and a detailed one at ninety-six. They were a thirteen-by-thirteen grid of booleans, which
+  is a resolution and a coarse one: at the size a row sets an icon on a 1366×768 desktop a cell is
+  one and a quarter pixels, so every diagonal was a staircase, every circle a lump, and there was no
+  antialiasing anywhere because a boolean has no edge to soften.
+- **A stroke is a letter's stroke, and it has a floor.** An icon is nominally 19 interface pixels
+  against text set at two device pixels per glyph pixel, which makes a letter's stroke eight units
+  of the cell; `kIconStroke` is a shade under it. An icon lighter or heavier than the word beside it
+  reads as a different interface. The floor is against the *sampling*, not the cell: an icon shrunk
+  to 0.55 of nominal gets a heavier drawing rather than a fainter one, which is the opposite of what
+  scaling a fixed width down does.
+- **Outlines for containers, fills for figures and for what is solid.** A folder, a page and a bin
+  are containers and filling one closes the inside that says what it is; a person, a book, a pupil
+  and a nib are masses.
+- **At most four features across, because sixteen device pixels is the size that decides.** Three of
+  the drawings were remade for this and not for taste: three figures came out as three dots, five
+  books came out as a bar chart, and a socket a quarter of a block wide came out as a rounded square
+  — which already meant something else two cells away.
+- **A press is eased and overshoots** (D475). The countdown a press keeps is linear; a drawing given
+  it directly snaps to its pressed pose and slides home at one speed, which reads as a slide rather
+  than as an answer, because the eye reads acceleration and not position. So it leaves fast, comes
+  home slowing, goes about a tenth past home and settles — and every drawing is written to take that
+  overshoot as a counter-swing rather than as a shape turning inside out.
+- **The whole vocabulary can be photographed.** `--icon-sheet --title-shot FILE` draws every icon at
+  four sizes and across five steps of its own animation. Without it an icon is only ever on screen
+  where a window happens to put it, and the size that decides is the one nothing ever looked at them
+  at — the same failure this document names for the tool previews.
 - When a button runs out of room, **the drawing gives up room before the word does, and never gives up all of it** — it shrinks to about 0.55 of its nominal size and stops, and only then does the word start shrinking. A button with no drawing at all is not a state the rule can reach.
 - The word is drawn at the row's own text size, not a size smaller.
 - **Text is centred on its capitals, not on its line box.** A line box carries descender room whether the string has descenders or not, which puts a word like `Fast` visibly high in its button with an empty band beneath. Centring each string's own ink instead would fix that word and break the column, because `Field of view` and `Haze distance (km)` would sit on different baselines. A capital is the same box for every string at a given size, so that is what gets centred — anything with a descender hangs slightly below the middle, which is what a descender is for.

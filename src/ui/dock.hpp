@@ -41,7 +41,7 @@ enum class Edge : u32 { Left = 0, Right = 1, Top = 2, Bottom = 3, Count = 4 };
 // Which side a window opens on when it has never been dragged anywhere.
 enum class Family : u32 {
     Parameters,   // numbers and switches: game settings, a tool's, a node's, a material's
-    Library,      // things you can pick: worlds, clips, materials, mods, characters, scripts
+    Library,      // things you can pick: worlds, clips, materials, mods, scripts
 };
 
 class Dock {
@@ -73,9 +73,14 @@ public:
     // on the frame it lands somewhere new.
     bool grip(Ui& ui, u32 window, const Rect& header);
 
-    // Per player, beside the settings. A layout that will not read costs the defaults.
+    // Per player, IN the settings. A layout that will not read costs the defaults.
     bool read(const std::filesystem::path& path);
     bool write(const std::filesystem::path& path) const;
+    // The same, appended to a file the preferences have already written into — one settings file
+    // rather than three (D496).
+    bool append(const std::filesystem::path& path) const;
+    // What it would write, as text. Used to tell whether anything has changed since the last save.
+    std::string state() const;
 
     usize size() const { return windows_.size(); }
     const std::string& name_of(u32 window) const { return windows_[window].name; }

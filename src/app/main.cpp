@@ -331,6 +331,21 @@ struct Options {
     u64 title_frames = 30;
     std::string title_open;
 
+    // `--icon-sheet`: draw the whole icon vocabulary instead of the title, every drawing at four
+    // sizes and across five steps of its own animation, and photograph THAT.
+    //
+    // The same argument `--title-shot` is made of, one level down. An icon is only ever on screen
+    // where some window happens to put it, so most of the twenty-four were drawn by nothing any
+    // automated run looked at, and the smallest size — sixteen device pixels, which is what a
+    // 1366x768 desktop gets — was the size nobody ever checked them at. That is exactly where a
+    // drawing stops being legible, and it is not a thing an argument can settle: it has to be
+    // looked at. Use with `--title-shot`.
+    bool icon_sheet = false;
+
+    // `--shelf clips`: which shelf the library window shows. Every shelf but *worlds* was reachable
+    // only by clicking, so a report about one of them could only be answered by clicking too.
+    std::string shelf;
+
     // Which combination the logo draws, fixed. 0 is "whatever the seed the shell chose says", which
     // is different on every launch on purpose (src/ui/logo.hpp) — and a photograph of a thing that
     // is different every time cannot be compared with the last one, so a photograph of the mark
@@ -420,6 +435,10 @@ Options parse_options(int argc, char** argv) {
             options.title_frames = next_number(options.title_frames);
         } else if (arg == "--title-open") {
             if (i + 1 < argc) options.title_open = argv[++i];
+        } else if (arg == "--icon-sheet") {
+            options.icon_sheet = true;
+        } else if (arg == "--shelf") {
+            if (i + 1 < argc) options.shelf = argv[++i];
         } else if (arg == "--logo-seed") {
             options.logo_seed = static_cast<u32>(next_number(options.logo_seed));
         } else if (arg == "--logo-change") {
@@ -1110,6 +1129,9 @@ public:
     // the player going back to the title; `wants_title` says which.
     int play(const Options& options);
     bool wants_title() const { return wants_title_; }
+    // Set instead when the way out was *into another world*: the tear-down is the same, and this
+    // is what the loop opens next instead of showing the title.
+    const std::string& wants_world() const { return wants_world_; }
 
 private:
     bool create_render_target(u32 width, u32 height);
@@ -1147,6 +1169,8 @@ private:
     // reaches ninety-nine per cent and then sits there.
     void draw_loading();
     std::string loading_cache_path() const;
+    // Where a built world and its load timings are kept: under the data root, not beside the world.
+    static std::string cache_file_for(const std::string& world_path, const char* suffix);
 
     void stream(f64 seconds);
     void update_tools(const InputState& input, bool chisel_has_wheel, bool clipboard_has_wheel,
@@ -1171,6 +1195,10 @@ private:
     ShellPass& shell_pass_;
     ui::Shell& shell_;
     bool wants_title_ = false;
+    std::string wants_world_;
+    // Why this world came up empty, if it did. Said once, on the screen, by the first frame of
+    // interface after the loading screen goes.
+    std::string world_trouble_;
     bool shell_drawn_ = false;   // this frame's list had something in it
     Hud hud_;
 
@@ -1831,10 +1859,39 @@ std::string time_left(f64 seconds) {
     return buffer;
 }
 
+// Where what this machine worked out about a world is kept: under the data root, in `cache\`, and
+// NOT beside the world (D493).
+//
+// Reported as *why are there multiple files for the same world, a world should be just one file* —
+// and the shelf was showing three: the `.wsworld`, a nineteen-megabyte `.world` built from it, and
+// a `.load` of how long each stage took. A library is a file manager over a real folder, so
+// everything in that folder is on the screen, and two of those three are not things a player has
+// any reason to see, move, copy or think about. They are also not *theirs*: they are what this
+// machine derived, they are worthless on any other machine, and a backup of the folder should not
+// be carrying a third of a gigabyte of them.
+//
+// The name carries a hash of the world's full path as well as its stem, because two worlds called
+// `house` in two folders are two worlds. A collision would only cost a rebuild — the file is keyed
+// by content and a mismatch is discarded — but a collision that costs a rebuild every time you
+// swap between them is a cache that stopped working for the one player who hit it.
+std::string Application::cache_file_for(const std::string& world_path, const char* suffix) {
+    std::error_code error;
+    const std::filesystem::path full =
+        std::filesystem::absolute(std::filesystem::path(world_path), error);
+    const std::string text = error ? world_path : full.lexically_normal().string();
+    u64 hash = 0xCBF29CE484222325ull;
+    for (char c : text) hash = hash_combine(hash, static_cast<u64>(static_cast<u8>(c)));
+    char stamp[24];
+    std::snprintf(stamp, sizeof(stamp), "-%016llx", static_cast<unsigned long long>(hash));
+    const std::filesystem::path into = ui::default_root() / "cache";
+    std::filesystem::create_directories(into, error);
+    return (into / (std::filesystem::path(world_path).stem().string() + stamp + suffix)).string();
+}
+
 std::string Application::loading_cache_path() const {
     const std::string clip =
         options_.clip_file.empty() ? default_clip_path() : options_.clip_file;
-    return clip + ".load";
+    return cache_file_for(clip, ".load");
 }
 
 void Application::draw_loading() {
@@ -2362,7 +2419,12 @@ void Application::build_world() {
 
         std::vector<forge::SourceLine> origin;
         std::vector<forge::ScriptError> trouble;
-        const std::string source = forge::expand_includes(path, origin, trouble);
+        // The clips the game ships with are where an include that is not beside its own file is
+        // looked for (D494). That is what lets `facility.wsworld` be one file on the shelf: the
+        // twenty-two pieces it is assembled out of live with the game, are never copied anywhere,
+        // and therefore cannot be deleted out from under it.
+        const std::string source = forge::expand_includes(
+            path, origin, trouble, (std::filesystem::path(Window::base_path()) / "clips").string());
 
         JobSystem jobs;
 
@@ -2461,7 +2523,7 @@ void Application::build_world() {
         // The resolution comes from the parsed script rather than from an assumption about the
         // default, because a clip can name its own and a key that ignored that would hand back a
         // world sampled at the wrong size.
-        const std::string cache_path = path + ".world";
+        const std::string cache_path = cache_file_for(path, ".world");
         // Keyed on the source WITHOUT its author tag. Who made a file is not part of what the file
         // builds, and counting it means a world put on the shelf — which is stamped with its
         // author as it is copied (D447) — no longer matches the world already built beside it. The
@@ -2647,6 +2709,16 @@ void Application::build_world() {
         // Nothing to fall back to, and that is deliberate. An empty world says plainly that the
         // clip did not load; a stand-in scene would say the clip loaded and looked like that.
         WS_LOG_ERROR("clip", "'{}' did not build ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the world is empty", path);
+        // And it says so ON THE SCREEN, which it did not.
+        //
+        // "the world is empty" was a line in a log file, so what a player got was a sky with
+        // nothing in it and no way to tell that from the renderer having broken -- which is
+        // exactly what was reported, twice, and both times the answer was in a log nobody had
+        // been given a reason to open. The FIRST error is the one that is said: the rest of any
+        // list of them is what the first one caused.
+        world_trouble_ = script.errors.empty()
+                             ? std::string("this world built to nothing")
+                             : ("did not build: " + script.errors.front().message);
         materials_.push_back(1);
         material_index_ = 0;
     }
@@ -3400,13 +3472,44 @@ void Application::run_shell(f64 seconds) {
     if (!shell_pass_.ensure(window_.width(), window_.height())) return;
 
     shell_.set_stage(ui::Stage::World);
+    // Once, on the first frame of interface this world gets. Long enough to read and to act on:
+    // a world that says why it is empty is a world a player can go and look at the file of.
+    if (!world_trouble_.empty()) {
+        shell_.say(world_trouble_, 12.0);
+        world_trouble_.clear();
+    }
+    // The numbers the overlay says, handed over before the frame that draws them. The shell owns
+    // where it goes and what it looks like; this owns what is true.
+    ui::Overlay& overlay = shell_.overlay();
+    overlay.on = hud_.overlay();
+    overlay.fps = (stats_.last_ms() > 0.0) ? 1000.0 / stats_.last_ms() : 0.0;
+    overlay.frame_ms = stats_.last_ms();
+    overlay.worst_ms = stats_.percentile_ms(0.99);
+    overlay.gpu_ms = profiler_.total_gpu_ms();
+    overlay.width = swapchain_.extent().width;
+    overlay.height = swapchain_.extent().height;
     const ui::Verdict verdict =
         shell_.frame(window_.input(), window_.width(), window_.height(), seconds);
     // Composition is on only while something is being typed into. Leaving it on puts an
     // input-method window over the game, for the whole session, on a machine set up for a language
     // that needs one.
     window_.set_text_input(shell_.ui().wants_text_input());
+    // Kept up to date rather than written on the way out, at most once a second (D496).
+    shell_.save_if_changed();
     if (verdict.leave_world) wants_title_ = true;
+    // A world chosen while you are standing in another one.
+    //
+    // The library is the same window here as it is on the title, and it lists the same worlds, so
+    // opening one from inside a world was something a player would obviously try and the only
+    // thing that happened was nothing. Going out to the title to come back in is not a step
+    // anybody wants; it is a step the code needed because the only thing that could open a world
+    // was the loop the title runs in. So this one ends the same way leaving does — the world is
+    // torn down, every pool with it (`02-architecture-overview.md`) — and hands the next one out
+    // instead of handing out nothing.
+    if (verdict.open_world && !verdict.world.empty()) {
+        wants_world_ = verdict.world.string();
+        wants_title_ = true;
+    }
     apply_knobs();
     shell_drawn_ = !shell_.ui().draw().empty();
 }
@@ -5975,6 +6078,11 @@ int Application::play(const Options& options) {
     const u64 start_ns = now_ns();
     u64 last_ns = start_ns;
 
+    // Nothing held, nothing pressed, nothing typed and no wheel. What the game is given on the
+    // frames the interface has the input, so that "the shell has it" is one branch here rather than
+    // a condition every tool has to remember to ask.
+    const InputState kNoInput{};
+
     while (window_.pump()) {
         const u64 frame_start = now_ns();
         stats_.push(ns_to_ms(frame_start - last_ns));
@@ -5991,19 +6099,32 @@ int Application::play(const Options& options) {
         }
 
         const InputState& input = window_.input();
-        // Escape, in three steps, and the third is not "quit".
+        // Escape, in ONE step, and it is not "quit".
         //
-        // It used to be two: give the mouse back, then end the process. That was right while there
-        // was one world per process and nothing to go back to. With a title behind it, a key that
-        // ends the game outright is a key that loses a world nobody meant to leave — so the third
-        // step opens the shell, the fourth closes it again, and leaving is a decision made in a
-        // window that says what it is (D441, D442).
+        // It was two: the first press gave the mouse back and the second opened a window — so the
+        // key everybody in the world presses to reach the settings had to be pressed twice before
+        // anything appeared at all, and the thing that appeared was the library on its own. Both
+        // halves of that were wrong for the same reason. Giving the mouse back is not a state a
+        // player asked to be in; it is what opening the menu *costs*, so it belongs to the same
+        // press. And the two families of window are one state, not two (D443, `Shell::open_windows`).
+        //
+        // So this is a toggle between two named states and there is no third. **Menu**: both windows
+        // up, the pointer free, and the game deaf to everything (see `shell_has_input` below).
+        // **Playing**: no windows, the mouse captured, every binding live. Closing puts the mouse
+        // back where it was, because a menu you close is a game you are back in — which is also
+        // what stops the old second-press-does-nothing frame from existing.
         if (input.was_pressed(Key::Escape) && !shell_.ui().wants_keys()) {
-            if (mouse_look_) {
-                mouse_look_ = false;   // first Escape releases the mouse
-                window_.set_relative_mouse(false);
+            if (shell_.windows_open()) {
+                shell_.close_windows();
+                mouse_look_ = true;
+                // For the hand that was already holding a button when it reached for Escape: the
+                // press it is still holding belongs to the menu it just left, not to the chisel.
+                swallow_click_ = true;
+                window_.set_relative_mouse(true);
             } else {
-                shell_.toggle_windows();
+                shell_.open_windows();
+                mouse_look_ = false;
+                window_.set_relative_mouse(false);
             }
         }
         if (input.was_pressed(Key::F1)) hud_.toggle_developer_panel();
@@ -6042,21 +6163,51 @@ int Application::play(const Options& options) {
             updater_.begin_download();
         }
 
+        // Who this frame's input belongs to, decided ONCE and for everything.
+        //
+        // The shell's windows are a mode rather than an overlay. While they are up the pointer is
+        // free and the mouse is not captured — and every key the game binds went on reaching the
+        // world anyway, because only the *mouse* was ever asked about. So dragging a slider on the
+        // left of the screen also flew the camera with the other hand, the wheel over a value also
+        // changed the flight speed, a digit typed into a field also swapped the tool in your hand,
+        // and Z was undo while you were reading the settings. Those are one bug, not eight, and the
+        // fix is one line: the game is handed an EMPTY input for those frames rather than being
+        // asked to remember, binding by binding, who each key was for.
+        //
+        // `wants_keys` is in it for the frame a field takes focus on: the windows say the mode and
+        // the field says the keyboard, and either of them is enough.
+        //
+        // The F-keys above are deliberately outside this. They are the developer's, they are not
+        // bound to anything in the world, and a panel that could not be opened over the menu would
+        // be a panel that cannot be opened while looking at the menu.
+        const bool shell_has_input = shell_.windows_open() || shell_.ui().wants_keys();
+        const InputState& game = shell_has_input ? kNoInput : input;
+
         // Clicking the world captures the mouse; from then on the buttons belong to the
         // chisel. That first click is swallowed, or capturing the mouse would also start a
         // cut you never asked for.
         //
-        // The shell gets first refusal on the pointer for the same reason the developer HUD does:
-        // a click on a docked window is a click on the window, and the world behind it must not
-        // also act on it.
-        if (!mouse_look_) {
+        // With the windows up, a press in the middle — the part of the screen a window may never
+        // cover — is the other way back to playing, and it does exactly what Escape does. Without
+        // it the only way out of the menu is a key, which is the one thing an interface a child who
+        // cannot read can use is not allowed to require.
+        if (shell_has_input) {
+            if (input.mouse_left_pressed && shell_.windows_open() &&
+                shell_.centre().holds(input.mouse_x, input.mouse_y) && !hud_.wants_mouse()) {
+                shell_.close_windows();
+                mouse_look_ = true;
+                swallow_click_ = true;
+                window_.set_relative_mouse(true);
+            }
+        } else if (!mouse_look_) {
             if ((input.mouse_left || input.mouse_right) && !hud_.wants_mouse() &&
                 !shell_.ui().wants_mouse()) {
                 mouse_look_ = true;
                 swallow_click_ = true;
                 window_.set_relative_mouse(true);
             }
-        } else if (swallow_click_ && !input.mouse_left && !input.mouse_right) {
+        }
+        if (mouse_look_ && swallow_click_ && !input.mouse_left && !input.mouse_right) {
             swallow_click_ = false;
         }
 
@@ -6071,7 +6222,7 @@ int Application::play(const Options& options) {
         u32 held_slot = kToolSlots;
         for (u32 slot = 0; slot < kToolSlots; ++slot) {
             const Key key = static_cast<Key>(static_cast<u16>(Key::Digit1) + slot);
-            if (input.is_down(key)) {
+            if (game.is_down(key)) {
                 held_slot = slot;
                 break;
             }
@@ -6083,16 +6234,16 @@ int Application::play(const Options& options) {
         //
         // It claims the wheel ahead of everything else, including tool cycling, because it is
         // a modifier you hold deliberately ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the same bargain G already makes for distance.
-        const bool hollow_has_wheel = input.is_down(Key::H);
-        if (hollow_has_wheel && input.wheel != 0.0f) {
-            const i32 step = (input.wheel > 0.0f) ? 1 : -1;
+        const bool hollow_has_wheel = game.is_down(Key::H);
+        if (hollow_has_wheel && game.wheel != 0.0f) {
+            const i32 step = (game.wheel > 0.0f) ? 1 : -1;
             hollow_ = static_cast<u32>(std::max(0, static_cast<i32>(hollow_) + step));
             WS_LOG_INFO("tool", "hollow {}",
                         (hollow_ == 0) ? std::string("off (solid)")
                                        : std::to_string(hollow_) + " voxel shell");
         }
 
-        const bool chisel_has_wheel = !hollow_has_wheel && input.is_down(Key::G);
+        const bool chisel_has_wheel = !hollow_has_wheel && game.is_down(Key::G);
         // The clipboard only claims the wheel once it is holding something. With nothing
         // selected it has nothing to slide, so the wheel goes back to flight speed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which
         // is what you want while flying somewhere to make a selection.
@@ -6105,18 +6256,18 @@ int Application::play(const Options& options) {
         const ToolKind tool_before = toolbelt_.active();
         for (u32 slot = 0; slot < kToolSlots; ++slot) {
             const Key key = static_cast<Key>(static_cast<u16>(Key::Digit1) + slot);
-            if (input.was_pressed(key)) toolbelt_.select_slot(slot);
+            if (game.was_pressed(key)) toolbelt_.select_slot(slot);
         }
-        if (cycling && input.wheel != 0.0f) {
+        if (cycling && game.wheel != 0.0f) {
             toolbelt_.select_slot(held_slot);
-            toolbelt_.cycle(static_cast<i32>(input.wheel));
+            toolbelt_.cycle(static_cast<i32>(game.wheel));
         }
         // Putting a tool away puts down what it was holding. A ghost that survived a trip
         // through the chisel and reappeared later would be a surprise, not a convenience.
         if (toolbelt_.active() != tool_before) clipboard_.drop();
 
         const f64 dt = (stats_.last_ms() > 0.0) ? stats_.last_ms() * 0.001 : 1.0 / 60.0;
-        camera_.update(input, (dt > 0.1) ? 0.1 : dt, mouse_look_, !tool_has_wheel);
+        camera_.update(game, (dt > 0.1) ? 0.1 : dt, mouse_look_, !tool_has_wheel);
 
         // A fixed step rather than the real frame time, so the same frame number is the same
         // place on every machine and a measurement is comparable between builds.
@@ -6144,7 +6295,7 @@ int Application::play(const Options& options) {
             cut_pending_ = false;
             WS_LOG_INFO("frame", "camera cut at measured frame {}", cut_at_);
         }
-        update_tools(input, chisel_has_wheel, clipboard_has_wheel, (dt > 0.1) ? 0.1 : dt);
+        update_tools(game, chisel_has_wheel, clipboard_has_wheel, (dt > 0.1) ? 0.1 : dt);
 
         if (window_.minimised()) continue;
         if (window_.resized_this_frame() || swapchain_.needs_recreate()) handle_resize();
@@ -6716,7 +6867,7 @@ int run_windowed(const Options& options) {
         // drawn, so the run opens a world directly, exactly as it did before Stage 15.
         WS_LOG_ERROR("shell", "no interface this run; opening a world directly");
     }
-    shell.load(ui::default_root());
+    shell.load(ui::default_root(), std::filesystem::path(Window::base_path()));
     // A pinned mark, for a photograph that has to be comparable with the last one. Before the first
     // frame, so the seed the shell would otherwise choose from the clock is never chosen at all.
     if (options.logo_seed != 0) shell.pin_logo(options.logo_seed);
@@ -6779,7 +6930,11 @@ int run_windowed(const Options& options) {
             // no render target. One compute pass draws the room, one draws the marks, and the
             // whole of it is up before anything expensive has been created.
             bool leave = false;
+            if (!round.shelf.empty() && !shell.open_shelf(round.shelf)) {
+                WS_LOG_WARN("shell", "there is no shelf called '{}'", round.shelf);
+            }
             if (!round.title_open.empty()) shell.open_window(round.title_open, true);
+            shell.show_icons(round.icon_sheet);
             u64 title_frame = 0;
             for (;;) {
                 if (!window.pump()) {
@@ -6806,6 +6961,7 @@ int run_windowed(const Options& options) {
                 const ui::Verdict verdict =
                     shell.frame(window.input(), window.width(), window.height(), seconds);
                 window.set_text_input(shell.ui().wants_text_input());
+                shell.save_if_changed();
 
                 const ui::Colour& accent = shell.ui().accent();
                 const f32 accent_rgb[3]{accent.r, accent.g, accent.b};
@@ -6865,12 +7021,22 @@ int run_windowed(const Options& options) {
                                                              shell_pass, shell);
             result = application->play(round);
             const bool back_to_title = application->wants_title();
+            // A world chosen from inside another one. The tear-down below is the same either way;
+            // the only difference is what happens next, and this is copied out before the object
+            // that holds it goes.
+            const std::string next_world = application->wants_world();
             // The world goes here, at the end of this scope, and every pool in it goes with it —
             // which is `02-architecture-overview.md`'s rule made structural rather than remembered.
             application.reset();
 
             if (result != 0 || !back_to_title) {
                 done = true;
+            } else if (!next_world.empty()) {
+                // Straight into the next one, past the title. The world just left is gone with
+                // every pool it owned, so this is the same fresh start opening one from the title
+                // is — it simply does not stop to show a screen nobody asked for.
+                round.world = next_world;
+                round.title_open.clear();
             } else if (scripted && round.cycle == 0) {
                 done = true;
             } else {

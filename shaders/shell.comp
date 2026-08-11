@@ -88,236 +88,544 @@ const uint kLogo = 6u;
 // --- the drawings -------------------------------------------------------------------------------
 //
 // An icon is the control and the label is the fallback, so this is the interface's actual
-// vocabulary. Each is a picture of what the thing DOES, drawn on a thirteen by thirteen cell so it
-// belongs to the same alphabet as the letters beside it — and each ANIMATES to say it did it,
-// never to say a pointer is over it. `phase` is 1 at rest and falls to 0 on a press, so a drawing
-// that does not move simply ignores it.
+// vocabulary. Each is a picture of what the thing DOES, and each ANIMATES to say it did it, never
+// to say a pointer is over it.
 //
-// The cell is in `c`, 0 to 12 on each axis, y down. Adding an icon is a function here and a name in
-// src/ui/draw.hpp.
+// # Why these are distance fields and not a grid of cells
+//
+// They were a thirteen-by-thirteen grid of booleans, and a grid is a resolution: at the size a row
+// sets an icon — sixteen interface pixels, which on a Steam Deck is sixteen DEVICE pixels — a cell
+// is one and a quarter pixels. So every diagonal was a staircase, every circle a lump, nothing
+// could be drawn finer than a cell however good the screen was, and there was no antialiasing
+// anywhere because a boolean has no edge to soften. A signed distance has no resolution at all:
+// the drawing is stated in continuous coordinates and sampled at whatever the screen has, so one
+// source is a clean shape at sixteen pixels and a detailed one at ninety-six, and the coverage of
+// an edge is the distance to it measured in device pixels — which is the one number the grid could
+// never know.
+//
+// # The rules the set is drawn to
+//
+//   **A stroke is a letter's stroke.** The cell below is 64 units across and an icon is nominally
+//   16 interface pixels wide against text set at 2 device pixels per glyph pixel, so a letter's
+//   stroke is 8 units and `kIconStroke` is a shade under it. An icon that is lighter or heavier
+//   than the word beside it reads as a different interface.
+//   **No stroke is ever thinner than a pixel and a bit.** `w` is floored against the sampling, so
+//   an icon shrunk to 0.55 of nominal on a small window gets a heavier drawing rather than a
+//   fainter one — which is the opposite of what happens when a fixed width is scaled down.
+//   **Outlines for things, fills for figures and for what is solid.** A pupil, a nib, a person and
+//   a book are masses; a folder, a page and a bin are containers. Filling a container closes the
+//   inside that says what it is.
+//
+// The cell runs 0 to 64 on each axis, y down. `aa` is one device pixel measured in those units,
+// `w` is the stroke, and `m` is the motion: **1 on the press, 0 at rest**, and briefly NEGATIVE on
+// the way home because `Ui`'s press curve overshoots (src/ui/widgets.cpp) so a drawing settles
+// rather than stops. Every function here is written so that a small negative `m` is a small
+// counter-swing rather than a shape turning inside out.
+//
+// Adding an icon is a function here and a name in src/ui/draw.hpp.
 
-bool cell_ring(vec2 p, float inner, float outer) {
-    float r = length(p - vec2(6.0));
-    return r >= inner && r <= outer;
+const float kIconStroke = 7.0;
+
+// --- the primitives ---
+//
+// All exact except the ellipse, whose error is a scale factor on the distance and therefore
+// invisible on a stroke of constant width.
+
+float sd_circle(vec2 p, vec2 c, float r) { return length(p - c) - r; }
+
+float sd_ellipse(vec2 p, vec2 c, vec2 r) {
+    vec2 q = (p - c) / max(r, vec2(0.001));
+    return (length(q) - 1.0) * min(r.x, r.y);
 }
 
-bool icon_world(ivec2 c, float phase) {
-    vec2 p = vec2(c) - vec2(6.0);
-    float r = length(p);
-    if (r > 6.0) return false;
-    // A sphere made of voxels: the meridians step rather than curve, because that is what a
-    // spherical thing in this game actually looks like.
-    if (r > 4.6) return true;
-    int band = int(floor((p.y + 6.0) / 3.0));
-    float turn = phase * 2.0;
-    int column = int(floor((p.x + 6.0 + turn) / 3.0));
-    return ((band + column) & 1) == 0;
+float sd_box(vec2 p, vec2 c, vec2 extent) {
+    vec2 d = abs(p - c) - extent;
+    return length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0);
 }
 
-bool icon_settings(ivec2 c, float phase) {
-    // Three sliders at three settings, and the handles slide when it is pressed — which is exactly
-    // what pressing it leads to. The tracks are one cell; the handles are three, because a handle
-    // the same thickness as its track is a handle you cannot see.
+float sd_round_box(vec2 p, vec2 c, vec2 extent, float r) {
+    r = min(r, min(extent.x, extent.y));
+    return sd_box(p, c, extent - vec2(r)) - r;
+}
+
+// Unsigned: a line of width `t` is `sd_line(...) - t * 0.5`, which is a capsule and therefore
+// joins the next one without a notch at the corner.
+float sd_line(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+float sd_triangle(vec2 p, vec2 p0, vec2 p1, vec2 p2) {
+    vec2 e0 = p1 - p0, e1 = p2 - p1, e2 = p0 - p2;
+    vec2 v0 = p - p0, v1 = p - p1, v2 = p - p2;
+    vec2 q0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+    vec2 q1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+    vec2 q2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+    float s = sign(e0.x * e2.y - e0.y * e2.x);
+    vec2 d = min(min(vec2(dot(q0, q0), s * (v0.x * e0.y - v0.y * e0.x)),
+                     vec2(dot(q1, q1), s * (v1.x * e1.y - v1.y * e1.x))),
+                 vec2(dot(q2, q2), s * (v2.x * e2.y - v2.y * e2.x)));
+    return -sqrt(d.x) * sign(d.y);
+}
+
+// The outline of a shape, which is what most of these are made of.
+float sd_edge(float d, float w) { return abs(d) - w * 0.5; }
+// Take `b` out of `a`, and keep only the part of `a` that is inside `b`.
+float sd_cut(float a, float b) { return max(a, -b); }
+float sd_keep(float a, float b) { return max(a, b); }
+// The half-plane above `y` and the half-plane below it, y being DOWN. `sd_keep(shape, sd_below(y))`
+// is the part of the shape under the line; that is worth spelling out because getting it backwards
+// draws the other half of the shape, which is a picture rather than an error.
+float sd_below(float y, vec2 p) { return y - p.y; }
+float sd_above(float y, vec2 p) { return p.y - y; }
+
+// Rotating the POINT by +a draws the shape turned by -a, which on a y-down screen is
+// anticlockwise: a lid whose right end lifts.
+vec2 sd_turn(vec2 p, vec2 about, float a) {
+    vec2 q = p - about;
+    float s = sin(a);
+    float c = cos(a);
+    return about + vec2(q.x * c - q.y * s, q.x * s + q.y * c);
+}
+
+// --- the drawings ---
+
+float icon_world(vec2 p, float m, float w) {
+    // A wireframe globe that TURNS on its axis, and turning is a thing a drawing has to earn.
+    //
+    // The first version swept whole ellipses across the disc. A whole ellipse is a meridian's near
+    // half and its far half drawn as one shape, and that shape is symmetrical about the axis — so
+    // it has no front and no back, and what it reads as is two lines breathing in and out. Nothing
+    // in it goes anywhere.
+    //
+    // A sphere is not symmetrical about its axis: half of it is facing you. So each meridian is
+    // drawn as HALF an ellipse — the half on its own side of the pole — and only while it is on the
+    // near side at all. Now the thing an eye is given is an arc that comes into view at one rim,
+    // travels across the face, and leaves at the other, which is what horizontal rotation looks
+    // like and is the only thing that does.
+    //
+    // The latitudes do not move, because on a sphere spun about its poles they do not: they are
+    // exactly horizontal lines at every moment of the turn. That is the other half of reading as a
+    // rotation — something has to be standing still for the rest of it to be turning against.
+    //
+    // A quarter turn is a whole revolution here. Four meridians a quarter turn apart are the same
+    // four meridians after a quarter turn, so the picture at the end is the picture at the start
+    // and the animation closes instead of snapping back.
+    // The inside is drawn lighter than the rim and spread as wide as it will go. Three latitudes
+    // and two arcs inside a circle is five strokes across twenty-five units, and at the smallest
+    // size — where the stroke has a floor and the drawing does not — five strokes at full weight
+    // close the gaps between themselves and the globe comes out as a disc.
+    float thin = w * 0.52;
+    float d = sd_edge(sd_circle(p, vec2(32.0), 25.0), w);
+    d = min(d, sd_line(p, vec2(7.4, 32.0), vec2(56.6, 32.0)) - thin * 0.5);
+    d = min(d, sd_line(p, vec2(11.5, 18.0), vec2(52.5, 18.0)) - thin * 0.5);
+    d = min(d, sd_line(p, vec2(11.5, 46.0), vec2(52.5, 46.0)) - thin * 0.5);
+
+    const float kQuarter = 1.5708;
+    float turn = (1.0 - m) * kQuarter + 0.35;
+    for (int i = 0; i < 4; ++i) {
+        float lon = turn + float(i) * kQuarter;
+        // Round the back, and therefore not drawn. Every pixel of the icon agrees about this, so
+        // it costs a branch and no divergence.
+        if (cos(lon) <= 0.0) continue;
+        // Where it projects to: signed, because the sign is which side of the pole it is on. The
+        // ellipse field degrades to the distance from the polar axis as this goes to nought, which
+        // is exactly what a meridian looks like when it is facing you, so no special case is needed
+        // for the one that is.
+        float rx = 25.0 * sin(lon);
+        // Just inside the rim, so a meridian meeting the pole does not put a spike through it.
+        float arc = sd_edge(sd_ellipse(p, vec2(32.0), vec2(max(abs(rx), 0.5), 24.2)), w * 0.62);
+        d = min(d, sd_keep(arc, (rx >= 0.0) ? (32.0 - p.x) : (p.x - 32.0)));
+    }
+    return d;
+}
+
+float icon_settings(vec2 p, float m, float w) {
+    // Three values at three settings, and the handles slide when it is pressed — which is exactly
+    // what pressing this leads to. The track is CUT where its handle sits, so a handle reads as a
+    // handle rather than as a bulge in the line.
+    float rest[3] = float[3](22.0, 42.0, 30.0);
+    float moved[3] = float[3](42.0, 20.0, 47.0);
+    float d = 1e9;
     for (int i = 0; i < 3; ++i) {
-        float track_y = 2.0 + float(i) * 4.0;
-        float at = 2.5 + float(i) * 3.0 + (1.0 - phase) * 2.5;
-        if (abs(float(c.y) - track_y) <= 1.0 && abs(float(c.x) - at) <= 1.0) return true;
-        if (float(c.y) == track_y && c.x >= 1 && c.x <= 11) return true;
+        float y = 12.0 + float(i) * 20.0;
+        float at = mix(rest[i], moved[i], clamp(m, -0.15, 1.0));
+        float track = sd_line(p, vec2(7.0, y), vec2(57.0, y)) - w * 0.32;
+        track = sd_cut(track, sd_round_box(p, vec2(at, y), vec2(w * 0.98, w * 1.5), w * 0.4));
+        float knob = sd_round_box(p, vec2(at, y), vec2(w * 0.62, w * 1.12), w * 0.36);
+        d = min(d, min(track, knob));
     }
-    return false;
+    return d;
 }
 
-bool icon_library(ivec2 c, float phase) {
-    // A shelf of upright things, one of which is being taken out.
-    if (c.y > 11 || c.y < 2) return c.y == 12 && c.x >= 1 && c.x <= 11;
-    if (c.x == 2 || c.x == 4 || c.x == 8 || c.x == 10) return true;
-    if (c.x == 6) return float(c.y) > 2.0 + (1.0 - phase) * 2.0;
-    return false;
-}
-
-bool icon_community(ivec2 c, float phase) {
-    // Three figures, the ones you can reach. The outer two drift in as it is pressed, because
-    // that is what the tab is for.
-    float pull = (1.0 - phase) * 1.5;
+float icon_library(vec2 p, float m, float w) {
+    // A shelf of upright things and the one being taken off it. Filled and separated, because the
+    // GAPS are what say "several things side by side" and an outline spends every one of them on
+    // its own two edges.
+    //
+    // THREE of them, not five. At the size a row sets an icon — sixteen device pixels, which is
+    // what a small desktop gives every row — five uprights are three pixels apart including their
+    // gaps, and five bars of five heights read as a bar chart. Three at eleven units across, with
+    // six between, is two and a half pixels of book and one and a half of gap, and that is a shelf.
+    float d = sd_round_box(p, vec2(32.0, 55.0), vec2(26.0, 3.4), 1.6);
+    float at[3] = float[3](15.0, 32.0, 49.0);
+    float top[3] = float[3](17.0, 10.0, 20.0);
     for (int i = 0; i < 3; ++i) {
-        float x = 2.0 + float(i) * 4.0 + (i == 0 ? pull : (i == 2 ? -pull : 0.0));
-        vec2 p = vec2(float(c.x) - x, float(c.y));
-        if (p.y <= 5.0 && length(vec2(p.x, p.y - 3.0)) < 2.0) return true;
-        if (p.y > 6.0 && p.y < 12.0 && abs(p.x) < 2.0) return true;
+        float lift = (i == 1) ? max(m, -0.2) * 13.0 : 0.0;
+        float t = top[i] - lift;
+        float b = 51.0 - lift;
+        float book = sd_round_box(p, vec2(at[i], (t + b) * 0.5), vec2(5.5, (b - t) * 0.5), 1.8);
+        // A band across the spine, which is the detail the larger sizes get and the smallest one
+        // simply loses — a cut narrower than a pixel is a cut that costs nothing.
+        book = sd_cut(book, sd_box(p, vec2(at[i], t + 8.0), vec2(3.8, 1.3)));
+        d = min(d, book);
     }
-    return false;
+    return d;
 }
 
-bool icon_editor(ivec2 c, float phase) {
-    // Lines of text with a caret at the end of one of them.
-    if ((c.y % 3) != 0 || c.y > 11) return false;
-    int line = c.y / 3;
-    int length = 10 - line * 2;
-    if (c.x >= 1 && c.x <= length) return true;
-    return line == 1 && c.x == length + 2 && phase > 0.5;
+// A person, measured from the NECK: the head above it, the shoulders below. Two figures at two
+// sizes therefore stand on the same line whatever their sizes are, which is what makes one read as
+// further away rather than as smaller.
+float icon_person(vec2 p, vec2 neck, float s) {
+    float head = sd_circle(p, neck - vec2(0.0, 10.0 * s), 7.6 * s);
+    float body = sd_round_box(p, neck + vec2(0.0, 11.0 * s), vec2(12.5 * s, 13.0 * s), 9.5 * s);
+    return min(head, sd_keep(body, sd_below(neck.y, p)));
 }
 
-bool icon_folder(ivec2 c, float phase) {
-    // And its lid opens when it is entered.
-    float lift = (1.0 - phase) * 2.0;
-    if (c.y >= 4 && c.y <= 12 && c.x >= 1 && c.x <= 11) {
-        return c.x == 1 || c.x == 11 || c.y == 12 || float(c.y) < 5.0 + lift;
+float icon_community(vec2 p, float m, float w) {
+    // The people you can reach.
+    //
+    // TWO of them, and it was three. Three is what the word means and three is what a tab called
+    // *community* is drawn as everywhere — but at sixteen device pixels each figure had eleven of
+    // the sixty-four units to be drawn in, and three figures came out as three dots in a row. Two
+    // are a group as plainly as three are, at half again the size each. The number was never the
+    // meaning; several-of-them-and-not-one is, and two says that.
+    //
+    // The one behind is CUT where the one in front is, so two overlapping bodies read as two rather
+    // than as one wide one — and it steps in when the tab is pressed, which is what the tab does.
+    float front = icon_person(p, vec2(25.0, 30.0), 1.05);
+    float back = icon_person(p, vec2(45.0 - m * 6.0, 26.0), 0.85);
+    return min(front, sd_cut(back, front - w * 0.55));
+}
+
+float icon_editor(vec2 p, float m, float w) {
+    // Lines of text, and a caret on the one being written. The press writes the line rather than
+    // blinking the caret: a blink says "here", and this has to say "this is where writing happens".
+    float len[3] = float[3](50.0, 38.0, 46.0);
+    float d = 1e9;
+    for (int i = 0; i < 3; ++i) {
+        float y = 12.0 + float(i) * 13.5;
+        d = min(d, sd_line(p, vec2(7.0, y), vec2(7.0 + len[i], y)) - w * 0.42);
     }
-    return c.y == 3 && c.x >= 1 && c.x <= 5;
+    float run = mix(26.0, 6.0, clamp(m, 0.0, 1.0));
+    float y = 52.5;
+    d = min(d, sd_line(p, vec2(7.0, y), vec2(7.0 + run, y)) - w * 0.42);
+    d = min(d, sd_round_box(p, vec2(11.0 + run + w * 0.4, y), vec2(w * 0.30, 6.5), w * 0.22));
+    return d;
 }
 
-bool icon_up(ivec2 c, float phase) {
-    float rise = (1.0 - phase) * 2.0;
-    float y = float(c.y) + rise;
-    if (abs(float(c.x) - 6.0) < 1.5 && y > 4.0 && y < 12.0) return true;
-    return y >= 2.0 && y <= 5.0 && abs(float(c.x) - 6.0) <= (y - 1.0);
+float icon_folder(vec2 p, float m, float w) {
+    // A folder, and its front OPENS when it is entered — leaning away from its own bottom edge
+    // rather than sliding, because a lid that slides is a drawer.
+    float back = sd_round_box(p, vec2(32.0, 35.0), vec2(26.0, 20.0), 3.0);
+    back = min(back, sd_round_box(p, vec2(19.5, 16.0), vec2(13.5, 5.5), 2.5));
+    vec2 q = sd_turn(p, vec2(8.0, 54.0), 0.30 * m);
+    float front = sd_round_box(q, vec2(32.0, 43.0), vec2(24.0, 11.0), 3.0);
+    // The back is drawn only where the front is not over it.
+    float d = sd_cut(sd_edge(back, w), front - w * 0.9);
+    return min(d, sd_edge(front, w));
 }
 
-bool icon_new(ivec2 c, float phase) {
-    float grow = 4.0 + (1.0 - phase) * 1.5;
-    return (abs(float(c.x) - 6.0) < 1.5 && abs(float(c.y) - 6.0) <= grow) ||
-           (abs(float(c.y) - 6.0) < 1.5 && abs(float(c.x) - 6.0) <= grow);
+float icon_up(vec2 p, float m, float w) {
+    // Out of this folder and into the one above: the ceiling stays put, and the arrow goes to it.
+    float d = sd_line(p, vec2(12.0, 9.0), vec2(52.0, 9.0)) - w * 0.5;
+    vec2 q = p + vec2(0.0, m * 8.0);
+    d = min(d, sd_line(q, vec2(32.0, 56.0), vec2(32.0, 23.0)) - w * 0.5);
+    d = min(d, sd_line(q, vec2(32.0, 21.0), vec2(18.5, 34.5)) - w * 0.5);
+    d = min(d, sd_line(q, vec2(32.0, 21.0), vec2(45.5, 34.5)) - w * 0.5);
+    return d;
 }
 
-bool icon_rename(ivec2 c, float phase) {
-    // A pen over a line, and the pen moves along the line when it is pressed.
-    if (c.y == 11 && c.x >= 1 && c.x <= 11) return true;
-    float along = (1.0 - phase) * 3.0;
-    float d = abs((float(c.x) - along) + float(c.y) - 8.0);
-    return d < 1.2 && c.y < 10 && c.y > 1;
+float icon_new(vec2 p, float m, float w) {
+    // A plus, which grows and leans a little when it is pressed. A QUARTER of a radian and not a
+    // half: a plus turned far enough is a cross, and a cross means close two cells away.
+    vec2 q = sd_turn(p, vec2(32.0), 0.24 * m);
+    float arm = 20.0 + 3.0 * m;
+    float d = sd_line(q, vec2(32.0 - arm, 32.0), vec2(32.0 + arm, 32.0)) - w * 0.5;
+    return min(d, sd_line(q, vec2(32.0, 32.0 - arm), vec2(32.0, 32.0 + arm)) - w * 0.5);
 }
 
-bool icon_duplicate(ivec2 c, float phase) {
-    // One square splitting into two. The animation IS the split.
-    float apart = (1.0 - phase) * 2.5;
-    bool first = c.x >= int(1.0 + apart) && c.x <= int(7.0 + apart) && c.y >= 1 && c.y <= 7;
-    bool second = c.x >= int(5.0 - apart) && c.x <= int(11.0 - apart) && c.y >= 5 && c.y <= 11;
-    bool first_edge = first && (c.x == int(1.0 + apart) || c.x == int(7.0 + apart) || c.y == 1 || c.y == 7);
-    bool second_edge = second && (c.x == int(5.0 - apart) || c.x == int(11.0 - apart) || c.y == 5 || c.y == 11);
-    return first_edge || second_edge;
+float icon_rename(vec2 p, float m, float w) {
+    // A pen over a line, and it travels back along the line when it is pressed. The nib is FILLED
+    // and the barrel is not: the point is where the ink is, and that is the part that has to be
+    // unmistakable at eight pixels.
+    float d = sd_line(p, vec2(8.0, 57.0), vec2(56.0, 57.0)) - w * 0.42;
+    vec2 q = sd_turn(p - vec2(mix(4.0, -14.0, clamp(m, -0.15, 1.0)), 0.0), vec2(32.0, 30.0), -0.40);
+    float barrel = sd_round_box(q, vec2(32.0, 24.0), vec2(6.4, 17.0), 2.0);
+    barrel = sd_cut(barrel, sd_box(q, vec2(32.0, 33.5), vec2(7.5, 1.3)));
+    d = min(d, sd_edge(barrel, w * 0.85));
+    d = min(d, sd_triangle(q, vec2(26.0, 42.0), vec2(38.0, 42.0), vec2(32.0, 52.5)));
+    return d;
 }
 
-bool icon_delete(ivec2 c, float phase) {
-    // A lid opening over a bin. The animation IS the opening, and the lid is what says the thing
-    // is not gone — it is somewhere with a lid on it.
-    float lift = (1.0 - phase) * 3.0;
-    float lid = 3.0 - lift;
-    if (abs(float(c.y) - lid) < 1.0 && c.x >= 1 && c.x <= 11) return true;
-    if (c.y < 5) return false;
-    return c.x == 2 || c.x == 10 || c.y == 12 || c.x == 6;
+float icon_duplicate(vec2 p, float m, float w) {
+    // One square splitting into two. The animation IS the split, and the one behind is cut where
+    // the one in front covers it so that two squares read as two.
+    float apart = m * 7.0;
+    float front = sd_round_box(p, vec2(38.0 + apart), vec2(15.0), 4.0);
+    float back = sd_round_box(p, vec2(26.0 - apart), vec2(15.0), 4.0);
+    return min(sd_edge(front, w), sd_cut(sd_edge(back, w), front - w * 1.2));
 }
 
-bool icon_trash(ivec2 c, float phase) {
-    return icon_delete(c, 1.0) || (phase < 0.0);
+float icon_bin(vec2 p, float w) {
+    // The body both bins share: tapering, because a straight-sided box is a box.
+    float d = min(sd_line(p, vec2(17.0, 26.0), vec2(21.5, 55.0)),
+                  sd_line(p, vec2(47.0, 26.0), vec2(42.5, 55.0)));
+    d = min(d, sd_line(p, vec2(21.5, 55.0), vec2(42.5, 55.0)));
+    return d - w * 0.5;
 }
 
-bool icon_sort(ivec2 c, float phase) {
-    if ((c.y % 4) != 1 || c.y > 11) return false;
-    int row = c.y / 4;
-    int length = 10 - row * 3;
-    if (phase < 0.5) length = 4 + row * 3;   // the order turns over when it is pressed
-    return c.x >= 1 && c.x <= 1 + length;
+float icon_delete(vec2 p, float m, float w) {
+    // A lid OPENING over a bin. The lid is the whole statement: the thing is not gone, it is
+    // somewhere with a lid on it, which is what `trash\` on the disk actually is.
+    float d = icon_bin(p, w);
+    d = min(d, min(sd_line(p, vec2(27.5, 33.0), vec2(28.5, 48.0)),
+                   sd_line(p, vec2(36.5, 33.0), vec2(35.5, 48.0))) - w * 0.32);
+    vec2 q = sd_turn(p, vec2(13.0, 21.0), 0.5 * m);
+    float lid = sd_line(q, vec2(12.0, 21.0), vec2(52.0, 21.0)) - w * 0.5;
+    lid = min(lid, sd_line(q, vec2(26.0, 12.0), vec2(38.0, 12.0)) - w * 0.42);
+    lid = min(lid, sd_line(q, vec2(26.5, 13.0), vec2(26.5, 20.0)) - w * 0.28);
+    lid = min(lid, sd_line(q, vec2(37.5, 13.0), vec2(37.5, 20.0)) - w * 0.28);
+    return min(d, lid);
 }
 
-bool icon_search(ivec2 c, float phase) {
-    if (cell_ring(vec2(c) - vec2(1.0, 1.0), 3.0, 4.2)) return true;
-    return abs(float(c.x) - float(c.y)) < 1.2 && c.x > 8 && phase >= 0.0;
+float icon_trash(vec2 p, float m, float w) {
+    // Where a delete GOES, as a shelf of its own: the same bin, shut, with something in it. The
+    // contents settle when the shelf is opened, which is the only motion a place is entitled to.
+    float d = icon_bin(p, w);
+    d = min(d, sd_line(p, vec2(12.0, 21.0), vec2(52.0, 21.0)) - w * 0.5);
+    d = min(d, sd_line(p, vec2(26.0, 12.0), vec2(38.0, 12.0)) - w * 0.42);
+    float settle = m * 2.5;
+    d = min(d, sd_round_box(p, vec2(27.5, 38.0 + settle), vec2(4.6, 4.6), 1.6));
+    d = min(d, sd_round_box(p, vec2(37.5, 45.0 - settle), vec2(4.0, 4.0), 1.4));
+    return d;
 }
 
-bool icon_eye(ivec2 c, bool open) {
-    vec2 p = vec2(c) - vec2(6.0);
-    bool lid = abs(abs(p.y) - 3.0 * cos(p.x * 0.28)) < 0.9 && abs(p.x) < 5.5;
-    if (!open) return abs(p.y) < 0.9 && abs(p.x) < 5.5;
-    return lid || length(p) < 1.8;
-}
-
-bool icon_close(ivec2 c, float phase) {
-    float arm = 4.0 + (1.0 - phase);
-    vec2 p = vec2(c) - vec2(6.0);
-    return (abs(p.x - p.y) < 1.2 || abs(p.x + p.y) < 1.2) && max(abs(p.x), abs(p.y)) <= arm;
-}
-
-bool icon_clip(ivec2 c, float phase) {
-    // A small solid made of voxels, one of which lifts off when it is pressed.
-    if (c.x < 2 || c.x > 10 || c.y < 2 || c.y > 10) return false;
-    if (c.x >= 6 && c.y <= 5) {
-        return float(c.y) > 2.0 - (1.0 - phase) * 2.0;
+float icon_sort(vec2 p, float m, float w) {
+    // Three bars, longest first, and the order turns over when it is pressed — with the arrow
+    // that says which way turning over with them, or the drawing would claim a sort it did not do.
+    float lo[3] = float[3](55.0, 43.0, 31.0);
+    float hi[3] = float[3](31.0, 43.0, 55.0);
+    float d = 1e9;
+    for (int i = 0; i < 3; ++i) {
+        float y = 14.0 + float(i) * 18.0;
+        d = min(d, sd_line(p, vec2(23.0, y), vec2(mix(lo[i], hi[i], clamp(m, 0.0, 1.0)), y)) -
+                       w * 0.5);
     }
-    return ((c.x / 3) + (c.y / 3)) % 2 == 0 || c.x == 2 || c.x == 10 || c.y == 2 || c.y == 10;
+    vec2 q = sd_turn(p, vec2(12.0, 32.0), 3.14159 * clamp(m, 0.0, 1.0));
+    d = min(d, sd_line(q, vec2(12.0, 12.0), vec2(12.0, 49.0)) - w * 0.4);
+    d = min(d, sd_line(q, vec2(12.0, 52.0), vec2(5.5, 44.0)) - w * 0.4);
+    d = min(d, sd_line(q, vec2(12.0, 52.0), vec2(18.5, 44.0)) - w * 0.4);
+    return d;
 }
 
-bool icon_material(ivec2 c, float phase) {
-    float roll = (1.0 - phase) * 3.0;
-    int x = int(mod(float(c.x) + roll, 13.0));
-    return ((x / 2) + (c.y / 2)) % 2 == 0 && c.x >= 1 && c.x <= 11 && c.y >= 1 && c.y <= 11;
+float icon_search(vec2 p, float m, float w) {
+    // A lens, and it moves when it is pressed, because looking for something is not standing still.
+    vec2 at = vec2(27.0) + vec2(5.0, -3.5) * m;
+    float d = sd_edge(sd_circle(p, at, 16.0 - m * 1.5), w);
+    vec2 dir = vec2(0.70711);
+    return min(d, sd_line(p, at + dir * 15.0, at + dir * 29.0) - w * 0.62);
 }
 
-bool icon_mod(ivec2 c, float phase) {
-    bool block = c.x >= 2 && c.x <= 10 && c.y >= 4 && c.y <= 11 &&
-                 (c.x == 2 || c.x == 10 || c.y == 4 || c.y == 11);
-    float peg = 3.0 - (1.0 - phase) * 2.0;
-    bool socket = c.x >= 5 && c.x <= 7 && float(c.y) >= peg && c.y <= 4;
-    return block || socket;
+float icon_private(vec2 p, float m, float w) {
+    // An eye, shut, with lashes — because a bare curve is a smile. The lid presses further down on
+    // a press, which is the shape of the word: this one is not offered to anybody.
+    float dip = m * 4.0;
+    float d = sd_edge(sd_circle(p, vec2(32.0, 12.0 - dip), 26.0), w);
+    d = sd_keep(d, sd_below(30.0 - dip * 0.5, p));   // the BOTTOM of that circle, which is the lid
+    float thin = w * 0.36;
+    d = min(d, sd_line(p, vec2(14.5, 31.0 - dip * 0.3), vec2(8.5, 40.0)) - thin);
+    d = min(d, sd_line(p, vec2(32.0, 39.5 - dip), vec2(32.0, 49.0 - dip)) - thin);
+    d = min(d, sd_line(p, vec2(49.5, 31.0 - dip * 0.3), vec2(55.5, 40.0)) - thin);
+    return d;
 }
 
-bool icon_character(ivec2 c, float phase) {
-    vec2 p = vec2(c) - vec2(6.0, 0.0);
-    if (length(vec2(p.x, float(c.y) - 3.0)) < 2.2) return true;
-    if (c.y > 5 && c.y < 10 && abs(p.x) < 2.0) return true;
-    float stride = (1.0 - phase) * 1.5;
-    return c.y >= 10 && abs(abs(p.x) - (1.0 + stride)) < 1.0;
+float icon_shared(vec2 p, float m, float w) {
+    // An eye, open, and a blink answers the press. The two lids are arcs of two circles chosen so
+    // that they meet at the corners; the pupil is the one part of this drawing that is solid,
+    // because it is the one part of an eye that is.
+    float blink = clamp(m, 0.0, 1.0) * 15.0;
+    float up = sd_edge(sd_circle(p, vec2(32.0, 44.8 + blink), 30.8), w);
+    up = sd_keep(up, sd_above(33.0, p));
+    float lo = sd_edge(sd_circle(p, vec2(32.0, 19.2 - blink), 30.8), w);
+    lo = sd_keep(lo, sd_below(31.0, p));
+    float d = min(up, lo);
+    d = min(d, sd_edge(sd_circle(p, vec2(32.0), max(10.5 - blink * 0.55, 1.5)), w * 0.85));
+    return min(d, sd_circle(p, vec2(32.0), max(4.6 - blink * 0.26, 0.8)));
 }
 
-bool icon_script(ivec2 c, float phase) {
-    bool page = c.x >= 2 && c.x <= 10 && c.y >= 1 && c.y <= 11 &&
-                (c.x == 2 || c.x == 10 || c.y == 1 || c.y == 11);
-    float chevron = 5.0 + (1.0 - phase);
-    bool mark = abs(float(c.y) - 6.0) <= 2.0 &&
-                abs(float(c.x) - (chevron - abs(float(c.y) - 6.0))) < 1.0;
-    return page || mark;
+float icon_close(vec2 p, float m, float w) {
+    vec2 q = sd_turn(p, vec2(32.0), 0.5 * m);
+    float arm = 16.0 + 3.0 * m;
+    float d = sd_line(q, vec2(32.0 - arm, 32.0 - arm), vec2(32.0 + arm, 32.0 + arm)) - w * 0.5;
+    return min(d, sd_line(q, vec2(32.0 - arm, 32.0 + arm), vec2(32.0 + arm, 32.0 - arm)) - w * 0.5);
 }
 
-bool icon_tick(ivec2 c, float phase) {
-    float draw_to = 4.0 + (1.0 - phase) * 8.0;
-    float along = float(c.x);
-    if (along > draw_to) return false;
-    float y = (c.x < 6) ? 6.0 + float(c.x) * 0.6 : 12.0 - (float(c.x) - 6.0) * 1.4;
-    return abs(float(c.y) - y) < 1.3 && c.x >= 1 && c.x <= 11;
+float icon_clip(vec2 p, float m, float w) {
+    // A small solid seen as a solid: six edges and the three that meet in the middle, which is the
+    // one drawing of a cube that cannot be read as a hexagon. The TOP face comes off when it is
+    // pressed, and the gap it leaves is what says the thing is made of parts.
+    const vec2 t = vec2(32.0, 9.0);
+    const vec2 ur = vec2(56.0, 22.0);
+    const vec2 lr = vec2(56.0, 45.0);
+    const vec2 b = vec2(32.0, 58.0);
+    const vec2 ll = vec2(8.0, 45.0);
+    const vec2 ul = vec2(8.0, 22.0);
+    const vec2 c = vec2(32.0, 35.0);
+    float half_w = w * 0.5;
+    float d = sd_line(p, ul, ll);
+    d = min(d, sd_line(p, ll, b));
+    d = min(d, sd_line(p, b, lr));
+    d = min(d, sd_line(p, lr, ur));
+    d = min(d, sd_line(p, c, b));
+    vec2 q = p + vec2(0.0, max(m, -0.2) * 5.5);
+    d = min(d, sd_line(q, t, ur));
+    d = min(d, sd_line(q, ur, c));
+    d = min(d, sd_line(q, c, ul));
+    d = min(d, sd_line(q, ul, t));
+    return d - half_w;
 }
 
-bool icon_play(ivec2 c, float phase) {
-    float x = float(c.x) - 3.0 + (1.0 - phase) * 1.5;
-    return x >= 0.0 && x <= 7.0 && abs(float(c.y) - 6.0) <= (7.0 - x) * 0.85;
+float icon_material(vec2 p, float m, float w) {
+    // A swatch of pattern, and the pattern ROLLS when it is pressed — because what a material is
+    // is a rule that generates, not a colour that sits there.
+    float frame = sd_round_box(p, vec2(32.0), vec2(25.0), 4.0);
+    float d = sd_edge(frame, w);
+    float s = (p.x + p.y) * 0.70711 + m * 13.0;
+    float stripe = abs(mod(s, 19.5) - 9.75) - 4.8;
+    return min(d, sd_keep(stripe, frame + w * 1.35));
 }
 
-bool icon_on(uint which, ivec2 c, float phase) {
-    if (c.x < 0 || c.x > 12 || c.y < 0 || c.y > 12) return false;
+float icon_mod(vec2 p, float m, float w) {
+    // A wrench. A mod is the thing a player reaches for when the game as shipped is not the game
+    // they want, and that is what a wrench means everywhere without anybody having to be told.
+    //
+    // It was a block with a socket, and before that a puzzle piece. Both of them said "this fits
+    // into something", which is true about a mod and is also true about a clip, a material and a
+    // character — a drawing whose statement is *belongs with the others* has not said which one it
+    // is. A wrench says the other half: it is the thing you change the machine with.
+    //
+    // Two ends, because one end and a stick is a magnifying glass with its lens knocked out, and
+    // `search` is two cells away on the same sheet. It TURNS when it is pressed, which is the only
+    // thing a wrench does — a tool that answers a press by sliding sideways is a tool being dragged.
+    vec2 q = sd_turn(p, vec2(32.0), 0.45 * m);
+    float d = sd_line(q, vec2(40.0, 24.0), vec2(23.0, 41.0)) - w * 0.55;
+    // The open end, its jaws pointing outward along the shaft: a ring with a slot cut through it.
+    float head = sd_edge(sd_circle(q, vec2(44.0, 20.0), 10.0), w);
+    vec2 jaw = sd_turn(q, vec2(44.0, 20.0), -0.7854);
+    head = sd_cut(head, sd_box(jaw, vec2(44.0, 9.0), vec2(4.6, 12.0)));
+    d = min(d, head);
+    // And the closed end, which is what makes it a wrench rather than a spanner-shaped hook.
+    return min(d, sd_edge(sd_circle(q, vec2(19.0, 45.0), 6.5), w * 0.9));
+}
+
+float icon_character(vec2 p, float m, float w) {
+    // A standing figure, and it strides when it is pressed.
+    float swing = m * 6.0;
+    float d = sd_edge(sd_circle(p, vec2(32.0, 13.0), 8.0), w * 0.9);
+    d = min(d, sd_line(p, vec2(32.0, 22.0), vec2(32.0, 40.0)) - w * 0.5);
+    d = min(d, sd_line(p, vec2(32.0, 27.0), vec2(17.5 - swing, 36.5 + swing * 0.4)) - w * 0.44);
+    d = min(d, sd_line(p, vec2(32.0, 27.0), vec2(46.5 + swing, 36.5 - swing * 0.4)) - w * 0.44);
+    d = min(d, sd_line(p, vec2(32.0, 40.0), vec2(21.5 - swing, 57.0)) - w * 0.5);
+    return min(d, sd_line(p, vec2(32.0, 40.0), vec2(42.5 + swing, 57.0)) - w * 0.5);
+}
+
+float icon_script(vec2 p, float m, float w) {
+    // A page with a prompt on it: the script view, which is text that RUNS. The chevron advances
+    // and the line it is waiting on comes with it.
+    float d = sd_edge(sd_round_box(p, vec2(32.0), vec2(22.0, 26.0), 3.5), w);
+    float run = m * 5.0;
+    float thin = w * 0.42;
+    d = min(d, sd_line(p, vec2(17.5 + run, 21.0), vec2(28.0 + run, 30.5)) - thin);
+    d = min(d, sd_line(p, vec2(28.0 + run, 30.5), vec2(17.5 + run, 40.0)) - thin);
+    return min(d, sd_line(p, vec2(33.0 + run, 44.0), vec2(46.5, 44.0)) - thin);
+}
+
+float icon_tick(vec2 p, float m, float w) {
+    // The mark a switch makes when it is on, and a press DRAWS it rather than showing it: the one
+    // animation in the set that is the making of the mark and not a movement of it.
+    float d = min(sd_line(p, vec2(11.0, 34.0), vec2(25.0, 48.0)),
+                  sd_line(p, vec2(25.0, 48.0), vec2(54.0, 16.0))) - w * 0.5;
+    return sd_keep(d, p.x - mix(54.0, 11.0, clamp(m, 0.0, 1.0)) - w * 0.5);
+}
+
+float icon_play(vec2 p, float m, float w) {
+    // Enter this world. Solid, because it is the one button on a row that is a departure.
+    float go = m * 5.0;
+    return sd_triangle(p, vec2(19.0 + go, 10.0), vec2(19.0 + go, 54.0), vec2(53.0 + go, 32.0)) -
+           w * 0.22;
+}
+
+float icon_reset(vec2 p, float m, float w) {
+    // An arrow that goes back round: put this value where it was. It TURNS BACK when pressed —
+    // anticlockwise, the way it is pointing — because the one thing this control must not look like
+    // is a refresh that fetches something.
+    vec2 q = sd_turn(p, vec2(32.0), 1.5 * m);
+    // A smaller ring than the cell allows, because the head is what carries the meaning and at the
+    // size a row sets this it needs room to be a triangle rather than a thickening of the stroke.
+    float ring = sd_edge(sd_circle(q, vec2(33.0, 34.0), 15.0), w);
+    // Open at the upper right, so the circle is a stroke that ended rather than a circle.
+    ring = sd_cut(ring, sd_box(q, vec2(46.0, 14.0), vec2(16.0, 14.0)));
+    float head = sd_triangle(q, vec2(35.0, 5.0), vec2(35.0, 27.0), vec2(15.0, 16.0));
+    return min(ring, head);
+}
+
+float icon_collapsed(vec2 p, float m, float w) {
+    // Folded away, pointing at where its contents would go. Pressing it turns it toward open,
+    // which is the animation saying what the press is about to do.
+    vec2 q = sd_turn(p, vec2(30.0, 32.0), -1.4 * m);
+    return sd_triangle(q, vec2(21.0, 17.0), vec2(21.0, 47.0), vec2(43.0, 32.0)) - w * 0.2;
+}
+
+float icon_expanded(vec2 p, float m, float w) {
+    vec2 q = sd_turn(p, vec2(32.0, 30.0), 1.4 * m);
+    return sd_triangle(q, vec2(17.0, 21.0), vec2(47.0, 21.0), vec2(32.0, 43.0)) - w * 0.2;
+}
+
+// The distance to the nearest ink of one drawing. Names match Icon in src/ui/draw.hpp value for
+// value; anything unknown is drawn as nothing, which is the failure a reader can see.
+float icon_field(uint which, vec2 p, float m, float w) {
     switch (which) {
-        case 1u:  return icon_world(c, phase);
-        case 2u:  return icon_settings(c, phase);
-        case 3u:  return icon_library(c, phase);
-        case 4u:  return icon_community(c, phase);
-        case 5u:  return icon_editor(c, phase);
-        case 6u:  return icon_folder(c, phase);
-        case 7u:  return icon_up(c, phase);
-        case 8u:  return icon_new(c, phase);
-        case 9u:  return icon_rename(c, phase);
-        case 10u: return icon_duplicate(c, phase);
-        case 11u: return icon_delete(c, phase);
-        case 12u: return icon_trash(c, phase);
-        case 13u: return icon_sort(c, phase);
-        case 14u: return icon_search(c, phase);
-        case 15u: return icon_eye(c, false);
-        case 16u: return icon_eye(c, true);
-        case 17u: return icon_close(c, phase);
-        case 18u: return icon_clip(c, phase);
-        case 19u: return icon_material(c, phase);
-        case 20u: return icon_mod(c, phase);
-        case 21u: return icon_character(c, phase);
-        case 22u: return icon_script(c, phase);
-        case 23u: return icon_tick(c, phase);
-        case 24u: return icon_play(c, phase);
-        default:  return false;
+        case 1u:  return icon_world(p, m, w);
+        case 2u:  return icon_settings(p, m, w);
+        case 3u:  return icon_library(p, m, w);
+        case 4u:  return icon_community(p, m, w);
+        case 5u:  return icon_editor(p, m, w);
+        case 6u:  return icon_folder(p, m, w);
+        case 7u:  return icon_up(p, m, w);
+        case 8u:  return icon_new(p, m, w);
+        case 9u:  return icon_rename(p, m, w);
+        case 10u: return icon_duplicate(p, m, w);
+        case 11u: return icon_delete(p, m, w);
+        case 12u: return icon_trash(p, m, w);
+        case 13u: return icon_sort(p, m, w);
+        case 14u: return icon_search(p, m, w);
+        case 15u: return icon_private(p, m, w);
+        case 16u: return icon_shared(p, m, w);
+        case 17u: return icon_close(p, m, w);
+        case 18u: return icon_clip(p, m, w);
+        case 19u: return icon_material(p, m, w);
+        case 20u: return icon_mod(p, m, w);
+        case 21u: return icon_character(p, m, w);
+        case 22u: return icon_script(p, m, w);
+        case 23u: return icon_tick(p, m, w);
+        case 24u: return icon_play(p, m, w);
+        case 25u: return icon_reset(p, m, w);
+        case 26u: return icon_collapsed(p, m, w);
+        case 27u: return icon_expanded(p, m, w);
+        default:  return 1e9;
     }
 }
 
@@ -398,11 +706,20 @@ void main() {
             if (coverage > 0.0) colour = mix(colour, ui_ink(colour, push.accent), coverage);
         } else if (command.kind == kIcon) {
             if (!inside) continue;
-            vec2 local = (centre - command.rect.xy) /
-                         max(command.rect.zw - command.rect.xy, vec2(0.0001));
-            ivec2 cell = ivec2(floor(local * 13.0));
-            if (icon_on(command.a, cell, command.f1)) {
-                colour = mix(colour, ui_ink(colour, push.accent), clamp(command.f0, 0.0, 1.0));
+            // The cell, in the 64-unit frame the drawings are stated in, and how much of that one
+            // device pixel is worth — which is the whole of the antialiasing and the reason the
+            // stroke has a floor: an icon shrunk to 0.55 of nominal on a small window gets a
+            // HEAVIER drawing rather than a fainter one.
+            vec2 size = max(command.rect.zw - command.rect.xy, vec2(0.0001));
+            vec2 cell = (centre - command.rect.xy) / size * 64.0;
+            float aa = 64.0 / max(min(size.x, size.y), 1.0);
+            float w = max(kIconStroke, aa * 1.35);
+            // `f1` is the phase: 1 at rest, 0 on a press, and a little past 1 on the way home. The
+            // drawings are written in terms of the motion, which is what is left of it.
+            float d = icon_field(command.a, cell, 1.0 - command.f1, w);
+            float coverage = clamp(0.5 - d / max(aa, 1e-4), 0.0, 1.0) * clamp(command.f0, 0.0, 1.0);
+            if (coverage > 0.0) {
+                colour = mix(colour, ui_ink(colour, push.accent), coverage);
             }
         } else if (command.kind == kHue) {
             if (!inside) continue;

@@ -66,7 +66,14 @@ struct Metrics {
     f32 row() const { return px(22.0f); }
     f32 gap() const { return px(6.0f); }
     f32 pad() const { return px(10.0f); }
-    f32 icon() const { return px(16.0f); }
+    // The drawing, against a row of 22 and a capital of 10.
+    //
+    // It was 16, and the row height it has to fit inside took it down to 16 device pixels on the
+    // desktop this is developed on — which is the size at which a drawing with four features across
+    // stops having four features. The icon is the control and the word is the fallback (D...), so
+    // when the two compete for a row it is the DRAWING that should be winning, and 19 against a
+    // 10-pixel capital is the drawing at not quite twice the letter it labels.
+    f32 icon() const { return px(19.0f); }
 };
 
 // What a control that refuses a value says about it. Empty means the value is fine.
@@ -123,6 +130,20 @@ public:
     // measure before it commits room — which is what a description in a library entry needs.
     f32 markdown(const Rect& box, std::string_view text, bool measure_only = false);
 
+    // How far left to shift a string that does not fit its room, so the end of it can be read.
+    //
+    // Zero when it fits, which is the normal case and costs one measurement. When it does not, the
+    // text waits at the start, travels left until its end is showing, waits there, and JUMPS back
+    // — rather than scrolling round in a loop. A loop has no beginning, so a name you glance at is
+    // a name you have to watch a whole cycle of before you know where it started; a hold at each
+    // end and a cut between them means the thing on screen is either the start of the name or the
+    // end of it, and both of those are readable on their own.
+    //
+    // The one place in this interface where something moves without a press having happened, and
+    // it is not an exception to that rule so much as the rule's own reason: motion means *this
+    // happened*, and what has happened here is that the name does not fit.
+    f32 scroll_overflow(u64 id, const Rect& room, std::string_view text);
+
     // --- controls ---------------------------------------------------------------------------
     //
     // Every one of these answers on the RELEASE inside its own rectangle, because a press that
@@ -154,9 +175,78 @@ public:
     // written then, so escaping out of a field leaves what was there.
     bool field(u64 id, const Rect& rect, std::string& value, std::string_view placeholder = {},
                std::string_view tooltip = {});
+    // What is IN a field right now, committed or not, falling back to `settled` when it is not
+    // being typed into. A field reports on enter because that is when a name is decided — and a
+    // search is decided on every keystroke, because a search box that only searches when you press
+    // a key nobody told you about is a search box that appears not to work.
+    const std::string& text_of(u64 id, const std::string& settled) const {
+        return (typing_ == id) ? buffer_ : settled;
+    }
     // A row of tabs, each with a drawing and a word.
     bool tabs(u64 id, const Rect& rect, const Icon* icons, const std::string_view* labels,
               u32 count, u32& active);
+
+    // --- folding, and putting a value back -----------------------------------------------------
+    //
+    // What a settings window is made of once it is longer than a screen. A panel that shows every
+    // control it has at once is a panel a player reads rather than uses, and the first constraint
+    // in documentation/14-ui-style.md is *as little of everything as possible*: a fold is how a
+    // control can exist without being on the screen.
+
+    // A heading that folds, and remembers whether it is folded. `depth` indents it, because a
+    // section inside a section has to look like one. `dirty` says something under it is not at its
+    // default — which puts a *reset* on the heading, so a player can find a changed value without
+    // opening every fold to look for it.
+    struct Fold {
+        bool open = false;    // draw what is under it
+        bool reset = false;   // and put all of it back, on the frame this is true
+    };
+    Fold section(u64 id, const Rect& row, std::string_view name, bool dirty, u32 depth = 0);
+    bool section_open(u64 id) const;
+    // Fold everything away. The settings window does this every time it opens (D485, corrected):
+    // what a panel opens as is the answer to *what can I change here*, and a list of five words is
+    // that answer where four screens of rows is the question again.
+    void close_all_sections();
+
+    // The one button that sits in every row's gutter. Drawn only when the value is off its
+    // default, because a control that is always there and does nothing most of the time is
+    // furniture — and its absence is also the answer to *is this one changed*.
+    bool reset_button(u64 id, const Rect& cell, bool changed, std::string_view tooltip = {});
+
+    // --- the menu a right-click opens ------------------------------------------------------------
+    //
+    // Every operation in a library is on the toolbar as well, and the toolbar is the one a child
+    // who cannot read can find. This is the other half: the actions a selection can take, at the
+    // pointer, on the thing under it — which is where a player who has used a computer will look
+    // first and is one gesture instead of aim-at-the-row-then-aim-at-the-toolbar.
+    struct MenuItem {
+        Icon icon = Icon::None;
+        std::string_view label;
+        bool enabled = true;
+    };
+    // Opens at a point; only one menu is open at a time.
+    void open_menu(u64 id, f32 x, f32 y);
+    bool menu_open(u64 id) const { return menu_ == id; }
+    // Whether ANY menu is up. While one is, whatever is underneath must not act on the pointer:
+    // the menu is drawn last so that it sits over the thing it is about, which means the list
+    // beneath has already hit-tested the very click that is choosing an item from it.
+    bool any_menu_open() const { return menu_ != 0; }
+
+    // A rectangle that belongs to something drawn LATER, so nothing drawn before it may be pointed
+    // at through it.
+    //
+    // An immediate-mode interface hit-tests in the order it draws, and the order it draws is the
+    // order things stack — so anything underneath has already answered the pointer by the time the
+    // thing on top is drawn. The title's two buttons are under the docked windows and were pressed
+    // straight through them. Claims are cleared before the windows themselves draw, so a window's
+    // own controls are unaffected by the claim its window made.
+    void claim(const Rect& rect) { claims_.push_back(rect); }
+    void clear_claims() { claims_.clear(); }
+    void close_menu() { menu_ = 0; }
+    // Draws it and reports which item was chosen, or -1. Call it LAST in the window that owns it:
+    // a menu is drawn over what it is about, and the order marks are added is the order they
+    // composite in. Choosing an item closes it; so does a press anywhere else, and so does Escape.
+    i32 menu(u64 id, const MenuItem* items, u32 count);
 
     // A press with nothing drawn for it: the hit box, the tooltip and the sound, and not one mark.
     // The logo is what this is for — it is a picture that answers a press, and a hover wash over it
@@ -177,6 +267,9 @@ public:
     f32 pointer_y() const { return input_.mouse_y; }
     bool pressed_in(const Rect& rect) const {
         return input_.mouse_left_pressed && rect.holds(input_.mouse_x, input_.mouse_y);
+    }
+    bool right_pressed_in(const Rect& rect) const {
+        return input_.mouse_right_pressed && rect.holds(input_.mouse_x, input_.mouse_y);
     }
     bool released() const { return input_.mouse_left_released; }
     const InputState& input() const { return input_; }
@@ -288,11 +381,22 @@ private:
     };
     Refusal refusal_{};
 
-    // Scroll offsets and rubber bands survive a frame; nothing else does.
+    // Which menu is open and where it was opened. Zero is none, which is why every other id is
+    // hashed and therefore never zero in practice.
+    u64 menu_ = 0;
+    f32 menu_x_ = 0.0f;
+    f32 menu_y_ = 0.0f;
+    u64 menu_opened_frame_ = 0;
+
+    // Scroll offsets, rubber bands and which sections are folded survive a frame; nothing else
+    // does. A fold is state about the INTERFACE rather than about the game, so it lives here and
+    // not beside the setting it hides.
     std::unordered_map<u64, f32> scrolls_;
     std::unordered_map<u64, Rect> bands_;
     std::unordered_map<u64, Anim> anims_;
+    std::unordered_map<u64, bool> folds_;
     std::vector<f32> scroll_stack_;
+    std::vector<Rect> claims_;
 };
 
 }  // namespace ws::ui

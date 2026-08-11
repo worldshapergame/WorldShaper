@@ -5,10 +5,10 @@
 // `%LOCALAPPDATA%\WorldShaper\`:
 //
 //     worlds\      .wsworld     one file per world
-//     clips\       .wsclip      creations, procedural or not
+//     clips\       .wsclip      creations, procedural or not — INCLUDING characters, which are
+//                               clips you can wear as well as stamp, so they are not a shelf
 //     materials\   .wsmat       pattern generators
 //     mods\        .wsmod       Lua and native packages
-//     characters\  .wsclip      the same format; a different shelf
 //     scripts\     .wslua
 //     trash\                    where a delete goes
 //
@@ -33,11 +33,13 @@
 // place to forget one — and a reader that scans the first few kilobytes for a fixed string works on
 // a file the game has never seen before, which is exactly the file that came from somebody else.
 //
-// # The trash (D446)
+// # Deleting (D446, corrected by D491)
 //
-// A delete goes to `trash\` rather than away, because a delete a player cannot undo is not what
-// they pressed, and this is a library of work somebody made. The trash is a shelf like any other:
-// it can be opened, and emptying it is a second, separate decision.
+// A delete a player cannot undo is not what they pressed, and this is a library of work somebody
+// made — so a delete has to be undoable. It went to `trash\` under the root; it now goes to the
+// **system's own recycle bin**. The requirement was right and the implementation was a second
+// recycle bin: every player already has one, they know where it is and how to empty it, and it
+// outlives the game not running. A delete that cannot be recycled is refused rather than done.
 
 #include <filesystem>
 #include <string>
@@ -60,6 +62,14 @@ struct Kind {
     // opens in Notepad and still parses.
     bool text = true;
     std::string comment = "#";
+    // A second extension this shelf also lists, or empty. One shelf, two spellings: `mods\` holds
+    // both packaged mods and the loose `.wslua` a player is still writing, because *loose script*
+    // and *packaged mod* is a decision about how finished something is rather than about what kind
+    // of thing it is (D492) — the same argument that folded the characters shelf into clips.
+    std::string also;
+    // Where the ones the game SHIPS live, relative to the executable, or empty for a shelf with
+    // none. They are listed alongside the player's own and are never copied anywhere (D494).
+    std::string shipped;
 };
 
 // What a listing holds. Everything here is read from the file system or from the file itself;
@@ -72,6 +82,10 @@ struct Entry {
     i64 modified = 0;    // seconds since the epoch, as the file system reports it
     std::string author;  // empty when the file carries no tag, which is what a foreign file is
     std::filesystem::path path;
+    // It came with the game rather than from the player's own shelf. It can be opened, used and
+    // duplicated; it cannot be renamed or deleted, because it is not theirs to lose and because
+    // the copy that came back on the next install would look like the delete had failed.
+    bool shipped = false;
 };
 
 enum class Sort : u32 { Name, Date, Author, Size, Count };
@@ -108,6 +122,10 @@ public:
     explicit Library(std::filesystem::path root = default_root());
 
     const std::filesystem::path& root() const { return root_; }
+
+    // Where the game's own files are — the folder the executable sits in. The built-in clips are
+    // read from under here and never copied; without it, a shelf shows only what the player made.
+    void set_shipped_root(std::filesystem::path where);
 
     // Makes sure every shelf exists. Called once at start-up; a shelf that a player deleted comes
     // back rather than making the library an error message.
@@ -148,11 +166,37 @@ public:
     std::string create(const std::string& name, const std::string& author,
                        const std::string& contents = {});
 
-    // Where a delete goes. Its own shelf, so it can be opened and emptied.
-    std::filesystem::path trash() const { return root_ / "trash"; }
+    // Where a built world is kept, now that it is not kept beside the world (D493).
+    std::filesystem::path cache() const { return root_ / "cache"; }
+
+    // Which file on this shelf is built out of `folder`, or empty if none is.
+    //
+    // A large world is not one file: it is a file that says `include "its own folder/piece.clip"`
+    // twenty times, plus that folder, plus the world already built from the two. The library shows
+    // all of it, because a library is a file manager over the real folder and the real folder has
+    // all of it in it — so a player can delete the pieces and keep the world, which leaves a world
+    // that opens as an empty sky. That happened, and finding out why took reading a log.
+    std::string built_from(const std::string& folder) const;
+
+    // What the listing is filtered to, or empty for all of it. Matched against the shown name,
+    // case-insensitively, anywhere in it — a search over four hundred clips is somebody looking for
+    // one whose name they half remember, and requiring the start of it is requiring them to
+    // remember the half that is hardest.
+    void set_filter(std::string text);
+    const std::string& filter() const { return filter_; }
 
 private:
     void list();
+    // Whether a path is inside a root, or is that root. Path-prefix rather than `relative`, because
+    // `relative` cheerfully answers `../..` and a caller that does not check has just been told
+    // that a folder two levels above the shelf is inside it.
+    static bool within(const std::filesystem::path& what, const std::filesystem::path& root);
+    // The root of whichever shelf `here_` is under: the player's, or the game's own.
+    const std::filesystem::path& top_of_here() const;
+    // Whether a folder has anything of this shelf's kind anywhere in it. An EMPTY folder is shown —
+    // it is one somebody just made — but one holding only documentation, or only files of some
+    // other kind, is not a folder this shelf has anything to say about.
+    bool worth_showing(const std::filesystem::path& folder, u32 depth) const;
     // A name that does not already exist in `into`, by appending " 2", " 3", and so on. Used by
     // duplicate and by the trash, where two files of the same name from two folders would
     // otherwise silently become one.
@@ -160,6 +204,8 @@ private:
                                     const std::string& extension) const;
 
     std::filesystem::path root_;
+    std::filesystem::path game_;      // beside the executable, or empty
+    std::filesystem::path shipped_;   // this shelf's share of it, or empty
     Kind kind_;
     std::filesystem::path here_;
     std::vector<Entry> entries_;
@@ -167,6 +213,8 @@ private:
     bool descending_ = false;
     std::filesystem::file_time_type stamp_{};
     bool listed_ = false;
+    std::string filter_;
+    mutable std::filesystem::path top_mine_;
 };
 
 }  // namespace ws::ui

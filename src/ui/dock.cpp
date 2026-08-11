@@ -236,18 +236,33 @@ bool Dock::read(const std::filesystem::path& path) {
     return true;
 }
 
+std::string Dock::state() const {
+    std::string out;
+    for (u32 e = 0; e < static_cast<u32>(Edge::Count); ++e) {
+        out += "split " + std::to_string(e) + " " + std::to_string(split_[e]) + "\n";
+    }
+    for (const Window& window : windows_) {
+        out += "window " + window.name + " " + std::to_string(static_cast<u32>(window.edge)) + " " +
+               (window.open ? "1" : "0");
+        for (u32 i = 0; i < 4; ++i) out += " " + std::to_string(window.fraction[i]);
+        out += "\n";
+    }
+    return out;
+}
+
 bool Dock::write(const std::filesystem::path& path) const {
     std::ofstream file(path, std::ios::trunc);
     if (!file) return false;
-    for (u32 e = 0; e < static_cast<u32>(Edge::Count); ++e) {
-        file << "split " << e << " " << split_[e] << "\n";
-    }
-    for (const Window& window : windows_) {
-        file << "window " << window.name << " " << static_cast<u32>(window.edge) << " "
-             << (window.open ? 1 : 0);
-        for (u32 i = 0; i < 4; ++i) file << " " << window.fraction[i];
-        file << "\n";
-    }
+    file << state();
+    return file.good();
+}
+
+bool Dock::append(const std::filesystem::path& path) const {
+    // The layout shares one file with the preferences now (D496), and it is written second. Both
+    // readers skip keys they do not know, so neither has to be told the other exists.
+    std::ofstream file(path, std::ios::app);
+    if (!file) return false;
+    file << state();
     return file.good();
 }
 

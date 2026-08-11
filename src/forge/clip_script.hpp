@@ -191,8 +191,16 @@ Script load_clip_script(const std::string& path, VoxelTypeTable& types, const Ta
 
 // Splices a file and everything it includes into one text, recording where each line came from.
 // Exposed for tests; load_clip_script is what callers want.
+//
+// `beside` is where an include is looked for when it is not next to the file that asked for it —
+// the folder of clips the game ships with (D494). It is a FALLBACK and not a search path: a file
+// sitting next to the one including it always wins, so a player who copies the facility's parts
+// into their own folder and edits them gets their own edits. Without it, a world assembled out of
+// pieces could only ever be opened from the one folder those pieces were copied into, and deleting
+// that folder — which looks like an ordinary folder — emptied the world.
 std::string expand_includes(const std::string& path, std::vector<SourceLine>& origin,
-                            std::vector<ScriptError>& errors);
+                            std::vector<ScriptError>& errors,
+                            const std::string& beside = {});
 
 }  // namespace forge
 }  // namespace ws
