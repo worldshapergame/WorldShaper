@@ -117,7 +117,6 @@ struct Options {
     // Start the measurement window when the world stops changing, rather than at frame nought.
     // Any figure meant to be compared with another run wants this; see the note at its use.
     bool settle = false;
-    bool path_trace = false;   // start in the reference path tracer
     // Which marcher walks the world.
     //
     // The node pool is the default. Measured across the whole camera grid it is faster on six
@@ -598,8 +597,6 @@ Options parse_options(int argc, char** argv) {
             options.hollow = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--clip-coarse" && i + 1 < argc) {
             options.clip_coarse = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--pathtrace") {
-            options.path_trace = true;
         } else if (arg == "--node-pool") {
             options.node_pool = true;
         } else if (arg == "--chunk-marcher") {
@@ -664,7 +661,6 @@ void print_help() {
         "                        geometry, grey the progress between,\n"
         "                        20 the lamp term alone: what the emitters deliver to each\n"
         "                        face, with blue for a face that has not measured yet\n"
-        "  --pathtrace           start in the reference path tracer (F4 toggles)\n"
         "  --chunk-marcher       march the old chunk grid instead of the node pool\n"
         "  --settle              start the measurement window once the world stops sharpening,\n"
         "                        rather than at frame nought. Any figure to be compared with\n"
@@ -708,7 +704,7 @@ void print_help() {
         "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
         "                        albedo, Henyey-Greenstein g, scale height and base in metres\n"
         "\n"
-        "In game:  F1 developer panel   F2 overlay   F4 path trace   F5 reload shaders\n"
+        "In game:  F1 developer panel   F2 overlay   F5 reload shaders\n"
         "          F11 toggle vsync     Esc quit\n"
         "  chisel: hold LMB carve   RMB place   G+wheel distance   MMB constraint\n"
         "          Z undo   X redo   R clear points   C cancel   Q/E material\n"
@@ -1328,9 +1324,6 @@ private:
     // R3: one invocation per face, working out light on the surface instead of on the screen.
     ComputePipeline shade_faces_;
 
-    // The reference path tracer. A separate pipeline that shares only the world, so with the
-    // mode off it costs exactly nothing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no branch in the marcher, no extra binding.
-    ComputePipeline pathtrace_;
     // The cloud volume, marched once per four-by-four block. See shaders/clouds.comp.
     ComputePipeline clouds_;
     GpuImage cloud_image_;
@@ -1340,24 +1333,16 @@ private:
     u32 cloud_parity_ = 0;       // which of the two the cloud pass writes this frame
     VkDescriptorSetLayout pathtrace_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet pathtrace_set_ = VK_NULL_HANDLE;
-    GpuImage accum_image_;
     // One entry per voxel face the camera has looked at, 32 bytes each. Light is computed
     // once per face and shared by every pixel that sees it, and because the key is a place in
     // the world rather than on the screen, turning the camera does not throw the work away.
-    GpuBuffer face_cache_;
-    bool face_cache_dirty_ = true;
     // Whole-frame numbers the tracer adds up on the GPU, so that next frame can be exposed
     // for the picture this one turned out to be. See gpu/render_params.hpp for the layout and
     // for why there are two slots rather than one.
     GpuBuffer frame_stats_;
     bool frame_stats_zeroed_ = false;   // the very first frame has no previous frame to read
-    bool path_trace_ = false;
-    u32 trace_samples_ = 0;      // samples accumulated since the last reset
     // How many more frames an edited world holds its accumulator down. Long enough that the light
     // around the edit has actually moved, short enough that it is over before anybody looks for it.
-    static constexpr u32 kEditSettleFrames = 20;
-    static constexpr f32 kEditKeepsWeight = 24.0f;
-    u32 edited_recently_ = 0;
 
     // Holds the frame rate by spending detail where it is worth most. Measured on the machine
     // it is running on, once, the first time the game starts. See documentation/19.
@@ -1486,7 +1471,6 @@ private:
     // not an in-game week; the speed is set by how it looks.
     f32 cloud_wind_[2]{0.40f, 0.16f};
     f32 prev_cloud_time_ = 0.0f;
-    bool accum_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
     bool face_ready_ = false;    // same, and for the same reason: it must survive a frame that
                                  // does not write it
     bool face_cleared_ = false;  // and holds kNoFace everywhere, so no clear is owed
@@ -1560,6 +1544,10 @@ private:
     // a ghost that fills the screen is read once per pixel and reading that over the bus
     // would make the preview cost more than the world behind it.
     GpuBuffer clip_buffer_;
+    // Read by nothing since R3d deleted the tracer. Still bound, because its binding number is
+    // one the shared layout and gpu/render_params.hpp agree about; reclaiming it is the layout
+    // trim that R3d hands on rather than part of deleting the pass.
+    GpuBuffer face_cache_;
     GpuBuffer clip_staging_;
     struct ClipSlot {
         u32 first_cell = 0;
@@ -1703,11 +1691,6 @@ bool Application::create_render_target(u32 width, u32 height) {
                                           "render_target");
     depth_target_ = create_storage_image(device_, width, height, VK_FORMAT_R32_SFLOAT,
                                          "depth_target");
-    // Full float, and not an economy. At a few thousand samples the differences between two
-    // materials are smaller than an 8-bit step, so an 8-bit accumulator would quantise away
-    // exactly what this mode exists to show.
-    accum_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                                        "path trace accumulation");
     // The cloud history, FULL resolution and two deep. The pass writes one and reads the other,
     // alternating, so a frame can carry forward what the last one marched without reading the
     // image it is writing. See shaders/clouds.comp.
@@ -1724,8 +1707,6 @@ bool Application::create_render_target(u32 width, u32 height) {
     cloud_ready_ = false;
     cloud_parity_ = 0;
 
-    trace_samples_ = 0;
-    accum_ready_ = false;   // a new image, so it needs its one transition out of UNDEFINED
     face_ready_ = false;
 
     // Images are the only bindings that change on resize; the world buffers are created
@@ -1742,10 +1723,6 @@ bool Application::create_render_target(u32 width, u32 height) {
     VkDescriptorImageInfo face_info{};
     face_info.imageView = face_image_.view;
     face_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    VkDescriptorImageInfo accum_info{};
-    accum_info.imageView = accum_image_.view;
-    accum_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     VkDescriptorImageInfo cloud_info[2]{};
     cloud_info[0].imageView = cloud_image_.view;
@@ -1765,7 +1742,7 @@ bool Application::create_render_target(u32 width, u32 height) {
     // Descriptors for the images are the only bindings that change on resize, which is why they
     // live here rather than beside the buffer writes where the node set was otherwise assembled -
     // and that split is exactly how they came to be forgotten.
-    VkWriteDescriptorSet writes[13]{};
+    VkWriteDescriptorSet writes[12]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -1784,27 +1761,24 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[3].dstBinding = 1;
     writes[3].pImageInfo = &colour_info;
     writes[4].dstSet = pathtrace_set_;
-    writes[4].dstBinding = 0;
-    writes[4].pImageInfo = &accum_info;
-    writes[5].dstSet = pathtrace_set_;
-    writes[5].dstBinding = 1;
-    writes[5].pImageInfo = &colour_info;
+    writes[4].dstBinding = 1;
+    writes[4].pImageInfo = &colour_info;
     VkDescriptorImageInfo marched_info{};
     marched_info.imageView = cloud_marched_.view;
     marched_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
+    writes[5].dstSet = pathtrace_set_;
+    writes[5].dstBinding = kCloudBinding;
+    writes[5].descriptorCount = 2;
+    writes[5].pImageInfo = cloud_info;
     writes[6].dstSet = pathtrace_set_;
-    writes[6].dstBinding = kCloudBinding;
-    writes[6].descriptorCount = 2;
-    writes[6].pImageInfo = cloud_info;
-    writes[7].dstSet = pathtrace_set_;
-    writes[7].dstBinding = kCloudMarchedBinding;
-    writes[7].pImageInfo = &marched_info;
+    writes[6].dstBinding = kCloudMarchedBinding;
+    writes[6].pImageInfo = &marched_info;
     // And the same pair to the raster pass, which draws the sky the player actually sees.
-    writes[8].dstSet = resolve_set_;
-    writes[8].dstBinding = kCloudBinding;
-    writes[8].descriptorCount = 2;
-    writes[8].pImageInfo = cloud_info;
+    writes[7].dstSet = resolve_set_;
+    writes[7].dstBinding = kCloudBinding;
+    writes[7].descriptorCount = 2;
+    writes[7].pImageInfo = cloud_info;
     // The node marcher writes the same two images the chunk marcher does, so resolve reads one
     // buffer whichever produced it.
     //
@@ -1818,21 +1792,21 @@ bool Application::create_render_target(u32 width, u32 height) {
     // this function again later, and a session without a resize dispatches the composite against a
     // descriptor that was never filled in. Validation says so plainly; without it the read is
     // whatever the pool held.
-    writes[9].dstSet = resolve_set_;
-    writes[9].dstBinding = 7;
-    writes[9].pImageInfo = &face_info;
-    u32 write_count = 10;
+    writes[8].dstSet = resolve_set_;
+    writes[8].dstBinding = 7;
+    writes[8].pImageInfo = &face_info;
+    u32 write_count = 9;
     if (node_set_ != VK_NULL_HANDLE) {
+        writes[9].dstSet = node_set_;
+        writes[9].dstBinding = 0;
+        writes[9].pImageInfo = &vis_info;
         writes[10].dstSet = node_set_;
-        writes[10].dstBinding = 0;
-        writes[10].pImageInfo = &vis_info;
+        writes[10].dstBinding = 1;
+        writes[10].pImageInfo = &depth_info;
         writes[11].dstSet = node_set_;
-        writes[11].dstBinding = 1;
-        writes[11].pImageInfo = &depth_info;
-        writes[12].dstSet = node_set_;
-        writes[12].dstBinding = 11;
-        writes[12].pImageInfo = &face_info;
-        write_count = 13;
+        writes[11].dstBinding = 11;
+        writes[11].pImageInfo = &face_info;
+        write_count = 12;
     }
     vkUpdateDescriptorSets(device_.handle(), write_count, writes, 0, nullptr);
     return true;
@@ -1843,7 +1817,6 @@ void Application::destroy_render_target() {
     if (face_image_.valid()) destroy_image(device_, face_image_);
     if (render_target_.valid()) destroy_image(device_, render_target_);
     if (depth_target_.valid()) destroy_image(device_, depth_target_);
-    if (accum_image_.valid()) destroy_image(device_, accum_image_);
     // The cloud history and its march buffer, created here with the rest and until now not
     // released with them. Three images and their memory, leaked once per resize and once per
     // run; validation names them at vkDestroyDevice.
@@ -3237,7 +3210,6 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
                 // you. Entries average over a sliding window instead, so a face follows
                 // what was built beside it within a few frames on its own and nothing
                 // further away flinches. See kFaceWindow in pathtrace.comp.
-                trace_samples_ = 0;
                 for (ThumbnailCache& tier : thumb_tiers_) tier.invalidate(coord);
             }
         }
@@ -3351,16 +3323,16 @@ void Application::stream(f64 seconds) {
     // rather than by which marcher is configured. A node entry carries a node coordinate at its
     // own level; a chunk entry carries a chunk coordinate and a detail level nothing shifts by.
     //
-    // The path tracer is the case that separates the two. It has not been ported to the node
-    // pool, so it marches `world.glsl` and reports chunks ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â while `use_node_pool_` is still
+    // The reference tracer used to be the case that separated the two. R3d deleted it, so the
+    // node pool is the only reporter now; `--chunk-marcher` is what keeps the distinction alive ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â while `use_node_pool_` is still
     // true, because that flag says what the *visibility* pass would do and the visibility pass
     // does not run in this mode at all. Reading a chunk coordinate as a node coordinate shifts
     // it by a detail level and asks for a chunk kilometres from the one that was missing, so
     // streaming stops serving the tracer: measured 52 of 68 chunks against 57.
-    const bool node_feedback = use_node_pool_ && !path_trace_;
+    const bool node_feedback = use_node_pool_;
 
     for (const FeedbackEntry& entry : wanted) {
-        // Chunk residency is fed whichever marcher ran, because the path tracer reads the chunk
+        // Chunk residency is fed whichever marcher ran. It mattered most for the reference tracer,
         // buffers directly ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so with the node pool marching and this left as it was, pressing F4
         // gave an empty world.
         // A used-report is not a request for anything; chunk residency has nothing to do with
@@ -4008,7 +3980,7 @@ TracePush Application::make_trace_push() {
     trace.sun_colour[0] = 3.2f;
     trace.sun_colour[1] = 3.05f;
     trace.sun_colour[2] = 2.75f;
-    trace.control[0] = trace_samples_;
+    trace.control[0] = 0;   // was the accumulator's sample count, which went with R3d
     // Which of the two histories the cloud pass writes this frame; it reads the other.
     cloud_parity_ ^= 1u;
     trace.control[1] = cloud_parity_;
@@ -4216,15 +4188,6 @@ void Application::record_frame(f32 time_seconds) {
     // edit is only how much that mean should be TRUSTED, so the accumulator is demoted rather than
     // emptied: the average stays exactly where it was and a few dozen frames are enough to replace
     // it. See the weight clamp in pt_post.glsl.
-    if (path_trace_) {
-        if (batch.chunks_added > 0 || batch.chunks_evicted > 0) {
-            trace_samples_ = 0;
-            edited_recently_ = 0;
-        } else if (batch.chunks_refreshed > 0) {
-            edited_recently_ = kEditSettleFrames;
-        }
-    }
-
     world_buffers_.upload_tables(cmd, types_);
     profiler_.add_bytes(world_buffers_.stats().staged_bytes);
 
@@ -4426,7 +4389,7 @@ void Application::record_frame(f32 time_seconds) {
     // the path tracer, and the composite would be reading a face index the driver was free to
     // invent. So: transitioned once, and then CLEARED on the frames nothing fills it, which says
     // "no face here" in the one value the composite already knows how to ignore.
-    const bool node_writes_faces = use_node_pool_ && !path_trace_;
+    const bool node_writes_faces = use_node_pool_;
     if (!face_ready_) {
         image_barrier(cmd, face_image_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                       VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -4465,23 +4428,6 @@ void Application::record_frame(f32 time_seconds) {
     //
     // So: once from UNDEFINED after it is created, and never again. It stays in GENERAL and
     // the read-after-write between frames is covered by an ordinary memory barrier.
-    if (!accum_ready_) {
-        image_barrier(cmd, accum_image_.image, VK_IMAGE_LAYOUT_UNDEFINED,
-                      VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
-        accum_ready_ = true;
-    } else if (path_trace_) {
-        VkMemoryBarrier2 accum_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        accum_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        accum_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        accum_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        accum_barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-        VkDependencyInfo accum_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        accum_dependency.memoryBarrierCount = 1;
-        accum_dependency.pMemoryBarriers = &accum_barrier;
-        vkCmdPipelineBarrier2(cmd, &accum_dependency);
-    }
-
     // ---- frame parameters -----------------------------------------------------------
     (void)time_seconds;
     RenderParams params{};
@@ -4498,18 +4444,7 @@ void Application::record_frame(f32 time_seconds) {
                              camera_.local_z(),           static_cast<f32>(camera_.chunk_x()),
                              static_cast<f32>(camera_.chunk_y()),
                              static_cast<f32>(camera_.chunk_z())};
-        f32 forward[3];
-        camera_.forward_vector(forward);
-        bool moved = false;
-        for (u32 i = 0; i < 6; ++i) {
-            if (here[i] != trace_camera_[i]) moved = true;
-            trace_camera_[i] = here[i];
-        }
-        for (u32 i = 0; i < 3; ++i) {
-            if (forward[i] != trace_forward_[i]) moved = true;
-            trace_forward_[i] = forward[i];
-        }
-        if (moved) trace_samples_ = 0;
+        for (u32 i = 0; i < 6; ++i) trace_camera_[i] = here[i];
     }
 
     params.origin[0] = camera_.local_x();
@@ -4545,9 +4480,7 @@ void Application::record_frame(f32 time_seconds) {
         params.motion[1] = kLongestStreak;
         // And which cloud history holds this frame's answer, for the tracer to read.
         params.motion[2] = static_cast<f32>(cloud_parity_);
-        // Nought means "trust the accumulator as far as it has earned"; anything else caps it.
-        params.motion[3] = (edited_recently_ > 0) ? kEditKeepsWeight : 0.0f;
-        if (edited_recently_ > 0) --edited_recently_;
+        params.motion[3] = 0.0f;   // was the accumulator's weight clamp; R3d took the accumulator
 
         // The weather. Coverage is what kind of day it is; the time is what moves the decks, and
         // moving the decks is what moves their shadows across the ground.
@@ -4970,111 +4903,8 @@ void Application::record_frame(f32 time_seconds) {
                     static_cast<usize>(swapchain_.frame_index()) * params_stride_,
                 &params, sizeof(RenderParams));
 
-    // ---- reference path tracer ------------------------------------------------------
-    //
-    // Replaces both passes below while it is on, and shares nothing with them but the world.
-    // It has no budget: it accumulates while you hold still and is expected to take seconds.
-    if (path_trace_) {
-        // Clearing the cache is what "the world changed" means to it. A face's cached light
-        // describes a world that no longer exists the moment something is carved next to it,
-        // and unlike screen-space accumulation it would never wash out on its own ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a stale
-        // face keeps its old light until something evicts it, which is never.
-        if (face_cache_dirty_) {
-            vkCmdFillBuffer(cmd, face_cache_.buffer, 0, VK_WHOLE_SIZE, 0);
-            VkMemoryBarrier2 clear_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-            clear_barrier.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
-            clear_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            clear_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            clear_barrier.dstAccessMask =
-                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-            VkDependencyInfo clear_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            clear_dependency.memoryBarrierCount = 1;
-            clear_dependency.pMemoryBarriers = &clear_barrier;
-            vkCmdPipelineBarrier2(cmd, &clear_dependency);
-            face_cache_dirty_ = false;
-        }
-
-        // Carry this frame's brightness forward and start a fresh count.
-        //
-        // Slot 1 is given whatever slot 0 finished the last traced frame as, and only then is
-        // slot 0 zeroed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so while the shader adds into an empty slot 0 it can read a whole,
-        // still slot 1 and expose for it. Doing it here rather than at the end of the frame
-        // means one place to look and no dependence on where a frame is considered to end.
-        {
-            auto memory_barrier = [cmd](VkPipelineStageFlags2 src_stage, VkAccessFlags2 src,
-                                        VkPipelineStageFlags2 dst_stage, VkAccessFlags2 dst) {
-                VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-                barrier.srcStageMask = src_stage;
-                barrier.srcAccessMask = src;
-                barrier.dstStageMask = dst_stage;
-                barrier.dstAccessMask = dst;
-                VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-                dependency.memoryBarrierCount = 1;
-                dependency.pMemoryBarriers = &barrier;
-                vkCmdPipelineBarrier2(cmd, &dependency);
-            };
-
-            constexpr VkDeviceSize kSlot = sizeof(FrameStatistics);
-            memory_barrier(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-                           VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT,
-                           VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
-            if (frame_stats_zeroed_) {
-                VkBufferCopy carry{};
-                carry.srcOffset = 0;
-                carry.dstOffset = kSlot;
-                carry.size = kSlot;
-                vkCmdCopyBuffer(cmd, frame_stats_.buffer, frame_stats_.buffer, 1, &carry);
-                // The fill overwrites what the copy just read, which is a hazard the hardware
-                // will not spot on its own.
-                memory_barrier(VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_READ_BIT,
-                               VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-                vkCmdFillBuffer(cmd, frame_stats_.buffer, 0, kSlot, 0);
-            } else {
-                // Nothing has been measured yet, so there is no previous frame worth keeping
-                // and both slots go to zero. Device memory arrives uninitialised, and a first
-                // frame exposed for whatever was left in it would flash.
-                vkCmdFillBuffer(cmd, frame_stats_.buffer, 0, VK_WHOLE_SIZE, 0);
-                frame_stats_zeroed_ = true;
-            }
-            memory_barrier(VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT,
-                           VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                           VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
-        }
-
-        profiler_.begin_pass(cmd, "pathtrace", 1000.0);
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.pipeline());
-        const u32 trace_offset =
-            static_cast<u32>(swapchain_.frame_index()) * static_cast<u32>(params_stride_);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.layout(), 0, 1,
-                                &pathtrace_set_, 1, &trace_offset);
-
-        TracePush trace = make_trace_push();
-        vkCmdPushConstants(cmd, pathtrace_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                           sizeof(TracePush), &trace);
-
-        dispatch_clouds(cmd, trace, render_extent, trace_offset);
-        // The tracer's own pipeline back, since the cloud pass bound its own over it.
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pathtrace_.pipeline());
-
-
-        vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
-        profiler_.end_pass(cmd);
-        ++trace_samples_;
-
-        VkMemoryBarrier2 trace_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-        trace_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        trace_barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
-        trace_barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-        trace_barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT;
-        VkDependencyInfo trace_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-        trace_dependency.memoryBarrierCount = 1;
-        trace_dependency.pMemoryBarriers = &trace_barrier;
-        vkCmdPipelineBarrier2(cmd, &trace_dependency);
-    }
 
     // ---- primary visibility ---------------------------------------------------------
-    if (!path_trace_) {
     profiler_.begin_pass(cmd, "visibility", 9.5);
     const u32 params_offset =
         static_cast<u32>(swapchain_.frame_index()) * static_cast<u32>(params_stride_);
@@ -5244,7 +5074,6 @@ void Application::record_frame(f32 time_seconds) {
     vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
     profiler_.add_bytes(static_cast<u64>(render_extent.width) * render_extent.height * 20);
     profiler_.end_pass(cmd);
-    }   // !path_trace_
 
     // Hand this frame's "what I could not find" list back to the CPU. Without this the
     // shader's report is written and then thrown away, and streaming never learns
@@ -5453,10 +5282,10 @@ int Application::play(const Options& options) {
     // the difference between a view that ends and one that does not.
     constexpr u64 kSlotBytes = sizeof(GpuBrickHeader) + kBrickWords * sizeof(u64);
     // What the chunk system gets, which since the node pool became the marcher is "enough to
-    // serve the path tracer" rather than "most of the card".
+    // serve --chunk-marcher" rather than "most of the card".
     //
-    // Nothing else reads it. `visibility.comp` is behind --chunk-marcher, and `pathtrace.comp` is
-    // the only thing left that includes world.glsl. Sized for the whole card it costs **1,432 ms
+    // Nothing else reads it. Since R3d deleted the reference tracer, `visibility.comp` behind
+    // --chunk-marcher is the ONLY thing left that includes world.glsl, which is what R1e finishes. Sized for the whole card it costs **1,432 ms
     // of chunk residency and 266 ms of thumbnail tiers on every single load** -- 83% of a 2,033 ms
     // start -- almost all of it zeroing pools that the frame never touches, plus about 12 ms of
     // CPU a frame keeping them current.
@@ -5464,7 +5293,7 @@ int Application::play(const Options& options) {
     // A tenth of the share is still hundreds of megabytes, which is a reference path tracer's
     // working set on one scene and is what it had before any of this existed. R1e deletes the rest
     // of it; this stops it being paid for by everybody in the meantime.
-    const u64 chunk_share = options_.path_trace ? 100 : 10;
+    const u64 chunk_share = 10;
     const u64 thumb_bytes = vram_budget * 15 / 100 * chunk_share / 100;
     residency_budget_.payload_bytes = vram_budget * 45 / 100 * chunk_share / 100;
     residency_budget_.max_bricks =
@@ -5722,8 +5551,9 @@ int Application::play(const Options& options) {
         create_render_target(render.width, render.height);
     }
 
-    // The three pipelines, which is where the rest of the wait lives: a path tracer is a large
-    // shader and compiling it is seconds, not milliseconds. This is the last stage, so it is also
+    // The pipelines. This was the rest of the wait while the reference tracer existed: one large
+    // shader whose compile is seconds rather than milliseconds on a cold driver cache, measured at
+    // 8,053 ms against 551 for a second run of the same build. R3d deleted it; this is 7 ms now. This is the last stage, so it is also
     // the one that has to be included or the bar reaches its end and the screen stays up anyway.
     progress_.enter(LoadStage::Settling);
     draw_loading();
@@ -5992,10 +5822,10 @@ int Application::play(const Options& options) {
     draw_loading();
 
     {
-        const std::filesystem::path trace_spirv = shaders / "pathtrace.comp.spv";
-        const std::filesystem::path trace_source =
-            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "pathtrace.comp";
-        // The cloud volume, on the tracer's own set and push constants.
+        // The cloud volume, on what used to be the tracer's set and push constants. The set is
+        // kept whole rather than trimmed to what the cloud pass names: its binding numbers are
+        // ones the shaders and gpu/render_params.hpp agree about, and renumbering them is R3d's
+        // follow-on rather than part of deleting the pass.
         const std::filesystem::path cloud_spirv = shaders / "clouds.comp.spv";
         const std::filesystem::path cloud_source =
             std::filesystem::path(WS_SHADER_SOURCE_DIR) / "clouds.comp";
@@ -6005,22 +5835,7 @@ int Application::play(const Options& options) {
             WS_LOG_ERROR("app", "no clouds this run: {}", clouds_.last_error());
         }
 
-        WS_LOG_INFO("load", "pipelines before the tracer {:.0f} ms",
-                    ns_to_ms(now_ns() - t_pipelines));
-        const u64 t_tracer = now_ns();
-        struct TracerTimer {
-            u64 began;
-            u64 origin;
-            ~TracerTimer() { WS_LOG_INFO("load", "path tracer pipeline {:.0f} ms  [t+{:.0f} ms]",
-                                         ns_to_ms(now_ns() - began),
-                                         ns_to_ms(now_ns() - origin)); }
-        } tracer_timer{t_tracer, load_began_ns_};
-        if (!pathtrace_.create(device_, trace_source, trace_spirv, pathtrace_layout_,
-                               sizeof(TracePush))) {
-            WS_LOG_FATAL("app", "could not create the path tracing pipeline: {}",
-                         pathtrace_.last_error());
-            return 1;
-        }
+        WS_LOG_INFO("load", "pipelines {:.0f} ms", ns_to_ms(now_ns() - t_pipelines));
     }
 
     // The world buffers never move, so they are bound once.
@@ -6260,7 +6075,6 @@ int Application::play(const Options& options) {
     // whether there is a newer release. The check is on its own thread and never blocks
     // starting; nothing is downloaded unless the player says so.
     Updater::clean_up_previous();
-    path_trace_ = options_.path_trace;
     hollow_ = options_.hollow;
     if (!options_.no_update_check) updater_.begin_check();
     WS_LOG_INFO("app", "ready. F1 developer panel, F2 overlay, F5 reload shaders, Esc quit");
@@ -6320,16 +6134,9 @@ int Application::play(const Options& options) {
         if (input.was_pressed(Key::F1)) hud_.toggle_developer_panel();
         if (input.was_pressed(Key::F2)) hud_.toggle_overlay();
         if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 7;
-        if (input.was_pressed(Key::F4)) {
-            path_trace_ = !path_trace_;
-            trace_samples_ = 0;
-            WS_LOG_INFO("app", "path tracing {}", path_trace_ ? "on" : "off");
-        }
         if (input.was_pressed(Key::F5)) {
             visibility_.force_reload();
             resolve_.force_reload();
-            pathtrace_.force_reload();
-            trace_samples_ = 0;
         }
         // Swap marchers where you are standing, without restarting.
         //
@@ -6343,7 +6150,6 @@ int Application::play(const Options& options) {
         // you are back on the old one for the rest of the session.
         if (input.was_pressed(Key::F6)) {
             use_node_pool_ = !use_node_pool_;
-            trace_samples_ = 0;
             WS_LOG_INFO("app", "marcher: {}", use_node_pool_ ? "node pool" : "chunk grid");
         }
         if (input.was_pressed(Key::F11)) swapchain_.set_vsync(!swapchain_.vsync());
@@ -6509,8 +6315,8 @@ int Application::play(const Options& options) {
             char what[160];
             const ResidencyStats residency = residency_.stats();
             std::snprintf(what, sizeof(what),
-                          "tool %d  path trace %d  debug %u  resident %u/%zu chunks",
-                          static_cast<int>(toolbelt_.active()), path_trace_ ? 1 : 0,
+                          "tool %d  debug %u  resident %u/%zu chunks",
+                          static_cast<int>(toolbelt_.active()),
                           debug_mode_, residency.resident_chunks, world_.chunk_count());
             crash_set_context("state", what);
             char timing[160];
@@ -6980,7 +6786,6 @@ int Application::play(const Options& options) {
         node_layout_ = VK_NULL_HANDLE;
     }
     resolve_.destroy();
-    pathtrace_.destroy();
     // And the cloud pass. Every pipeline has to be torn down HERE, while the device is still
     // alive: a ComputePipeline left to its own destructor runs after ~Application has taken the
     // device with it, and destroying a pipeline against a dead device is an access violation in

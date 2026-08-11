@@ -1767,3 +1767,21 @@ now 7. **The undo capture is what is left and it is now the largest part**: appl
 capture **194 ms** into 538,169 inverse ops. That is the next thing in this frame, and it is D74's
 Stage 16 argument arriving at its real target at last — an inverse op per changed run, captured
 synchronously, for an edit nobody may ever undo.
+
+## R3d — the per-pixel light path is deleted
+
+*§9 of the plan has said since it was written that `pathtrace.comp` goes at R3. It has now gone.
+3,297 lines deleted against 52 written.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D517 | **The reference path tracer is deleted, and the descriptor set it owned is kept because the cloud pass was always sharing it** | change | Gone: `shaders/pathtrace.comp` (2,757 lines), `shaders/pt_normals.glsl` (293), the rgba32f accumulator and its barrier, the camera-moved test that existed only to reset it, the old world-space face cache's *use*, `--pathtrace`, F4, and the `path_trace_` branch in every place it reached. **Kept and renamed in comment only: `pathtrace_layout_` / `pathtrace_set_`**, because `clouds_.create(...)` is passed that layout and the comment at its construction always said so — *"the cloud pass needs the parameter block and the sun and nothing else, and a set of its own would be the same set with holes in it"*. Trimming it to what the cloud pass names is follow-on, not part of deleting the pass: the binding numbers are ones the shaders and `gpu/render_params.hpp` agree about. Same reason `face_cache_` is still allocated and bound while nothing reads it |
+| D518 | **Validation caught the one real fault, which was a count and not a binding** | trap | Removing the accumulator's descriptor meant renumbering the `writes[]` entries after it — and the two `write_count` values a few lines below, `10` and `13`, are literals that do not renumber themselves. `vkUpdateDescriptorSets(): pDescriptorWrites[9].dstSet is VK_NULL_HANDLE`. It would have been a silent read of whatever the pool held on any machine not running `--validation`, which is every machine a player has. **Trap 1 says run `--validation` when a pipeline is new; it is equally the rule when a descriptor set loses a member**, and an array whose length is written as a literal beside it is where that bites |
+
+**Measured.** Warm start is unchanged — 538 / 555 ms after against 551 before, same camera, same cache. The cost the tracer was carrying is on a **cold driver shader cache**: two runs of the *before* build gave **8,053 ms then 551**, which is the driver compiling that one large shader once per driver cache. That is now not compiled at all, and the pipeline stage reads **7 ms**. The picture is untouched: content hash `1f4710eee4ee2585`, GPU 3.994 ms, `--validation` clean, both node-pool audits clean, 548 tests.
+
+**The gate is partly not R3d's to close, and saying so is the point.** §8 asks for *"no per-pixel random numbers remain"*. `shaders/resolve.comp` still carries `hash_u32` for the composite's ordered dither — and deleting that dither is **R5c**, in as many words. R3d removed every per-pixel random number in the *lighting*; the last one is in the composite and belongs to the stage chartered to replace it. The other two clauses (enclosed within 30% of outdoor, face pass within 10% between 1080p and 4K) are statements about the face architecture rather than about this deletion, and are unmeasured here.
+
+**What R3d hands to R1e**: `shaders/world.glsl` now has exactly **one** includer, `shaders/visibility.comp`, which is `--chunk-marcher`. That was the whole reason for doing R3 before R1e (D278) — R1e no longer has a path tracer to port.
+
+**Still owed from R3b, and not done here**: splitting `GpuFace` so the CPU's half and the card's half are never in one copy. The line is known — `x, y, z, packed` host, `irradiance, photons, counters, bins` card — and `src/gpu/face_light.*` already exists as the card-only home.

@@ -1002,7 +1002,25 @@ rather than from `--clip-file`:
 computed. A 608 MB cache written under `--clip-coarse 1` is deleted as stale by the next default
 launch. The arms of a `--clip-coarse` sweep destroy each other's caches. D501.
 
-### Next: R3d, and the five things found by scoping it that are not in the plan
+### R3d is done, and R1e is next
+
+**Deleted** (D517, D518): `shaders/pathtrace.comp` and `shaders/pt_normals.glsl`, the rgba32f
+accumulator and its barrier, the camera-moved test that existed only to reset it, `--pathtrace`, F4
+and every `path_trace_` branch. 3,297 lines out, 52 in. Warm start unchanged; the cost it carried
+was a **cold driver shader cache**, where the before-build read 8,053 ms and then 551 for a second
+run of itself. Picture untouched, `--validation` clean, 548 tests.
+
+**Two of the five findings below turned out to matter and are now facts rather than warnings**: the
+descriptor set is kept whole because the cloud pass shares it, and `world.glsl` is down to one
+includer. **The one that bit** was not in the list at all — removing a descriptor write means
+renumbering the `write_count` literals a few lines under the array, and `--validation` is the only
+thing that says so (D518).
+
+**Still owed from R3b**: the `GpuFace` split. **Not R3d's to close**: the gate's *no per-pixel
+random numbers* clause, whose last holdout is `hash_u32` in `resolve.comp`'s ordered dither — R5c
+deletes that dither by name.
+
+### What the scoping pass found, kept because R1e inherits most of it
 
 **R3d is the next step and R1e is the one after it** (see the section below for why that order).
 None of this is built; what follows is what a scoping pass turned up, recorded because every item
