@@ -127,7 +127,6 @@ struct Options {
     // The chunk marcher stays behind --chunk-marcher rather than being deleted, because R1e has
     // not happened yet and because two marchers that can render the same camera are how any
     // disagreement gets settled. It goes when the old addressing does.
-    bool node_pool = true;
     u32 hollow = 0;            // shell thickness for the scripted edit, and the starting value
 
     // Automatic quality. Off, or pinned, or aimed at something other than the monitor.
@@ -597,10 +596,6 @@ Options parse_options(int argc, char** argv) {
             options.hollow = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--clip-coarse" && i + 1 < argc) {
             options.clip_coarse = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--node-pool") {
-            options.node_pool = true;
-        } else if (arg == "--chunk-marcher") {
-            options.node_pool = false;
         } else if (arg == "--settle") {
             options.settle = true;
         } else if (arg == "--no-update-check") {
@@ -661,7 +656,6 @@ void print_help() {
         "                        geometry, grey the progress between,\n"
         "                        20 the lamp term alone: what the emitters deliver to each\n"
         "                        face, with blue for a face that has not measured yet\n"
-        "  --chunk-marcher       march the old chunk grid instead of the node pool\n"
         "  --settle              start the measurement window once the world stops sharpening,\n"
         "                        rather than at frame nought. Any figure to be compared with\n"
         "                        another run needs this\n"
@@ -1319,7 +1313,6 @@ private:
     u64 loading_drawn_ns_ = 0;    // when the last loading frame went out, so it can be paced
     bool loading_quit_ = false;   // the window was closed while it was still building
 
-    ComputePipeline visibility_;
     ComputePipeline resolve_;
     // R3: one invocation per face, working out light on the surface instead of on the screen.
     ComputePipeline shade_faces_;
@@ -1664,10 +1657,9 @@ private:
     u64 chisel_apply_ns_ = 0;
     u64 chisel_coarse_ns_ = 0;
     u64 chisel_invalidate_ns_ = 0;
-    ComputePipeline node_visibility_;
+    ComputePipeline visibility_;
     VkDescriptorSetLayout node_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet node_set_ = VK_NULL_HANDLE;
-    bool use_node_pool_ = false;
     u32 last_node_built_ = 0;
     u32 last_node_evicted_ = 0;
     u32 last_node_evicted_nodes_ = 0;
@@ -3329,7 +3321,7 @@ void Application::stream(f64 seconds) {
     // does not run in this mode at all. Reading a chunk coordinate as a node coordinate shifts
     // it by a detail level and asks for a chunk kilometres from the one that was missing, so
     // streaming stops serving the tracer: measured 52 of 68 chunks against 57.
-    const bool node_feedback = use_node_pool_;
+    constexpr bool node_feedback = true;
 
     for (const FeedbackEntry& entry : wanted) {
         // Chunk residency is fed whichever marcher ran. It mattered most for the reference tracer,
@@ -3527,7 +3519,7 @@ void Application::stream(f64 seconds) {
     // come back full.
     // What the lattice's period IS this frame, before deciding what "cold" means.
     //
-    // `node_visibility.comp` doubles the face-request stride until pixels/stride^2 is under sixty
+    // `visibility.comp` doubles the face-request stride until pixels/stride^2 is under sixty
     // thousand, so the period a face waits to be claimed again doubles with the resolution. The
     // store's eviction floor is derived from it, and the same arithmetic is written twice on
     // purpose rather than pushed through the parameter block: the shader's copy decides which
@@ -4389,7 +4381,7 @@ void Application::record_frame(f32 time_seconds) {
     // the path tracer, and the composite would be reading a face index the driver was free to
     // invent. So: transitioned once, and then CLEARED on the frames nothing fills it, which says
     // "no face here" in the one value the composite already knows how to ignore.
-    const bool node_writes_faces = use_node_pool_;
+    constexpr bool node_writes_faces = true;
     if (!face_ready_) {
         image_barrier(cmd, face_image_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
                       VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -4908,20 +4900,16 @@ void Application::record_frame(f32 time_seconds) {
     profiler_.begin_pass(cmd, "visibility", 9.5);
     const u32 params_offset =
         static_cast<u32>(swapchain_.frame_index()) * static_cast<u32>(params_stride_);
-    if (use_node_pool_) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, node_visibility_.pipeline());
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, node_visibility_.layout(), 0,
+    {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.pipeline());
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.layout(), 0,
                                 1, &node_set_, 1, &params_offset);
         // The entry table's size and how far a probe may run. A push constant rather than a
         // field in the parameter block, because it belongs to this pipeline and nothing else
         // reads it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and because the block is already at the size AMD gives (128 bytes) once.
         const NodePush node_constants = make_node_push(0);
-        vkCmdPushConstants(cmd, node_visibility_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
+        vkCmdPushConstants(cmd, visibility_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(node_constants), &node_constants);
-    } else {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.pipeline());
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, visibility_.layout(), 0, 1,
-                                &descriptor_set_, 1, &params_offset);
     }
 
     vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
@@ -4937,7 +4925,7 @@ void Application::record_frame(f32 time_seconds) {
     // Its own pass, so the cost is visible beside visibility rather than folded into it -- the
     // claim R3 makes is that this number does not move with resolution and that has to be
     // measurable rather than asserted (D201's lesson, in the pass it is being made about).
-    if (use_node_pool_) {
+    {
         // The visibility pass writes faces now, not only reads them: R3e has it claim a stand-in on
         // the card for any surface the store has never heard of. So the shading pass has to be told
         // to wait for those writes, where before the only barrier in the frame was the one before
@@ -5562,9 +5550,6 @@ int Application::play(const Options& options) {
     // running ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â asked at run time, not baked in at build time. The source tree location
     // still comes from the build, because hot reload only ever runs where the source is.
     const std::filesystem::path shaders = compiled_shader_dir();
-    const std::filesystem::path spirv = shaders / "visibility.comp.spv";
-    const std::filesystem::path source =
-        std::filesystem::path(WS_SHADER_SOURCE_DIR) / "visibility.comp";
 
     // The node pool, its buffers, its descriptor set and its pipeline. Created unconditionally
     // rather than behind the flag: the point of R1c is that the two marchers can be swapped at
@@ -5756,9 +5741,9 @@ int Application::play(const Options& options) {
         node_images[2].pImageInfo = &node_face;
         vkUpdateDescriptorSets(device_.handle(), 3, node_images, 0, nullptr);
 
-        const std::filesystem::path node_spirv = shaders / "node_visibility.comp.spv";
+        const std::filesystem::path node_spirv = shaders / "visibility.comp.spv";
         const std::filesystem::path node_source =
-            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "node_visibility.comp";
+            std::filesystem::path(WS_SHADER_SOURCE_DIR) / "visibility.comp";
         // The face shader shares the marcher's set: a shadow ray has to march exactly the
         // geometry the primary ray stopped on, so giving it its own set would be two places to
         // bind the same buffers. Its push constant is larger -- a sun direction and a count --
@@ -5787,21 +5772,15 @@ int Application::play(const Options& options) {
         // The same push range as the face shader, because they include the same file and a
         // stage may declare only one block: the marcher writes the first two fields and ignores
         // the rest, but its layout has to reserve what the block declares.
-        if (!node_visibility_.create(device_, node_source, node_spirv, node_layout_,
+        if (!visibility_.create(device_, node_source, node_spirv, node_layout_,
                                      sizeof(NodePush))) {
             WS_LOG_FATAL("app", "could not create the node visibility pipeline: {}",
-                         node_visibility_.last_error());
+                         visibility_.last_error());
             return 1;
         }
-        use_node_pool_ = options_.node_pool;
-    }
+        }
 
     const u64 t_pipelines = now_ns();
-    if (!visibility_.create(device_, source, spirv, set_layout_, 0)) {
-        WS_LOG_FATAL("app", "could not create the visibility pipeline: {}",
-                     visibility_.last_error());
-        return 1;
-    }
 
     progress_.within(0.25);
     draw_loading();
@@ -6135,7 +6114,6 @@ int Application::play(const Options& options) {
         if (input.was_pressed(Key::F2)) hud_.toggle_overlay();
         if (input.was_pressed(Key::F3)) debug_mode_ = (debug_mode_ + 1) % 7;
         if (input.was_pressed(Key::F5)) {
-            visibility_.force_reload();
             resolve_.force_reload();
         }
         // Swap marchers where you are standing, without restarting.
@@ -6148,10 +6126,6 @@ int Application::play(const Options& options) {
         //
         // It is also the escape hatch. If the new one is worse in front of you, press F6 and
         // you are back on the old one for the rest of the session.
-        if (input.was_pressed(Key::F6)) {
-            use_node_pool_ = !use_node_pool_;
-            WS_LOG_INFO("app", "marcher: {}", use_node_pool_ ? "node pool" : "chunk grid");
-        }
         if (input.was_pressed(Key::F11)) swapchain_.set_vsync(!swapchain_.vsync());
         // The only thing that starts a download. Nothing else does, and nothing does it
         // automatically.
@@ -6207,7 +6181,6 @@ int Application::play(const Options& options) {
             swallow_click_ = false;
         }
 
-        visibility_.reload_if_changed();
         resolve_.reload_if_changed();
 
         // Who gets the wheel this frame. It is the most contested input in the game, so the
@@ -6569,7 +6542,7 @@ int Application::play(const Options& options) {
             // rather than per frame because it stalls the device; that is often enough to catch
             // an upload that is dropping or misplacing something, which is the class of fault
             // this exists for.
-            if (use_node_pool_) {
+            {
                 node_buffers_.audit(node_pool_);
                 // And what the POOL holds against what the world holds, which is the half of that
                 // standard nothing was checking. `node_buffers_.audit` asks whether the card agrees
@@ -6671,10 +6644,10 @@ int Application::play(const Options& options) {
 
             const NodePoolStats node_stats = node_pool_.stats();
             WS_LOG_INFO("frame",
-                        "node pool {}: {} nodes, {} leaves, {} bytes ({} for the screen); "
+                        "node pool: {} nodes, {} leaves, {} bytes ({} for the screen); "
                         "built {} evicted {}; "
                         "requests {} hits {} deferred {}",
-                        use_node_pool_ ? "marching" : "idle", node_stats.nodes,
+                        node_stats.nodes,
                         node_stats.leaves, node_stats.total_bytes, node_stats.screen_bytes,
                         last_node_built_,
                         last_node_evicted_, node_stats.requests, node_stats.hits,
@@ -6765,7 +6738,6 @@ int Application::play(const Options& options) {
     destroy_buffer(device_, clip_staging_);
     destroy_buffer(device_, light_buffer_);
     visibility_.destroy();
-    node_visibility_.destroy();
     // The face pass and its store, which were added without being added here.
     //
     // The cost of the omission is exactly what the note below predicts: validation reports three

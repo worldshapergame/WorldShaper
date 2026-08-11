@@ -243,7 +243,7 @@ struct FaceStoreBudget {
     // lattice has not got round to it", and evicting on it throws away the wall you are looking at.
     //
     // Set every frame from the render resolution, because the shader derives the stride from it
-    // (node_visibility.comp: stride doubles until pixels/stride^2 is under sixty thousand). 64 at
+    // (visibility.comp: stride doubles until pixels/stride^2 is under sixty thousand). 64 at
     // 1280x800 and 1440p, 256 at 4K.
     u32 claim_period = 64;
 

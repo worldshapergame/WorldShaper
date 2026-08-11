@@ -665,7 +665,7 @@ void main() {
     // 763,800 live faces with 281,244 of them still bursting, against a frame that reads a fraction
     // of that. Most of a moving frame was light for surfaces nobody was looking at.
     //
-    // The stamp is exact and it is this frame's: `node_visibility.comp` writes it for every face a
+    // The stamp is exact and it is this frame's: `visibility.comp` writes it for every face a
     // pixel resolves to, there is a barrier between that pass and this one, and `kFaceSeenWindow`
     // is the small amount of hysteresis a grazing face needs. Nothing about RESIDENCY changes --
     // the face keeps its slot, its key and its accumulated answer, so the composite reads exactly
@@ -1206,7 +1206,7 @@ void main() {
     //
     // A stand-in the card claimed for itself is the exception, and it takes the one unbounded ray
     // this pass has always cast and nothing else. Its record is zeroed again on the next frame it
-    // is needed -- `node_face_claim` re-takes the bucket and `node_visibility.comp` rewrites the
+    // is needed -- `node_face_claim` re-takes the bucket and `visibility.comp` rewrites the
     // record -- so it can never accumulate, and thirty-two rays into a record that is discarded
     // before it is read again is the one place a burst buys strictly nothing. Missing this is what
     // would have made the cheapest faces in the frame the most expensive.
