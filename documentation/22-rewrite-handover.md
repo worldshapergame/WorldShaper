@@ -37,7 +37,8 @@ through everything here. Plain-language explanation for them lives in `12-plain-
   *visibility buffer* (which face was hit, at what detail level, how far), and
   `shaders/resolve.comp` turns that into pixels. Both include `shaders/world.glsl`, which holds
   the traversal;
-- the **path tracer** — `shaders/pathtrace.comp`, reached with `--pathtrace` or F4. It shades per
+- the **path tracer** — `shaders/pathtrace.comp`, reached with `--pathtrace` or F4. **Deleted by
+  R3d**; this paragraph describes what the rewrite started from. It shaded per
   pixel over a world-space *face cache*, and it is what the user wants rewritten to be per-face
   and much faster.
 
@@ -134,9 +135,9 @@ written for the person the work is for, so it is the one to keep current.
 | Stage | Size | State |
 |---|---|---|
 | R0 instruments | S | a–c done. **R0d** outstanding — record the grid; now 6.6 s a run rather than 133 |
-| R1 node pool | XL | a–d, f–i done. **R1e** outstanding, and it is most of what remains of R1 |
+| R1 node pool | XL | a–d, f–i done. **R1e is four slices in and unfinished** — one marcher, `world.glsl` gone, the summary octree and eight thumbnail tiers gone, the ray clip box off the world. Left: `residency.*`, most of `world_buffers.*`, the orphaned descriptor set and `rebuild_coarse_grids` |
 | R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit. **A ray now reports what it READS and not only where it stopped** (D427), which is what "wanted" was supposed to mean since D247 |
-| R3 the face pass | XL | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
+| R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
 | R9 the off-screen set | L | **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). The rest **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
@@ -1002,7 +1003,28 @@ rather than from `--clip-file`:
 computed. A 608 MB cache written under `--clip-coarse 1` is deleted as stale by the next default
 launch. The arms of a `--clip-coarse` sweep destroy each other's caches. D501.
 
-### R3d is done, and R1e is next
+### R3d is done. R1e is four slices in. Start at the fifth.
+
+**What is left of R1e, in the order it has to happen.** The four done slices are below; the rest is
+one job with a risky middle:
+
+1. **`residency.*` cannot go until `world_buffers_` does**, because `WorldBuffers::create` is sized
+   from `ResidencyBudget` and `residency_.update()` is what feeds `world_buffers_.upload()`.
+2. **`world_buffers_` cannot be trimmed to its type and visual tables until the descriptor bindings
+   are renumbered**, because eleven chunk buffers sit at binding numbers that `gpu/render_params.hpp`
+   and the shaders agree about. **This is the risky edit in the stage** and nothing else in R1e is
+   hard.
+3. The good news is that the renumber is now provably safe to do: **`clouds.comp` names only
+   bindings 13, 20 and 21**, and it is the only pipeline left on that set. Everything else on it is
+   written and read by nobody — which `--validation` confirms, since it accepted the accumulator's
+   binding going unwritten in R3d.
+4. Then `rebuild_coarse_grids` goes, and with it **4.10 ms of CPU per edit** and the ~12 ms a frame
+   the chunk system still costs.
+
+**Measure it against `documentation/baselines/r1e-chunks-going.csv`**, not against
+`r2-node-pool.csv` — see D519 for why the older file cannot answer this question.
+
+### R3d, and what deleting it turned up
 
 **Deleted** (D517, D518): `shaders/pathtrace.comp` and `shaders/pt_normals.glsl`, the rgba32f
 accumulator and its barrier, the camera-moved test that existed only to reset it, `--pathtrace`, F4
@@ -1380,7 +1402,14 @@ R7 the primary ray, R8 infinite detail.
 `src/world/world_cache.{hpp,cpp}`, `src/gpu/profiler.{hpp,cpp}`, `shaders/{pathtrace,resolve}.comp`,
 `tools/speckle.ps1`, `documentation/{13-decision-log,README}.md`.
 
-Nothing has been deleted yet.
+**Deleted.** R3d and R1e have started removing things, and this is the running list:
+`shaders/pathtrace.comp`, `shaders/pt_normals.glsl`, `shaders/world.glsl`,
+`shaders/visibility.comp` (the chunk marcher's — `node_visibility.comp` was renamed into its
+place), `src/world/summary_tree.{hpp,cpp}`, `src/world/thumb_cache.{hpp,cpp}`,
+`src/world/thumbnail.{hpp,cpp}`, and `tests/test_{summary_tree,thumb_cache,thumbnail}.cpp`.
+About 5,000 lines. **Still standing and still running every frame**: `src/world/residency.*`,
+most of `src/gpu/world_buffers.*`, the chunk marcher's orphaned descriptor set, and
+`rebuild_coarse_grids` at 4.10 ms an edit — which is the rest of R1e.
 
 ## 7. Commands
 
@@ -1471,8 +1500,9 @@ Compare the two marchers on one camera:
   --no-vsync --no-update-check --no-auto-quality
 ```
 
-**The node pool is what the game launches with** (D224). Add `--chunk-marcher` for the old one;
-`--node-pool` still parses and is now a no-op that says what it means. `--debug-mode 11` writes each pixel's face key as four
+**The node pool is the only marcher** (R1e). `--chunk-marcher`, `--node-pool` and the F6 toggle
+are gone, and so are `--pathtrace` and F4 — R3d deleted the reference tracer, so there is no second
+renderer to switch to and nothing left that computes the picture a second way. `--debug-mode 11` writes each pixel's face key as four
 exact bytes; `12`–`15` write one word of the visibility buffer the same way, which is how a
 disagreement gets localised to a field instead of argued about from a screenshot. **`16` is the sun
 term on its own** and is the instrument for anything about shadows: grey is the visibility fraction,
@@ -1488,7 +1518,7 @@ unconverged one are the same picture in every other view. **`20` is the lamp ter
 mapped because a lamp's contribution spans orders of magnitude between standing under a sconce and
 standing across a hall from one; magenta no face, blue no samples yet, green no geometry, and black
 is a legitimate answer rather than a failure. The node pool's
-GPU mirror is checked automatically at the screenshot in `--node-pool` mode and logs either
+GPU mirror is checked automatically at the screenshot and logs either
 `GPU mirror matches` or the first differing byte.
 
 **Three audits run at every screenshot and they answer three different questions.** `GPU mirror
