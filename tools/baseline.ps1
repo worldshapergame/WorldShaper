@@ -19,7 +19,7 @@
 #   tools\baseline.ps1 -Views enclosed,outdoor -Sizes deck # a quick look while working
 #   tools\baseline.ps1 -Compare docs\baseline-r0.csv       # what has moved, and by how much
 #
-# The full grid is seven views times three resolutions times two modes and takes a few minutes.
+# The full grid is seven views times three resolutions and takes a few minutes.
 # Narrow it while iterating; run all of it before claiming a stage is done.
 
 param(
@@ -27,7 +27,11 @@ param(
     [string]$Views = "all",
     # deck (1280x800), dev (2560x1440), high (3840x2160), or "all".
     [string]$Sizes = "all",
-    [string]$Modes = "realtime,pathtrace",
+    # Realtime only. R3d deleted the reference path tracer, so "pathtrace" here would pass a flag
+    # the binary no longer parses -- and an unknown flag is IGNORED, which means those runs would
+    # come back looking like perfectly good measurements of a mode that does not exist. Trap 15,
+    # arriving through the harness rather than through the engine.
+    [string]$Modes = "realtime",
     [string]$Clip = "",
     # Frames rendered before the shot. The first half is thrown away as warm-up by the engine
     # itself and the rest is averaged, so this is twice the averaging window.
@@ -90,7 +94,9 @@ function Invoke-Run([string]$mode, [string]$view, [string]$size) {
                  "--width", "$($wh[0])", "--height", "$($wh[1])",
                  "--cam", $allViews[$view], "--quality", "$Quality",
                  "--no-vsync", "--no-update-check", "--no-auto-quality")
-    if ($mode -eq "pathtrace") { $runArgs += "--pathtrace" }
+    if ($mode -eq "pathtrace") {
+        throw "the reference path tracer was deleted by R3d; there is no --pathtrace to measure"
+    }
     if ($Clip -ne "") { $runArgs += @("--clip-file", $Clip) }
     if ($Fly -ne "") { $runArgs += @("--fly", $Fly) }
 
