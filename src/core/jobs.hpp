@@ -47,14 +47,36 @@ public:
     // Splits [0, count) into chunks and runs them across the pool. Blocks until done.
     // The callback receives a half-open range so it can process a batch at a time
     // instead of paying call overhead per element.
+    //
+    // ONE POOL, ONE SUBMITTER AT A TIME. What goes on the queue is not a slice of the range but a
+    // take-LOOP over it, so a worker that picks one up stays inside it until the whole range is
+    // consumed. Two threads calling this on one pool therefore do not share it -- the second one's
+    // entries sit behind the first one's for the length of the FIRST one's work, and `wait` below
+    // makes it worse by handing the waiting thread the other submitter's jobs to run.
+    //
+    // That is not theoretical: the region paste and the background clip sampler shared a pool, and
+    // the paste -- on the main thread, in the frame the player is sitting in -- cost whatever the
+    // sample beside it cost. 7,076 ms for 75 ms of work. It is measured in D511, and the second
+    // call is now warned about rather than left to be discovered by its symptom.
     void parallel_for(usize count, usize min_chunk,
                       const std::function<void(usize begin, usize end)>& body);
 
     // Helps out with queued work while waiting, so a waiting thread is never idle.
+    //
+    // Whatever is queued, which is only the caller's own work if the caller is the only submitter.
+    // See the warning above.
     void wait(const JobCounter& counter);
 
     u32 worker_count() const noexcept { return worker_count_; }
     u64 jobs_executed() const noexcept { return executed_.load(std::memory_order_relaxed); }
+
+    // How many times a thread entered parallel_for while another one was already inside it.
+    //
+    // A count rather than a flag, and for the same reason `FaceStore::refusals` is (D507): "are
+    // two threads in there *now*" is a state, and a pool that collides for four seconds of every
+    // seven reads as idle at whatever moment somebody happens to ask. Nought here is the only
+    // thing that means the pool was used the way it is meant to be.
+    u64 submitter_collisions() const noexcept;
 
 private:
     struct Impl;

@@ -23,7 +23,18 @@ struct JobSystem::Impl {
     std::deque<Entry> queue;
     std::vector<std::thread> workers;
     bool shutting_down = false;
+
+    // Which thread is inside parallel_for, hashed, or 0 for none. Not a lock and not trying to be
+    // one: a second submitter is allowed, it is merely almost always a mistake, and the whole
+    // reason D511 cost a session is that nothing anywhere said it was happening.
+    std::atomic<u64> submitter{0};
+    std::atomic<u64> collisions{0};
+    std::atomic<bool> warned{false};
 };
+
+u64 JobSystem::submitter_collisions() const noexcept {
+    return impl_->collisions.load(std::memory_order_relaxed);
+}
 
 JobSystem::JobSystem(u32 worker_count) : impl_(std::make_unique<Impl>()) {
     if (worker_count == 0) {
@@ -137,6 +148,23 @@ void JobSystem::parallel_for(usize count, usize min_chunk,
         return;
     }
 
+    // Said once per pool, because a pool with two submitters has them for its whole life and a
+    // warning per call would bury the run it is trying to explain. The consequence is spelled out
+    // rather than the state, because "two submitters" reads as harmless and the cost is not.
+    const u64 me = std::hash<std::thread::id>{}(std::this_thread::get_id()) | 1u;
+    u64 idle = 0;
+    const bool first = impl_->submitter.compare_exchange_strong(idle, me, std::memory_order_acq_rel,
+                                                               std::memory_order_acquire);
+    if (!first && idle != me) impl_->collisions.fetch_add(1, std::memory_order_relaxed);
+    if (!first && idle != me && !impl_->warned.exchange(true, std::memory_order_relaxed)) {
+        WS_LOG_WARN("jobs",
+                    "two threads are inside parallel_for on one pool. What is queued is a "
+                    "take-loop over a whole range, so the second one gets no workers until the "
+                    "first one's work is DONE, and wait() will run the first one's jobs on the "
+                    "second one's thread. If one of them is the main thread, that is a stall the "
+                    "length of the other one's work. See D511");
+    }
+
     auto next = std::make_shared<std::atomic<usize>>(0);
     const auto take = [&body, next, chunk, count] {
         for (;;) {
@@ -152,6 +180,8 @@ void JobSystem::parallel_for(usize count, usize min_chunk,
     // The calling thread pulls its share too rather than sitting idle.
     take();
     wait(counter);
+
+    if (first) impl_->submitter.store(0, std::memory_order_release);
 }
 
 }  // namespace ws

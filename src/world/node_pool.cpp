@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstring>
 
 #include "core/assert.hpp"
+#include "core/log.hpp"
 #include "world/voxel_type.hpp"
 
 namespace ws {
@@ -405,6 +407,31 @@ u32 NodePool::stale_leaves(const World& world, NodeKey* first) const {
         if (stale == 0 && first != nullptr) {
             *first = NodeKey{node.x, node.y, node.z, kLeafLevel};
         }
+        ++stale;
+    }
+    return stale;
+}
+
+u32 NodePool::stale_masks(const World& world, NodeKey* first) const {
+    u32 stale = 0;
+    for (u32 slot = 0; slot < next_free_; ++slot) {
+        const GpuNode& node = nodes_[slot];
+        const u32 level = node_level(node);
+        // A free slot resets to level nought, and a brick's mask describes voxels rather than
+        // child nodes -- `stale_leaves` is what covers those.
+        if (level <= kLeafLevel) continue;
+        if ((node_flags(node) & kNodeLeaf) != 0) continue;
+
+        const NodeKey key{node.x, node.y, node.z, level};
+        u32 want = 0;
+        for (u32 octant = 0; octant < 8; ++octant) {
+            const NodeKey child{(key.x << 1) | static_cast<i64>(octant & 1),
+                                (key.y << 1) | static_cast<i64>((octant >> 1) & 1),
+                                (key.z << 1) | static_cast<i64>((octant >> 2) & 1), level - 1};
+            if (world_has(world, child)) want |= (1u << octant);
+        }
+        if (node_child_mask(node) == want) continue;
+        if (stale == 0 && first != nullptr) *first = key;
         ++stale;
     }
     return stale;
@@ -901,7 +928,98 @@ void NodePool::touch(const NodeKey& key) {
 }
 
 void NodePool::invalidate(i64 x, i64 y, i64 z) {
-    dirty_.push_back(node_key_of(x, y, z, kLeafLevel));
+    // One brick, expressed as the box it occupies, so there is one path below this and not two.
+    const NodeKey key = node_key_of(x, y, z, kLeafLevel);
+    const i64 lo[3] = {key.x << kLeafLevel, key.y << kLeafLevel, key.z << kLeafLevel};
+    const i64 hi[3] = {lo[0] + (i64{1} << kLeafLevel) - 1, lo[1] + (i64{1} << kLeafLevel) - 1,
+                       lo[2] + (i64{1} << kLeafLevel) - 1};
+    invalidate_box(lo, hi);
+}
+
+void NodePool::invalidate_box(const i64 lo[3], const i64 hi[3]) {
+    EditBox box{};
+    for (u32 axis = 0; axis < 3; ++axis) {
+        box.lo[axis] = std::min(lo[axis], hi[axis]);
+        box.hi[axis] = std::max(lo[axis], hi[axis]);
+    }
+    dirty_.push_back(box);
+}
+
+// One built node. Its children first, then its own mask and fold.
+//
+// Only nodes that EXIST are visited, which is the whole point: the box may span a million bricks
+// and the pool may hold none of them, and what has to be refreshed is what it holds.
+void NodePool::refresh_box(const World& world, u32 slot, const NodeKey& key, const i64 lo[3],
+                           const i64 hi[3], u32& budget, EditRefresh& done) {
+    ++done.visited;
+
+    // A brick, which is dropped and re-derived from the world into the slot it already occupies.
+    // The reasoning for re-deriving here rather than waiting for the feedback round trip is D422's
+    // and is unchanged; only how this node was arrived at has changed.
+    if (node_level(nodes_[slot]) == kLeafLevel) {
+        release_contents(slot);
+        nodes_[slot] = GpuNode{};
+        dirty_nodes_.mark(slot);
+        if (budget > 0) {
+            const u32 rebuilt = build_leaf(world, key, budget);
+            if (rebuilt != kNoNode) {
+                nodes_[slot] = nodes_[rebuilt];
+                nodes_[rebuilt] = GpuNode{};
+                dirty_nodes_.mark(slot);
+                dirty_nodes_.mark(rebuilt);
+                node_last_read_[slot] = static_cast<u32>(touch_frame_);
+                free_singles_.push_back(rebuilt);
+                ++done.leaves_rebuilt;
+            }
+        }
+        return;
+    }
+
+    const GpuNode& node = nodes_[slot];
+    const bool has_children = (node_flags(node) & kNodeLeaf) == 0 && node.children != kNoNode &&
+                              key.level > kLeafLevel;
+    if (has_children) {
+        const u32 child_level = key.level - 1;
+        const u32 children = node.children;
+        for (u32 octant = 0; octant < 8; ++octant) {
+            const NodeKey child_key{(key.x << 1) | static_cast<i64>(octant & 1),
+                                    (key.y << 1) | static_cast<i64>((octant >> 1) & 1),
+                                    (key.z << 1) | static_cast<i64>((octant >> 2) & 1),
+                                    child_level};
+            const u32 child = children + octant;
+            if (node_level(nodes_[child]) == 0) continue;   // not built below here
+
+            // Prune. A child covers 2^level voxels from its origin, and anything that does not
+            // reach into the edited box cannot have changed.
+            bool overlaps = true;
+            for (u32 axis = 0; axis < 3 && overlaps; ++axis) {
+                const i64 origin = ((axis == 0)   ? child_key.x
+                                    : (axis == 1) ? child_key.y
+                                                  : child_key.z)
+                                   << child_level;
+                const i64 last = origin + (i64{1} << child_level) - 1;
+                overlaps = origin <= hi[axis] && last >= lo[axis];
+            }
+            if (!overlaps) continue;
+
+            refresh_box(world, child, child_key, lo, hi, budget, done);
+        }
+    }
+
+    // The mask is re-derived from the WORLD rather than from the children, because the edit may
+    // have emptied a region the pool never built -- and a bit left set over nothing is a ray
+    // reporting a node the world does not have, every frame, for ever. That is D133.
+    u32 mask = 0;
+    for (u32 octant = 0; octant < 8; ++octant) {
+        const NodeKey child{(key.x << 1) | static_cast<i64>(octant & 1),
+                            (key.y << 1) | static_cast<i64>((octant >> 1) & 1),
+                            (key.z << 1) | static_cast<i64>((octant >> 2) & 1), key.level - 1};
+        if (world_has(world, child)) mask |= (1u << octant);
+    }
+    nodes_[slot].packed = pack_node(node_level(nodes_[slot]), node_flags(nodes_[slot]), mask);
+    dirty_nodes_.mark(slot);
+    fold_children(slot);
+    ++done.folded;
 }
 
 const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_voxel[3], u64 frame,
@@ -970,133 +1088,53 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     // spelling of "the world has this and I have not built it" -- so the next ray that wants it
     // reports it and it returns on demand, at the level that ray asked for.
     if (!dirty_.empty()) {
-        const std::unordered_set<NodeKey, NodeKeyHash> touched(dirty_.begin(), dirty_.end());
-
-        // Two passes, and the split is the whole of what makes a large edit affordable.
+        // Walked from the pool's own roots and pruned to each box, so what this costs is the number
+        // of built nodes an edit reaches rather than the number of bricks its box contains. D515.
         //
-        // An ancestor is shared by everything beneath it, so a carve of 97,500 bricks walks the
-        // same handful of upper nodes tens of thousands of times -- and re-deriving one mask is
-        // eight `world_has` calls, which below level 8 walk bricks in a chunk. Doing that per
-        // brick measured a single frame of 22,481 ms. Each node is refreshed once instead.
+        // The flat version took a list of every brick in the box, put it in a set to deduplicate
+        // it, and descended to each one. It was written when the announcement was per brick and it
+        // is the same algorithm as this one with the tree walked upwards instead of downwards --
+        // but upwards means starting from bricks that mostly do not exist. On a 36-million-voxel
+        // delete: 1,573,269 bricks announced, 13,325 nodes actually refreshed, no leaves rebuilt at
+        // all, and **714 ms** to work that out -- 457 of it building the set and 257 walking it,
+        // against 4 ms of the folding that is the entire purpose. Downwards, the pool visits what
+        // it holds and nothing else.
         //
-        // And the order matters: a fold reads its children, so every brick has to be dropped
-        // before anything above it is folded, and the ancestors themselves have to go deepest
-        // first or a parent averages a child that has not been refreshed yet.
-        std::vector<std::pair<u32, NodeKey>> ancestors;
-        std::unordered_set<u32> seen_ancestor;
+        // Post-order, which is what makes the sort unnecessary: a fold reads its children, so every
+        // child is refreshed before the parent that averages it, by construction rather than by
+        // ordering a list afterwards.
+        const auto refresh_began = std::chrono::steady_clock::now();
+        EditRefresh done;
 
-        for (const NodeKey& leaf_key : touched) {
-            const u32 up = kEntryLevel - kLeafLevel;
-            const NodeKey root_key{leaf_key.x >> up, leaf_key.y >> up, leaf_key.z >> up,
-                                   kEntryLevel};
-            const auto it = live_.find(root_key);
-            if (it == live_.end()) continue;   // nothing built here, so nothing to refresh
-
-            u32 chain[kEntryLevel + 2];
-            NodeKey keys[kEntryLevel + 2];
-            u32 depth = 0;
-            u32 slot = it->second.slot;
-            chain[depth] = slot;
-            keys[depth] = root_key;
-            ++depth;
-
-            for (u32 level = kEntryLevel; level > kLeafLevel; --level) {
-                const GpuNode& node = nodes_[slot];
-                if ((node_flags(node) & kNodeLeaf) != 0 || node.children == kNoNode) break;
-                const u32 shift = level - 1 - kLeafLevel;
-                const u32 octant = octant_of(leaf_key.x >> shift, leaf_key.y >> shift,
-                                             leaf_key.z >> shift);
-                const u32 child = node.children + octant;
-                if (node_level(nodes_[child]) == 0) break;   // not built below here
-                slot = child;
-                chain[depth] = slot;
-                keys[depth] = NodeKey{leaf_key.x >> shift, leaf_key.y >> shift,
-                                      leaf_key.z >> shift, level - 1};
-                ++depth;
-            }
-
-            // The brick itself, when it was built at all -- dropped and then IMMEDIATELY re-derived
-            // from the world, into the slot it already occupies.
-            //
-            // Dropping alone is what this used to do, and it leaves the brick at level nought,
-            // which is the pool's spelling of "the world has this and I have not built it". That is
-            // the right answer for a node nobody has asked about; it is the wrong one for a node
-            // that was resident a microsecond ago, because "not built" is answered by the marcher's
-            // stand-in (R2d) -- it paints an ANCESTOR's folded colour as a flat cube over the whole
-            // cell until a ray reports the gap and the request comes back, which is the feedback
-            // round trip: report on frame N, host reads it on N+2, builds, uploads. Three frames of
-            // a hard-edged slab of the wrong colour sitting where the geometry is.
-            //
-            // Photographed on the enclosed camera one frame after a 4,913-voxel chisel: the cell
-            // and its neighbours painted in flat black, cream and sky-blue rectangles, resolving to
-            // the correct stone by edit+60. That is the reported fault in as many words -- "the
-            // brick I placed that voxel on becomes a grey cube whatever material it might be" --
-            // and the colours are arbitrary because a fold is only ever over the children that
-            // happen to exist.
-            //
-            // Nothing has to be discovered here: `dirty_` already names the exact brick, and the
-            // world already holds the answer. Re-deriving it costs one `encode_brick`, which is the
-            // same work the request path would do two frames later, moved to the frame that knows
-            // it is needed. It also repairs the ancestors for free -- the fold below now averages a
-            // child that is THERE, where before it averaged around a hole.
-            //
-            // Bounded by the frame's build budget, so a carve of a hundred thousand bricks degrades
-            // to exactly the old behaviour on whatever it cannot afford rather than blowing the
-            // frame. The set is bricks that were RESIDENT, which is the set the screen was looking
-            // at, and an emptied brick costs almost nothing: `build_leaf` finds no occupancy and
-            // returns before it encodes anything.
-            if (node_level(nodes_[slot]) == kLeafLevel) {
-                release_contents(slot);
-                nodes_[slot] = GpuNode{};
-                dirty_nodes_.mark(slot);
-                --depth;   // a node is not its own ancestor
-
-                // Built into a slot of its own and then MOVED here, which is what `refine` does for
-                // the same reason: `build_leaf` allocates, and the destination is a member of its
-                // parent's run of eight rather than a separate allocation. Both ends are marked --
-                // marking only the build leaves the card holding whatever was in `slot` before,
-                // which is the fault NodeBuffers::audit caught at byte 18,240.
-                if (budget > 0) {
-                    const u32 rebuilt = build_leaf(world, leaf_key, budget);
-                    if (rebuilt != kNoNode) {
-                        nodes_[slot] = nodes_[rebuilt];
-                        nodes_[rebuilt] = GpuNode{};
-                        dirty_nodes_.mark(slot);
-                        dirty_nodes_.mark(rebuilt);
-                        node_last_read_[slot] = static_cast<u32>(touch_frame_);
-                        free_singles_.push_back(rebuilt);
-                    }
+        for (const EditBox& box : dirty_) {
+            for (const std::pair<const NodeKey, Resident>& entry : live_) {
+                const NodeKey& root_key = entry.first;
+                if (root_key.level != kEntryLevel) continue;
+                bool overlaps = true;
+                for (u32 axis = 0; axis < 3 && overlaps; ++axis) {
+                    const i64 origin = ((axis == 0)   ? root_key.x
+                                        : (axis == 1) ? root_key.y
+                                                      : root_key.z)
+                                       << kEntryLevel;
+                    const i64 last = origin + (i64{1} << kEntryLevel) - 1;
+                    overlaps = origin <= box.hi[axis] && last >= box.lo[axis];
                 }
-            }
-
-            for (u32 i = 0; i < depth; ++i) {
-                if (seen_ancestor.insert(chain[i]).second) {
-                    ancestors.emplace_back(chain[i], keys[i]);
-                }
+                if (!overlaps) continue;
+                refresh_box(world, entry.second.slot, root_key, box.lo, box.hi, budget, done);
             }
         }
 
-        // Deepest first: level 3 is a brick and level 14 is the root.
-        std::sort(ancestors.begin(), ancestors.end(),
-                  [](const std::pair<u32, NodeKey>& l, const std::pair<u32, NodeKey>& r) {
-                      return l.second.level < r.second.level;
-                  });
-
-        for (const std::pair<u32, NodeKey>& entry : ancestors) {
-            const u32 ancestor = entry.first;
-            const NodeKey& key = entry.second;
-            u32 mask = 0;
-            for (u32 octant = 0; octant < 8; ++octant) {
-                const NodeKey child{(key.x << 1) | static_cast<i64>(octant & 1),
-                                    (key.y << 1) | static_cast<i64>((octant >> 1) & 1),
-                                    (key.z << 1) | static_cast<i64>((octant >> 2) & 1),
-                                    key.level - 1};
-                if (world_has(world, child)) mask |= (1u << octant);
-            }
-            nodes_[ancestor].packed =
-                pack_node(node_level(nodes_[ancestor]), node_flags(nodes_[ancestor]), mask);
-            dirty_nodes_.mark(ancestor);
-            fold_children(ancestor);
+        const f64 refresh_ms =
+            std::chrono::duration<f64, std::milli>(std::chrono::steady_clock::now() - refresh_began)
+                .count();
+        // At a threshold, because an ordinary chisel comes through here every mouse-down frame and
+        // costs a fraction of a millisecond. What this is for is the one that does not.
+        if (refresh_ms > 5.0) {
+            WS_LOG_INFO("pool",
+                        "edit refresh: {:.0f} ms over {} announced {}, {} nodes visited, {} leaves "
+                        "rebuilt, {} folded",
+                        refresh_ms, dirty_.size(), dirty_.size() == 1 ? "box" : "boxes",
+                        done.visited, done.leaves_rebuilt, done.folded);
         }
     }
 

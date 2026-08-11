@@ -100,6 +100,9 @@ struct Options {
     // front of you, and a scripted screenshot should not depend on the network.
     bool no_update_check = (WS_DEBUG != 0);
     bool no_clip_cache = false;   // always rebuild the clip, never read or write the cache
+    // The control arm for the region paste's own pool: put the paste back on the sampler's job
+    // system, which is where it was and which is what made it wait for the sample. See D511.
+    bool no_paste_pool = false;
     std::string clip_part;        // build only this let name, for looking at one piece
 
     // A smaller box to sample, overriding the clip's own.
@@ -498,6 +501,8 @@ Options parse_options(int argc, char** argv) {
             options.clip_metre = static_cast<i32>(next_number(0));
         } else if (arg == "--no-clip-cache") {
             options.no_clip_cache = true;
+        } else if (arg == "--no-paste-pool") {
+            options.no_paste_pool = true;
         } else if (arg == "--clip-part") {
             if (i + 1 < argc) options.clip_part = argv[++i];
         } else if (arg == "--clip-bounds") {
@@ -1242,6 +1247,19 @@ private:
     // making them so to save a few milliseconds a minute would be a poor trade.
     std::unique_ptr<forge::Script> refine_script_;
     std::unique_ptr<JobSystem> refine_jobs_;
+    // The paste's own workers, and the reason they are not the sampler's is measured (D511).
+    //
+    // `JobSystem` is one FIFO queue, and `parallel_for` puts a take-LOOP on it: a worker that
+    // picks one up stays inside it until that submitter's whole range is consumed. So while the
+    // background sampler is running, every worker of `refine_jobs_` is occupied for the length of
+    // the SAMPLE, the paste's own entries sit behind them, and `wait()` -- which helps with queued
+    // work so that a waiting thread is never idle -- pops the sampler's entries and runs them on
+    // the MAIN thread. The paste therefore cost whatever the sample beside it cost, and the
+    // instrument said so in one column: the same 991-brick region pasted in 146 ms and in 7,076,
+    // and the only region with no sample running beside it pasted in 75.
+    //
+    // Foreground work and background work must not share a queue. This is the foreground one.
+    std::unique_ptr<JobSystem> paste_jobs_;
     std::unique_ptr<forge::SampleResult> refine_result_;
     std::thread refine_thread_;
     std::atomic<bool> refine_ready_{false};
@@ -2162,13 +2180,25 @@ void Application::pump_refinement() {
     // divided up ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is a real gap and is recorded as one, not a decision that this looks
     // better.
 
+    // Sized like any foreground pool rather than like the sampler, which is deliberately held to
+    // half the machine because it runs while somebody is playing. The paste is not background
+    // work: it is the frame the player is waiting inside, it lasts about a tenth of a second, and
+    // for that tenth of a second it is worth more than the sample it briefly oversubscribes.
+    if (paste_jobs_ == nullptr && !options_.no_paste_pool) {
+        paste_jobs_ = std::make_unique<JobSystem>();
+    }
+    JobSystem* const paste_pool =
+        options_.no_paste_pool ? refine_jobs_.get() : paste_jobs_.get();
+
     // REPLACE, so the box supersedes the coarse voxels standing in for it. Stamped instead, the
     // blocky overshoot survives outside the finer surface and the world only ever grows.
+    const u64 paste_began = now_ns();
     const PasteStats stamped = paste_clip(
         world_, ledger_, finished->clip, finished->origin_voxel[0] + refine_at_[0],
         finished->origin_voxel[1] + refine_at_[1],
         finished->origin_voxel[2] + refine_at_[2], PasteMode::Replace,
-        MatterReason::PlayerPlace, 1, refine_jobs_.get(), types_.type_count(), 1);
+        MatterReason::PlayerPlace, 1, paste_pool, types_.type_count(), 1);
+    const f64 paste_ms = ns_to_ms(now_ns() - paste_began);
     // NOT compacted here, and that was the hiccup.
     //
     // compact() walks the whole world to find chunks that have been emptied. Called once at the end
@@ -2184,8 +2214,10 @@ void Application::pump_refinement() {
     // Everything the player did, done again. An op is a SHAPE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FillBox carries two corners in
     // world voxels, not the voxels it happened to change ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so replaying it against finer geometry
     // re-cuts the same volume at the new detail. The cut re-measures itself.
+    const u64 replay_began = now_ns();
     const std::vector<Op>& done = op_log_.ops();
     if (!done.empty()) apply_ops(world_, done, ledger_);
+    const f64 replay_ms = ns_to_ms(now_ns() - replay_began);
 
     // And the renderer is told, which for the whole life of the clip ladder it was not.
     //
@@ -2207,7 +2239,9 @@ void Application::pump_refinement() {
     const i64 paste_hi[3] = {paste_lo[0] + std::max(finished->clip.size[0] - 1, 0),
                              paste_lo[1] + std::max(finished->clip.size[1] - 1, 0),
                              paste_lo[2] + std::max(finished->clip.size[2] - 1, 0)};
+    const u64 announce_began = now_ns();
     announce_world_change(paste_lo, paste_hi);
+    const f64 announce_ms = ns_to_ms(now_ns() - announce_began);
 
     finished.reset();
 
@@ -2215,8 +2249,16 @@ void Application::pump_refinement() {
     for (const RefineRegion& box : refine_regions_) {
         if (!box.done) ++left;
     }
-    WS_LOG_INFO("clip", "region: sampled {:.0f} ms ({} voxels asked), pasted {:.0f} ms, {} left",
-                refine_sample_ms_, refine_asked_, ns_to_ms(now_ns() - began), left);
+    // Split, because "pasted N ms" was three different things in one number and they do not scale
+    // with the same quantity: the paste itself is O(the box), the replay is O(what the player has
+    // done), and the announcement is O(the box in BRICKS). A region that asked for 440,142 voxels
+    // took 7,099 ms and one that asked for 3,295,122 took 81 -- which no reading of a single
+    // figure can explain, and which the split answers in one line.
+    WS_LOG_INFO("clip",
+                "region: sampled {:.0f} ms ({} voxels asked), pasted {:.0f} ms "
+                "(paste {:.0f} + replay {:.0f} + announce {:.0f}), {} bricks, {} left",
+                refine_sample_ms_, refine_asked_, ns_to_ms(now_ns() - began), paste_ms, replay_ms,
+                announce_ms, stamped.bricks_written, left);
 
     if (left == 0) {
         // The one walk, now that there is nothing left to empty.
@@ -2231,6 +2273,7 @@ void Application::pump_refinement() {
         }
         refine_script_.reset();
         refine_jobs_.reset();
+        paste_jobs_.reset();   // nothing left to paste, so nothing left for these to do
         return;
     }
 
@@ -3055,9 +3098,28 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
     // An edit can create chunks where the world had none, or empty the last brick out of
     // one. The coarse occupancy grids describe what the world contains, so they are what
     // tells the marcher there is now something to look for here.
+    f64 coarse_ms = 0.0;
+    f64 announce_ms = 0.0;
     if (result.voxels_changed > 0) {
+        const u64 coarse_began = now_ns();
         rebuild_coarse_grids();
+        coarse_ms = ns_to_ms(now_ns() - coarse_began);
+        const u64 announce_began = now_ns();
         invalidate_edited_chunks(ops);
+        announce_ms = ns_to_ms(now_ns() - announce_began);
+    }
+
+    // Split for the same reason the region paste's was (D511, trap 17), and reported at a
+    // threshold rather than every stroke: an ordinary chisel is a fraction of a millisecond and a
+    // line per click would bury the one that is not. What §5 records for a large delete is a frame
+    // of 1,209 ms of which the op is 68 and the undo capture 240 -- so most of it is somewhere
+    // below this line, and nothing has ever said where.
+    if (last_edit_ms_ + coarse_ms + announce_ms > 50.0) {
+        WS_LOG_INFO("edit",
+                    "large edit: {} voxels in {:.0f} ms (apply {:.0f} + coarse grids {:.0f} + "
+                    "announce {:.0f}), {} ops",
+                    last_edit_voxels_, last_edit_ms_ + coarse_ms + announce_ms, last_edit_ms_,
+                    coarse_ms, announce_ms, ops.size());
     }
 }
 
@@ -3204,13 +3266,12 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
     //
     // The case is real and is written up as open work -- see the shadow-latency section of
     // documentation/13-decision-log.md.
-    for (i64 bz = lo[2] >> kLeafLevel; bz <= (hi[2] >> kLeafLevel); ++bz) {
-        for (i64 by = lo[1] >> kLeafLevel; by <= (hi[1] >> kLeafLevel); ++by) {
-            for (i64 bx = lo[0] >> kLeafLevel; bx <= (hi[0] >> kLeafLevel); ++bx) {
-                node_pool_.invalidate(bx << kLeafLevel, by << kLeafLevel, bz << kLeafLevel);
-            }
-        }
-    }
+    // The BOX, not every brick in it (D515). Naming the bricks made the caller enumerate a volume
+    // and the pool deduplicate it, and neither of them knows anything useful about a brick that
+    // was never built -- which on a large delete is nearly all of them: 1,573,269 announced,
+    // 13,325 nodes actually refreshed, 714 ms to find that out. The pool holds the tree, so the
+    // pool prunes.
+    node_pool_.invalidate_box(lo, hi);
 }
 
 // Stands in for the renderer's feedback buffer until Stage 3: request every chunk within
@@ -6721,6 +6782,22 @@ int Application::play(const Options& options) {
                                 first_stale.z << kLeafLevel);
                 } else {
                     WS_LOG_INFO("frame", "the node pool agrees with the world, leaf for leaf");
+                }
+                // And the field a leaf audit cannot see. A child mask decides where a ray is
+                // allowed to look, so a wrong one is either a phantom request for ever (D133) or
+                // geometry nothing will ever ask for -- and it is invisible to every other check
+                // here, because the mirror compares the pool against the card and both agree
+                // perfectly about a bit that is wrong in each. See D515.
+                NodeKey first_mask{};
+                const u32 masks = node_pool_.stale_masks(world_, &first_mask);
+                if (masks > 0) {
+                    WS_LOG_WARN("frame",
+                                "the node pool holds {} child masks the world disagrees with; the "
+                                "first is the level {} node at ({}, {}, {})",
+                                masks, first_mask.level, first_mask.x << first_mask.level,
+                                first_mask.y << first_mask.level, first_mask.z << first_mask.level);
+                } else {
+                    WS_LOG_INFO("frame", "the node pool agrees with the world, mask for mask");
                 }
                 // The live gate, not the default, so the audit describes the run that was made.
                 face_buffers_.audit(face_store_, face_seen_.buffer(),

@@ -1047,10 +1047,70 @@ quitting part way through. It does carry on where it left off, and after enough 
 complete — a complete one loads in **119 ms with no hiccup at all**. But until then every launch pays,
 and a brand new world always pays.
 
-**It is the top item on my list and it is written down** as *slice the paste across frames* — the
-work of putting a region in gets broken into pieces small enough to fit in a frame, the same way
-everything else in this engine already is. Nothing about it is hard; it is a day's careful work
-rather than an experiment. Say the word and it is next.
+## The hiccups are fixed, and I had the wrong culprit for two sessions
+
+Everything I said above about the hiccups was **true and about the wrong thing**. Putting a region
+into the world was never slow. It was *waiting*.
+
+Here is the whole of it. The game has a set of worker threads it hands work to. The background
+sharpening was using them — correctly, that is what they are for. Putting a region in was *also*
+using them, from the main thread. And the way that queue works, once a worker picks up a piece of
+the sharpening it stays on it until the whole sharpening job is done. So the main thread asked for
+help, got none, and then — because a thread that is waiting is told to make itself useful — **the
+main thread ended up doing the background sharpening itself**. That is your frozen frame. The game
+was not putting voxels in the world for fourteen seconds; it was doing somebody else's job.
+
+**What gave it away was not a profiler.** I printed how long each region took to go in, next to how
+much was in it. The same region went in **twice** — once in 146 ms and once in 7,076 ms. Identical
+work, forty-seven times apart. Nothing about the work can explain that, so it was not the work. Then
+I printed it next to what was running at the same time, and every single row matched the sharpening
+job beside it. The one region that had nothing running beside it took **75 ms**.
+
+The fix is that the two now have separate sets of workers, which is a few lines. On your machine,
+opening the facility from scratch:
+
+| | before | after |
+|---|---|---|
+| worst single frozen frame | **7.3 seconds** | **0.09 seconds** |
+| all twelve of them added up | **34.7 seconds** | **0.7 seconds** |
+| frames actually drawn while it builds | 453 | **5,439** |
+
+The building comes out **identical** — I checked that rather than assumed it, by comparing a
+fingerprint of the finished world from both versions, and they match exactly. The sharpening itself
+got about 1% slower, which is the price of the two of them sharing a machine for a tenth of a second.
+
+**And the thing I said was next is not next any more.** *Slice the paste across frames* was on the
+list because a fourteen-second freeze had to be broken up. What is left is 31 to 92 milliseconds —
+two to six frames — which is not something you have ever complained about, and cutting it up is a
+genuinely risky change for no reward you would notice.
+
+## The very large chisel stroke, which was the same mistake again
+
+Deleting 36 million voxels at once froze for about a second. Same shape as the paste, one level
+down, and I found it the same way — by splitting the frame up and printing the parts.
+
+When you change part of the world, the renderer keeps a tree describing it and has to be told what
+changed. It was being told **brick by brick**: for that delete, **1,573,269 of them**. It then had
+to sort out which ones it actually held — and the answer was that it needed to fix up **13,325**
+things and rebuild **no** bricks at all. Working that out took **718 milliseconds**. The useful part
+of it took **4**.
+
+The tree knows what it holds; the thing announcing the edit does not. So it now hands over **the
+box** and lets the tree walk down through what it actually has, skipping anything the edit cannot
+have touched. **718 milliseconds becomes 7**, and that frame is no longer the slowest frame in the
+run. A one-voxel chisel is exactly as it was.
+
+Before changing it I built a check that did not exist, because this is the sort of change that can
+look right and be wrong in a way nothing notices for months. The tree stores, for every node, a note
+saying *which of my eight children have anything in them* — and that note decides where light and
+sight are even allowed to look. If it is wrong one way the renderer asks for something that is not
+there, every frame, for ever; wrong the other way and real geometry becomes invisible and nothing
+ever asks for it. None of the existing checks could see it. Now there is one, it runs at every
+screenshot, and it says *the node pool agrees with the world, mask for mask*.
+
+**What is left of that frozen second is the undo capture: 194 milliseconds.** Deleting 36 million
+voxels writes down 538,169 instructions for how to put them all back, and it does that immediately,
+for an edit you may never undo. That is the next thing in that frame.
 
 ## What the game will open on, and where everything will live
 

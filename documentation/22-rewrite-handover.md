@@ -320,6 +320,20 @@ failure, not a compile error.
     wrong, because every one of them asked how a report was *used*. The question that answered it in
     one line was whether a report had ever been *made*: 99.9% of evictions were of nodes no ray had
     ever mentioned. D426, and D345 says the same thing from the other end.
+17. **A cost that tracks nothing about its own output is not a cost, it is a wait — and the
+    question to ask of a wait is who else is running.** The region paste was quoted at 1.4 to 14.1
+    seconds in this file for two sessions and every figure was true. None of them was about the
+    paste. The tell was there the whole time and needed no profiler: the same 991-brick region
+    pasted in **146 ms and in 7,076 ms**, and 5,359 bricks went in 80 ms while 4,258 took 1,453.
+    Nothing about the work explains 47× on identical output. Printing the suspect's cost **beside
+    the cost of what was running at the same time** answered it in one column — it tracked the
+    background sample, row for row, and the one region with no sample beside it cost 75 ms.
+    Two things follow that are worth more than the fix. A timing figure that covers more than one
+    thing hides exactly this, so split it before theorising (the replay and the announcement inside
+    that same number were **0 ms**). And **foreground work and background work must never share a
+    job pool**: `parallel_for` queues a take-*loop* over a whole range, so the second submitter gets
+    no workers until the first has finished and `wait()` runs the first one's jobs on the second
+    one's thread. `JobSystem::submitter_collisions()` now counts it. D511–D514.
 
 ---
 
@@ -371,19 +385,22 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-### Before anything else: the paste, which is what a player actually feels
+### Closed: the paste, which is what a player actually felt
 
-**Not renderer work, and more important than any of it.** The scene sharpens region by region. The
-sampling runs on a background thread; the **paste does not**, and a paste measures **twelve to
-fourteen seconds** with the main thread blocked. That is what the in-game overlay reports as a
-2,234 ms 99th percentile and a 6,282 ms worst frame, while the GPU sits at 0.92 ms.
+**Both halves of this are now done, and the second one was not what this section spent two sessions
+saying it was.** It is left here in full rather than deleted, because the reasoning that was wrong
+is the reusable part — see trap 17, which is this section's whole lesson in one paragraph.
 
-Both marchers suffer it identically — swap with F6 and watch — and it predates the rewrite entirely.
-It also happens on **every run**, because the finished-world cache is only written when the last
-region lands and regions behind walls are never sharpened from a fixed camera, so it never
-completes and never caches.
+What it said: the scene sharpens region by region; the sampling runs on a background thread, the
+**paste does not**, and a paste measured **twelve to fourteen seconds** with the main thread
+blocked. That is what the in-game overlay reported as a 2,234 ms 99th percentile and a 6,282 ms
+worst frame while the GPU sat at 0.92 ms. All true. Both marchers suffered it identically — swap
+with F6 — and it predates the rewrite entirely.
 
-Two fixes, in the order they pay:
+What it was: **the paste waiting for the background sampler**, because the two shared a job pool.
+Not the paste. D511–D514, and item 2 below.
+
+Two fixes, in the order they paid:
 
 1. ~~**Write the cache when sharpening settles**, not only when it completes.~~ **Done** — D241–D246.
    The cache is written at the fixed point carrying a `CachedRegion` per box saying which are sharp,
@@ -392,20 +409,59 @@ Two fixes, in the order they pay:
    after that loads a complete world in five to seven seconds. **Read D243 and D244 before comparing
    any figure across this change** — the `scene:` line now carries the world's content hash, and
    figures taken before it are not comparable with figures taken after it.
-2. **Slice the paste across frames.** D74 already names this and hands it to Stage 16: *"an edit
-   runs in one frame and cannot be interrupted… raising the cap means slicing the work across
-   frames"*. This is the one that makes editing feel right, and it is now the whole of what is left
-   here: the first run on a cold cache still pastes for up to **17.4 s at a time** with the main
-   thread blocked, and the fourteen seconds of stall in a first load is still fourteen seconds.
+2. ~~**Slice the paste across frames.**~~ **The stall is closed, and slicing was not what closed
+   it** — D511–D514. The paste was never doing the work. Read that block before touching any of
+   this, because the shape of the mistake is more useful than the fix:
 
-   **A large chisel is the same fault and is measurable on demand**, which the paste is not: the
-   36-million-voxel delete used throughout §4b costs **one frame of 1,209 ms**, of which the op
-   itself is 68 ms, the undo capture is 240 ms into 841,944 inverse ops, and the rest is everything
-   downstream re-deriving itself. Whatever slices the paste should slice this, and this one can be
-   reproduced with a flag rather than by watching a load.
+   The one figure this section quoted covered three things — `paste_clip`, the op-log replay and
+   `announce_world_change`. Split, the replay is **0 ms** and the announcement **0–2 ms** in every
+   region, so all of it was `paste_clip`. But paste time did not track the *paste*: the same
+   991-brick region went in **146 ms and in 7,076**, and 5,359 bricks went in 80 ms while 4,258
+   took 1,453. Nothing about the output explains 47× on identical output.
 
-Until the second lands, nobody can judge the renderer by playing a *first* load, because what they
-are judging is the paste. Every load after the first is now the renderer.
+   It tracked the **sample running beside it**, row for row, and the only region with no sample
+   beside it pasted in **75 ms**. `JobSystem::parallel_for` queues a take-**loop** over the whole
+   range rather than a slice of it, so a worker that picks one up is inside it until that
+   submitter's range is exhausted. `pump_refinement` starts the next sample before pasting — on
+   purpose, it nearly halves the ladder — and handed both the sampler and the paste `refine_jobs_`.
+   Every worker was therefore inside the sample for its whole length, the paste's entries sat
+   behind them, and `wait()`, which helps with queued work so a waiting thread is never idle, gave
+   the **main thread** the sampler's jobs to run.
+
+   Foreground and background now have separate pools. Cold facility, two flags of one build,
+   `--no-paste-pool` the control: worst paste **7,282 → 92 ms**, the twelve pastes of one load
+   **34,697 → 719 ms**, frames drawn before the world settles **453 → 5,439**, the sample beside it
+   +1–3%, and both arms settle on the same content hash `1f4710eee4ee2585`.
+
+   **What is left of the slicing, and why it is not next.** 31–92 ms — two to six frames, which
+   nobody has reported. It is a large change whose hazard is real (a half-pasted world is visible
+   to `save_refined_world`, to `--settle`, and therefore to every measurement in this file) and it
+   was sized against a premise that has since moved by 79×. Do not build it without measuring it
+   again first.
+
+   **A large chisel was a different fault, and most of it is now closed too** (D515, D516). It was
+   the same shape one level down: `announce_world_change` named **every brick** in the edited box
+   and the pool walked up from each one. On the 36-million-voxel delete that is **1,573,269 bricks
+   announced**, producing **13,325 refolds and no rebuilt leaves**, at **718 ms in a single frame**
+   — gather 457, descend 257, fold **4**. The pool holds the tree, so it now takes the **box** and
+   descends from its own roots, pruning any child whose extent misses it, post-order so the fold
+   ordering falls out by construction instead of being sorted for afterwards. **718 → 7 ms**, and
+   the edit frame is no longer the worst frame in the run. A one-voxel chisel is unchanged.
+
+   Do not touch that code without reading `NodePool::stale_masks` first. It is the audit that had
+   to be built before the change could be believed: a **child mask** decides where a ray is allowed
+   to look, and it is invisible to every other check here — the GPU mirror compares the pool against
+   the card and both agree about a bit that is wrong in each, and `stale_leaves` compares contents
+   rather than reachability. The screenshot audit now prints *the node pool agrees with the world,
+   mask for mask*.
+
+   **What is left of that frame is the undo capture, and it is now the largest part**: apply 62 ms,
+   undo capture **194 ms into 538,169 inverse ops**, pool refresh 7. An inverse op per changed run,
+   captured synchronously, for an edit nobody may ever undo. *That* is what D74's Stage 16 argument
+   is actually about now, and it can be reproduced with a flag rather than by watching a load.
+
+**So a first load is now the renderer too.** What is left of it is the *sampling* — 7 s a region on
+a background thread — which is not a stall and does not block a frame.
 
 ### Closed: undo restored the world and not its light
 
@@ -561,8 +617,12 @@ says so.
 sixty-four lanes of a workgroup walk one neighbourhood of the tree instead of sixty-four (it cannot
 change a pixel — it only reorders the same invocations — and nothing has measured it); R5's face
 denoise, which is what would let `kSkyConverged` fall from 2,048 and was measured as worth 5.05 →
-3.55 ms at 512; and `rebuild_coarse_grids`, which is **3.55 ms of CPU per edit**, is O(world) for a
-change one metre across, and is now the largest single thing an edit costs.
+3.55 ms at 512; and `rebuild_coarse_grids`, which is O(world) for a change one metre across and is
+**by a wide margin the largest thing an edit costs**. Re-measured under `_flybench.ps1 -Chisel
+8,16`, where the game prints it per edit: **apply and undo 0.26 ms, coarse grids 4.10–4.14 ms,
+invalidation downstream 0.01 ms** (that last was 718 ms on a large edit before D515). It is a
+**chunk** structure — one of the five the node pool replaced — so it does not want optimising, it
+wants deleting, and that is R1e.
 
 ### How the moving case was measured, and why the grid could not see it
 
@@ -917,16 +977,19 @@ heartbeat every six hundred frames whether or not anything is wrong. **When this
 read the player's own log before building any repro** — three rounds of it have now been diagnosed
 from repros of mine, and the second and third were repros of the wrong thing.
 
-### Open, measured here: opening a world re-samples the clip, and every paste is a hiccup
+### Opening a world re-samples the clip — and the hiccup half of this is closed
 
 Reported alongside the above as *"you're not using the resolution pixel screen based loading of
-detail system streaming in worlds"* and *"the game has massive hiccups"*, and **both halves are
-true**. This is §5's second item — *slice the paste across frames* — with numbers from the real path
-a player takes rather than from `--clip-file`:
+detail system streaming in worlds"* and *"the game has massive hiccups"*, and **both halves were
+true**. The hiccups are **fixed** (D511–D514): they were the paste waiting on the sampler through a
+shared job pool, not the paste, and the twelve pastes of a cold load now come to **719 ms between
+them** rather than 34,697. The re-sampling half stands. Numbers from the real path a player takes
+rather than from `--clip-file`:
 
 - a world whose `.world` cache is **complete** loads in **119 ms** with no pastes and no hiccups;
-- a world whose cache is not complete re-runs the ladder, and each region paste **blocks the main
-  thread**: 1.4, 6.5, 7.0, 13.0 and **14.1 s** in single frames, measured on this machine;
+- a world whose cache is not complete re-runs the ladder. Each region paste used to **block the
+  main thread**: 1.4, 6.5, 7.0, 13.0 and **14.1 s** in single frames. It is now **31–92 ms**, and
+  the sampling behind it — 7 s a region — never blocked a frame and still does not;
 - the facility had **never** completed one, because the cache is written at refinement's fixed point
   and the late regions cost 7–26 s of sampling apiece. Progress *is* carried between launches —
   `cached world has 12 of 18 regions sharpened; carrying on from here` — so it finishes eventually,
@@ -938,6 +1001,52 @@ a player takes rather than from `--clip-file`:
 `src/app/main.cpp` divides `script.settings.voxels_per_metre` by `coarse` *before* the key is
 computed. A 608 MB cache written under `--clip-coarse 1` is deleted as stale by the next default
 launch. The arms of a `--clip-coarse` sweep destroy each other's caches. D501.
+
+### Next: R3d, and the five things found by scoping it that are not in the plan
+
+**R3d is the next step and R1e is the one after it** (see the section below for why that order).
+None of this is built; what follows is what a scoping pass turned up, recorded because every item
+is something the plan's one-line description does not say and each would cost a session to
+rediscover.
+
+1. **The descriptor layout is shared with the cloud pass on purpose, so it survives R3d.**
+   `pathtrace_layout_` / `pathtrace_set_` are built at `src/app/main.cpp:5687` and the comment there
+   is explicit: *"They share this layout whole, because the cloud pass needs the parameter block and
+   the sun and nothing else, and a set of its own would be the same set with holes in it."*
+   `clouds_.create(...)` passes `pathtrace_layout_`. So R3d **renames** these to what they will then
+   be — the cloud pass's — rather than deleting them. Trimming the bindings the tracer alone used is
+   separate, optional, and wants doing after it builds rather than during.
+2. **Deleting the tracer removes the WRITER of the frame-statistics buffer.** `resolve.comp:151`
+   says so in as many words: *"The tracer's frame_exposure() reads the frame statistics buffer it
+   fills itself, which this pass has no binding for and no business writing"*, which is why
+   `kPreviewExposure` is the constant 3.2. R6's real exposure meter therefore needs a new writer,
+   and R3d is where that dependency is created. It is also the reason `clips/many_lamps.clip` comes
+   out blown white today.
+3. **It removes the only ground-truth renderer.** The blown-white case above was diagnosed *by
+   comparing the face pass against `--pathtrace` on the same camera*. After R3d there is nothing in
+   the tree that computes the same picture a second way. That is the plan's intent (§9 deletes it),
+   but it means anything wanting a reference comparison should be measured **before** R3d lands, not
+   after.
+4. **The include graph says exactly what dies with it.** `pathtrace.comp` is the *sole* includer of
+   `pt_normals.glsl`, `pt_material.glsl`, `pt_sampling.glsl` and `pt_post.glsl`. Only the first is
+   named for deletion; the other three become orphaned files that nothing compiles, and §9 wants
+   `pt_post.glsl`'s exposure meter and tone curve kept for R6. Leave them, and say in the commit that
+   they are R6's inheritance rather than dead code, or the next sweep deletes them.
+   `pt_sky.glsl`, `pt_clouds.glsl` and `pt_media.glsl` are shared with `clouds.comp` and
+   `resolve.comp` and must stay. `world.glsl` is left with one includer, `visibility.comp`, which is
+   R1e's.
+5. **`path_trace_` is not one branch around a dispatch.** It is interwoven with barriers, the
+   accumulator's demote-on-edit rule and the face cache's clear: `src/app/main.cpp` 4219 (accumulator
+   reset on residency change), 4429 (`node_writes_faces`), 4473 (the accumulator barrier), 4977
+   (the face-cache clear), 5045–5077 (the dispatch) and 5247. The rgba32f accumulator and
+   `trace_samples_` go with it; check each barrier rather than deleting the block around it.
+
+**The debt R3d carries**, from R3b: split `GpuFace` so the CPU's half and the card's half are never
+in one copy, which is what makes D295 — the upload coalescing across clean records and sending the
+CPU's zeroed counters over what the card wrote — unrepresentable rather than merely absent. The
+split line is already known: `x, y, z, packed` are the host's and `irradiance, photons, counters,
+bins` are the card's, and **`src/gpu/face_light.*` already exists as the card-only home** (built for
+R10a, D325, for this exact reason), so there is somewhere for the second half to go.
 
 ### R3 comes before R1e, deliberately
 
@@ -1289,7 +1398,11 @@ D504's control arm, `--face-pressure-from N` is how little free space starts the
 (2 is "from half free", which is the setting D505 measured and rejected), `--no-face-reads` stops a
 face telling the host that a pixel read it and is D508's control arm, `--face-read-period N` is the
 window it says it in, and `--face-budget N` shrinks the table so the full-table state — the blocky
-flicker of D502 — is reachable in ninety seconds instead of after minutes of play. `--chisel EVERY,RADIUS` carves
+flicker of D502 — is reachable in ninety seconds instead of after minutes of play;
+`--no-paste-pool` puts the region paste back on the background sampler's job system, which is
+D513's control arm and the state every paste figure above this line was measured in — pair it with
+`--no-clip-cache` so the ladder actually runs, and watch the `region:` line, which now splits the
+paste from the op replay from the announcement. `--chisel EVERY,RADIUS` carves
 and fills alternately at whatever the camera is looking at, through the same code path the mouse
 button takes, and prints what it changed — **read that line before reading any time from a chisel
 run**, because a run that missed every time and a run that never fired print the same pass table.
@@ -1359,3 +1472,13 @@ standing across a hall from one; magenta no face, blue no samples yet, green no 
 is a legitimate answer rather than a failure. The node pool's
 GPU mirror is checked automatically at the screenshot in `--node-pool` mode and logs either
 `GPU mirror matches` or the first differing byte.
+
+**Three audits run at every screenshot and they answer three different questions.** `GPU mirror
+matches` asks whether the card holds what the pool holds — and both can agree perfectly about
+something neither has looked at since the world changed. *The node pool agrees with the world, leaf
+for leaf* (`stale_leaves`, D400) asks whether a built brick still has the shape the world gives it,
+which is what catches a writer that skipped `invalidate`. *The node pool agrees with the world, mask
+for mask* (`stale_masks`, D516) asks whether a **child mask** matches the world — where a ray is
+allowed to look, as against what it finds when it gets there. A wrong bit there is either a phantom
+request every frame for ever (D133) or geometry no feedback will ever ask for, and it is invisible
+to the other two. Read all three before concluding the tree is healthy.

@@ -1,7 +1,9 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
+#include <chrono>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 #include "core/jobs.hpp"
@@ -88,4 +90,75 @@ TEST_CASE("nested waiting does not deadlock") {
     }
     jobs.wait(outer);
     CHECK(done.load() == 32 * 8);
+}
+
+// The pool notices when two threads submit to it at once, and a second pool is the cure.
+//
+// This is D511's gate. `parallel_for` queues a take-LOOP over the whole range rather than a slice
+// of it, so a worker that picks one up is inside it until that submitter's range is exhausted --
+// which means a second submitter gets no workers at all until the first one has finished, and
+// `wait()` hands it the first one's jobs to run on its own thread. On the region paste, on the main
+// thread, that was 7,076 ms of stall for 75 ms of work.
+//
+// Written the way trap 15 says to write it: the case that must be clean is checked against a case
+// that must NOT be, because a detector that never fires and a pool that never collides look
+// identical from the clean side alone.
+TEST_CASE("a pool with two submitters says so, and two pools do not collide") {
+    // The overlap is arranged rather than raced for. A first version simply started both threads
+    // and hoped they were inside at the same moment, which passes on this machine and is a
+    // coin-toss on a busier or a smaller one -- and a flaky test in a suite this size is worse
+    // than no test, because the next person to see it fail will re-run it rather than read it.
+    //
+    // So the first submitter's own body refuses to finish until the collision has been recorded,
+    // which is exactly the state under test, and the wait is bounded so a broken detector fails
+    // the case instead of hanging the suite.
+    JobSystem background(2);
+    std::atomic<JobSystem*> watched{nullptr};
+    std::atomic<bool> second_in{false};
+    std::atomic<bool> holding{false};
+
+    // Only the first chunk to arrive holds the pass open; the rest pass straight through. One
+    // waiter rather than one per chunk, so a detector that never fires costs the suite one bounded
+    // spin instead of one per piece of the range.
+    const auto hold = [&](usize, usize) {
+        if (holding.exchange(true, std::memory_order_acq_rel)) return;
+        JobSystem* const pool = watched.load(std::memory_order_acquire);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (second_in.load(std::memory_order_acquire) &&
+                (pool == nullptr || pool->submitter_collisions() > 0)) {
+                return;
+            }
+            std::this_thread::yield();
+        }
+    };
+
+    // Comfortably past the point where parallel_for stops dispatching and just runs the body on
+    // the calling thread, which would take the collision check out of the picture entirely.
+    const usize kRange = 64;
+
+    SUBCASE("one pool, two threads") {
+        watched.store(&background, std::memory_order_release);
+        std::thread other([&] {
+            second_in.store(true, std::memory_order_release);
+            background.parallel_for(kRange, 1, [](usize, usize) {});
+        });
+        background.parallel_for(kRange, 1, hold);
+        other.join();
+        CHECK(background.submitter_collisions() > 0);
+    }
+
+    SUBCASE("two pools, two threads") {
+        // Nothing to watch: the point is that the foreground pool never sees the other submitter
+        // at all, so `hold` waits only for the second thread to have started its own pass.
+        JobSystem foreground(2);
+        std::thread other([&] {
+            second_in.store(true, std::memory_order_release);
+            background.parallel_for(kRange, 1, [](usize, usize) {});
+        });
+        foreground.parallel_for(kRange, 1, hold);
+        other.join();
+        CHECK(background.submitter_collisions() == 0);
+        CHECK(foreground.submitter_collisions() == 0);
+    }
 }

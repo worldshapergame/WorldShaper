@@ -857,3 +857,93 @@ TEST_CASE("a leaf whose brick the world has dropped is reported as stale") {
     f.serve(2);
     CHECK(f.pool.stale_leaves(f.world) == 1);
 }
+
+// D515. The edit refresh descends the pool's own tree and prunes to the edited box, instead of
+// being handed every brick in that box and walking up from each one. Same answer, and the cost is
+// the number of built nodes an edit reaches rather than the volume it covers -- 718 ms to 7 on a
+// 36-million-voxel delete, which is the whole reason for the change.
+//
+// What it risks is the field nothing was comparing. A child mask decides where a ray is ALLOWED to
+// look, so refreshing the wrong set of nodes leaves either a bit set over nothing -- a phantom
+// request every frame for ever, D133 -- or a bit clear over something, which is geometry no
+// feedback will ever ask for because feedback only reports what a ray could not find. Both are
+// silent: the GPU mirror agrees, `stale_leaves` agrees, and the count of nodes looks healthy.
+//
+// So the gate is `stale_masks`, and it is checked against an arm that must NOT be clean, because a
+// detector that never fires and a pool that is never wrong look identical from the clean side
+// (trap 15).
+TEST_CASE("an edited box refreshes every mask under it, and an unannounced edit does not") {
+    Fixture f;
+    // Two bricks apart in every axis, so the edit lands well inside a built subtree and there are
+    // ancestors above it that have to be re-derived rather than merely a leaf to drop.
+    f.fill_box(0, 0, 0, 63, 63, 63);
+    f.want_box(0, 0, 0, 63, 63, 63);
+    f.serve(1);
+    REQUIRE(f.pool.validate());
+    REQUIRE(f.pool.stale_leaves(f.world) == 0);
+    REQUIRE(f.pool.stale_masks(f.world) == 0);
+
+    // Empty one whole brick, so the world genuinely loses a child and the masks above it change
+    // rather than only the leaf's contents.
+    for (i64 z = 8; z < 16; ++z) {
+        for (i64 y = 8; y < 16; ++y) {
+            for (i64 x = 8; x < 16; ++x) f.world.set(x, y, z, kAir);
+        }
+    }
+
+    SUBCASE("nobody tells the pool, so it is wrong and says so") {
+        f.serve(2);
+        NodeKey first{};
+        CHECK(f.pool.stale_masks(f.world, &first) > 0);
+        CHECK(first.level > kLeafLevel);
+    }
+
+    SUBCASE("the box is announced, so every mask under it comes right") {
+        const i64 lo[3] = {8, 8, 8};
+        const i64 hi[3] = {15, 15, 15};
+        f.pool.invalidate_box(lo, hi);
+        f.serve(2);
+        CHECK(f.pool.stale_masks(f.world) == 0);
+        CHECK(f.pool.stale_leaves(f.world) == 0);
+        CHECK(f.pool.validate());
+    }
+
+    SUBCASE("one brick announced as a box is the same as announcing it as a brick") {
+        // `invalidate` is now `invalidate_box` over one brick, so the narrow path a single-voxel
+        // chisel takes has to land on the identical answer.
+        f.pool.invalidate(8, 8, 8);
+        f.serve(2);
+        CHECK(f.pool.stale_masks(f.world) == 0);
+        CHECK(f.pool.stale_leaves(f.world) == 0);
+    }
+}
+
+// The cost claim itself, headless: announcing a box must not depend on how many bricks it spans.
+//
+// Measured as WORK rather than as time, because a wall-clock assertion in a test suite is a
+// flake waiting for a busy machine. The old shape visited one node per brick in the box; this one
+// visits only nodes that exist, so a box covering thousands of empty bricks costs what the built
+// tree under it costs and nothing more.
+TEST_CASE("announcing a large empty box costs what the pool holds, not what the box spans") {
+    Fixture f;
+    f.fill_box(0, 0, 0, 15, 15, 15);
+    f.want_box(0, 0, 0, 15, 15, 15);
+    f.serve(1);
+    REQUIRE(f.pool.stale_masks(f.world) == 0);
+
+    const u32 built = f.pool.node_watermark();
+
+    // A box a thousand bricks a side, almost entirely over empty world. Per brick this is a billion
+    // announcements; from the tree it is the handful of nodes that are actually there.
+    const i64 lo[3] = {-4096, -4096, -4096};
+    const i64 hi[3] = {4095, 4095, 4095};
+    f.pool.invalidate_box(lo, hi);
+    f.serve(2);
+
+    // Nothing was invented and nothing was lost: the pool still holds what it held, and it still
+    // agrees with the world on both fields.
+    CHECK(f.pool.node_watermark() == built);
+    CHECK(f.pool.stale_masks(f.world) == 0);
+    CHECK(f.pool.stale_leaves(f.world) == 0);
+    CHECK(f.pool.validate());
+}

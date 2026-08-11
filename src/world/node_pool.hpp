@@ -445,6 +445,20 @@ public:
     // them (D131).
     void invalidate(i64 x, i64 y, i64 z);
 
+    // The same thing for a REGION, and the difference is not convenience (D515).
+    //
+    // Per brick, the caller has to enumerate every brick in the box, and the pool then has to
+    // deduplicate and descend to each one. A 36-million-voxel delete announces **1,573,269**
+    // bricks that way, of which the pool holds almost none — the answer it computed from that list
+    // was 13,325 ancestors and *no* rebuilt leaves, and getting there cost **714 ms in one frame**:
+    // 457 to put the keys in a set and 257 to walk them, against 4 ms of actual work.
+    //
+    // The pool knows what it holds and the caller does not. Given the box, it descends from its own
+    // roots and prunes to it, so the cost is the number of built nodes the edit touches rather than
+    // the number of bricks the box contains. Single-voxel edits are unaffected: one root, one
+    // chain, the same eleven nodes as before.
+    void invalidate_box(const i64 lo[3], const i64 hi[3]);
+
     // Serves this frame's requests, holds the proximity radius, evicts what has gone cold, and
     // returns what the GPU layer must copy.
     //
@@ -481,6 +495,20 @@ public:
     // payloads would mean re-encoding every brick. `first` receives the first disagreeing leaf's
     // key, because a count says there is a fault and a coordinate says where to look.
     u32 stale_leaves(const World& world, NodeKey* first = nullptr) const;
+
+    // The same question one level up: how many built nodes carry a child mask the world disagrees
+    // with. `stale_leaves` covers what a ray SEES; this covers what a ray is allowed to look for.
+    //
+    // A mask bit set over nothing is a ray reporting a node the world does not have, every frame,
+    // for ever — D133 — and a bit clear over something is geometry that has become invisible and
+    // that no feedback will ever ask for, because feedback reports what a ray could not find and a
+    // ray never goes there. Both are silent: the GPU mirror agrees, the leaves agree, the node
+    // count is healthy, and the fault is in the one field nothing compares.
+    //
+    // It had no instrument until the edit refresh was rewritten to descend the tree rather than
+    // enumerate the box (D515), because that rewrite changes precisely which nodes get their mask
+    // re-derived and nothing could have told a correct answer from a plausible one.
+    u32 stale_masks(const World& world, NodeKey* first = nullptr) const;
 
     // How much of each array is in use, so the GPU copies a prefix rather than a capacity. An
     // empty world uploads nothing and the facility uploads a couple of megabytes, where copying
@@ -641,7 +669,26 @@ private:
     std::unordered_map<NodeKey, Resident, NodeKeyHash> live_;
     std::vector<NodeKey> requested_;
     std::vector<u8> requested_source_;   // instrument only, parallel to `requested_`
-    std::vector<NodeKey> dirty_;
+    // Boxes an edit changed, in voxels, inclusive. One entry per announcement rather than one per
+    // brick — see `invalidate_box`.
+    struct EditBox {
+        i64 lo[3];
+        i64 hi[3];
+    };
+    std::vector<EditBox> dirty_;
+
+    // How many nodes a box refresh looked at and what it did, so the cost of an edit is reportable
+    // rather than inferred from a frame time.
+    struct EditRefresh {
+        usize visited = 0;
+        usize leaves_rebuilt = 0;
+        usize folded = 0;
+    };
+
+    // Post-order: children are refreshed before the parent that folds them, which is the ordering
+    // the flat version had to sort for.
+    void refresh_box(const World& world, u32 slot, const NodeKey& key, const i64 lo[3],
+                     const i64 hi[3], u32& budget, EditRefresh& done);
 
     // A bump pointer plus two free lists, and never a search for a contiguous run.
     //
