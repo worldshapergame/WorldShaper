@@ -1372,6 +1372,15 @@ R7 the primary ray, R8 infinite detail.
 
 ### Debt, tracked so it is not lost
 
+- **The baselines directory holds two files and only one of them means anything.**
+  `r2-node-pool.csv` is superseded and **must not be compared against**: it was recorded before the
+  face pass computed sun, ambient occlusion or lamps, so every near camera reads as a large
+  regression and every distance camera as a large win, and neither is true (D519).
+  `r1e-chunks-going.csv` is the live one -- twenty-one realtime rows, seven cameras at three
+  resolutions, taken with `world.glsl` and the thumbnail tiers deleted and `residency.*` still in.
+  And `tools/baseline.ps1` no longer offers a `pathtrace` mode and throws if asked for one: the flag
+  it passed has not existed since R3d, and an unknown flag is IGNORED rather than refused, which
+  made half of every grid run a second realtime pass wearing the other mode's label (D519).
 - **R0d**: `tools\baseline.ps1 -Out documentation\baselines\r0-before-rewrite.csv` has never
   completed a full run — it was interrupted twice. The directory exists and holds only the face
   counts. **The reason it was unaffordable is gone** (D241): a settled run was 133 s and is 6.6 s,

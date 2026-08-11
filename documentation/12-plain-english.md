@@ -1179,3 +1179,40 @@ what it is waiting for, because a tab that is simply missing teaches you it will
 - Because there's no second programmer checking my work, the game tests itself constantly — thousands of automated checks that run every time anything changes, including one that literally counts every drop of water in the world to prove none went missing.
 - Your job: play the builds, make the design calls, tell me what feels wrong. That genuinely is the harder half.
 - This is a big project. It'll be playable and fun long before it's finished — that's what the nineteen playable checkpoints are for.
+
+## Chunks are half gone, and one whole renderer is gone
+
+Two of the three things you asked for are structural rather than visible, so here is what actually
+happened and what you would notice.
+
+**The old renderer is deleted.** The game used to carry two: the one you play, and a slow
+"reference" one on F4 that drew the same scene a different way. It existed to check the fast one was
+telling the truth. The fast one has since learned to do sun shadows, ambient occlusion and lamps
+properly, so the slow one was 3,000 lines nobody looked at. **F4 and F6 do nothing now** — those were
+the two switches between renderers, and there is only one renderer.
+
+What you would notice: **the very first launch after a graphics driver update gets much faster.**
+That old renderer was one enormous shader, and your driver had to compile it once each time its
+cache was cleared. I measured that at **8 seconds**. It is not compiled at all now. Ordinary
+launches are unchanged — about half a second either way.
+
+**Chunks are half removed.** A "chunk" was the 8-metre box the world used to be cut into for
+drawing. The new system does not need them, but a lot of machinery was still computing chunk answers
+every frame for nobody. Gone so far: the traversal code itself, the summary tree, and the eight
+"thumbnail" tiers that drew distant scenery. About 5,000 lines.
+
+What is left is the piece with the prize in it. There is still a routine that rebuilds a chunk
+occupancy map **every time you edit a single voxel**, and it costs **4.1 milliseconds a stroke**
+regardless of how small the edit was. That is the largest single cost of editing right now, and it
+dies with the rest of the chunk system.
+
+**Nothing about the picture changed.** I check that with a fingerprint of the finished world and two
+audits that compare what the renderer believes against what the world actually contains, at every
+step. Identical every time.
+
+**One thing I got wrong and caught.** I ran the standard measurement grid against the recorded
+baseline and it showed the close-up views 40 to 70 per cent *slower*. That is not a slowdown. That
+baseline was recorded before the game had shadows, ambient occlusion or lamps at all — so it was
+comparing today's renderer against one doing far less work and calling the difference a regression.
+The distance views, which those three barely touch, came out 40 to 50 per cent **faster**. I have
+recorded a fresh baseline and marked the old one as not to be used.
