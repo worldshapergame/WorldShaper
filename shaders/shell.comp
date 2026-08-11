@@ -1,0 +1,436 @@
+#version 450
+// The interface, drawn.
+//
+// documentation/14-ui-style.md is the specification, shaders/ui.glsl is the ink rule and the
+// typeface, and src/ui/draw.hpp is the list this reads. Everything here is *shapes*: what colour
+// each one comes out is decided by `ui_ink` against whatever is already behind it, and nothing in
+// this file names a colour except the five the style permits.
+//
+// # Why a pixel walks a list instead of the list being drawn
+//
+// The style prices the ink at about forty-six nanoseconds a pixel and the interface's whole budget
+// at 0.6 ms (documentation/09-performance-budgets.md), so running it over 1440p would spend six
+// milliseconds deciding that nothing is there. The rule it states is *run the ink only over panel
+// rectangles, never the full screen*. So the host bins every mark into sixteen-pixel tiles, the
+// dispatch covers only the rectangle those tiles occupy, and each pixel walks its own tile's short
+// list — which for a docked window is a handful of entries and for the world in the middle is none
+// at all, because the dispatch never reaches it.
+//
+// # Why the order is the compositing order
+//
+// A pixel evaluates its tile's marks in the order the host added them, accumulating colour as it
+// goes. So a label added after the glass it sits on reads the GLASS as its backdrop and inverts
+// against that, rather than against the world two layers down. That is the same mechanism that
+// makes the loading bar's percentage invert per pixel as the fill passes under it, and it is why
+// nothing in this interface needs to know what is behind it.
+
+#extension GL_GOOGLE_include_directive : require
+#include "ui.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba16f) uniform image2D target;
+layout(binding = 1, rgba16f) uniform readonly image2D blurred;   // quarter resolution
+
+// One instruction. The layout is duplicated field for field from src/ui/draw.hpp, and a
+// disagreement is a picture that is wrong in a way no compiler can see — so the struct there
+// carries the same comment and a static assertion on its size.
+struct Command {
+    vec4 rect;    // x0, y0, x1, y1 in device pixels
+    vec4 clip;    // and the window it is inside
+    uint kind;
+    uint a;       // Text: the first character.  Icon: which.  Hue/Logo: 0xRRGGBB
+    uint b;       // Text: how many.  Logo: the seed
+    uint style;   // Text: the style bits.  Logo: the seed before this one
+    float f0;     // coverage
+    float f1;     // Text: the pen's x.   Icon: the animation's phase.
+                  // Logo: where its two frames start in `characters`
+    float f2;     // Text: the capitals' top y.  Logo: seconds since the seed was chosen
+    float f3;     // Text: device pixels per glyph pixel.  Edge: its thickness.
+                  // Logo: how far through the morph out of the seed before it, 1 when settled
+};
+
+layout(std430, binding = 2) readonly buffer Commands { Command commands[]; };
+layout(std430, binding = 3) readonly buffer Characters { uint characters[]; };
+layout(std430, binding = 4) readonly buffer Tiles { uvec2 tiles[]; };        // first, count
+layout(std430, binding = 5) readonly buffer TileIndices { uint tile_indices[]; };
+
+layout(push_constant) uniform Push {
+    vec2 resolution;
+    vec2 origin;          // the top-left of the dispatch, in device pixels
+
+    uvec2 tile_counts;    // across, down
+    float seconds;
+    float pad0;
+
+    vec3 accent;          // the player's colour, used only where inversion is blind
+    float pad1;
+} push;
+
+// The mark, its drawing, its animations, its patterns, its palettes, the folds it arranges itself
+// into and the transitions between two of them. It is a file of its own because none of it is shared
+// with anything else here: every other shape in this shader is a thirteen-cell icon that answers a
+// press, and the logo is a picture that answers a clock.
+//
+// It goes BELOW the buffers on purpose: it reads `characters` — the same buffer the text runs out of
+// — because the host sorts the mark's slices and a hundred and sixty words does not deserve an
+// upload of its own. See `src/ui/logo.hpp` for why the sort cannot be on this side of the line.
+#include "logo.glsl"
+
+const uint kGlass = 0u;
+const uint kInk = 1u;
+const uint kText = 2u;
+const uint kIcon = 3u;
+const uint kHue = 4u;
+const uint kEdge = 5u;
+const uint kLogo = 6u;
+
+// --- the drawings -------------------------------------------------------------------------------
+//
+// An icon is the control and the label is the fallback, so this is the interface's actual
+// vocabulary. Each is a picture of what the thing DOES, drawn on a thirteen by thirteen cell so it
+// belongs to the same alphabet as the letters beside it — and each ANIMATES to say it did it,
+// never to say a pointer is over it. `phase` is 1 at rest and falls to 0 on a press, so a drawing
+// that does not move simply ignores it.
+//
+// The cell is in `c`, 0 to 12 on each axis, y down. Adding an icon is a function here and a name in
+// src/ui/draw.hpp.
+
+bool cell_ring(vec2 p, float inner, float outer) {
+    float r = length(p - vec2(6.0));
+    return r >= inner && r <= outer;
+}
+
+bool icon_world(ivec2 c, float phase) {
+    vec2 p = vec2(c) - vec2(6.0);
+    float r = length(p);
+    if (r > 6.0) return false;
+    // A sphere made of voxels: the meridians step rather than curve, because that is what a
+    // spherical thing in this game actually looks like.
+    if (r > 4.6) return true;
+    int band = int(floor((p.y + 6.0) / 3.0));
+    float turn = phase * 2.0;
+    int column = int(floor((p.x + 6.0 + turn) / 3.0));
+    return ((band + column) & 1) == 0;
+}
+
+bool icon_settings(ivec2 c, float phase) {
+    // Three sliders at three settings, and the handles slide when it is pressed — which is exactly
+    // what pressing it leads to. The tracks are one cell; the handles are three, because a handle
+    // the same thickness as its track is a handle you cannot see.
+    for (int i = 0; i < 3; ++i) {
+        float track_y = 2.0 + float(i) * 4.0;
+        float at = 2.5 + float(i) * 3.0 + (1.0 - phase) * 2.5;
+        if (abs(float(c.y) - track_y) <= 1.0 && abs(float(c.x) - at) <= 1.0) return true;
+        if (float(c.y) == track_y && c.x >= 1 && c.x <= 11) return true;
+    }
+    return false;
+}
+
+bool icon_library(ivec2 c, float phase) {
+    // A shelf of upright things, one of which is being taken out.
+    if (c.y > 11 || c.y < 2) return c.y == 12 && c.x >= 1 && c.x <= 11;
+    if (c.x == 2 || c.x == 4 || c.x == 8 || c.x == 10) return true;
+    if (c.x == 6) return float(c.y) > 2.0 + (1.0 - phase) * 2.0;
+    return false;
+}
+
+bool icon_community(ivec2 c, float phase) {
+    // Three figures, the ones you can reach. The outer two drift in as it is pressed, because
+    // that is what the tab is for.
+    float pull = (1.0 - phase) * 1.5;
+    for (int i = 0; i < 3; ++i) {
+        float x = 2.0 + float(i) * 4.0 + (i == 0 ? pull : (i == 2 ? -pull : 0.0));
+        vec2 p = vec2(float(c.x) - x, float(c.y));
+        if (p.y <= 5.0 && length(vec2(p.x, p.y - 3.0)) < 2.0) return true;
+        if (p.y > 6.0 && p.y < 12.0 && abs(p.x) < 2.0) return true;
+    }
+    return false;
+}
+
+bool icon_editor(ivec2 c, float phase) {
+    // Lines of text with a caret at the end of one of them.
+    if ((c.y % 3) != 0 || c.y > 11) return false;
+    int line = c.y / 3;
+    int length = 10 - line * 2;
+    if (c.x >= 1 && c.x <= length) return true;
+    return line == 1 && c.x == length + 2 && phase > 0.5;
+}
+
+bool icon_folder(ivec2 c, float phase) {
+    // And its lid opens when it is entered.
+    float lift = (1.0 - phase) * 2.0;
+    if (c.y >= 4 && c.y <= 12 && c.x >= 1 && c.x <= 11) {
+        return c.x == 1 || c.x == 11 || c.y == 12 || float(c.y) < 5.0 + lift;
+    }
+    return c.y == 3 && c.x >= 1 && c.x <= 5;
+}
+
+bool icon_up(ivec2 c, float phase) {
+    float rise = (1.0 - phase) * 2.0;
+    float y = float(c.y) + rise;
+    if (abs(float(c.x) - 6.0) < 1.5 && y > 4.0 && y < 12.0) return true;
+    return y >= 2.0 && y <= 5.0 && abs(float(c.x) - 6.0) <= (y - 1.0);
+}
+
+bool icon_new(ivec2 c, float phase) {
+    float grow = 4.0 + (1.0 - phase) * 1.5;
+    return (abs(float(c.x) - 6.0) < 1.5 && abs(float(c.y) - 6.0) <= grow) ||
+           (abs(float(c.y) - 6.0) < 1.5 && abs(float(c.x) - 6.0) <= grow);
+}
+
+bool icon_rename(ivec2 c, float phase) {
+    // A pen over a line, and the pen moves along the line when it is pressed.
+    if (c.y == 11 && c.x >= 1 && c.x <= 11) return true;
+    float along = (1.0 - phase) * 3.0;
+    float d = abs((float(c.x) - along) + float(c.y) - 8.0);
+    return d < 1.2 && c.y < 10 && c.y > 1;
+}
+
+bool icon_duplicate(ivec2 c, float phase) {
+    // One square splitting into two. The animation IS the split.
+    float apart = (1.0 - phase) * 2.5;
+    bool first = c.x >= int(1.0 + apart) && c.x <= int(7.0 + apart) && c.y >= 1 && c.y <= 7;
+    bool second = c.x >= int(5.0 - apart) && c.x <= int(11.0 - apart) && c.y >= 5 && c.y <= 11;
+    bool first_edge = first && (c.x == int(1.0 + apart) || c.x == int(7.0 + apart) || c.y == 1 || c.y == 7);
+    bool second_edge = second && (c.x == int(5.0 - apart) || c.x == int(11.0 - apart) || c.y == 5 || c.y == 11);
+    return first_edge || second_edge;
+}
+
+bool icon_delete(ivec2 c, float phase) {
+    // A lid opening over a bin. The animation IS the opening, and the lid is what says the thing
+    // is not gone — it is somewhere with a lid on it.
+    float lift = (1.0 - phase) * 3.0;
+    float lid = 3.0 - lift;
+    if (abs(float(c.y) - lid) < 1.0 && c.x >= 1 && c.x <= 11) return true;
+    if (c.y < 5) return false;
+    return c.x == 2 || c.x == 10 || c.y == 12 || c.x == 6;
+}
+
+bool icon_trash(ivec2 c, float phase) {
+    return icon_delete(c, 1.0) || (phase < 0.0);
+}
+
+bool icon_sort(ivec2 c, float phase) {
+    if ((c.y % 4) != 1 || c.y > 11) return false;
+    int row = c.y / 4;
+    int length = 10 - row * 3;
+    if (phase < 0.5) length = 4 + row * 3;   // the order turns over when it is pressed
+    return c.x >= 1 && c.x <= 1 + length;
+}
+
+bool icon_search(ivec2 c, float phase) {
+    if (cell_ring(vec2(c) - vec2(1.0, 1.0), 3.0, 4.2)) return true;
+    return abs(float(c.x) - float(c.y)) < 1.2 && c.x > 8 && phase >= 0.0;
+}
+
+bool icon_eye(ivec2 c, bool open) {
+    vec2 p = vec2(c) - vec2(6.0);
+    bool lid = abs(abs(p.y) - 3.0 * cos(p.x * 0.28)) < 0.9 && abs(p.x) < 5.5;
+    if (!open) return abs(p.y) < 0.9 && abs(p.x) < 5.5;
+    return lid || length(p) < 1.8;
+}
+
+bool icon_close(ivec2 c, float phase) {
+    float arm = 4.0 + (1.0 - phase);
+    vec2 p = vec2(c) - vec2(6.0);
+    return (abs(p.x - p.y) < 1.2 || abs(p.x + p.y) < 1.2) && max(abs(p.x), abs(p.y)) <= arm;
+}
+
+bool icon_clip(ivec2 c, float phase) {
+    // A small solid made of voxels, one of which lifts off when it is pressed.
+    if (c.x < 2 || c.x > 10 || c.y < 2 || c.y > 10) return false;
+    if (c.x >= 6 && c.y <= 5) {
+        return float(c.y) > 2.0 - (1.0 - phase) * 2.0;
+    }
+    return ((c.x / 3) + (c.y / 3)) % 2 == 0 || c.x == 2 || c.x == 10 || c.y == 2 || c.y == 10;
+}
+
+bool icon_material(ivec2 c, float phase) {
+    float roll = (1.0 - phase) * 3.0;
+    int x = int(mod(float(c.x) + roll, 13.0));
+    return ((x / 2) + (c.y / 2)) % 2 == 0 && c.x >= 1 && c.x <= 11 && c.y >= 1 && c.y <= 11;
+}
+
+bool icon_mod(ivec2 c, float phase) {
+    bool block = c.x >= 2 && c.x <= 10 && c.y >= 4 && c.y <= 11 &&
+                 (c.x == 2 || c.x == 10 || c.y == 4 || c.y == 11);
+    float peg = 3.0 - (1.0 - phase) * 2.0;
+    bool socket = c.x >= 5 && c.x <= 7 && float(c.y) >= peg && c.y <= 4;
+    return block || socket;
+}
+
+bool icon_character(ivec2 c, float phase) {
+    vec2 p = vec2(c) - vec2(6.0, 0.0);
+    if (length(vec2(p.x, float(c.y) - 3.0)) < 2.2) return true;
+    if (c.y > 5 && c.y < 10 && abs(p.x) < 2.0) return true;
+    float stride = (1.0 - phase) * 1.5;
+    return c.y >= 10 && abs(abs(p.x) - (1.0 + stride)) < 1.0;
+}
+
+bool icon_script(ivec2 c, float phase) {
+    bool page = c.x >= 2 && c.x <= 10 && c.y >= 1 && c.y <= 11 &&
+                (c.x == 2 || c.x == 10 || c.y == 1 || c.y == 11);
+    float chevron = 5.0 + (1.0 - phase);
+    bool mark = abs(float(c.y) - 6.0) <= 2.0 &&
+                abs(float(c.x) - (chevron - abs(float(c.y) - 6.0))) < 1.0;
+    return page || mark;
+}
+
+bool icon_tick(ivec2 c, float phase) {
+    float draw_to = 4.0 + (1.0 - phase) * 8.0;
+    float along = float(c.x);
+    if (along > draw_to) return false;
+    float y = (c.x < 6) ? 6.0 + float(c.x) * 0.6 : 12.0 - (float(c.x) - 6.0) * 1.4;
+    return abs(float(c.y) - y) < 1.3 && c.x >= 1 && c.x <= 11;
+}
+
+bool icon_play(ivec2 c, float phase) {
+    float x = float(c.x) - 3.0 + (1.0 - phase) * 1.5;
+    return x >= 0.0 && x <= 7.0 && abs(float(c.y) - 6.0) <= (7.0 - x) * 0.85;
+}
+
+bool icon_on(uint which, ivec2 c, float phase) {
+    if (c.x < 0 || c.x > 12 || c.y < 0 || c.y > 12) return false;
+    switch (which) {
+        case 1u:  return icon_world(c, phase);
+        case 2u:  return icon_settings(c, phase);
+        case 3u:  return icon_library(c, phase);
+        case 4u:  return icon_community(c, phase);
+        case 5u:  return icon_editor(c, phase);
+        case 6u:  return icon_folder(c, phase);
+        case 7u:  return icon_up(c, phase);
+        case 8u:  return icon_new(c, phase);
+        case 9u:  return icon_rename(c, phase);
+        case 10u: return icon_duplicate(c, phase);
+        case 11u: return icon_delete(c, phase);
+        case 12u: return icon_trash(c, phase);
+        case 13u: return icon_sort(c, phase);
+        case 14u: return icon_search(c, phase);
+        case 15u: return icon_eye(c, false);
+        case 16u: return icon_eye(c, true);
+        case 17u: return icon_close(c, phase);
+        case 18u: return icon_clip(c, phase);
+        case 19u: return icon_material(c, phase);
+        case 20u: return icon_mod(c, phase);
+        case 21u: return icon_character(c, phase);
+        case 22u: return icon_script(c, phase);
+        case 23u: return icon_tick(c, phase);
+        case 24u: return icon_play(c, phase);
+        default:  return false;
+    }
+}
+
+// --- the marks ------------------------------------------------------------------------------------
+
+vec3 blur_at(vec2 pixel) {
+    ivec2 size = imageSize(blurred);
+    ivec2 at = clamp(ivec2(pixel * 0.25), ivec2(0), size - ivec2(1));
+    return imageLoad(blurred, at).rgb;
+}
+
+float text_ink(Command command, vec2 pixel) {
+    // `at` is in glyph pixels from the string's left edge and its capitals' top, and `smear` is
+    // one DEVICE pixel expressed in the same units — which is what bold is worth here. See
+    // `ui_ink_at`: a whole cell of smear closes every counter the face has.
+    float scale = max(command.f3, 0.0001);
+    vec2 at = (pixel - vec2(command.f1, command.f2)) / scale;
+    // Half a cell where there is half a cell to be had, and a whole one where there is not.
+    const float smear = max(kUiBoldReach, 1.0 / scale);
+    if (at.y < 0.0 || at.y >= float(kUiRows + 1)) return 0.0;
+    float pen = 0.0;
+    for (uint i = 0u; i < command.b; ++i) {
+        uvec2 glyph = ui_glyph(characters[command.a + i]);
+        float step = ui_step(glyph, command.style);
+        if (at.x >= pen - 1.0 && at.x < pen + step + 1.0) {
+            float ink = ui_ink_at(glyph, vec2(at.x - pen, at.y), command.style, smear);
+            if (ink > 0.0) return ink;
+        }
+        pen += step;
+    }
+    return 0.0;
+}
+
+vec3 unpack(uint rgb) {
+    return vec3(float((rgb >> 16) & 0xFFu), float((rgb >> 8) & 0xFFu), float(rgb & 0xFFu)) / 255.0;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy) + ivec2(push.origin);
+    ivec2 size = imageSize(target);
+    if (pixel.x >= size.x || pixel.y >= size.y || pixel.x < 0 || pixel.y < 0) return;
+
+    uvec2 tile = uvec2(pixel) / 16u;
+    if (tile.x >= push.tile_counts.x || tile.y >= push.tile_counts.y) return;
+    uvec2 slice = tiles[tile.y * push.tile_counts.x + tile.x];
+    if (slice.y == 0u) return;   // nothing reaches this pixel: the world underneath is untouched
+
+    vec2 centre = vec2(pixel) + vec2(0.5);
+    vec3 colour = imageLoad(target, pixel).rgb;
+
+    for (uint n = 0u; n < slice.y; ++n) {
+        Command command = commands[tile_indices[slice.x + n]];
+        if (centre.x < command.clip.x || centre.x >= command.clip.z ||
+            centre.y < command.clip.y || centre.y >= command.clip.w) {
+            continue;
+        }
+        bool inside = centre.x >= command.rect.x && centre.x < command.rect.z &&
+                      centre.y >= command.rect.y && centre.y < command.rect.w;
+
+        if (command.kind == kGlass) {
+            if (!inside) continue;
+            // A panel's background is the world behind it, blurred. Nothing else: it has no
+            // colour of its own to be made out of.
+            colour = mix(colour, blur_at(centre), clamp(command.f0, 0.0, 1.0));
+        } else if (command.kind == kInk) {
+            if (!inside) continue;
+            colour = mix(colour, ui_ink(colour, push.accent), clamp(command.f0, 0.0, 1.0));
+        } else if (command.kind == kEdge) {
+            if (!inside) continue;
+            float thickness = max(command.f3, 1.0);
+            bool on = centre.x < command.rect.x + thickness ||
+                      centre.x >= command.rect.z - thickness ||
+                      centre.y < command.rect.y + thickness ||
+                      centre.y >= command.rect.w - thickness;
+            if (on) colour = mix(colour, ui_ink(colour, push.accent), clamp(command.f0, 0.0, 1.0));
+        } else if (command.kind == kText) {
+            float coverage = text_ink(command, centre) * clamp(command.f0, 0.0, 1.0);
+            if (coverage > 0.0) colour = mix(colour, ui_ink(colour, push.accent), coverage);
+        } else if (command.kind == kIcon) {
+            if (!inside) continue;
+            vec2 local = (centre - command.rect.xy) /
+                         max(command.rect.zw - command.rect.xy, vec2(0.0001));
+            ivec2 cell = ivec2(floor(local * 13.0));
+            if (icon_on(command.a, cell, command.f1)) {
+                colour = mix(colour, ui_ink(colour, push.accent), clamp(command.f0, 0.0, 1.0));
+            }
+        } else if (command.kind == kHue) {
+            if (!inside) continue;
+            // One of the five permitted colours, STATED rather than inverted: a red that inverted
+            // against what was behind it would be a red that is sometimes green.
+            colour = mix(colour, unpack(command.a), clamp(command.f0, 0.0, 1.0));
+        } else if (command.kind == kLogo) {
+            if (!inside) continue;
+            // The mark has no bounding box, so the rectangle this command covers is `kLogoReach`
+            // times the square the DRAWING occupies (see `DrawList::logo`). Undoing that here is
+            // what keeps the drawing its own size while everything it throws outward still lands:
+            // `local` runs past 0 and 1 at the edges, `logo_mask` is nought out there, and a block
+            // that flew that far is drawn instead of clipped.
+            vec2 local = (centre - command.rect.xy) /
+                         max(command.rect.zw - command.rect.xy, vec2(0.0001));
+            local = (local - 0.5) * kLogoReach + 0.5;
+            // The one mark that decides its own colour: `unpack(command.a)` is the player's chosen
+            // logo hue and it goes in as a BIAS on the palette rather than as the answer, so the
+            // seed still gets to choose and their setting still means something. See logo.glsl.
+            // `f1` is where the host put what it worked out for these two seeds — the sorted order
+            // of the mark's slices and the two weights — in the character buffer, and the clock comes
+            // from the push block because it is the same clock for every mark on the screen.
+            vec4 mark = logo_draw(local, command.b, command.style, command.f2, push.seconds,
+                                  command.f3, unpack(command.a), uint(command.f1));
+            float coverage = mark.a * clamp(command.f0, 0.0, 1.0);
+            if (coverage > 0.0) colour = mix(colour, mark.rgb, coverage);
+        }
+    }
+
+    imageStore(target, pixel, vec4(colour, 1.0));
+}

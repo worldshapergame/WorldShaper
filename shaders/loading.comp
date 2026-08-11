@@ -75,25 +75,45 @@ uint text_length(uint slot) {
     return 24u;
 }
 
-// How much ink a slot puts at a point, `at` measured in glyph cells from the string's left edge
+// Interface pixels per glyph pixel.
+//
+// The typeface is three by five, which is the smallest a letter can be drawn and still be read at
+// one pixel per pixel — and one pixel per pixel is not what a loading screen is. On the machine
+// this has to work on at all (1280×800, where `push.scale` comes out as one) a capital would be
+// five device pixels tall, so the words are set at two: ten pixels of capital, against the seven
+// the old five-by-seven face gave at the same place, in two thirds of the ink.
+const float kTextPixels = 2.0;
+
+// How much ink a slot puts at a point, `at` measured in glyph pixels from the string's left edge
 // and its capitals' top. Same geometry as ui_text, reading from the packed slot instead of an
-// array, and with no length limit of its own.
+// array, and with no length limit of its own. The walk is a loop rather than a divide because the
+// face is proportional: an `i` is one pixel wide and an `m` is five.
 float slot_ink(uint slot, uint length, vec2 at) {
-    if (at.y < 0.0 || at.y >= 7.0) return 0.0;
-    float advance = 6.0;
-    int index = int(floor(at.x / advance));
-    if (index < 0 || index >= int(length)) return 0.0;
-    vec2 inside = vec2(at.x - float(index) * advance, at.y);
-    if (inside.x >= 5.0) return 0.0;
-    return ui_glyph_on(ui_glyph(text_char(slot, uint(index))), ivec2(inside)) ? 1.0 : 0.0;
+    if (at.y < 0.0 || at.y >= float(kUiRows + 1)) return 0.0;
+    float pen = 0.0;
+    for (uint i = 0u; i < length; ++i) {
+        uvec2 glyph = ui_glyph(text_char(slot, i));
+        float step = ui_step(glyph, kUiPlain);
+        if (at.x >= pen && at.x < pen + step) {
+            return ui_ink_at(glyph, vec2(at.x - pen, at.y), kUiPlain, max(kUiBoldReach, 1.0 / kTextPixels));
+        }
+        pen += step;
+    }
+    return 0.0;
+}
+
+float slot_width(uint slot, uint length) {
+    float pen = 0.0;
+    for (uint i = 0u; i < length; ++i) pen += ui_step(ui_glyph(text_char(slot, i)), kUiPlain);
+    return max(pen - 1.0, 0.0);
 }
 
 // A string centred on a point, in interface pixels. Returns coverage.
 float centred_text(uint slot, vec2 at, vec2 centre_top) {
     uint length = text_length(slot);
     if (length == 0u) return 0.0;
-    float width = float(length) * 6.0 - 1.0;
-    return slot_ink(slot, length, at - centre_top + vec2(width * 0.5, 0.0));
+    vec2 local = (at - centre_top) / kTextPixels;
+    return slot_ink(slot, length, local + vec2(slot_width(slot, length) * 0.5, 0.0));
 }
 
 // The percentage, drawn from the same number that drives the bar so the two can never disagree.
@@ -106,14 +126,22 @@ float percent_ink(vec2 at, vec2 centre_top, float fraction) {
     else { digits[count++] = 48u + uint(whole); }
     digits[count++] = 37u;   // %
 
-    float width = float(count) * 6.0 - 1.0;
-    vec2 local = at - centre_top + vec2(width * 0.5, 0.0);
-    if (local.y < 0.0 || local.y >= 7.0) return 0.0;
-    int index = int(floor(local.x / 6.0));
-    if (index < 0 || index >= int(count)) return 0.0;
-    vec2 inside = vec2(local.x - float(index) * 6.0, local.y);
-    if (inside.x >= 5.0) return 0.0;
-    return ui_glyph_on(ui_glyph(digits[index]), ivec2(inside)) ? 1.0 : 0.0;
+    float width = 0.0;
+    for (uint i = 0u; i < count; ++i) width += ui_step(ui_glyph(digits[i]), kUiPlain);
+    width = max(width - 1.0, 0.0);
+
+    vec2 local = (at - centre_top) / kTextPixels + vec2(width * 0.5, 0.0);
+    if (local.y < 0.0 || local.y >= float(kUiRows + 1)) return 0.0;
+    float pen = 0.0;
+    for (uint i = 0u; i < count; ++i) {
+        uvec2 glyph = ui_glyph(digits[i]);
+        float step = ui_step(glyph, kUiPlain);
+        if (local.x >= pen && local.x < pen + step) {
+            return ui_ink_at(glyph, vec2(local.x - pen, local.y), kUiPlain, max(kUiBoldReach, 1.0 / kTextPixels));
+        }
+        pen += step;
+    }
+    return 0.0;
 }
 
 // --- the animated marks -----------------------------------------------------------------------
@@ -266,10 +294,13 @@ void main() {
         if (mark_on(push.stage, ivec2(floor(cell)), t)) coverage = 1.0;
     }
 
+    // The capitals are ten interface pixels tall now (five glyph pixels at kTextPixels), so the
+    // rows below the bar sit at 18 and 32 rather than 16 and 28: two lines of ten with room to
+    // breathe, rather than two lines of seven that happened to fit twelve apart.
     coverage = max(coverage, centred_text(kSlotStage, at, vec2(0.0, -32.0)));
-    coverage = max(coverage, percent_ink(at, vec2(0.0, -3.5), push.fraction));
-    coverage = max(coverage, centred_text(kSlotCount, at, vec2(0.0, 16.0)));
-    coverage = max(coverage, centred_text(kSlotLeft, at, vec2(0.0, 28.0)));
+    coverage = max(coverage, percent_ink(at, vec2(0.0, -5.0), push.fraction));
+    coverage = max(coverage, centred_text(kSlotCount, at, vec2(0.0, 18.0)));
+    coverage = max(coverage, centred_text(kSlotLeft, at, vec2(0.0, 32.0)));
 
     if (coverage > 0.0) colour = mix(colour, ui_ink(colour, push.accent), coverage);
 

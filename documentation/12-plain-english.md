@@ -916,6 +916,66 @@ entry every time — but it is the one reading of your report I have not been ab
 happens again, tell me what you were doing when it did (one drag, or several clicks) and that will
 settle it.
 
+## What the game will open on, and where everything will live
+
+This is written down and not built yet — it is the next stage. Here is the whole of it in plain
+terms, so you can tell me now if any of it is wrong rather than after I have built it.
+
+**The game will open on a title with two buttons: worlds, and settings.** Nothing else. At the
+moment the game builds the whole facility before it will even show you a window, which made sense
+when the only thing to look at was the renderer and stops making sense the moment you have more than
+one world. Nothing will be loaded until you ask for something to be loaded.
+
+**Windows come in two kinds, and which side they are on tells you which kind.** Anything with
+numbers in it — settings, a tool's controls, a node's controls — opens on the left. Anything you
+pick a thing out of — worlds, your creations, materials, mods — opens on the right. All of them are
+stuck to an edge rather than floating, all of them can be resized, and you can drag any of them to
+any edge you prefer. The reason for the two sides is that you should be able to know where to look
+without reading anything, which is the same reason the buttons are pictures.
+
+**Every number is a slider, and you can double-click it and type instead.** What you type is not
+capped — the slider's range is where the handle can go, not where the value can. If a number would
+genuinely break the game it gets refused, and it says in one line what it would have done, because a
+refusal with no explanation is indistinguishable from a bug.
+
+**A library is just a folder on your computer, shown nicely.** Your worlds, your clips, your
+materials and your mods each live in a real folder, and the library is a file manager over it — make
+folders inside folders, rename, duplicate, drag things around, select a bunch of them by dragging a
+box the way you would in Windows. Delete puts things in a trash folder rather than destroying them.
+You can drag a clip in from Explorer and it appears; you can back your work up by copying a folder.
+
+**Everything you make is stamped with your name, and that stays on it for ever** — in your library,
+and in the library of anyone who takes a copy.
+
+**Every library window has three tabs.**
+
+- **Yours** — the folder above.
+- **The community** — what everyone who is online *at that moment* has in theirs. Newest first
+  normally, or sorted by what is being downloaded most today, this week, this month, or ever. It
+  works the same way the multiplayer does: no server, no hosting, no port forwarding. So it can only
+  show you people your machine can actually reach, and I would rather say that plainly now than have
+  you find it later. If somebody deletes their copy of something you downloaded, yours keeps working
+  and keeps saying who made it — it just stops being offered to anyone new.
+- **The editor** — where you make one of these things rather than pick one. It asks you to choose or
+  make a file first, because there is no editing without something to edit.
+
+**The editor has two halves, and they are the same document seen twice.** One is boxes and wires
+with sliders on them; the other is the same thing written as text. Change either and the other
+changes as you type. Neither is the "real" one — the real one is underneath and both are views of
+it. The text half will always be able to say more, because it does not have to draw anything; the
+picture half will get as close to it as I can make it, and anything it genuinely cannot draw appears
+as a block of text sitting in the graph rather than quietly disappearing. **Something disappearing
+because the editor could not draw it would be the worst bug this thing could have**, so it is
+designed to be impossible rather than unlikely.
+
+**What lands when.** The title, the windows, the sliders and the libraries are the next stage. The
+community tab needs the multiplayer stage, because there is nothing to search over before it. The
+picture half of the editor waits for the stage that builds the node editor — there is only ever
+going to be one node editor in this game, used for world generation, logic, materials and clips
+alike, so you learn it once; building a second one now to throw away later is exactly the mistake
+the whole plan is ordered to avoid. Until each of those lands, the tab is there and says in one line
+what it is waiting for, because a tab that is simply missing teaches you it will never exist.
+
 ## How we'll work
 
 - I write all the code. You never open a code file.

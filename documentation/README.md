@@ -27,10 +27,11 @@ This folder is the source of truth for design, architecture, and planning. Code 
 | [20-clip-forge.md](20-clip-forge.md) | A clip is a description, not a box of voxels: the field, the vocabulary, weathering, and the instruments that say whether what came out is what was meant |
 | **[21-renderer-rewrite.md](21-renderer-rewrite.md)** | **The from-scratch rewrite of the path tracer, the chunk system and streaming. §8 is the work plan, §8.0 is where it stands** |
 | **[22-rewrite-handover.md](22-rewrite-handover.md)** | **Start here to pick the rewrite up cold: what is done, what is next, and every trap that has already cost a day** |
+| [23-shell-and-libraries.md](23-shell-and-libraries.md) | The shell: the title the game opens on, docked windows, libraries as real folders, the community browser, and the two views of one editor. Stage 15's specification |
 
 ## Status
 
-**Stages 0, 1 and 2 done.** `build.bat` / `run.bat` / `test.bat` at the project root. 146 tests, 17.6 M assertions passing; zero Vulkan validation warnings. Verified on the RTX 5060 Ti dev machine; Steam Deck validation is deferred (no hardware — decision D62).
+**Stages 0, 1 and 2 done.** `build.bat` / `run.bat` / `test.bat` at the project root. 523 tests, 18.1 M assertions passing; zero Vulkan validation warnings. Verified on the RTX 5060 Ti dev machine; Steam Deck validation is deferred (no hardware — decision D62).
 
 Two headless audits run in CI and in `test.bat`:
 
@@ -41,7 +42,16 @@ Two headless audits run in CI and in `test.bat`:
 
 Dev machine, 2560×1440, after streaming converges: **3.0 ms** standing in the scene with all 98 chunks resident, **0.27 ms** looking at the whole thing from 900 m with 4 chunks resident. Memory follows what the view needs, not where the camera is.
 
-Next: **Stage 5 — the chisel.** The first build you can actually make something in.
+**Stage 15's shell — its first five steps — is in.** The game opens on a **title**, not in a world:
+two buttons, a room behind them, and nothing loaded until somebody asks for something to be loaded.
+Docked windows re-dock to any edge and split one; every number is a slider you can double-click and
+type past the end of; the worlds library is a file manager over the real folder, with an author name
+written into every file that travels with every copy of it. Leaving a world tears it down and comes
+back to the title, which is the first thing to exercise the many-worlds rule at all. See
+[23-shell-and-libraries.md](23-shell-and-libraries.md) §9 for what is built and the five things that
+are not.
+
+Next: **Stage 5 — the chisel**, and the `.wsworld` container that Stage 15 still owes.
 
 Answer rounds 1 and 2 are complete and folded into every document. One question remains open: **O21**, a link to the deprecated project for UI *style* reference only.
 

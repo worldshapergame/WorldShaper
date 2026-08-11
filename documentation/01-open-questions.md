@@ -366,3 +366,29 @@ yes
 also, bear in mind the only thing i want you to reuse from the deprecated worldshaper project is the style of the ui, its on github maybe you have access if you dont tell me, only the style and transparent opposing ink thing, neither the structure or anything just the vibe.
 
 you can also look at the controls tooltips which i would want you to implement something like that too
+
+---
+
+# ROUND 3 — raised per stage, as the working rules say
+
+## Q. The shell (Stage 15) — raised against the specification of 2026-08-11
+
+- **Q1.** "all values must be sliders which you can also type their value … any value with no caps" —
+  does *no caps* mean **no limits on the value**, or **no capital letters in the interface's text**?
+  The two are different work and both read naturally there.
+
+**A: no limits on values.** A slider shows the useful range; typing goes past either end. Recorded as
+D444, with the two boundaries the rule needs written beside it: a value that would genuinely break
+the game is still refused *and says why*, and a value that is not a number is not a slider.
+
+- **Q2.** The community tab searches "files or folders any player has, auto published". Answer M2 says
+  no infrastructure of ours, ever, and a search over strangers' content normally needs somewhere to
+  look. Which way — reachable peers only, an index somewhere, or publish-on-purpose plus an index?
+
+**A:** *"it uses multiplayer laws like free multiplayer with no hosting and no port forwarding so that
+you can browse any file or folder any online player has at that moment, files and folders are tagged
+with the user that made them too and it shows it, even within your own library it says the original
+author, if the original author deletes his copy its still on your library and it still says who made
+it but its just not available on the community browser anymore."* Recorded as D448–D451, with the one
+limit that follows from having no rendezvous: the browser reaches who you can reach, and the DHT that
+would widen it to strangers is named as its own sub-step rather than assumed.

@@ -107,10 +107,17 @@ public:
 
     void toggle_developer_panel() { show_developer_ = !show_developer_; }
     void toggle_overlay() { show_overlay_ = !show_overlay_; }
+    // The same switch, said rather than flipped, so the settings window can say what it means
+    // instead of having to know what state the key left it in.
+    void set_overlay(bool on) { show_overlay_ = on; }
+    bool overlay() const { return show_overlay_; }
     bool developer_panel_visible() const { return show_developer_; }
 
 private:
     Device* device_ = nullptr;
+    // The window this HUD hooked, so `destroy` can unhook it. The window outlives the HUD now
+    // that a world is an object with a lifetime (D458); see the note in `destroy`.
+    Window* window_ = nullptr;
     StreamingReport streaming_;
     ToolReport tool_;
     UpdateReport update_;

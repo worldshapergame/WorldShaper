@@ -48,9 +48,12 @@
 #include "gpu/profiler.hpp"
 #include "gpu/screenshot.hpp"
 #include "gpu/shader.hpp"
+#include "gpu/shell_pass.hpp"
 #include "gpu/swapchain.hpp"
 #include "gpu/world_buffers.hpp"
+#include "platform/audio.hpp"
 #include "platform/window.hpp"
+#include "ui/shell.hpp"
 #include "world/history.hpp"
 #include "world/op.hpp"
 #include "world/raycast.hpp"
@@ -310,6 +313,57 @@ struct Options {
     // degrees about y. Everything after the box is optional.
     std::string clip;
 
+    // Open this world at once, without the title. A path to a `.wsworld` in the player's own
+    // library, or to a clip: the shell's *open* fills this in, and so does a shortcut.
+    std::string world;
+    // Skip the title even when nothing else would. The inverse of a scripted run asking for it.
+    bool no_title = false;
+
+    // Photograph the title after `title_frames` frames of it, then exit.
+    //
+    // The instrument the shell would otherwise not have. Every other measurement in this file is
+    // taken by a flag that walks PAST the title, so without this the one screen the game opens on
+    // is the one screen no automated run ever looks at — and documentation/14-ui-style.md's own
+    // rule about the tool previews applies to it exactly: a shape nobody can photograph is a shape
+    // nobody notices has stopped being drawn. `--title-open worlds|settings` opens a window first,
+    // so the docked panels are photographable too.
+    std::string title_shot;
+    u64 title_frames = 30;
+    std::string title_open;
+
+    // Which combination the logo draws, fixed. 0 is "whatever the seed the shell chose says", which
+    // is different on every launch on purpose (src/ui/logo.hpp) — and a photograph of a thing that
+    // is different every time cannot be compared with the last one, so a photograph of the mark
+    // needs this. It is also the only way to look at a particular one of the four billion on purpose.
+    u32 logo_seed = 0;
+    // And ask for another combination on this title frame, so the morph BETWEEN two of them is
+    // photographable too. Both seeds are derived from the pinned one, so the transition is the same
+    // twice; `--title-frames` a little after it is a picture of the change in progress.
+    u64 logo_change = 0;
+
+    // Open a world, play it for N frames, LEAVE it, and show the title again before exiting.
+    //
+    // The one path D458 exists for and the one path nothing exercised: a world torn down while the
+    // window, the card and the interface carry on. The first thing it found was a crash — the
+    // developer HUD's SDL event hook outlived the ImGui context it points into, so the first mouse
+    // move on the title afterwards read address 8. That is a fault no unit test can reach and no
+    // screenshot can show, and it happened on the very first attempt at leaving a world.
+    u64 cycle = 0;
+
+    // Whether this run is SCRIPTED, and therefore walks straight past the title
+    // (documentation/23-shell-and-libraries.md §0).
+    //
+    // This is not a convenience. Every measurement in this project is taken by one of these flags,
+    // and a menu that a harness has to click through would end measurement here. The list is
+    // exactly the one that document names, plus the two that imply a fixed subject.
+    bool scripted() const {
+        return no_title || cycle > 0 || !title_shot.empty() || !screenshot.empty() || settle ||
+               !camera.empty() || !fly.empty() ||
+               !orbit.empty() || !cut.empty() || chisel_every > 0 || ticks > 0 ||
+               stream_frames > 0 || !crash_test.empty() || benchmark || !edit.empty() ||
+               !preview.empty() || !clip.empty() || !clip_file.empty() || max_seconds > 0.0;
+    }
+
     // Air that is not empty: --fog "extinction,albedo,g,scale-height,base".
     //
     // Authored per METRE and in metres, because that is the unit a person thinks in; the
@@ -356,6 +410,22 @@ Options parse_options(int argc, char** argv) {
 
         if (arg == "--headless") {
             options.headless = true;
+        } else if (arg == "--world") {
+            if (i + 1 < argc) options.world = argv[++i];
+        } else if (arg == "--no-title") {
+            options.no_title = true;
+        } else if (arg == "--title-shot") {
+            if (i + 1 < argc) options.title_shot = argv[++i];
+        } else if (arg == "--title-frames") {
+            options.title_frames = next_number(options.title_frames);
+        } else if (arg == "--title-open") {
+            if (i + 1 < argc) options.title_open = argv[++i];
+        } else if (arg == "--logo-seed") {
+            options.logo_seed = static_cast<u32>(next_number(options.logo_seed));
+        } else if (arg == "--logo-change") {
+            options.logo_change = next_number(60);
+        } else if (arg == "--cycle") {
+            options.cycle = next_number(120);
         } else if (arg == "--ticks") {
             options.ticks = next_number(0);
             options.headless = true;
@@ -518,6 +588,16 @@ void print_help() {
     std::puts(
         "WorldShaper\n"
         "  --headless            run with no window or GPU\n"
+        "  --world FILE          open this world at once, skipping the title\n"
+        "  --no-title            skip the title and open whatever would have been opened\n"
+        "  --title-shot FILE     photograph the title after --title-frames N and exit\n"
+        "  --title-open WHICH    open a window on it first: worlds, settings, or both\n"
+        "  --logo-seed N         draw the mark from this seed rather than a new one, so a\n"
+        "                        photograph of the title is comparable with the last one\n"
+        "  --logo-change N       ask the mark for another combination on title frame N, so the\n"
+        "                        morph between two of them can be photographed\n"
+        "  --cycle N             play N frames, LEAVE the world, show the title again, exit.\n"
+        "                        The tear-down path, walked without a hand on the keyboard\n"
         "  --ticks N             headless world audit over N ops, then exit\n"
         "  --stream-frames N     headless streaming audit over N frames, then exit\n"
         "  --width N --height N  window size (default 1600x900)\n"
@@ -1005,9 +1085,31 @@ int run_stream_audit(const Options& options) {
     return 0;
 }
 
+// One world, from the loading screen to the way out.
+//
+// Everything below the window is HERE, and nothing above it is: the device, the swapchain, the
+// interface and its sound outlive a world and are passed in. That split is D441's, and it is what
+// makes `02-architecture-overview.md`'s rule — **a world is torn down on the way out, never
+// shared** — true by construction rather than by discipline. Opening a second world builds a
+// second Application; every pool, every table and every counter in it is new, so two worlds cannot
+// contaminate each other however badly either of them behaves.
+//
+// It is a large object and it is deliberately never on the stack: see `run_windowed`.
 class Application {
 public:
-    int run(const Options& options);
+    Application(Window& window, Device& device, Swapchain& swapchain, GpuProfiler& profiler,
+                ShellPass& shell_pass, ui::Shell& shell)
+        : window_(window),
+          device_(device),
+          swapchain_(swapchain),
+          profiler_(profiler),
+          shell_pass_(shell_pass),
+          shell_(shell) {}
+
+    // Plays one world. Returns 0 when it ended normally, whether that was the window closing or
+    // the player going back to the title; `wants_title` says which.
+    int play(const Options& options);
+    bool wants_title() const { return wants_title_; }
 
 private:
     bool create_render_target(u32 width, u32 height);
@@ -1054,11 +1156,22 @@ private:
     void announce_world_change(const i64 lo[3], const i64 hi[3]);
     void rebuild_coarse_grids();
 
+    // The interface, one frame of it, and what it decided. Drawn after the world's own composite
+    // and before the present, into a surface at the WINDOW's resolution rather than the render
+    // scale's — a three-pixel-tall letter does not survive being stretched.
+    void run_shell(f64 seconds);
+    void seed_knobs();
+    void apply_knobs();
+
     Options options_;
-    Window window_;
-    Device device_;
-    Swapchain swapchain_;
-    GpuProfiler profiler_;
+    Window& window_;
+    Device& device_;
+    Swapchain& swapchain_;
+    GpuProfiler& profiler_;
+    ShellPass& shell_pass_;
+    ui::Shell& shell_;
+    bool wants_title_ = false;
+    bool shell_drawn_ = false;   // this frame's list had something in it
     Hud hud_;
 
     // The load, and the screen that reports it. The screen is torn down once the game is up ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it
@@ -2229,8 +2342,17 @@ void Application::build_world() {
     // in C++ and a clip file were two ways of saying the same thing, and only one of them can be
     // edited without a compiler, measured by the forge, or weathered.
     {
-        const std::string path =
-            options_.clip_file.empty() ? default_clip_path() : options_.clip_file;
+        // What to build, in the order of who asked most specifically: a world chosen in the
+        // library, then a clip named on the command line, then the scene the game ships with.
+        //
+        // A `.wsworld` is a clip script today. The single-file container with append-only
+        // journaling is Stage 15's own and is not built yet, so the shelf holds what a world
+        // actually is at this point in the project — the description it is grown from — and the
+        // extension is already the one the container will use. Nothing above here knows the
+        // difference, which is the point of the path being the only thing passed down.
+        const std::string path = !options_.world.empty()  ? options_.world
+                                 : options_.clip_file.empty() ? default_clip_path()
+                                                              : options_.clip_file;
 
         // The clip is read once, here, with everything it includes spliced in, and that spliced
         // text is what everything downstream works from ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the cache key as well as the parser.
@@ -2340,8 +2462,12 @@ void Application::build_world() {
         // default, because a clip can name its own and a key that ignored that would hand back a
         // world sampled at the wrong size.
         const std::string cache_path = path + ".world";
+        // Keyed on the source WITHOUT its author tag. Who made a file is not part of what the file
+        // builds, and counting it means a world put on the shelf — which is stamped with its
+        // author as it is copied (D447) — no longer matches the world already built beside it. The
+        // first open of every library world was a rebuild from cold because of one comment line.
         const u64 key =
-            world_cache_key(source + "|part=" + options_.clip_part,
+            world_cache_key(ui::without_author(source) + "|part=" + options_.clip_part,
                             script.settings.voxels_per_metre, build_stamp());
         if (!source.empty() && !options_.no_clip_cache) {
             WorldCache cache;
@@ -3262,6 +3388,85 @@ std::string settings_path() {
     return dir + "settings.txt";
 }
 }  // namespace
+
+// One frame of interface, over the world.
+//
+// It runs BEFORE the frame is recorded, because what it decides changes the frame: a render scale
+// typed into a slider has to be applied before the targets are sized, and a world left has to stop
+// the loop before it draws one more picture of a world that is going away.
+void Application::run_shell(f64 seconds) {
+    shell_drawn_ = false;
+    if (!shell_pass_.valid()) return;
+    if (!shell_pass_.ensure(window_.width(), window_.height())) return;
+
+    shell_.set_stage(ui::Stage::World);
+    const ui::Verdict verdict =
+        shell_.frame(window_.input(), window_.width(), window_.height(), seconds);
+    // Composition is on only while something is being typed into. Leaving it on puts an
+    // input-method window over the game, for the whole session, on a machine set up for a language
+    // that needs one.
+    window_.set_text_input(shell_.ui().wants_text_input());
+    if (verdict.leave_world) wants_title_ = true;
+    apply_knobs();
+    shell_drawn_ = !shell_.ui().draw().empty();
+}
+
+// What the settings window SHOWS, taken from what the game is actually doing.
+//
+// Without this the panel opens on the defaults in `Knobs` — which are a guess — so a player reads
+// numbers that are not this machine's, and the first slider they touch snaps the game to whatever the
+// row happened to say. A settings window has to be a picture of the state before it can be a way to
+// change it.
+void Application::seed_knobs() {
+    ui::Knobs& knobs = shell_.knobs();
+    knobs.auto_quality = quality_.enabled();
+    knobs.target_fps = (options_.target_fps > 0.0f) ? static_cast<f64>(quality_.target_fps()) : 0.0;
+    knobs.quality_level = static_cast<f64>(quality_.level());
+    knobs.render_scale = static_cast<f64>(render_scale_);
+    knobs.field_of_view = static_cast<f64>(camera_.fov_degrees());
+    knobs.vsync = swapchain_.vsync();
+    knobs.motion_blur = motion_blur_;
+    knobs.overlay = hud_.overlay();
+    knobs.changed = false;   // this is a read of the state, not a change to it
+}
+
+// What the settings window changed, put where the renderer will see it.
+//
+// Only on the frames it actually changed something: `changed` is set by the shell and cleared
+// here. A settings panel that reapplied every knob every frame would fight the quality controller
+// for the level, which is a picture that breathes.
+void Application::apply_knobs() {
+    ui::Knobs& knobs = shell_.knobs();
+    // While the controller owns the level, the row that shows it follows what the controller decided
+    // rather than what it last said — otherwise the one number on this panel that moves by itself is
+    // the one number on it that is always stale.
+    if (knobs.auto_quality) knobs.quality_level = static_cast<f64>(quality_.level());
+    if (!knobs.changed) return;
+    knobs.changed = false;
+
+    quality_.set_enabled(knobs.auto_quality);
+    if (knobs.target_fps > 0.0) {
+        quality_.set_target_fps(static_cast<f32>(knobs.target_fps));
+    } else {
+        quality_.set_target_fps(window_.refresh_hz());
+    }
+    if (!knobs.auto_quality) {
+        quality_.set_level(static_cast<u32>(std::clamp(knobs.quality_level, 0.0,
+                                                       static_cast<f64>(kQualityLevels - 1))));
+        applied_quality_level_ = 0xFFFFFFFFu;   // force the knobs through on the next update
+    }
+    // A render scale is the one setting that resizes every target, so it goes through the same
+    // path a quality step does rather than being poked in.
+    const f32 wanted = static_cast<f32>(std::clamp(knobs.render_scale, 0.05, 4.0));
+    if (std::abs(wanted - render_scale_) > 0.001f) {
+        render_scale_ = wanted;
+        handle_resize();
+    }
+    motion_blur_ = knobs.motion_blur;
+    camera_.set_fov_degrees(static_cast<f32>(knobs.field_of_view));
+    if (knobs.vsync != swapchain_.vsync()) swapchain_.set_vsync(knobs.vsync);
+    hud_.set_overlay(knobs.overlay);
+}
 
 // Deliberately the plainest format that works: one `key value` per line. A player who wants
 // to force a quality level or a target should be able to open it in Notepad and see what the
@@ -4769,32 +4974,69 @@ void Application::record_frame(f32 time_seconds) {
                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
                   VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-    image_barrier(cmd, swapchain_.current_image(), VK_IMAGE_LAYOUT_UNDEFINED,
-                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                  VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_BLIT_BIT,
-                  VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    // The swapchain image is put into TRANSFER_DST by whichever of the two paths below writes it.
+    // Doing it here as well would be a second transition out of UNDEFINED on top of the first —
+    // legal, and exactly the kind of redundancy that makes a layout trace unreadable.
 
     // This is also where a scaled render is put back to the size of the window: source is the
     // render target at whatever the quality level chose, destination is the whole swapchain
     // image, and the filter below does the stretching. Nothing else in the frame needs to know.
+    //
+    // With a window open, the same enlargement happens into the shell's own surface instead, the
+    // interface is drawn there at the WINDOW's resolution, and that goes to the swapchain size for
+    // size. Putting the interface through the upscale with the world would soften a three-pixel
+    // letter for nothing — and when no window is open none of it runs, so the world in the middle
+    // pays exactly what it always paid.
     profiler_.begin_pass(cmd, "blit", 0.4);
-    VkImageBlit2 region{VK_STRUCTURE_TYPE_IMAGE_BLIT_2};
-    region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.srcSubresource.layerCount = 1;
-    region.dstSubresource = region.srcSubresource;
-    region.srcOffsets[1] = {static_cast<i32>(render_extent.width),
-                            static_cast<i32>(render_extent.height), 1};
-    region.dstOffsets[1] = {static_cast<i32>(extent.width), static_cast<i32>(extent.height), 1};
+    if (shell_drawn_ && shell_pass_.valid()) {
+        shell_pass_.blit_in(cmd, render_target_.image, render_extent);
+        profiler_.end_pass(cmd);
+        // Its own pass, with its own budget, because `09-performance-budgets.md` gives the whole
+        // interface 0.6 ms on a T0 machine and a number folded into the blit is a number nobody
+        // can hold to that.
+        profiler_.begin_pass(cmd, "shell", 0.6);
+        shell_pass_.upload(shell_.ui().draw(), swapchain_.frame_index());
 
-    VkBlitImageInfo2 blit{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
-    blit.srcImage = render_target_.image;
-    blit.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    blit.dstImage = swapchain_.current_image();
-    blit.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    blit.regionCount = 1;
-    blit.pRegions = &region;
-    blit.filter = VK_FILTER_LINEAR;
-    vkCmdBlitImage2(cmd, &blit);
+        VkMemoryBarrier2 memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        memory.srcStageMask = VK_PIPELINE_STAGE_2_BLIT_BIT;
+        memory.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        memory.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        memory.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &memory;
+        vkCmdPipelineBarrier2(cmd, &dependency);
+
+        const ui::Colour& accent = shell_.ui().accent();
+        const f32 accent_rgb[3]{accent.r, accent.g, accent.b};
+        shell_pass_.draw(cmd, shell_.ui().draw(), swapchain_.frame_index(), accent_rgb,
+                         static_cast<f32>(shell_.ui().seconds()));
+        profiler_.end_pass(cmd);
+        profiler_.begin_pass(cmd, "blit", 0.4);
+        shell_pass_.blit_out(cmd, swapchain_.current_image(), extent);
+    } else {
+        image_barrier(cmd, swapchain_.current_image(), VK_IMAGE_LAYOUT_UNDEFINED,
+                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                      VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_2_BLIT_BIT,
+                      VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        VkImageBlit2 region{VK_STRUCTURE_TYPE_IMAGE_BLIT_2};
+        region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.srcSubresource.layerCount = 1;
+        region.dstSubresource = region.srcSubresource;
+        region.srcOffsets[1] = {static_cast<i32>(render_extent.width),
+                                static_cast<i32>(render_extent.height), 1};
+        region.dstOffsets[1] = {static_cast<i32>(extent.width), static_cast<i32>(extent.height), 1};
+
+        VkBlitImageInfo2 blit{VK_STRUCTURE_TYPE_BLIT_IMAGE_INFO_2};
+        blit.srcImage = render_target_.image;
+        blit.srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        blit.dstImage = swapchain_.current_image();
+        blit.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        blit.regionCount = 1;
+        blit.pRegions = &region;
+        blit.filter = VK_FILTER_LINEAR;
+        vkCmdBlitImage2(cmd, &blit);
+    }
     profiler_.end_pass(cmd);
 
     // Leave the render target in GENERAL. A frame that ends with an image in a transfer
@@ -4829,30 +5071,8 @@ void Application::record_frame(f32 time_seconds) {
     light_changed_ = false;
 }
 
-int Application::run(const Options& options) {
+int Application::play(const Options& options) {
     options_ = options;
-
-    const std::string title = std::string("WorldShaper v") + kVersion;
-    if (!window_.create(title, options_.width, options_.height,
-                        options_.size_explicit)) {
-        return 1;
-    }
-    if (!device_.create(&window_, options_.validation)) return 1;
-    {
-        // Which card and which driver, in every crash report from here on. A fault that only
-        // happens on one machine is answerable; a fault on "a PC" is not.
-        const DeviceCapabilities& caps = device_.caps();
-        crash_set_context(
-            "gpu", std::format("{} (vendor 0x{:04X}, driver {}.{}.{}, {} MB)", caps.name,
-                               caps.vendor_id, VK_API_VERSION_MAJOR(caps.driver_version),
-                               VK_API_VERSION_MINOR(caps.driver_version),
-                               VK_API_VERSION_PATCH(caps.driver_version),
-                               caps.device_local_bytes >> 20));
-    }
-    if (!swapchain_.create(device_, window_.width(), window_.height(), options_.vsync)) {
-        return 1;
-    }
-    if (!profiler_.create(device_)) return 1;
 
     // ---- the loading screen ------------------------------------------------------------
     //
@@ -4885,7 +5105,13 @@ int Application::run(const Options& options) {
         }
         builder.join();
     }
-    if (loading_quit_) return 0;
+    if (loading_quit_) {
+        // The window was closed while the world was still building. Nothing above the loading
+        // screen has been created yet, so this is the whole of the tear-down — and it has to
+        // happen, because the process carries on to the title rather than ending here.
+        loading_screen_.destroy();
+        return 0;
+    }
 
     // Everything from here to the first frame is the part a progress bar normally leaves out, and
     // leaving it out is exactly why bars sit at ninety-nine per cent: the residency tables, the
@@ -5682,6 +5908,7 @@ int Application::run(const Options& options) {
     }
     apply_quality();
     applied_quality_level_ = quality_.level();
+    seed_knobs();
     WS_LOG_INFO("quality", "target {:.0f} fps ({}), level {} of {}{}", quality_.target_fps(),
                 options_.target_fps > 0.0f ? "asked for" : "the monitor's refresh rate",
                 quality_.level(), kQualityLevels - 1,
@@ -5764,12 +5991,19 @@ int Application::run(const Options& options) {
         }
 
         const InputState& input = window_.input();
-        if (input.was_pressed(Key::Escape)) {
+        // Escape, in three steps, and the third is not "quit".
+        //
+        // It used to be two: give the mouse back, then end the process. That was right while there
+        // was one world per process and nothing to go back to. With a title behind it, a key that
+        // ends the game outright is a key that loses a world nobody meant to leave — so the third
+        // step opens the shell, the fourth closes it again, and leaving is a decision made in a
+        // window that says what it is (D441, D442).
+        if (input.was_pressed(Key::Escape) && !shell_.ui().wants_keys()) {
             if (mouse_look_) {
                 mouse_look_ = false;   // first Escape releases the mouse
                 window_.set_relative_mouse(false);
             } else {
-                break;
+                shell_.toggle_windows();
             }
         }
         if (input.was_pressed(Key::F1)) hud_.toggle_developer_panel();
@@ -5811,8 +6045,13 @@ int Application::run(const Options& options) {
         // Clicking the world captures the mouse; from then on the buttons belong to the
         // chisel. That first click is swallowed, or capturing the mouse would also start a
         // cut you never asked for.
+        //
+        // The shell gets first refusal on the pointer for the same reason the developer HUD does:
+        // a click on a docked window is a click on the window, and the world behind it must not
+        // also act on it.
         if (!mouse_look_) {
-            if ((input.mouse_left || input.mouse_right) && !hud_.wants_mouse()) {
+            if ((input.mouse_left || input.mouse_right) && !hud_.wants_mouse() &&
+                !shell_.ui().wants_mouse()) {
                 mouse_look_ = true;
                 swallow_click_ = true;
                 window_.set_relative_mouse(true);
@@ -5945,6 +6184,17 @@ int Application::run(const Options& options) {
         // A rung of the ladder, if one has finished sampling since the last frame.
         pump_refinement();
 
+        // The interface, before the frame it changes. A world left here stops the loop rather
+        // than drawing one more picture of a world that is going away.
+        run_shell(ns_to_ms(frame_start - start_ns) * 0.001);
+        // Leaving on a count rather than on a click, which is how the tear-down path gets
+        // exercised without a hand on the keyboard. See Options::cycle.
+        if (options_.cycle > 0 && frame_counter_ >= options_.cycle) {
+            WS_LOG_INFO("shell", "leaving the world after {} frames, as asked", frame_counter_);
+            wants_title_ = true;
+        }
+        if (wants_title_) break;
+
         hud_.begin_frame();
         hud_.draw(stats_, profiler_, device_.caps(), swapchain_);
 
@@ -6072,7 +6322,14 @@ int Application::run(const Options& options) {
         if (!options_.screenshot.empty() && measuring &&
             (measured >= options_.screenshot_frame || out_of_time)) {
             device_.wait_idle();
-            save_image_png(device_, render_target_, options_.screenshot);
+            // The shell's surface when a window is open, the render target when none is. A
+            // screenshot of the world with a panel over it has to be the picture that was
+            // presented, or the one screen a scripted run can photograph is the one without the
+            // interface on it — which is how an interface stops being checked.
+            save_image_png(device_,
+                           (shell_drawn_ && shell_pass_.valid()) ? shell_pass_.surface()
+                                                                 : render_target_,
+                           options_.screenshot);
 
             // A figure taken while the world is still being built is not comparable to anything,
             // and nothing said so.
@@ -6382,11 +6639,263 @@ int Application::run(const Options& options) {
     if (pathtrace_layout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device_.handle(), pathtrace_layout_, nullptr);
     }
-    profiler_.destroy();
-    swapchain_.destroy();
-    device_.destroy();
-    window_.destroy();
+    // The device, the swapchain, the profiler, the window and the interface are NOT torn down
+    // here: they outlive a world, which is the whole point of the split. What is torn down is
+    // every pool and buffer above — and the rest of this object goes with its destructor, so the
+    // next world starts from nothing rather than from whatever this one left behind.
+    loading_screen_.destroy();
+
+    // And everything this world left ON something that outlives it. There are three, they are all
+    // one line, and every one of them is a thing a title screen would otherwise inherit from a
+    // world that no longer exists:
+    //
+    //   the captured mouse — a title you cannot point at
+    //   the crash context — a report naming a camera in a world that has been torn down
+    //   composition — an input-method window over a menu nobody is typing into
+    //
+    // The fourth was the HUD's event hook, and that one was not harmless: see Hud::destroy.
+    if (mouse_look_) {
+        mouse_look_ = false;
+        window_.set_relative_mouse(false);
+    }
+    window_.set_text_input(false);
+    crash_set_context("camera", "no world");
+    crash_set_context("state", "at the title");
     return 0;
+}
+
+// The process: a window, a card, an interface, and however many worlds get opened in it.
+//
+// **The game opens on a title, not in a world** (D441). Everything expensive is behind that: the
+// build, the pools, the pipelines and the residency belong to an Application, and there is no
+// Application until somebody has asked for a world. That is what makes
+// `09-performance-budgets.md`'s *cold start to main menu ≤3 s* and *enter a world ≤5 s* two
+// numbers about two different events rather than one number said twice.
+//
+// And **every scripted run walks straight past it** (`23-shell-and-libraries.md` §0). Every
+// measurement in this project is taken by one of those flags, and a menu a harness has to click
+// through would end measurement here.
+int run_windowed(const Options& options) {
+    // Where *cold start to main menu* is measured from. `09-performance-budgets.md` §8 asks for
+    // three seconds, and that number only means anything now that there is a menu between the
+    // launch and the world (D441) — so it is reported, every run, rather than assumed.
+    const u64 launched_ns = now_ns();
+
+    Window window;
+    Device device;
+    Swapchain swapchain;
+    GpuProfiler profiler;
+
+    const std::string title = std::string("WorldShaper v") + kVersion;
+    if (!window.create(title, options.width, options.height, options.size_explicit)) return 1;
+    if (!device.create(&window, options.validation)) return 1;
+    {
+        // Which card and which driver, in every crash report from here on. A fault that only
+        // happens on one machine is answerable; a fault on "a PC" is not.
+        const DeviceCapabilities& caps = device.caps();
+        crash_set_context(
+            "gpu", std::format("{} (vendor 0x{:04X}, driver {}.{}.{}, {} MB)", caps.name,
+                               caps.vendor_id, VK_API_VERSION_MAJOR(caps.driver_version),
+                               VK_API_VERSION_MINOR(caps.driver_version),
+                               VK_API_VERSION_PATCH(caps.driver_version),
+                               caps.device_local_bytes >> 20));
+    }
+    if (!swapchain.create(device, window.width(), window.height(), options.vsync)) return 1;
+    if (!profiler.create(device)) return 1;
+
+    const std::filesystem::path spirv = compiled_shader_dir();
+    const std::filesystem::path sources(WS_SHADER_SOURCE_DIR);
+
+    ShellPass shell_pass;
+    ui::Shell shell;
+    Audio audio;
+    const bool shell_up = shell_pass.create(device, sources, spirv);
+    if (!shell_up) {
+        // Not fatal, and deliberately so: a game that will not start because its menu would not
+        // compile has traded the thing for the report on the thing. Without it the title cannot be
+        // drawn, so the run opens a world directly, exactly as it did before Stage 15.
+        WS_LOG_ERROR("shell", "no interface this run; opening a world directly");
+    }
+    shell.load(ui::default_root());
+    // A pinned mark, for a photograph that has to be comparable with the last one. Before the first
+    // frame, so the seed the shell would otherwise choose from the clock is never chosen at all.
+    if (options.logo_seed != 0) shell.pin_logo(options.logo_seed);
+    // The scenes that travel with the executable, on the shelf, once. See Shell::seed_worlds for
+    // why a library over a real folder cannot simply start empty.
+    shell.seed_worlds(std::filesystem::path(Window::base_path()) / "clips");
+    // The synthesis is in ws_ui and the device is in ws_platform, and neither knows the other
+    // exists. No audio device costs silence and one line, never a start-up error.
+    audio.create(shell.ui().sound());
+    shell.ui().sound().configure(audio.valid() ? audio.sample_rate() : 48000u);
+
+    // Whether a script would parse, asked on every keystroke by the editor tab. The tables are
+    // this function's rather than the shell's, because ws_ui does not know what a clip is — and a
+    // scratch table here cannot contaminate the one a world is using.
+    TagRegistry editor_tags;
+    shell.set_parser([&](const std::string& text) {
+        ui::ParseReport report;
+        // A parse that interns materials into a table on every keystroke is a table that grows
+        // without bound over an afternoon of typing, so a fresh one is made each time. It is a few
+        // microseconds against a keystroke, and it cannot contaminate the table a world is using.
+        VoxelTypeTable scratch;
+        const forge::Script script = forge::parse_clip_script(text, scratch, editor_tags);
+        if (!script.errors.empty()) {
+            report.ok = false;
+            report.line = script.errors.front().line;
+            report.message = script.errors.front().message;
+        }
+        return report;
+    });
+
+    {
+        const f64 cold_ms = ns_to_ms(now_ns() - launched_ns);
+        WS_LOG_INFO("shell", "title ready in {:.0f} ms{}", cold_ms,
+                    (cold_ms > 3000.0) ? "  -- over the 3 s budget in documentation/09 section 8"
+                                       : "");
+    }
+
+    const u64 began_ns = now_ns();
+    int result = 0;
+
+    // `round` is carried across iterations rather than copied fresh, because leaving a world has
+    // to clear the world that was opened: a `--world` run that came back to the title and then
+    // reopened the same world on the next turn round would never stop.
+    Options round = options;
+    const bool scripted = options.scripted();
+    bool done = false;
+    // Set when a scripted `--cycle` run has come back from its world: the title is shown once
+    // more, for the frames it was given, and then the run ends.
+    bool stop_after_title = false;
+
+    while (!done) {
+        // The title runs whenever there is no world already chosen. A scripted run walks past it —
+        // except the two that are ABOUT it: one that photographs it, and one that came back to it.
+        const bool title_now = shell_up && round.world.empty() &&
+                               (!scripted || !round.title_shot.empty() || stop_after_title);
+        if (title_now) {
+            // ---- the title ---------------------------------------------------------------
+            //
+            // Its own loop, because there is nothing else to record: no world, no pipelines and
+            // no render target. One compute pass draws the room, one draws the marks, and the
+            // whole of it is up before anything expensive has been created.
+            bool leave = false;
+            if (!round.title_open.empty()) shell.open_window(round.title_open, true);
+            u64 title_frame = 0;
+            for (;;) {
+                if (!window.pump()) {
+                    leave = true;
+                    break;
+                }
+                if (window.minimised()) continue;
+                if (window.resized_this_frame() || swapchain.needs_recreate()) {
+                    device.wait_idle();
+                    swapchain.recreate(window.width(), window.height());
+                }
+                shell_pass.reload_if_changed();
+
+                // A scripted title steps its clock by a fixed sixtieth, exactly as `--fly` does for
+                // the camera, so `--title-frames N` means N/60 seconds and not "however long that
+                // took on this machine". Everything on this screen that moves is a function of this
+                // number — the mark's animations, its arrangements, the sort in progress, the room's
+                // own light — so on the wall clock a photograph of any of them was a photograph of
+                // whatever the frame rate happened to be, and two runs could not be compared.
+                const f64 seconds = scripted ? static_cast<f64>(title_frame) / 60.0
+                                             : ns_to_ms(now_ns() - began_ns) * 0.001;
+                shell.set_stage(ui::Stage::Title);
+                shell.set_playing({});
+                const ui::Verdict verdict =
+                    shell.frame(window.input(), window.width(), window.height(), seconds);
+                window.set_text_input(shell.ui().wants_text_input());
+
+                const ui::Colour& accent = shell.ui().accent();
+                const f32 accent_rgb[3]{accent.r, accent.g, accent.b};
+                shell_pass.present(swapchain, shell.ui().draw(), accent_rgb,
+                                   static_cast<f32>(seconds));
+
+                // A scripted title runs for a fixed number of frames and then stops, whether it
+                // was asked for a photograph or only for the tear-down path to be walked.
+                ++title_frame;
+                // The one thing that moves a pinned mark, and the only way the morph between two
+                // combinations is ever looked at by anything other than a person watching it.
+                if (round.logo_change > 0 && title_frame == round.logo_change) shell.change_logo();
+                if ((!round.title_shot.empty() || stop_after_title) &&
+                    title_frame >= round.title_frames) {
+                    if (!round.title_shot.empty()) {
+                        // Taken from the shell's own surface rather than from the swapchain,
+                        // because a swapchain image cannot be read back on every driver and this
+                        // one always can.
+                        device.wait_idle();
+                        save_image_png(device, shell_pass.surface(), round.title_shot);
+                        WS_LOG_INFO("shell", "title photographed to {} after {} frames",
+                                    round.title_shot, title_frame);
+                    }
+                    leave = true;
+                    break;
+                }
+
+                if (verdict.quit) {
+                    leave = true;
+                    break;
+                }
+                if (verdict.open_world) {
+                    round.world = verdict.world.string();
+                    break;
+                }
+            }
+            if (leave) break;
+            // A title that ended without choosing a world has nothing to hand on, which is what
+            // the last title of a `--cycle` run does.
+            if (round.world.empty()) break;
+        }
+
+        // ---- one world -------------------------------------------------------------------
+        //
+        // On the heap, and not because of the allocation: the object holds the world, the node
+        // pool, the face store and the residency tables, and a few hundred kilobytes of it on the
+        // stack is a stack overflow on a thread that has done nothing wrong.
+        {
+            shell.set_playing(round.world.empty()
+                                  ? std::string("the test scene")
+                                  : std::filesystem::path(round.world).stem().string());
+            // A scripted run can ask for a window to be up in the world too, which is the only
+            // way the docked interface over a real backdrop gets photographed by anything other
+            // than a person with a hand on the keyboard.
+            if (!round.title_open.empty()) shell.open_window(round.title_open, true);
+            auto application = std::make_unique<Application>(window, device, swapchain, profiler,
+                                                             shell_pass, shell);
+            result = application->play(round);
+            const bool back_to_title = application->wants_title();
+            // The world goes here, at the end of this scope, and every pool in it goes with it —
+            // which is `02-architecture-overview.md`'s rule made structural rather than remembered.
+            application.reset();
+
+            if (result != 0 || !back_to_title) {
+                done = true;
+            } else if (scripted && round.cycle == 0) {
+                done = true;
+            } else {
+                // Back to the title, and the world that was open is forgotten — otherwise the
+                // next turn round the loop would reopen the very world that was just left.
+                round.world.clear();
+                // A cycle run shows the title once more, for the frames it was given, and then
+                // stops. It has already done the thing it was for.
+                if (round.cycle > 0) {
+                    round.cycle = 0;
+                    round.title_open.clear();
+                    stop_after_title = true;
+                }
+            }
+        }
+    }
+
+    shell.save();
+    audio.destroy();
+    shell_pass.destroy();
+    profiler.destroy();
+    swapchain.destroy();
+    device.destroy();
+    window.destroy();
+    return result;
 }
 
 // Break on purpose, each kind through a different path into the handler, so a report that
@@ -6761,6 +7270,5 @@ int main(int argc, char** argv) {
     if (options.stream_audit) return ws::run_stream_audit(options);
     if (options.headless) return ws::run_headless(options);
 
-    ws::Application app;
-    return app.run(options);
+    return ws::run_windowed(options);
 }

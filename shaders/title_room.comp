@@ -1,0 +1,169 @@
+#version 450
+// What the title screen is a picture of.
+//
+// documentation/23-shell-and-libraries.md §1: the title **is diegetic** — a place rather than a
+// screen (answer O12, D59) — and "the title is the cheapest possible diegetic space: one room, two
+// things in it, the ink rule doing the work it already does over the loading screen."
+//
+// So this is one room. It is not the renderer: there is no world loaded when this is on screen and
+// that is the entire point of the screen, so nothing here reads a brick, a node or a chunk. It is
+// an analytic box with a doorway in one wall, a floor and walls made of visible voxels, and the
+// daylight that comes through the doorway — traced far enough to have a shaft in the air and a
+// patch on the floor, and no further.
+//
+// Three things it has to be, in order:
+//
+//   **Up in the time it takes to open a window.** `09-performance-budgets.md` §8 asks for cold
+//   start to main menu in three seconds, and none of that budget is for this. One compute pass, no
+//   allocation, no upload, six ray-box intersections and sixteen steps of a shaft.
+//
+//   **Dark, and slow.** Every mark on top of it is the inverse of what is behind it, so a bright
+//   backdrop makes a dark interface and a busy one makes an interface that crawls. It drifts
+//   because a still picture reads as a photograph of a menu and a moving one reads as a place.
+//
+//   **Made of voxels.** A title screen for this game that is smooth is a title screen for a
+//   different game. The surfaces carry their own grid, and it is the grid rather than a texture:
+//   the same 32-voxels-to-the-metre the world uses, so the room is a real size.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba16f) uniform writeonly image2D target;
+
+layout(push_constant) uniform Push {
+    vec2 resolution;
+    float seconds;
+    float pad0;
+} push;
+
+// The room, in metres. Twelve across, four and a half tall, sixteen deep — a hall rather than a
+// cell, because a doorway at the far end of a short room is a doorway you are standing in.
+const vec3 kRoomLow = vec3(-6.0, 0.0, -8.0);
+const vec3 kRoomHigh = vec3(6.0, 4.5, 8.0);
+
+// The doorway, in the far wall (+z). Wide enough to walk through and tall enough to stand in,
+// because a room whose only opening is a slot is a room that reads as a prison.
+const vec2 kDoorLow = vec2(-1.3, 0.0);
+const vec2 kDoorHigh = vec2(1.3, 2.6);
+
+// Where the light comes from. Low and to one side, so the patch it throws on the floor is long and
+// the shaft is at an angle — a sun straight through a doorway lights a rectangle and says nothing.
+const vec3 kSun = vec3(-0.34, -0.28, -0.90);
+
+float voxel_grid(vec3 point, vec3 normal) {
+    // One voxel is 1/32 of a metre; the grid drawn here is every eighth of a metre, which is a
+    // brick. Drawing every voxel at this range would be a grey field.
+    vec3 cell = fract(point * 8.0);
+    vec3 edge = min(cell, 1.0 - cell);
+    // The face's own two axes, so a floor is not striped by its vertical seam.
+    vec2 across = (abs(normal.y) > 0.5) ? vec2(edge.x, edge.z)
+                : (abs(normal.x) > 0.5) ? vec2(edge.y, edge.z)
+                                        : vec2(edge.x, edge.y);
+    float seam = min(across.x, across.y);
+    return 1.0 - smoothstep(0.0, 0.06, seam);
+}
+
+bool through_door(vec3 point) {
+    // Does the straight line from `point` towards the sun leave through the doorway? The wall is
+    // at z = kRoomHigh.z and the sun is behind it, so this is one plane crossing and two bounds
+    // checks — which is the whole of the shadowing in this scene, and enough.
+    vec3 to_sun = -normalize(kSun);
+    if (to_sun.z <= 0.0001) return false;
+    float t = (kRoomHigh.z - point.z) / to_sun.z;
+    if (t < 0.0) return false;
+    vec3 at = point + to_sun * t;
+    return at.x > kDoorLow.x && at.x < kDoorHigh.x && at.y > kDoorLow.y && at.y < kDoorHigh.y;
+}
+
+// The inside of the box: which wall a ray leaves through, and where.
+float box_exit(vec3 origin, vec3 direction, out vec3 normal) {
+    vec3 inverse = 1.0 / direction;
+    vec3 to_low = (kRoomLow - origin) * inverse;
+    vec3 to_high = (kRoomHigh - origin) * inverse;
+    vec3 far = max(to_low, to_high);
+    float t = min(min(far.x, far.y), far.z);
+    normal = (t == far.x) ? vec3(-sign(direction.x), 0.0, 0.0)
+           : (t == far.y) ? vec3(0.0, -sign(direction.y), 0.0)
+                          : vec3(0.0, 0.0, -sign(direction.z));
+    return t;
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(target);
+    if (pixel.x >= size.x || pixel.y >= size.y) return;
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec2 screen = (uv * 2.0 - 1.0) * vec2(float(size.x) / float(size.y), -1.0);
+
+    // The camera drifts. Slowly enough to read as depth rather than as animation — the same
+    // judgement the loading screen's backdrop makes, for the same reason.
+    float t = push.seconds;
+    vec3 eye = vec3(sin(t * 0.06) * 0.9, 1.75 + sin(t * 0.043) * 0.12, -5.6 + sin(t * 0.031) * 0.5);
+    vec3 forward = normalize(vec3(sin(t * 0.05) * 0.05, -0.06, 1.0));
+    vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), forward));
+    vec3 up = cross(forward, right);
+    vec3 direction = normalize(forward * 1.5 + right * screen.x + up * screen.y);
+
+    vec3 normal;
+    float t_wall = box_exit(eye, direction, normal);
+    vec3 hit = eye + direction * t_wall;
+
+    // Through the doorway is the sky, which is the only thing in this picture that is not stone.
+    bool doorway = (normal.z < -0.5) && hit.x > kDoorLow.x && hit.x < kDoorHigh.x &&
+                   hit.y > kDoorLow.y && hit.y < kDoorHigh.y;
+
+    vec3 colour;
+    if (doorway) {
+        // Deliberately not a sky: a flat, over-exposed brightness, the way an opening looks from
+        // inside a dark room. A gradient here would be a second sky to keep in step with the real
+        // one, and the real one belongs to the renderer.
+        colour = vec3(0.62, 0.66, 0.70);
+    } else {
+        // Surfaces. One sun term, shadowed by whether the point can see the doorway at all, plus
+        // an ambient that falls off with distance from the opening — which is what a single-opening
+        // room actually looks like and costs one length().
+        float facing = max(0.0, dot(normal, -normalize(kSun)));
+        float lit = through_door(hit + normal * 0.02) ? 1.0 : 0.0;
+        float from_door = length(hit - vec3(0.0, 1.3, kRoomHigh.z));
+        float ambient = 0.055 + 0.10 / (1.0 + from_door * from_door * 0.06);
+
+        // The seam is DARKER, not lighter: a voxel seam is a crack between two blocks, and light
+        // does not gather in a crack. It also FADES with distance, because a grid drawn at full
+        // strength across a whole wall is a moiré rather than a surface — the same reason the
+        // marcher stops resolving detail it cannot separate.
+        float away = length(hit - eye);
+        float grid = voxel_grid(hit, normal) * (1.0 - smoothstep(5.0, 20.0, away));
+        float shade = ambient + facing * lit * 0.55;
+        shade *= mix(1.0, 0.55, grid);
+        colour = vec3(shade) * vec3(1.00, 0.985, 0.96);
+    }
+
+    // The shaft: the air between the eye and the wall, lit wherever it can see the doorway. Sixteen
+    // steps, dithered by pixel so the banding a fixed step would produce becomes noise instead —
+    // the same trade the marcher makes between levels.
+    {
+        float dither = fract(sin(dot(vec2(pixel), vec2(12.9898, 78.233))) * 43758.5453);
+        float carried = 0.0;
+        float span = min(t_wall, 18.0);
+        const int kSteps = 16;
+        for (int i = 0; i < kSteps; ++i) {
+            float along = (float(i) + dither) / float(kSteps) * span;
+            vec3 at = eye + direction * along;
+            if (at.y < kRoomLow.y || at.y > kRoomHigh.y) continue;
+            if (through_door(at)) carried += 1.0;
+        }
+        carried /= float(kSteps);
+        // Forward scattering: the shaft is far brighter looking towards the sun than across it,
+        // which is what makes it read as air rather than as fog.
+        float towards = max(0.0, dot(direction, -normalize(kSun)));
+        float glow = carried * (0.045 + 0.20 * pow(towards, 6.0)) * span * 0.12;
+        colour += vec3(glow) * vec3(1.0, 0.97, 0.92);
+    }
+
+    // A little vignette, which is not decoration: it keeps the corners dark, and the corners are
+    // where the version number and the docked windows land.
+    float corner = length(uv - vec2(0.5));
+    colour *= 1.0 - smoothstep(0.35, 0.95, corner) * 0.45;
+
+    imageStore(target, pixel, vec4(max(colour, vec3(0.0)), 1.0));
+}

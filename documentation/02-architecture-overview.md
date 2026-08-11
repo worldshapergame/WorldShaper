@@ -119,6 +119,39 @@ Because of this boundary, mods are unrestricted in what language features they u
 
 A `WorldManager` owns a list of worlds, each a single `.wsworld` container (answer K1). Only one world is resident at a time; switching tears down pools and rebuilds them rather than sharing state, so worlds can never contaminate each other. Clips, materials and mods live outside worlds in a shared user library.
 
+## The shell (Stage 15 — `23-shell-and-libraries.md`)
+
+Two modules sit above `Game`, and the layer rule applies to them unchanged: **the interface mutates
+the world only through ops.** A library that renames a file touches the file system; a library that
+stamps a clip emits an op like any other edit, and multiplayer replicates it for nothing.
+
+```
+ws_ui        docking, windows, widgets, the ink rule, input hit-testing, the library
+             knows: core, game, platform, the file system
+             does NOT know: the device, the network, the world's internals
+```
+
+`ws_library` is inside `ws_ui` rather than beside it (`src/ui/library.*`): a library is a file
+manager and a file manager is a window, and splitting them would be two modules that only ever
+appear together. It knows `platform` because the input snapshot and the audio device are there, and
+it produces a **list of marks** rather than drawing anything — which is what lets the whole of it
+be tested without a window, and what keeps the device out of it.
+
+**The shell is a state machine over three states and a lifetime over one world** (D458). The
+process owns the window, the card, the interface and its sound; an `Application` owns exactly one
+world and is destroyed when that world is left. The rule above — *a world is torn down on the way
+out, never shared* — is therefore structural rather than remembered: every pool in a second world is
+new because there is nowhere for an old one to survive.
+
+**The shell is a state machine with three states — title, library, world** (D441). The game opens on
+the title and builds nothing until something is chosen, which is what first exercises the tear-down
+path above: today there is exactly one world per process and it is built before the first frame. The
+loading screen already covers the transition and already reads `shaders/ui.glsl`.
+
+**A library is a file manager over the real folder** in `%LOCALAPPDATA%\WorldShaper\` (D445), not a
+database with a folder underneath it — so nothing in the game may hold state about a file that the
+file does not itself carry.
+
 ## Headless mode is a first-class citizen
 
 From Stage 1, the whole game must be runnable with `--headless`: no window, no GPU (CPU reference simulation), fixed tick count, deterministic. This is how conservation-of-matter tests, determinism tests, and multiplayer desync tests run in CI. It costs a little discipline early and saves months later.

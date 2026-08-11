@@ -65,7 +65,7 @@ So in that one band the contrast is **spent on hue instead of on brightness**: t
 A colour that appears in exactly one place cannot be read as a theme. There are five, and no more:
 
 1. **A destructive decision is red.**
-2. **The animated logo mark** — the one *surface* allowed a hue of its own, because it is a picture, not furniture.
+2. **The animated logo mark** — the one *surface* allowed a hue of its own, because it is a picture, not furniture. It is drawn from a seed, so which colours it takes is a choice the seed makes out of twelve schemes, with the player's own logo colour biasing the family rather than replacing it (D463, `23-shell-and-libraries.md` §1). The dark end of every one of those schemes has a floor, and that is a legibility rule rather than a taste: the title room is nearly black, so a scheme free to take its floor to a quarter puts some of the combinations on the screen as a shape you have to look for.
 3. **Node-graph wires**, coloured by what they carry. Three hues because the script language has three value types; a fourth hue would have to mean a fourth kind of value. They are the player's own ink rotated by a third of the circle each, so there is still no palette written down anywhere — an interface whose ink is grey has grey wires. Wires are **stated** (full brightness) rather than inverted, because an inverted two-pixel line over glass of its own brightness is a line that is not there.
 4. **Command-line parts** — verb, subject, value — using the same three rotations, for the same reason: several unlike things on one line, and telling them apart is the whole task. Joining words take no hue; they are grammar, not a kind of thing. Difference from wires: a command line sits over the *world*, so it keeps the brightness the inversion asked for, except that the swing is capped (≈0.45) and the rest spent on hue — otherwise, over a white sky, all three parts come out as three blacks and black has no hue.
 5. **The accent in the blind band**, above.
@@ -78,6 +78,103 @@ A colour that appears in exactly one place cannot be read as a theme. There are 
 - When a button runs out of room, **the drawing gives up room before the word does, and never gives up all of it** — it shrinks to about 0.55 of its nominal size and stops, and only then does the word start shrinking. A button with no drawing at all is not a state the rule can reach.
 - The word is drawn at the row's own text size, not a size smaller.
 - **Text is centred on its capitals, not on its line box.** A line box carries descender room whether the string has descenders or not, which puts a word like `Fast` visibly high in its button with an empty band beneath. Centring each string's own ink instead would fix that word and break the column, because `Field of view` and `Haze distance (km)` would sit on different baselines. A capital is the same box for every string at a given size, so that is what gets centred — anything with a descender hangs slightly below the middle, which is what a descender is for.
+
+---
+
+## Windows, and the two things in them
+
+The structure this language is applied to — the title, the docked windows, the libraries and the
+editors — is `23-shell-and-libraries.md`. Three of its rules are style rather than structure and
+belong here:
+
+- **Two families, and the side is the meaning.** Parameters open on the left, libraries on the
+  right. A player learns *where to look* rather than *what to read*, which is the same argument the
+  icons are made of. Every window is docked, resizable and re-dockable to any edge; nothing floats,
+  and nothing ever covers the thing it is about.
+- **Every number is a slider, and a double-click types into it.** A typed value is not capped: the
+  range is where the handle goes, not where the value can. A value that would break the game is
+  refused *and says what it would have done* — a refusal that does not explain itself reads as a
+  bug. Values that are not numbers are not sliders: a choice is icons, a switch is a switch.
+- **An icon animates to say what it does, never to say it is being pointed at.** The duplicate icon
+  splits; the delete icon opens. That is the same rule as *motion answers a press and nothing else*,
+  applied to the drawing rather than to the control.
+
+---
+
+## The typeface (D437–D440)
+
+**Three pixels wide, five tall for a capital, three for an x-height, one row below the baseline for
+a descender.** Six rows and three columns is the whole cell, and the size is the *first* constraint
+at the top of this document made arithmetic: as little of everything as possible, while staying
+legible. Every pixel is a voxel somebody has to build, so a letter's size is the price of a word.
+
+Three by five is the floor for an alphabet carrying **both cases**, and the floor is where the
+shapes stop being *distinct* rather than where they get harder to read — at three by four the
+capitals lose the row that holds B's, E's and S's middle bar; at two wide there is no interior left
+at all, so nothing tells an `o` from an `n`. Five letters are allowed past it (`M`, `W`, `m`, `w`
+are five wide, `N` is four): three strokes need two gaps between them, and a diagonal with one
+column to fall through is a horizontal bar.
+
+- **What it costs, against the five-by-seven it replaced:** a capital is 15 cells rather than 35,
+  and an `o` is 9 rather than 25. A sign in the world is well under half the wall.
+- **"Unmistakable" was measured, not asserted.** Every pair of the ninety-five printable characters
+  was compared cell by cell; seven letters were redrawn because they came out ONE pixel apart —
+  `0`/`U`, `2`/`Z`, `&`/`8`, `H`/`K`, `=`/`z`, `l`/`!` and `u`/`v`. What remains one pixel apart is
+  the set where the one pixel *is* the meaning: `.` against a space, `,` against `;`, `.` against
+  `:`, `O` against `0` (the barred zero — a slash needs a diagonal and there is one column to draw
+  it in), and `O` against `Q`.
+- **The interface and the world are lettered in the same face.** `shaders/ui.glsl` carries a packed
+  copy so text can be drawn on the card, generated from the same source by `tools/font-table.ps1`
+  and checked against it by a test. Two copies of a drawing is one place for them to disagree.
+- The capital-centred baseline rule above applies unchanged.
+
+### Markdown, because the alternative is a second way to say the same thing
+
+Text in this game is written by players — on signs, in the sentence a tooltip gets, in whatever a
+mod puts on a panel — and three pixels across leaves no room to say "this is a heading" by choosing
+a different face. So structure is said with size, weight and marks, which is the vocabulary
+markdown already carries, and what people already type when they want it.
+
+Read: headings, bullets (nested by indent), numbered items, task boxes, quotations, fenced code,
+rules, `**bold**`, `*italic*`, `` `code` ``, `~~struck~~`, `[label](target)`, and `\` to escape.
+Each emphasis is a property of the glyph rather than a second typeface:
+
+| Emphasis | How it is drawn | Why |
+|---|---|---|
+| bold | **in the world**, the drawing smeared one whole pixel sideways and one wider. **On a panel**, smeared *half a cell* at about seven tenths of the ink, and no wider | at three across there is no second weight to draw — but see below, because the same rule is wrong in the two places |
+| italic | the rows above the x-height leaned one pixel right; on a panel that one pixel is spread continuously over the cap height rather than stepping at the x-height | one pixel is the whole lean available; two is a diagonal. A step puts a notch in the side of every `l`, and a panel has the resolution to avoid it |
+| underline | a row *below* the descender | so it never touches a `p` |
+| strike | along the middle of the x-height | where the hyphen already is |
+| code | set monospaced | a box around a word costs more pixels than the word |
+| heading | `#` ×3 the size, `##` ×2, `###` and deeper bold | a heading twice the size does not also need to be heavier |
+
+**Why bold is two rules and not one** (D457). *Smeared one pixel sideways, one wider* is right about the
+world and wrong about a panel, and it took looking at it to see which. At three columns across, a
+counter is exactly one cell — so smearing a whole cell fills the middle of `o`, `e`, `a`, `g` and
+`y`, and a bold word comes out as a row of blocks rather than as a heavier word. It was legible in
+this document and unreadable on the screen.
+
+On a panel a glyph pixel is *several* device pixels — four, at the size a row is set at — so there
+is a fraction of a cell to smear into, and half of one is what bold takes. The stroke gains half its
+own width and the counter keeps half of itself, so it is still a hole. The added half is drawn at
+about seven tenths of the ink rather than at full strength, so what it adds reads as weight on the
+stroke rather than as a second column of the letter: **a bold letter has to be the same letter.**
+
+Two consequences worth stating. It **degrades honestly**: at one device pixel per glyph pixel there
+is no fraction to be had and the smear is a whole cell again, which is exactly the case a letter
+made of voxels is always in — so the world keeps the original rule, and keeps it for a reason
+rather than by omission. And on a panel an emphasis **costs no width**, so `**this**` in the middle
+of a sentence does not move the rest of the line as it is typed.
+
+One thing that is not the emphasis and cancels it: a heading drawn *fainter* than the rows under it.
+A heavier letter that is also dimmer reads as a row that has been disabled. Weight and strength are
+two different statements and only one of them is emphasis.
+
+Not read, each a decision rather than a gap: **tables** (a column rule is a third of a letter at
+this size — a list says the same thing in the room that exists), **images** (nowhere to fetch a
+picture from inside a world; the emoji block covers the case that matters), **raw HTML**, **setext
+headings**, and **reference links**. `_` inside a word is not emphasis, so `snake_case_names`
+survive being written down.
 
 ---
 
@@ -157,5 +254,7 @@ The style fits this engine better than it fitted the last one, and one number ne
 - **We already have the backdrop.** The UI is diegetic (answer D16/O12), so panels are real geometry lit by the real renderer. The blurred glass and the ink both read from the composited frame we are already producing, in the pass right after tone mapping.
 - **Cost is the risk.** The old implementation measured about 46 ns per pixel for the ink — several square roots per pixel over the panel area. Our T0 UI budget is 0.6 ms total (`09-performance-budgets.md`), so: work in encoded space throughout, replace the encode/decode roots with a small lookup, compute the blur once at quarter resolution, and run the ink only over panel rectangles — never the full screen.
 - **The accent colour is a setting** with a default of pure green, stored per player.
-- **Fonts:** a pixel font (answer L3, OFL-licensed). The capital-centred baseline rule applies to it unchanged.
+- **Fonts:** a pixel font (answer L3), and it is **ours** — three by five, drawn in
+  `assets/font/`, so there is no licence to carry and no glyph we cannot change. The typeface
+  section above is its specification; the capital-centred baseline rule applies to it unchanged.
 - **Nothing here is copied.** This document is the specification; the implementation is written from it against our own renderer.

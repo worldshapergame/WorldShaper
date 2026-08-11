@@ -111,6 +111,7 @@ add_library(ws_game STATIC
     src/game/chisel.cpp
     src/game/clip.cpp
     src/game/font.cpp
+    src/game/markup.cpp
     src/game/clipboard.cpp
     src/game/toolbelt.cpp)
 target_include_directories(ws_game PUBLIC src)
@@ -134,9 +135,32 @@ target_link_libraries(ws_forge PUBLIC ws_core ws_world ws_game)
 # ws_platform - window, input, event pump.
 # --------------------------------------------------------------------------------------
 add_library(ws_platform STATIC
-    src/platform/window.cpp)
+    src/platform/window.cpp
+    src/platform/audio.cpp)
 target_include_directories(ws_platform PUBLIC src)
 target_link_libraries(ws_platform PUBLIC ws_core SDL3::SDL3)
+
+# --------------------------------------------------------------------------------------
+# ws_ui - the shell: the ink rule, the typeface's metrics, the controls, docking, the
+# libraries over the real folders, and the state machine the game opens on.
+#
+# documentation/23-shell-and-libraries.md is its specification. It knows core, game (for
+# the markdown reader), platform (for the input snapshot and the audio device) and the file
+# system. It does NOT know the device, the network, or the world's internals: it produces a
+# list of marks and somebody else draws it, which is what lets the whole of it be tested
+# without a window.
+# --------------------------------------------------------------------------------------
+add_library(ws_ui STATIC
+    src/ui/ink.cpp
+    src/ui/draw.cpp
+    src/ui/logo.cpp
+    src/ui/sound.cpp
+    src/ui/widgets.cpp
+    src/ui/dock.cpp
+    src/ui/library.cpp
+    src/ui/shell.cpp)
+target_include_directories(ws_ui PUBLIC src)
+target_link_libraries(ws_ui PUBLIC ws_core ws_game ws_platform ws_version)
 
 # --------------------------------------------------------------------------------------
 # ws_gpu - Vulkan device, swapchain, per-frame ring, shader loading and hot reload.
@@ -153,9 +177,10 @@ add_library(ws_gpu STATIC
     src/gpu/face_light.cpp
     src/gpu/world_buffers.cpp
     src/gpu/screenshot.cpp
+    src/gpu/shell_pass.cpp
     src/gpu/feedback.cpp)
 target_include_directories(ws_gpu PUBLIC src)
-target_link_libraries(ws_gpu PUBLIC ws_core ws_world ws_platform ws_volk ws_vma ws_stb)
+target_link_libraries(ws_gpu PUBLIC ws_core ws_world ws_platform ws_ui ws_volk ws_vma ws_stb)
 
 # VMA is a third-party single-header implementation; do not hold it to our warning bar.
 if(MSVC)
@@ -193,7 +218,7 @@ endif()
 
 add_executable(WorldShaper ${WS_APP_SOURCES})
 target_link_libraries(WorldShaper PRIVATE
-    ws_core ws_world ws_game ws_forge ws_platform ws_gpu ws_imgui ws_version)
+    ws_core ws_world ws_game ws_forge ws_platform ws_ui ws_gpu ws_imgui ws_version)
 if(WIN32)
     # The update check speaks HTTPS through the system's own stack, so there is no HTTP
     # library to depend on, to license, or to keep patched.
@@ -264,6 +289,7 @@ add_executable(ws_tests
     tests/test_weathering.cpp
     tests/test_sample.cpp
     tests/test_font.cpp
+    tests/test_markup.cpp
     tests/test_fixed.cpp
     tests/test_hash.cpp
     tests/test_arena.cpp
@@ -295,11 +321,21 @@ add_executable(ws_tests
     tests/test_pass_ledger.cpp
     tests/test_node_pool.cpp
     tests/test_world_cache.cpp
-    tests/test_face_store.cpp)
-target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_doctest)
+    tests/test_face_store.cpp
+    tests/test_ink.cpp
+    tests/test_draw.cpp
+    tests/test_logo.cpp
+    tests/test_widgets.cpp
+    tests/test_dock.cpp
+    tests/test_library.cpp
+    tests/test_sound.cpp)
+target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_ui ws_doctest)
 # Where the assets a test reads actually live. A test that walks up from the working directory
 # passes when it is run from the build folder and fails from anywhere else, which makes it a test
 # of where somebody was standing.
 target_compile_definitions(ws_tests PRIVATE
-    WS_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+    WS_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    # And the shader sources, because the interface carries a copy of the typeface on the card and
+    # a test reads it back to check it is the same drawings (tests/test_font.cpp).
+    WS_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 add_test(NAME unit COMMAND ws_tests)

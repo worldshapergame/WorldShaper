@@ -1,888 +1,671 @@
 # Basic Latin — the printable ASCII, and the shapes every other block is measured against.
 #
-# Capitals are five wide and seven tall, which is the smallest cell in which the Latin alphabet is
-# unambiguous. Four wide loses B against 8 and G against 6; six wide buys nothing a reader can use
-# and costs a fifth more voxels on every sign in the world.
+# # The cell, and why it is this small
 #
-# Lowercase has an x-height of five and hangs two below the baseline where it needs to, so `p` and
-# `o` sit on the same line and `b` and `o` share a top. `top` is how many rows above the baseline
-# the glyph's FIRST row sits at: 7 for a capital or an ascender, 5 for a plain lowercase letter.
+# Three wide, five tall for a capital; three tall for a lowercase x-height; one row below the
+# baseline for descenders. Six rows and three columns is the whole cell, and every pixel of it is
+# a voxel somebody has to build, so the size is not a style choice — it is the price of a word.
 #
-# `advance` is how far the pen moves, INCLUDING the glyph's own width. It is only written where a
-# letter is narrower than five — `i` and `l` are two and three wide, and setting them five wide
-# would put a hole either side of every one.
+# Three by five is the floor for an alphabet that has to carry BOTH cases. Below it the shapes
+# stop being distinct rather than becoming harder to read: at three by four a capital B, E and S
+# all lose the row that holds their middle bar, and at two wide there is no interior left at all —
+# no bowl, no counter, nothing to tell an o from a n. Five by seven (what this file used to be)
+# reads no better at one voxel per pixel; it costs 35 voxels a letter against 15 and makes every
+# sign in the world two and a third times the size for nothing a reader can use.
+#
+# Three rules break out of that cell, each argued rather than assumed:
+#
+#   - **M and W are five wide, N is four.** Three strokes do not fit in three columns: two stems
+#     need a gap between them, a third needs two gaps, and a diagonal that has one column to fall
+#     through is a horizontal bar. Drawn at three, M is H with a heavier middle and N is H with the
+#     bar moved a row — which is a pair of letters told apart by one pixel, in the two words a
+#     player is most likely to write on a door. Lowercase m and w are five for the same reason.
+#   - **The zero is the ring with a bar through it.** A slashed zero needs a diagonal and there is
+#     one column to draw it in, so the slash lies down. It is one pixel from the letter O on
+#     purpose: that pixel is the convention every reader already knows, and the alternatives were
+#     worse — a squared ring is one pixel from `U`, which is a distinction nobody expects.
+#   - **i, l, punctuation and brackets are narrower than three**, because an `i` set three wide
+#     puts a hole either side of every one and a word is read by its shape.
+#
+# # What "unmistakable" was measured as
+#
+# Every pair of the ninety-five was compared cell by cell, and seven letters were redrawn because
+# they came out ONE pixel apart: `0`/`U`, `2`/`Z`, `&`/`8`, `H`/`K`, `=`/`z`, `l`/`!` and `u`/`v`.
+# One pixel is not a difference at this size — it is a smudge, a bad screenshot, or a voxel somebody
+# has not placed yet. What remains one pixel apart is the set where the one pixel IS the meaning:
+# `.` against a space, `,` against `;`, `.` against `:`, `O` against `0`, and `O` against `Q`.
+# tests/test_font.cpp holds the weaker half of this — that no two characters are the same drawing.
+#
+# # How to read the format
+#
+# `top` is how many rows above the baseline the glyph's FIRST row sits at: 5 for a capital or an
+# ascender, 3 for a plain lowercase letter, 1 for a comma, 0 for an underscore. A glyph declares
+# only the rows it uses, so an `o` is three by three and costs what it looks like. The default is 5.
+#
+# `advance` is how far the pen moves, INCLUDING the glyph's own width, and defaults to the width.
+# The tracking (one pixel) is added on top of it by the layout, so a three-wide letter steps four.
 #
 # A row is drawn with `#` and `.`. Anything that is not a directive inside an open glyph is a row,
-# so a row of dots is a row of dots and can never be read as a comment.
+# so a row of dots is a row of dots and can never be read as a comment — which also means there
+# can be no comment between a glyph's first row and its blank line. Comments live between glyphs.
 
-glyph U+0020 advance 3
+glyph U+0020 space
+advance 2
 
-glyph U+0021
-..#..
-..#..
-..#..
-..#..
-..#..
-.....
-..#..
-advance 3
+glyph U+0021 exclamation mark
+#
+#
+#
+.
+#
 
-glyph U+0022
-.#.#.
-.#.#.
-.....
-.....
-.....
-.....
-.....
-advance 5
+glyph U+0022 quotation mark
+#.#
+#.#
 
-glyph U+0023
-.#.#.
-#####
-.#.#.
-.#.#.
-#####
-.#.#.
-.....
+glyph U+0023 number sign
+#.#
+###
+#.#
+###
+#.#
 
-glyph U+0024
-..#..
-.####
-#.#..
-.###.
-..#.#
-####.
-..#..
+glyph U+0024 dollar sign
+.##
+##.
+.#.
+.##
+##.
 
-glyph U+0025
-##..#
-##.#.
-..#..
-.#...
-#.##.
-...##
-.....
+glyph U+0025 percent sign
+#.#
+..#
+.#.
+#..
+#.#
 
-glyph U+0026
-.##..
-#..#.
-#.#..
-.#...
-#.#.#
-#..#.
-.##.#
+glyph U+0026 ampersand
+.#.
+#.#
+.##
+#.#
+.##
 
-glyph U+0027
-..#..
-..#..
-.....
-.....
-.....
-.....
-.....
-advance 3
+glyph U+0027 apostrophe
+#
+#
 
-glyph U+0028
-...#.
-..#..
-..#..
-..#..
-..#..
-..#..
-...#.
-advance 4
+glyph U+0028 left parenthesis
+.#
+#.
+#.
+#.
+.#
 
-glyph U+0029
-.#...
-..#..
-..#..
-..#..
-..#..
-..#..
-.#...
-advance 4
+glyph U+0029 right parenthesis
+#.
+.#
+.#
+.#
+#.
 
-glyph U+002A
-.....
-#.#.#
-.###.
-#####
-.###.
-#.#.#
-.....
+glyph U+002A asterisk
+#.#
+.#.
+#.#
 
-glyph U+002B
-.....
-..#..
-..#..
-#####
-..#..
-..#..
-.....
+glyph U+002B plus sign
+.#.
+###
+.#.
+top 4
 
-glyph U+002C
-.....
-.....
-.....
-.....
-.....
-..#..
-..#..
-top 7
-advance 3
+glyph U+002C comma
+.#
+#.
+top 1
 
-glyph U+002D
-.....
-.....
-.....
-#####
-.....
-.....
-.....
+glyph U+002D hyphen-minus
+###
+top 2
 
-glyph U+002E
-.....
-.....
-.....
-.....
-.....
-.....
-..#..
-advance 3
+glyph U+002E full stop
+#
+top 1
 
-glyph U+002F
-....#
-...#.
-..#..
-..#..
-.#...
-#....
-.....
+glyph U+002F solidus
+..#
+..#
+.#.
+#..
+#..
 
-glyph U+0030
-.###.
-#...#
-#..##
-#.#.#
-##..#
-#...#
-.###.
+glyph U+0030 digit zero
+.#.
+#.#
+###
+#.#
+.#.
 
-glyph U+0031
-..#..
-.##..
-..#..
-..#..
-..#..
-..#..
-.###.
+glyph U+0031 digit one
+.#.
+##.
+.#.
+.#.
+###
 
-glyph U+0032
-.###.
-#...#
-....#
-...#.
-..#..
-.#...
-#####
+glyph U+0032 digit two
+.#.
+#.#
+..#
+.#.
+###
 
-glyph U+0033
-#####
-...#.
-..##.
-....#
-....#
-#...#
-.###.
+glyph U+0033 digit three
+##.
+..#
+.#.
+..#
+##.
 
-glyph U+0034
-...#.
-..##.
-.#.#.
-#..#.
-#####
-...#.
-...#.
+glyph U+0034 digit four
+#.#
+#.#
+###
+..#
+..#
 
-glyph U+0035
-#####
-#....
-####.
-....#
-....#
-#...#
-.###.
+glyph U+0035 digit five
+###
+#..
+##.
+..#
+##.
 
-glyph U+0036
-..##.
-.#...
-#....
-####.
-#...#
-#...#
-.###.
+glyph U+0036 digit six
+.#.
+#..
+##.
+#.#
+.#.
 
-glyph U+0037
-#####
-....#
-...#.
-..#..
-.#...
-.#...
-.#...
+glyph U+0037 digit seven
+###
+..#
+.#.
+.#.
+.#.
 
-glyph U+0038
-.###.
-#...#
-#...#
-.###.
-#...#
-#...#
-.###.
+glyph U+0038 digit eight
+.#.
+#.#
+.#.
+#.#
+.#.
 
-glyph U+0039
-.###.
-#...#
-#...#
-.####
-....#
-...#.
-.##..
+glyph U+0039 digit nine
+.#.
+#.#
+.##
+..#
+.#.
 
-glyph U+003A
-.....
-..#..
-.....
-.....
-.....
-..#..
-.....
-advance 3
+glyph U+003A colon
+#
+.
+#
+top 3
 
-glyph U+003B
-.....
-..#..
-.....
-.....
-..#..
-..#..
-.....
-advance 3
+glyph U+003B semicolon
+.#
+..
+.#
+#.
+top 3
 
-glyph U+003C
-...#.
-..#..
-.#...
-#....
-.#...
-..#..
-...#.
+glyph U+003C less-than sign
+..#
+.#.
+#..
+.#.
+..#
 
-glyph U+003D
-.....
-.....
-#####
-.....
-#####
-.....
-.....
+glyph U+003D equals sign
+##
+..
+##
+top 3
 
-glyph U+003E
-.#...
-..#..
-...#.
-....#
-...#.
-..#..
-.#...
+glyph U+003E greater-than sign
+#..
+.#.
+..#
+.#.
+#..
 
-glyph U+003F
-.###.
-#...#
-....#
-...#.
-..#..
-.....
-..#..
+glyph U+003F question mark
+##.
+..#
+.#.
+...
+.#.
 
-glyph U+0040
-.###.
-#...#
-#.###
-#.#.#
-#.###
-#....
-.###.
+glyph U+0040 commercial at
+.#.
+#.#
+###
+#..
+.##
 
-glyph U+0041
-.###.
-#...#
-#...#
-#####
-#...#
-#...#
-#...#
+glyph U+0041 capital A
+.#.
+#.#
+###
+#.#
+#.#
 
-glyph U+0042
-####.
-#...#
-#...#
-####.
-#...#
-#...#
-####.
+glyph U+0042 capital B
+##.
+#.#
+##.
+#.#
+##.
 
-glyph U+0043
-.###.
-#...#
-#....
-#....
-#....
-#...#
-.###.
+glyph U+0043 capital C
+.##
+#..
+#..
+#..
+.##
 
-glyph U+0044
-###..
-#..#.
-#...#
-#...#
-#...#
-#..#.
-###..
+glyph U+0044 capital D
+##.
+#.#
+#.#
+#.#
+##.
 
-glyph U+0045
-#####
-#....
-#....
-####.
-#....
-#....
-#####
+glyph U+0045 capital E
+###
+#..
+##.
+#..
+###
 
-glyph U+0046
-#####
-#....
-#....
-####.
-#....
-#....
-#....
+glyph U+0046 capital F
+###
+#..
+##.
+#..
+#..
 
-glyph U+0047
-.###.
-#...#
-#....
-#.###
-#...#
-#...#
-.####
+glyph U+0047 capital G
+.##
+#..
+#.#
+#.#
+.##
 
-glyph U+0048
-#...#
-#...#
-#...#
-#####
-#...#
-#...#
-#...#
+glyph U+0048 capital H
+#.#
+#.#
+###
+#.#
+#.#
 
-glyph U+0049
-.###.
-..#..
-..#..
-..#..
-..#..
-..#..
-.###.
-advance 5
+glyph U+0049 capital I
+###
+.#.
+.#.
+.#.
+###
 
-glyph U+004A
-...##
-....#
-....#
-....#
-....#
-#...#
-.###.
+glyph U+004A capital J
+..#
+..#
+..#
+#.#
+.#.
 
-glyph U+004B
-#...#
-#..#.
-#.#..
-##...
-#.#..
-#..#.
-#...#
+glyph U+004B capital K
+#.#
+##.
+#..
+##.
+#.#
 
-glyph U+004C
-#....
-#....
-#....
-#....
-#....
-#....
-#####
+glyph U+004C capital L
+#..
+#..
+#..
+#..
+###
 
-glyph U+004D
+glyph U+004D capital M
 #...#
 ##.##
 #.#.#
-#.#.#
-#...#
-#...#
-#...#
-
-glyph U+004E
-#...#
-##..#
-#.#.#
-#..##
-#...#
 #...#
 #...#
 
-glyph U+004F
-.###.
-#...#
-#...#
-#...#
-#...#
-#...#
-.###.
+glyph U+004E capital N
+#..#
+##.#
+#.##
+#..#
+#..#
 
-glyph U+0050
-####.
-#...#
-#...#
-####.
-#....
-#....
-#....
+glyph U+004F capital O
+.#.
+#.#
+#.#
+#.#
+.#.
 
-glyph U+0051
-.###.
-#...#
-#...#
-#...#
-#.#.#
-#..#.
-.##.#
+glyph U+0050 capital P
+##.
+#.#
+##.
+#..
+#..
 
-glyph U+0052
-####.
-#...#
-#...#
-####.
-#.#..
-#..#.
-#...#
+glyph U+0051 capital Q
+.#.
+#.#
+#.#
+#.#
+.#.
+..#
 
-glyph U+0053
-.####
-#....
-#....
-.###.
-....#
-....#
-####.
+glyph U+0052 capital R
+##.
+#.#
+##.
+#.#
+#.#
 
-glyph U+0054
-#####
-..#..
-..#..
-..#..
-..#..
-..#..
-..#..
+glyph U+0053 capital S
+.##
+#..
+.#.
+..#
+##.
 
-glyph U+0055
-#...#
-#...#
-#...#
-#...#
-#...#
-#...#
-.###.
+glyph U+0054 capital T
+###
+.#.
+.#.
+.#.
+.#.
 
-glyph U+0056
-#...#
-#...#
-#...#
-#...#
-#...#
-.#.#.
-..#..
+glyph U+0055 capital U
+#.#
+#.#
+#.#
+#.#
+###
 
-glyph U+0057
-#...#
-#...#
-#...#
-#.#.#
-#.#.#
-##.##
-#...#
+glyph U+0056 capital V
+#.#
+#.#
+#.#
+#.#
+.#.
 
-glyph U+0058
+glyph U+0057 capital W
 #...#
 #...#
-.#.#.
-..#..
-.#.#.
-#...#
-#...#
-
-glyph U+0059
-#...#
-#...#
-.#.#.
-..#..
-..#..
-..#..
-..#..
-
-glyph U+005A
-#####
-....#
-...#.
-..#..
-.#...
-#....
-#####
-
-glyph U+005B
-..###
-..#..
-..#..
-..#..
-..#..
-..#..
-..###
-advance 4
-
-glyph U+005C
-#....
-.#...
-..#..
-..#..
-...#.
-....#
-.....
-
-glyph U+005D
-###..
-..#..
-..#..
-..#..
-..#..
-..#..
-###..
-advance 4
-
-glyph U+005E
-..#..
-.#.#.
-#...#
-.....
-.....
-.....
-.....
-
-glyph U+005F
-.....
-.....
-.....
-.....
-.....
-.....
-.....
-#####
-top 6
-
-glyph U+0060
-.#...
-..#..
-.....
-.....
-.....
-.....
-.....
-
-glyph U+0061
-.###.
-....#
-.####
-#...#
-.####
-top 5
-
-glyph U+0062
-#....
-#....
-####.
-#...#
-#...#
-#...#
-####.
-top 7
-
-glyph U+0063
-.###.
-#....
-#....
-#....
-.###.
-top 5
-
-glyph U+0064
-....#
-....#
-.####
-#...#
-#...#
-#...#
-.####
-top 7
-
-glyph U+0065
-.###.
-#...#
-#####
-#....
-.###.
-top 5
-
-glyph U+0066
-..##.
-.#...
-####.
-.#...
-.#...
-.#...
-.#...
-top 7
-advance 5
-
-glyph U+0067
-.####
-#...#
-#...#
-.####
-....#
-#...#
-.###.
-top 5
-
-glyph U+0068
-#....
-#....
-####.
-#...#
-#...#
-#...#
-#...#
-top 7
-
-glyph U+0069
-..#..
-.....
-.##..
-..#..
-..#..
-..#..
-.###.
-top 7
-advance 4
-
-glyph U+006A
-...#.
-.....
-..##.
-...#.
-...#.
-...#.
-...#.
-#..#.
-.##..
-top 7
-
-glyph U+006B
-#....
-#....
-#..#.
-#.#..
-##...
-#.#..
-#..#.
-top 7
-
-glyph U+006C
-.##..
-..#..
-..#..
-..#..
-..#..
-..#..
-.###.
-top 7
-advance 4
-
-glyph U+006D
-##.#.
-#.#.#
-#.#.#
-#.#.#
-#.#.#
-top 5
-
-glyph U+006E
-####.
-#...#
-#...#
-#...#
-#...#
-top 5
-
-glyph U+006F
-.###.
-#...#
-#...#
-#...#
-.###.
-top 5
-
-glyph U+0070
-####.
-#...#
-#...#
-####.
-#....
-#....
-#....
-top 5
-
-glyph U+0071
-.####
-#...#
-#...#
-.####
-....#
-....#
-....#
-top 5
-
-glyph U+0072
-#.##.
-##...
-#....
-#....
-#....
-top 5
-
-glyph U+0073
-.####
-#....
-.###.
-....#
-####.
-top 5
-
-glyph U+0074
-.#...
-.#...
-####.
-.#...
-.#...
-.#...
-..##.
-top 7
-advance 5
-
-glyph U+0075
-#...#
-#...#
-#...#
-#...#
-.####
-top 5
-
-glyph U+0076
-#...#
-#...#
-#...#
-.#.#.
-..#..
-top 5
-
-glyph U+0077
-#.#.#
-#.#.#
 #.#.#
 #.#.#
 .#.#.
-top 5
 
-glyph U+0078
+glyph U+0058 capital X
+#.#
+#.#
+.#.
+#.#
+#.#
+
+glyph U+0059 capital Y
+#.#
+#.#
+.#.
+.#.
+.#.
+
+glyph U+005A capital Z
+###
+..#
+.#.
+#..
+###
+
+glyph U+005B left square bracket
+##
+#.
+#.
+#.
+##
+
+glyph U+005C reverse solidus
+#..
+#..
+.#.
+..#
+..#
+
+glyph U+005D right square bracket
+##
+.#
+.#
+.#
+##
+
+glyph U+005E circumflex accent
+.#.
+#.#
+
+glyph U+005F low line
+###
+top 0
+
+glyph U+0060 grave accent
+#.
+.#
+
+glyph U+0061 small a
+##.
+#.#
+.##
+top 3
+
+glyph U+0062 small b
+#..
+#..
+##.
+#.#
+##.
+
+glyph U+0063 small c
+.##
+#..
+.##
+top 3
+
+glyph U+0064 small d
+..#
+..#
+.##
+#.#
+.##
+
+glyph U+0065 small e
+.#.
+###
+.##
+top 3
+
+glyph U+0066 small f
+.##
+.#.
+###
+.#.
+.#.
+
+glyph U+0067 small g
+.##
+#.#
+.##
+##.
+top 3
+
+glyph U+0068 small h
+#..
+#..
+##.
+#.#
+#.#
+
+glyph U+0069 small i
+#
+.
+#
+#
+#
+
+glyph U+006A small j
+.#
+..
+.#
+.#
+.#
+#.
+
+glyph U+006B small k
+#..
+#..
+#.#
+##.
+#.#
+
+glyph U+006C small l
+#.
+#.
+#.
+#.
+.#
+
+glyph U+006D small m
+####.
+#.#.#
+#.#.#
+top 3
+
+glyph U+006E small n
+##.
+#.#
+#.#
+top 3
+
+glyph U+006F small o
+.#.
+#.#
+.#.
+top 3
+
+glyph U+0070 small p
+##.
+#.#
+##.
+#..
+top 3
+
+glyph U+0071 small q
+.##
+#.#
+.##
+..#
+top 3
+
+glyph U+0072 small r
+##.
+#..
+#..
+top 3
+
+glyph U+0073 small s
+.##
+.#.
+##.
+top 3
+
+glyph U+0074 small t
+.#.
+.#.
+###
+.#.
+.##
+
+glyph U+0075 small u
+#.#
+#.#
+###
+top 3
+
+glyph U+0076 small v
+#.#
+#.#
+.#.
+top 3
+
+glyph U+0077 small w
 #...#
+#.#.#
 .#.#.
-..#..
-.#.#.
-#...#
-top 5
+top 3
 
-glyph U+0079
-#...#
-#...#
-#...#
-.####
-....#
-#...#
-.###.
-top 5
+glyph U+0078 small x
+#.#
+.#.
+#.#
+top 3
 
-glyph U+007A
-#####
-...#.
-..#..
-.#...
-#####
-top 5
+glyph U+0079 small y
+#.#
+#.#
+.##
+##.
+top 3
 
-glyph U+007B
-...##
-..#..
-..#..
-.##..
-..#..
-..#..
-...##
-advance 5
+glyph U+007A small z
+###
+.#.
+###
+top 3
 
-glyph U+007C
-..#..
-..#..
-..#..
-..#..
-..#..
-..#..
-..#..
-advance 3
+glyph U+007B left curly bracket
+.##
+.#.
+#..
+.#.
+.##
 
-glyph U+007D
-##...
-..#..
-..#..
-..##.
-..#..
-..#..
-##...
-advance 5
+glyph U+007C vertical line
+#
+#
+#
+#
+#
+#
 
-glyph U+007E
-.....
-.....
-.##.#
-#..#.
-.....
-.....
-.....
+glyph U+007D right curly bracket
+##.
+.#.
+..#
+.#.
+##.
+
+glyph U+007E tilde
+.##
+##.
+top 3

@@ -4,14 +4,60 @@
 #define STBIW_ASSERT(x) ((void)0)
 #include <stb_image_write.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <vector>
 
+#include "core/log.hpp"
+
 namespace ws {
+namespace {
+
+// Half precision back to a float. Written out rather than pulled in, because it is nine lines and
+// the alternative is a dependency for nine lines.
+f32 from_half(u16 bits) {
+    const u32 sign = static_cast<u32>(bits & 0x8000u) << 16;
+    const u32 exponent = (bits >> 10) & 0x1Fu;
+    const u32 mantissa = bits & 0x3FFu;
+    u32 out = 0;
+    if (exponent == 0) {
+        // Subnormal, or zero. Rare enough in a picture that the simple branch is the right one.
+        if (mantissa != 0) {
+            f32 value = static_cast<f32>(mantissa) / 1024.0f / 16384.0f;
+            u32 packed = 0;
+            std::memcpy(&packed, &value, sizeof(packed));
+            out = packed;
+        }
+    } else if (exponent == 31) {
+        out = 0x7F800000u | (mantissa << 13);
+    } else {
+        out = ((exponent + 112) << 23) | (mantissa << 13);
+    }
+    out |= sign;
+    f32 value = 0.0f;
+    std::memcpy(&value, &out, sizeof(value));
+    return value;
+}
+
+// How many bytes a pixel of this format is, and whether it needs converting on the way out.
+//
+// Two formats reach here and they are both pictures somebody wants to look at: the renderer's
+// eight-bit target, and the sixteen-bit float surfaces the loading screen and the interface
+// compose into. Reading the second one as though it were the first is not a subtle failure — it
+// is a magenta and blue tartan, which is exactly what it looked like the first time the title was
+// photographed.
+u32 pixel_bytes(VkFormat format) {
+    return (format == VK_FORMAT_R16G16B16A16_SFLOAT) ? 8u : 4u;
+}
+
+}  // namespace
 
 bool save_image_png(Device& device, const GpuImage& image, const std::string& path) {
     if (!image.valid()) return false;
 
-    const u64 bytes = static_cast<u64>(image.extent.width) * image.extent.height * 4;
+    const u64 bytes =
+        static_cast<u64>(image.extent.width) * image.extent.height * pixel_bytes(image.format);
     GpuBuffer readback = create_staging_buffer(device, bytes, "screenshot readback");
 
     // One-shot command buffer. Screenshots are rare and off the hot path, so the simple
@@ -87,9 +133,24 @@ bool save_image_png(Device& device, const GpuImage& image, const std::string& pa
     WS_VK(vkQueueSubmit2(device.graphics_queue(), 1, &submit, VK_NULL_HANDLE));
     device.wait_idle();
 
+    // A sixteen-bit float surface is already in ENCODED units — the ink rule and the tone curve
+    // both work there — so this is a range conversion and not a tone map. Anything else here
+    // would make a photograph of the interface disagree with the interface.
+    std::vector<u8> converted;
+    const void* pixels = readback.mapped;
+    if (pixel_bytes(image.format) == 8) {
+        const u64 count = static_cast<u64>(image.extent.width) * image.extent.height * 4;
+        converted.resize(static_cast<usize>(count));
+        const u16* source = static_cast<const u16*>(readback.mapped);
+        for (u64 i = 0; i < count; ++i) {
+            const f32 value = std::clamp(from_half(source[i]), 0.0f, 1.0f);
+            converted[static_cast<usize>(i)] = static_cast<u8>(value * 255.0f + 0.5f);
+        }
+        pixels = converted.data();
+    }
+
     const int written = stbi_write_png(path.c_str(), static_cast<int>(image.extent.width),
-                                       static_cast<int>(image.extent.height), 4,
-                                       readback.mapped,
+                                       static_cast<int>(image.extent.height), 4, pixels,
                                        static_cast<int>(image.extent.width) * 4);
 
     vkDestroyCommandPool(device.handle(), pool, nullptr);

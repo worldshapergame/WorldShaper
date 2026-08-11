@@ -37,7 +37,7 @@ WorldShaper ships under **MIT-0** (MIT No Attribution) — answers A10 and O1. P
 | Tests | **doctest** | MIT | Fast to compile, header-only |
 | Image IO | **stb_image / stb_image_write** | MIT / public domain | Screenshots, icon/UI atlases |
 | Font rasterization | **stb_truetype** | MIT / public domain | No FreeType (also fine, but this is simpler) |
-| Fonts | **Pixelify Sans** / **Departure Mono** (pixel fonts, answer L3) | SIL OFL 1.1 | OFL permits commercial embedding |
+| Fonts | **Ours** — a three-by-five pixel face drawn in `assets/font/` (answer L3, decisions D437–D440) | MIT-0, like the rest | A letter here is *matter*, so the face has to be as small as a legible letter can be and every glyph has to be ours to redraw. No third-party face is drawn at three pixels, and none may be modified into one under OFL without renaming it |
 | Build | **CMake** | BSD-3 | Universal |
 | *(later)* Steam integration | **Steamworks SDK** | Valve SDK terms | Only at Stage 23. Free, optional, and isolated behind an interface so the game runs identically without it (answer A11) |
 

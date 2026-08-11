@@ -36,16 +36,17 @@ static_assert(sizeof(Push) == 120, "the shader's push block is laid out to match
 constexpr u32 kSlotUints = 6;    // twenty-four characters, four to a uint
 constexpr u32 kSlotChars = kSlotUints * 4;
 
-// Packs a string into a slot, four characters to a uint, upper-cased and zero-terminated.
+// Packs a string into a slot, four characters to a uint, zero-terminated.
 //
-// Upper-cased here rather than at the call site because the font in ui.glsl is capitals only, and
-// a caller writing a label should not have to know that. A character the font does not have comes
-// out blank rather than as a wrong letter, which is the failure a reader can actually diagnose.
+// It used to upper-case as it went, because the font in ui.glsl was capitals only and a caller
+// writing a label should not have to know that. The face carries both cases now, so a label is
+// packed as it was written — and a stage called `Sampling` reads as a word rather than as a
+// shout. A character the font does not have still comes out blank rather than as a wrong letter,
+// which is the failure a reader can actually diagnose.
 void pack(u32* text, u32 slot, const std::string& value) {
     const usize count = std::min<usize>(value.size(), kSlotChars - 1);
     for (usize i = 0; i < count; ++i) {
-        char c = value[i];
-        if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+        const char c = value[i];
         const u32 index = slot * kSlotUints + static_cast<u32>(i / 4);
         text[index] |= static_cast<u32>(static_cast<u8>(c)) << ((i % 4) * 8);
     }

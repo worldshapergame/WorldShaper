@@ -396,12 +396,63 @@ Fixed-point Verlet with graph-coloured deterministic solving (answer E12); cloth
 **What you can do:** write or install a mod that adds materials, reactions, tools or whole game modes (answer B1: "any mode of game the player builds or scripts").
 **Perf gate:** Lua ≤0.8 ms/tick on T0; a script exceeding budget is suspended without a frame hitch.
 
-## Stage 15 — Diegetic UI, world manager, clip library ▶ **PLAYABLE #13** · L
+## Stage 15 — The shell: title, docked windows, libraries ▶ **PLAYABLE #13** · L
 
-In-world UI framework (panels as real lit geometry, ray interaction, pixel font — answers D16, L3); main menu; **many-worlds manager** (answer B3); clip library with save/load/stamp and procedural clips (answer H4); `.vox` and `.schematic` import, `.wsobj` clip export (answers B8, H5); remappable controls (answer L5); the `.wsworld` single-file container with append-only journaling and zero-stall save-on-every-edit (answers K1, K3).
+**Full specification in `23-shell-and-libraries.md`; decisions D441–D456.** In-world UI framework
+(panels as real lit geometry, ray interaction, the three-by-five pixel font — answers D16, L3, D437);
+the `.wsworld` single-file container with append-only journaling and zero-stall save-on-every-edit
+(answers K1, K3); `.vox` and `.schematic` import, `.wsobj` clip export (answers B8, H5); remappable
+controls (answer L5).
 
-**What you can do:** manage many worlds, keep a library of your creations, import from MagicaVoxel, and never lose work.
-**Perf gate:** UI ≤0.6 ms on T0; save-on-edit stalls the main thread by 0 ms.
+What the shell is, in the order it gets built:
+
+1. **The title, and the world build moved behind it** (D441). Two buttons — worlds, settings — and
+   nothing else on the screen (D442). Today the facility is built before the first frame exists and
+   there is no way to not do that; this is the change that makes `09`'s *cold start to main menu ≤3 s*
+   and *enter a world ≤5 s* two different numbers, and it is what first exercises `02`'s rule that a
+   world is torn down on the way out rather than shared.
+2. **Docked windows** (D443): parameters open on the left, libraries on the right, every one of them
+   resizable and re-dockable to any edge, two on an edge splitting it. Nothing floats.
+3. **Sliders everywhere, with double-click to type, and typed values uncapped** (D444).
+4. **The libraries** (D445–D447): a file manager over the real folders in `%LOCALAPPDATA%\WorldShaper\`
+   — worlds, clips, materials, mods, characters, scripts — with folders to any depth, rename,
+   duplicate, move, delete to a trash folder, Explorer's rubber-band bulk select, and an author name
+   written into every file that travels with every copy of it. This is the **many-worlds manager**
+   (answer B3) and the **clip library** (answer H4): both are the same window with a different shelf
+   behind it.
+5. **The three tabs** on every library window: *library*, *community* (Stage 16 — the tab exists here
+   and says so), *editor*.
+6. **The editor tab, script view** (D452–D455): it asks for a file first, then edits the clip
+   language `20-clip-forge.md` already defines, re-parsing on every keystroke. The **visual view and
+   the live link between the two are Stage 20's** (D456), because there is exactly one node editor in
+   this project and building a second one here to throw away is what this roadmap's ordering rationale
+   exists to prevent.
+
+**What you can do:** open the game to a title, keep many worlds and a library of your creations
+organised the way you organise anything else, change every setting from a slider you can also type
+into, and never lose work.
+**Perf gate:** UI ≤0.6 ms on T0; save-on-edit stalls the main thread by 0 ms; cold start to the title
+≤3 s. **Met, on the two of the three that exist yet:** cold start to the title **543 ms**, and the
+interface **0.26 ms** mean at 2560×1440 with two full-height windows docked. Save-on-edit waits for
+the `.wsworld` container.
+
+### Progress
+
+**Steps 1 to 5 are done**, and `23-shell-and-libraries.md` §9 lists what is built, where it lives,
+and the five things that are not. In short: the game opens on a title with two buttons on it and
+nothing else; docked windows resize, re-dock to any edge and split one; every number is a slider you
+can double-click and type past the end of; the worlds library is a file manager over
+`%LOCALAPPDATA%\WorldShaper\` with folders, rename, duplicate, delete-to-trash, rubber-band select
+and an author tag written into every file; the settings window drives the quality controller,
+the render scale, the sound and the player's own accent colour; and all three tabs are there, with
+*community* and the editor's *visual* view saying in one line what they are waiting for.
+
+Leaving a world tears it down and returns to the title, which is the first time
+`02-architecture-overview.md`'s many-worlds rule has been exercised at all (D458).
+
+**Next, and in this order:** the `.wsworld` container with append-only journaling and
+save-on-every-edit — a world is a clip script with a `.wsworld` extension today, which is honest and
+temporary — then `.vox` / `.schematic` import and `.wsobj` export, then remappable controls.
 
 ---
 
@@ -411,8 +462,18 @@ In-world UI framework (panels as real lit geometry, ray interaction, pixel font 
 
 UDP transport with channels, reliability, congestion control and encryption; **connectivity ladder** IPv6 → LAN → STUN hole punch → peer relay (answer M1); **invite codes carrying a username** with duplicate suffixing (answer J2); **region-ownership distributed authority for 32 players** with gossip trees and no host (answers J1, J4); client-side prediction and rollback; chunk digest reconciliation; interest management; content-hash handshake; determinism CI across CPU and GPU backends; packet loss/latency/jitter simulator in tests.
 
-**What you can do:** build with up to 32 friends. No port forwarding, no server, no setup. Anyone can leave, including whoever started it, and the world carries on.
-**Perf gate:** 32 players, ≤120 KB/s upstream worst case; join ≤15 s; zero desyncs over a 1-hour soak at 5% packet loss.
+**Also here: the community tab** (D448–D451, `23-shell-and-libraries.md` §5b). Every library window
+has one, and it searches what players who are reachable **right now** have in theirs — newest first
+by default, trending by downloads over a day, a week, a month and all time. It runs on this stage's
+ladder and adds no infrastructure: a peer answers what it has, what one of them looks like, and give
+me that one, and the index is gossiped rather than hosted. A file is browsable while its author is
+online; deleting the original removes it from the browser and never from the copies, which keep
+saying who made it. The reach is bounded by who you can reach, and the **DHT rendezvous** that would
+widen it to strangers (answer M1's option b — explicitly not infrastructure of ours) is its own
+sub-step with its own decision.
+
+**What you can do:** build with up to 32 friends. No port forwarding, no server, no setup. Anyone can leave, including whoever started it, and the world carries on. Browse and take what anybody online has made.
+**Perf gate:** 32 players, ≤120 KB/s upstream worst case; join ≤15 s; zero desyncs over a 1-hour soak at 5% packet loss; a community search answers in ≤2 s over the reachable set.
 
 ---
 
@@ -457,6 +518,12 @@ Motorised joints with PD control; balance controller; protective behaviours (bra
 # PHASE X — Machines
 
 ## Stage 20 — Logic and wires ▶ **PLAYABLE #18** · XL
+
+**The one node editor** (answer O19, D66, D456) lands here, and with it the **visual half of every
+library's editor tab** and the live link between the two views: the node array is the document, wires
+and text are two views of it, and editing either updates the other (D452–D454,
+`23-shell-and-libraries.md` §5c). Every node's parameters are a parameters window on the left, made
+of sliders that can be typed into (D444).
 
 Node-graph visual programming plus **physical wires and logic components in the style of LittleBigPlanet/Dreams** — but destructible, physics-simulated, and attachable to moving objects (answer I1). Signal propagation on its own event-driven tick synchronised to the sim tick (answer I2, my call: separate tick, event-driven, not polled). Sensors (pressure, light, heat, fluid, proximity), displays, timers, math and logic nodes. **Accounted matter source/sink ops** so drills and printers cannot break conservation (answer I6). The node editor UI here also serves reaction authoring from Stage 14.
 

@@ -1,0 +1,59 @@
+#version 450
+// The glass a panel is made of.
+//
+// documentation/14-ui-style.md: a panel's background is the world behind it, heavily blurred, and
+// nothing else. The number that matters is in the same document's implementation notes — the whole
+// interface has 0.6 ms on a T0 machine — so this is done ONCE, at quarter resolution, and
+// separably. A full-resolution two-dimensional blur over a docked column is most of that budget
+// spent on the part of the picture nobody is reading.
+//
+// Three passes: a four-by-four box down to quarter resolution, then nine taps along x, then nine
+// along y. Thirty-four taps per quarter-resolution pixel, which is about two per full-resolution
+// pixel — against the eighty-one a single square kernel of the same reach would cost, and the
+// fourteen hundred a full-resolution one would.
+//
+// It reads the frame AFTER tone mapping, in encoded units, which is the same space the ink rule
+// works in. Blurring in linear light would be more correct about photons and wrong about this: the
+// backdrop's brightness is what the ink measures itself against, and that measurement is
+// perceptual.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0, rgba16f) uniform readonly image2D source;
+layout(binding = 1, rgba16f) uniform writeonly image2D destination;
+
+layout(push_constant) uniform Push {
+    ivec2 source_size;
+    ivec2 destination_size;
+    int mode;          // 0 down to a quarter, 1 along x, 2 along y
+    int pad0;
+    int pad1;
+    int pad2;
+} push;
+
+// Nine taps, spaced two quarter-pixels apart, which reaches sixteen full-resolution pixels either
+// side. Weights are a binomial, because a box blur of a box blur has a visible cross in it wherever
+// there is a hard edge — which a panel's own edge is.
+const float kWeights[5] = float[5](0.2270270, 0.1945946, 0.1216216, 0.0540541, 0.0162162);
+
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    if (at.x >= push.destination_size.x || at.y >= push.destination_size.y) return;
+
+    vec3 sum = vec3(0.0);
+    if (push.mode == 0) {
+        for (int y = 0; y < 4; ++y) {
+            for (int x = 0; x < 4; ++x) {
+                ivec2 read = clamp(at * 4 + ivec2(x, y), ivec2(0), push.source_size - ivec2(1));
+                sum += imageLoad(source, read).rgb * 0.0625;
+            }
+        }
+    } else {
+        const ivec2 along = (push.mode == 1) ? ivec2(2, 0) : ivec2(0, 2);
+        for (int i = -4; i <= 4; ++i) {
+            ivec2 read = clamp(at + along * i, ivec2(0), push.source_size - ivec2(1));
+            sum += imageLoad(source, read).rgb * kWeights[abs(i)];
+        }
+    }
+    imageStore(destination, at, vec4(sum, 1.0));
+}

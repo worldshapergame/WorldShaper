@@ -23,6 +23,9 @@ enum class Key : u16 {
     Left, Right, Up, Down,
     Comma, Period, Slash,
     Shift, Ctrl, Alt,
+    // What a text field needs and a camera never did. They arrived with the shell (Stage 15):
+    // a value you can type into is a value you can put the caret in the middle of.
+    Delete, Home, End, PageUp, PageDown,
     F1, F2, F3, F4, F5, F6, F8, F9, F10, F11, F12,
     Count
 };
@@ -36,6 +39,11 @@ struct InputState {
     bool down[static_cast<usize>(Key::Count)]{};
     bool pressed[static_cast<usize>(Key::Count)]{};   // went down this frame
     bool released[static_cast<usize>(Key::Count)]{};
+    // Held long enough that the system said so again. The camera never wanted this — a held W is
+    // already a held W — but a held Backspace has to delete more than one character, and the
+    // system's own repeat delay and rate are the ones the player set for every other application
+    // on their machine. Game/repeat.hpp is still the answer for things a game invents a rate for.
+    bool repeated[static_cast<usize>(Key::Count)]{};
 
     f32 mouse_x = 0.0f;
     f32 mouse_y = 0.0f;
@@ -45,10 +53,26 @@ struct InputState {
     bool mouse_left = false;
     bool mouse_right = false;
     bool mouse_middle = false;
+    // The edges, which a pointer-driven interface needs and a camera does not: a button is
+    // answered on the release inside it, not on the press.
+    bool mouse_left_pressed = false;
+    bool mouse_left_released = false;
+    bool mouse_right_pressed = false;
+    bool mouse_right_released = false;
+    // How many clicks the system counted in this one, so a double-click is the system's idea of
+    // one rather than a timer of ours that disagrees with every other window on the desktop.
+    u32 click_count = 0;
+
+    // What was typed this frame, as UTF-8. Empty unless a field asked for text input, because
+    // that is what turns the platform's composition on.
+    std::string typed;
 
     bool is_down(Key k) const { return down[static_cast<usize>(k)]; }
     bool was_pressed(Key k) const { return pressed[static_cast<usize>(k)]; }
     bool was_released(Key k) const { return released[static_cast<usize>(k)]; }
+    // A press or a repeat: what an editing key means. Spelled out here so that no caller has to
+    // remember to `||` the two and none of them can forget.
+    bool fired(Key k) const { return pressed[static_cast<usize>(k)] || repeated[static_cast<usize>(k)]; }
 };
 
 class Window {
@@ -74,6 +98,12 @@ public:
 
     void set_relative_mouse(bool enabled);
     bool relative_mouse() const { return relative_mouse_; }
+
+    // Turns the platform's text composition on, which is what makes `InputState::typed` non-empty.
+    // Off unless something is being typed into: leaving it on puts an input-method window over the
+    // game on a machine set up for a language that needs one, for the whole session, for nothing.
+    void set_text_input(bool enabled);
+    bool text_input() const { return text_input_; }
 
     void set_title(const std::string& title);
 
@@ -114,6 +144,7 @@ private:
     bool minimised_ = false;
     bool resized_ = false;
     bool relative_mouse_ = false;
+    bool text_input_ = false;
     bool should_close_ = false;
     InputState input_;
     EventHook event_hook_ = nullptr;

@@ -57,6 +57,11 @@ Key key_from_scancode(SDL_Scancode code) {
         case SDL_SCANCODE_LSHIFT: case SDL_SCANCODE_RSHIFT: return Key::Shift;
         case SDL_SCANCODE_LCTRL:  case SDL_SCANCODE_RCTRL:  return Key::Ctrl;
         case SDL_SCANCODE_LALT:   case SDL_SCANCODE_RALT:   return Key::Alt;
+        case SDL_SCANCODE_DELETE:   return Key::Delete;
+        case SDL_SCANCODE_HOME:     return Key::Home;
+        case SDL_SCANCODE_END:      return Key::End;
+        case SDL_SCANCODE_PAGEUP:   return Key::PageUp;
+        case SDL_SCANCODE_PAGEDOWN: return Key::PageDown;
         case SDL_SCANCODE_F1:  return Key::F1;
         case SDL_SCANCODE_F2:  return Key::F2;
         case SDL_SCANCODE_F3:  return Key::F3;
@@ -155,9 +160,16 @@ bool Window::pump() {
     // Edge-triggered state is per frame; level-triggered state persists.
     std::memset(input_.pressed, 0, sizeof(input_.pressed));
     std::memset(input_.released, 0, sizeof(input_.released));
+    std::memset(input_.repeated, 0, sizeof(input_.repeated));
     input_.mouse_dx = 0.0f;
     input_.mouse_dy = 0.0f;
     input_.wheel = 0.0f;
+    input_.mouse_left_pressed = false;
+    input_.mouse_left_released = false;
+    input_.mouse_right_pressed = false;
+    input_.mouse_right_released = false;
+    input_.click_count = 0;
+    input_.typed.clear();
     resized_ = false;
 
     SDL_Event event;
@@ -186,12 +198,22 @@ bool Window::pump() {
 
             case SDL_EVENT_KEY_DOWN: {
                 const Key k = key_from_scancode(event.key.scancode);
-                if (k != Key::Unknown && !event.key.repeat) {
+                if (k == Key::Unknown) break;
+                if (event.key.repeat) {
+                    input_.repeated[static_cast<usize>(k)] = true;
+                } else {
                     input_.down[static_cast<usize>(k)] = true;
                     input_.pressed[static_cast<usize>(k)] = true;
                 }
                 break;
             }
+
+            case SDL_EVENT_TEXT_INPUT:
+                // Appended rather than assigned: a fast typist, or a paste the system delivers as
+                // composition, arrives as several events in one frame and losing all but the last
+                // would drop characters that were genuinely typed.
+                if (event.text.text != nullptr) input_.typed += event.text.text;
+                break;
 
             case SDL_EVENT_KEY_UP: {
                 const Key k = key_from_scancode(event.key.scancode);
@@ -216,9 +238,25 @@ bool Window::pump() {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP: {
                 const bool is_down = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN);
-                if (event.button.button == SDL_BUTTON_LEFT)   input_.mouse_left = is_down;
-                if (event.button.button == SDL_BUTTON_RIGHT)  input_.mouse_right = is_down;
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    input_.mouse_left = is_down;
+                    input_.mouse_left_pressed |= is_down;
+                    input_.mouse_left_released |= !is_down;
+                    // The system's own count, not a timer of ours. A double-click interval a
+                    // player has set once, for their whole desktop, is the interval this
+                    // interface has to agree with.
+                    if (is_down) input_.click_count = static_cast<u32>(event.button.clicks);
+                }
+                if (event.button.button == SDL_BUTTON_RIGHT) {
+                    input_.mouse_right = is_down;
+                    input_.mouse_right_pressed |= is_down;
+                    input_.mouse_right_released |= !is_down;
+                }
                 if (event.button.button == SDL_BUTTON_MIDDLE) input_.mouse_middle = is_down;
+                // A press that arrives without a motion event first — which is what a click on a
+                // freshly focused window is — still has to know where it was.
+                input_.mouse_x = event.button.x;
+                input_.mouse_y = event.button.y;
                 break;
             }
 
@@ -234,6 +272,16 @@ void Window::set_relative_mouse(bool enabled) {
     if (window_ == nullptr) return;
     SDL_SetWindowRelativeMouseMode(window_, enabled);
     relative_mouse_ = enabled;
+}
+
+void Window::set_text_input(bool enabled) {
+    if (window_ == nullptr || text_input_ == enabled) return;
+    if (enabled) {
+        SDL_StartTextInput(window_);
+    } else {
+        SDL_StopTextInput(window_);
+    }
+    text_input_ = enabled;
 }
 
 void Window::set_title(const std::string& title) {

@@ -12,6 +12,11 @@ namespace ws {
 namespace {
 
 void hud_event_hook(const SDL_Event& event) {
+    // Belt as well as braces. `Hud::destroy` takes this hook off the window before it shuts ImGui
+    // down, so this can only be reached with a live context — but the cost of being wrong about
+    // that is an access violation inside a backend with none of our code in the stack, and the
+    // cost of checking is one pointer compare per event.
+    if (ImGui::GetCurrentContext() == nullptr) return;
     ImGui_ImplSDL3_ProcessEvent(&event);
 }
 
@@ -43,6 +48,10 @@ bool Hud::create(Device& device, Window& window, VkFormat colour_format) {
         return false;
     }
     window.set_event_hook(&hud_event_hook);
+    // Kept so `destroy` can take it off again. The window outlives the HUD now that a world is an
+    // object with a lifetime (D458), and a hook left pointing at a shut-down ImGui is a hook the
+    // very next event walks into.
+    window_ = &window;
 
     VkFormat colour = colour_format;
     VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
@@ -78,6 +87,18 @@ bool Hud::create(Device& device, Window& window, VkFormat colour_format) {
 
 void Hud::destroy() {
     if (!initialised_) return;
+    // The hook comes off FIRST, and before the context it points into is gone.
+    //
+    // This is the one thing the many-worlds path broke, and it broke it in the least obvious way
+    // available: leaving a world tore the HUD down, the window carried on pumping events on the
+    // title behind it, and the first mouse move afterwards went through a stale hook into a
+    // shut-down ImGui and read address 8. The crash report named `ImGui_ImplSDL3_ProcessEvent`
+    // and `Window::pump`, neither of which is where the fault is — the fault is a pointer that
+    // used to be immortal because the process ended immediately after this line.
+    if (window_ != nullptr) {
+        window_->set_event_hook(nullptr);
+        window_ = nullptr;
+    }
     device_->wait_idle();
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();

@@ -1,0 +1,30 @@
+# Marks — the three drawings a marked-up document needs that are not letters.
+#
+# A bullet, an empty box and a done box. They are here rather than in the layout code because a
+# mark in a line of text is a glyph like any other: it has a width, it sits on the baseline, and
+# somebody may want to type one. Drawing them in code would make them the one thing on a sign that
+# cannot be looked at in the source.
+#
+# The done box is drawn as a tick and NOT as a box with a tick in it. A three-wide box has a
+# one-pixel interior, so a tick inside one is a single pixel, and a box that is full is a box that
+# is full — indistinguishable at a glance from a box with something in it. An empty box against a
+# bare tick is two different silhouettes, which is the only difference this size can carry.
+
+glyph U+2022 bullet
+##
+##
+top 3
+
+glyph U+2610 ballot box
+###
+#.#
+#.#
+###
+top 4
+
+glyph U+2611 ballot box with check
+..#
+..#
+#.#
+.#.
+top 4
