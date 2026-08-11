@@ -1238,3 +1238,16 @@ second: the measuring harness itself had quietly stopped reading which world eac
 taken against, so its "are these two runs comparable?" check was comparing nothing with nothing and
 saying yes. Both look exactly like everything being fine, which is why the numbers get split up and
 printed rather than trusted.
+
+**What is next, and it is the half of your third ask that has not been built.** You said everything
+is per voxel face — *"even reflections and those things"*. Sun, sky, ambient occlusion and lamps all
+live on faces now. Reflections, glass and bounced light do not, and the stage that adds them cannot
+be built first, for a reason worth knowing: a face only exists once you have looked at it. So a
+mirror facing a wall behind you reflects nothing, a red wall out of shot bounces no red onto a white
+one, and glass shows the room behind it unlit. The fix is one rule — a face is also created because
+another face needs to *read* it, not only because you looked at it — with a budget so that the
+things you cannot see can never starve the things you can. That comes first, and reflections and
+glass come immediately after it.
+
+Two smaller things are queued behind that and both have numbers on them: the exposure meter, which
+is why the hall lit only by sconces comes out white, and the undo record above.

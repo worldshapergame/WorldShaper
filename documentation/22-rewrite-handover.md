@@ -1042,22 +1042,40 @@ session and two runs an hour apart are not an A/B (D407, and D523 for it arrivin
 content hash `766f2fd63f1a01c4` unmoved, the settled enclosed picture inside its own run-to-run
 floor, `GPU mirror matches`, *leaf for leaf*, *mask for mask*, `--validation` clean, 505 tests.
 
-**Where to start now** is the list below, and the first two are the ones with numbers attached:
+### Where to start now, and the two orders are not the same order
 
-- **R5, the face denoise.** Three open items point at it and none of them can be closed without it:
-  the ambient term's face-to-face variance (§5), `kSkyConverged` falling from 2,048 — measured worth
-  **5.05 → 3.55 ms at 512** — and the enclosed room's last gate clause, 1.35× outdoor on the Deck
-  against the 30% the plan asks for;
+**By the plan, the next stage is R4 — and R4's own prerequisite is R9.** §8 puts R4 directional
+faces after R3, and R9's opening says why it cannot be first: R4c reads *other faces* for a
+reflection and R4d for a refraction, and the store holds only what a primary ray landed on. A mirror
+facing a wall behind the camera reflects nothing, because the wall has no face. §8 R9 has the table
+of five cases and the rule that fixes them — *the face set is the transitive closure of what the
+screen sees, one bounce at a time, bounded by a budget per bounce*. R9d is already done (D308–D311)
+and R9i's first half with it (D324, D341–D343); R9a–R9c and R9f–R9h are the stage.
+
+So the plan's sequence is **R9, then R4**, and that is the one to follow unless the user says
+otherwise — it is what makes reflections, refraction and bounce possible at all, which is the half
+of *"everything is per voxel face based — even reflections and those things"* the rewrite has not
+delivered yet.
+
+**The other order is by which open items have a measurement behind them**, and it is a different
+list. Do not confuse the two, and do not quote one as though it were the other:
+
+- **R5, the face denoise.** Three measured items point at it: the ambient term's face-to-face
+  variance (§5, at the noise floor and not a fault to find), `kSkyConverged` falling from 2,048 —
+  **5.05 → 3.55 ms at 512** — and the enclosed room's last open gate clause, 1.35× outdoor on the
+  Deck against the 30% the plan asks for;
 - **R6's exposure meter, which now has no writer at all.** `resolve.comp`'s `kPreviewExposure` is
-  the constant 3.2 and the frame-statistics buffer went with R1e, having been written by nobody
+  the constant 3.2, and the frame-statistics buffer went with R1e having been written by nobody
   since R3d deleted the tracer. That is why `clips/many_lamps.clip` comes out blown white. It wants
   its own change and its own baseline, because fixing it makes every screenshot in this project
   brighter at once;
 - **the undo capture**, 194 ms into 538,169 inverse ops on a large edit, which is now the largest
   single thing an edit costs (D515);
-- **R9**, the off-screen light set, which R4 cannot be measured without;
 - **sorting the face work list by Morton code**, which cannot change a pixel and has never been
-  measured.
+  measured;
+- **R10's open item**: 6.0% of surface held short of convergence by unbuilt geometry, which needs an
+  instrument counting ambient ignorance by level before either of its two obvious fixes can be
+  tried, because both are known-bad without one.
 
 
 ### R3d, and what deleting it turned up
