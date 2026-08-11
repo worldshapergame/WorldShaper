@@ -50,7 +50,7 @@
 #include "gpu/shader.hpp"
 #include "gpu/shell_pass.hpp"
 #include "gpu/swapchain.hpp"
-#include "gpu/world_buffers.hpp"
+#include "gpu/type_tables.hpp"
 #include "platform/audio.hpp"
 #include "platform/window.hpp"
 #include "ui/shell.hpp"
@@ -59,7 +59,6 @@
 #include "world/raycast.hpp"
 #include "world/face_store.hpp"
 #include "world/node_pool.hpp"
-#include "world/residency.hpp"
 #include "world/serialize.hpp"
 #include "world/world_cache.hpp"
 #include "world/voxel_type.hpp"
@@ -87,8 +86,6 @@ inline constexpr f64 kDefaultMaxSeconds = 180.0;
 
 struct Options {
     bool headless = false;
-    bool stream_audit = false;
-    u64 stream_frames = 0;
     u64 ticks = 0;
     u32 width = 1600;
     u32 height = 900;
@@ -113,7 +110,6 @@ struct Options {
     // a box can settle depends on how large a voxel is ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so it answers a different question,
     // confidently and wrongly.
     std::string clip_bounds;
-    bool stream_log = false;   // per-second residency report, for diagnosing streaming
     // Start the measurement window when the world stops changing, rather than at frame nought.
     // Any figure meant to be compared with another run wants this; see the note at its use.
     bool settle = false;
@@ -386,7 +382,7 @@ struct Options {
         return no_title || cycle > 0 || !title_shot.empty() || !screenshot.empty() || settle ||
                !camera.empty() || !fly.empty() ||
                !orbit.empty() || !cut.empty() || chisel_every > 0 || ticks > 0 ||
-               stream_frames > 0 || !crash_test.empty() || benchmark || !edit.empty() ||
+               !crash_test.empty() || benchmark || !edit.empty() ||
                !preview.empty() || !clip.empty() || !clip_file.empty() || max_seconds > 0.0;
     }
 
@@ -459,10 +455,6 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--ticks") {
             options.ticks = next_number(0);
             options.headless = true;
-        } else if (arg == "--stream-frames") {
-            options.stream_frames = next_number(600);
-            options.stream_audit = true;
-            options.headless = true;
         } else if (arg == "--width") {
             options.width = static_cast<u32>(next_number(options.width));
             options.size_explicit = true;
@@ -519,8 +511,6 @@ Options parse_options(int argc, char** argv) {
             options.vsync = false;
         } else if (arg == "--validation") {
             options.validation = true;
-        } else if (arg == "--stream-log") {
-            options.stream_log = true;
         } else if (arg == "--target-fps" && i + 1 < argc) {
             options.target_fps = static_cast<f32>(std::atof(argv[++i]));
         } else if (arg == "--max-seconds" && i + 1 < argc) {
@@ -615,8 +605,8 @@ Options parse_options(int argc, char** argv) {
     // Every scripted run ends on the clock. See Options::max_seconds: a run bounded only by a
     // frame count cannot report the one thing it most needs to - that the frames got slow.
     if (options.max_seconds < 0.0) {
-        const bool scripted = !options.screenshot.empty() || options.ticks > 0 ||
-                              options.stream_frames > 0 || options.benchmark;
+        const bool scripted =
+            !options.screenshot.empty() || options.ticks > 0 || options.benchmark;
         options.max_seconds = scripted ? kDefaultMaxSeconds : 0.0;
     }
     return options;
@@ -637,7 +627,6 @@ void print_help() {
         "  --cycle N             play N frames, LEAVE the world, show the title again, exit.\n"
         "                        The tear-down path, walked without a hand on the keyboard\n"
         "  --ticks N             headless world audit over N ops, then exit\n"
-        "  --stream-frames N     headless streaming audit over N frames, then exit\n"
         "  --width N --height N  window size (default 1600x900)\n"
         "  --no-vsync            uncapped presentation\n"
         "  --validation          force Vulkan validation layers on\n"
@@ -983,144 +972,10 @@ std::string default_clip_path() {
     return (std::filesystem::path("clips") / "facility.clip").string();
 }
 
-int run_stream_audit(const Options& options) {
-    const u64 frames = (options.stream_frames > 0) ? options.stream_frames : 600;
-    WS_LOG_INFO("app", "streaming audit: {} frames over the test scene", frames);
-
-    TagRegistry tags;
-    PropertyRegistry properties;
-    VoxelTypeTable types;
-    World world;
-    MatterLedger ledger;
-
-    const u64 build_start = now_ns();
-    {
-        forge::Script script = forge::load_clip_script(default_clip_path(), types, tags);
-        if (script.ok()) {
-            JobSystem build_jobs;
-            forge::SampleResult built = forge::sample(script.field, script.solid, script.paint,
-                                                      script.settings, &build_jobs);
-            forge::apply_variation(built.clip, types, script.field, script.variation,
-                                   script.settings, built, &build_jobs);
-            std::vector<Op> ops;
-            clip_to_ops(built.clip, built.origin_voxel[0], built.origin_voxel[1],
-                        built.origin_voxel[2], PasteMode::SolidOnly, 1, 1, ops);
-            for (const Op& op : ops) apply_op(world, op, ledger);
-        }
-    }
-    world.compact();
-    const f64 build_ms = ns_to_ms(now_ns() - build_start);
-
-    const WorldStats world_stats = world.stats();
-    WS_LOG_INFO("audit", "scene: {} chunks, {} bricks, {} solid voxels, {} MB ({:.3f} B/voxel), built in {:.0f} ms",
-                world_stats.chunks, world_stats.bricks, world_stats.solid_voxels,
-                world_stats.bytes / (1024 * 1024), world_stats.bytes_per_voxel(), build_ms);
-
-    // Deliberately smaller than the scene so eviction and re-upload are exercised, but
-    // large enough to hold the working set the camera path actually looks at ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â a budget
-    // that cannot hold what is on screen measures thrashing rather than streaming.
-    ResidencyBudget budget;
-    budget.payload_bytes = 24ull << 20;
-    budget.max_bricks = 80000;
-    ResidencyManager residency;
-    residency.create(budget, types);
-
-    bool ok = true;
-    u64 checked = 0;
-    f64 worst_update_ms = 0.0;
-    u64 worst_update_frame = 0;
-    f64 total_update_ms = 0.0;
-
-    for (u64 frame = 1; frame <= frames; ++frame) {
-        // On the clock, like every other scripted run. See Options::max_seconds.
-        if (options.max_seconds > 0.0 &&
-            ns_to_ms(now_ns() - build_start) > options.max_seconds * 1000.0) {
-            WS_LOG_WARN("stream",
-                        "deadline: {:.0f} s elapsed at frame {} of {}; reporting from here",
-                        options.max_seconds, frame, frames);
-            break;
-        }
-        const f64 seconds = static_cast<f64>(frame) / 60.0;
-        const f64 angle = seconds * 0.25;
-        const i64 focus_x = static_cast<i64>(std::cos(angle) * 700.0);
-        const i64 focus_z = static_cast<i64>(std::sin(angle) * 700.0);
-        const ChunkCoord centre = chunk_coord_of(focus_x, 0, focus_z);
-
-        for (i64 z = -3; z <= 3; ++z) {
-            for (i64 y = -1; y <= 1; ++y) {
-                for (i64 x = -3; x <= 3; ++x) {
-                    const ChunkCoord coord{centre.x + x, centre.y + y, centre.z + z};
-                    if (world.has_chunk(coord)) residency.request(coord);
-                }
-            }
-        }
-
-        const u64 update_start = now_ns();
-        residency.update(world, frame);
-        const f64 update_ms = ns_to_ms(now_ns() - update_start);
-        total_update_ms += update_ms;
-        if (update_ms > worst_update_ms) {
-            worst_update_ms = update_ms;
-            worst_update_frame = frame;
-        }
-
-        if (!residency.validate()) {
-            WS_LOG_ERROR("audit", "residency invariants FAILED at frame {}", frame);
-            ok = false;
-            break;
-        }
-
-        // Sample the shader's own lookup path ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â wrapped grid, record, mask, rank ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â near
-        // the camera. This is what catches grid aliasing and stale records, which a
-        // per-chunk hash comparison cannot see because it never goes through the grid.
-        for (u32 sample = 0; sample < 256; ++sample) {
-            const u64 h = hash_cell(static_cast<i64>(frame), sample, 0, frame, 0x57414C4Bull);
-            const i64 x = focus_x + static_cast<i64>(hash_range(h, 512)) - 256;
-            const i64 y = static_cast<i64>(hash_range(hash_mix(h + 1), 64)) - 32;
-            const i64 z = focus_z + static_cast<i64>(hash_range(hash_mix(h + 2), 512)) - 256;
-            if (!residency.resident(chunk_coord_of(x, y, z))) continue;
-            ++checked;
-            if (residency.mirror_voxel_world(x, y, z) != world.get(x, y, z)) {
-                WS_LOG_ERROR("audit", "shader-path lookup disagreed at ({}, {}, {}) on frame {}",
-                             x, y, z, frame);
-                ok = false;
-                break;
-            }
-        }
-        if (!ok) break;
-
-        // Everything resident must agree with the world, every frame.
-        for (const ChunkCoord& coord : world.sorted_chunk_coords()) {
-            if (!residency.resident(coord)) continue;
-            ++checked;
-            if (residency.mirror_hash(coord) != world.chunk_hash(coord)) {
-                WS_LOG_ERROR("audit", "mirror mismatch at chunk ({}, {}, {}) on frame {}",
-                             coord.x, coord.y, coord.z, frame);
-                ok = false;
-                break;
-            }
-        }
-        if (!ok) break;
-    }
-
-    const ResidencyStats stats = residency.stats();
-    WS_LOG_INFO("audit", "resident {} chunks / {} bricks, {} KB payload of {} KB",
-                stats.resident_chunks, stats.resident_bricks, stats.payload_in_use / 1024,
-                stats.payload_capacity / 1024);
-    WS_LOG_INFO("audit", "uploads {}  evictions {}  hit rate {:.1f}%  chunk checks {}",
-                stats.uploads, stats.evictions, stats.hit_rate() * 100.0, checked);
-    WS_LOG_INFO("audit", "residency update: {:.3f} ms average, {:.3f} ms worst (frame {})",
-                total_update_ms / static_cast<f64>(frames), worst_update_ms,
-                worst_update_frame);
-
-    if (!ok) {
-        WS_LOG_FATAL("audit", "FAILED");
-        return 1;
-    }
-    WS_LOG_INFO("audit", "the mirror matched the world on every frame");
-    return 0;
-}
-
+// The chunk-mirror streaming audit that stood here went with `world/residency.*` (R1e). What it
+// checked -- that the CPU's copy of every resident chunk still hashes to what the world holds --
+// is now `NodePool::stale_leaves` and `stale_masks`, which check the same property of the tree the
+// renderer actually walks, run at every screenshot rather than in a mode of their own.
 // One world, from the loading screen to the way out.
 //
 // Everything below the window is HERE, and nothing above it is: the device, the swapchain, the
@@ -1195,7 +1050,7 @@ private:
     void invalidate_edited_chunks(const std::vector<Op>& ops);
     // The same, for a writer that is not made of ops. See the function.
     void announce_world_change(const i64 lo[3], const i64 hi[3]);
-    void rebuild_coarse_grids();
+    void refresh_world_bounds();
 
     // The interface, one frame of it, and what it decided. Drawn after the world's own composite
     // and before the present, into a surface at the WINDOW's resolution rather than the render
@@ -1324,18 +1179,13 @@ private:
     GpuImage cloud_marched_;
     bool cloud_ready_ = false;   // transitioned out of UNDEFINED once, then left in GENERAL
     u32 cloud_parity_ = 0;       // which of the two the cloud pass writes this frame
-    VkDescriptorSetLayout pathtrace_layout_ = VK_NULL_HANDLE;
-    VkDescriptorSet pathtrace_set_ = VK_NULL_HANDLE;
-    // One entry per voxel face the camera has looked at, 32 bytes each. Light is computed
-    // once per face and shared by every pixel that sees it, and because the key is a place in
-    // the world rather than on the screen, turning the camera does not throw the work away.
-    // Whole-frame numbers the tracer adds up on the GPU, so that next frame can be exposed
-    // for the picture this one turned out to be. See gpu/render_params.hpp for the layout and
-    // for why there are two slots rather than one.
-    GpuBuffer frame_stats_;
-    bool frame_stats_zeroed_ = false;   // the very first frame has no previous frame to read
-    // How many more frames an edited world holds its accumulator down. Long enough that the light
-    // around the edit has actually moved, short enough that it is over before anybody looks for it.
+    // The set the cloud pass runs on: the parameter block and its three images, and nothing else.
+    // It was the path tracer's whole set until R1e trimmed it to what a shader actually declares.
+    VkDescriptorSetLayout cloud_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSet cloud_set_ = VK_NULL_HANDLE;
+    // The frame-statistics buffer went with them. It was the tracer's exposure meter, nothing has
+    // written it since R3d, and a buffer bound to a set no shader declares is invisible waste.
+    // R6's exposure meter needs a writer of its own -- see resolve.comp's kPreviewExposure.
 
     // Holds the frame rate by spending detail where it is worth most. Measured on the machine
     // it is running on, once, the first time the game starts. See documentation/19.
@@ -1519,12 +1369,11 @@ private:
     World world_;
     MatterLedger ledger_;
     Updater updater_;
-    ResidencyManager residency_;
+
     ChunkCoord world_min_{};
     ChunkCoord world_max_{};
     bool world_bounds_valid_ = false;
-    WorldBuffers world_buffers_;
-    ResidencyBudget residency_budget_;
+    TypeTables type_tables_;
     FeedbackBuffer feedback_;
     GpuBuffer params_buffer_;
     // The clipboard's held clip, as the resolve pass sees it: one cell per voxel, holding
@@ -1532,10 +1381,10 @@ private:
     // a ghost that fills the screen is read once per pixel and reading that over the bus
     // would make the preview cost more than the world behind it.
     GpuBuffer clip_buffer_;
-    // Read by nothing since R3d deleted the tracer. Still bound, because its binding number is
-    // one the shared layout and gpu/render_params.hpp agree about; reclaiming it is the layout
-    // trim that R3d hands on rather than part of deleting the pass.
-    GpuBuffer face_cache_;
+    // The tracer's world-space face cache -- a quarter of a gigabyte of it -- is gone with R1e.
+    // It had been read by nothing since R3d and was kept only because its binding number was one
+    // the shared layout agreed about, which is exactly what trimming that layout released.
+    GpuBuffer ballast_;
     GpuBuffer clip_staging_;
     struct ClipSlot {
         u32 first_cell = 0;
@@ -1550,10 +1399,9 @@ private:
     u64 frame_counter_ = 0;
     u32 last_feedback_ = 0;
     u32 last_feedback_truncated_ = 0;
-    u32 last_feedback_accepted_ = 0;
-    u32 last_feedback_rejected_ = 0;   // reported, but the world has no chunk there
-    f64 residency_ms_ = 0.0;
-    f64 worst_residency_ms_ = 0.0;
+    // Miss reports for a place the world has nothing at. See the note where it is counted.
+    u32 last_feedback_phantom_ = 0;
+
     // The same, for the pool. The chunk path has been timed since Stage 2 and the node path never
     // was, so the CPU cost of building the tree has never appeared in any figure -- which is a
     // problem when a frame is 275 ms, the GPU is 7 ms, and nothing accounts for the rest.
@@ -1562,9 +1410,7 @@ private:
     // WHICH frame was the worst, which is the question three attempts at making it smaller should
     // have started with: a worst-of-run taken over startup is not something steady play can feel.
     u64 worst_node_frame_ = 0;
-    VkDescriptorSetLayout set_layout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet descriptor_set_ = VK_NULL_HANDLE;
 
     // What both passes that walk the tree are told about it. One struct rather than two argument
     // lists, because the visibility pass and the shading pass probe the SAME two tables and a
@@ -1647,7 +1493,7 @@ private:
     // a run that missed every time and a run that never fired print the same pass table.
     u64 chisels_missed_ = 0;
     u64 chisel_apply_ns_ = 0;
-    u64 chisel_coarse_ns_ = 0;
+    u64 chisel_bounds_ns_ = 0;
     u64 chisel_invalidate_ns_ = 0;
     ComputePipeline visibility_;
     VkDescriptorSetLayout node_layout_ = VK_NULL_HANDLE;
@@ -1658,6 +1504,11 @@ private:
     u32 last_node_evicted_on_screen_ = 0;
     u32 last_node_churned_ = 0;
     u32 last_node_deferred_ = 0;
+    f64 stream_ms_ = 0.0;    // reading the feedback buffer and acting on it
+    f64 uploads_ms_ = 0.0;   // the face mirror and the type tables
+    f64 report_ms_ = 0.0;    // what the overlay is handed
+    // "I could not fit it", which is never the same answer as "nothing is here" (trap 7).
+    bool last_node_out_of_memory_ = false;
     FrameStats stats_;
     // A device that dies of a timeout and a device that dies of a bad address leave exactly the
     // same message behind. The difference is in the frames just before it, and those are gone by
@@ -1714,55 +1565,51 @@ bool Application::create_render_target(u32 width, u32 height) {
     cloud_info[1].imageView = cloud_image_prev_.view;
     cloud_info[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    // Eleven, not nine: the last two are the node marcher's output images.
+    // Six, not eleven: the chunk marcher's set is gone with R1e and the cloud pass does not
+    // write a colour image, so what is left is the composite's pair, the cloud pair each way,
+    // and the face-slot image.
     //
-    // They were missing, and the failure was silent in the worst way. The node pipeline ran, did
-    // all its work, and stored its result into an unwritten descriptor - so the visibility image
-    // kept whatever was in it and the picture never changed no matter what the marcher did. Five
-    // separate changes to the traversal produced bit-identical images while the *timing* moved
-    // with every one of them, which is the signature: the shader is running and its output is
-    // going nowhere.
+    // They were once missing, and the failure was silent in the worst way. The node pipeline ran,
+    // did all its work, and stored its result into an unwritten descriptor - so the visibility
+    // image kept whatever was in it and the picture never changed no matter what the marcher did.
+    // Five separate changes to the traversal produced bit-identical images while the *timing*
+    // moved with every one of them, which is the signature: the shader is running and its output
+    // is going nowhere.
     //
     // Descriptors for the images are the only bindings that change on resize, which is why they
     // live here rather than beside the buffer writes where the node set was otherwise assembled -
     // and that split is exactly how they came to be forgotten.
-    VkWriteDescriptorSet writes[12]{};
+    //
+    // `write_count` below is a literal beside the array, which is the shape D518 caught: removing
+    // a write means renumbering everything after it AND the count, and only `--validation` says so.
+    VkWriteDescriptorSet writes[9]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
         write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     }
-    writes[0].dstSet = descriptor_set_;
+    writes[0].dstSet = resolve_set_;
     writes[0].dstBinding = 0;
     writes[0].pImageInfo = &vis_info;
-    writes[1].dstSet = descriptor_set_;
+    writes[1].dstSet = resolve_set_;
     writes[1].dstBinding = 1;
-    writes[1].pImageInfo = &depth_info;
-    writes[2].dstSet = resolve_set_;
-    writes[2].dstBinding = 0;
-    writes[2].pImageInfo = &vis_info;
-    writes[3].dstSet = resolve_set_;
-    writes[3].dstBinding = 1;
-    writes[3].pImageInfo = &colour_info;
-    writes[4].dstSet = pathtrace_set_;
-    writes[4].dstBinding = 1;
-    writes[4].pImageInfo = &colour_info;
+    writes[1].pImageInfo = &colour_info;
     VkDescriptorImageInfo marched_info{};
     marched_info.imageView = cloud_marched_.view;
     marched_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    writes[5].dstSet = pathtrace_set_;
-    writes[5].dstBinding = kCloudBinding;
-    writes[5].descriptorCount = 2;
-    writes[5].pImageInfo = cloud_info;
-    writes[6].dstSet = pathtrace_set_;
-    writes[6].dstBinding = kCloudMarchedBinding;
-    writes[6].pImageInfo = &marched_info;
+    writes[2].dstSet = cloud_set_;
+    writes[2].dstBinding = kCloudBinding;
+    writes[2].descriptorCount = 2;
+    writes[2].pImageInfo = cloud_info;
+    writes[3].dstSet = cloud_set_;
+    writes[3].dstBinding = kCloudMarchedBinding;
+    writes[3].pImageInfo = &marched_info;
     // And the same pair to the raster pass, which draws the sky the player actually sees.
-    writes[7].dstSet = resolve_set_;
-    writes[7].dstBinding = kCloudBinding;
-    writes[7].descriptorCount = 2;
-    writes[7].pImageInfo = cloud_info;
+    writes[4].dstSet = resolve_set_;
+    writes[4].dstBinding = kCloudBinding;
+    writes[4].descriptorCount = 2;
+    writes[4].pImageInfo = cloud_info;
     // The node marcher writes the same two images the chunk marcher does, so resolve reads one
     // buffer whichever produced it.
     //
@@ -1776,21 +1623,21 @@ bool Application::create_render_target(u32 width, u32 height) {
     // this function again later, and a session without a resize dispatches the composite against a
     // descriptor that was never filled in. Validation says so plainly; without it the read is
     // whatever the pool held.
-    writes[8].dstSet = resolve_set_;
-    writes[8].dstBinding = 7;
-    writes[8].pImageInfo = &face_info;
-    u32 write_count = 9;
+    writes[5].dstSet = resolve_set_;
+    writes[5].dstBinding = 7;
+    writes[5].pImageInfo = &face_info;
+    u32 write_count = 6;
     if (node_set_ != VK_NULL_HANDLE) {
-        writes[9].dstSet = node_set_;
-        writes[9].dstBinding = 0;
-        writes[9].pImageInfo = &vis_info;
-        writes[10].dstSet = node_set_;
-        writes[10].dstBinding = 1;
-        writes[10].pImageInfo = &depth_info;
-        writes[11].dstSet = node_set_;
-        writes[11].dstBinding = 11;
-        writes[11].pImageInfo = &face_info;
-        write_count = 12;
+        writes[6].dstSet = node_set_;
+        writes[6].dstBinding = 0;
+        writes[6].pImageInfo = &vis_info;
+        writes[7].dstSet = node_set_;
+        writes[7].dstBinding = 1;
+        writes[7].pImageInfo = &depth_info;
+        writes[8].dstSet = node_set_;
+        writes[8].dstBinding = 11;
+        writes[8].pImageInfo = &face_info;
+        write_count = 9;
     }
     vkUpdateDescriptorSets(device_.handle(), write_count, writes, 0, nullptr);
     return true;
@@ -2815,7 +2662,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
                     history_.last_apply_ms(), history_.last_capture_ms(),
                     history_.last_inverse_ops());
         if (result.voxels_changed > 0) {
-            rebuild_coarse_grids();
+            refresh_world_bounds();
             // The same invalidation the interactive path does. Without it the summary tree
             // never hears that these chunks exist, so nothing past the streaming range is
             // ever drawn ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which made a scripted edit behave differently from the identical
@@ -2883,15 +2730,15 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
             // for a large chisel and nothing had ever measured it for a small one.
             const u64 t_apply = now_ns();
             const OpResult result = history_.apply_group(world_, ledger_, op_log_, scripted);
-            const u64 t_coarse = now_ns();
+            const u64 t_bounds = now_ns();
             if (result.voxels_changed > 0) {
-                rebuild_coarse_grids();
+                refresh_world_bounds();
                 const u64 t_invalidate = now_ns();
                 invalidate_edited_chunks({op});
-                chisel_coarse_ns_ += t_invalidate - t_coarse;
+                chisel_bounds_ns_ += t_invalidate - t_bounds;
                 chisel_invalidate_ns_ += now_ns() - t_invalidate;
             }
-            chisel_apply_ns_ += t_coarse - t_apply;
+            chisel_apply_ns_ += t_bounds - t_apply;
             ++chisels_fired_;
             chisel_voxels_ += result.voxels_changed;
         } else {
@@ -2971,7 +2818,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         const bool did = history_.undo(world_, ledger_, op_log_, tick_++, kLocalPlayer, stepped);
         WS_LOG_INFO("tool", "undo: {}", did ? "one step back" : "nothing to undo");
         if (did) {
-            rebuild_coarse_grids();
+            refresh_world_bounds();
             invalidate_edited_chunks(stepped);
         }
     }
@@ -2979,7 +2826,7 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         const bool did = history_.redo(world_, ledger_, op_log_, tick_++, kLocalPlayer, stepped);
         WS_LOG_INFO("tool", "redo: {}", did ? "one step forward" : "nothing to redo");
         if (did) {
-            rebuild_coarse_grids();
+            refresh_world_bounds();
             invalidate_edited_chunks(stepped);
         }
     }
@@ -3053,14 +2900,14 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
     last_edit_voxels_ = result.voxels_changed;
 
     // An edit can create chunks where the world had none, or empty the last brick out of
-    // one. The coarse occupancy grids describe what the world contains, so they are what
-    // tells the marcher there is now something to look for here.
-    f64 coarse_ms = 0.0;
+    // one, so how far the world reaches has to be worked out again -- it is what a ray is
+    // clipped to. Telling the node pool what changed is the line below it.
+    f64 bounds_ms = 0.0;
     f64 announce_ms = 0.0;
     if (result.voxels_changed > 0) {
-        const u64 coarse_began = now_ns();
-        rebuild_coarse_grids();
-        coarse_ms = ns_to_ms(now_ns() - coarse_began);
+        const u64 bounds_began = now_ns();
+        refresh_world_bounds();
+        bounds_ms = ns_to_ms(now_ns() - bounds_began);
         const u64 announce_began = now_ns();
         invalidate_edited_chunks(ops);
         announce_ms = ns_to_ms(now_ns() - announce_began);
@@ -3071,12 +2918,12 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
     // line per click would bury the one that is not. What §5 records for a large delete is a frame
     // of 1,209 ms of which the op is 68 and the undo capture 240 -- so most of it is somewhere
     // below this line, and nothing has ever said where.
-    if (last_edit_ms_ + coarse_ms + announce_ms > 50.0) {
+    if (last_edit_ms_ + bounds_ms + announce_ms > 50.0) {
         WS_LOG_INFO("edit",
-                    "large edit: {} voxels in {:.0f} ms (apply {:.0f} + coarse grids {:.0f} + "
+                    "large edit: {} voxels in {:.0f} ms (apply {:.0f} + world bounds {:.0f} + "
                     "announce {:.0f}), {} ops",
-                    last_edit_voxels_, last_edit_ms_ + coarse_ms + announce_ms, last_edit_ms_,
-                    coarse_ms, announce_ms, ops.size());
+                    last_edit_voxels_, last_edit_ms_ + bounds_ms + announce_ms, last_edit_ms_,
+                    bounds_ms, announce_ms, ops.size());
     }
 }
 
@@ -3151,51 +2998,11 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
         edit_hi_[axis] = hi[axis] + kEditShadowReach;
     }
 
-    for (i64 cz = chunk_of(lo[2]); cz <= chunk_of(hi[2]); ++cz) {
-        for (i64 cy = chunk_of(lo[1]); cy <= chunk_of(hi[1]); ++cy) {
-            for (i64 cx = chunk_of(lo[0]); cx <= chunk_of(hi[0]); ++cx) {
-                const ChunkCoord coord{cx, cy, cz};
-                // invalidate(), not request(): a request lives for one frame and is
-                // dropped when that frame's upload budget runs out. A large edit touches
-                // hundreds of chunks and the budget serves four, so all but the first
-                // four were being forgotten ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and nothing ever asked again, because a
-                // stale chunk is one the renderer can still find.
-                if (!world_.has_chunk(coord)) continue;
-                residency_.invalidate(coord);
+    // The chunk half of this announcement -- invalidate every chunk in the box, then request it
+    // back so a shadow ray would find it -- went with `world/residency.*` (R1e). It was talking to
+    // a streaming system no shader read any more. What replaces it is the line below, which says
+    // the same thing to the tree the renderer actually walks.
 
-                // And ask for it outright, which invalidate() alone does not do: it
-                // refreshes a chunk that is already resident and drops one that is not.
-                //
-                // A chunk nobody has looked at closely is not resident, and a shadow ray
-                // cannot be occluded by geometry that is not there. Shadow rays are also
-                // the one kind that deliberately never request streaming, so a structure
-                // built at a distance was never fetched by the rays that needed it: it
-                // cast no shadow until the camera came close enough for *primary* rays to
-                // pull it in, at which point the shadow was measured, cached, and stayed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
-                // which is precisely the "shadows only appear when I get close, then fade
-                // in and remain" that was reported. Measured: with the camera 400 m away,
-                // an edited region was 0 of 101 chunks resident.
-                //
-                // A chunk the player just built is not a guess about what might be looked
-                // at. It is the one thing on screen they are certain to care about.
-                residency_.request(coord);
-                // A summary is a summary of contents, so changing the contents makes it
-                // wrong too ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and it is what this chunk draws as from a distance. The
-                // tree first: it holds the node that every level above this chunk was
-                // folded from, and the cache only reads its answers.
-                // The accumulated *image* is of a world that changed, so it restarts. The
-                // camera moving does the same; the face cache does not, because it is
-                // keyed to places in the world rather than to the screen.
-                //
-                // The face cache deliberately is *not* wiped. Wiping it meant every voxel
-                // placed relit the entire scene at once, which is what the smearing while
-                // building actually was ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â not a settle but the whole room changing under
-                // you. Entries average over a sliding window instead, so a face follows
-                // what was built beside it within a few frames on its own and nothing
-                // further away flinches. See kFaceWindow in pathtrace.comp.
-            }
-        }
-    }
 
     // And the node pool, which was never told at all.
     //
@@ -3228,20 +3035,21 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
     node_pool_.invalidate_box(lo, hi);
 }
 
-// Stands in for the renderer's feedback buffer until Stage 3: request every chunk within
-// a radius of a moving focus point. The residency manager cannot tell the difference, and
-// neither can the eviction path, which is the point of exercising it now.
-// Rebuilds the world-occupancy grids around wherever the camera is now.
+// How far the world reaches, which is how far a ray may usefully travel: `bounds_min` and
+// `bounds_max` in the parameter block clip every ray to this box.
+//
+// This was `rebuild_coarse_grids`, and the five coarse occupancy grids it rebuilt were **by a
+// wide margin the largest thing an edit cost** -- 4.10 ms of CPU for a change one metre across,
+// because those grids are O(the world) and a wrapped chunk grid cannot be told about a box. They
+// were a chunk structure read by a marcher that no longer exists, so R1e deletes them rather
+// than optimising them. What is left is the sweep for the world's extent, which is O(chunks)
+// rather than O(bricks).
 //
 // Level 0 of those grids ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the one that answers "the world has a chunk here and you do not
 // have it" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â is only recorded within a window around this point, because that is what stops
 // two distant regions colliding in the wrapped grid and inventing chunks that do not exist.
 // So the grids have to follow the camera, not only world edits.
-void Application::rebuild_coarse_grids() {
-    residency_.rebuild_coarse(
-        world_, ChunkCoord{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()});
-    // Every path that changes which chunks exist already comes through here, which makes it
-    // the one place the thumbnail cache needs telling that its work list is stale.
+void Application::refresh_world_bounds() {
 
     // Deliberately *not* clearing the face cache here any more.
     //
@@ -3273,111 +3081,28 @@ void Application::rebuild_coarse_grids() {
 void Application::stream(f64 seconds) {
     (void)seconds;
 
-    // Keep level 0 centred on the camera. Rebuilt on a margin rather than on every chunk
-    // boundary, so walking to and fro across one does not rebuild twice a second. The
-    // margin is well inside the window, so the grid is never consulted past what it
-    // describes.
-    const ChunkCoord centre{camera_.chunk_x(), camera_.chunk_y(), camera_.chunk_z()};
 
-    // The wrapped record grid can only describe one period at a time, so residency follows
-    // the camera. Set before any request is made this frame, because request() uses it.
-    residency_.set_view_centre(centre);
-
-    const ChunkCoord& built = residency_.coarse_centre();
-    constexpr i64 kCoarseFollowMargin = 8;   // chunks, 64 m
-    if (std::abs(centre.x - built.x) > kCoarseFollowMargin ||
-        std::abs(centre.y - built.y) > kCoarseFollowMargin ||
-        std::abs(centre.z - built.z) > kCoarseFollowMargin) {
-        rebuild_coarse_grids();
-    }
-
-    // What the renderer asked for, two frames ago. This is the rule that makes residency
-    // follow the *view* rather than the camera position ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a chunk 300 m away that covers
-    // a hundred pixels gets streamed; one 10 m away behind a wall does not.
+    // What the renderer asked for, two frames ago. This is the rule that makes residency follow
+    // the *view* rather than the camera position -- geometry 300 m away that covers a hundred
+    // pixels gets streamed; geometry 10 m away behind a wall does not.
     const std::vector<FeedbackEntry>& wanted = feedback_.read(swapchain_.frame_index());
     last_feedback_ = feedback_.last_reported();
     last_feedback_truncated_ = feedback_.last_truncated();
-    u32 accepted = 0;
-    u32 rejected = 0;
 
-    // Which format this frame's reports are in, and it is decided by **who wrote the buffer**
-    // rather than by which marcher is configured. A node entry carries a node coordinate at its
-    // own level; a chunk entry carries a chunk coordinate and a detail level nothing shifts by.
-    //
-    // The reference tracer used to be the case that separated the two. R3d deleted it, so the
-    // node pool is the only reporter now; `--chunk-marcher` is what keeps the distinction alive ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â while `use_node_pool_` is still
-    // true, because that flag says what the *visibility* pass would do and the visibility pass
-    // does not run in this mode at all. Reading a chunk coordinate as a node coordinate shifts
-    // it by a detail level and asks for a chunk kilometres from the one that was missing, so
-    // streaming stops serving the tracer: measured 52 of 68 chunks against 57.
-    constexpr bool node_feedback = true;
 
-    for (const FeedbackEntry& entry : wanted) {
-        // Chunk residency is fed whichever marcher ran. It mattered most for the reference tracer,
-        // buffers directly ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so with the node pool marching and this left as it was, pressing F4
-        // gave an empty world.
-        // A used-report is not a request for anything; chunk residency has nothing to do with
-        // it, and its level field carries a flag that would shift the coordinate into nonsense.
-        if (node_feedback &&
-            (entry.level & (kFeedbackUsed | kFeedbackRead | kFeedbackFace | kFeedbackExact |
-                            kFeedbackFaceRead)) != 0) {
-            continue;
-        }
-
-        ChunkCoord coord{entry.x, entry.y, entry.z};
-        if (node_feedback) {
-            const u32 level = static_cast<u32>(entry.level);
-            if (level > 40) continue;
-            coord = chunk_coord_of(static_cast<i64>(entry.x) << level,
-                                   static_cast<i64>(entry.y) << level,
-                                   static_cast<i64>(entry.z) << level);
-        }
-        if (!world_.has_chunk(coord)) {
-            // Reported, but the world has nothing there. A few of these are normal ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
-            // grid answers at block granularity, so a ray inside an occupied block still
-            // asks about individual chunks that turn out to be empty.
-            //
-            // A *large* number is a stall, and it used to be a silent one. A ray reports
-            // only its nearest miss, so a phantom hides the real chunk behind it forever:
-            // streaming asks for the same nothing every frame while the world stays
-            // unloaded. It is counted so it can be seen rather than deduced.
-            ++rejected;
-            continue;
-        }
-        residency_.request(coord);
-        ++accepted;
-
-        // Also pull in the immediate neighbours. A ray reports one chunk, and only the
-        // chunks some ray happened to land on would ever be requested ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which left visible
-        // notches along the edges of what had streamed. Dilating by one face covers the
-        // gaps between sample points and costs nothing: neighbours that are already
-        // resident are a hit, and ones the world does not have are one lookup.
-        const ChunkCoord neighbours[6] = {
-            {coord.x - 1, coord.y, coord.z}, {coord.x + 1, coord.y, coord.z},
-            {coord.x, coord.y - 1, coord.z}, {coord.x, coord.y + 1, coord.z},
-            {coord.x, coord.y, coord.z - 1}, {coord.x, coord.y, coord.z + 1},
-        };
-        for (const ChunkCoord& neighbour : neighbours) {
-            if (world_.has_chunk(neighbour)) residency_.request(neighbour);
-        }
-    }
-    last_feedback_accepted_ = accepted;
-    last_feedback_rejected_ = rejected;
-
-    // The same reports, read the node pool's way.
-    //
-    // A node feedback entry carries the node coordinate at its own level in xyz and the level in
-    // w, where a chunk entry carried a chunk coordinate and a detail level it did not use. The two
-    // marchers write the same buffer in the same format, so whichever one ran this frame, the
-    // other's consumer sees numbers it can make sense of ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is what lets the two be swapped
-    // at run time without a second feedback path.
-    //
-    // Gated on the same thing as the loop above, and for the sharper half of the same reason: a
-    // chunk coordinate read as a node key is a request for a node the world does not have, and
-    // the pool builds toward it. In the path tracer that spent budget on 488 nodes of nothing.
+    // The reports, in one pass.
     u32 faces_seen = 0;
     u32 faces_read_reported = 0;
-    if (node_feedback) {
+    // Miss reports for a place the world has nothing at all.
+    //
+    // A few are normal: a ray inside an occupied block still asks about cells that turn out to be
+    // empty. A *large* number is D133 -- a ray reports only its nearest miss, so a phantom hides
+    // the real geometry behind it for ever and the same nothing is asked for every frame.
+    // `index_world` is what makes that structurally impossible in the node pool, since a root
+    // exists wherever the world does. Counted anyway, because it costs one hash on a miss report
+    // and the failure it catches is silent.
+    u32 phantom = 0;
+    {
         for (const FeedbackEntry& entry : wanted) {
             // A ray that READ this node, rather than one that could not find it.
             //
@@ -3463,6 +3188,13 @@ void Application::stream(f64 seconds) {
             const bool exact = (entry.level & kFeedbackExact) != 0;
             const u32 level = static_cast<u32>(entry.level & ~kFeedbackExact);
             if (level < kLeafLevel || level > kMaxNodeLevel) continue;
+            // The chunk a missing node falls in is a superset test for "the world has nothing
+            // here", and a cheap one.
+            if (!world_.has_chunk(chunk_coord_of(static_cast<i64>(entry.x) << level,
+                                                 static_cast<i64>(entry.y) << level,
+                                                 static_cast<i64>(entry.z) << level))) {
+                ++phantom;
+            }
             node_pool_.request(NodeKey{entry.x, entry.y, entry.z, level},
                                exact ? kRequestOcclusion : kRequestRay);
             if (exact) continue;
@@ -3486,6 +3218,7 @@ void Application::stream(f64 seconds) {
 
     last_faces_seen_ = faces_seen;
     last_faces_read_reported_ = faces_read_reported;
+    last_feedback_phantom_ = phantom;
 
 
     // And give up the faces nobody asked for, which nothing did until now.
@@ -3567,19 +3300,10 @@ void Application::stream(f64 seconds) {
         }
     }
 
-    // A small radius around the camera on top, so the ground under your feet is resident
-    // before it has been looked at. Feedback cannot report what has never been on screen.
-    // (The window itself is set before the loop above, so requests outside it are already
-    // being dropped rather than queued and then discarded.)
-    const i64 radius_chunks = 2;
-    for (i64 z = -radius_chunks; z <= radius_chunks; ++z) {
-        for (i64 y = -1; y <= 1; ++y) {
-            for (i64 x = -radius_chunks; x <= radius_chunks; ++x) {
-                const ChunkCoord coord{centre.x + x, centre.y + y, centre.z + z};
-                if (world_.has_chunk(coord)) residency_.request(coord);
-            }
-        }
-    }
+    // The two-chunk radius that used to be requested around the camera here is `NodePool::refine`
+    // now -- twenty metres at brick detail, asked of the world rather than of a volume, resumable
+    // and bounded (R2c, D270-D272). It is a better version of the same rule and it was running
+    // beside this one.
 }
 
 // Where the quality decision is remembered between runs. Beside the logs and the crash
@@ -3998,7 +3722,7 @@ void Application::dispatch_clouds(VkCommandBuffer cmd, TracePush& trace,
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.pipeline());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, clouds_.layout(), 0, 1,
-                                &pathtrace_set_, 1, &trace_offset);
+                                &cloud_set_, 1, &trace_offset);
         vkCmdPushConstants(cmd, clouds_.layout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(TracePush), &trace);
         // The packed march: one invocation per four-by-four block, all of them marching.
@@ -4094,13 +3818,16 @@ void Application::record_frame(f32 time_seconds) {
         last_node_evicted_on_screen_ = node_batch.evicted_on_screen;
         last_node_churned_ = node_batch.churned;
         last_node_deferred_ = node_batch.deferred;
+        last_node_out_of_memory_ = node_batch.out_of_memory;
         node_buffers_.upload(cmd, node_pool_, swapchain_.frame_index());
         profiler_.add_bytes(node_buffers_.stats().uploaded_this_frame);
         profiler_.end_pass(cmd);
     }
 
     profiler_.begin_pass(cmd, "streaming", 0.8);
+    const u64 stream_started = now_ns();
     stream(static_cast<f64>(time_seconds));
+    const u64 stream_ended = now_ns();
 
     // The face store's mirror, AFTER the claims rather than before them.
     //
@@ -4112,77 +3839,47 @@ void Application::record_frame(f32 time_seconds) {
     // the audit, which reads the CPU's copy and not the card's.
     face_buffers_.upload(cmd, face_store_, swapchain_.frame_index());
     profiler_.add_bytes(face_buffers_.stats().uploaded_this_frame);
-    const u64 residency_start = now_ns();
-    const UploadBatch& batch = residency_.update(world_, frame_counter_);
-    residency_ms_ = ns_to_ms(now_ns() - residency_start);
-    if (residency_ms_ > worst_residency_ms_) worst_residency_ms_ = residency_ms_;
-    world_buffers_.upload(cmd, residency_, batch, swapchain_.frame_index());
-    // If the occupancy grid did not fit in this frame's staging, ask for it again. Clearing
-    // the dirty flag over an upload that never happened is what left holes in the world.
-    if (world_buffers_.stats().coarse_incomplete) residency_.mark_coarse_dirty();
-
-    // Geometry arriving or leaving means the samples already in the accumulator were taken of
-    // a different world, so the average has to start again.
-    //
-    // Without this the tracer keeps them for ever. The accumulator is a running mean over
-    // every sample since the last reset, so a hundred bright frames taken while a wall was
-    // still a summary block ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â drawn as if it stood in daylight ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â stay in the average once the
-    // real wall arrives and the true answer is zero. A sealed box with no lights in it settled
-    // at 8 to 16 of 255 rather than black, uniformly, and no amount of waiting cleared it:
-    // every later sample was correct and simply diluted the old ones more slowly.
-    //
-    // This is also why light "did not update properly" anywhere else. Anything streaming in
-    // behind you left its stand-in's brightness baked into the picture.
-    // Arriving or leaving is a different world; a chunk being EDITED is not.
-    //
-    // The reasoning above holds when a summary block becomes a real wall: the samples in the
-    // accumulator were taken of geometry that was never there, and they have to go. It does not
-    // hold for a voxel placed with the chisel. That chunk is refreshed, the reset fires, and the
-    // running mean of the entire screen goes back to a single sample ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is a raw path traced
-    // sample, which is noise with a colour in it. Reported as blue and cyan artefacts flashing over
-    // everything whenever a voxel is placed, settling a moment later.
-    //
-    // The mean was very nearly right, because one voxel is not a new world. What is wrong after an
-    // edit is only how much that mean should be TRUSTED, so the accumulator is demoted rather than
-    // emptied: the average stays exactly where it was and a few dozen frames are enough to replace
-    // it. See the weight clamp in pt_post.glsl.
-    world_buffers_.upload_tables(cmd, types_);
-    profiler_.add_bytes(world_buffers_.stats().staged_bytes);
+    // Chunk residency and its ten device buffers stood here (R1e). They were maintained every
+    // frame -- about twelve milliseconds of CPU and 650 MB -- for a marcher that has not existed
+    // since `world.glsl` was deleted. What is left of that whole layer is the two interned tables
+    // a voxel is turned into a colour with, which the node pool does not hold.
+    type_tables_.upload_tables(cmd, types_, swapchain_.frame_index());
+    profiler_.add_bytes(type_tables_.staged_bytes());
 
     profiler_.end_pass(cmd);
+    const u64 uploads_ended = now_ns();
 
     {
-        const ResidencyStats residency = residency_.stats();
-        const WorldBufferStats buffers = world_buffers_.stats();
+        // The CHEAP half. `stats()` walks every node and popcounts every leaf, and this runs
+        // every frame -- see the note on live_stats().
+        const NodePoolStats pool = node_pool_.live_stats();
         StreamingReport report;
         report.world_chunks = world_.chunk_count();
-        report.resident_chunks = residency.resident_chunks;
-        report.resident_bricks = residency.resident_bricks;
-        report.resident_bytes = residency.total_bytes;
-        report.payload_in_use = residency.payload_in_use;
-        report.payload_capacity = residency.payload_capacity;
-        report.staged_bytes = buffers.staged_bytes;
-        report.deferred_bytes = buffers.deferred_bytes;
-        report.copy_regions = buffers.copy_regions;
-        report.raw_regions = buffers.raw_regions;
-        report.evictions = residency.evictions;
-        report.hit_rate = residency.hit_rate();
-        report.out_of_memory = batch.out_of_memory;
-        report.update_ms = residency_ms_;
-        report.worst_update_ms = worst_residency_ms_;
+        report.nodes = pool.nodes;
+        report.leaves = pool.leaves;
+        report.payload_in_use = pool.payload_in_use;
+        report.payload_capacity = pool.payload_capacity;
+        report.resident_bytes = pool.total_bytes;
+        report.screen_bytes = pool.screen_bytes;
+        report.staged_bytes = node_buffers_.stats().uploaded_this_frame;
+        report.builds = pool.builds;
+        report.evictions = pool.evictions;
+        report.churn = pool.churn;
+        report.deferred = last_node_deferred_;
+        report.hit_rate = pool.hit_rate();
+        report.out_of_memory = last_node_out_of_memory_;
+        report.update_ms = node_ms_;
+        report.worst_update_ms = worst_node_ms_;
         report.feedback_reports = last_feedback_;
         report.feedback_dropped = last_feedback_truncated_;
+        report.feedback_phantom = last_feedback_phantom_;
         hud_.set_streaming(report);
-        if (options_.stream_log && (frame_counter_ % 60 == 0)) {
-            WS_LOG_INFO("diag",
-                        "f{} resident {}/{} added {} refreshed {} evicted {} deferred {} "
-                        "bricks {} oom {} feedback {} accepted {} phantom {}",
-                        frame_counter_, report.resident_chunks, report.world_chunks,
-                        batch.chunks_added, batch.chunks_refreshed, batch.chunks_evicted,
-                        batch.chunks_deferred, report.resident_bricks,
-                        batch.out_of_memory ? 1 : 0, last_feedback_, last_feedback_accepted_,
-                        last_feedback_rejected_);
-        }
+        // Split, because one figure covering three things is what hid the paste's real cause for
+        // two sessions (trap 17). These are the host's per-frame renderer costs, and the frame's
+        // own CPU time is printed beside them.
+        stream_ms_ = ns_to_ms(stream_ended - stream_started);
+        uploads_ms_ = ns_to_ms(uploads_ended - stream_ended);
+        report_ms_ = ns_to_ms(now_ns() - uploads_ended);
 
         const ChiselPreview& preview = chisel_.preview();
         const ClipboardPreview& ghost = clipboard_.preview();
@@ -4488,9 +4185,6 @@ void Application::record_frame(f32 time_seconds) {
         params.edit_min[3] = edit_window_opened_ ? 2 : 1;
         edit_window_opened_ = false;
     }
-    params.grid_dims[0] = residency_budget_.grid_width;
-    params.grid_dims[1] = residency_budget_.grid_height;
-    params.grid_dims[2] = residency_budget_.grid_depth;
     // Clip rays to what is resident, plus a margin.
     //
     // The margin is not slack, it is the mechanism: feedback can only report chunks a ray
@@ -4561,9 +4255,6 @@ void Application::record_frame(f32 time_seconds) {
     // so this is set past anything a world will contain rather than being a quality knob.
     params.lens[1] = 4000000.0f;   // voxels: 125 km
     params.lens[2] = detail_bias_;
-    // The thumbnail tiers went with R1e. `params.thumb_dims` and `params.thumb_tiers` are still
-    // in the parameter block and are now written by nothing and read by nothing; they go when the
-    // block itself is trimmed.
 
     // The chisel's preview, moved into the camera-relative space the shader works in. The
     // camera chunk corner is the origin of that space, so the same subtraction that the
@@ -5193,92 +4884,28 @@ int Application::play(const Options& options) {
     progress_.enter(LoadStage::Uploading);
     draw_loading();
 
-    // Sized from detected VRAM, and never resized afterwards
-    // (documentation/03-voxel-data-model.md ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§8).
-    const u64 vram = device_.caps().device_local_bytes;
+    // The VRAM share, the brick-slot arithmetic and the residency budget that stood here were
+    // the chunk system's, and they are gone with it (R1e). The node pool sizes itself from
+    // `NodePoolBudget` and the face store from `FaceStoreBudget`, both a few lines below.
+    //
+    // What that budget cost, for the record: it was sized at a tenth of half the card and still
+    // zeroed pools the frame never touched -- 1,432 ms of chunk residency and 266 ms of thumbnail
+    // tiers on a 2,033 ms start, plus about twelve milliseconds of CPU a frame keeping current a
+    // structure no shader had read since `world.glsl` was deleted.
 
-    // A share of the card, rather than a step function that stops caring at eight gigabytes.
-    //
-    // It was 1 GB for anything with 8 GB or more, and that ceiling is what a sixteen-gigabyte
-    // card got: six per cent of it. The facility is 86 chunks and 460 MB of payload held 54 of
-    // them, so a third of the building could not be resident at once and residency spent every
-    // frame swapping which third ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is a world that flickers while you stand still.
-    //
-    // Half the card, less a fixed floor for everything that is not brick payload: the render
-    // targets, the face cache (256 MB), the type tables, the summary thumbnails, and whatever
-    // the compositor and the driver want. A card is not ours alone and a build that takes all
-    // of it is a build that stutters against everything else on the desktop.
-    //
-    // Small cards keep their old shares, because the reasoning that produced them was about
-    // fitting at all rather than about generosity.
-    const u64 reserved = 1536ull << 20;
-    const u64 vram_budget =
-        (vram >= (8ull << 30))
-            ? std::max<u64>(1ull << 30, (vram > reserved) ? (vram - reserved) / 2 : (1ull << 30))
-        : (vram >= (4ull << 30)) ? (384ull << 20)
-                                 : (192ull << 20);
-
-    // A brick costs two separate things, and they have to be budgeted separately.
-    //
-    //   its **payload** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the packed voxel indices and palette, anywhere from 8 bytes for a
-    //   uniform brick to 2 KB for one where every voxel differs
-    //   its **slot** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a header and a 64-byte occupancy mask, the same for every brick
-    //
-    // The slot count used to be derived from the payload budget as `payload / 1024`, on the
-    // assumption that a brick averages about a kilobyte. That assumption fails in exactly the
-    // case that matters: a large flat build is almost entirely *uniform* bricks, which cost
-    // eight bytes of payload each and a full slot each. Filling a 3 km square with one
-    // material used 8 MB of a 1 GB payload budget and ran clean out of slots at 128 chunks ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
-    // whereupon residency evicted a chunk for every chunk it added, and the world blinked in
-    // and out as you moved. The payload gauge said 1% and everything looked fine.
-    //
-    // So: split the budget, and size the slots by what a slot actually costs.
-    //
-    // Thumbnails take a slice off the top, because they buy something the other two cannot
-    // buy at any price. Full detail is bounded by memory however it is split: a chunk has to
-    // be entirely resident to draw at all, so past that bound the world is not drawn coarsely,
-    // it is simply not drawn. A thumbnail is two kilobytes, so the same memory that holds a
-    // few hundred chunks at full detail holds tens of thousands of them at a metre ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is
-    // the difference between a view that ends and one that does not.
-    constexpr u64 kSlotBytes = sizeof(GpuBrickHeader) + kBrickWords * sizeof(u64);
-    // What the chunk system gets, which since the node pool became the marcher is "enough to
-    // serve --chunk-marcher" rather than "most of the card".
-    //
-    // Nothing else reads it. Since R3d deleted the reference tracer, `visibility.comp` behind
-    // world.glsl is deleted and nothing marches chunks at all. What is left of the chunk system
-    // is host-side bookkeeping that no shader reads, which is the rest of R1e. Sized for the whole
-    // card it costs **1,432 ms
-    // of chunk residency and 266 ms of thumbnail tiers on every single load** -- 83% of a 2,033 ms
-    // start -- almost all of it zeroing pools that the frame never touches, plus about 12 ms of
-    // CPU a frame keeping them current.
-    //
-    // A tenth of the share is still hundreds of megabytes, which is a reference path tracer's
-    // working set on one scene and is what it had before any of this existed. R1e deletes the rest
-    // of it; this stops it being paid for by everybody in the meantime.
-    const u64 chunk_share = 10;
-    residency_budget_.payload_bytes = vram_budget * 45 / 100 * chunk_share / 100;
-    residency_budget_.max_bricks =
-        static_cast<u32>((vram_budget * 40 / 100 * chunk_share / 100) / kSlotBytes);
-    residency_budget_.max_chunk_uploads_per_frame = 8;
-    residency_budget_.max_bricks_per_frame = 8192;
-    const u64 t_residency = now_ns();
-    residency_.create(residency_budget_, types_);
-    WS_LOG_INFO("load", "chunk residency {:.0f} ms  [t+{:.0f} ms]",
-                ns_to_ms(now_ns() - t_residency), ns_to_ms(now_ns() - load_began_ns_));
-    progress_.within(0.15);
+    // How far the world reaches, which is what a ray is clipped to. It used to be a side effect
+    // of rebuilding the coarse grids.
+    refresh_world_bounds();
+    progress_.within(0.30);
     draw_loading();
 
-
-    // Coarse occupancy comes from the world, so the marcher can tell "nothing here" from
-    // "something here that you have not streamed yet". Without it, feedback never fires.
-    rebuild_coarse_grids();
-    progress_.within(0.45);
-    draw_loading();
-    const u64 t_world_buffers = now_ns();
-    if (!world_buffers_.create(device_, residency_budget_, 0, 0,
-                               32ull << 20)) {
+    const u64 t_tables = now_ns();
+    // The two interned tables, and one frame of staging for them. 32 MB because the tables can be
+    // two million records each and both halves have to travel together.
+    if (!type_tables_.create(device_, 32ull << 20)) {
         return 1;
     }
+
     if (!feedback_.create(device_)) return 1;
     progress_.within(0.70);
     draw_loading();
@@ -5291,74 +4918,35 @@ int Application::play(const Options& options) {
                                            "render params",
                                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
-    // Four million faces at 32 bytes, so 128 MB.
-    //
-    // A million was enough until parent seeding arrived. Seeding keeps an entry for a node
-    // *and* its parent, so the table holds two levels for everything it sees, and that extra
-    // pressure took uncached surface pixels from 3,661 to 18,400 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a band of noise back along
-    // the skyline, traded for the halved first-look noise seeding buys. This pays for both.
-    //
-    // A face that cannot find a slot is not wrong, it just goes uncached and noisy, and that
-    // failure is invisible until someone wonders why one wall is grainier than the rest ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
-    // which is what debug view 5 is for.
-    // Doubled again when the sun moved into entries of its own. Two kinds of entry per surface
-    // instead of one is more pressure on the same table, and the table answers pressure by
-    // refusing slots: refusals in an enclosed room went from 4.6% of surface pixels to 12.2%,
-    // and a refused face has no light at all, so they show up as grainy patches the size of
-    // whatever region saturated. Lengthening the probe instead reached 7% and cost a fifth of
-    // the frame; the memory is the cheaper answer.
-    // Sized from VRAM, like the world buffers, rather than fixed. A quarter of a gigabyte is
-    // the right answer on a card with sixteen and plainly the wrong one on a handheld with
-    // four, and a table that cannot be allocated is worse than a smaller one: a refused face
-    // is noisy, an absent buffer is nothing at all.
-    const u64 face_vram = device_.caps().device_local_bytes;
-    const u64 kFaceCacheEntries = (face_vram >= (8ull << 30))   ? (8ull << 20)
-                                  : (face_vram >= (4ull << 30)) ? (4ull << 20)
-                                                                : (2ull << 20);
-    face_cache_ = create_device_buffer(device_, kFaceCacheEntries * 32,
-                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "face cache");
+    // The tracer's world-space face cache -- 128 to 256 MB of it, sized from VRAM -- and the
+    // frame-statistics buffer are both gone (R1e). Nothing has read either since R3d deleted
+    // the per-pixel light path; they were allocated and bound every run because their binding
+    // numbers belonged to a layout the cloud pass shared. Trimming that layout is what made
+    // them removable. R6's exposure meter will want a frame-statistics buffer again, with a
+    // writer this time -- see kPreviewExposure in shaders/resolve.comp.
+
+    // TEMPORARY PROBE: put back the device memory the chunk buffers used to hold, to find out
+    // whether the frame-time difference is placement rather than code.
+    ballast_ = create_device_buffer(device_, 950ull << 20, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    "ballast");
 
     // Where the lamps are, so a shadow ray can be aimed at one. Small enough to be a staging
     // buffer written straight from the CPU: a thousand lights is 28 KB and it only changes
     // when the world does.
     light_buffer_ = create_staging_buffer(device_, kMaxLights * sizeof(LightSource),
                                           "light list", VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    WS_LOG_INFO("app", "face cache: {} entries, {} MB", kFaceCacheEntries,
-                (kFaceCacheEntries * 32) >> 20);
-
-    // Thirty-two bytes for the whole frame's brightness. TRANSFER_SRC on top of the storage
-    // usage because this frame's slot is copied over the previous one before it is zeroed, and
-    // create_device_buffer only asks for TRANSFER_DST.
-    frame_stats_ = create_device_buffer(
-        device_, sizeof(FrameStatistics) * kFrameStatsSlots,
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        "frame statistics");
 
     const u64 clip_bytes = kMaxClipPoolCells * sizeof(u32);
     clip_buffer_ = create_device_buffer(device_, clip_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                         "clip cells");
     clip_staging_ = create_staging_buffer(device_, clip_bytes, "clip staging");
 
-    // Visibility set: bindings 0-1 are the output images; 2-8 are the world, in the order
-    // the marcher walks them. See shaders/visibility.comp.
-    constexpr u32 kImageBindings = 2;
-    constexpr u32 kBufferBindings = 11;   // 10 world buffers plus the feedback buffer
-    VkDescriptorSetLayoutBinding bindings[kImageBindings + kBufferBindings + 1]{};
-    for (u32 i = 0; i < kImageBindings + kBufferBindings + 1; ++i) {
-        bindings[i].binding = i;
-        bindings[i].descriptorType =
-            (i < kImageBindings) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-            : (i < kImageBindings + kBufferBindings)
-                ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
-                : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        bindings[i].descriptorCount = 1;
-        bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    }
-    VkDescriptorSetLayoutCreateInfo layout_info{
-        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layout_info.bindingCount = kImageBindings + kBufferBindings + 1;
-    layout_info.pBindings = bindings;
-    WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &layout_info, nullptr, &set_layout_));
+    // The chunk marcher's set — two output images, eleven world buffers and the parameter block —
+    // is gone with R1e. It outlived its pipeline by one stage: `visibility.comp` moved onto
+    // `node_layout_` when the node pool became the only marcher, and this set went on being
+    // allocated, written every resize and filled with eleven buffers no shader declared. An
+    // unread descriptor costs nothing per frame and hides everything behind it, which is why
+    // trimming it is what lets the buffers under it go.
 
     // Resolve set: the visibility image in, the colour image out, plus the two tables it
     // needs to turn a voxel type into a colour.
@@ -5407,9 +4995,9 @@ int Application::play(const Options& options) {
 
     const VkDescriptorPoolSize pool_sizes[]{
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8},
-        // The three sets between them bind the world twice, the type tables, the clip, the
-        // face cache and the light list. Counted generously: running out of pool is a failure
-        // at start-up with a message nobody connects to the binding they just added.
+        // The two sets left here bind the type tables, the clip, the face store and its light.
+        // Counted generously: running out of pool is a failure at start-up with a message
+        // nobody connects to the binding they just added.
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 60},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 4},
     };
@@ -5419,54 +5007,53 @@ int Application::play(const Options& options) {
     pool_info.pPoolSizes = pool_sizes;
     WS_VK(vkCreateDescriptorPool(device_.handle(), &pool_info, nullptr, &descriptor_pool_));
 
-    VkDescriptorSetAllocateInfo set_alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    set_alloc.descriptorPool = descriptor_pool_;
-    set_alloc.descriptorSetCount = 1;
-    set_alloc.pSetLayouts = &set_layout_;
-    WS_VK(vkAllocateDescriptorSets(device_.handle(), &set_alloc, &descriptor_set_));
-
     VkDescriptorSetAllocateInfo resolve_alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     resolve_alloc.descriptorPool = descriptor_pool_;
     resolve_alloc.descriptorSetCount = 1;
     resolve_alloc.pSetLayouts = &resolve_layout_;
     WS_VK(vkAllocateDescriptorSets(device_.handle(), &resolve_alloc, &resolve_set_));
 
-    // The path tracer's own set, allocated here with the others because create_render_target
-    // writes image descriptors into all three and cannot write into a set that does not exist
-    // yet. Its two images are 0 and 1, then the same world bindings the marcher uses ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it
-    // includes the same traversal, so the binding numbers come with it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â then the parameter
-    // block at 13 and the type tables at 14 and 15.
+    // The cloud pass's set, allocated here with the others because create_render_target writes
+    // image descriptors into it and cannot write into a set that does not exist yet.
     {
-        // Twenty-one: the two images, the world, the parameter block, the type tables, the clip,
-        // the face cache, the light list at 18, the frame statistics at 19, and the cloud buffer
-        // at 20 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which the cloud pass writes and this one reads. They share this layout whole,
-        // because the cloud pass needs the parameter block and the sun and nothing else, and a set
-        // of its own would be the same set with holes in it.
-        constexpr u32 kTraceBindings = kCloudMarchedBinding + 1;
-        VkDescriptorSetLayoutBinding trace_bindings[kTraceBindings]{};
-        for (u32 i = 0; i < kTraceBindings; ++i) {
-            trace_bindings[i].binding = i;
-            trace_bindings[i].descriptorType =
-                (i < 2 || i >= kCloudBinding) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                : (i == 13)                   ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                                              : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            // Two at the cloud binding: the history is read and written alternately, so both are
-            // bound and the shader picks by parity rather than the descriptors being rewritten.
-            trace_bindings[i].descriptorCount = (i == kCloudBinding) ? 2 : 1;
-            trace_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        }
-        VkDescriptorSetLayoutCreateInfo trace_layout{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        trace_layout.bindingCount = kTraceBindings;
-        trace_layout.pBindings = trace_bindings;
-        WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &trace_layout, nullptr,
-                                          &pathtrace_layout_));
+        // Three bindings, and they keep the numbers clouds.comp already names: the parameter
+        // block at 13, the cloud history at 20 and this frame's marches at 21.
+        //
+        // This was the path tracer's whole set -- two images, the eleven world buffers, the type
+        // tables, the clip, the face cache, the light list and the frame statistics -- and R3d
+        // kept it entire because the cloud pass is passed that layout and the binding numbers were
+        // ones gpu/render_params.hpp and the shaders agree about. Nothing had to be renumbered in
+        // the end: a Vulkan layout's binding numbers need not be contiguous, so the seventeen
+        // descriptors no shader declares are simply not there, and the buffers behind them are
+        // free to go with them. That is what unblocked the rest of R1e.
+        VkDescriptorSetLayoutBinding cloud_bindings[3]{};
+        cloud_bindings[0].binding = 13;
+        cloud_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        cloud_bindings[0].descriptorCount = 1;
+        cloud_bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        cloud_bindings[1].binding = kCloudBinding;
+        cloud_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        // Two at the cloud binding: the history is read and written alternately, so both are
+        // bound and the shader picks by parity rather than the descriptors being rewritten.
+        cloud_bindings[1].descriptorCount = 2;
+        cloud_bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        cloud_bindings[2].binding = kCloudMarchedBinding;
+        cloud_bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        cloud_bindings[2].descriptorCount = 1;
+        cloud_bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
-        VkDescriptorSetAllocateInfo trace_alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        trace_alloc.descriptorPool = descriptor_pool_;
-        trace_alloc.descriptorSetCount = 1;
-        trace_alloc.pSetLayouts = &pathtrace_layout_;
-        WS_VK(vkAllocateDescriptorSets(device_.handle(), &trace_alloc, &pathtrace_set_));
+        VkDescriptorSetLayoutCreateInfo cloud_layout_info{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        cloud_layout_info.bindingCount = 3;
+        cloud_layout_info.pBindings = cloud_bindings;
+        WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &cloud_layout_info, nullptr,
+                                          &cloud_layout_));
+
+        VkDescriptorSetAllocateInfo cloud_alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        cloud_alloc.descriptorPool = descriptor_pool_;
+        cloud_alloc.descriptorSetCount = 1;
+        cloud_alloc.pSetLayouts = &cloud_layout_;
+        WS_VK(vkAllocateDescriptorSets(device_.handle(), &cloud_alloc, &cloud_set_));
     }
 
     {
@@ -5492,8 +5079,8 @@ int Application::play(const Options& options) {
     // path nobody notices has stopped compiling.
     {
         NodePoolBudget node_budget;
-        WS_LOG_INFO("load", "world buffers {:.0f} ms  [t+{:.0f} ms]",
-                ns_to_ms(now_ns() - t_world_buffers), ns_to_ms(now_ns() - load_began_ns_));
+        WS_LOG_INFO("load", "type tables {:.0f} ms  [t+{:.0f} ms]",
+                ns_to_ms(now_ns() - t_tables), ns_to_ms(now_ns() - load_began_ns_));
         const u64 t_pool = now_ns();
         node_pool_.create(node_budget, types_);
         const u64 t_node_buffers = now_ns();
@@ -5743,7 +5330,7 @@ int Application::play(const Options& options) {
         const std::filesystem::path cloud_spirv = shaders / "clouds.comp.spv";
         const std::filesystem::path cloud_source =
             std::filesystem::path(WS_SHADER_SOURCE_DIR) / "clouds.comp";
-        if (!clouds_.create(device_, cloud_source, cloud_spirv, pathtrace_layout_,
+        if (!clouds_.create(device_, cloud_source, cloud_spirv, cloud_layout_,
                             sizeof(TracePush))) {
             // Not fatal. A sky with no cloud in it is a worse picture and a working one.
             WS_LOG_ERROR("app", "no clouds this run: {}", clouds_.last_error());
@@ -5752,23 +5339,21 @@ int Application::play(const Options& options) {
         WS_LOG_INFO("load", "pipelines {:.0f} ms", ns_to_ms(now_ns() - t_pipelines));
     }
 
-    // The world buffers never move, so they are bound once.
-    const VkBuffer marcher_buffers[]{
-        world_buffers_.grid(),     world_buffers_.records(),   world_buffers_.masks(),
-        world_buffers_.prefixes(), world_buffers_.headers(),   world_buffers_.occupancy(),
-        world_buffers_.payload(), world_buffers_.coarse(), world_buffers_.thumb_grid(),
-        world_buffers_.thumbs(), feedback_.buffer(),
-    };
-    static_assert(kBufferBindings == 11, "marcher buffer list must match the binding count");
+    // The two tables the composite turns a voxel into a colour with. Everything else the marcher
+    // used to be handed -- the wrapped chunk grid, the records, the masks, the popcount prefixes,
+    // the headers, the occupancy, the payload, the coarse grids and the two thumbnail buffers --
+    // went with the set it was bound to. The node pool's own buffers live on `node_set_`.
+    //
     // Four now: the face store joins them, because the composite reads light off a face rather
     // than working it out per pixel.
     // Five now: the face light joins them, so the composite can read how much sky a surface can
     // actually see instead of deciding it from which way the surface points (R10a).
-    const VkBuffer resolve_buffers[]{world_buffers_.types(), world_buffers_.visuals(),
+    const VkBuffer resolve_buffers[]{type_tables_.types(), type_tables_.visuals(),
                                      clip_buffer_.buffer, face_buffers_.faces(),
                                      face_light_.buffer()};
 
-    // The parameter block, bound to both sets with a dynamic offset chosen per frame.
+    // The parameter block, bound to the composite and to the cloud pass with a dynamic offset
+    // chosen per frame.
     VkDescriptorBufferInfo params_info{};
     params_info.buffer = params_buffer_.buffer;
     params_info.offset = 0;
@@ -5776,8 +5361,8 @@ int Application::play(const Options& options) {
     VkWriteDescriptorSet params_writes[2]{};
     for (u32 i = 0; i < 2; ++i) {
         params_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        params_writes[i].dstSet = (i == 0) ? descriptor_set_ : resolve_set_;
-        params_writes[i].dstBinding = (i == 0) ? (kImageBindings + kBufferBindings) : 4;
+        params_writes[i].dstSet = (i == 0) ? cloud_set_ : resolve_set_;
+        params_writes[i].dstBinding = (i == 0) ? 13 : 4;
         params_writes[i].descriptorCount = 1;
         params_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
         params_writes[i].pBufferInfo = &params_info;
@@ -5785,68 +5370,23 @@ int Application::play(const Options& options) {
     vkUpdateDescriptorSets(device_.handle(), 2, params_writes, 0, nullptr);
 
     constexpr u32 kResolveBuffers = 5;   // types, visuals, clip cells, the face store, face light
-    VkDescriptorBufferInfo buffer_infos[kBufferBindings + kResolveBuffers]{};
-    VkWriteDescriptorSet buffer_writes[kBufferBindings + kResolveBuffers]{};
-    for (u32 i = 0; i < kBufferBindings + kResolveBuffers; ++i) {
-        const bool marcher = (i < kBufferBindings);
-        buffer_infos[i].buffer = marcher ? marcher_buffers[i] : resolve_buffers[i - kBufferBindings];
+    VkDescriptorBufferInfo buffer_infos[kResolveBuffers]{};
+    VkWriteDescriptorSet buffer_writes[kResolveBuffers]{};
+    // Resolve's storage buffers are bindings 2, 3, 5, 6 and 8 -- 4 is the parameter block and
+    // 7 is an image. Spelled out for the same reason the node set's mapping is.
+    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8};
+    for (u32 i = 0; i < kResolveBuffers; ++i) {
+        buffer_infos[i].buffer = resolve_buffers[i];
         buffer_infos[i].offset = 0;
         buffer_infos[i].range = VK_WHOLE_SIZE;
         buffer_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        buffer_writes[i].dstSet = marcher ? descriptor_set_ : resolve_set_;
-        // Resolve's storage buffers are bindings 2, 3, 5, 6 and 8 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â 4 is the parameter block and
-        // 7 is an image. Spelled out for the same reason the node set's mapping now is.
-        const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8};
-        const u32 resolve_index = i - kBufferBindings;
-        const u32 resolve_binding = resolve_bindings_for[resolve_index];
-        buffer_writes[i].dstBinding = marcher ? (kImageBindings + i) : resolve_binding;
+        buffer_writes[i].dstSet = resolve_set_;
+        buffer_writes[i].dstBinding = resolve_bindings_for[i];
         buffer_writes[i].descriptorCount = 1;
         buffer_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         buffer_writes[i].pBufferInfo = &buffer_infos[i];
     }
-    vkUpdateDescriptorSets(device_.handle(), kBufferBindings + kResolveBuffers, buffer_writes, 0,
-                           nullptr);
-
-    // The path tracer's world bindings. The same buffers at the same numbers as the marcher,
-    // because it includes the same traversal and the binding numbers come with it, plus the
-    // type tables at 14 and 15 so a hit becomes a material.
-    {
-        // world, types, visuals, clip, faces, lights, frame statistics
-        constexpr u32 kTraceBuffers = kBufferBindings + 6;
-        const VkBuffer trace_buffers[kTraceBuffers]{
-            marcher_buffers[0], marcher_buffers[1], marcher_buffers[2],  marcher_buffers[3],
-            marcher_buffers[4], marcher_buffers[5], marcher_buffers[6],  marcher_buffers[7],
-            marcher_buffers[8], marcher_buffers[9], marcher_buffers[10], world_buffers_.types(),
-            world_buffers_.visuals(), clip_buffer_.buffer,   face_cache_.buffer,
-            light_buffer_.buffer, frame_stats_.buffer,
-        };
-        // The last buffer in that list is the frame statistics, and the binding it lands on
-        // has to be the one the shader and gpu/render_params.hpp agree about.
-        static_assert(2 + (kTraceBuffers - 1) + 1 == kFrameStatsBinding,
-                      "the frame statistics must land on kFrameStatsBinding");
-        VkDescriptorBufferInfo trace_infos[kTraceBuffers]{};
-        VkWriteDescriptorSet trace_writes[kTraceBuffers + 1]{};
-        for (u32 i = 0; i < kTraceBuffers; ++i) {
-            trace_infos[i].buffer = trace_buffers[i];
-            trace_infos[i].offset = 0;
-            trace_infos[i].range = VK_WHOLE_SIZE;
-            trace_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            trace_writes[i].dstSet = pathtrace_set_;
-            // 2..12 are the world, 13 is the parameter block, then 14 upwards in order ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
-            // which lands the frame statistics on kFrameStatsBinding.
-            trace_writes[i].dstBinding = (i < kBufferBindings) ? (2 + i) : (2 + i + 1);
-            trace_writes[i].descriptorCount = 1;
-            trace_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            trace_writes[i].pBufferInfo = &trace_infos[i];
-        }
-        trace_writes[kTraceBuffers].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        trace_writes[kTraceBuffers].dstSet = pathtrace_set_;
-        trace_writes[kTraceBuffers].dstBinding = 13;
-        trace_writes[kTraceBuffers].descriptorCount = 1;
-        trace_writes[kTraceBuffers].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        trace_writes[kTraceBuffers].pBufferInfo = &params_info;
-        vkUpdateDescriptorSets(device_.handle(), kTraceBuffers + 1, trace_writes, 0, nullptr);
-    }
+    vkUpdateDescriptorSets(device_.handle(), kResolveBuffers, buffer_writes, 0, nullptr);
 
     // The test scene spans about 64 m. Start at one corner of it, above the ground slab,
     // looking back toward the origin so the towers, arch and lattice are all in frame.
@@ -6221,11 +5761,13 @@ int Application::play(const Options& options) {
                           camera_.local_y(), camera_.local_z());
             crash_set_context("camera", where);
             char what[160];
-            const ResidencyStats residency = residency_.stats();
             std::snprintf(what, sizeof(what),
-                          "tool %d  debug %u  resident %u/%zu chunks",
-                          static_cast<int>(toolbelt_.active()),
-                          debug_mode_, residency.resident_chunks, world_.chunk_count());
+                          "tool %d  debug %u  %u nodes over %zu chunks",
+                          static_cast<int>(toolbelt_.active()), debug_mode_,
+                          // live_stats(), never stats(): this runs every frame, and the walking
+                          // version costs 1.76 ms of it. Measured, because it was written here
+                          // as stats() first and the frame went 5.19 ms -> 7.27.
+                          node_pool_.live_stats().nodes, world_.chunk_count());
             crash_set_context("state", what);
             char timing[160];
             std::snprintf(timing, sizeof(timing),
@@ -6459,16 +6001,13 @@ int Application::play(const Options& options) {
                         profiler_.mean_total_gpu_ms(), profiler_.worst_total_gpu_ms(),
                         profiler_.averaged_frames());
             WS_LOG_INFO("frame", "CPU {:.3f} ms", stats_.average_ms());
-            WS_LOG_INFO("frame", "CPU node pool {:.3f} ms, worst {:.3f} on frame {}; chunk "
-                                 "residency {:.3f} ms, worst {:.3f}",
-                        node_ms_, worst_node_ms_, worst_node_frame_, residency_ms_,
-                        worst_residency_ms_);
-            const ResidencyStats residency = residency_.stats();
+            WS_LOG_INFO("frame", "CPU node pool {:.3f} ms, worst {:.3f} on frame {}",
+                        node_ms_, worst_node_ms_, worst_node_frame_);
+            WS_LOG_INFO("frame", "CPU last frame: feedback {:.3f} ms, uploads {:.3f}, report {:.3f}",
+                        stream_ms_, uploads_ms_, report_ms_);
             WS_LOG_INFO("frame",
-                        "resident {} of {} chunks, {} bricks; feedback {} reports ({} dropped)",
-                        residency.resident_chunks, world_.chunk_count(),
-                        residency.resident_bricks, last_feedback_,
-                        last_feedback_truncated_);
+                        "feedback {} reports ({} dropped, {} for places the world is empty at)",
+                        last_feedback_, last_feedback_truncated_, last_feedback_phantom_);
             // In bytes as well as in chunks, because the claim the rewrite makes about streaming
             // is about memory following the *screen* ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and a chunk count cannot show that. Two
             // views holding the same number of chunks at different resolutions should differ
@@ -6558,10 +6097,10 @@ int Application::play(const Options& options) {
                                 options_.chisel_every, options_.chisel_radius);
                     const f64 fired = static_cast<f64>(std::max<u64>(chisels_fired_, 1));
                     WS_LOG_INFO("frame",
-                                "chisel CPU per edit: apply and undo {:.2f} ms, coarse grids "
+                                "chisel CPU per edit: apply and undo {:.2f} ms, world bounds "
                                 "{:.2f} ms, invalidation downstream {:.2f} ms",
                                 ns_to_ms(chisel_apply_ns_) / fired,
-                                ns_to_ms(chisel_coarse_ns_) / fired,
+                                ns_to_ms(chisel_bounds_ns_) / fired,
                                 ns_to_ms(chisel_invalidate_ns_) / fired);
                 }
 
@@ -6649,9 +6188,10 @@ int Application::play(const Options& options) {
                 }
                 WS_LOG_INFO("frame", "nodes by level  {}", levels);
             }
-            WS_LOG_INFO("frame", "resident bytes {} payload, {} index, {} total",
-                        residency.payload_in_use, residency.index_bytes,
-                        residency.total_bytes);
+            WS_LOG_INFO("frame", "resident bytes {} payload, {} nodes, {} total, {} the "
+                                 "screen pays for",
+                        node_stats.payload_in_use, node_stats.node_bytes, node_stats.total_bytes,
+                        node_stats.screen_bytes);
             break;
         }
     }
@@ -6664,11 +6204,10 @@ int Application::play(const Options& options) {
 
     device_.wait_idle();
     hud_.destroy();
-    world_buffers_.destroy();
+    type_tables_.destroy();
     feedback_.destroy();
     destroy_buffer(device_, params_buffer_);
-    destroy_buffer(device_, face_cache_);
-    destroy_buffer(device_, frame_stats_);
+    destroy_buffer(device_, ballast_);
     destroy_buffer(device_, clip_buffer_);
     destroy_buffer(device_, clip_staging_);
     destroy_buffer(device_, light_buffer_);
@@ -6703,14 +6242,11 @@ int Application::play(const Options& options) {
     if (descriptor_pool_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(device_.handle(), descriptor_pool_, nullptr);
     }
-    if (set_layout_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device_.handle(), set_layout_, nullptr);
-    }
     if (resolve_layout_ != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(device_.handle(), resolve_layout_, nullptr);
     }
-    if (pathtrace_layout_ != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device_.handle(), pathtrace_layout_, nullptr);
+    if (cloud_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_.handle(), cloud_layout_, nullptr);
     }
     // The device, the swapchain, the profiler, the window and the interface are NOT torn down
     // here: they outlive a world, which is the whole point of the split. What is torn down is
@@ -7340,8 +6876,7 @@ int main(int argc, char** argv) {
     }
     // A modal dialog in an automated run is a hang, so scripted modes get the stderr line
     // and nothing else.
-    ws::crash_set_dialog(!options.headless && !options.stream_audit &&
-                         options.screenshot.empty());
+    ws::crash_set_dialog(!options.headless && options.screenshot.empty());
 
     // "frame" is the one kind that has to happen inside the running game, because what it
     // proves is that a report carries the camera and the device with it.
@@ -7355,7 +6890,6 @@ int main(int argc, char** argv) {
                     options.max_seconds);
     }
 
-    if (options.stream_audit) return ws::run_stream_audit(options);
     if (options.headless) return ws::run_headless(options);
 
     return ws::run_windowed(options);

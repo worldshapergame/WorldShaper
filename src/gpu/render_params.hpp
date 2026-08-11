@@ -48,26 +48,19 @@ inline constexpr u32 kMarkReserveCells = 512u * 1024u;
 // there is more than one; beyond this they still stamp, they just stop being drawn.
 inline constexpr u32 kMaxPreviewBoxes = 16;
 
-// Levels of the summary octree the marcher can read. Declared here rather than included from
-// the world layer, which this header deliberately does not depend on; world_buffers.cpp sees
-// both and asserts they agree.
-inline constexpr u32 kRenderSummaryTiers = 8;
-
 struct RenderParams {
     f32 origin[4];         // xyz: voxel units relative to the camera chunk corner
     f32 forward[4];
     f32 right[4];
     f32 up[4];
     i32 camera_chunk[4];
-    u32 grid_dims[4];      // xyz: wrapped chunk grid size
-    i32 bounds_min[4];     // resident chunk bounding box, relative to the camera chunk
+    // The world's bounding box in chunks, relative to the camera chunk. Every ray is clipped to
+    // it. It was the RESIDENT box until R1e, and the wrapped chunk grid's dimensions used to sit
+    // above it; both went with the chunk renderer.
+    i32 bounds_min[4];
     i32 bounds_max[4];
     u32 resolution[4];     // xy: pixels, z: debug mode, w: feedback capacity
     f32 lens[4];           // x: tan(fov/2), y: max distance, z: detail bias
-    i32 thumb_dims[4];     // xyz: wrapped summary grid size, in blocks; w: how many levels
-    // Per level: x first grid cell, y first slot, z chunks per block. Every level shares one
-    // grid buffer and one slot buffer, so the marcher needs one binding rather than sixteen.
-    i32 thumb_tiers[kRenderSummaryTiers][4];
 
     // The chisel's preview box, in voxels relative to the camera chunk corner — the same
     // space as `origin`, so the resolve pass can intersect it with the ray it already has
@@ -169,10 +162,16 @@ struct RenderParams {
     // altitude and veered, which is both true and what makes a sky read as deep.
     f32 sky_wind[4];
 };
-// The marks array left the block entirely (it is unbounded now and lives in the clip buffer);
-// what stays is tool_colour and the two bounds vectors.
-static_assert(sizeof(RenderParams) == 1520 + 80 + 32 + 16 - (8 * 16) + 32,
-              "RenderParams must match the GLSL block");
+// Written out rather than accumulated as a sum of historical deltas, which is what this was and
+// which nobody could check: 41 vectors of 16 bytes, in the order shaders/params.glsl declares
+// them. std140 lays out by position, so a shader whose field list disagrees with this reads
+// everything after the first gap at the wrong offset -- silently, and it has cost two sessions.
+//
+// The count: origin, forward, right, up, camera_chunk, bounds_min, bounds_max, resolution, lens,
+// tint_visible, tint_occluded, tool_colour (12), box_min and box_max at 16 each (32), marks_min,
+// marks_max (2), clip_slot and clip_coarse at 16 each (32), edit_min, edit_max (2), prev_origin,
+// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind (7) -- 87 in all.
+static_assert(sizeof(RenderParams) == 87 * 16, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.

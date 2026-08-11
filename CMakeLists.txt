@@ -92,7 +92,6 @@ add_library(ws_world STATIC
     src/world/serialize.cpp
     src/world/world_cache.cpp
     src/world/gpu_brick.cpp
-    src/world/residency.cpp
     src/world/light_list.cpp
     src/world/node_pool.cpp
     src/world/face_store.cpp)
@@ -173,7 +172,7 @@ add_library(ws_gpu STATIC
     src/gpu/node_buffers.cpp
     src/gpu/face_buffers.cpp
     src/gpu/face_light.cpp
-    src/gpu/world_buffers.cpp
+    src/gpu/type_tables.cpp
     src/gpu/screenshot.cpp
     src/gpu/shell_pass.cpp
     src/gpu/feedback.cpp)
@@ -308,7 +307,6 @@ add_executable(ws_tests
     tests/test_clipboard.cpp
     tests/test_toolbelt.cpp
     tests/test_serialize.cpp
-    tests/test_residency.cpp
     tests/test_hollow.cpp
     tests/test_log_ring.cpp
     tests/test_quality.cpp

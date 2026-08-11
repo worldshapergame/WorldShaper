@@ -11,15 +11,10 @@
     vec4 right;
     vec4 up;
     ivec4 camera_chunk;
-    uvec4 grid_dims;
     ivec4 bounds_min;
     ivec4 bounds_max;
     uvec4 resolution;     // xy pixels, z debug mode, w feedback capacity
     vec4 lens;            // x tan(fov/2), y max distance, z detail bias
-    // Unused here, but the block is shared and std140 lays out by position: leave these out
-    // and every field below shifts, which draws a broken screen and blames nothing.
-    ivec4 thumb_dims;
-    ivec4 thumb_tiers[8];
     vec4 tint_visible;    // xyz colour, w = 1 to use it, 0 to invert the backdrop instead
     vec4 tint_occluded;
     // The material in hand with nothing done to it. The two tints above carry a decision -- already

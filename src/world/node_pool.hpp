@@ -552,6 +552,16 @@ public:
         dirty_payload_.clear();
     }
 
+    // Everything in NodePoolStats that is a counter, and nothing that is a walk.
+    //
+    // `stats()` sweeps every node for the level histogram and popcounts every resident leaf for
+    // the average fill -- 1.5 million popcounts on the facility -- and its own comment says it is
+    // read once at an audit. It is, from the screenshot. The OVERLAY reads a report every frame,
+    // and pointing that at `stats()` when chunk residency's cheap counters went away cost **4.5 ms
+    // of CPU a frame** against a 4 ms frame: measured 9.458 ms against a control's 4.985, on a
+    // change that only deleted work. Hence two functions, and the expensive one keeps the name
+    // that sounds expensive.
+    NodePoolStats live_stats() const;
     NodePoolStats stats() const;
     bool validate() const;
 

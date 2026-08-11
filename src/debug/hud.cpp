@@ -294,12 +294,14 @@ void Hud::draw(const FrameStats& stats, const GpuProfiler& profiler,
     }
 
     if (ImGui::CollapsingHeader("Streaming", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Text("chunks: %llu resident of %llu in world",
-                    static_cast<unsigned long long>(streaming_.resident_chunks),
+        ImGui::Text("node pool: %llu nodes, %llu leaves, over %llu chunks of world",
+                    static_cast<unsigned long long>(streaming_.nodes),
+                    static_cast<unsigned long long>(streaming_.leaves),
                     static_cast<unsigned long long>(streaming_.world_chunks));
-        ImGui::Text("bricks resident: %llu   evictions: %llu",
-                    static_cast<unsigned long long>(streaming_.resident_bricks),
-                    static_cast<unsigned long long>(streaming_.evictions));
+        ImGui::Text("built: %llu   evicted: %llu   came back: %llu",
+                    static_cast<unsigned long long>(streaming_.builds),
+                    static_cast<unsigned long long>(streaming_.evictions),
+                    static_cast<unsigned long long>(streaming_.churn));
         // Two buffers: both arguments are evaluated before the call, so sharing one would
         // print the same number twice.
         char capacity_text[64];
@@ -307,32 +309,38 @@ void Hud::draw(const FrameStats& stats, const GpuProfiler& profiler,
                     format_bytes(streaming_.payload_in_use, buffer, sizeof(buffer)),
                     format_bytes(streaming_.payload_capacity, capacity_text,
                                  sizeof(capacity_text)));
-        ImGui::Text("resident total: %s",
-                    format_bytes(streaming_.resident_bytes, buffer, sizeof(buffer)));
-        ImGui::Text("staged this frame: %s in %u copies (%u before merging)",
-                    format_bytes(streaming_.staged_bytes, buffer, sizeof(buffer)),
-                    streaming_.copy_regions, streaming_.raw_regions);
-        ImGui::Text("cache hit rate: %.1f%%", streaming_.hit_rate * 100.0);
+        ImGui::Text("resident: %s, of which the screen pays for %s",
+                    format_bytes(streaming_.resident_bytes, buffer, sizeof(buffer)),
+                    format_bytes(streaming_.screen_bytes, capacity_text, sizeof(capacity_text)));
+        ImGui::Text("staged this frame: %s",
+                    format_bytes(streaming_.staged_bytes, buffer, sizeof(buffer)));
+        ImGui::Text("request hit rate: %.1f%%", streaming_.hit_rate * 100.0);
 
         // The CPU side of streaming, which is what the 0.8 ms budget is actually about.
         const bool over = streaming_.update_ms > 0.8;
         if (over) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-        ImGui::Text("residency update (CPU): %.3f / 0.80 ms   worst %.3f ms",
+        ImGui::Text("node pool update (CPU): %.3f / 0.80 ms   worst %.3f ms",
                     streaming_.update_ms, streaming_.worst_update_ms);
         if (over) ImGui::PopStyleColor();
 
         ImGui::Text("feedback: %llu reports%s",
                     static_cast<unsigned long long>(streaming_.feedback_reports),
                     (streaming_.feedback_dropped > 0) ? " (buffer full)" : "");
-        if (streaming_.deferred_bytes > 0) {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "deferred: %s",
-                               format_bytes(streaming_.deferred_bytes, buffer, sizeof(buffer)));
+        if (streaming_.feedback_phantom > 0) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                               "%llu reports for places the world is empty at",
+                               static_cast<unsigned long long>(streaming_.feedback_phantom));
+        }
+        if (streaming_.deferred > 0) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "deferred: %llu nodes",
+                               static_cast<unsigned long long>(streaming_.deferred));
         }
         if (streaming_.out_of_memory) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
-                               "OUT OF POOL - raise the residency budget");
+                               "OUT OF POOL - raise the node pool budget");
         }
     }
+
 
     if (ImGui::CollapsingHeader("Tools", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("active: %s (slot %u)", tool_.active_tool, tool_.active_slot + 1);

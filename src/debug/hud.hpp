@@ -27,18 +27,28 @@ struct UpdateReport {
 
 // What the streaming system wants shown. Kept as plain numbers so the HUD does not pull
 // the whole world module into every translation unit that includes it.
+//
+// These are the NODE POOL's numbers since R1e. They were chunk residency's, which is deleted:
+// resident chunks and bricks, a payload pool sized from a chunk budget, and a cache hit rate
+// over chunk requests. Everything here has the same meaning one structure further in.
 struct StreamingReport {
-    u64 world_chunks = 0;
-    u64 resident_chunks = 0;
-    u64 resident_bricks = 0;
-    u64 resident_bytes = 0;
+    u64 world_chunks = 0;   // what the world holds, as the scale the rest is read against
+    u64 nodes = 0;
+    u64 leaves = 0;
     u64 payload_in_use = 0;
     u64 payload_capacity = 0;
-    u64 staged_bytes = 0;
-    u64 deferred_bytes = 0;
-    u32 copy_regions = 0;
-    u32 raw_regions = 0;
+    u64 resident_bytes = 0;
+    // What the SCREEN is paying for: everything except the fixed-size entry table. R2b's rule is
+    // about resident bytes following resolution, and a megabyte constant in the total is enough
+    // to hide a threefold change in the part that moves.
+    u64 screen_bytes = 0;
+    u64 staged_bytes = 0;   // what went to the card this frame
+    u64 builds = 0;
     u64 evictions = 0;
+    // Evicted and then wanted again within kChurnWindow. The harm itself rather than a proxy for
+    // it, and the number three separate flicker reports were eventually diagnosed from (D426).
+    u64 churn = 0;
+    u64 deferred = 0;       // wanted, and the frame's build budget ran out
     f64 hit_rate = 0.0;
     bool out_of_memory = false;
 
@@ -50,6 +60,8 @@ struct StreamingReport {
     f64 worst_update_ms = 0.0;
     u64 feedback_reports = 0;
     u64 feedback_dropped = 0;
+    // Miss reports for a place the world has nothing at. A large number is D133.
+    u64 feedback_phantom = 0;
 };
 
 // What the chisel wants shown. Same reasoning as StreamingReport: plain numbers, so the

@@ -26,8 +26,9 @@ if (-not $SkipTests) {
     if ($LASTEXITCODE -ne 0) { throw "unit tests failed" }
     & (Join-Path $root "build\bin\WorldShaper.exe") --ticks 20000
     if ($LASTEXITCODE -ne 0) { throw "the world audit failed" }
-    & (Join-Path $root "build\bin\WorldShaper.exe") --stream-frames 120
-    if ($LASTEXITCODE -ne 0) { throw "the streaming audit failed" }
+    # `--stream-frames`, the chunk-mirror audit, went with world/residency.* in R1e. What it
+    # checked is `NodePool::stale_leaves` and `stale_masks` now, which ws_tests above covers
+    # headlessly and which every screenshot prints.
 }
 
 # The executable has to agree with CMakeLists about what it is, for the same reason the

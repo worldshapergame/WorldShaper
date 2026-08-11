@@ -1509,21 +1509,18 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     return batch_;
 }
 
-NodePoolStats NodePool::stats() const {
+NodePoolStats NodePool::live_stats() const {
     NodePoolStats s;
     s.nodes = next_free_ - static_cast<u32>(free_singles_.size()) -
               static_cast<u32>(free_runs_.size()) * 8;
     s.leaves = next_leaf_ - static_cast<u32>(free_leaves_.size());
+    s.payload_in_use = payload_high_;
     s.payload_capacity = budget_.payload_bytes;
     s.node_bytes = static_cast<u64>(s.nodes) * sizeof(GpuNode);
     s.occupancy_bytes = static_cast<u64>(s.leaves) * kBrickWords * sizeof(u64);
     s.total_bytes = s.node_bytes + s.occupancy_bytes + s.payload_in_use +
                     entries_.size() * sizeof(u32);
     s.screen_bytes = s.node_bytes + s.occupancy_bytes + s.payload_in_use;
-    for (u32 slot = 0; slot < next_free_; ++slot) {
-        const u32 level = node_level(nodes_[slot]);
-        if (level != 0 && level < 32) ++s.per_level[level];
-    }
     s.builds = builds_;
     s.evictions = evictions_;
     s.evictions_on_screen = evictions_on_screen_;
@@ -1537,6 +1534,17 @@ NodePoolStats NodePool::stats() const {
     }
     if (evicted_leaves_ > 0) {
         s.evicted_fill = static_cast<f64>(evicted_fill_sum_) / static_cast<f64>(evicted_leaves_);
+    }
+    s.requests = requests_;
+    s.hits = hits_;
+    return s;
+}
+
+NodePoolStats NodePool::stats() const {
+    NodePoolStats s = live_stats();
+    for (u32 slot = 0; slot < next_free_; ++slot) {
+        const u32 level = node_level(nodes_[slot]);
+        if (level != 0 && level < 32) ++s.per_level[level];
     }
     // The baseline: every leaf the pool is holding right now. Walked rather than tracked, because
     // this is read once at an audit and tracking it would be a running total to keep in step with

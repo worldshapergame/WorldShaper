@@ -89,7 +89,6 @@ jobs:
         run: |
           .\build\bin\ws_tests.exe
           .\build\bin\WorldShaper.exe --ticks 20000
-          .\build\bin\WorldShaper.exe --stream-frames 120
 
       - name: Check the built game agrees about its version
         shell: pwsh
