@@ -191,7 +191,11 @@ void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store, u32 frame_index)
 
     // Only when all of it fitted. Clearing after a partial upload marks clean what the card has
     // not been sent, which is the stale byte this whole arrangement exists to avoid.
-    if (!stats_.staging_exhausted) store.clear_dirty();
+    if (!stats_.staging_exhausted) {
+        store.clear_dirty();
+    } else {
+        ++stats_.exhausted_frames;
+    }
     ++stats_.uploads;
 
     VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
@@ -216,10 +220,18 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
     // no idea about any of that: it read the buffers whenever it was asked and reported the
     // backlog as a stale byte. Intermittent, scale-dependent, and pointing at the one check that
     // has actually caught three real faults, which is the worst possible thing to make untrustworthy.
-    if (!store.nothing_dirty()) {
+    //
+    // ...but only the COMPARISON is off. What the card wrote into its own half of the record --
+    // which faces have converged, which are still bursting, which class each belongs to -- is a fact
+    // about the card and needs no host copy to agree with anything. Skipping the whole audit on a
+    // pending upload meant those numbers were never printed in the one case that costs: a MOVING
+    // camera always has an upload backlog, and the moving case is where this pass spends 63% of a
+    // frame. Two arms of an A/B differed by a factor of two here with nothing in either log to say
+    // why, which is trap 15 -- a measurement that never ran looks exactly like a clean one.
+    const bool compare = store.nothing_dirty();
+    if (!compare) {
         WS_LOG_INFO("faces", "mirror not compared: {} faces and {} buckets still owed to the card",
                     store.dirty_faces().marked(), store.dirty_entries().marked());
-        return true;
     }
 
     // Wait for the frame BEFORE touching the staging ring, not only after submitting.
@@ -299,8 +311,9 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
     WS_VK(vkQueueSubmit2(device_->graphics_queue(), 1, &submit, VK_NULL_HANDLE));
     device_->wait_idle();
 
-    bool matched = true;
+    bool matched = compare;
     for (const Range& range : ranges) {
+        if (!compare) break;
         if (range.bytes == 0) continue;
         const u8* card = static_cast<const u8*>(staging_.mapped) + range.offset;
         const u8* host = static_cast<const u8*>(range.expected);
@@ -320,7 +333,7 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
     // face B is the fault that matters: the light would be written to the wrong surface and look
     // like a shading bug for ever. What is IN the face is the card's business.
     const u32 watermark = store.watermark();
-    if (matched && watermark > 0) {
+    if ((matched || !compare) && watermark > 0) {
         const u64 face_bytes = static_cast<u64>(watermark) * sizeof(GpuFace);
         if (face_bytes <= staging_.size) {
             VkCommandPoolCreateInfo face_pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
@@ -363,7 +376,7 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             device_->wait_idle();
 
             const GpuFace* card = static_cast<const GpuFace*>(staging_.mapped);
-            for (u32 slot = 0; slot < watermark; ++slot) {
+            for (u32 slot = 0; compare && slot < watermark; ++slot) {
                 const GpuFace& host = store.faces()[slot];
                 if (card[slot].x == host.x && card[slot].y == host.y && card[slot].z == host.z &&
                     card[slot].packed == host.packed) {
@@ -420,12 +433,42 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             // the picture is made of the second.
             u32 seen_now = 0;
             u32 seen_bursting = 0;
+            // R9e. The set is the subject of R9, so the set is what has to be countable: which class
+            // each live face belongs to, how far each class has got, and -- the one the plan names
+            // as the measurement that decides the stage -- SAMPLES PER FACE PER CLASS. The risk R9
+            // carries is not frame time, which the cap fixes by construction; it is a store spread
+            // too thin, where every face gets too few samples and the picture gets noisier
+            // everywhere rather than slower anywhere. Only this number shows that.
+            u32 secondary_live = 0;
+            u32 secondary_done = 0;
+            u32 secondary_seen = 0;
+            u64 secondary_samples = 0;
+            u64 primary_samples = 0;
+            u32 primary_live = 0;
             const u32* stamps =
                 seen_fits ? reinterpret_cast<const u32*>(static_cast<const u8*>(staging_.mapped) +
                                                          face_bytes)
                           : nullptr;
             for (u32 slot = 0; slot < watermark; ++slot) {
                 if (!face_live(card[slot])) continue;
+                // The class comes from the STORE and the light comes from the card, which is the
+                // record's ownership split read the right way round. See FaceStore::is_secondary.
+                if (store.is_secondary(slot)) {
+                    // Counted by the set line below and by nothing here, and that is trap 10 rather
+                    // than tidiness. An off-screen face casts no rays at all -- it is not idle, it
+                    // is not finished, and it is emphatically not "still bursting", which is what
+                    // `live - idle` called it: the first run of R9a reported 284,662 faces bursting
+                    // when the true number was 22,517 and the other 262,144 were costing nothing.
+                    // A counter that gives one number to two states sends the next reader to the
+                    // wrong pass, and this line is read before every cost figure in this file.
+                    ++secondary_live;
+                    if ((card[slot].photons & kFaceAmbientDone) != 0) ++secondary_done;
+                    secondary_samples += face_samples(card[slot]);
+                    if (stamps != nullptr && (frame - stamps[slot]) <= seen_window) ++secondary_seen;
+                    continue;
+                }
+                ++primary_live;
+                primary_samples += face_samples(card[slot]);
                 ++ambient_live;
                 const bool done = (card[slot].photons & kFaceAmbientDone) != 0;
                 if (done) ++ambient_done;
@@ -462,6 +505,36 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                             "last {} frames; {} of those still owe ambient rays",
                             seen_now, ambient_live, seen_window + 1, seen_bursting);
             }
+            // How far behind the store the card actually is, which is the number every cost figure
+            // in this pass has to be read against and which nothing printed.
+            //
+            // The shading pass shades what the CARD holds. The host evicting a face marks the slot
+            // dirty; if the upload runs out of staging that frame it clears NOTHING and retries the
+            // whole dirty set next frame, so a moving camera can leave the card holding hundreds of
+            // thousands of live records the store gave up long ago -- and every one of them is a
+            // face the worklist may still pack and the shading pass may still pay for. Measured
+            // flying at 1440p: 982,507 live on the card against 548,601 in the store.
+            const i64 behind = static_cast<i64>(ambient_live) + static_cast<i64>(secondary_live) -
+                               static_cast<i64>(store.stats().faces);
+            WS_LOG_INFO("faces",
+                        "the card is {} records ahead of the store ({} live there, {} here); the "
+                        "upload ran out of staging on {} frames, and a frame that runs out clears "
+                        "nothing and sends the whole set again",
+                        behind, ambient_live + secondary_live, store.stats().faces,
+                        stats_.exhausted_frames);
+            // R9e, and it is printed whether or not the off-screen set has anything in it: nought
+            // secondary faces on a run with the rule ON is itself the result, and a line that only
+            // appears when something happened cannot say that nothing did.
+            WS_LOG_INFO("faces",
+                        "the set on the card: {} on screen at {:.0f} sun samples each, {} off "
+                        "screen at {:.0f} -- {} of those have finished their ambient term and {} "
+                        "are being read by a pixel and should not be in that class",
+                        primary_live, primary_live > 0
+                                          ? static_cast<f64>(primary_samples) / primary_live : 0.0,
+                        secondary_live,
+                        secondary_live > 0
+                            ? static_cast<f64>(secondary_samples) / secondary_live : 0.0,
+                        secondary_done, secondary_seen);
             for (u32 slot = 0; slot < watermark; ++slot) {
                 if (face_samples(card[slot]) < kFaceEager) continue;
                 ++settled;
@@ -498,7 +571,11 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                             "visibility {:.4f}, brightest {:.4f}, {} fully shadowed, {} fully lit, "
                             "{:.0f} samples each, {} lit only by a ray that ran out of steps, "
                             "{} shadowed by a cell the pool has not built",
-                            settled, watermark, facing,
+                            // Against the ON-SCREEN population, not against the watermark. An
+                            // off-screen face has no sun samples by construction and never will
+                            // until a pixel reads it, so counting it in the denominator reads as a
+                            // third of the store having failed to settle.
+                            settled, primary_live, facing,
                             facing > 0 ? facing_sum / facing : 0.0, brightest, dark, bright,
                             facing > 0 ? static_cast<f64>(sample_sum) / facing : 0.0, exhausted,
                             by_ignorance);
@@ -514,17 +591,85 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                 }
             }
 
+            // ...and the card's OWN faces, which are the most expensive face in the store and which
+            // nothing has ever counted.
+            //
+            // A provisional stand-in is claimed by the visibility pass when a pixel's fine face is
+            // not answerable and the coarse face over it is not in the store either (R3e, D316). Its
+            // record is rewritten every frame it is needed, so it can never accumulate: it takes a
+            // fresh unbounded far ray and a fresh lamp burst EVERY FRAME, for as long as anything is
+            // looking at it. Half a million of the store's faces cost a few rays each and then stop;
+            // these cost their rays for ever, and there was no number anywhere saying how many there
+            // were. Trap 16 -- when a cost is suspect, count the events that produce it.
+            //
+            // The mark carries the low byte of the frame it was claimed in, so "claimed on the frame
+            // that has just been drawn" is one comparison. The two frames before it are counted too,
+            // because a stand-in claimed on the frame before this one is a stand-in that was being
+            // paid for a moment ago, and a single frame's count on a moving camera is a sample of a
+            // quantity that varies frame to frame.
+            const u64 marks_bytes = static_cast<u64>(provisional_count()) * sizeof(u32);
+            if (marks_bytes <= staging_.size) {
+                VkCommandPoolCreateInfo mark_pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+                mark_pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+                mark_pool_info.queueFamilyIndex = device_->graphics_family();
+                VkCommandPool mark_pool = VK_NULL_HANDLE;
+                WS_VK(vkCreateCommandPool(device_->handle(), &mark_pool_info, nullptr, &mark_pool));
+                VkCommandBufferAllocateInfo mark_alloc{
+                    VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+                mark_alloc.commandPool = mark_pool;
+                mark_alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+                mark_alloc.commandBufferCount = 1;
+                VkCommandBuffer mark_cmd = VK_NULL_HANDLE;
+                WS_VK(vkAllocateCommandBuffers(device_->handle(), &mark_alloc, &mark_cmd));
+                VkCommandBufferBeginInfo mark_begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+                mark_begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                WS_VK(vkBeginCommandBuffer(mark_cmd, &mark_begin));
+                VkBufferCopy mark_copy{};
+                mark_copy.size = marks_bytes;
+                vkCmdCopyBuffer(mark_cmd, provisional_.buffer, staging_.buffer, 1, &mark_copy);
+                WS_VK(vkEndCommandBuffer(mark_cmd));
+                VkCommandBufferSubmitInfo mark_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+                mark_info.commandBuffer = mark_cmd;
+                VkSubmitInfo2 mark_submit{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+                mark_submit.commandBufferInfoCount = 1;
+                mark_submit.pCommandBufferInfos = &mark_info;
+                WS_VK(vkQueueSubmit2(device_->graphics_queue(), 1, &mark_submit, VK_NULL_HANDLE));
+                device_->wait_idle();
+
+                const u32* marks = static_cast<const u32*>(staging_.mapped);
+                u32 fresh = 0;
+                u32 recent = 0;
+                u32 ever = 0;
+                for (u32 i = 0; i < provisional_count(); ++i) {
+                    if (marks[i] == 0) continue;
+                    ++ever;
+                    const u32 stamp = marks[i] >> 24;
+                    const u32 age = (frame - stamp) & 0xFFu;
+                    if (age == 0) ++fresh;
+                    if (age <= 2) ++recent;
+                }
+                WS_LOG_INFO("faces",
+                            "the card's own stand-ins: {} claimed on this frame, {} in the last "
+                            "three, {} buckets ever used of {} -- each of these takes a fresh "
+                            "unbounded ray and a fresh lamp burst every frame it is needed",
+                            fresh, recent, ever, provisional_count());
+                vkDestroyCommandPool(device_->handle(), mark_pool, nullptr);
+            }
+
             vkDestroyCommandPool(device_->handle(), face_pool, nullptr);
         }
     }
 
-    if (matched) {
+    if (matched && compare) {
         WS_LOG_INFO("faces", "GPU mirror matches: {} faces by identity, {} buckets exactly",
                     watermark, store.entries().size());
     }
 
     vkDestroyCommandPool(device_->handle(), command_pool, nullptr);
-    return matched;
+    // A run that could not compare has not failed; it has not asked. Saying otherwise would make
+    // "the mirror is wrong" and "the mirror was busy" one answer, which is the distinction the log
+    // line above exists to draw.
+    return compare ? matched : true;
 }
 
 }  // namespace ws

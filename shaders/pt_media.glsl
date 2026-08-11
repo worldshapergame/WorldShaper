@@ -196,7 +196,26 @@ float henyey_greenstein(float cos_theta, float g) {
 
 // ---------------------------------------------------------------------------------------
 
-vec3 apply_media(vec3 radiance, vec3 origin, vec3 dir, float distance) {
+// `sun_reach` and `sky_reach` are how much of the sun and of the sky actually get to the air along
+// this ray, in [0, 1]. One each, because the two are blocked by different things and a room with a
+// skylight has one without the other.
+//
+// **Air cannot help you see in the dark.** Without this the in-scatter below lights every cubic
+// metre of fog in the world with the full sun and the full sky, whether or not either can reach it:
+// a sealed room with fog in it glowed, and the glow was in front of the walls, so the fog was
+// brighter than anything it was hiding. That is the same fault as an ambient floor — light the
+// renderer adds because it has not asked — and it is worse than the floor was, because it lifts the
+// air rather than the surface and no amount of black paint on the walls removes it.
+//
+// The caller passes what the SURFACE this ray ends on has measured: its sun visibility and its sky
+// visibility, both of which the composite has already read for that pixel, and both of which are
+// nought in a sealed room and one in the open. It is a proxy and it is stated as one — the air
+// halfway along a ray is not the surface at the end of it — but it is exact in the two cases that
+// matter (a room that receives nothing, and open ground), it costs nothing, and it errs towards
+// darkness in between. The alternative is an occlusion ray per pixel, which is what this function
+// was rewritten to remove: it cost twenty milliseconds of a thirty millisecond frame.
+vec3 apply_media(vec3 radiance, vec3 origin, vec3 dir, float distance,
+                 float sun_reach, float sky_reach) {
     Air air = world_air();
     // Clear air, which is what almost every scene is. One compare against a push constant, uniform
     // across the whole dispatch, so the branch is free and nothing below it is reached.
@@ -270,7 +289,7 @@ vec3 apply_media(vec3 radiance, vec3 origin, vec3 dir, float distance) {
     // light around it was stopped by something, and at this scale that something is cloud. Without
     // it an overcast sky still put full sunbeams through the fog underneath it, and those beams were
     // the brightest thing in a scene whose ground had correctly gone dark.
-    vec3 sunlight = sun_radiance() * deck;
+    vec3 sunlight = sun_radiance() * deck * clamp(sun_reach, 0.0, 1.0);
 
     // Skylight, and its absence is what made thick fog go BLACK.
     //
@@ -281,7 +300,7 @@ vec3 apply_media(vec3 radiance, vec3 origin, vec3 dir, float distance) {
     // than by one direction, and droplets return nearly all of what reaches them.
     //
     // Isotropic, because a hemisphere averaged over every direction has no lobe left in it.
-    vec3 skylight = sky_radiance(vec3(0.0, 1.0, 0.0));
+    vec3 skylight = sky_radiance(vec3(0.0, 1.0, 0.0)) * clamp(sky_reach, 0.0, 1.0);
     const float kIsotropic = 1.0 / (4.0 * kPi);
 
     // Each species with its own coefficient, albedo and phase, weighted by how much of it the ray

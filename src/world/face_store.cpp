@@ -18,6 +18,7 @@ void FaceStore::create(const FaceStoreBudget& budget) {
     budget_ = budget;
     faces_.assign(budget_.max_faces, GpuFace{});
     last_read_.assign(budget_.max_faces, 0);
+    secondary_.assign(budget_.max_faces, 0);
     // Twice the face count, so the table is at most half full and a probe stays short. Open
     // addressing degrades sharply past that, and the table is four bytes an entry against
     // thirty-two for the record it points at, so the headroom is cheap.
@@ -37,6 +38,9 @@ void FaceStore::create(const FaceStoreBudget& budget) {
     hits_ = 0;
     evictions_ = 0;
     refusals_ = 0;
+    secondary_live_ = 0;
+    secondary_declined_ = 0;
+    promotions_ = 0;
 }
 
 usize FaceStore::bucket_of(const FaceKey& key) const {
@@ -66,14 +70,51 @@ u32 FaceStore::find(const FaceKey& key) const {
     return kNoFace;
 }
 
-u32 FaceStore::claim(const FaceKey& key, u64 frame, bool* was_new) {
+u32 FaceStore::secondary_cap() const {
+    const u32 share = std::max(2u, budget_.secondary_share);
+    return budget_.max_faces / share;
+}
+
+void FaceStore::promote(u32 slot) {
+    if (slot >= faces_.size() || !is_secondary(slot)) return;
+    if (!face_live(faces_[slot])) return;
+    secondary_[slot] = 0;
+    if (secondary_live_ > 0) --secondary_live_;
+    ++promotions_;
+    // No dirty mark, and that is the point: nothing about the card's copy of this record changed.
+    // See `is_secondary`.
+}
+
+u32 FaceStore::claim(const FaceKey& key, u64 frame, bool* was_new, bool secondary) {
     if (was_new != nullptr) *was_new = false;
     ++claims_;
     const u32 existing = find(key);
     if (existing != kNoFace) {
         ++hits_;
         last_read_[existing] = static_cast<u32>(frame);
+        // A face already here is never demoted by a ray asking for it again. The class answers "who
+        // wants this", and the answer once a pixel has wanted it is the pixel, for as long as the
+        // face lives -- a bounce ray landing on the wall in front of you must not put that wall
+        // inside the off-screen cap.
+        if (!secondary) promote(existing);
         return existing;
+    }
+
+    // The cap, and it is checked before a slot is taken rather than after. R9b: a class that
+    // overruns degrades its own refresh rate and nothing else's, so this returns kNoFace WITHOUT
+    // setting `out_of_room_` and without counting a refusal. The store is not full; this class is.
+    //
+    // Two tests, and the second is what makes "R9a cannot cause a refusal" structural rather than
+    // hopeful. The cap alone bounds the off-screen set against the TABLE; it does not bound the two
+    // sets together, and the on-screen set has no bound at all -- flying, it has measured 995,684
+    // live faces against a table of 1,048,576 (D504). A quarter of the table held off-screen on top
+    // of that is the store full and refusing, which is a visible surface with no light of its own
+    // and is the exact picture D502 was reported as. So the moment the store is tight enough to
+    // start spending its history, the off-screen set stops growing at all: it is the class whose
+    // faces nobody is looking at, and it is the one that can afford to wait.
+    if (secondary && (secondary_live_ >= secondary_cap() || pressure_shift() > 0)) {
+        ++secondary_declined_;
+        return kNoFace;
     }
 
     u32 slot = kNoFace;
@@ -101,6 +142,8 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame, bool* was_new) {
     faces_[slot].y = static_cast<i32>(key.y);
     faces_[slot].z = static_cast<i32>(key.z);
     faces_[slot].packed = pack_face(key.level, key.face, kFaceLive);
+    secondary_[slot] = secondary ? 1 : 0;
+    if (secondary) ++secondary_live_;
     faces_[slot].bins = kNoOffset;
     last_read_[slot] = static_cast<u32>(frame);
     dirty_faces_.mark(slot);
@@ -120,6 +163,10 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame, bool* was_new) {
 
     // The table is sized at twice the face count, so reaching here means every bucket is taken
     // while a face slot was free, which cannot happen unless one of the two is mis-sized.
+    if (secondary && secondary_live_ > 0) --secondary_live_;
+    secondary_[slot] = 0;
+    faces_[slot] = GpuFace{};
+    dirty_faces_.mark(slot);
     free_faces_.push_back(slot);
     out_of_room_ = true;
     ++refusals_;
@@ -292,6 +339,8 @@ void FaceStore::sweep(u32 now, u32 cold, u32 first, u32 last) {
                 break;
             }
         }
+        if (secondary_[slot] != 0 && secondary_live_ > 0) --secondary_live_;
+        secondary_[slot] = 0;
         faces_[slot] = GpuFace{};
         dirty_faces_.mark(slot);
         last_read_[slot] = now;
@@ -310,6 +359,10 @@ FaceStoreStats FaceStore::stats() const {
     s.evictions = evictions_;
     s.refusals = refusals_;
     s.cold_window = cold_now();
+    s.secondary = secondary_live_;
+    s.secondary_cap = secondary_cap();
+    s.secondary_declined = secondary_declined_;
+    s.promotions = promotions_;
     return s;
 }
 
@@ -321,13 +374,19 @@ bool FaceStore::validate() const {
         if (slot == kNoFace || slot == kFaceTombstone) continue;
         if (slot >= next_free_) return false;
     }
+    u32 secondary = 0;
     for (u32 slot = 0; slot < next_free_; ++slot) {
         const GpuFace& face = faces_[slot];
         if (!face_live(face)) continue;
+        if (is_secondary(slot)) ++secondary;
         const FaceKey key{face.x, face.y, face.z, face_level(face), face_direction(face)};
         if (find(key) != slot) return false;
     }
-    return true;
+    // The class counter against the classes actually present. It is the one number here that is
+    // maintained incrementally rather than derived, so it is the one that can drift -- a decrement
+    // missed on one of eviction, promotion or the mis-sized-table path would let the off-screen cap
+    // creep upwards for the rest of the run with nothing to say so.
+    return secondary == secondary_live_;
 }
 
 }  // namespace ws

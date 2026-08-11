@@ -346,6 +346,130 @@ TEST_CASE("a claim says whether it is what put the face here") {
     CHECK_FALSE(was_new);
 }
 
+// R9b, and it is the clause that makes R9a safe to land at all: the off-screen set is bounded and
+// the on-screen set is not bounded by it.
+//
+// The failure this is written against is D502 with a new cause. The store filling is not a slow
+// frame — it is a claim REFUSED, which leaves a visible surface with no face of its own, falling to
+// the card's provisional stand-in that re-measures every frame. That is the blocky flickering light
+// a player reported. A gathering ray's set has no bound the screen knows about, so without a cap it
+// would reach that state on its own, and the fault would arrive looking exactly like a bug that was
+// already fixed.
+TEST_CASE("the off-screen set is capped, and a pixel's claim never is") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 64;
+    budget.cold_frames = 600;
+    budget.claim_period = 1;
+    budget.secondary_share = 4;   // a quarter of the table, so sixteen faces
+    store.create(budget);
+    REQUIRE(store.secondary_cap() == 16);
+
+    for (u32 i = 0; i < 16; ++i) {
+        REQUIRE(store.claim(FaceKey{i, 7, 0, 0, 0}, 1, nullptr, true) != kNoFace);
+    }
+    CHECK(store.stats().secondary == 16);
+
+    // The seventeenth is DECLINED: no slot, no refusal counted, and the store is not out of room.
+    // Those three together are the whole of what "a class that overruns degrades its own refresh
+    // rate and nothing else's" means, and a decline counted as a refusal would read as the fault
+    // above in every log line that reports it.
+    CHECK(store.claim(FaceKey{17, 7, 0, 0, 0}, 1, nullptr, true) == kNoFace);
+    CHECK(store.stats().secondary_declined == 1);
+    CHECK(store.stats().refusals == 0);
+    CHECK_FALSE(store.out_of_room());
+
+    // ...while the on-screen set still has the other three quarters, and takes them.
+    for (u32 i = 0; i < 48; ++i) {
+        REQUIRE(store.claim(FaceKey{i, 9, 0, 0, 0}, 1) != kNoFace);
+    }
+    CHECK(store.stats().faces == 64);
+    CHECK(store.validate());
+}
+
+// The cap bounds the off-screen set against the table; it does not bound the two sets TOGETHER, and
+// the on-screen set has no bound at all. Flying, it has measured 995,684 live faces against a table
+// of 1,048,576 (D504) — so a quarter of the table held off screen on top of that is the store full
+// and refusing, and a refusal is a visible surface with no light of its own. That is the picture
+// D502 was reported as, and R9a must not be able to produce it.
+TEST_CASE("a store under pressure stops growing the off-screen set at all") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 1024;
+    budget.cold_frames = 600;
+    budget.claim_period = 1;
+    budget.secondary_share = 4;    // 256 slots, which this never reaches
+    budget.pressure_from = 8;      // the squeeze begins under an eighth free
+    store.create(budget);
+
+    // The on-screen set takes seven eighths of the table, which is where the squeeze begins.
+    for (u32 i = 0; i < 900; ++i) {
+        REQUIRE(store.claim(FaceKey{i, 0, 0, 0, 0}, 1) != kNoFace);
+    }
+    REQUIRE(store.pressure_shift() > 0);
+    REQUIRE(store.stats().secondary < store.secondary_cap());
+
+    // A light ray asking now is declined although its own cap has room, because the table has not.
+    CHECK(store.claim(FaceKey{1, 1, 1, 0, 0}, 1, nullptr, true) == kNoFace);
+    CHECK(store.stats().secondary_declined == 1);
+    CHECK(store.stats().refusals == 0);
+    // ...and a pixel asking at the same moment is served, which is the whole point of the rule.
+    CHECK(store.claim(FaceKey{2, 2, 2, 0, 0}, 1) != kNoFace);
+    CHECK(store.validate());
+}
+
+// The class is a state and not a birthmark, and this is the case that says so: a face a bounce ray
+// found, which the player then walks up to. Without promotion it would count against the off-screen
+// cap for the rest of its life — so the cap would be holding down faces somebody is looking at,
+// which is the exact opposite of what it is for.
+TEST_CASE("a pixel reading an off-screen face moves it into the on-screen set") {
+    FaceStore store = make_store(1024, 600);
+    bool was_new = false;
+    const u32 slot = store.claim(FaceKey{5, 6, 7, 0, 2}, 1, &was_new, true);
+    REQUIRE(slot != kNoFace);
+    REQUIRE(was_new);
+    REQUIRE(store.is_secondary(slot));
+    CHECK(store.stats().secondary == 1);
+
+    // The read report, which is what the visibility pass sends for every face a pixel resolves to.
+    store.promote(slot);
+    CHECK_FALSE(store.is_secondary(slot));
+    CHECK(store.stats().secondary == 0);
+    CHECK(store.stats().promotions == 1);
+
+    // And a light ray asking for it again does not put it back: the class only ever moves towards
+    // the screen. A ray landing on the wall in front of you must not file that wall as off-screen.
+    store.claim(FaceKey{5, 6, 7, 0, 2}, 2, nullptr, true);
+    CHECK_FALSE(store.is_secondary(slot));
+    CHECK(store.stats().secondary == 0);
+
+    // A primary claim of a face that is still secondary promotes it too, which is the same rule
+    // arriving through the request lattice rather than through the read report.
+    const u32 other = store.claim(FaceKey{8, 8, 8, 0, 1}, 3, nullptr, true);
+    REQUIRE(other != kNoFace);
+    CHECK(store.stats().secondary == 1);
+    store.claim(FaceKey{8, 8, 8, 0, 1}, 4);
+    CHECK(store.stats().secondary == 0);
+    CHECK(store.validate());
+}
+
+// The counter is maintained incrementally and everything else in `validate` is derived, so it is the
+// one number here that can drift. A decrement missed on eviction would let the cap creep upward for
+// the rest of the run with nothing anywhere to say so — until the store is full of off-screen faces
+// and the picture is the one D502 describes.
+TEST_CASE("giving up an off-screen face gives its place in the cap back") {
+    FaceStore store = make_store(1024, 4);
+    for (u32 i = 0; i < 8; ++i) {
+        REQUIRE(store.claim(FaceKey{i, 1, 1, 0, 0}, 1, nullptr, true) != kNoFace);
+    }
+    REQUIRE(store.stats().secondary == 8);
+
+    for (u64 frame = 2; frame < 40; ++frame) store.evict_cold(frame);
+    CHECK(store.stats().secondary == 0);
+    CHECK(store.find(FaceKey{3, 1, 1, 0, 0}) == kNoFace);
+    CHECK(store.validate());
+}
+
 TEST_CASE("a reclaimed slot carries nothing of the face before it") {
     FaceStore store = make_store(1024, 4);
     const u32 first = store.claim(FaceKey{3, 3, 3, 3, 0}, 1);

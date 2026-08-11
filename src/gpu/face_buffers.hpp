@@ -25,6 +25,16 @@ struct FaceBufferStats {
     u32 uploads = 0;
     u64 device_bytes = 0;
     bool staging_exhausted = false;
+    // How many frames ran out of staging before they had sent everything the store had changed.
+    //
+    // A state rather than an event was all this had, and a state answers "is it happening now" --
+    // which for something that happens on a burst of frames while the camera moves reads as false
+    // at every moment anybody asks. The same distinction `FaceStoreStats::refusals` draws against
+    // `out_of_room()`, and the same trap (16). It matters because an exhausted upload clears NOTHING
+    // -- the whole dirty set is retried next frame -- so the card can fall arbitrarily far behind
+    // the store and stay there, holding live records for faces the host gave up long ago. The face
+    // pass shades what the CARD holds.
+    u32 exhausted_frames = 0;
 };
 
 class FaceBuffers {

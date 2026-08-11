@@ -130,6 +130,10 @@ static_assert(sizeof(GpuFace) == 32, "GpuFace must stay two to a cache line");
 inline constexpr u32 kFaceLeaf = 1u << 0;         // the face of a leaf rather than a coarse node
 inline constexpr u32 kFaceTransmissive = 1u << 1; // light comes through it: glass, water
 
+// Which class a face belongs to -- a light ray landed on it, or a pixel did -- lives in a HOST-ONLY
+// array beside the records and emphatically not in a flag of `packed`. See `FaceStore::is_secondary`
+// for what putting it in the record cost.
+
 // Set on every face this store claims, and the reason it exists is a collision on zero.
 //
 // A slot was called empty when its packed word was nought. That worked for exactly as long as the
@@ -259,6 +263,20 @@ struct FaceStoreBudget {
     // run time is a trade somebody guesses at (D430's rule, applied to this one). See
     // kFacePressureFrom for what each end of it measured.
     u32 pressure_from = kFacePressureFrom;
+
+    // The most of the table the OFF-SCREEN set may hold, as a divisor: 4 means a quarter.
+    //
+    // R9b, and it is the reason R9a can be landed at all. A face claimed by a light ray is claimed
+    // because some other face needs to read it, and the set of those is bounded by nothing the
+    // screen knows about -- §6's whole argument for why faces grow sub-linearly with resolution says
+    // nothing about a set that includes surfaces no pixel is looking at. One shared budget lets that
+    // set fill the table, and a full table is the state D502 measured: refused claims, no face for a
+    // visible surface, and the card's provisional stand-in re-measuring every frame, which is what
+    // blocky flickering light IS.
+    //
+    // A cap per class means a class that overruns degrades its own refresh rate and nothing else's.
+    // Declining a secondary claim costs a bounce sample; refusing a primary one costs a picture.
+    u32 secondary_share = 4;
 };
 
 // How many frames one full eviction sweep is spread over. Eight slices costs eight frames of
@@ -314,6 +332,15 @@ struct FaceStoreStats {
     // surface that got no light of its own on this frame. Trap 16.
     u64 refusals = 0;
     u32 cold_window = 0;
+
+    // The two classes, and what the cap turned away. A DECLINE is not a refusal and the two must not
+    // be added together: a refusal is a surface with no light of its own, which is a picture fault; a
+    // decline is one bounce sample that reads its coarse stand-in instead, which is the cap doing
+    // exactly what it is for. Trap 7 -- "nothing here" and "I could not fit it" -- one level along.
+    u32 secondary = 0;
+    u32 secondary_cap = 0;
+    u64 secondary_declined = 0;
+    u64 promotions = 0;
 };
 
 // The store itself.
@@ -334,7 +361,40 @@ public:
     // claims are repeats -- the same surfaces reported by the same lattice frame after frame -- and
     // the stand-in claim hanging off this one is only worth anything the first time. Asking the
     // store instead of asking `find` first is the point: `claim` has already done that probe.
-    u32 claim(const FaceKey& key, u64 frame, bool* was_new = nullptr);
+    // `secondary` says a LIGHT ray asked for this face rather than a pixel (R9a). Such a claim is
+    // subject to `secondary_cap` and is DECLINED rather than refused when the cap is reached, which
+    // is a different answer with a different consequence -- see FaceStoreStats::secondary_declined.
+    // A secondary claim for a face that is already here never demotes it: the class only ever moves
+    // towards primary, because a pixel wanting a face outranks a ray wanting it.
+    u32 claim(const FaceKey& key, u64 frame, bool* was_new = nullptr, bool secondary = false);
+
+    // A pixel read this face, so it belongs to the on-screen set whatever put it here.
+    //
+    // Called from the `kFeedbackFaceRead` report, which is the exact signal: it is sent by the
+    // visibility pass for every face a pixel resolves to. Without it a face claimed by a bounce ray
+    // and then walked up to would stay inside the off-screen cap for the rest of its life, and the
+    // cap would be holding down faces the player is looking at.
+    void promote(u32 slot);
+
+    // Which class a slot is in. HOST-ONLY, in an array beside the records rather than in a flag of
+    // `packed`, and the reason is D295 with a new door into it.
+    //
+    // `packed` is mirrored to the card, and `FaceBuffers::upload` sends whole records for the slots
+    // the store marks dirty. The record has two owners -- the host owns the key and the flags, the
+    // card owns `irradiance`, `photons` and `counters` -- so marking a LIVE face dirty sends the
+    // host's zeroed counters over the light the card has accumulated into it. That is exactly the
+    // fault D295 found and the reason uploads go by exact region rather than by coalesced range.
+    //
+    // Class was a flag of `packed` for one afternoon, and promotion therefore wiped the light of
+    // every face a bounce ray had found and a pixel then walked up to: 29,882 of them in one flight,
+    // each starting its whole ambient burst again, and nothing anywhere would have said so -- the
+    // picture is right, the mirror agrees, and only the cost moves. An instrument's own bookkeeping
+    // must not be written into a field the card is writing to.
+    bool is_secondary(u32 slot) const {
+        return slot < secondary_.size() && secondary_[slot] != 0;
+    }
+
+    u32 secondary_cap() const;
 
     // The slot for a face, or kNoFace. Never claims. This is what the composite does.
     u32 find(const FaceKey& key) const;
@@ -388,6 +448,7 @@ private:
     std::vector<GpuFace> faces_;
     std::vector<u32> entries_;        // open-addressed, slot per bucket, kNoFace when empty
     std::vector<u32> last_read_;      // CPU-side, parallel to faces_, as the node pool's is
+    std::vector<u8> secondary_;       // CPU-side too, and see `is_secondary` for why it must be
     std::vector<u32> free_faces_;
     u32 next_free_ = 0;
     u32 evict_cursor_ = 0;     // where the rolling eviction sweep is
@@ -403,6 +464,9 @@ private:
     u64 hits_ = 0;
     u64 evictions_ = 0;
     u64 refusals_ = 0;
+    u32 secondary_live_ = 0;
+    u64 secondary_declined_ = 0;
+    u64 promotions_ = 0;
 };
 
 }  // namespace ws

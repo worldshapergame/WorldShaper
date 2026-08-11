@@ -1251,3 +1251,121 @@ glass come immediately after it.
 
 Two smaller things are queued behind that and both have numbers on them: the exposure meter, which
 is why the hall lit only by sconces comes out white, and the undo record above.
+
+## That rule is now in, and on purpose you cannot see it yet
+
+The rule above — *a face also exists because another face needs to read it* — is built. When the
+lighting fires a ray out from a surface and that ray lands on something, the game now writes down the
+one surface it landed on. Only that one: never anything the ray passed through on the way, which is a
+line I have to hold, because "remember everything a light ray touches" is how a renderer ends up
+loading the whole world behind every wall.
+
+**Deliberately, nothing reads that list yet, and the picture is unchanged.** I checked it two ways:
+standing still and flying, the picture differs from a build with the rule switched off by less than
+two runs of the *same* build differ from each other. Those surfaces sit in the list costing no light
+and no rays. The next change is the one that reads them — that is bounced light, and it is what
+replaces the single number the game currently uses to stand in for *all* indirect light indoors.
+
+I landed it on its own rather than together with the thing that uses it, and that turned out to be
+worth it, because two faults came out that would have been invisible inside a change that also moved
+every pixel:
+
+- **The lighting got faster and that was the bug.** Each surface waits its turn for a sun ray, and
+  the queue was "everything in the list" rather than "everything you can see" — so the moment the new
+  off-screen surfaces joined the list, every surface you *were* looking at was updated less often.
+  The lighting pass measured 17 per cent cheaper, and the price was hidden somewhere no stopwatch
+  looks: each visible surface had 72 sun measurements instead of 84. A thing that got cheaper by
+  doing less of its job looks exactly like a thing that got faster. It is fixed, and both now read 84.
+- **The label nearly erased the light.** I first stored "this surface came from a light ray" as a
+  flag inside the surface's own record — and that record is shared with the graphics card, which
+  writes the light into it. Changing the flag would have sent our copy over the card's, wiping the
+  accumulated light on nearly 30,000 surfaces per flight. Right picture, every self-check green, and
+  only the cost moving. The label lives in a separate list now.
+
+## Dark is now actually dark
+
+You asked for two things and both were real: nothing should have a minimum brightness, and fog
+should not let you see in the pitch black.
+
+**The first.** Two numbers in the drawing code made a black surface impossible. One added half of the
+sky's light back wherever a surface could not see the sky. The other added a small fixed amount of
+light to **every surface in the world**, no conditions at all — a face sealed inside solid stone,
+with no sun, no sky and no lamp, still got some. Both are deleted. What is left cannot invent light:
+sun times how much of the sun the surface can see, plus sky times how much sky, plus lamps, plus the
+measured bounce. All nought means black.
+
+**The second, and it was the worse of the two.** Fog was a torch. The air was lit with full sunlight
+and full skylight everywhere in the world, whether or not either could reach it — so a sealed room
+with fog in it *glowed*, and the glow sits in front of the walls, so painting the walls black would
+not have removed it. The air now gets told how much sun and sky actually reach that spot, and in a
+sealed room that is nothing.
+
+**Proof, not a promise.** There is now a test room — four metres of air inside two metres of stone,
+no door, no window, no lamp — and a one-line tool that renders it and reports the brightest pixel:
+
+```bash
+.\tools\darkroom.ps1 -Fog
+```
+
+It reads **0 out of 255, every pixel**, clear and with fog. I added it because this is exactly the
+kind of thing that quietly comes back: a small amount of fake light is invisible in a lit scene, and
+those two numbers survived the entire rewrite without anything noticing.
+
+**What it cost the building: nearly nothing.** The average pixel in the rotunda goes from 126.3 to
+124.8 — because the light those numbers were faking is now light that is actually measured. What
+changed is the bottom end: the darkest pixel indoors was stuck at 4.7 and is now 0.4.
+
+## And then the thing that list was for: bounced light
+
+The game has lit every interior with **one number**. Not a measurement — a constant, 0.5, standing in
+for all the light that bounces off walls onto other walls, with a note beside it saying this stage
+would replace it. It is replaced.
+
+Each surface already fires one long ray into the room to ask "can I see the sky from here?". That ray
+lands on something almost every time, and until now everything it hit was thrown away. It now brings
+back **what that surface is giving off** — read straight from the surface's own record, which the
+same pass filled in a moment earlier. So the light in a room is now light that came off the things in
+the room.
+
+**What you can see:**
+
+- outdoors, the portico, the columns and the steps go from crushed black to legible. Sunlit stone
+  throws far more light than the old constant pretended;
+- indoors, the room has shape instead of a flat wash: the niches, the dome and the pilasters carry a
+  gradient that was not there;
+- it is **quieter**, not noisier — the speckle measure falls from 21.2 to 17.6 and the count of stray
+  bright pixels from 81 to 9;
+- and it bounces more than once for free, because what a surface gives off already includes what it
+  gathered, so the light goes round the room.
+
+**What it costs: about 5% of a frame.** That is the whole point of doing light on surfaces rather than
+on pixels — the ray was already being fired, so the fourth kind of light in the game is nearly free.
+
+**I predicted this would make rooms darker and I was wrong**, which is worth writing down: I expected
+one bounce to be dimmer than a constant of 0.5. It is much brighter outdoors, because a sunlit wall
+is far brighter than half of a sky.
+
+**Three faults on the way, and the first is the one worth telling.** The number saying how big a
+surface's light record is was written down in two files. The record grew and only one of the two was
+updated — so the pass that draws read every surface's light out of a *different* surface's record.
+The building came out black under dense black-and-white speckle, which looks exactly like "not enough
+samples", and I spent two fixes chasing sample counts before reading the two files side by side.
+
+**Still open: the fine grid you spotted.** I measured it and can tell you what it is not — not the
+bounce (identical with it switched off), not the model, not the materials, not the lamps, not the
+resolution once measured properly. What is left is that **every kind of light in this game is worked
+out per surface from that surface's own random samples, and nothing smooths between neighbours** —
+so two surfaces side by side disagree slightly, and a disagreement per surface on a grid of cubes is
+a grid. That is exactly the job of the next stage in the plan, the denoiser. Your last clue — that it
+fixes itself when you leave and come back — points at something narrower: a surface stops measuring
+once it is confident, so surfaces that finished while the room was still filling with light keep the
+darker answer they had. That one I can test.
+
+**And one measurement that is bigger than the change that found it.** While hunting the above I
+finally got the game to report, while you are *moving*, how far the graphics card's copy of the
+lighting table is behind ours. The answer is **up to 434,838 surfaces**: we throw a surface away, the
+card is told in the next upload, the upload runs out of room, and — this is the fault — it then
+throws away *all* its progress and starts the whole list again next frame. So the card goes on
+lighting hundreds of thousands of surfaces we abandoned long ago, and that is what the lighting pass
+is actually spending its time on while you fly. Fixing that is now the biggest single number on the
+list for movement, and it has nothing to do with lighting at all.

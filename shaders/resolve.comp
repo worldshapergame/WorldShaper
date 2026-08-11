@@ -51,11 +51,14 @@ layout(std430, binding = 6) readonly buffer Faces { Face items[]; } faces;
 layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
 // The card's own light, which the host never touches. See src/gpu/face_light.hpp.
 layout(std430, binding = 8) readonly buffer FaceLight { uint words[]; } face_light;
-// Nine, and the layout is documented once in shaders/node.glsl beside the pass that writes it.
-// Word 0 holds two counts -- near-field rays low, far-field rays high -- because the two halves of
-// the ambient integral stopped sharing a ray when the near field's was bounded at a metre. Words
-// 5-7 are the lamps' accumulated irradiance and word 8 their sample count and list version.
-const uint kFaceLightWords = 9u;
+// The stride comes from shaders/face_terms.glsl, which both this pass and the pass that writes the
+// record include. It was a second `const uint kFaceLightWords = 9u` here for three stages, and the
+// day the record grew to twelve words this pass went on reading it at nine — so every face's sun,
+// sky, near field and lamps came out of a different face's record, and the enclosed camera drew as
+// salt and pepper over a black building. The block comment ten lines above this one says the Params
+// block is declared once "so a shader can never again drift out of step with the buffer it is
+// reading"; this is the same lesson, in the same file, about the buffer beside it.
+#include "face_terms.glsl"
 // Must match kSkyConverged in shaders/node.glsl. Read by debug view 19 only -- the shaded path
 // never asks whether a face has finished, it asks what the face says.
 const uint kSkyConverged = 2048u;
@@ -159,24 +162,52 @@ vec3 to_display(vec3 radiance) {
     return pow(tonemap_aces(radiance * kPreviewExposure), vec3(1.0 / 2.2));
 }
 
-// How much of the sky a surface sees, with nothing traced to find out.
-//
-// An up-facing surface sees the whole dome, a down-facing one sees only what bounces off the
-// ground. Without a term like this every face not pointing at the sun is lit identically, and the
-// building reads as a paper model.
+// How much of the sky's radiance a fully open surface receives. A scale on a measured visibility,
+// not a floor under it: at `open_sky` = 0 this contributes nothing at all.
 const float kSkyAmbient = 0.55;
-const float kGroundBounce = 0.12;
-// What is left of the ambient term where no sky reaches at all. Not an occlusion parameter: it is
-// the share of `kSkyAmbient` that was always standing in for light bounced off other surfaces, and
-// it goes to zero when R3c and R9 compute that light instead of assuming it.
-// Its value is chosen, not tuned: the orientation heuristic it replaces averaged 0.5 over a
-// surface whose normals point every way, so a floor of 0.5 leaves the enclosed room at the mean
-// brightness it already had. That matters because of what this stage is FOR. Indoors every surface
-// is occluded, so any floor below that darkens the whole room uniformly — and a uniform darkening
-// is indistinguishable from a lower exposure, which is the one failure the R10 gate calls out by
-// name. At 0.5 the mean is held and the occlusion spends itself on contrast instead: creases,
-// soffits and alcove interiors go dark against walls that do not.
-const float kIndirectFloor = 0.5;
+
+// ---- there is no minimum light ------------------------------------------------------------------
+//
+// **A surface that receives nothing is black.** Two constants used to make that impossible and both
+// are gone:
+//
+//   `kGroundBounce = 0.12` was added to every surface in the world, multiplied by the near field and
+//   by nothing else — so a face sealed inside solid stone, with no sky, no sun and no lamp, still
+//   received a fixed share of the sky's radiance. It was standing in for light bouncing off the
+//   ground, which R9's bounce now measures, and it was the larger of the two failures because it did
+//   not even pretend to be conditional.
+//
+//   `kIndirectFloor = 0.5` was the share of `kSkyAmbient` that was never sky: light bounced off
+//   other surfaces, assumed rather than traced, and mixed in wherever the measured sky visibility
+//   fell short. Its own comment gave it an expiry — *"it goes to zero when R3c and R9 compute that
+//   light instead of assuming it"* — and R9 computes it now.
+//
+// What replaces both is the bounce, which is a measurement of this room rather than of nothing. The
+// consequence is deliberate and is the thing to expect: **a sealed room with no lamp in it is black,
+// and stays black.** Anything else is a renderer deciding on the player's behalf that the dark is
+// too dark, and the plan's own gate calls that failure out by name — a uniform lift is
+// indistinguishable from a higher exposure, so it hides exactly the occlusion this stage exists to
+// measure.
+//
+// The one thing that is NOT a floor and reads like one: a face with no samples yet is drawn with the
+// composite's own fallback — full sun, fully open sky — because a surface that has not been measured
+// has not been shown to be dark. That is latency, it lasts a frame or two (D313, R9d), and it errs
+// bright rather than dark on purpose. Making it err dark instead is a separate decision with its own
+// trade, and it is not this one.
+
+// How many far samples a face's bounce needs before it is believed outright, and it is a smaller
+// number than the one the face converges to.
+//
+// The two are different questions. `kBounceMin` is when the face may STOP measuring — where the
+// answer is good enough to freeze. This is where it is worth reading at all, and it is reached far
+// sooner: a mean of thirty-two radiance samples is noisy and it is still a measurement of this room.
+//
+// It ramps rather than switching, which is D387's rule — a hard per-face decision is a new
+// discontinuity per face. What it ramps between is nought and the measurement, NOT between a
+// constant and the measurement: there is no constant any more. So an unconverged face is dimmer than
+// a converged one for a second, which errs dark, and dark is the direction this renderer is now
+// required to err in.
+const float kBounceBelieve = 32.0;
 
 vec3 unpack_rgb(uint packed) {
     return vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
@@ -221,6 +252,13 @@ void main() {
     }
 
     bool hit = packed.x != 0xFFFFFFFFu;
+    // How much of the sun and of the sky reach the far end of this ray, for the air along it.
+    //
+    // One each and both default to fully open, which is right for a ray that reached the sky: there
+    // is nothing between that air and either source. Where the ray ends on a surface they are that
+    // surface's own measured visibilities, so fog in a sealed room scatters nothing. See apply_media.
+    float media_sun_reach = 1.0;
+    float media_sky_reach = 1.0;
     float t = uintBitsToFloat(packed.w);
     uint face = packed.x & 0xFFu;
     uint level = (packed.x >> 8u) & 0xFFu;
@@ -325,6 +363,17 @@ void main() {
         // dark, which is the same discipline the sun's own fallback follows.
         float open_sky = 1.0;
         float unoccluded = 1.0;
+        // What this surface has measured arriving from other surfaces, as radiance (R9).
+        //
+        // A mean rather than a sum, over the far field's own count, because it is the same ray: one
+        // unbounded cosine-weighted sample of the hemisphere, whose answer is the sky when it
+        // escapes and a surface's outgoing light when it does not. `bounce_known` is what says
+        // whether the measurement exists at all, and it is the whole of what decides between this
+        // and `kIndirectFloor` below — a face with no far rays yet has not found the room dark, it
+        // has not looked.
+        vec3 bounce = vec3(0.0);
+        bool bounce_known = false;
+        float bounce_confidence = 0.0;
         // What the lamps deliver here, measured on the face by shade_faces.comp (R3c).
         //
         // IRRADIANCE, already carrying the cosine and already divided by the density that chose
@@ -349,6 +398,29 @@ void main() {
             uint sky_counters = face_light.words[face_slot * kFaceLightWords];
             uint sky_samples = sky_counters & 0xFFFFu;          // near-field rays
             uint far_samples = (sky_counters >> 16u) & 0xFFFFu;  // far-field rays
+            if (far_samples > 0u) {
+                bounce = vec3(uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 9u]),
+                              uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 10u]),
+                              uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 11u])) /
+                         float(far_samples);
+                // How far to believe it, and this is not caution — it is the difference between a
+                // measurement and a per-face lottery.
+                //
+                // A bounce sample is a RADIANCE, so it has no bound to average itself against: one
+                // ray landing on a sunlit sill returns something twenty times what the wall around
+                // it returns, and a mean of ten such samples is mostly the luck of which ten. The
+                // first version of this believed the mean the moment a single ray existed, and the
+                // enclosed camera came out as salt and pepper over a black building — every face
+                // disagreeing with its neighbour, which is exactly what a per-face estimator with
+                // ten samples looks like when nothing smooths it.
+                //
+                // So confidence rises with the samples, and it rises SMOOTHLY. A threshold would put
+                // a discontinuity at the sample count on every face that straddles it, and D387 is
+                // the standing measurement of what a hard per-face decision does: neighbours either
+                // side of it disagree by more than the noise ever did.
+                bounce_confidence = clamp(float(far_samples) / float(kBounceBelieve), 0.0, 1.0);
+                bounce_known = bounce_confidence > 0.0;
+            }
             if (sky_samples >= kShadowSettled) {
                 // The far field has its own count and its own ray, and the near field converges
                 // far faster, so the two are gated separately. A face with contact measured and no
@@ -429,26 +501,24 @@ void main() {
                 unoccluded = 1.0 - clamp(occluded, 0.0, 1.0);
             }
         }
-        // The sky term is occluded; the bounce term is not, because it is not the sky.
+        // How much sky this surface receives, and there is nothing under it.
         //
-        // `kSkyAmbient` was standing in for two different things at once: light arriving from the
-        // dome, and light that has bounced off something else in the room. Occlusion applies to
-        // the first and emphatically not to the second — a windowless room gets no sky and is
-        // still not black, because its walls light each other. Multiplying the whole constant by
-        // measured sky visibility takes both away, and the enclosed camera goes to near black:
-        // correct about the sky, wrong about the room, and wrong in the direction that looks like
-        // the feature is broken.
+        // `kSkyAmbient` used to stand in for two different things at once — light arriving from the
+        // dome, and light bounced off something else in the room — which is why taking the second
+        // away by multiplying the whole constant by measured sky visibility sent the enclosed camera
+        // to near black: correct about the sky, wrong about the room. The second thing is measured
+        // now (R9's bounce, added below), so this is the sky and only the sky, and where a face can
+        // see none of it this is nought.
         //
-        // So `kIndirectFloor` is the part of that constant which was never sky. It is a stand-in
-        // with a name and an expiry rather than a fudge: R3c's lamps and R9's bounce replace it
-        // with light that is actually computed, and when they do this term goes to zero and the
-        // line above it stops needing a comment this long.
-        // Multiplied, not averaged, and each appears exactly once. The far field says how much of
-        // the dome is there to be seen; the near field says how much of what is left is shut out
-        // by whatever is within a metre. Applying either twice double-darkens every crease, and
-        // that failure looks like a taste problem rather than like a bug.
-        float sees_sky = kSkyAmbient * mix(kIndirectFloor, 1.0, open_sky) * unoccluded +
-                         kGroundBounce * unoccluded;
+        // Multiplied, not averaged, and each appears exactly once. The far field says how much of the
+        // dome is there to be seen; the near field says how much of what is left is shut out by
+        // whatever is within a metre. Applying either twice double-darkens every crease, and that
+        // failure looks like a taste problem rather than like a bug.
+        float sees_sky = face_sky_visibility(open_sky, unoccluded) * kSkyAmbient;
+        // ...and the same two numbers for the air in front of this surface, which is the whole of
+        // what stops fog glowing in a room the sun and the sky cannot reach.
+        media_sun_reach = sun_visible;
+        media_sky_reach = face_sky_visibility(open_sky, unoccluded);
         // Over PI, and leaving it out is what blew the building white while the sky stayed dark.
         //
         // A Lambertian surface lit by an irradiance E reflects albedo * E / PI as RADIANCE. Dropping
@@ -456,7 +526,13 @@ void main() {
         // sky, which is already radiance and needs no such conversion. The exposure then has to be
         // pulled down to stop the walls saturating, and pulling it down is what left the sky navy.
         // The two are the same fault seen twice.
-        colour *= (sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) * (1.0 / kPi);
+        // ...and the bounce, which is a RADIANCE MEAN and so is added after the divide rather than
+        // inside it: the irradiance it stands for is PI times it, and the two PIs cancel. See
+        // face_outgoing_radiance in face_terms.glsl, which is the same arithmetic and is what the
+        // gathering ray reads a surface with — one function, two callers, so the light this frame is
+        // drawn with and the light the next bounce is computed from cannot drift apart.
+        colour *= (sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) * (1.0 / kPi) +
+                  bounce * bounce_confidence;
 
         // And what the surface gives off, added AFTER the albedo multiply because emission is not
         // reflected light: a lamp's own face is bright whether or not anything is shining on it.
@@ -490,7 +566,8 @@ void main() {
     // whatever the ray reached; cloud second, because the deck is in front of the air for anything
     // beyond it; the preview last, because it is a tool overlay and belongs in front of the world.
     if (push.resolution.z == 0u) {
-        colour = apply_media(colour, push.origin.xyz, dir, hit ? t : 0.0);
+        colour = apply_media(colour, push.origin.xyz, dir, hit ? t : 0.0,
+                             media_sun_reach, media_sky_reach);
 
         // Cloud, from the full-resolution history the cloud pass keeps. Gated by the same slab
         // arithmetic the tracer uses, so a near wall is never painted over by a deck behind it.

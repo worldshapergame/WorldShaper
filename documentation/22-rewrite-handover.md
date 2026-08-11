@@ -138,7 +138,7 @@ written for the person the work is for, so it is the one to keep current.
 | R1 node pool | XL | **done, all of it** — R1e's fifth slice took the rest: `residency.*`, `world_buffers.*`, both orphaned descriptor sets, the tracer's 256 MB face cache and `rebuild_coarse_grids`. Device memory 970 MB → 112, warm start 505 → 340 ms, and an edit stops paying 3.86 ms for grids nothing reads. D521–D525 |
 | R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit. **A ray now reports what it READS and not only where it stopped** (D427), which is what "wanted" was supposed to mean since D247 |
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
-| R9 the off-screen set | L | **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). The rest **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
+| R9 the off-screen set | L | **a, b and e done** (D526–D532): a light ray names the one face it landed on, the store holds those in a class with a cap, and both classes are counted. **Nothing reads them yet** — that is bounce, and it is the next change. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
 | R5 face denoise, composite | M | not started |
@@ -355,6 +355,28 @@ failure, not a compile error.
     of **nought voxels**, and every comparison against them passed the gate by comparing nought
     with nought. It parses the **content hash** now and refuses a row that has none. D524, and it
     is trap 10 living in the instrument rather than in the engine.
+20. **A change that makes a pass cheaper by giving it less to do is a regression wearing an
+    improvement's clothes.** The sun's ray budget is divided among the faces that want one, and it
+    was divided by the store's WATERMARK — so R9a claiming 262,144 faces nobody is looking at
+    refreshed every face on screen less often, and the faces pass measured **0.96 ms against a
+    control's 1.16**. The cost was real and was in a number no pass table carries: **72 sun samples a
+    face against 84**. A timing figure alone cannot tell a pass that got faster from a pass that
+    stopped doing its job, and the only defence is to print a convergence number beside every time —
+    which is what `sun samples each`, `still bursting` and `cast no more rays at all` are for. D527.
+21. **An instrument's own bookkeeping must never live in a field the card is writing to.** `GpuFace`
+    has two owners: the host owns the key and the flags, the card owns the light. `FaceBuffers::upload`
+    sends whole records for every slot the store marks dirty, so a host-side flag change on a LIVE
+    record sends the host's zeroed counters over what the card accumulated. Putting R9's face class in
+    the flags byte would have cost **29,882 faces a flight** their light, silently: right picture,
+    matching mirror, clean audits, and only the cost moving. D295 is the same fault through a
+    different door, and the standing cure is R3b's owed `GpuFace` split. D528.
+22. **An audit that cannot run looks exactly like an audit with nothing to report.** The face audit
+    returned at its first line whenever an upload was pending — correct for the mirror comparison and
+    wrong for the dozen card-only statistics printed under it. A moving camera always has a backlog,
+    so those numbers were missing from the one case where this pass costs anything, and two arms of an
+    A/B differed by a factor of two with nothing in either log to say why. Split the check that needs
+    both sides to agree from the reading that needs only one. D529, and it is trap 15's shape one
+    level along.
 
 ---
 
@@ -1042,6 +1064,131 @@ session and two runs an hour apart are not an A/B (D407, and D523 for it arrivin
 content hash `766f2fd63f1a01c4` unmoved, the settled enclosed picture inside its own run-to-run
 floor, `GPU mirror matches`, *leaf for leaf*, *mask for mask*, `--validation` clean, 505 tests.
 
+### There is no minimum light, and there is a gate that says so
+
+**Asked for directly and both halves were real faults** (D541–D543). Two constants in the composite
+made a black surface impossible: `kIndirectFloor = 0.5`, the share of the sky term applied wherever
+measured sky visibility fell short, and `kGroundBounce = 0.12`, which was added to **every surface in
+the world** unconditionally. Both are deleted rather than switched off — R9's bounce measures what
+they were standing in for.
+
+**The air was the second way in and the worse one.** `apply_media` lit every cubic metre of fog with
+the full sun and the full sky whether or not either reached it, so a sealed room with fog glowed —
+and that glow sits in *front* of the walls, so no amount of black paint removes it. It takes
+`sun_reach` and `sky_reach` now, filled from the surface's own measured visibilities. It is a proxy
+and is documented as one: fog in front of a shadowed wall is dimmer than it should be, which is the
+direction this renderer is required to err in.
+
+**The gate**, because a constant added to a lit scene is invisible in every other test and these two
+survived the whole rewrite:
+
+```powershell
+.\tools\darkroom.ps1              # brightest channel 0 of 255, every pixel
+.\tools\darkroom.ps1 -Fog         # ...and with fog in the room
+```
+
+`clips/sealed_dark.clip` is four metres of air inside two metres of stone — no opening, no emitter,
+no sky — so every term is nought by construction and any pixel above nought is the renderer adding
+light it was not given. Run it after anything that touches the composite or the air.
+
+**On the facility it costs almost nothing**, which is the point: the enclosed camera's mean pixel
+goes 126.3 → 124.8 and the portico's 135.0 → 133.6, while **the darkest pixel indoors falls from 4.7
+of 255 to 0.4**. And **`--no-bounce` is no longer a way back to the old picture** — the floor it used
+to restore does not exist.
+
+### Bounce is in, and it is the fourth term
+
+**`kIndirectFloor` is no longer what lights an interior** (D533–D538). The ambient far ray — unbounded,
+cosine-weighted about the face's normal, and already being cast — now returns what it FOUND: the sky
+where it escaped, and the outgoing radiance of the face it landed on where it did not, read from that
+face's own record. Three words of face light hold the sum; the far field's own count divides it,
+because it is one ray answering two questions.
+
+**Measured, enclosed camera, three interleaved rounds of one build**: faces pass **0.757/0.762/0.780
+against 0.644/0.722/0.726**, total GPU **3.101/3.155/3.219 against 3.024/3.028/3.072** — about **+7%
+of the light pass and +5% of the frame**. Flying at 1440p the arms overlap. The picture moves by
+**16.998 of 255 over 763,794 pixels of 1,024,000** and is *quieter*: **speckle 17.62 with 9 fireflies
+against 21.22 with 81**.
+
+**The prediction in this file was wrong and the direction is the useful part.** It said one measured
+bounce would be dimmer than a constant of 0.5 and that interiors would darken until the exposure meter
+had a writer. Outdoors it is the opposite by a wide margin — sunlit stone bounces far more than the
+constant stood in for, and the portico, the shafts and the steps go from crushed black to legible.
+Indoors the constant was flat and the measurement has shape.
+
+**Four things to know before touching it**, three of which were faults on the way:
+
+1. **`kFaceLightWords` was declared twice** — in `node.glsl` and again in `resolve.comp` — and the
+   record grew to twelve words with only the writer's copy changed. The composite then read every
+   face's record at the wrong stride and the enclosed camera came out as **salt and pepper over a
+   black building**, which reads exactly like an estimator with too few samples and cost two fixes
+   aimed at the wrong thing. It lives in `shaders/face_terms.glsl` now, which both include (D534).
+2. **The bounce is believed in proportion to its samples**, smoothly, over `kBounceBelieve` = 32. A
+   hard switch is a discontinuity per face, which is D387's measurement (D535).
+3. **`kSkyFarEager` was already the right convergence rate.** Extending the eager phase to the whole
+   of `kBounceMin` converges in two seconds instead of thirteen and costs the faces pass **4.3–4.6 ms
+   flying against 2.0–2.4** — over budget for the first time since D416, and it buys nothing the
+   confidence blend does not already give (D536).
+4. **A `vec4` in a push block aligns to sixteen bytes and an `f32[4]` in a C++ struct to four**, so
+   the shader declared 128 bytes against a range of 124 and read every later field early.
+   `--validation` is the only thing that says so, and the `static_assert` on that struct is an
+   equality rather than a bound for the same reason (D537).
+
+**Open, reported from playing and not closed: a fine grid on flat surfaces.** *"Subtle horizontal
+lines on everything"*, then *"it seems to be a grid"*, then *"when I set the window to max size it
+gets fixed as I leave and come back"*. It is **not** the bounce (5.65 with the term off against 5.66
+with it on, on the same patch), not the model, not the detail level, not the material, not the
+prolongation, not the lamps, and not the ray footprint — D539 has the eight eliminations, each with
+its number, and D540 has the measurement that started it and was wrong. What is left is the class
+rather than a bug: every light term here is a per-face Monte Carlo estimate and **nothing filters
+across faces**, which is R5's charter. The one clue with nothing behind it yet is the revisit —
+`kFaceAmbientDone` freezes a face's ambient and bounce for the life of the face, so faces that
+converged while the room was still filling keep a darker answer than their neighbours until something
+evicts them. That is testable and it is the thread to pull first.
+
+### R9a is in: the face set is no longer only what the camera can see
+
+**Three sub-steps landed and the picture did not move, deliberately** (D526–D532). The ambient far
+ray — the unbounded one, already cast, cosine-weighted about the face's normal — now names the one
+face it LANDED on, and the store claims it in a class of its own:
+
+- **R9a**, the report. It is the deliberate exception to D292: a light ray may name what it landed
+  on, which is one face, and never the geometry it crossed. The host's answer is a face claim, which
+  builds nothing and asks the world for nothing, so **R9h's *no light path may cause streaming* holds
+  by construction** — measured, node requests **18,828,939 against 18,830,058** over a settled run;
+- **R9b**, the cap. A quarter of the table, and past it a claim is **declined rather than refused**.
+  The store also declines the whole class the moment it is under any pressure, so this cannot be what
+  pushes the table into refusing a face somebody is looking at — which is D502's picture;
+- **R9e**, the counting. `the set on the card` and `the off-screen set` in the audit.
+
+**Nothing reads the set yet, and that is the point of landing it alone.** `may_cast` gates a face on a
+pixel having read it, so an off-screen face casts no rays and holds no light: what it costs is a
+record in the store and about 1,200 feedback entries a frame. **The consumer is bounce**, and it is
+the next thing to do — see below.
+
+**Two traps came out of it, and both are the kind that produce a plausible picture and no error.**
+
+1. **A change that makes a pass cheaper by giving it less to do is a regression wearing an
+   improvement's clothes** (D527). `face_stride`, the sun's ray budget, was divided by the WATERMARK,
+   so 262,144 off-screen faces diluted the refresh rate of every face on screen: the faces pass read
+   **0.96 ms against a control's 1.16**, and the cost was in a number no pass table shows — **72 sun
+   samples a face against 84**. Print a convergence figure beside every timing in this pass.
+2. **An instrument's own bookkeeping must never live in a field the card is writing to** (D528). The
+   class was a flag of `GpuFace::packed` for an afternoon. `packed` is mirrored, the uploader sends
+   whole records for dirty slots, and the record has two owners — so promoting a face sent the host's
+   zeroed counters over the light the card had accumulated. That is D295 through a door D295 did not
+   name, it would have cost **29,882 faces a flight** their light, and the picture, the mirror and
+   every audit would all have looked right.
+
+**And one measurement that is bigger than the change that found it.** The face pass's cost while
+moving is a function of how many live records the **card** holds, not how many the store holds — and
+the card runs **up to 434,838 records ahead of the store** while flying, because an upload that runs
+out of staging clears nothing and retries the whole dirty set next frame (165 frames of 400 did).
+R9a's flying win (**faces 3.123 → 1.621 ms median, total GPU 10.512 → 9.621**, five interleaved rounds
+with no overlap) is that backlog moving rather than the light getting cheaper. **The backlog is the
+next performance item in this file** and it predates every stage of the rewrite. The instruments are
+`the card is N records ahead of the store` and `the card's own stand-ins`, both at every screenshot.
+
 ### Where to start now, and the two orders are not the same order
 
 **By the plan, the next stage is R4 — and R4's own prerequisite is R9.** §8 puts R4 directional
@@ -1050,12 +1197,26 @@ reflection and R4d for a refraction, and the store holds only what a primary ray
 facing a wall behind the camera reflects nothing, because the wall has no face. §8 R9 has the table
 of five cases and the rule that fixes them — *the face set is the transitive closure of what the
 screen sees, one bounce at a time, bounded by a budget per bounce*. R9d is already done (D308–D311)
-and R9i's first half with it (D324, D341–D343); R9a–R9c and R9f–R9h are the stage.
+and R9i's first half with it (D324, D341–D343); **R9a, R9b and R9e are done too** (D526–D532); R9c
+and R9f–R9h are what is left.
 
 So the plan's sequence is **R9, then R4**, and that is the one to follow unless the user says
 otherwise — it is what makes reflections, refraction and bounce possible at all, which is the half
 of *"everything is per voxel face based — even reflections and those things"* the rewrite has not
 delivered yet.
+
+**The change this section used to specify — a gathering ray reading the face it lands on — is done**
+(D533–D538), and so is the clause it turned out to be hiding: there is no minimum light anywhere any
+more (D541–D543). Both are written up above. What is left of R9 is **R9c**, the halo, and
+**R9f–R9h**, light from regions that are not loaded; then R4.
+
+**One prediction in this section was wrong and the correction is worth carrying forward.** It said a
+single measured bounce would be *dimmer* than a constant of 0.5, that interiors would darken, and
+that the change therefore collided with the exposure meter. Outdoors it is the opposite by a wide
+margin — sunlit stone bounces far more than the constant stood in for — and on the facility the mean
+pixel barely moves at all. **The exposure item is now independent of this and is still open**:
+`kPreviewExposure` is the constant 3.2 with no writer, which is why `clips/many_lamps.clip` comes out
+blown white.
 
 **The other order is by which open items have a measurement behind them**, and it is a different
 list. Do not confuse the two, and do not quote one as though it were the other:
@@ -1493,6 +1654,7 @@ networking, which the renderer never sees.
 ```powershell
 .\build.bat                          # build; NEVER pipe this to Out-Null while measuring
 .\build\bin\ws_tests.exe             # the whole suite - not a name filter, which silently skips
+.\tools\darkroom.ps1 [-Fog]          # a sealed room must be BLACK: brightest channel 0 of 255
 .\tools\baseline.ps1 -Out docs.csv   # the fixed grid; -Compare <csv> to diff a previous run
 .\tools\facecount.ps1                # distinct visible faces per view and resolution
 .\tools\_flybench.ps1 -Rounds 3      # the MOVING case, which the grid cannot see (D410)
@@ -1523,6 +1685,14 @@ D504's control arm, `--face-pressure-from N` is how little free space starts the
 face telling the host that a pixel read it and is D508's control arm, `--face-read-period N` is the
 window it says it in, and `--face-budget N` shrinks the table so the full-table state — the blocky
 flicker of D502 — is reachable in ninety seconds instead of after minutes of play;
+`--no-bounce` is the bounce control arm — and it is **not** a way back to the picture before R9, since
+the ambient floor that stood in for that light is deleted rather than switched off: with it, an
+interior is lit by the sun, the sky and the lamps it can see, and by nothing else. `--bounce-min N` is
+how many far samples a face takes before its bounce may stop;
+`--no-secondary-faces` stops a light ray naming the face it landed on, which is R9a's control arm and
+the state everything above that section was measured in, `--secondary-period N` is the window in
+frames a face may name one in (a power of two; 64 is the default) and `--secondary-share N` is the
+off-screen cap as a divisor of the table (4 is a quarter);
 `--no-paste-pool` puts the region paste back on the background sampler's job system, which is
 D513's control arm and the state every paste figure above this line was measured in — pair it with
 `--no-clip-cache` so the ladder actually runs, and watch the `region:` line, which now splits the
@@ -1597,6 +1767,20 @@ standing across a hall from one; magenta no face, blue no samples yet, green no 
 is a legitimate answer rather than a failure. The node pool's
 GPU mirror is checked automatically at the screenshot and logs either
 `GPU mirror matches` or the first differing byte.
+
+**Five lines about the face store are printed at every screenshot, and three of them are new.** `the
+set on the card` splits the store into the on-screen and off-screen classes with the samples each
+carries — the measurement R9 is judged on, because the risk of that stage is not frame time but a
+store spread too thin. `the off-screen set` says what light rays offered, what was claimed, what the
+cap declined and what a pixel later promoted; **declined is not refused** and the two must never be
+added. `the card is N records ahead of the store` is the one to read before any moving-camera cost
+figure: the face pass shades what the CARD holds, and an upload that runs out of staging clears
+nothing and sends the whole set again, so the card can hold hundreds of thousands of records the
+store gave up (measured: 434,838 while flying). `the card's own stand-ins` counts the provisional
+faces the card claims for itself, each of which takes a fresh unbounded ray and a fresh lamp burst
+every frame it is needed. The fifth is `faces:`, which now also prints the **sun stride** — what the
+sun's ray budget is being divided by, and the number two builds with the same store and the same
+picture can differ by (D527).
 
 **Three audits run at every screenshot and they answer three different questions.** `GPU mirror
 matches` asks whether the card holds what the pool holds — and both can agree perfectly about

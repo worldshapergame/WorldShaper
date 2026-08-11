@@ -566,8 +566,12 @@ void write_pixel(ivec2 pixel, uint sample_index, vec3 radiance_in, float primary
     // the pixels, which on the beam scene read 197 where every pixel getting it reads 241, with
     // the un-fogged pixels showing through the shaft. See pt_media.glsl.
     vec3 eye_dir = eye_ray(pixel, aspect);
+    // Fully open on both counts, and that is a placeholder rather than an answer. This file has had
+    // no compiler since R3d deleted the pass that included it and is kept for R6; when R6 picks it
+    // up, the air wants the same two numbers the composite passes — how much of the sun and of the
+    // sky reach the far end of the ray — or fog will glow inside sealed rooms here as it did there.
     vec3 radiance = apply_media(g_prefix + g_throughput * radiance_in, push.origin.xyz, eye_dir,
-                                primary_t);
+                                primary_t, 1.0, 1.0);
 
     // Cloud, read from the full-resolution history the cloud pass keeps.
     //

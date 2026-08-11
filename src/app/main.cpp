@@ -258,6 +258,28 @@ struct Options {
     // because it sets the floor under every eviction window: half a million live faces reporting at
     // one in sixty-four is about eight thousand entries a frame against a capacity of 131,072.
     u32 face_read_period = 64;
+    // How often a face may ask the store for ONE face a light ray of its own landed on, in frames,
+    // a power of two. 0 is off and is R9a's control arm (`--no-secondary-faces`).
+    //
+    // Sixty-four, so the volume is of the same order as D508's read-reports, which is the other
+    // per-face report sharing this buffer: about half a million live faces at one in sixty-four is
+    // eight thousand entries a frame, and only the faces still casting a far ray say anything at
+    // all. What it buys is how fast the off-screen set fills in, which is paid in frames.
+    u32 secondary_period = 64;
+    // The most of the face table the off-screen set may hold, as a divisor. 0 keeps the store's own
+    // figure. R9b: a class that overruns must degrade its own refresh rate and nothing else's.
+    u32 secondary_share = 0;
+    // R9's bounce: a gathering ray reads the surface it lands on, and the composite adds what it
+    // found. It replaced `kIndirectFloor` — the constant that stood in for every bounce of indirect
+    // light in the building — and that constant is now DELETED rather than switched off, along with
+    // `kGroundBounce`, because a surface that receives no light must be black. So `--no-bounce` is
+    // the control arm for the bounce and is not a way back to the old picture: with it off, an
+    // interior is lit by the sun, the sky and the lamps it can actually see, and by nothing else.
+    bool bounce = true;
+    // The least far samples a face takes before its bounce may stop. 0 keeps kBounceMin (128).
+    // The trade is unbounded rays against a per-face mottle in every interior, and it is a run-time
+    // figure because a trade nobody can sweep at run time is a trade somebody guesses at.
+    u32 bounce_min = 0;
     // Wall-clock deadline for a scripted run, in seconds. A frame count cannot bound a run whose
     // frames are the thing that got slow, so every scripted run has one whether it asked or not:
     // this is filled in from kDefaultMaxSeconds after parsing when a screenshot, a tick audit, a
@@ -574,6 +596,18 @@ Options parse_options(int argc, char** argv) {
             options.face_read_period = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--no-face-reads") {
             options.face_read_period = 0;   // D508's control arm
+        } else if (arg == "--secondary-period" && i + 1 < argc) {
+            // A power of two, or 0 for off. R9a's dial: how fast the off-screen set fills in,
+            // against how much of the feedback buffer it takes to fill it.
+            options.secondary_period = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--no-secondary-faces") {
+            options.secondary_period = 0;   // R9a's control arm
+        } else if (arg == "--secondary-share" && i + 1 < argc) {
+            options.secondary_share = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--no-bounce") {
+            options.bounce = false;   // R9's control arm: kIndirectFloor everywhere again
+        } else if (arg == "--bounce-min" && i + 1 < argc) {
+            options.bounce_min = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--face-pressure-from" && i + 1 < argc) {
             options.face_pressure_from = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--no-face-pressure") {
@@ -728,6 +762,13 @@ constexpr f32 kShutterFraction = 0.5f;
 // point most of the way across the screen in a frame, and there is no picture in a streak that
 // long ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only taps.
 constexpr f32 kLongestStreak = 24.0f;
+
+// The sun's radiance at the reference hour, in one place because two passes evaluate the sky from
+// it now: the composite, which draws it, and the face pass, whose gathering rays read it when they
+// escape. Two copies would be indirect light lit by a sun the picture does not have.
+//
+// Chosen so a 0.5-albedo surface facing the sun lands near mid-grey; see make_trace_push.
+constexpr f32 kSunColour[3] = {3.2f, 3.05f, 2.75f};
 
 struct TracePush {
     f32 sun[4]{};          // xyz towards the sun, w cos of its angular radius
@@ -1446,7 +1487,36 @@ private:
         // two. 0 is off and leaves residency hearing only the request lattice, which is D508's
         // control arm and the state D502 was measured in.
         u32 face_read_period;
+        // How often a face may name one face a light ray of its own landed on, in frames, a power
+        // of two. 0 is off and is R9a's control arm.
+        u32 secondary_period;
+        // 1: a gathering ray reads the surface it lands on and the composite reads the result
+        // instead of `kIndirectFloor`. 0 is the bounce control arm and restores that constant.
+        u32 bounce;
+        // The least far samples a face takes before its bounce may stop; 0 keeps kBounceMin.
+        u32 bounce_min;
+        // Alignment, and it is declared rather than left to happen.
+        //
+        // A `vec4` in a shader's push block is aligned to sixteen bytes; a `f32[4]` in a C++ struct
+        // is aligned to four. So the block below started at 112 on the card and at 108 here, the
+        // shader declared 128 bytes against a range of 124, and every field from `sun_colour` on
+        // was read four bytes early — which is params.glsl's D168 fault arriving in the push block
+        // instead. `--validation` named it in one line and nothing else would have: on a machine
+        // without the layers it is a wrong sun colour, not an error. The same pad is declared in
+        // shaders/node.glsl so the two structures are visibly the same shape rather than
+        // accidentally the same size.
+        u32 pad_before_sun_colour;
+        // The sun's colour at the reference hour, so the face pass evaluates the same sky the
+        // composite draws. The same four floats `TracePush::sun_colour` carries, from the same
+        // place, because a gathering ray that escapes reads the sky and two plausible skies is one
+        // sky too many. This takes the block to 116 bytes of the 128 that are guaranteed.
+        f32 sun_colour[4];
     };
+    static_assert(sizeof(NodePush) == 128,
+                  "the node push block must be exactly what shaders/node.glsl declares, and no "
+                  "larger than the 128 bytes Vulkan guarantees. Equality rather than a bound: a "
+                  "host struct SMALLER than the shader's block is a range the pipeline rejects "
+                  "under validation and reads past silently without it");
     NodePush make_node_push(u32 face_count) const;
 
 
@@ -1463,6 +1533,11 @@ private:
     // How many faces said "a pixel is reading me" this frame. The volume of D508's reports,
     // which is the one cost of that rule and is bounded by the feedback buffer it shares.
     u32 last_faces_read_reported_ = 0;
+    // R9a's two counts, over the run: how many faces light rays asked for, and how many of those
+    // were faces the store did not already have. Offered against claimed is the whole of what this
+    // rule costs -- the difference is repeats, which cost one probe each and buy the residency stamp.
+    u64 faces_secondary_offered_ = 0;
+    u64 faces_secondary_claimed_ = 0;
     // For the in-play warning: refusals as of last frame, and when it last said anything.
     u64 last_face_refusals_ = 0;
     u64 last_face_warn_frame_ = 0;
@@ -3116,9 +3191,27 @@ void Application::stream(f64 seconds) {
                 const u32 level = static_cast<u32>(entry.level & 0xFF);
                 const u32 face = static_cast<u32>((entry.level >> 8) & 0xFF);
                 if (level > kMaxNodeLevel || face >= kFaceCount) continue;
+                // A face a LIGHT ray landed on, rather than one a pixel landed on. R9a.
+                //
+                // The claim is the same claim -- there is nothing to build and nothing to stream, so
+                // this cannot move a single node into the pool and R9h's rule is intact. What the
+                // class changes is what happens when there is no room: a secondary claim is DECLINED
+                // against its own cap, and the on-screen set never sees it.
+                const bool secondary = (entry.level & kFeedbackSecondary) != 0;
                 bool first_time = false;
-                face_store_.claim(FaceKey{entry.x, entry.y, entry.z, level, face}, frame_counter_,
-                                  &first_time);
+                const u32 slot =
+                    face_store_.claim(FaceKey{entry.x, entry.y, entry.z, level, face},
+                                      frame_counter_, &first_time, secondary);
+                if (secondary) {
+                    ++faces_secondary_offered_;
+                    if (slot != kNoFace && first_time) ++faces_secondary_claimed_;
+                    // No stand-in for a secondary face, and that is not an omission. A stand-in
+                    // exists so the COMPOSITE has something to read while a fine face is being
+                    // found (R9d), and no pixel is reading this one; claiming one would be a second
+                    // face, at a coarse level shared by five hundred and twelve others, for a
+                    // gathering ray that already has its own answer for the coarse case.
+                    continue;
+                }
                 ++faces_seen;
 
                 // And the coarse face standing over it, which the marcher reads while this one is
@@ -3163,6 +3256,12 @@ void Application::stream(f64 seconds) {
             // why it filled and started refusing faces. D502.
             if ((entry.level & kFeedbackFaceRead) != 0) {
                 face_store_.touch(static_cast<u32>(entry.x), frame_counter_);
+                // ...and it belongs to the on-screen set now, whatever put it here. This is the
+                // exact signal for that -- the visibility pass sends it for every face a pixel
+                // resolves to -- and without it a face claimed by a bounce ray and then walked up to
+                // would count against the off-screen cap for the rest of its life. R9b's cap has to
+                // hold down light nobody is looking at, never light somebody is.
+                face_store_.promote(static_cast<u32>(entry.x));
                 ++faces_read_reported;
                 continue;
             }
@@ -3639,7 +3738,30 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     // handful of frames however busy the store is, and only the refresh rate of settled faces
     // degrades. That is the right thing to give up: a settled face is looking at a sun that has
     // not moved.
-    const u32 live = std::max(face_store_.watermark(), 1u);
+    //
+    // Over the ON-SCREEN set, and that is R9b rather than a detail. This stride is the sun's ray
+    // budget divided among the faces that want one, and it was divided among the WATERMARK -- so the
+    // moment R9a started claiming faces for light rays, every face a pixel is looking at was refreshed
+    // less often, by exactly the ratio the off-screen set had grown to. It measured as the faces pass
+    // getting CHEAPER (1.16 ms against 0.96) with 262,144 off-screen faces in the store, which is the
+    // most misleading shape a regression can take: the number that is supposed to go up went down,
+    // and the cost was hidden in convergence -- 84 sun samples a face against 72.
+    //
+    // That is precisely what the plan says the per-class budget is for: one shared budget lets the
+    // off-screen set starve the on-screen one, and the on-screen one is what the player is looking
+    // at. A class that overruns must degrade its own refresh rate and nothing else's, and the
+    // off-screen class casts no rays at all today, so its share of this budget is nought.
+    // The LIVE on-screen faces, and neither word in that is spare.
+    //
+    // It was the watermark, which counts every slot ever used — so a store that has evicted a
+    // quarter of a million faces divides the sun's budget by a quarter of a million faces that do
+    // not exist. Two arms of one build differed by exactly that: 125,078 evictions against 32,848,
+    // same live count, and a sun stride of 3 against 2. That is a third fewer sun rays on every
+    // visible face in one arm, and it reads on the pass table as the change having made the light
+    // CHEAPER. D527 is the same fault by a different route, and the general form of it is that a
+    // budget divided by the wrong population is a silent quality setting.
+    const FaceStoreStats set = face_store_.stats();
+    const u32 live = std::max(set.faces > set.secondary ? set.faces - set.secondary : set.faces, 1u);
     push.face_stride = std::max(1u, (live + kFacesPerFrame - 1) / kFacesPerFrame);
 
     // Where the card may claim faces of its own, and R3e is the whole of why it may.
@@ -3664,6 +3786,17 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.edit_seed = options_.face_edit_seed;
     push.lamp_edit_scope = options_.lamp_edit_scope ? 1u : 0u;
     push.face_read_period = options_.face_read_period;
+    push.secondary_period = options_.secondary_period;
+    push.bounce = options_.bounce ? 1u : 0u;
+    push.bounce_min = options_.bounce_min;
+    // The same three numbers make_trace_push hands the composite, and named here rather than
+    // copied there so the two cannot drift: a gathering ray that escapes reads the sky, and the
+    // picture is lit by that same sky, so a difference between them would be indirect light with a
+    // colour the frame does not have. See kSunColour.
+    push.sun_colour[0] = kSunColour[0];
+    push.sun_colour[1] = kSunColour[1];
+    push.sun_colour[2] = kSunColour[2];
+    push.sun_colour[3] = 0.0f;
     return push;
 }
 
@@ -3682,9 +3815,9 @@ TracePush Application::make_trace_push() {
     // Chosen so a 0.5-albedo surface facing the sun lands near mid-grey. At 12 every
     // material blew to white, which hides exactly the differences this mode exists to
     // show. Real exposure control is Stage 9's job.
-    trace.sun_colour[0] = 3.2f;
-    trace.sun_colour[1] = 3.05f;
-    trace.sun_colour[2] = 2.75f;
+    trace.sun_colour[0] = kSunColour[0];
+    trace.sun_colour[1] = kSunColour[1];
+    trace.sun_colour[2] = kSunColour[2];
     trace.control[0] = 0;   // was the accumulator's sample count, which went with R3d
     // Which of the two histories the cloud pass writes this frame; it reads the other.
     cloud_parity_ ^= 1u;
@@ -5093,6 +5226,7 @@ int Application::play(const Options& options) {
         if (options_.face_budget > 0) face_budget.max_faces = options_.face_budget;
         face_budget.pressure = options_.face_pressure;
         if (options_.face_pressure_from > 0) face_budget.pressure_from = options_.face_pressure_from;
+        if (options_.secondary_share > 0) face_budget.secondary_share = options_.secondary_share;
         face_budget_max_ = face_budget.max_faces;
         face_store_.create(face_budget);
         if (!face_buffers_.create(device_, face_budget)) {
@@ -5101,15 +5235,16 @@ int Application::play(const Options& options) {
         }
         // Every slot the face pass may write: the store's capacity plus the card's provisional
         // tail. Not the watermark, which grows.
-        // Nine words a slot: the two ambient sample counts packed in one word, the near-field
+        // Twelve words a slot: the two ambient sample counts packed in one word, the near-field
         // contact sum, its gradient along each of the face's two axes, the far field's own count of
-        // rays that reached open sky, then three floats of accumulated lamp irradiance and one word
-        // holding the lamp sample count with the emitter-list version those samples were taken
-        // under. kFaceLightWords in shaders/node.glsl is the same nine, and the shader bounds its
-        // writes against this length because a disagreement here is a write into whatever the
-        // allocator placed next (D332).
-        if (!face_light_.create(device_, 9 * (face_buffers_.provisional_base() +
-                                              FaceBuffers::provisional_count()))) {
+        // rays that reached open sky, three floats of accumulated lamp irradiance, one word holding
+        // the lamp sample count with the emitter-list version those samples were taken under, and
+        // three floats of accumulated BOUNCE radiance over the far field's own count.
+        // kFaceLightWords in shaders/node.glsl is the same twelve, and the shader bounds its writes
+        // against this length because a disagreement here is a write into whatever the allocator
+        // placed next (D332).
+        if (!face_light_.create(device_, 12 * (face_buffers_.provisional_base() +
+                                               FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;
         }
@@ -6059,11 +6194,19 @@ int Application::play(const Options& options) {
                 WS_LOG_INFO("frame",
                             "faces: {} live of {}, {} seen this frame, {} claims {} already there, "
                             "{} evicted, {} REFUSED, cold window {} frames (floor {}), "
-                            "{} read-reports this frame, {} bytes of faces ({} with the table)",
+                            "{} read-reports this frame, sun stride {}, "
+                            "{} bytes of faces ({} with the table)",
                             face_stats.faces, face_budget_max_, last_faces_seen_,
                             face_stats.claims, face_stats.hits, face_stats.evictions,
                             face_stats.refusals, face_stats.cold_window, face_store_.min_cold(),
                             last_faces_read_reported_,
+                            // What the sun's ray budget is being divided by, which is the one number
+                            // the cost of this pass is most directly a function of and the one
+                            // nothing printed. Two builds whose face pass differs by a factor of two
+                            // with the same store and the same picture differ HERE, and there was no
+                            // way to see it. Trap 17: the pass table gives one number to a pass whose
+                            // cost is a rate, and a rate is not visible in a total.
+                            make_node_push(face_stats.faces).face_stride,
                             face_stats.face_bytes, face_stats.total_bytes);
 
                 // What SIZE the faces are, which is the size of the smallest shadow the frame can
@@ -6086,6 +6229,19 @@ int Application::play(const Options& options) {
                     face_levels += std::to_string(level) + ":" + std::to_string(by_level[level]);
                 }
                 WS_LOG_INFO("frame", "faces by level  {}", face_levels);
+                // R9a and R9b from the host's side: what the light rays asked for, what the cap
+                // allowed, and what it turned away. Offered against claimed is the cost of the rule
+                // -- the difference is repeat reports of faces already here, one probe each -- and
+                // DECLINED is the cap doing its job rather than a fault. A decline is not a refusal
+                // and the two are printed apart on purpose: a refusal is a visible surface with no
+                // light of its own (D502), a decline is one gathering ray reading a coarse stand-in.
+                WS_LOG_INFO("frame",
+                            "the off-screen set: {} of a cap of {} slots, {} offered by light rays "
+                            "over the run, {} of those new, {} declined by the cap, {} promoted "
+                            "when a pixel read them",
+                            face_stats.secondary, face_stats.secondary_cap,
+                            faces_secondary_offered_, faces_secondary_claimed_,
+                            face_stats.secondary_declined, face_stats.promotions);
                 // And what the scripted chisel did, if it was asked for. A run that changed no
                 // voxels is a run that measured the flight and not the edit, and the two figures
                 // look identical from the pass table alone.

@@ -214,6 +214,14 @@ inline constexpr i32 kFeedbackExact = 0x80000;
 // shaders/node.glsl. D508.
 inline constexpr i32 kFeedbackFaceRead = 0x100000;
 
+// ...and this one rides on kFeedbackFace and says a LIGHT ray landed on it, not a pixel. R9a.
+//
+// The consumer's answer is the same claim with one difference: it is subject to the off-screen cap
+// and is DECLINED rather than refused when that cap is full. It builds nothing and streams nothing,
+// so R9h's rule -- no light path may cause streaming -- is not bent by it. Must match
+// kFeedbackSecondary in shaders/node.glsl.
+inline constexpr i32 kFeedbackSecondary = 0x200000;
+
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.
 // One report per sampled pixel worst case, and sampling is one pixel in 64 — so this has

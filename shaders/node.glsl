@@ -139,6 +139,36 @@ layout(push_constant) uniform NodeConstants {
     // tracks the screen more closely and more feedback entries, and the entries are the constrained
     // thing. See node_face_read_due.
     uint face_read_period;
+    // How often a face may name ONE face a light ray of its own landed on, in frames, as a power of
+    // two. 0 is off and is R9a's control arm.
+    //
+    // A period rather than a switch because it is the whole trade this rule makes: shorter is an
+    // off-screen set that fills in faster and more feedback entries, and the entries are the
+    // constrained thing -- D431 is the standing measurement of what happens when a per-ray report
+    // goes down this buffer unthrottled (1,538,219 reports against a capacity of 131,072, and the
+    // 1,407,147 that were dropped took the streaming reports with them).
+    uint secondary_period;
+    // 1: a gathering ray reads the surface it lands on and the composite adds what it found. 0 is
+    // R9's bounce control arm — and it is NOT "the renderer as it was", because the ambient floor
+    // that used to stand in for this light is gone rather than switched off. With the bounce off, a
+    // surface that receives nothing is black, which is the point.
+    uint bounce;
+    // The least far samples a face takes before its bounce may stop, or 0 for kBounceMin. The trade
+    // is unbounded rays against a per-face mottle in every interior; see kBounceMin.
+    uint bounce_min;
+    // Declared, not inferred: a vec4 here is aligned to sixteen bytes and its counterpart in the
+    // host struct is aligned to four, so without this the two blocks are the same fields at
+    // different offsets. See NodePush in src/app/main.cpp, where `--validation` caught it.
+    uint pad_before_sun_colour;
+    // The sun's colour at the reference hour, which is the ONE thing pt_sky.glsl needs that the
+    // marcher did not already carry. With it and `sun` above, the face pass evaluates exactly the
+    // sky the composite draws rather than a second plausible one -- which matters because a
+    // gathering ray that escapes reads the sky, and if this pass and the composite disagreed about
+    // what the sky is worth, indirect light would be lit by one sky and the picture by another.
+    //
+    // Sixteen bytes, taking this block to 116 of the 128 a Vulkan implementation is required to
+    // offer. Anything else that wants space here has to earn it.
+    vec4 sun_colour;
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }
@@ -325,6 +355,18 @@ const uint kFaceSeenWindow = 4u;
 //       divided by a density, and it has no bound this record could scale itself against.
 //   [8] the lamp SAMPLE COUNT in the low sixteen bits, and in the high sixteen the LIGHT-LIST
 //       VERSION those samples were taken under. See kLampConverged.
+//   [9][10][11] the BOUNCE -- the running SUM of the radiance the far rays found when they landed
+//       on a surface rather than reaching sky, one float a channel, over count [0].hi. A float sum
+//       and not a fixed-point mean for the same reason the lamps are: this is radiance, it has no
+//       bound in [0,1] to scale itself against, and D293 is the standing measurement of what a
+//       narrow running mean does to a quantity that has to converge.
+//
+// The bounce shares the FAR field's count on purpose. It is the same ray: one unbounded,
+// cosine-weighted sample of the hemisphere, whose answer is the sky when it escapes and a surface's
+// outgoing radiance when it does not. Splitting the count would allow the two to disagree about how
+// many samples one ray produced, which is the shape of fault D316's provisional table exists to make
+// unrepresentable. What the composite reads is `sky_radiance(normal) * open_sky + bounce_sum/far_n`,
+// and those two terms are the two halves of one integral rather than two effects added together.
 //
 // Indoors the far field saturates -- every ray hits something, so sky visibility is nought on every
 // surface in the room and carries no shape at all. Measured: 1,619 of 1,671 surface pixels in the
@@ -367,7 +409,9 @@ const uint kFaceSeenWindow = 4u;
 // against 1.053 once converged, for 34 MB against 21. This record is touched a handful of times per
 // face per frame, not per step, so its stride is not where this pass spends anything. The same
 // argument holds at nine, and padding to sixteen would cost 26 MB to buy the same nothing.
-const uint kFaceLightWords = 9u;
+// Declared in shaders/face_terms.glsl, which the composite includes too. Two copies of
+// this number is what drew the enclosed camera as salt and pepper; see that file.
+#include "face_terms.glsl"
 // How far away geometry stops darkening, in METRES rather than voxels, so a coarse face at 200 m
 // and a level-0 face at arm's length darken over the same physical distance and a dolly-in shows
 // no transition.
@@ -548,6 +592,24 @@ const uint kSkyConverged = kSkyWindow;
 // floor, and going further under it costs UNBOUNDED rays quadratically. 2,048 would be sixteen
 // times the rays for a difference nothing can see.
 const uint kSkyFarConverged = 256u;
+
+// ...and the least far samples a face must take before its BOUNCE is worth stopping on, which is a
+// different question with a much larger answer.
+//
+// The rule above stops the far field when its own error falls under `kSkyFarEps`, and for a sealed
+// room that is **thirty-two rays**: every one of them hits something, p is nought, and the variance
+// of a proportion at nought is nought. That is exactly right for the question it was asked — *how
+// much sky can this face see* — and useless for the question the same ray now also answers, which is
+// *what colour is everything it hit*. A colour has no such collapse: thirty-two samples of a room is
+// thirty-two samples of a room however unanimous the sky part was, and the estimate that comes out
+// is a per-face mottle, which is the failure mode this whole term exists to avoid.
+//
+// So the sky's own test may not end the ray while the bounce is still short. What it costs is
+// UNBOUNDED rays, which are the expensive ray in this pass — one a visit on the sun's schedule until
+// this is reached, against thirty-two before. It is the one number in R9 that buys picture with
+// frames, and `--bounce-min N` sweeps it rather than leaving it to be guessed at.
+const uint kBounceMin = 128u;
+
 
 // ...and most faces stop long before it, because **a fraction's error depends on the fraction**,
 // and that is what makes the expensive half of this term affordable.
@@ -1311,6 +1373,25 @@ const int kFeedbackExact = 0x80000;
 // claims nothing, builds nothing and asks for nothing. D508.
 const int kFeedbackFaceRead = 0x100000;
 
+// A face a LIGHT ray landed on, rather than one a pixel landed on. R9a.
+//
+// The store holds what a primary ray stopped on, so it holds exactly what the camera can see and the
+// light in it is a screen-space set in world-space clothing. Everything the eye can see behaves;
+// everything the eye cannot see, but which the eye's surfaces depend on, does not exist. That is
+// what a mirror facing a wall behind the camera reflects, what a red wall out of frame bounces, and
+// what has to be rediscovered every time the camera turns.
+//
+// This is deliberately the OPPOSITE of the rule a shadow ray follows (D292: a light path may not
+// drag streaming towards whatever it crosses), and the distinction is the whole of why it is
+// affordable: a ray names the one face it LANDED on, never the geometry along the way. It is also
+// not a streaming request of any kind -- the host's answer is a face claim, which builds nothing,
+// asks the world for nothing and cannot move one node into the pool. R9h's rule survives intact.
+//
+// The class rides on the tag rather than in a second buffer because it is one bit about one entry,
+// and the host needs it for exactly one decision: whether this claim is subject to the off-screen
+// cap. See kFaceSecondary in src/world/face_store.hpp.
+const int kFeedbackSecondary = 0x200000;
+
 // A light ray keeps the geometry it is standing on, and asks for nothing new.
 //
 // D292 forbids a light path from dragging residency towards whatever it crosses, and that rule is
@@ -1422,6 +1503,27 @@ void node_face_report_read(uint slot) {
     uint index = atomicAdd(feedback.count, 1u);
     if (index < push.resolution.w) {
         feedback.entries[index].coord = ivec4(int(slot), 0, 0, kFeedbackFaceRead);
+    }
+}
+
+// Ask the host to claim the face a LIGHT ray landed on. R9a, and the tag above is the whole of the
+// argument for why this is allowed at all.
+//
+// Called from the face pass after a march rather than from inside `node_march`, and that is not
+// tidiness. The march already RECORDS the face key on every hit -- recording is unconditional and
+// reporting is not, which is `node_face_hit`'s own split -- so the caller has the three numbers in
+// hand and the marcher's hot path is not touched by this stage at all. A parameter threaded through
+// `node_march` would put a branch in the inner walk of the pass that is 63% of a moving frame.
+//
+// The THROTTLE is the caller's and it has to be, because there is no slot to stamp: the whole point
+// is that this face is not in the store yet, so `node_seen`'s trick (D431 -- one entry per node per
+// window, however many rays hit it) has nothing to key on. What bounds this instead is that it is
+// asked on one ray in `secondary_period` frames per gathering face; see shaders/shade_faces.comp.
+void node_face_request(ivec3 node, uint level, uint dir) {
+    uint index = atomicAdd(feedback.count, 1u);
+    if (index < push.resolution.w) {
+        feedback.entries[index].coord =
+            ivec4(node, (int(level) & 0xFF) | int(dir << 8) | kFeedbackFace | kFeedbackSecondary);
     }
 }
 
@@ -1778,6 +1880,15 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                         // A single voxel is all of itself.
                         result.type_id = leaf_voxel_type(leaf, inner);
                         result.coverage = 255u;
+                        // ...and the brick's average colour beside it, which the primary ray does
+                        // not use and a GATHERING ray does. A bounce needs an albedo for the
+                        // surface it landed on and cannot reach the interned tables from the face
+                        // pass, which does not have them bound. Twenty-five centimetres of average
+                        // is the right resolution for light arriving from a surface rather than for
+                        // the surface itself, and it costs nothing: `leaf_voxel_type` on the line
+                        // above has already fetched this LeafHeader, and `average_colour` is a
+                        // field of the same struct.
+                        result.colour = leaves.items[leaf].average_colour;
                     } else {
                         result.colour = leaves.items[leaf].average_colour;
                         result.coverage = node_face_coverage(found.slot, inner_normal);
