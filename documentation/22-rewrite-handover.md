@@ -802,6 +802,143 @@ nought, which is the one thing `face_accumulate`'s comment promises never happen
 the visibility pass reads the counters before the shading pass writes them. Kept for the case no
 screenshot reaches — a face reopened while nobody is looking at it takes no sample at all.
 
+### Closed: the same flicker again, from moving rather than from editing
+
+Reported as *"after playing for a while the lights turn blocky and start flickering rapidly and
+randomly"*, with a photograph of the enclosed room. **Word for word the section above, and a
+different cause** (D500, D501). The section above scoped the *edit* announcement; this arrives
+through the **light list**, which is global by design and which no scoping in `shade_faces.comp`
+can narrow.
+
+`build_light_list` ranks fittings by what each delivers **at the camera**, so the same lamps come
+back permuted when the player has moved. `light_list_hash` ran over that order, so the host
+concluded the lamps had changed and set `light_reset`, which reopens the lamp term of **every face
+in the store**. A player who moves between two edits therefore relights the whole room on the second
+one — and a region paste from the clip ladder counts as an edit, so it also happens on its own while
+the building sharpens.
+
+**Measured, facility, warm cache, 1280×800, `--chisel 60,16`, 600 frames, one build:**
+
+| nine chisel strokes | version bumps | lamps on the card |
+|---|---|---|
+| static camera | 1 | 469,861 of 507,251 cast no more rays |
+| flying, before | **9** | **0 of 997,296** |
+| flying, after | **1** | **264,456 of 995,684** |
+
+**The audit line said it in one reading and nothing had been pointed at it.** `lamps on the card: N
+of M live faces cast no more rays at all` is D403's, it is printed at every screenshot, and `0 of M`
+is the whole diagnosis: nothing converges, so every face re-measures every frame — per face, so it
+reads as squares; every frame, so it flickers. That is trap 16 from the other end. **Reach for that
+line before any picture** when light is reported as blocky or flickering, and note that the other
+two terms have one each beside it (`ambient on the card`, and `faces sun on the card`).
+
+The gate is headless: *walking to the other lamp does not change the list identity* in
+`tests/test_light_list.cpp`, which requires that the ranking really did change before it checks that
+the hash did not — a test that cannot tell the fix from a build where the camera makes no difference
+would be trap 15. 543 tests, 18.7 M assertions.
+
+### Closed: the blocky flicker itself — the store fills, and the card's stand-in fills the hole
+
+**Verified the way this project's acceptance test actually works**: the player went looking for it in
+a build with both changes in and *could not find it*. That is the evidence that closes it, and the
+numbers below are why it went rather than whether. Note what it took to get there — two causes, two
+rounds of "still there", and three diagnoses made from repros of mine before the game was made to
+report the state from a real session. **Read D510 and start there next time.**
+
+The report came back after the above, with the two clarifications that closed it: **"the bug still
+happens even when you haven't placed or erased a single voxel"**, and it takes a while to appear.
+Neither is consistent with anything edit-driven. D502–D507.
+
+**Reproduce it in ninety seconds** rather than by playing, which is the whole reason `--face-budget`
+exists:
+
+```powershell
+.\build\bin\WorldShaper.exe --world <world> --face-budget 120000 --screenshot out.png `
+  --screenshot-frame 900 --width 1866 --height 745 --cam "0,2,-20,90,0" --quality 7 `
+  --no-vsync --no-update-check --no-auto-quality
+```
+
+That is the reported picture — the facade and steps in hard blocky patches — and the flicker is a
+number: **two consecutive frames of a static camera with no edits differ on 231,409 pixels of
+1,390,170 at a mean of 6.44**, against **56,284 at 1.55** with room to spare.
+
+**The chain, and every link of it was already written down somewhere:**
+
+1. the store holds 1,048,576 faces and gives one up after 600 frames of nobody *claiming* it;
+2. `last_read_` is stamped by a CLAIM and by nothing else, and a claim comes from the one pixel in
+   stride² the moving lattice is asking with — so the store keeps ten seconds of everything the
+   camera has walked past. Measured: **995,684 live after ten seconds of flight**, against a visible
+   set of about half a million;
+3. the table fills, and `claim` starts returning `kNoFace`;
+4. a pixel whose fine face is missing reads the coarse stand-in three levels above it — and there is
+   no host stand-in either, because claiming one is also a claim. So it falls to the **card's
+   provisional** face, which by construction re-claims itself and takes **one fresh sample every
+   frame** (`node_face_claim`, D316–D318, and its comment says so);
+5. one ray per 8³-voxel block per frame is a blocky picture that is completely different next frame.
+
+**Three things fixed, and the trade in the middle one is the part to read before touching it:**
+
+- **the eviction floor** was `kFaceMinCold = 32`, reasoned from how long a face takes to converge.
+  The binding quantity is how long the lattice takes to come *back*: 64 frames at 1440p, **256 at
+  4K**. The emergency sweep reached 18 and evicted what the camera was pointed at. It is
+  `2 × claim_period` now, set every frame from the render resolution (D503);
+- **the store gives history up before it is full**, because a refusal has no graceful form. Under an
+  eighth free the window drops to a quarter of itself, under a sixteenth to the floor. Spinning at
+  `--face-budget 600000`: **75,421 refusals → 0** with the live count unmoved. At the real budget,
+  flying: **771 and 139 → 0 and 0** over two interleaved rounds (D504);
+- **where it starts is measured and the obvious setting was wrong.** At *half* free it removes every
+  refusal and costs the faces pass **1.918 → 8.086 ms**, because a short window also gives up faces
+  whose coverage is under a pixel — which the lattice samples rarely however plainly they are on
+  screen — and each pays its whole ambient burst again. At an eighth the arms interleave inside each
+  other's spread (D505).
+
+`--no-face-pressure` is the control arm. The audit line now reads `N live of M … R REFUSED, cold
+window C frames (floor F)`: **read the refusal count and the fullness before anything else** when
+light is reported as blocky, because `out_of_room()` is a state and a store that fills and recovers
+sixty times a second reads as fine at every moment anybody asks (D507).
+
+**Then residency was given the exact signal, and it did not buy what it was built to buy.** D508,
+D509. `last_read_` is now stamped by what a pixel READ: `face_read` is a card-owned word a slot and a
+face reports itself down the feedback buffer at most once per `face_read_period` frames however many
+pixels are on it — `node_seen` (D431) doing for the store what it already does for the pool. It
+works, it costs nothing measurable (740–5,271 entries a frame, 63,822 of 131,072, none dropped), and
+**it does not pay for D505**: flying with the squeeze turned up, faces reads-off **7.108 ms** against
+reads-on **7.181**. The prediction was that a short window was expensive because eviction was blind
+to sub-pixel faces; it is expensive because faces that genuinely leave the screen and come back have
+to burst again, and no signal makes that free. Kept for what it does buy — "cold" means what it says,
+and the eviction floor stops scaling with resolution (128 frames rather than 512 at 4K).
+`--no-face-reads` is the control arm and `--face-pressure-from N` sweeps the trade D505 measured.
+
+**And the instrument that should have existed three rounds ago** (D510). Every number about this
+store was printed at the screenshot audit and nowhere else, so the state that produces the reported
+picture was invisible in the one situation it gets reported from. `worldshaper.log` now carries a
+rate-limited warning naming the refusals and the fullness while somebody is *playing*, and a
+heartbeat every six hundred frames whether or not anything is wrong. **When this is reported again,
+read the player's own log before building any repro** — three rounds of it have now been diagnosed
+from repros of mine, and the second and third were repros of the wrong thing.
+
+### Open, measured here: opening a world re-samples the clip, and every paste is a hiccup
+
+Reported alongside the above as *"you're not using the resolution pixel screen based loading of
+detail system streaming in worlds"* and *"the game has massive hiccups"*, and **both halves are
+true**. This is §5's second item — *slice the paste across frames* — with numbers from the real path
+a player takes rather than from `--clip-file`:
+
+- a world whose `.world` cache is **complete** loads in **119 ms** with no pastes and no hiccups;
+- a world whose cache is not complete re-runs the ladder, and each region paste **blocks the main
+  thread**: 1.4, 6.5, 7.0, 13.0 and **14.1 s** in single frames, measured on this machine;
+- the facility had **never** completed one, because the cache is written at refinement's fixed point
+  and the late regions cost 7–26 s of sampling apiece. Progress *is* carried between launches —
+  `cached world has 12 of 18 regions sharpened; carrying on from here` — so it finishes eventually,
+  and until it does every launch pays;
+- and every paste is an announced world change, so it rebuilds the light list. That is how the
+  flicker above fires with nobody editing anything.
+
+**A trap for anyone measuring loads:** `--clip-coarse` is part of the cache key, because
+`src/app/main.cpp` divides `script.settings.voxels_per_metre` by `coarse` *before* the key is
+computed. A 608 MB cache written under `--clip-coarse 1` is deleted as stale by the next default
+launch. The arms of a `--clip-coarse` sweep destroy each other's caches. D501.
+
 ### R3 comes before R1e, deliberately
 
 R1e's bulk is moving `pathtrace.comp` from `world.glsl` onto the node pool — and §9 of the plan
@@ -1146,7 +1283,13 @@ control arm for D427 and the state everything above this section was measured in
 D430's control arm, and `--light-read-period N` is the window that rule reports on, in frames;
 `--no-lamp-edit-scope` reopens the lamp term of every face within sixteen metres of an edit again,
 which is D434's control arm, and `--face-edit-seed N` is how many samples an announced face keeps,
-where 0 is D435's control arm and restores the wipe. `--chisel EVERY,RADIUS` carves
+where 0 is D435's control arm and restores the wipe;
+`--no-face-pressure` makes the face store wait until it is FULL before giving anything up, which is
+D504's control arm, `--face-pressure-from N` is how little free space starts the squeeze as a divisor
+(2 is "from half free", which is the setting D505 measured and rejected), `--no-face-reads` stops a
+face telling the host that a pixel read it and is D508's control arm, `--face-read-period N` is the
+window it says it in, and `--face-budget N` shrinks the table so the full-table state — the blocky
+flicker of D502 — is reachable in ninety seconds instead of after minutes of play. `--chisel EVERY,RADIUS` carves
 and fills alternately at whatever the camera is looking at, through the same code path the mouse
 button takes, and prints what it changed — **read that line before reading any time from a chisel
 run**, because a run that missed every time and a run that never fired print the same pass table.

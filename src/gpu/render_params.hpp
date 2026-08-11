@@ -205,6 +205,16 @@ inline constexpr i32 kFeedbackFace = 0x40000;
 // shaders/node.glsl, where the reasoning is.
 inline constexpr i32 kFeedbackExact = 0x80000;
 
+// ...and this one is a FACE a pixel READ, carrying a face-store SLOT in x. The consumer's whole
+// answer is `FaceStore::touch`: it claims nothing and asks for nothing.
+//
+// Not to be conflated with kFeedbackFace, which is the request lattice asking for a face to be
+// CLAIMED and arrives for one pixel in stride² — a sample, and therefore useless as a residency
+// clock for any face whose coverage is under a pixel. This one is one entry per face per
+// `face_read_period` frames however many pixels are on it. Must match kFeedbackFaceRead in
+// shaders/node.glsl. D508.
+inline constexpr i32 kFeedbackFaceRead = 0x100000;
+
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.
 // One report per sampled pixel worst case, and sampling is one pixel in 64 — so this has

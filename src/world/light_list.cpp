@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <numeric>
 #include <unordered_map>
 
@@ -347,11 +348,38 @@ u64 light_list_hash(const std::vector<LightSource>& lights) {
     // radiance cannot collide, and so that a truncated list is distinct from the same lamps
     // untruncated.
     u64 hash = hash_mix(static_cast<u64>(lights.size()) + 0x9E3779B97F4A7C15ull);
-    if (!lights.empty()) {
-        hash = hash_bytes(reinterpret_cast<const u8*>(lights.data()),
-                          lights.size() * sizeof(LightSource), hash);
-    }
-    return hash;
+    if (lights.empty()) return hash;
+
+    // Over a CANONICAL order, because the list's own order is a fact about where the camera is
+    // standing and not about the lamps.
+    //
+    // `build_light_list` ranks by what each fitting would deliver at the camera, so walking two
+    // paces re-orders it with nothing having changed. This hash is the gate on `light_reset`, and
+    // `light_reset` reopens the lamp term of EVERY face in the store -- so hashing the rank order
+    // meant that any world change made while the player had moved since the last one relit the
+    // whole room. Measured on the facility, warm cache, one edit every sixty frames: nine strokes
+    // from a static camera bumped the version once and left `lamps on the card: 469,861 of 507,251
+    // live faces cast no more rays at all`; the same nine while flying bumped it NINE times and
+    // left `0 of 997,296`. Nothing converges, so every face is re-measuring every frame, which is
+    // what a player sees as the light turning into per-face squares that flicker. It is D433's
+    // symptom exactly, arriving through the one door D434 did not close. D500.
+    //
+    // What ordering was said to buy -- catching a change that happens to be a permutation -- is not
+    // lost, because a permutation of the same records IS the same set of lamps. Rank decides only
+    // which of them survive the `kMaxLights` cap, and a cap that drops a different fitting changes
+    // the set, so it still changes this hash.
+    //
+    // Ordered by the bytes rather than field by field, which is a total order over a 28-byte POD
+    // with no padding (the static_assert beside the record is what makes that safe) and is the same
+    // bytes the hash then runs over. A comparison on a subset of the fields would leave two records
+    // equal-comparing, and `std::sort` is not stable, so the hash would depend on the input order
+    // again -- through a narrower door.
+    std::vector<LightSource> canonical = lights;
+    std::sort(canonical.begin(), canonical.end(), [](const LightSource& a, const LightSource& b) {
+        return std::memcmp(&a, &b, sizeof(LightSource)) < 0;
+    });
+    return hash_bytes(reinterpret_cast<const u8*>(canonical.data()),
+                      canonical.size() * sizeof(LightSource), hash);
 }
 
 }  // namespace ws

@@ -916,6 +916,142 @@ entry every time — but it is the one reading of your report I have not been ab
 happens again, tell me what you were doing when it did (one drag, or several clicks) and that will
 settle it.
 
+## "It still goes square and flickers after a while" — the second way in
+
+You reported the same picture again, and you were right: the fix above was real and it closed one of
+the two doors into that state. Here is the other one.
+
+**The room is relit whenever the list of lamps changes.** A surface works out its lamp light over
+about a second and then stops asking, so it cannot notice on its own that you smashed the lamp
+lighting it — the game has to tell it, and the way it tells it is: *the list of lamps changed, every
+surface look again*. That is the fingerprint I described above, and it is right.
+
+**But the list was in the wrong order.** The lamps are sorted by how much light each one delivers
+**to wherever you happen to be standing** — that is what lets the game keep the important ones when
+a scene has more lamps than it can carry. Sorting is fine. Taking the *fingerprint over the sorted
+order* is not: walk two paces and the same lamps come back in a different order, the fingerprint
+changes, and the game concludes the lamps changed. Nothing changed. But every surface in the room
+throws its lamp light away and starts counting again — which is exactly the state the fix above got
+us out of, reached by walking instead of by building.
+
+So: build while standing still and it was fine. Build while **moving**, which is what building
+actually is, and every single block you placed relit the entire room.
+
+**How I measured it, and the number that made it obvious.** The game already prints one line at
+every screenshot saying how many surfaces have finished working out their lamps and stopped casting
+rays. I ran nine tool strokes twice, on the same world, from one build — once from a still camera
+and once flying:
+
+| nine strokes | times the room was relit | surfaces that had finished |
+|---|---|---|
+| standing still | 1 | 469,861 of 507,251 |
+| flying, before | **9** — one per stroke | **0 of 997,296** |
+| flying, after the fix | **1** | **264,456 of 995,684** |
+
+Zero out of a million is the whole diagnosis: nothing ever finishes, so every surface is still
+guessing every frame — one square each, changing every frame. That line was being printed all along
+and I had not looked at it.
+
+**The fix.** The fingerprint is now taken over the lamps in a fixed order that has nothing to do with
+where you are standing. Moving cannot change it; placing, deleting, dimming or chipping a lamp still
+does, so nothing about "the room notices instantly" is given up.
+
+## "It still happens, and I haven't placed or erased a single voxel"
+
+That sentence is what closed it, because nothing edit-driven can survive it. Here is the actual
+cause, and the one above was a real bug that was not this one.
+
+**Every visible surface gets a slot in a table.** That is where its light is kept — how much sun it
+sees, how much sky, how dark its creases are, what the lamps give it. The table holds about a
+million slots, and a surface keeps its slot for ten seconds after the last time anything asked for
+it. Ten seconds of walking about is not ten seconds of *looking* at things: it is everything you
+walked past. Measured on your building, ten seconds of flying leaves **995,684 slots taken out of
+1,048,576** — while what is actually on your screen is about half a million.
+
+**So the table fills, and a full table has no polite failure.** A surface that cannot get a slot has
+nowhere to keep its light, and there is no host stand-in for it either, because that needs a slot
+too. What it falls back on is a coarse stand-in the graphics card claims for itself, covering an
+eight-by-eight-by-eight block of voxels — and that one, by design, **starts again from one single
+measurement every frame**. One measurement per block per frame is a blocky picture that is
+completely different next frame. That is the squares, and that is the flickering, and it needs no
+edit at all — just enough time.
+
+**How I proved it rather than argued it.** There is a switch that shrinks the table on purpose, so
+the state you reach after minutes of play arrives in ninety seconds. The picture that came out is
+your screenshot. And the flicker is a number: two frames in a row, camera not moving, nothing
+edited — **231,409 pixels of 1,390,170 different**, against **56,284** with room in the table.
+
+**What I changed.**
+
+- The table now starts giving up its oldest history *before* it is full, instead of waiting until a
+  surface is turned away. Spinning on the spot with a deliberately small table: **75,421 surfaces
+  turned away, now none** — and it keeps the same number of surfaces, so nothing is lost.
+- The rule that decides when a surface is "cold" was measuring the wrong thing. The game only asks
+  about one pixel in sixty-four each frame, and it takes 64 frames — 256 at 4K — to come back round
+  to any particular one. The old emergency rule was giving surfaces up after **18** frames, which is
+  before it had even asked. It cannot go below that round trip now.
+- And the table says how full it is, and counts every surface it turned away. It used to report only
+  the number of surfaces in it, which cannot show you a table that is nearly full — the one state
+  that produces this picture.
+
+**One thing I tried first and took back out**, because it made the game slower rather than faster:
+starting to give history up at *half* full. It removes every refusal too, and it costs the lighting
+pass **1.9 ms a frame against 8.1** — because a surface too far away to cover a whole pixel is
+rarely asked about, so a short window throws away distant things you are looking straight at and
+they have to work themselves out again. Starting at seven-eighths full does the same good and
+measures as costing nothing.
+
+**Then I wired up the signal I said was the real answer, and I was wrong about what it would buy.**
+The card knows exactly which surfaces your pixels are looking at — it writes that down every frame —
+and the part that decides what to throw away was reading a much sparser signal instead. It reads the
+real one now. What I predicted was that this would make a *small* table cheap, because I thought the
+expensive part was throwing away distant surfaces by mistake. It is not: with the table squeezed hard
+the lighting pass costs **7.108 ms with the old signal and 7.181 with the exact one** — the same.
+What actually costs is that surfaces which genuinely leave your screen and come back have to work
+themselves out again, and no amount of knowing which ones they are makes that free. I have kept the
+change because it makes the rule honest and stops it getting worse at 4K, but it is not a speed-up
+and I am not going to present it as one.
+
+**And the thing I should have built three rounds ago.** Every number about this was only ever printed
+when the game takes a scripted screenshot — so the exact state that produces your picture was
+invisible in the one situation you keep reporting it from, and I have now diagnosed it three times
+from my own reproductions instead of from your session. The game writes it into its log while you
+play now: a warning the moment it starts turning surfaces away, and a line every ten seconds saying
+how full it is either way.
+
+**So: play until it looks wrong, then quit.** The log at
+`%LOCALAPPDATA%\WorldShaper\worldshaper.log` will say whether the table filled, and if it did not, it
+will say that too — which rules this out and points at the next thing instead of at another guess.
+
+**You went looking and could not find it.** That is what closes this, and it is worth saying plainly
+that it is the only test that counts here: everything above is a number explaining *why* it went, and
+none of those numbers would have been worth anything if the picture had still been wrong. If it comes
+back, the log now tells us in one line whether it is this again or something new.
+
+## The other thing you said, and it is a real one: the hiccups
+
+You said the detail system is not being used when you open a world, and that the game has massive
+hiccups. Both are true, and they are the same thing.
+
+A world is a *description* — the facility is a few kilobytes of instructions — and the game turns it
+into real voxels the first time it opens it. That is done in stages: a rough version so you are
+standing in it in a second and a half, then eighteen regions sharpened one at a time in the
+background. The **sharpening** happens on a background thread, which is right. The moment where the
+sharpened region is **put into the world** does not: it happens in one frame, with everything else
+waiting. I measured single frames taking **1.4 s, 6.5 s, 7.0 s, 13.0 s and 14.1 s** on your machine.
+That is your hiccup, and it is not the renderer — swapping the renderer changes nothing about it.
+
+The finished version is saved so the next launch does not redo it. The catch is that the facility had
+**never finished**: the last regions cost 7–26 seconds of sampling each, so a session was always
+quitting part way through. It does carry on where it left off, and after enough launches it does
+complete — a complete one loads in **119 ms with no hiccup at all**. But until then every launch pays,
+and a brand new world always pays.
+
+**It is the top item on my list and it is written down** as *slice the paste across frames* — the
+work of putting a region in gets broken into pieces small enough to fit in a frame, the same way
+everything else in this engine already is. Nothing about it is hard; it is a day's careful work
+rather than an experiment. Say the word and it is next.
+
 ## What the game will open on, and where everything will live
 
 This is written down and not built yet — it is the next stage. Here is the whole of it in plain

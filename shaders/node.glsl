@@ -132,6 +132,13 @@ layout(push_constant) uniform NodeConstants {
     // fitting. 0 reopens the whole sixteen-metre box, which is the control arm and is what made a
     // room full of lamps flicker for as long as somebody was building in it.
     uint lamp_edit_scope;
+    // How often a face a PIXEL read may say so down the feedback buffer, in frames, as a power of
+    // two. 0 is off and restores residency hearing only from the request lattice.
+    //
+    // A period rather than a switch because it is the whole trade: shorter is a residency clock that
+    // tracks the screen more closely and more feedback entries, and the entries are the constrained
+    // thing. See node_face_read_due.
+    uint face_read_period;
 } node_push;
 
 uint node_level_of(uint packed) { return packed & 0xFFu; }
@@ -257,6 +264,37 @@ layout(std430, binding = 15) buffer FaceSeen { uint frames[]; } face_seen;
 // node keeps an old stamp and is merely reported a few frames late, and the host stamps a node it
 // builds anyway. Two invocations racing both report, which costs one duplicate entry.
 layout(std430, binding = 17) buffer NodeSeen { uint frames[]; } node_seen;
+
+// When a face was last REPORTED to the host as read by a pixel. One word a slot, card-owned, and
+// exactly `node_seen` doing for the face store what it already does for the node pool.
+//
+// # Why residency needed a second signal at all
+//
+// `FaceStore::last_read_` is stamped by a CLAIM, and a claim comes from the one pixel in stride^2
+// the request lattice is asking with this frame. That is the store's whole idea of "somebody is
+// looking at this", and it is wrong in the direction that costs: a face whose coverage is under a
+// pixel is plainly on screen and is sampled by that lattice rarely, so the only safe cold window is
+// a very long one — which is why the store kept ten seconds of everything the camera walked past,
+// filled, and started refusing faces (D502). `face_seen` above is the exact signal, written for
+// every face every pixel resolves to, every frame; the host simply had no way to hear it.
+//
+// # Why this is a second array and not a read of that one
+//
+// They answer different questions. `face_seen` must say "was this read RECENTLY", so it is stamped
+// every frame; this must say "has this been REPORTED lately", which is a much longer clock. One word
+// cannot hold both, and packing them into halves would put a sixteen-bit frame counter in the middle
+// of a comparison that already has to be right about wrap-around.
+//
+// # Why the phase gate here is not the mistake D432 records
+//
+// D432 took out a slot-hash pre-gate in front of `node_seen`, because the thing doing the reporting
+// there is a LIGHT ray and a converged face casts none — so a node was reported only if a ray
+// happened to read it on the one frame it was eligible, which for most nodes is never. The reporter
+// here is the PRIMARY ray, which runs for every visible pixel on every frame without exception, so a
+// face on screen is guaranteed to be visited on its eligible frame. Same shape, opposite guarantee,
+// and the phase is what keeps the first frames of a run from reporting half a million faces at once
+// into a buffer that holds 131,072.
+layout(std430, binding = 18) buffer FaceRead { uint frames[]; } face_read;
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
 // live value is `node_push.seen_window`, so `--face-gate` can widen it to the whole run and give
@@ -1263,6 +1301,16 @@ const int kFeedbackFace = 0x40000;
 // seven on the request volume, which is where the node pool's CPU goes (D351).
 const int kFeedbackExact = 0x80000;
 
+// A FACE a pixel READ, named by slot in x, exactly as kFeedbackRead names a node slot.
+//
+// The distinction against kFeedbackFace is the whole point and the two must not be conflated: that
+// one is the request lattice saying *claim this face, I have not seen it before*, and it arrives for
+// one pixel in stride² so it cannot be the residency clock. This one says *this face, which you
+// already have, is on the screen right now* — one entry per face per `face_read_period` frames
+// however many pixels are on it. The consumer's answer is `FaceStore::touch` and nothing else: it
+// claims nothing, builds nothing and asks for nothing. D508.
+const int kFeedbackFaceRead = 0x100000;
+
 // A light ray keeps the geometry it is standing on, and asks for nothing new.
 //
 // D292 forbids a light path from dragging residency towards whatever it crosses, and that rule is
@@ -1337,6 +1385,43 @@ void node_flush_read(bool enabled, uint slot) {
     uint index = atomicAdd(feedback.count, 1u);
     if (index < push.resolution.w) {
         feedback.entries[index].coord = ivec4(int(slot), 0, 0, kFeedbackRead);
+    }
+}
+
+// A face a PIXEL read, named by slot, so the store's residency clock hears what the screen is
+// actually looking at instead of what the request lattice got round to asking about.
+//
+// See `face_read` above for why this exists and why the phase gate here is not D432's mistake. Two
+// gates, and both are needed:
+//
+//   the PHASE  -- a slot is eligible one frame in `period`, so the reports of a store of half a
+//                 million faces are spread evenly rather than all arriving on the first frame that
+//                 anything is due. Without it a cold store reports every visible face at once into a
+//                 buffer of 131,072 entries and the overflow takes the streaming reports with it,
+//                 which is D431 exactly;
+//   the STAMP  -- the array, so the thousands of pixels that share one face on its eligible frame
+//                 produce one entry between them and not thousands.
+//
+// The stamp is a plain store rather than an atomic. Two pixels racing on the same face on the same
+// frame both see the stale value and both report, which costs one duplicate entry out of thousands
+// and cannot cost correctness -- the host's answer to two reports of one slot is to stamp it twice
+// with the same frame. An atomicCompSwap here would be a read-modify-write on every visible face
+// every eligible frame to save an entry nobody misses.
+void node_face_report_read(uint slot) {
+    const uint period = node_push.face_read_period;
+    if (period == 0u || slot == kNoFace || slot == kFaceTombstone) return;
+    // The card's own provisional faces live above the store's capacity and are not the host's to
+    // keep: they are re-claimed every frame by whichever pixel gets there first, and the host has no
+    // slot of that number. Reporting one would stamp an unrelated face in the store.
+    if (node_push.provisional_base != 0u && slot >= node_push.provisional_base) return;
+    if (slot >= face_read.frames.length()) return;
+    if (((node_push.frame + slot) & (period - 1u)) != 0u) return;
+    if ((node_push.frame - face_read.frames[slot]) < period) return;
+    face_read.frames[slot] = node_push.frame;
+
+    uint index = atomicAdd(feedback.count, 1u);
+    if (index < push.resolution.w) {
+        feedback.entries[index].coord = ivec4(int(slot), 0, 0, kFeedbackFaceRead);
     }
 }
 

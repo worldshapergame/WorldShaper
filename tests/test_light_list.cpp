@@ -304,6 +304,34 @@ TEST_CASE("an unchanged world produces an unchanged list identity") {
     CHECK(first != light_list_hash(std::vector<LightSource>{}));
 }
 
+TEST_CASE("walking to the other lamp does not change the list identity") {
+    // The gate on D500, and it is the case that was costing a player the picture.
+    //
+    // The list is RANKED by what each fitting delivers at the camera, so two lamps come back in one
+    // order from beside the first and in the other order from beside the second. Nothing about the
+    // lamps has changed. A hash over the rank order says otherwise, and the host answers a changed
+    // identity by reopening the lamp term of EVERY face in the store — so a player who moved between
+    // two edits relit the whole room on the second one, every face dropped to eight samples, and
+    // none of them ever reached `kLampConverged`. Measured in the game: nine chisel strokes from a
+    // static camera bumped the version once; the same nine while flying bumped it nine times and
+    // left `lamps on the card: 0 of 997,296 live faces cast no more rays at all`.
+    VoxelTypeTable types;
+    World world;
+    const VoxelTypeId lamp = make_lamp(types, 200);
+    fill(world, 0, 0, 0, 3, 3, 3, lamp);
+    fill(world, 1000, 0, 0, 1003, 3, 3, lamp);
+
+    const std::vector<LightSource> near_first = build_light_list(world, types, 0, 0, 0);
+    const std::vector<LightSource> far_first = build_light_list(world, types, 1000, 0, 0);
+    REQUIRE(near_first.size() == 2);
+    REQUIRE(far_first.size() == 2);
+    // The ranking really did change, or this test would pass on a build where the camera makes no
+    // difference at all and would be evidence about nothing. Trap 15: a measurement that never ran
+    // and a clean one look identical.
+    REQUIRE(near_first[0].x != far_first[0].x);
+    CHECK(light_list_hash(near_first) == light_list_hash(far_first));
+}
+
 TEST_CASE("placing a lamp changes the list identity") {
     VoxelTypeTable types;
     World world;

@@ -103,10 +103,16 @@ std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTab
 // `LightSource` is a packed 28-byte POD with no padding — the static_assert above is what makes
 // that safe, and it is why the assert is worth keeping.
 //
-// Ordering counts, deliberately. The list is sorted by contribution at the camera, so it can be
-// reordered by the camera moving with no lamp having changed at all; that costs one extra
-// re-measure of a term that re-measures in about a second, and the alternative — an
-// order-independent hash — would hide a genuine change that happened to be a permutation.
+// Ordering does NOT count, and the version of this that said it did was wrong about what the
+// re-measure costs. The list is sorted by contribution at the camera, so it is reordered by the
+// camera moving with no lamp having changed at all — and this hash is the gate on `light_reset`,
+// which reopens the lamp term of every face in the store, not one face. Measured: nine chisel
+// strokes from a static camera bumped the version once and the store stayed converged; the same
+// nine while flying bumped it nine times and left `lamps on the card: 0 of 997,296 live faces cast
+// no more rays at all`, which is a room made of per-face squares that flicker. So the hash runs
+// over a canonically ordered copy. What ordering was said to buy is not lost: a permutation of the
+// same records is the same set of lamps, and rank only decides which survive the `kMaxLights` cap,
+// which changes the set. D500.
 u64 light_list_hash(const std::vector<LightSource>& lights);
 
 }  // namespace ws

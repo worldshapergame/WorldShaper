@@ -11,6 +11,15 @@ FaceStore make_store(u32 max_faces = 1024, u32 cold_frames = 4) {
     FaceStoreBudget budget;
     budget.max_faces = max_faces;
     budget.cold_frames = cold_frames;
+    // A lattice period of one, so `cold_frames` means what these cases say it means.
+    //
+    // The store floors every eviction window at twice the period the request lattice takes to come
+    // back to a pixel, because below that "nobody has claimed this" means "the lattice has not got
+    // round to it" (see kFaceMinCold). That floor is 128 frames at the real default, which would
+    // quietly raise every short window below and turn these into tests of nothing. Naming it here
+    // is the honest way to say what each case is about: this one is about the cold rule, not about
+    // the lattice.
+    budget.claim_period = 1;
     store.create(budget);
     return store;
 }
@@ -43,6 +52,82 @@ TEST_CASE("a full store recovers, rather than refusing faces for ever") {
     const u32 slot = store.claim(FaceKey{999, 0, 0, 0, 0}, 200);
     CHECK(slot != kNoFace);
     CHECK(store.find(FaceKey{999, 0, 0, 0, 0}) == slot);
+    CHECK(store.validate());
+}
+
+// The fault the pressure rule exists for, written as the thing a player does rather than as an
+// invariant: keep looking at new surfaces, never at more of them at once than the table holds.
+//
+// The old policy waits for the table to be FULL and only then gives anything up, so a visible set
+// that fits several times over still fills the table with history — and a refused claim is a pixel
+// with no face of its own and no host stand-in either, which falls to the card's provisional coarse
+// face and gets ONE fresh sample per frame. That is the blocky picture that changes completely every
+// frame. Measured in the game at a forced budget: 231,409 pixels of 1,390,170 differing between two
+// consecutive frames of a STATIC camera with no edits at all, against 56,284 with room to spare.
+TEST_CASE("a store under pressure spends its history rather than refusing a face") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 4096;
+    budget.cold_frames = 600;
+    budget.claim_period = 8;    // so the floor is 16 and the window has somewhere to go
+    store.create(budget);
+
+    // Two hundred faces are on screen and re-claimed every frame; everything else is walked past
+    // once and never asked for again. Six hundred frames of that is far more history than the table
+    // can hold, which is the player's case exactly.
+    u64 refused = 0;
+    u64 first_refusal = 0;
+    u32 used_then = 0;
+    for (u64 frame = 1; frame <= 600; ++frame) {
+        for (u32 i = 0; i < 200; ++i) {
+            if (store.claim(FaceKey{i, 0, 0, 0, 0}, frame) == kNoFace) ++refused;
+        }
+        for (u32 i = 0; i < 60; ++i) {
+            const i64 fresh = static_cast<i64>(1000 + frame * 60 + i);
+            if (store.claim(FaceKey{fresh, 1, 0, 0, 0}, frame) == kNoFace) ++refused;
+        }
+        if (refused > 0 && first_refusal == 0) {
+            first_refusal = frame;
+            used_then = store.stats().faces;
+        }
+        store.evict_cold(frame);
+    }
+
+    // Named rather than counted, because "it refused four faces on frame 65" and "it refuses faces"
+    // are the same failing assertion and different bugs.
+    CHECK(first_refusal == 0);
+    CHECK(used_then == 0);
+    CHECK(refused == 0);
+    CHECK(store.stats().refusals == 0);
+    CHECK_FALSE(store.out_of_room());
+    // ...and the two hundred faces being looked at are all still there, with their light. Giving
+    // history up is only the right answer while what is on screen survives it.
+    for (u32 i = 0; i < 200; ++i) {
+        CHECK(store.find(FaceKey{i, 0, 0, 0, 0}) != kNoFace);
+    }
+    CHECK(store.validate());
+}
+
+// The floor, which is the half of it that the old constant got wrong.
+TEST_CASE("eviction never uses a window shorter than the request lattice's own period") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 64;
+    budget.cold_frames = 600;
+    budget.claim_period = 256;   // 4K
+    store.create(budget);
+
+    // Full, and every face claimed recently enough that the lattice has not had its turn yet.
+    for (u32 i = 0; i < 64; ++i) REQUIRE(store.claim(FaceKey{i, 0, 0, 0, 0}, 1000) != kNoFace);
+    CHECK(store.min_cold() == 512);
+    CHECK(store.cold_now() >= 512);
+
+    // The emergency sweep runs and finds nothing it is allowed to take. That is the correct answer:
+    // a face claimed a hundred frames ago at 4K has not been abandoned, it has not been ASKED yet,
+    // and the old floor of 32 took it and handed the picture a slot with no light in it.
+    store.claim(FaceKey{999, 0, 0, 0, 0}, 1100);
+    store.evict_cold(1100);
+    for (u32 i = 0; i < 64; ++i) CHECK(store.find(FaceKey{i, 0, 0, 0, 0}) != kNoFace);
     CHECK(store.validate());
 }
 

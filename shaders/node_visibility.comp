@@ -176,6 +176,10 @@ void main() {
         // has to keep casting rays, and gating the stamp on answerability would be a face that can
         // never become answerable because it is never lit because it is not answerable.
         node_face_seen(face_slot);
+        // ...and tell the HOST, at most once per face per window, because the store's residency
+        // clock only ever heard from the request lattice and that is not what a screen is. See
+        // node_face_report_read.
+        node_face_report_read(face_slot);
         bool answerable = face_slot != kNoFace &&
                           face_samples_of(faces.items[face_slot].counters) >= kFaceSettled;
         if (!answerable) {
@@ -189,6 +193,10 @@ void main() {
             // stand-in whose children have all settled stops being stamped, stops casting, and
             // keeps the mean it had, which is all `face_light_seed` ever wanted of it.
             node_face_seen(stand_in);
+            // The stand-in is being READ, so it is wanted, and a stand-in is claimed by the host
+            // only once — when the face under it was new. Without this it is the one kind of face
+            // whose residency clock never advances at all while it is on screen.
+            node_face_report_read(stand_in);
             if (stand_in != kNoFace &&
                 face_samples_of(faces.items[stand_in].counters) >= kFaceSettled) {
                 face_slot = stand_in;

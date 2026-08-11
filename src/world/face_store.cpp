@@ -36,6 +36,7 @@ void FaceStore::create(const FaceStoreBudget& budget) {
     claims_ = 0;
     hits_ = 0;
     evictions_ = 0;
+    refusals_ = 0;
 }
 
 usize FaceStore::bucket_of(const FaceKey& key) const {
@@ -87,6 +88,7 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame, bool* was_new) {
         // node pool needed `out_of_room_` for and the one whose absence made a tree that ran out
         // of memory look like a tree over empty space.
         out_of_room_ = true;
+        ++refusals_;
         return kNoFace;
     }
 
@@ -120,7 +122,57 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame, bool* was_new) {
     // while a face slot was free, which cannot happen unless one of the two is mis-sized.
     free_faces_.push_back(slot);
     out_of_room_ = true;
+    ++refusals_;
     return kNoFace;
+}
+
+u32 FaceStore::min_cold() const {
+    // Twice the lattice's period, not once. Once is the average wait for a face that covers many
+    // pixels; a face covering a single pixel waits the whole period, and the phase walk is not
+    // synchronised with anything here. Two periods is the cheapest margin that makes "not claimed"
+    // mean "not wanted" rather than "not asked yet".
+    //
+    // This quantity ALONE, and `kFaceMinCold` is not part of it -- see that constant for why a floor
+    // reasoned from how long a face takes to converge is a floor about the wrong thing.
+    return budget_.claim_period * 2;
+}
+
+u32 FaceStore::pressure_shift() const {
+    if (!budget_.pressure || budget_.max_faces == 0) return 0;
+    // Free space is the whole table minus what is live, so the recycled slots on `free_faces_`
+    // count as free -- they are exactly what a claim is about to take.
+    //
+    // Nothing happens at all until the table is half full, which on this building is a camera that
+    // has genuinely seen half a million faces. The point is to spend HISTORY before the table is
+    // full rather than to keep the store small.
+    const u32 used = next_free_ - static_cast<u32>(free_faces_.size());
+    const u32 free_now = (used < budget_.max_faces) ? budget_.max_faces - used : 0;
+    u32 shift = 0;
+    const u32 from = std::max(2u, budget_.pressure_from);
+    while (shift < 8 && free_now * (from << shift) <= budget_.max_faces) ++shift;
+    return shift;
+}
+
+u32 FaceStore::cold_now() const {
+    const u32 floor_frames = min_cold();
+    const u32 relaxed = std::max(budget_.cold_frames, floor_frames);
+    const u32 shift = pressure_shift();
+    if (shift == 0) return relaxed;                                // an eighth free or better
+    if (shift == 1) return std::max(relaxed >> 2, floor_frames);   // under an eighth
+    return floor_frames;                                           // under a sixteenth
+
+    // Three steps rather than a smooth ramp, and the reason is that a window has to BITE.
+    //
+    // The obvious shape is to halve the window per halving of the free space, and it does not work:
+    // a table that fills in sixty-eight frames holds nothing older than sixty-eight frames, so a
+    // window of three hundred, or a hundred and fifty, or seventy-five evicts NOTHING however
+    // alarming the occupancy is. The store then sails past full with every window above it having
+    // done nothing, and refuses claims for the handful of frames it takes the ladder to reach a
+    // number smaller than the ages actually present. Those frames are the fault.
+    //
+    // Under a quarter free there is nothing left worth being gradual about: everything above the
+    // floor is history — a face nobody has looked at for longer than the lattice needs to come back
+    // — and the alternative to spending it is refusing a face somebody is looking at now.
 }
 
 void FaceStore::touch(u32 slot, u64 frame) {
@@ -152,7 +204,11 @@ void FaceStore::evict_cold(u64 frame) {
     // Halving down to a floor rather than dropping straight to it, so a store that is only just
     // full gives up only what it must. The floor is well above the handful of frames a face needs
     // to settle, or the store would recycle faces it is still converging.
-    u32 cold = budget_.cold_frames;
+    // The window this frame, which is the relaxed one until the table starts running out and then
+    // shortens with the pressure. Never below `min_cold`, which is the lattice's own period and is
+    // the number the old floor of 32 was wrong about. See kFaceMinCold.
+    u32 cold = cold_now();
+    const u32 floor_frames = min_cold();
     if (out_of_room_ && free_faces_.empty() &&
         (last_emergency_ == 0 || now - last_emergency_ >= kFaceEmergencyGap)) {
         // Rate limited, because this scans the whole table several times over and a store whose
@@ -160,8 +216,18 @@ void FaceStore::evict_cold(u64 frame) {
         // "no new faces" into "no new faces and a frame rate to match". Once every sixty frames is
         // often enough to recover in under a second and rare enough to be invisible if it cannot.
         last_emergency_ = now;
-        while (cold > kFaceMinCold && free_faces_.empty()) {
-            cold >>= 1;
+        // Once at whatever the window is, and only then halve. The halving used to come first,
+        // which is fine while the window has room above the floor and skips the sweep entirely once
+        // pressure has already taken it down to the floor -- a table that is full, has faces older
+        // than the floor in it, and gives up none of them.
+        sweep(now, cold, 0, next_free_);
+        // Down to the floor and no further, and the floor is now the lattice's period rather than
+        // 32. The old loop tested `cold > kFaceMinCold` BEFORE halving, so the window it actually
+        // reached was 18 -- under a third of the 64 frames the lattice takes to come back, so the
+        // sweep that was meant to recover the table was evicting the faces the camera was pointed
+        // at.
+        while (cold > floor_frames && free_faces_.empty()) {
+            cold = std::max(cold >> 1, floor_frames);
             sweep(now, cold, 0, next_free_);
         }
         evict_cursor_ = 0;
@@ -173,6 +239,27 @@ void FaceStore::evict_cold(u64 frame) {
     // records: the timestamp array is a quarter the width of a record and read in order, so the
     // cheap test costs a fraction of what looking at every face would. Eight slices costs eight
     // frames of latency on an eviction against a window of six hundred.
+    //
+    // ...and MORE slices as the table fills, because eight frames of latency is fine against six
+    // hundred and is not fine against a table that fills in sixty-eight. Shortening the window
+    // without also looking oftener leaves the shorter window unenforced for eight frames, and a
+    // claim refused in those eight frames is a surface with no light of its own — which is the whole
+    // fault. At full pressure this is the whole table every frame, which is one pass over an array a
+    // quarter the width of a record and is only paid by a store that is nearly full.
+    // Under real pressure it is the WHOLE table, from nought, and not a bigger slice.
+    //
+    // A slice is a cursor, and a cursor that happens to be sitting at the young end of a table that
+    // is still growing sweeps only the faces it has just claimed — every one of them younger than
+    // any window — and reports having found nothing to give up while the table fills behind it.
+    // Measured in the test below: window already down to the floor, half the table swept per frame,
+    // and nought evictions until the cursor wrapped. Where the cursor is is not a fact about the
+    // store's pressure, so it must not decide what the store looks at when it is under pressure.
+    if (pressure_shift() >= 2) {
+        sweep(now, cold, 0, next_free_);
+        evict_cursor_ = 0;
+        return;
+    }
+
     const u32 slice = (next_free_ + kFaceEvictSlices - 1) / kFaceEvictSlices;
     if (evict_cursor_ >= next_free_) evict_cursor_ = 0;
     const u32 first = evict_cursor_;
@@ -221,6 +308,8 @@ FaceStoreStats FaceStore::stats() const {
     s.claims = claims_;
     s.hits = hits_;
     s.evictions = evictions_;
+    s.refusals = refusals_;
+    s.cold_window = cold_now();
     return s;
 }
 

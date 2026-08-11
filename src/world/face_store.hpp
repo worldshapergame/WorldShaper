@@ -37,6 +37,7 @@
 // empty-then-publish key ordering, the eight-probe coldest-slot eviction — is a consequence of
 // the wrong thing owning the write, not a set of bugs to be fixed. One writer removes all of it.
 
+#include <algorithm>
 #include <vector>
 
 #include "core/block_pool.hpp"
@@ -204,6 +205,22 @@ constexpr u32 pack_counters(u32 samples, u32 lit) {
     return (samples & 0xFFFFu) | ((lit & 0xFFFFu) << 16);
 }
 
+// Where it starts is a measured trade and not a round number, and both directions cost something
+// real. Starting at half free removes every refusal and costs the FACES PASS: 1.918 -> 8.086 ms
+// flying at the default budget, because a shorter window also gives up faces whose coverage is under
+// a pixel — which the lattice samples rarely however plainly they are on screen — and every one of
+// them pays its whole ambient burst again when it comes back. Starting at an eighth keeps the store
+// large, so the re-burst is small, and still stops the table reaching the point where a claim is
+// refused. That is the point of the rule: a refusal is a surface with NO face, and there is no
+// window short enough to make one of those come out right.
+//
+// The proper answer is not on this dial at all: `last_read_` is stamped by the lattice's CLAIM,
+// while the card already stamps `face_seen` for every face every pixel resolves to, every frame.
+// Residency wants that signal — the same correction D427 made for nodes and D430 for light rays —
+// and with it the window could be short without giving up anything anybody is looking at. See the
+// handover; that is the next change here, and this constant is the holding position until it lands.
+inline constexpr u32 kFacePressureFrom = 8;   // shifts begin once free space is under 1/8
+
 struct FaceStoreBudget {
     // Faces the table can hold. The premise this whole stage rests on was measured before any of
     // it was built (D205): distinct visible faces went 118,826 to 141,110 while pixels went up
@@ -213,8 +230,35 @@ struct FaceStoreBudget {
     // record's shape does not change when it does.
     u64 bin_bytes = 64ull * 1024 * 1024;
     // A face nothing has asked for in this many frames is given up, the same rule and the same
-    // reason as the node pool's.
+    // reason as the node pool's. It is the RELAXED window: what the store keeps while it has room
+    // to keep it. See `claim_period` and `pressure` for what happens when it does not.
     u32 cold_frames = 600;
+
+    // How many frames the request lattice takes to come back to a given pixel.
+    //
+    // This is the floor under everything else here, and getting it wrong is what filled the table.
+    // `last_read_` is stamped by a CLAIM and by nothing else, and a claim comes from the one pixel
+    // in stride^2 that the moving lattice is asking with this frame -- so "nobody has asked for this
+    // face in N frames" says nothing at all until N is past stride^2. Below that, "cold" means "the
+    // lattice has not got round to it", and evicting on it throws away the wall you are looking at.
+    //
+    // Set every frame from the render resolution, because the shader derives the stride from it
+    // (node_visibility.comp: stride doubles until pixels/stride^2 is under sixty thousand). 64 at
+    // 1280x800 and 1440p, 256 at 4K.
+    u32 claim_period = 64;
+
+    // Shorten the window as the table fills, instead of waiting for it to be full.
+    //
+    // False restores the old policy and is the control arm (`--no-face-pressure`). See
+    // `FaceStore::cold_now`.
+    bool pressure = true;
+
+    // How little free space starts the squeeze, as a divisor: 8 means "under an eighth free".
+    //
+    // A run-time figure and not a constant, because it is a TRADE and a trade nobody can sweep at
+    // run time is a trade somebody guesses at (D430's rule, applied to this one). See
+    // kFacePressureFrom for what each end of it measured.
+    u32 pressure_from = kFacePressureFrom;
 };
 
 // How many frames one full eviction sweep is spread over. Eight slices costs eight frames of
@@ -222,9 +266,34 @@ struct FaceStoreBudget {
 // The same figure and the same reasoning as the node pool's kErodeSlices (D273).
 inline constexpr u32 kFaceEvictSlices = 8;
 
-// How cold a face may be forced to be when the table is full. Far above the handful of frames a
-// face needs to settle, so a store under pressure never recycles what it is still converging.
-inline constexpr u32 kFaceMinCold = 32;
+// Retired, and kept written down because the reasoning behind it is the fault.
+//
+// It was 32 — "far above the handful of frames a face needs to settle, so a store under pressure
+// never recycles what it is still converging" — and every word of that is true and about the wrong
+// quantity. What bounds an eviction window is not how long a face takes to converge. It is how long
+// the request lattice takes to come back and SAY the face is still wanted, because `last_read_` is
+// stamped by a claim and a claim comes from one pixel in stride². That is
+// `FaceStoreBudget::claim_period`: 64 frames at 1440p, 256 at 4K — two to eight times this number.
+//
+// So the emergency sweep, halving its window down through 300, 150, 75, 37 to 18, was evicting
+// faces the camera was pointed at, which came back the moment the lattice reached them again as
+// empty records with no light in them. `FaceStore::min_cold` is `2 * claim_period` and nothing else.
+inline constexpr u32 kFaceMinCold = 32;   // unused; see above before reaching for it again
+
+// Where the store starts giving up history rather than waiting to be full.
+//
+// `cold_frames` is ten seconds. What a screen NEEDS is the faces it can see -- about half a million
+// on this building -- and what ten seconds of walking about ACCUMULATES is everything seen along the
+// way, which measured 995,684 against a table of 1,048,576 after ten seconds of flight. So the table
+// fills with history while the visible set fits inside it several times over, and a full table is
+// not a graceful state: a refused claim leaves a pixel with no face of its own and no host stand-in
+// either, so it falls to the card's provisional coarse face -- which by construction re-claims
+// itself and takes ONE fresh sample every frame. One ray per 8^3-voxel block per frame is a blocky
+// picture that changes completely every frame, and that is exactly what was reported.
+//
+// Halving the window per doubling of pressure spends the history first, which is the thing worth
+// spending: a face you looked away from keeps its answer for as long as there is room to keep it,
+// and gives it up before a face anybody is looking at is refused. Never below `min_cold`.
 
 // How rarely the full-table emergency sweep may run. It scans everything several times over, so a
 // store whose faces are all genuinely hot must not pay it every frame.
@@ -238,6 +307,13 @@ struct FaceStoreStats {
     u64 claims = 0;
     u64 hits = 0;
     u64 evictions = 0;
+    // Claims the table had no room for, ever, and the window the pressure rule is currently
+    // holding. Counted rather than deduced from `out_of_room()`, which is a state and answers
+    // "is it full now" -- a store that fills and recovers sixty times a second reads as empty
+    // from that flag at every moment anybody asks. This is the harm itself: a refused claim is a
+    // surface that got no light of its own on this frame. Trap 16.
+    u64 refusals = 0;
+    u32 cold_window = 0;
 };
 
 // The store itself.
@@ -264,6 +340,18 @@ public:
     u32 find(const FaceKey& key) const;
 
     void touch(u32 slot, u64 frame);
+
+    // How long the request lattice takes to come back to a pixel, which is the floor under every
+    // eviction decision. Set from the render resolution every frame, because it doubles with it.
+    void set_claim_period(u32 frames) { budget_.claim_period = std::max(1u, frames); }
+
+    // The window eviction is actually using this frame, after pressure and the floor. Exposed
+    // because a policy nobody can read is a policy nobody can tell has gone wrong.
+    u32 cold_now() const;
+    u32 min_cold() const;
+    // How hard the table is being squeezed: 0 with room to spare, one more per halving of the free
+    // space past half. It sets both the window and how much of the table is looked at per frame.
+    u32 pressure_shift() const;
 
     // Give up faces nobody has asked for. Must be called every frame: without it the store only
     // ever grows, reaches its cap, and then refuses every new face for the rest of the run.
@@ -314,6 +402,7 @@ private:
     u64 claims_ = 0;
     u64 hits_ = 0;
     u64 evictions_ = 0;
+    u64 refusals_ = 0;
 };
 
 }  // namespace ws

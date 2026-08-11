@@ -251,6 +251,16 @@ struct Options {
     u64 screenshot_frame = 30;
     u32 debug_mode = 0;   // 0 shaded, 1 step count, 2 face normals
     u32 face_budget = 0;  // faces the store may hold; 0 keeps FaceStoreBudget's own figure
+    bool face_pressure = true;   // shorten the cold window as the table fills (D502)
+    u32 face_pressure_from = 0;  // 0 keeps kFacePressureFrom; 2 means "from half free"
+    // How often a face a pixel read reports itself to the store, in frames, a power of two. 0 is off
+    // and restores residency hearing only from the request lattice (D508's control arm).
+    //
+    // Sixty-four, because that is the lattice's own period at the resolutions this runs at, so the
+    // clock is no coarser than what it replaces while being exact about WHICH faces it covers — and
+    // because it sets the floor under every eviction window: half a million live faces reporting at
+    // one in sixty-four is about eight thousand entries a frame against a capacity of 131,072.
+    u32 face_read_period = 64;
     // Wall-clock deadline for a scripted run, in seconds. A frame count cannot bound a run whose
     // frames are the thing that got slow, so every scripted run has one whether it asked or not:
     // this is filled in from kDefaultMaxSeconds after parsing when a screenshot, a tick audit, a
@@ -565,6 +575,18 @@ Options parse_options(int argc, char** argv) {
             // while, which is precisely why "the shadowed faces stop being produced" was found by
             // playing rather than by any test.
             options.face_budget = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--face-read-period" && i + 1 < argc) {
+            // A power of two, or 0 for off. Not rounded here: a figure that is silently changed is
+            // a figure an A/B cannot be read against.
+            options.face_read_period = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--no-face-reads") {
+            options.face_read_period = 0;   // D508's control arm
+        } else if (arg == "--face-pressure-from" && i + 1 < argc) {
+            options.face_pressure_from = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--no-face-pressure") {
+            // The control arm for D502: the store waits until it is FULL before giving anything up,
+            // which is what it did before. Two flags of one build, as D407 requires.
+            options.face_pressure = false;
         } else if (arg == "--crash-test" && i + 1 < argc) {
             options.crash_test = argv[++i];
         } else if (arg == "--hollow" && i + 1 < argc) {
@@ -1583,6 +1605,10 @@ private:
         // An edit reopens a face's lamp term only where it can stand between that face and a
         // fitting. 0 reopens the whole sixteen-metre box, which is the control arm.
         u32 lamp_edit_scope;
+        // How often a face a pixel read may say so down the feedback buffer, in frames, a power of
+        // two. 0 is off and leaves residency hearing only the request lattice, which is D508's
+        // control arm and the state D502 was measured in.
+        u32 face_read_period;
     };
     NodePush make_node_push(u32 face_count) const;
 
@@ -1593,6 +1619,16 @@ private:
     NodeBuffers node_buffers_;
     // R3. Claimed from what the marcher reports and mirrored to the card; nothing shades it yet.
     FaceStore face_store_;
+    // What the table was sized at, so the audit can say "N live of M" rather than a bare count.
+    // A count with nothing to measure it against cannot show a store that is nearly full, which is
+    // the state that produces the reported picture and the one nothing was reporting.
+    u32 face_budget_max_ = 0;
+    // How many faces said "a pixel is reading me" this frame. The volume of D508's reports,
+    // which is the one cost of that rule and is bounded by the feedback buffer it shares.
+    u32 last_faces_read_reported_ = 0;
+    // For the in-play warning: refusals as of last frame, and when it last said anything.
+    u64 last_face_refusals_ = 0;
+    u64 last_face_warn_frame_ = 0;
     FaceBuffers face_buffers_;
     FaceLight face_light_;
     // One word a slot: the frame a pixel last read that face. Written by the visibility pass, read
@@ -1602,6 +1638,10 @@ private:
     // One word a node slot: when the card last REPORTED that node as read by a light ray. A
     // deduplicator, and the reason D429's rule fits down the feedback buffer at all (D430).
     FaceLight node_seen_;
+    // When each face slot last REPORTED itself to the store as read by a pixel. The same shape and
+    // the same guarantee as the two above: one word a slot, device local, written and read by the
+    // card and by nothing else. See `face_read` in shaders/node.glsl.
+    FaceLight face_read_;
     // The compacted dispatch: three words of VkDispatchIndirectCommand, a count, then the slots
     // that owe work. Written by `face_worklist.comp` and read by the shading pass, both on the
     // card; the host only ever zeroes the header. See face_worklist.comp for why it exists.
@@ -3265,7 +3305,8 @@ void Application::stream(f64 seconds) {
         // A used-report is not a request for anything; chunk residency has nothing to do with
         // it, and its level field carries a flag that would shift the coordinate into nonsense.
         if (node_feedback &&
-            (entry.level & (kFeedbackUsed | kFeedbackRead | kFeedbackFace | kFeedbackExact)) != 0) {
+            (entry.level & (kFeedbackUsed | kFeedbackRead | kFeedbackFace | kFeedbackExact |
+                            kFeedbackFaceRead)) != 0) {
             continue;
         }
 
@@ -3321,6 +3362,7 @@ void Application::stream(f64 seconds) {
     // chunk coordinate read as a node key is a request for a node the world does not have, and
     // the pool builds toward it. In the path tracer that spent budget on 488 nodes of nothing.
     u32 faces_seen = 0;
+    u32 faces_read_reported = 0;
     if (node_feedback) {
         for (const FeedbackEntry& entry : wanted) {
             // A ray that READ this node, rather than one that could not find it.
@@ -3371,6 +3413,21 @@ void Application::stream(f64 seconds) {
                 continue;
             }
 
+            // A face a PIXEL read, named by slot. Not a claim: the face is already here, and this
+            // says only that it is on the screen right now.
+            //
+            // It is the store's residency clock, and until D508 there was not one. `claim` stamped
+            // `last_read_`, so "somebody is looking at this" was really "the request lattice got
+            // round to asking about this" -- one pixel in stride^2, which a face covering less than
+            // a pixel goes many periods without being picked by. That is why the only safe cold
+            // window was ten seconds, why the store kept everything the camera had walked past, and
+            // why it filled and started refusing faces. D502.
+            if ((entry.level & kFeedbackFaceRead) != 0) {
+                face_store_.touch(static_cast<u32>(entry.x), frame_counter_);
+                ++faces_read_reported;
+                continue;
+            }
+
             // A node read by a ray, named by slot. Per node rather than per root, because
             // eviction at the root can only keep the scene whole or drop it whole (D260).
             if ((entry.level & kFeedbackRead) != 0) {
@@ -3414,6 +3471,7 @@ void Application::stream(f64 seconds) {
     }
 
     last_faces_seen_ = faces_seen;
+    last_faces_read_reported_ = faces_read_reported;
 
 
     // And give up the faces nobody asked for, which nothing did until now.
@@ -3434,7 +3492,66 @@ void Application::stream(f64 seconds) {
     // Runs every frame regardless of which marcher is drawing, because the store is claimed from
     // whichever one ran and a store that stops being swept while the chunk marcher is up would
     // come back full.
+    // What the lattice's period IS this frame, before deciding what "cold" means.
+    //
+    // `node_visibility.comp` doubles the face-request stride until pixels/stride^2 is under sixty
+    // thousand, so the period a face waits to be claimed again doubles with the resolution. The
+    // store's eviction floor is derived from it, and the same arithmetic is written twice on
+    // purpose rather than pushed through the parameter block: the shader's copy decides which
+    // pixels report and this one decides what the host may throw away, and if they ever drift the
+    // store gives up faces the lattice has not got round to. Keep them together.
+    {
+        const u32 pixels = std::max(1u, render_target_.extent.width * render_target_.extent.height);
+        u32 stride = 4;
+        while ((pixels / (stride * stride)) > 60000u) stride <<= 1;
+        // With D508 in, the slowest a face ON SCREEN refreshes its stamp is `face_read_period`, and
+        // that is the number the floor is about -- the lattice is then only a second opinion. With
+        // the reports off it is the lattice again, and at 4K that is 256 frames rather than 64.
+        face_store_.set_claim_period(options_.face_read_period > 0 ? options_.face_read_period
+                                                                   : stride * stride);
+    }
     face_store_.evict_cold(frame_counter_);
+
+    // ...and SAY SO, in the log, while somebody is playing.
+    //
+    // Every number about this store was printed at a screenshot and nowhere else, so the one state
+    // that produces the reported picture — a full table refusing faces — was invisible in exactly
+    // the situation it was reported from. A player cannot take a screenshot with `--settle` and read
+    // a pass table; they can play until it looks wrong, quit, and hand over a log. That log has to
+    // have the answer in it already, because the alternative is another round of guessing at their
+    // session from a repro of mine. Trap 14, one level further out: look at what THEIR run says.
+    //
+    // Rate limited to once a second while it is happening, and it says both halves — how full the
+    // table is and how many faces it turned away — because "nearly full" and "turning faces away"
+    // have different answers and the second is the harm.
+    {
+        const FaceStoreStats live = face_store_.stats();
+        const bool refusing = live.refusals > last_face_refusals_;
+        if (refusing && frame_counter_ - last_face_warn_frame_ >= 60) {
+            WS_LOG_WARN("faces",
+                        "the face store turned away {} faces in the last {} frames: {} of {} slots "
+                        "live, cold window {} frames. Surfaces past this point have no light of "
+                        "their own and fall back to a coarse stand-in that re-measures every frame "
+                        "-- which is what blocky flickering light IS. See D502",
+                        live.refusals - last_face_refusals_,
+                        frame_counter_ - last_face_warn_frame_, live.faces, face_budget_max_,
+                        live.cold_window);
+            last_face_warn_frame_ = frame_counter_;
+        }
+        last_face_refusals_ = live.refusals;
+
+        // And a heartbeat, whether or not anything is wrong, because "the log says nothing" and
+        // "the log says it was fine" are different answers and only the second one is evidence.
+        // Every ten seconds is nothing in a log a session writes anyway, and it is what makes a
+        // player's own run readable afterwards without asking them to reproduce under a flag.
+        if (frame_counter_ > 0 && frame_counter_ % 600 == 0) {
+            WS_LOG_INFO("faces",
+                        "store at frame {}: {} of {} slots live, {} evicted, {} turned away, "
+                        "cold window {} frames (floor {})",
+                        frame_counter_, live.faces, face_budget_max_, live.evictions,
+                        live.refusals, live.cold_window, face_store_.min_cold());
+        }
+    }
 
     // A small radius around the camera on top, so the ground under your feet is resident
     // before it has been looked at. Feedback cannot report what has never been on screen.
@@ -3808,6 +3925,7 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.light_read_period = options_.light_read_period;
     push.edit_seed = options_.face_edit_seed;
     push.lamp_edit_scope = options_.lamp_edit_scope ? 1u : 0u;
+    push.face_read_period = options_.face_read_period;
     return push;
 }
 
@@ -5575,6 +5693,9 @@ int Application::play(const Options& options) {
         }
         FaceStoreBudget face_budget;
         if (options_.face_budget > 0) face_budget.max_faces = options_.face_budget;
+        face_budget.pressure = options_.face_pressure;
+        if (options_.face_pressure_from > 0) face_budget.pressure_from = options_.face_pressure_from;
+        face_budget_max_ = face_budget.max_faces;
         face_store_.create(face_budget);
         if (!face_buffers_.create(device_, face_budget)) {
             WS_LOG_FATAL("app", "could not create the face store buffers");
@@ -5599,6 +5720,14 @@ int Application::play(const Options& options) {
                                face_buffers_.provisional_base() + FaceBuffers::provisional_count(),
                                "face seen")) {
             WS_LOG_FATAL("app", "could not create the face seen buffer");
+            return 1;
+        }
+        // And one word a slot for when that face last told the HOST it was being read. Over the same
+        // range as `face seen`, so a provisional slot has a word even though it never reports.
+        if (!face_read_.create(device_,
+                               face_buffers_.provisional_base() + FaceBuffers::provisional_count(),
+                               "face read")) {
+            WS_LOG_FATAL("app", "could not create the face read buffer");
             return 1;
         }
         // And one word a NODE slot, for the same job on the other array: which nodes the light has
@@ -5648,8 +5777,8 @@ int Application::play(const Options& options) {
         // Eighteen: 17 is the node SEEN stamp, which is to the light's reads what 15 is to the
         // pixel's -- a card-owned word a slot that turns one entry per ray into one per node per
         // window. D430.
-        VkDescriptorSetLayoutBinding node_bindings[18]{};
-        for (u32 i = 0; i < 18; ++i) {
+        VkDescriptorSetLayoutBinding node_bindings[19]{};
+        for (u32 i = 0; i < 19; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -5660,7 +5789,7 @@ int Application::play(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 18;
+        node_layout_info.bindingCount = 19;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -5671,20 +5800,20 @@ int Application::play(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[14]{
+        const VkBuffer node_pool_buffers[15]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
             face_light_.buffer(),      light_buffer_.buffer,    face_seen_.buffer(),
-            face_work_.buffer,         node_seen_.buffer(),
+            face_work_.buffer,         node_seen_.buffer(),     face_read_.buffer(),
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[14]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16, 17};
-        VkDescriptorBufferInfo node_infos[14]{};
-        VkWriteDescriptorSet node_writes[15]{};
-        for (u32 i = 0; i < 14; ++i) {
+        const u32 node_bindings_for[15]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16, 17, 18};
+        VkDescriptorBufferInfo node_infos[15]{};
+        VkWriteDescriptorSet node_writes[16]{};
+        for (u32 i = 0; i < 15; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -5699,13 +5828,13 @@ int Application::play(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[14].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[14].dstSet = node_set_;
-        node_writes[14].dstBinding = 8;
-        node_writes[14].descriptorCount = 1;
-        node_writes[14].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[14].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 15, node_writes, 0, nullptr);
+        node_writes[15].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[15].dstSet = node_set_;
+        node_writes[15].dstBinding = 8;
+        node_writes[15].descriptorCount = 1;
+        node_writes[15].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[15].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 16, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -6598,11 +6727,14 @@ int Application::play(const Options& options) {
                                     static_cast<u32>(frame_counter_), options_.face_gate);
                 const FaceStoreStats face_stats = face_store_.stats();
                 WS_LOG_INFO("frame",
-                            "faces: {} live, {} seen this frame, {} claims {} already there, "
-                            "{} evicted, {} bytes of faces ({} with the table)",
-                            face_stats.faces, last_faces_seen_, face_stats.claims,
-                            face_stats.hits, face_stats.evictions, face_stats.face_bytes,
-                            face_stats.total_bytes);
+                            "faces: {} live of {}, {} seen this frame, {} claims {} already there, "
+                            "{} evicted, {} REFUSED, cold window {} frames (floor {}), "
+                            "{} read-reports this frame, {} bytes of faces ({} with the table)",
+                            face_stats.faces, face_budget_max_, last_faces_seen_,
+                            face_stats.claims, face_stats.hits, face_stats.evictions,
+                            face_stats.refusals, face_stats.cold_window, face_store_.min_cold(),
+                            last_faces_read_reported_,
+                            face_stats.face_bytes, face_stats.total_bytes);
 
                 // What SIZE the faces are, which is the size of the smallest shadow the frame can
                 // cast. The plan's arithmetic assumes level 0 near the camera -- a voxel covers a
@@ -6762,6 +6894,7 @@ int Application::play(const Options& options) {
     face_light_.destroy();
     face_seen_.destroy();
     node_seen_.destroy();
+    face_read_.destroy();
     face_worklist_.destroy();
     destroy_buffer(device_, face_work_);
     node_buffers_.destroy();
