@@ -247,7 +247,7 @@ file(GLOB WS_SHADERS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.comp"
                      "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.vert"
                      "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.frag")
 # Shared GLSL, included rather than compiled on its own. Every .comp depends on all of it:
-# editing world.glsl has to rebuild the shaders that include it, or the next run is quietly
+# editing node.glsl has to rebuild the shaders that include it, or the next run is quietly
 # the old traversal.
 file(GLOB WS_SHADER_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.glsl")
 

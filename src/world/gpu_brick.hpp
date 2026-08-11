@@ -54,7 +54,7 @@ struct GpuBrickHeader {
 // the sense is "known opaque" rather than "holds glass": an encoder that has not been taught
 // about a new see-through material leaves the bit clear and stays correct, merely slower.
 //
-// Must match kBrickOpaqueOnly in shaders/world.glsl, which reads it out of `packed`.
+// Was kBrickOpaqueOnly in shaders/world.glsl, which R1e deleted along with the chunk marcher.
 inline constexpr u8 kBrickOpaqueOnly = 1u << 0;
 static_assert(sizeof(GpuBrickHeader) == 32, "GpuBrickHeader must stay 32 bytes");
 

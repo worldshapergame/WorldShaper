@@ -5273,7 +5273,9 @@ int Application::play(const Options& options) {
     // serve --chunk-marcher" rather than "most of the card".
     //
     // Nothing else reads it. Since R3d deleted the reference tracer, `visibility.comp` behind
-    // --chunk-marcher is the ONLY thing left that includes world.glsl, which is what R1e finishes. Sized for the whole card it costs **1,432 ms
+    // world.glsl is deleted and nothing marches chunks at all. What is left of the chunk system
+    // is host-side bookkeeping that no shader reads, which is the rest of R1e. Sized for the whole
+    // card it costs **1,432 ms
     // of chunk residency and 266 ms of thumbnail tiers on every single load** -- 83% of a 2,033 ms
     // start -- almost all of it zeroing pools that the frame never touches, plus about 12 ms of
     // CPU a frame keeping them current.
