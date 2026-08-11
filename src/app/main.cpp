@@ -4501,7 +4501,21 @@ void Application::record_frame(f32 time_seconds) {
     constexpr i64 kExploreMargin = 24;   // chunks, so ~190 m of frontier per frame
     ChunkCoord bounds_lo{};
     ChunkCoord bounds_hi{};
-    if (residency_.resident_bounds(bounds_lo, bounds_hi)) {
+    // The WORLD's bounds, not what chunk residency happens to hold.
+    //
+    // This was `residency_.resident_bounds`, and it was the last thing the marcher still read
+    // out of the chunk system -- which made deleting that system impossible while the ray clip
+    // depended on it. The two differ in the safe direction: resident bounds are what has been
+    // streamed and world bounds are what EXISTS, so the box can only ever grow, and a larger clip
+    // box clips less rather than hiding geometry. `world_min_`/`world_max_` are maintained a few
+    // lines above by the same sweep that used to feed the coarse grids. R1e.
+    ChunkCoord world_lo = world_min_;
+    ChunkCoord world_hi = world_max_;
+    (void)bounds_lo;
+    (void)bounds_hi;
+    if (world_bounds_valid_) {
+        bounds_lo = world_lo;
+        bounds_hi = world_hi;
         params.bounds_min[0] = static_cast<i32>(bounds_lo.x - camera_.chunk_x() - kExploreMargin);
         params.bounds_min[1] = static_cast<i32>(bounds_lo.y - camera_.chunk_y() - kExploreMargin);
         params.bounds_min[2] = static_cast<i32>(bounds_lo.z - camera_.chunk_z() - kExploreMargin);
