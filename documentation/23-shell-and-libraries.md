@@ -23,7 +23,7 @@ start to main menu ≤3 s** and **enter a world ≤5 s**; those two numbers only
 there is a menu between them.
 
 **Every scripted run walks straight past it.** `--screenshot`, `--settle`, `--cam`, `--fly`,
-`--chisel`, `--ticks`, `--stream-frames` and the crash tests open the world they were told to open
+`--chisel`, `--ticks` and the crash tests open the world they were told to open
 and never wait for a click. This is not a convenience: every measurement in this project is taken by
 one of those flags, and a menu that a harness has to click through would end measurement here. The
 same rule `19-auto-quality.md` states for the quality controller — *scripted runs never adapt* —

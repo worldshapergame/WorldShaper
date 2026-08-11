@@ -1196,15 +1196,28 @@ That old renderer was one enormous shader, and your driver had to compile it onc
 cache was cleared. I measured that at **8 seconds**. It is not compiled at all now. Ordinary
 launches are unchanged — about half a second either way.
 
-**Chunks are half removed.** A "chunk" was the 8-metre box the world used to be cut into for
-drawing. The new system does not need them, but a lot of machinery was still computing chunk answers
-every frame for nobody. Gone so far: the traversal code itself, the summary tree, and the eight
-"thumbnail" tiers that drew distant scenery. About 5,000 lines.
+**Chunks are gone from the renderer.** A "chunk" was the 8-metre box the world used to be cut into
+for drawing. The new system does not need them, and as of this session nothing that draws the world
+mentions one. Gone: the traversal code, the summary tree, the eight "thumbnail" tiers that drew
+distant scenery, the streaming system that decided which chunks to keep, its ten graphics-card
+buffers, and the map-rebuilding routine below. About 6,500 lines.
 
-What is left is the piece with the prize in it. There is still a routine that rebuilds a chunk
-occupancy map **every time you edit a single voxel**, and it costs **4.1 milliseconds a stroke**
-regardless of how small the edit was. That is the largest single cost of editing right now, and it
-dies with the rest of the chunk system.
+Chunks still exist where they were always meant to — saving a world to disk, and sending it over a
+network later. That part is untouched.
+
+**Three things you can feel:**
+
+- **Editing.** Every chisel stroke used to rebuild a chunk map over the *whole world*, however small
+  the edit was: **3.9 milliseconds a stroke**, which was the single largest cost of editing. It is
+  **nothing** now — the same measurement reads 0.00. What is left in an edit is the undo record,
+  which is the next thing to look at.
+- **Memory.** The game held **970 MB** on the graphics card for that system, including a quarter of
+  a gigabyte for a table the deleted renderer used. It is **112 MB** now. That is memory back for
+  the things you can actually see.
+- **Loading.** A warm start is **505 milliseconds down to 340**.
+
+What did **not** change is the frame rate standing still, and that is expected: the deleted work was
+being done on the processor beside the frame rather than inside it.
 
 **Nothing about the picture changed.** I check that with a fingerprint of the finished world and two
 audits that compare what the renderer believes against what the world actually contains, at every
@@ -1216,3 +1229,12 @@ baseline was recorded before the game had shadows, ambient occlusion or lamps at
 comparing today's renderer against one doing far less work and calling the difference a regression.
 The distance views, which those three barely touch, came out 40 to 50 per cent **faster**. I have
 recorded a fresh baseline and marked the old one as not to be used.
+
+**And two more, from this session, because both are the same lesson.** The first: I moved the
+overlay's numbers onto the new system and, without noticing, made every frame count the whole tree
+to fill them in — so a change that only *deleted* work measured slower. It cost 1.8 milliseconds a
+frame and it took splitting the frame into three timed pieces to see which piece it was in. The
+second: the measuring harness itself had quietly stopped reading which world each measurement was
+taken against, so its "are these two runs comparable?" check was comparing nothing with nothing and
+saying yes. Both look exactly like everything being fine, which is why the numbers get split up and
+printed rather than trusted.

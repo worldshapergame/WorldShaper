@@ -36,7 +36,7 @@ This folder is the source of truth for design, architecture, and planning. Code 
 Two headless audits run in CI and in `test.bat`:
 
 - `--ticks 1000000` — a million random ops against a real world, every invariant checked, the matter ledger reconciled against a full recount, byte-identical save round trip. **7.5–8.4 M voxel writes/second, 0.437 bytes per voxel.**
-- `--stream-frames 300` — a camera path over the scripted test scene, asserting after every frame that the GPU mirror is bit-identical to the world. **0.059 ms average residency update against a 0.8 ms budget**, 93–98% cache hit rate.
+- the node pool's three audits, which run at every screenshot rather than in a mode of their own: `GPU mirror matches` (the card holds what the pool holds), *the node pool agrees with the world, leaf for leaf* and *mask for mask*. They replace `--stream-frames`, the chunk-mirror audit R1e deleted along with chunk residency itself.
 
 **Stages 0–4 done.** `run.bat` opens on the scripted test scene and you can fly around it. The ray marcher resolves detail per pixel as a continuous function of distance, with an ordered dither between neighbouring levels so there is no discrete transition anywhere in the maths. Streaming is driven by what the renderer can see: the marcher reports the chunks it wanted and could not find, and residency follows the view rather than the camera.
 

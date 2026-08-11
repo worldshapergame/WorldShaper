@@ -63,7 +63,10 @@ Sizes are relative effort (S/M/L/XL), not calendar time (answer A9: open-ended).
 **Exit:** a 512×512×128 m prebuilt test world streams in and out along a camera path with matching hashes and zero runtime allocation.
 **Perf gate:** ≤0.8 ms/frame streaming on T0; zero hitches over 60 s.
 
-**Actual result** (`WorldShaper.exe --stream-frames N`, the headless streaming audit):
+**Actual result** (`WorldShaper.exe --stream-frames N`, the headless streaming audit). **That
+audit and the residency it measured were deleted by R1e** (D521–D525): what streams now is the node
+pool, its equivalent audits are `NodePool::stale_leaves` and `stale_masks`, and the figures below
+are kept as the record of what the chunk system did rather than as anything a build can reproduce:
 
 | Measure | Gate | Measured |
 |---|---|---|

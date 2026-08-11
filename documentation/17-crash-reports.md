@@ -74,8 +74,8 @@ carries on, for a hang or a wedged device).
 
 ## Notes for later
 
-- The dialog is suppressed for `--headless`, `--stream-audit` and scripted screenshots. A
-  modal dialog in an automated run is a hang.
+- The dialog is suppressed for `--headless` and scripted screenshots. A modal dialog in an
+  automated run is a hang.
 - Reports are never uploaded anywhere. Sending one is the player's choice, by hand.
 - The handler allocates nothing: the report is assembled in a fixed buffer, and the log tail
   it reads is lock-free, because the thread that just faulted may be the one holding the log

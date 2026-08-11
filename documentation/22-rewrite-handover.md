@@ -135,7 +135,7 @@ written for the person the work is for, so it is the one to keep current.
 | Stage | Size | State |
 |---|---|---|
 | R0 instruments | S | a–c done. **R0d** outstanding — record the grid; now 6.6 s a run rather than 133 |
-| R1 node pool | XL | a–d, f–i done. **R1e is four slices in and unfinished** — one marcher, `world.glsl` gone, the summary octree and eight thumbnail tiers gone, the ray clip box off the world. Left: `residency.*`, most of `world_buffers.*`, the orphaned descriptor set and `rebuild_coarse_grids` |
+| R1 node pool | XL | **done, all of it** — R1e's fifth slice took the rest: `residency.*`, `world_buffers.*`, both orphaned descriptor sets, the tracer's 256 MB face cache and `rebuild_coarse_grids`. Device memory 970 MB → 112, warm start 505 → 340 ms, and an edit stops paying 3.86 ms for grids nothing reads. D521–D525 |
 | R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit. **A ray now reports what it READS and not only where it stopped** (D427), which is what "wanted" was supposed to mean since D247 |
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
 | R9 the off-screen set | L | **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). The rest **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
@@ -155,9 +155,11 @@ either measurable. Against the three things the user actually asked for:
   pixel, and every one of the three converges and then costs nothing. That is three of the four
   terms a picture is made of moved off the screen; the fourth is bounce, which is R9's. The
   *reference* tracer (`--pathtrace`, F4) still shades per pixel over the old face cache and still
-  includes `world.glsl`; that is R3d and R1e;
-- **chunks removed** — the node pool is proven and is what the game launches with, but the chunk
-  system is still in the build and still maintained every frame, at about 12 ms of CPU. R1e;
+  includes `world.glsl`; that was R3d and R1e, and both are done;
+- **chunks removed** — **done**. Nothing in the renderer addresses a chunk: one sparse octree
+  marches, `node_buffers` mirrors it, and the composite reads a face store and two interned
+  tables. Chunks remain what `03-voxel-data-model.md` says they are, a storage and networking
+  unit, and `World`, `Chunk`, `serialize` and `world_cache` never changed;
 - **streaming and coarse resolution driven by pixels** — half. Feedback drives residency and a ray
   reports what it uses; the sub-pixel rule and proximity are R2b and R2c.
 
@@ -335,6 +337,24 @@ failure, not a compile error.
     job pool**: `parallel_for` queues a take-*loop* over a whole range, so the second submitter gets
     no workers until the first has finished and `wait()` runs the first one's jobs on the second
     one's thread. `JobSystem::submitter_collisions()` now counts it. D511–D514.
+
+18. **An accessor whose comment says "read once at an audit" will end up in the frame, and the
+    frame will not say so.** `NodePool::stats()` sweeps every node and popcounts every resident
+    leaf — 1.5 million popcounts on the facility. R1e moved the overlay's report and the crash
+    context off chunk residency's counters and onto it, and a change that only DELETED work
+    measured **7.27 ms a frame against a control's 5.19**. Every host cost this file already timed
+    came out equal between the two, because none of them covered that line. Splitting the frame
+    into head, recording and present named it in one run: head **1.911 ms against 0.154**. The
+    counters live in `live_stats()` now and the walk keeps the name that sounds expensive. Trap 17
+    from the other end — there, one number covered three things; here, three numbers covered
+    everything except the one that mattered. D525.
+19. **A harness that has stopped reading the log looks exactly like a clean run.** `baseline.ps1`
+    refuses to compare two rows measured against different worlds, and read the scene out of the
+    `scene:` line with a regex that wanted the clip ladder's *"N of M regions"* — which a settled
+    world does not print. Twenty of twenty-one rows of the last baseline therefore recorded a scene
+    of **nought voxels**, and every comparison against them passed the gate by comparing nought
+    with nought. It parses the **content hash** now and refuses a row that has none. D524, and it
+    is trap 10 living in the instrument rather than in the engine.
 
 ---
 
@@ -618,12 +638,10 @@ says so.
 sixty-four lanes of a workgroup walk one neighbourhood of the tree instead of sixty-four (it cannot
 change a pixel — it only reorders the same invocations — and nothing has measured it); R5's face
 denoise, which is what would let `kSkyConverged` fall from 2,048 and was measured as worth 5.05 →
-3.55 ms at 512; and `rebuild_coarse_grids`, which is O(world) for a change one metre across and is
-**by a wide margin the largest thing an edit costs**. Re-measured under `_flybench.ps1 -Chisel
-8,16`, where the game prints it per edit: **apply and undo 0.26 ms, coarse grids 4.10–4.14 ms,
-invalidation downstream 0.01 ms** (that last was 718 ms on a large edit before D515). It is a
-**chunk** structure — one of the five the node pool replaced — so it does not want optimising, it
-wants deleting, and that is R1e.
+3.55 ms at 512. `rebuild_coarse_grids` was the third item and is **deleted** (R1e, D522): it was
+O(world) for a change one metre across and by a wide margin the largest thing an edit cost, at
+**3.86–4.14 ms** against the op's own 0.24. The same run now prints **apply and undo 0.24 ms, world
+bounds 0.00, invalidation downstream 0.00**. What is left in an edit is the undo capture.
 
 ### How the moving case was measured, and why the grid could not see it
 
@@ -1003,26 +1021,44 @@ rather than from `--clip-file`:
 computed. A 608 MB cache written under `--clip-coarse 1` is deleted as stale by the next default
 launch. The arms of a `--clip-coarse` sweep destroy each other's caches. D501.
 
-### R3d is done. R1e is four slices in. Start at the fifth.
+### R1e is done. The renderer has no chunks in it.
 
-**What is left of R1e, in the order it has to happen.** The four done slices are below; the rest is
-one job with a risky middle:
+**All five slices have landed** (D521–D525). What this section used to say was the plan for the
+fifth, and two of its three warnings were wrong in a way worth keeping:
 
-1. **`residency.*` cannot go until `world_buffers_` does**, because `WorldBuffers::create` is sized
-   from `ResidencyBudget` and `residency_.update()` is what feeds `world_buffers_.upload()`.
-2. **`world_buffers_` cannot be trimmed to its type and visual tables until the descriptor bindings
-   are renumbered**, because eleven chunk buffers sit at binding numbers that `gpu/render_params.hpp`
-   and the shaders agree about. **This is the risky edit in the stage** and nothing else in R1e is
-   hard.
-3. The good news is that the renumber is now provably safe to do: **`clouds.comp` names only
-   bindings 13, 20 and 21**, and it is the only pipeline left on that set. Everything else on it is
-   written and read by nobody — which `--validation` confirms, since it accepted the accumulator's
-   binding going unwritten in R3d.
-4. Then `rebuild_coarse_grids` goes, and with it **4.10 ms of CPU per edit** and the ~12 ms a frame
-   the chunk system still costs.
+1. it said `world_buffers_` could not be trimmed **until the descriptor bindings were renumbered**,
+   and called that *the risky edit in the stage*. Nothing had to be renumbered. A Vulkan layout's
+   binding numbers need not be contiguous, so the cloud pass keeps 13, 20 and 21 and the seventeen
+   descriptors no shader declares are simply absent from the set;
+2. it said the chunk system cost **about 12 ms of CPU a frame**. The instrument had been saying
+   0.003 ms mean with a 12–15 ms *worst* the whole time, so that was one frame's spike quoted as a
+   steady state. The costs that were real: 970 MB of device memory, 165 ms of every warm start,
+   and **3.86 ms on every edit** in `rebuild_coarse_grids`;
+3. it was right about the order — `residency.*` could not go until nothing read the buffers it
+   fed, and nothing read them once both orphaned descriptor sets went.
 
-**Measure it against `documentation/baselines/r1e-chunks-going.csv`**, not against
-`r2-node-pool.csv` — see D519 for why the older file cannot answer this question.
+**Measured against a same-session control build**, because the machine drifts about 10% over a long
+session and two runs an hour apart are not an A/B (D407, and D523 for it arriving through the grid):
+content hash `766f2fd63f1a01c4` unmoved, the settled enclosed picture inside its own run-to-run
+floor, `GPU mirror matches`, *leaf for leaf*, *mask for mask*, `--validation` clean, 505 tests.
+
+**Where to start now** is the list below, and the first two are the ones with numbers attached:
+
+- **R5, the face denoise.** Three open items point at it and none of them can be closed without it:
+  the ambient term's face-to-face variance (§5), `kSkyConverged` falling from 2,048 — measured worth
+  **5.05 → 3.55 ms at 512** — and the enclosed room's last gate clause, 1.35× outdoor on the Deck
+  against the 30% the plan asks for;
+- **R6's exposure meter, which now has no writer at all.** `resolve.comp`'s `kPreviewExposure` is
+  the constant 3.2 and the frame-statistics buffer went with R1e, having been written by nobody
+  since R3d deleted the tracer. That is why `clips/many_lamps.clip` comes out blown white. It wants
+  its own change and its own baseline, because fixing it makes every screenshot in this project
+  brighter at once;
+- **the undo capture**, 194 ms into 538,169 inverse ops on a large edit, which is now the largest
+  single thing an edit costs (D515);
+- **R9**, the off-screen light set, which R4 cannot be measured without;
+- **sorting the face work list by Morton code**, which cannot change a pixel and has never been
+  measured.
+
 
 ### R3d, and what deleting it turned up
 
@@ -1094,8 +1130,9 @@ R1e's bulk is moving `pathtrace.comp` from `world.glsl` onto the node pool — a
 **deletes** `pathtrace.comp` at R3 and replaces it with the face pass. Doing R1e first is building
 something to throw away one stage later, so R3 goes first and leaves R1e with nothing to port
 (D278). What that costs is the chunk system staying in the build, which since it was resized to
-what still reads it is 226 ms of load and about 12 ms of CPU a frame rather than 1.7 s and the
-same 12.
+what still read it is 226 ms of load rather than 1.7 s. The "12 ms of CPU a frame" this used to
+say alongside it was never measured and was wrong — see D522, where the instrument reads 0.003 ms
+mean with a 12–15 ms worst.
 
 ### ~~Then, the thing R1e cannot be judged without~~ — solved
 
@@ -1120,20 +1157,22 @@ first time. What remains is a design question with a known answer rather than a 
 should be marked wanted when a ray *uses* it, which needs the marcher to report hits as well as
 misses. That is R2's residency policy.
 
-### R1e — delete the old addressing
+### R1e — delete the old addressing (done)
 
-The node pool is proven, so the chunk renderer comes out. Delete `src/world/residency.*`,
-`thumb_cache.*`, `thumbnail.*`, `summary_tree.*` and their tests; delete `shaders/world.glsl`'s
-chunk walk, the coarse grids and the thumbnail tiers; fold `node_visibility.comp` into
-`visibility.comp` and drop `--chunk-marcher`. `src/gpu/world_buffers.*` loses most of its contents.
+What it was: delete `src/world/residency.*`, `thumb_cache.*`, `thumbnail.*`, `summary_tree.*` and
+their tests; delete `shaders/world.glsl`'s chunk walk, the coarse grids and the thumbnail tiers;
+fold `node_visibility.comp` into `visibility.comp` and drop `--chunk-marcher`; and trim
+`src/gpu/world_buffers.*` to the two interned tables, which is `src/gpu/type_tables.*` now.
 
-The path tracer includes `world.glsl`, so it has to move to `node.glsl` in the same change — that
-is the bulk of the work and the reason this is its own sub-step.
+All of it is done — D521–D525, and the section above says what the plan for it got wrong. Two
+things in it stopped being true before it landed: the path tracer did not have to be ported,
+because R3d deleted it (D278), and the enclosed-room regression it said to settle first was settled
+by R1h, which is why there was nothing left to compare the old marcher against.
 
-*Gate: the grid table above does not move, with those tests deleted rather than disabled.*
+*Gate: the grid table does not move, with those tests deleted rather than disabled.* Met against an
+interleaved same-session control rather than against the recorded file — see D523, and trap 19 for
+why the file could not answer.
 
-**Before starting it, decide the enclosed-room regression.** 1.108 against 0.699 is the only place
-the pool is worse, and once the old marcher is gone there is nothing to compare against.
 
 ### R3 — the face pass (a and b done, c half) — and how it failed, which is the useful part
 
@@ -1372,12 +1411,17 @@ R7 the primary ray, R8 infinite detail.
 
 ### Debt, tracked so it is not lost
 
-- **The baselines directory holds two files and only one of them means anything.**
+- **The baselines directory holds three files and only the newest means anything.**
+  `r1e-chunks-gone.csv` is the live one — twenty-one realtime rows taken with the chunk system
+  deleted, and the first grid in the file that records the world's **content hash** per row, so a
+  later run can tell whether it is looking at the same world (D524). Note that its `close` and
+  `enclosed` rows were taken late in a long measuring session and read about 10% high; the gate
+  that decided R1e was an interleaved same-session pair, not this file (D523).
   `r2-node-pool.csv` is superseded and **must not be compared against**: it was recorded before the
   face pass computed sun, ambient occlusion or lamps, so every near camera reads as a large
   regression and every distance camera as a large win, and neither is true (D519).
-  `r1e-chunks-going.csv` is the live one -- twenty-one realtime rows, seven cameras at three
-  resolutions, taken with `world.glsl` and the thumbnail tiers deleted and `residency.*` still in.
+  `r1e-chunks-going.csv` is **superseded too**: it holds no content hash, so nothing can check what
+  it was measured against, and comparing against it now says so on every row.
   And `tools/baseline.ps1` no longer offers a `pathtrace` mode and throws if asked for one: the flag
   it passed has not existed since R3d, and an unknown flag is IGNORED rather than refused, which
   made half of every grid run a second realtime pass wearing the other mode's label (D519).
@@ -1401,24 +1445,30 @@ R7 the primary ray, R8 infinite detail.
 
 **New:** `src/world/node_pool.{hpp,cpp}`, `src/world/face_store.{hpp,cpp}`,
 `src/gpu/node_buffers.{hpp,cpp}`, `src/gpu/face_buffers.{hpp,cpp}`, `src/core/pass_ledger.{hpp,cpp}`,
-`src/core/dirty_set.hpp`, `shaders/node.glsl`, `shaders/node_visibility.comp`,
+`src/core/dirty_set.hpp`, `src/gpu/type_tables.{hpp,cpp}`,
+`shaders/node.glsl`, `shaders/node_visibility.comp`,
 `shaders/shade_faces.comp`, `shaders/face_worklist.comp`,
 `tests/test_node_pool.cpp`, `tests/test_face_store.cpp`,
 `tests/test_pass_ledger.cpp`, `tests/test_world_cache.cpp`,
 `tools/{baseline,facecount,_grid,_measure}.ps1`, `documentation/21-renderer-rewrite.md`, this file.
 
 **Modified:** `CMakeLists.txt`, `src/app/main.cpp`, `src/core/hash.hpp`, `src/gpu/image.hpp`,
-`src/world/world_cache.{hpp,cpp}`, `src/gpu/profiler.{hpp,cpp}`, `shaders/{pathtrace,resolve}.comp`,
-`tools/speckle.ps1`, `documentation/{13-decision-log,README}.md`.
+`src/world/world_cache.{hpp,cpp}`, `src/gpu/profiler.{hpp,cpp}`, `shaders/{params.glsl,resolve.comp}`,
+`src/gpu/render_params.hpp`, `src/debug/hud.{hpp,cpp}`, `tools/{speckle,baseline,package}.ps1`,
+`documentation/{13-decision-log,README}.md`.
 
-**Deleted.** R3d and R1e have started removing things, and this is the running list:
-`shaders/pathtrace.comp`, `shaders/pt_normals.glsl`, `shaders/world.glsl`,
-`shaders/visibility.comp` (the chunk marcher's — `node_visibility.comp` was renamed into its
-place), `src/world/summary_tree.{hpp,cpp}`, `src/world/thumb_cache.{hpp,cpp}`,
-`src/world/thumbnail.{hpp,cpp}`, and `tests/test_{summary_tree,thumb_cache,thumbnail}.cpp`.
-About 5,000 lines. **Still standing and still running every frame**: `src/world/residency.*`,
-most of `src/gpu/world_buffers.*`, the chunk marcher's orphaned descriptor set, and
-`rebuild_coarse_grids` at 4.10 ms an edit — which is the rest of R1e.
+**Deleted**, by R3d and R1e between them: `shaders/pathtrace.comp`, `shaders/pt_normals.glsl`,
+`shaders/world.glsl`, `shaders/visibility.comp` (the chunk marcher's — `node_visibility.comp` was
+renamed into its place), `src/world/residency.{hpp,cpp}`, `src/world/summary_tree.{hpp,cpp}`,
+`src/world/thumb_cache.{hpp,cpp}`, `src/world/thumbnail.{hpp,cpp}`, `src/gpu/world_buffers.{hpp,cpp}`
+and `tests/test_{residency,summary_tree,thumb_cache,thumbnail}.cpp`. About 6,500 lines. With them
+went both orphaned descriptor sets, the tracer's 256 MB face cache, the frame-statistics buffer,
+`rebuild_coarse_grids`, `--stream-frames` and `--stream-log`.
+
+**Nothing in the renderer addresses a chunk now.** `World`, `Chunk`, `serialize` and `world_cache`
+are untouched: a chunk is still what `03-voxel-data-model.md` says it is, a unit for saving and
+networking, which the renderer never sees.
+
 
 ## 7. Commands
 
