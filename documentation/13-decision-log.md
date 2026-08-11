@@ -1557,5 +1557,17 @@ was measured or photographed rather than argued.*
   heavy scramble therefore reads as fine streaks rather than as bars sliding past each other. That is
   the direct consequence of D468 being what was asked for; `kLogoLanes` is the one lever, and nothing
   has measured whether a player prefers thicker slices to full resolution.
+- **O22. The two things called "the icon" that D463–D473 did not touch.** The work above is the
+  *animated mark on the title*. Two other drawings answer to the same word and neither has changed:
+  - **The application icon** — `assets/icon.png`, and `assets/icon.ico` built from it by
+    `tools/make-icon.ps1`. It is the window, taskbar, Explorer and shortcut picture, it is the same
+    160×160 drawing `assets/logo.txt` was extracted from, and it is static by nature. The obvious
+    move, unbuilt: render one *pinned* combination of the real mark to a PNG and build the `.ico`
+    from that, so the two cannot drift apart the way two hand-drawn copies of anything do.
+  - **The twenty-four interface icons** — the thirteen-by-thirteen drawings in `shaders/shell.comp`
+    (world, settings, library, folder, trash, search, eye, clip, script, play, and the rest), each
+    animating on a press. They arrived with the shell and none of them has been revisited since.
+- **The two songs in `songs/` are committed and unplayed**, with no licence recorded. See
+  `08-tech-stack-and-licensing.md` §4 for what has to happen before they can ship.
 - Round-1 and round-2 questions are otherwise closed. Round-3 questions are raised per stage as they arise; **Q1 and Q2 (the shell) are asked and answered** in `01-open-questions.md` and carried here as D444 and D448–D451.
 - **Open, and named rather than assumed:** whether the community browser gets a **DHT rendezvous** so it reaches strangers rather than only the peers you can already get to (D451). It is answer M1's option (b), it is not infrastructure of ours, and it is the difference between a village and a city.

@@ -90,3 +90,21 @@ The binding constraint on the Deck is **memory bandwidth (88 GB/s shared)**, not
 - No downloaded models, textures, or sounds unless CC0 or explicitly public domain, recorded in `ASSET_SOURCES.md` with the URL and license text.
 - Procedurally generated content (noise-based materials) is ours by construction — a further argument for the "materials are pattern generators" design.
 - Any AI-generated asset gets flagged in the same file so provenance is auditable later.
+
+### Outstanding, and named rather than left in a folder
+
+`songs/` holds two mp3 files — `broken door (hills).mp3` and `turkey (settings).mp3`, 6.1 MB
+together. They are **in the repository and nothing plays them**: no code path, no build rule and no
+document references either one, and the interface's sound is synthesised (`src/ui/sound.cpp`), so
+there is no music playback for them to be part of yet.
+
+Two things have to happen before they can ship, and this is the record that they have not:
+
+1. **Their licence is not written down.** The policy above says every sound arrives with a URL and a
+   licence in `ASSET_SOURCES.md`, and neither of these has an entry. Until it does, they are two
+   files of unknown provenance sitting in a public repository — which is the exact situation the
+   policy exists to prevent, and a worse one than not having them, because the history now carries
+   them whether or not the folder is deleted later.
+2. **Nothing decides where music belongs.** A title that plays a song and a settings window that
+   plays a different one is a design decision nobody has taken; the names of the files suggest one
+   and the absence of any code confirms it has not been taken.
