@@ -2261,3 +2261,146 @@ that produced it.
 |---|---|---|---|
 | D559 | **The probe is read in the audit's FIRST submit, not its second** | trap | The second is nested inside "the mirror matched" and "the store fits in the staging ring", and a counter about what rays found has nothing to do with either. D529 is that fault: the audit that could not run and the audit with nothing to report were one picture, and the numbers went missing from the one case that costs |
 | D560 | **`--cut` is repeatable** | instrument | One cut measures arriving; two measure leaving and coming back, which is what a player does and what R9f's gate is written about. A cut whose frame is not after the one before it is WARNED about rather than silently reordered, because a harness that writes them in the wrong order has measured something nobody asked for and both arms would look clean — trap 15. Writing the harness for it walked straight into trap 4 as well: a local `$a` in a script with a `[string]$A` parameter is the same variable, and every character of the joined string arrived as its own argument |
+
+## D561 — the off-screen set held a quarter of a million records with nothing in them
+
+**The handover named R9c, the halo, as the next step, and the audit said it would have changed no
+pixel.** That is the useful part of this entry: the reasoning behind the order was sound and one log
+line overturned it, so read the line before building the plan.
+
+R9a claims a face for the surface a gathering ray lands on, so the store holds geometry no pixel is
+looking at. It then did nothing with it. `may_cast` in `face_work_of` is
+`provisional_face || node_face_recently_seen(slot)`, and that stamp is written by the VISIBILITY
+pass — which only ever runs on pixels. So every face in the off-screen class was refused a ray for
+its whole life. Measured, close camera, 1280x800, settled, frame 900:
+
+- **229,413 off-screen faces of a cap of 262,144, at nought sun samples each, nought of them with a
+  finished ambient term.** A quarter of the table, holding empty records;
+- and the gathering rays that had asked for them read those empty records straight back:
+  **12.4% of every gathering ray in the frame landed on a face that is in the store and has measured
+  nothing**, against 21.2% landing on a surface with no face at all.
+
+R9c claims a margin of faces just off the edge of the screen. Those faces are off-screen faces. They
+would have moved rays from the second bucket into the first and lit nothing, because nothing in the
+class casts. **The prerequisite is R9b's ray share, which had never been spent** — `make_node_push`
+said so in as many words ("the off-screen class casts no rays at all today, so its share of this
+budget is nought") and it read as a statement of fact rather than as the missing half of a sub-step.
+
+| close camera, 1280x800, settled, frame 900 | `--no-secondary-light` | default |
+|---|---|---|
+| gathering rays landing on a **lit** face | 18.5 / 18.8 / 18.7% | **30.2 / 29.9 / 29.9%** |
+| ...on a face in the store with nothing measured | 12.5% | **1.7%** |
+| ...on a surface with no face at all | 21.3% | 21.9% — unchanged, and it is R9c's |
+| off-screen faces, sun samples each | 229,879 at **0** | 232,170 at **4** |
+| enclosed camera, mean pixel | 127.51 | **150.17** |
+| enclosed speckle / fireflies | 16.13 / 9 | **12.80 / 0** |
+| close camera, mean pixel | 139.80 | **143.10** |
+| close speckle / fireflies | 40.13 / 108 | **35.83 / 27** |
+| outdoor camera, mean pixel | 161.75 | 161.83 — nothing, correctly |
+
+Three interleaved rounds each, one build, two flags. The enclosed picture differs on 1,001,416 pixels
+of 1,024,000 at a mean of 24.5 and it is the same at frame 3,600, so it is the answer and not a
+transient. Outdoors it is 0.86 of 255, because outdoors a gathering ray reaches sky and there was
+never anything missing. **The more enclosed the view, the larger the win**, which is R9's whole thesis
+arriving as a number.
+
+`tools\darkroom.ps1` and `-Fog` are both still **BLACK at 0 of 255**, which is what makes the
+brightness safe to believe: what is recovered is light that was measured and thrown away, not light
+that was invented. 519 tests, 18.7 M assertions.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D561 | **The off-screen set measures its own light, out of its own budget** | R9b | A face is worth a ray when something is INTEGRATING it, and for an off-screen face that something is the gathering ray that landed on it. Without this the class was a claim with no consequence |
+| D562 | **`face_gathered` is a SECOND card-owned stamp, not a second meaning for `face_seen`** | trap 21 | The two must be counted apart, not merely told apart: `face_seen`'s population is what the sun's ray budget is divided by, and D527 and D557 are the same fault twice — anything added to that denominator refreshes every face on screen less often, the pass gets CHEAPER, and the cost lands in a convergence number no pass table carries. Card-owned for D528's reason: a class kept in `GpuFace` would send the host's zeroed counters over the card's light |
+| D563 | **The two classes are two divisions of two budgets** | R9b | `secondary_light_stride()` divides the off-screen population by its own share of `kFacesPerFrame`; the sun's stride goes on dividing the on-screen population by the whole of it. The day they share a denominator is the day D527 happens for the fourth time |
+| D564 | **The sun's stride must not compose with the off-screen one** | trap 7 | An off-screen face has already been thinned by `secondary_stride`. Applying `face_stride` on top means `(slot + frame)` is nought modulo both on almost no frame at all unless one divides the other — the class would be visited and then given no sun ray, lit by sky and lamps only, for ever, with every audit line reading exactly as it does when the class works |
+| D565 | **The probe buffer is written above the work list, in three disjoint ranges** | trap 1 | `face_work_of` reads the stride and BOTH passes call it — it is one function precisely so the two cannot disagree (D420) — so writing the stride between them hands the worklist last frame's value and the shading pass this frame's, and a worklist that is stricter drops faces out of the dispatch silently. The stride sits at the far END of the buffer because transfer commands in one command buffer have no ordering between them, so a host word inside the filled span is a race whose loser is whichever the driver ran second |
+
+## D566 — the cost of the off-screen class is a TAIL, not a rate, and its own budget cannot buy it back
+
+**This is the entry to read before touching the budget, because the obvious lever does almost
+nothing and three explanations for why were priced and rejected before the instrument existed.**
+
+The tell was that the faces pass barely responded to `--secondary-light-share`. Close camera,
+settled, frame 900, three interleaved rounds, one build:
+
+| share | stride | faces the class shaded, **counted** | faces pass | over the control | rays landing lit |
+|---|---|---|---|---|---|
+| `--no-secondary-light` | 0 | — | **1.748-1.781 ms** | — | 18.7% |
+| 512 | 1,311 | **31 / 37 / 38** | **2.583-2.632** | **+0.85** | 19.8% |
+| 64 | 164 | 308 | 3.190 | +1.43 | 24.3% |
+| 8 (the default) | 21 | 2,361 / 2,364 / 2,390 | **3.537-3.579** | +1.79 | **29.9%** |
+
+**Thirty-five faces cost 0.85 ms and the next two thousand three hundred cost 0.94.** Eight times
+fewer faces shaded gives back a tenth of the cost and gives up more than half the win, so the budget
+is the wrong dial and the default is therefore the generous end of it: you pay for the class existing,
+so take what it buys.
+
+Three explanations were tried, and each is worth not re-trying:
+
+1. **the rays** — ruled out by the table above. Thirty-five faces cannot be a millisecond;
+2. **the load in front of the stride.** `face_work_of` runs for every live slot in both passes, and
+   `node_face_recently_gathered` was being read before the modulo — three quarters of a million
+   scattered four-byte reads a frame, twice, charged whether or not one face casts. The test was
+   reordered, which is a pure evaluation-order change on a conjunction and cannot alter which faces
+   are eligible (and is therefore NOT the pre-gate D432 forbids, whose gate decided whether a node was
+   ever reported). It measured **3.58 -> 3.48 ms**. Kept, because a load that need not happen should
+   not, and recorded because the reasoning was sound and the answer was still no;
+3. **divergence in the compacted dispatch** — the shape `face_worklist.comp` was built on, a workgroup
+   running as long as its slowest lane. It predicts the cost falling with the density of bursting
+   lanes, and at share 512 the density is a sixtieth of the default's while the cost is half of it.
+   Not it either, or not on its own.
+
+What fits the numbers is that the pass finishes when its LAST workgroup does, and one face taking its
+first full ambient burst is long enough to set that floor by itself — so the cost is bounded below by
+one unconverged off-screen face and only grows once there are enough of them to saturate. That is
+D394's sentence from the other side ("what it spends on an unconverged face is mostly the face, not
+the ray") arriving as a property of the whole dispatch rather than of one invocation. **It is a
+hypothesis that fits and it has not been proved**; what would prove it is grouping the class's slots
+together in the work list, which is the same lever as the unmeasured Morton sort and is not built.
+
+**The instrument is the part that outlives this.** The host divides a population by a budget and hands
+down a stride; that arithmetic is a PREDICTION, and trap 15's whole lesson is that a prediction and a
+measurement read identically in a log. `the off-screen set cast on N faces this frame` is the
+measurement, counted in the shading pass where it is spent, and it is printed beside the
+`off-screen stride` the host predicted. It took over probe word 8, which had been reserved for a
+question that cannot be answered from there at all.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D566 | **The default share is 8, the generous end** | measurement | The cost is nearly fixed, so a smaller budget gives up most of the win for a tenth of the cost. `--secondary-light-share N` sweeps it and `--no-secondary-light` is the control arm |
+| D567 | **The class is counted where it is spent, not predicted on the host** | trap 15 | A stride is what the host meant to happen. `the off-screen set cast on N faces this frame` is what did, and the two being printed together is the only thing that can say the class has silently stopped casting — which is trap 20's shape in this pass. Note that it is a RATE over one frame: nought on a frame where the whole store has converged means "nothing was due", and the `set on the card` line beside it is what says whether anything ever was |
+
+## D568 — what the moving case pays for it, which is most of the cost and little of the win
+
+**Said plainly because it is the half a player might not want.** `tools\_flybench.ps1`, close camera,
+`--fly 0,0,3,15`, 2560x1440, `--settle`, 200 measured frames, two interleaved rounds of one build:
+
+| flying | `--no-secondary-light` | default |
+|---|---|---|
+| faces pass | 6.545 / 6.829 ms | **7.895 / 7.928** |
+| total GPU | 13.620 / 13.604 | **15.128 / 14.712** |
+| gathering rays landing on a lit face | 15.0% | **16.1%** |
+| the class shaded | 0 | 356 / 394 faces a frame |
+
+So **+18% on a pass that is already over its 4.40 ms budget** (D545 recorded that honestly, and this
+adds to it) for **one point** of what standing still gains eleven. The reason is not mysterious and it
+is not fixable with the budget: flying, two thirds of every gathering ray reaches sky, and an
+off-screen face never lives long enough to converge before the camera has replaced it. The class is
+worth most exactly where a player stops to build and look, and least where they are travelling.
+
+The enclosed camera shows the other end of the same trade: **+1.24 ms at frame 900 and +0.24 ms at
+frame 3,600**, because once every on-screen face has converged nothing gathers, nothing is offered,
+and the store lets the class go — 250,395 off-screen faces at frame 900 against 634 at frame 3,600.
+The cost is a transient paid in frames, which is the currency §6 chose, and it is a longer one than
+anything else in this pass: 2,048 ambient samples at sixteen a visit, one visit in twenty-one frames,
+is about forty-five seconds.
+
+**Two things this makes more pressing rather than less**, and neither is this change's to fix:
+R6's exposure meter, because `kPreviewExposure` is still the constant 3.2 with no writer and the
+enclosed room is now 150 of 255 rather than 128; and R5, because the argument for the faces pass being
+inside its budget while moving is now further from true than it was.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D568 | **Landed ON by default, with the cost named** | judgement | The win is large, visible and in the case a player spends most of their time in; the cost is one flag away for anyone who would rather have the frames. Both arms are one build, as D407 requires |

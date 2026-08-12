@@ -1305,10 +1305,10 @@ face it LANDED on, and the store claims it in a class of its own:
   pushes the table into refusing a face somebody is looking at — which is D502's picture;
 - **R9e**, the counting. `the set on the card` and `the off-screen set` in the audit.
 
-**Nothing reads the set yet, and that is the point of landing it alone.** `may_cast` gates a face on a
-pixel having read it, so an off-screen face casts no rays and holds no light: what it costs is a
-record in the store and about 1,200 feedback entries a frame. **The consumer is bounce**, and it is
-the next thing to do — see below.
+**Nothing read the set, and that stayed true for longer than the sentence below expected** — the
+bounce reads a face's record, and every record in this class was empty. See *the off-screen set held a
+quarter of a million records with nothing in them*, below, which is the change that closed it and the
+one that overturned this file's own advice about what to do next.
 
 **Two traps came out of it, and both are the kind that produce a plausible picture and no error.**
 
@@ -1428,6 +1428,77 @@ reach sky, 18.6% land on a lit face, and **34.1% land on a surface with nothing 
 R9f answers 30.7%. So about a quarter of everything the bounce integrates is still black, and that is
 the size of R9c and R9g–R9h.
 
+### Closed: the off-screen set was a quarter of a million records with nothing in them
+
+**This file said to do R9c next, and one audit line said R9c would have changed no pixel.** That is
+the part to keep: the reasoning behind the order was sound, and reading the instrument before building
+the plan overturned it in five minutes. D561–D568.
+
+R9a claims a face for whatever a gathering ray lands on. Nothing then lit those faces, because
+`may_cast` is `node_face_recently_seen` and that stamp is written by the **visibility** pass, which
+only ever runs on pixels. Close camera, settled, frame 900:
+
+- **229,413 off-screen faces of a cap of 262,144, at nought sun samples each and nought with a
+  finished ambient term** — a quarter of the table holding empty records;
+- **12.4% of every gathering ray in the frame landed on one of them** and read the emptiness back.
+
+R9c claims a margin of faces just off the edge of the screen. Those are off-screen faces. It would
+have moved rays out of *"landed on a surface with no face"* and into *"landed on a face with nothing
+measured yet"*, and lit nothing at all. **The prerequisite is R9b's ray share, and `make_node_push`
+had been saying so in as many words** — *"the off-screen class casts no rays at all today, so its
+share of this budget is nought"* — which read as a fact about the world rather than as the missing
+half of a sub-step.
+
+**What landed**: an off-screen face measures its own light, out of a budget of its own.
+`face_gathered` is a card-owned word a slot stamped by `bounce_radiance` — `face_seen` for the pixel,
+`node_seen` for the light's geometry, and this for the light's faces — and a face is worth a ray when
+something is *integrating* it. It must be a second array and not a second meaning for `face_seen`,
+because that population is what the sun's budget is divided by and a shared stamp is D527 for the
+fourth time.
+
+| close camera, 1280×800, settled, frame 900 | `--no-secondary-light` | default |
+|---|---|---|
+| gathering rays landing on a **lit** face | 18.5 / 18.8 / 18.7% | **30.2 / 29.9 / 29.9%** |
+| ...on a face in the store with nothing measured | 12.5% | **1.7%** |
+| ...on a surface with no face at all | 21.3% | 21.9% — **unchanged, and it is R9c's** |
+| enclosed mean pixel, speckle, fireflies | 127.51, 16.13, 9 | **150.17, 12.80, 0** |
+| close mean pixel, speckle, fireflies | 139.80, 40.13, 108 | **143.10, 35.83, 27** |
+| outdoor mean pixel | 161.75 | 161.83 — nothing, correctly |
+
+Three interleaved rounds, one build, two flags. The enclosed picture is the same at frame 3,600, so
+it is the answer rather than a transient; outdoors nothing moves, because outdoors a gathering ray
+reaches sky. `darkroom.ps1` BLACK clear and with fog, so what is recovered is light that was measured
+and thrown away rather than light invented. 519 tests.
+
+**Three things to know before touching it, and the first decides the other two.**
+
+1. **The cost is a TAIL, not a rate, and the budget cannot buy it back** (D566). Thirty-five faces
+   shaded cost **0.85 ms**; the next 2,335 cost 0.94. Eight times fewer faces returns a tenth of the
+   cost and gives up more than half the win, which is why the default is the generous end of the dial.
+   Three explanations were priced and rejected — the rays themselves, a scattered load in front of the
+   stride (reordered, worth 0.1 ms, kept anyway), and lane divergence in the compacted dispatch. What
+   fits is that the pass ends when its last workgroup does and one face taking its first full ambient
+   burst sets that floor alone. **That is a hypothesis that fits, not a proved cause**; what would
+   prove it is grouping the class's slots in the work list, which is the Morton-sort lever under a
+   different name and is not built.
+2. **The moving case pays most of the cost for a tenth of the win** (D568). Flying at 1440p, the faces
+   pass goes **6.69 → 7.91 ms** on a pass already over its 4.40 ms budget, for **16.1% against 15.0%**
+   of rays landing lit. Flying, two thirds of every gathering ray reaches sky and no off-screen face
+   lives long enough to converge. The class is worth most where a player stops to build and look.
+3. **The instrument is counted, not predicted** (D567). The host divides a population by a budget and
+   hands down a stride; that is what it *meant* to happen. `the off-screen set cast on N faces this
+   frame` is what did, printed beside the `off-screen stride` on the `faces:` line. Read them as a
+   pair — and note it is a rate over one frame, so nought on a fully converged camera means "nothing
+   was due", which the `set on the card` line beside it disambiguates.
+
+The levers are `--no-secondary-light` (the control arm, and the state every figure above this section
+was measured in) and `--secondary-light-share N`, the divisor of the on-screen set's shading rate.
+
+**What this makes more pressing, and neither is its to fix.** R6's exposure meter, because
+`kPreviewExposure` is still the constant 3.2 with no writer and the enclosed room is now 150 of 255
+rather than 128. And R5, because the argument for this pass being inside its budget while moving is
+further from true than it was.
+
 ### Where to start now, and the two orders are not the same order
 
 **By the plan, the next stage is R4 — and R4's own prerequisite is R9.** §8 puts R4 directional
@@ -1440,12 +1511,22 @@ and R9i's first half with it (D324, D341–D343); **R9a, R9b and R9e are done to
 **R9f's outlive half** with them (D554–D560). What is left is **R9c** the halo, **R9f's fold**,
 **R9g** the emitter list, and **R9h** the fallback.
 
-**The order inside what is left, now that the probe can price it.** A third of what the bounce
-integrates still comes back black, and the probe says which third: 19.9% of gathering rays land on a
-surface with no face in the store at all and 14.2% on one that has measured nothing yet. **R9c is the
-cheapest thing that moves the first number** — a face just off the edge of the screen is never
-claimed until it comes on, and the margin is free while standing still. The fold is the *accuracy* of
-what R9f already returns rather than more of it, so it is second unless a picture complains.
+**The order inside what is left, now that the probe can price it — and this paragraph has already
+been wrong once, so read the probe before following it.** It used to say R9c was the cheapest thing
+that moved the first number, and that was true of the number and false of the picture: R9c claims
+off-screen faces, and off-screen faces held nothing until R9b's ray share landed (D561). With that in,
+the two buckets are no longer the same size and the order is no longer a judgement call:
+
+- **21.9% of gathering rays land on a surface with no face in the store at all** — unmoved by R9b,
+  and now nearly all of what the bounce still finds black. **This is R9c's and R9g's**, and R9c is the
+  cheaper of the two;
+- **1.7% land on a face that has measured nothing yet**, down from 12.4%. Nothing left there.
+
+So **R9c is still next, and now for a reason that has survived being measured** rather than for one
+that a single audit line could overturn. Size it against D566 rather than against how many faces the
+margin holds: a halo face is an off-screen face, and lighting one is priced by a tail. The fold is the
+*accuracy* of what R9f already returns rather than more of it, so it is after that unless a picture
+complains.
 
 So the plan's sequence is **R9, then R4**, and that is the one to follow unless the user says
 otherwise — it is what makes reflections, refraction and bounce possible at all, which is the half
@@ -1952,6 +2033,11 @@ use if that counting is ever suspected of costing something;
 the state everything above that section was measured in, `--secondary-period N` is the window in
 frames a face may name one in (a power of two; 64 is the default) and `--secondary-share N` is the
 off-screen cap as a divisor of the table (4 is a quarter);
+`--no-secondary-light` stops a face nobody is looking at from casting any ray at all, whatever is
+reading it — R9b's control arm, and the state every figure taken before D561 was measured in — and
+`--secondary-light-share N` is that class's ray budget as a divisor of the on-screen set's shading
+rate (8 by default; larger is cheaper and slower, and **D566 is why sweeping it downwards buys much
+less than it looks like it should**);
 `--no-paste-pool` puts the region paste back on the background sampler's job system, which is
 D513's control arm and the state every paste figure above this line was measured in — pair it with
 `--no-clip-cache` so the ladder actually runs, and watch the `region:` line, which now splits the
@@ -2051,7 +2137,16 @@ store gave up (measured: 434,838 while flying). `the card's own stand-ins` count
 faces the card claims for itself, each of which takes a fresh unbounded ray and a fresh lamp burst
 every frame it is needed. The fifth is `faces:`, which now also prints the **sun stride** — what the
 sun's ray budget is being divided by, and the number two builds with the same store and the same
-picture can differ by (D527).
+picture can differ by (D527) — and beside it the **off-screen stride**, the same number for the other
+class, where nought means that class is casting nothing at all.
+
+**And one more, which is the only counted figure among them**: `the off-screen set cast on N faces
+this frame` says what the off-screen class actually shaded, measured in the pass that spends it rather
+than predicted from a population and a stride on the host. Read it against the stride beside it — a
+stride without a count is what the host *meant* to happen, and the two disagreeing is the only thing
+that can say this class has silently stopped casting. It is a rate over one frame, so nought on a
+camera whose whole store has converged means "nothing was due"; `the set on the card` is what says
+whether the class ever measured anything at all. D567.
 
 **Three audits run at every screenshot and they answer three different questions.** `GPU mirror
 matches` asks whether the card holds what the pool holds — and both can agree perfectly about

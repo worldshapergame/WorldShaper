@@ -521,11 +521,11 @@ checked. Tick the ledger in §8.0 when one lands.
 | R9 | i. the mechanism, second half | **done for the static case** — D341–D343. A shadow ray now reports the one cell that STOPPED it, which is the narrowing D292 always needed. Faces shadowed by a cell the pool has not built: **18,820 → 0** on a static camera, bricks 13,651 → 41,814, at +4% outdoor and +8% mid. **Still open:** after a 36M-voxel deletion the same count sits at 51,326 and does not converge, with feedback at 124,621 of 131,072 — requests made, nothing built, which is the D133 phantom signature. And speckle rose sharply (D342), which needs R5 |
 | R9 | i. the geometry a shadow ray needs | **half done: the leak is stopped, the mechanism is not built.** A sealed room filled with sunlight as the pool shed — 0.0000 at frame 500, 0.0458 at 700, 0.0596 at 900, static camera, no edit — because a cold root cleared its node and entry and so read as EMPTY rather than WANTED. A cold root now sheds its subtree and stands as a shell: frame 900 goes 1,163 fully lit faces → **0**, mean 0.02 → **0.0000**, four of eight roots → **eight**, holding to frame 5,000, and the 42-run grid moves **+0.46%** with speckle identical in every cell against a same-commit control (D324). Still open: 9 faces read lit at frame 500 at full residency for an unrelated reason, and residency still does not count what a shadow ray reads. D322, D323, D324; §8 R9i |
 | R9 | a. secondary faces are requested by the rays that need them | **done** — D526–D532. The ambient far ray names the one face it LANDED on, tagged `kFeedbackSecondary`, throttled by a phase on the slot and a period in frames. It builds nothing and streams nothing, so R9h's rule holds by construction and is measured: node requests **18,828,939 against 18,830,058** over a settled run. The picture does not move at either camera, because **nothing reads the set yet** — `may_cast` gates a face on a pixel having read it, so an off-screen face casts no rays and holds no light. The consumer is bounce, and it is the next change |
-| R9 | b. a budget per bounce | **done for the two classes that exist** — D526, D527. A cap of a quarter of the table, a DECLINE rather than a refusal past it, and a decline whenever the store is under pressure at all, so the class cannot push the table into refusing a face somebody is looking at. The half that was not obvious: the SUN's ray budget was divided by the watermark, so the new class diluted the refresh rate of every face on screen and the faces pass **got cheaper — 1.16 ms against 0.96 — while convergence fell from 84 sun samples a face to 72**. A regression in an improvement's clothes. Divided by the on-screen population now: 85 both arms |
+| R9 | b. a budget per bounce | **done, both halves** — D526, D527, D561–D568. The CLAIM half first: a cap of a quarter of the table, a DECLINE rather than a refusal past it, and a decline whenever the store is under pressure at all, so the class cannot push the table into refusing a face somebody is looking at. The part that was not obvious there: the SUN's ray budget was divided by the watermark, so the new class diluted the refresh rate of every face on screen and the faces pass **got cheaper — 1.16 ms against 0.96 — while convergence fell from 84 sun samples a face to 72**. A regression in an improvement's clothes. Divided by the on-screen population now: 85 both arms. **The RAY half was never spent and the class therefore held nothing** — 229,413 records at nought samples, read straight back out by the rays that asked for them (D561). It has its own share of `kFacesPerFrame` now, its own stride out of its own population, and its own card-owned stamp (`face_gathered`) so the two are counted apart rather than merely told apart |
 | R9 | e. an instrument for the set itself | **done** — D529–D531. `the set on the card` reports both classes and their samples per face, `the off-screen set` reports what was offered, claimed, declined and promoted, and the audit that prints them no longer refuses to run when an upload is pending — which is always, while moving, and is the case that costs. Two things came out of it that were nobody's plan: the card's own provisional stand-ins are counted for the first time (**8,254 a frame**, each taking a fresh unbounded ray and lamp burst every frame), and the card is **up to 434,838 records behind the store** while flying, which is what the face pass's moving cost is actually a function of |
 | R9 | bounce — the fourth term, off the pixel and onto the face | **done** — D533–D538. The ambient far ray already went out unbounded and cosine-weighted about the normal; it now returns what it FOUND, which is the sky where it escaped and the landed-on face's own outgoing radiance where it did not. `kIndirectFloor` — the constant that lit every interior in this game — is **deleted**, along with `kGroundBounce`, which was added to every surface in the world unconditionally: there is no minimum light anywhere now, and `clips/sealed_dark.clip` with `tools\darkroom.ps1` is the gate that says so (D541–D543). **+7% of the light pass and +5% of the frame** at the enclosed camera over three interleaved rounds; flying, the arms overlap. The picture moves by **16.998 of 255 over three quarters of the frame** and is **quieter**: speckle 17.62 with 9 fireflies against 21.22 with 81. It is multi-bounce for nothing, because a face's own bounce is part of what it gives off. Three traps came with it and all three are the same shape — a layout constant declared twice (D534), a per-face threshold where a blend belongs (D535), and a host struct that is not the shape of the push block it fills (D537) |
 | R9 | f. coarse faces outlive their children, and a gathering ray may read them | **done, in the half that needed no fold** — D554–D560. The coarse pyramid is what everything else is rebuilt from and it was the FIRST thing the store threw away: a stand-in is stamped only when a fine face under it is new, so a settled camera never touches one again and after `cold_frames` it is evicted with every child still live. Measured on the close camera, the control arm holds **0 stand-ins of 711,000 faces and nothing at all above level 1**, having evicted 21,796; with the rule it holds **21,794 and gives up none**. A gathering ray that finds no light now walks up to the first ancestor with an answer, which recovers **30.7% of what found nothing** settled and 21.1% flying. The converged picture is brighter where the store forgets most and **quieter everywhere**: close mean pixel 133.5 → 140.0 with speckle 45.5 → 38.5, enclosed 126.4 → 127.6 with fireflies 36 → 9, outdoor unmoved at 0.214 of 255. Three frames after walking back into a room, the card's own provisional stand-ins — the most expensive face there is — go **3,137 → 99**, speckle 34.35 → 19.58. Gates: `darkroom.ps1` BLACK clear and with fog, the 42-run grid **+0.17%** with speckle −6.9%, flying arms overlapping, 519 tests. **What is NOT done is the FOLD**: a coarse face still measures itself with its own rays rather than averaging its children, and R9f's other clause — a ray that reaches an *unbuilt* region getting light — is blocked on the marcher, which does not name a face for an ignorance stop (D558) |
-| R9 | the off-screen set | **half, and the second half now shows.** R9a, R9b, R9e and R9f are in; R9c (the halo) and R9g–R9h are not. The store holds what the camera can see plus one bounce and a coarse pyramid over both — and the probe says **a third of what the bounce integrates is still nothing at all**, which is the size of what is left. Prerequisite for R4c/R4d being worth measuring |
+| R9 | the off-screen set | **half, and the off-screen set now carries light rather than merely existing.** R9a, R9b, R9e and R9f are in; R9c (the halo) and R9g–R9h are not. What the bounce integrates and finds black has gone from a third to **just under a quarter**: rays landing on a lit face 18.7% → 29.9%, rays landing on a face in the store with nothing measured 12.4% → **1.7%**, on the close camera settled (D561). The enclosed room's mean pixel goes **127.5 → 150.2** with fireflies 9 → 0. **What is left is entirely the other bucket — 21.9% landing on a surface with no face at all — and that is R9c's and R9g's.** Prerequisite for R4c/R4d being worth measuring |
 | R9 | light from what is not loaded | **started at R9f; R9g–R9h planned, not started.** Light outlives its children now, so eviction has stopped being a lighting decision for anything the camera has already seen. What remains is the fold itself, the emitter list persisting per region and loading with the index rather than the voxels, and the analytic fallback past the last node |
 | R4–R8 | | not started |
 | **the large edit** | **an edit announced a volume to a tree that is not stored by volume** | **cause found and fixed — D515, D516.** The same shape as the paste one level down. `announce_world_change` named every brick in the edited box and the pool walked up from each; on a 36-million-voxel delete that is **1,573,269 bricks announced** to produce **13,325 refolds and no rebuilt leaves**, at **718 ms in one frame** — gather 457, descend 257, fold **4**. The pool holds the tree, so it now takes the **box** and descends from its own roots, pruning children that miss it, post-order so the fold ordering falls out instead of being sorted for. **718 → 7 ms**, and the edit frame is no longer the worst frame in the run (node-pool CPU worst 890.7 on the edit frame → 26.2 at startup). A one-voxel chisel is unchanged. `NodePool::stale_masks` is the audit that had to exist first, because a child mask is invisible to both the GPU mirror and `stale_leaves`, and both ways of getting it wrong are silent. **What is left in that frame is the undo capture: 194 ms into 538,169 inverse ops**, which is now the largest part of a large edit |
@@ -946,31 +946,69 @@ depth. This is deliberately the *opposite* of the rule the shadow ray follows to
 must not drag streaming towards whatever it happens to cross" — and the distinction is that a ray
 now names what it **landed on**, which is one face, rather than everything it passed through.
 
-**R9b — a budget per bounce, and the reason it is per bounce. Done for the two classes that exist —
-D526, D527.** One shared budget lets the off-screen set starve the on-screen one, and the on-screen
+**R9b — a budget per bounce, and the reason it is per bounce. Done, both halves — D526, D527,
+D561–D568.** One shared budget lets the off-screen set starve the on-screen one, and the on-screen
 set is what the player is looking at. Three classes: primary (a pixel landed on it), secondary (one
 bounce from a primary), tertiary and beyond (folded into one class with the smallest share). Each has
 its own share of the face-shading budget `kFacesPerFrame` and its own share of the claim rate. A class
 that overruns degrades its own refresh rate and nothing else's.
 
-Two of the three exist so far, and the paragraph above described the claim rate and missed the half
-that bit. **The share of `kFacesPerFrame` was the one that mattered first**, because that budget was
-divided by the WATERMARK: the moment R9a claimed anything, every face on screen was refreshed less
-often, and the faces pass got *cheaper* while convergence fell from 84 sun samples a face to 72
-(D527). It is divided by the on-screen population now. The claim rate is a cap of a quarter of the
-table, and a claim past it is **declined rather than refused** — a distinction that has to exist,
-because a refusal is a visible surface with no light of its own (D502) and a decline is one gathering
-ray reading a coarse stand-in. The store also declines the whole class while it is under pressure at
-all, so this can never be what pushes the table into refusing a face somebody is looking at.
+The CLAIM rate landed first. It is a cap of a quarter of the table, and a claim past it is **declined
+rather than refused** — a distinction that has to exist, because a refusal is a visible surface with
+no light of its own (D502) and a decline is one gathering ray reading a coarse stand-in. The store
+also declines the whole class while it is under pressure at all, so this can never be what pushes the
+table into refusing a face somebody is looking at. Building it walked into the fault that keeps
+recurring: the SUN's budget was divided by the WATERMARK, so the moment R9a claimed anything every
+face on screen was refreshed less often and the faces pass got *cheaper* while convergence fell from
+84 sun samples a face to 72 (D527).
 
-**R9c — the halo, which is the "reprojection" half.** Faces do not leave the store the moment they
-leave the screen: they leave when they go cold, and `cold_frames` is already 600. That is most of
-what is wanted from reprojection and it exists. What is missing is the *entry* side — a face just
-off the edge of the screen is never claimed until it comes on, so a pan reveals unlit geometry
-that then lights over several frames. The primary pass therefore claims over a frustum widened by a
-margin, at a coarser request lattice than the on-screen one: geometry arrives already lit, and the
-cost is a fraction of a pass that is already sparse. Margin from the camera's angular velocity, so
-standing still costs nothing.
+**The RAY share is the half that had never been spent, and without it the class was a claim with no
+consequence.** `may_cast` is `node_face_recently_seen`, a stamp written by the visibility pass, which
+runs only on pixels — so an off-screen face was refused a ray for its whole life. Measured on the
+close camera settled: **229,413 off-screen faces at nought sun samples and nought finished ambient
+terms**, and 12.4% of every gathering ray in the frame reading one of those empty records straight
+back out. The shape of the fix is the same shape as everything else here:
+
+- **a face is worth a ray when something is INTEGRATING it**, and for an off-screen face that
+  something is the gathering ray that landed on it. `face_gathered` is a card-owned word a slot,
+  stamped in `bounce_radiance` — `face_seen` for the pixel, `node_seen` for the light's geometry, and
+  now this for the light's *faces*;
+- **it has to be a second array, not a second meaning for the first.** `face_seen`'s population is
+  what the sun's budget is divided by, so a shared stamp is D527 and D557 a fourth time;
+- **the class's stride comes out of its own population and its own share** (`secondary_light_stride`,
+  `--secondary-light-share N`, default 8; `--no-secondary-light` is the control arm);
+- **and the sun's stride must not compose with it**, or the class is visited and then given no sun
+  ray, for ever, with every audit line reading as though it worked (D564).
+
+**What it is worth, and where** (D561): rays landing on a lit face **18.7% → 29.9%**, rays landing on
+a face with nothing measured **12.4% → 1.7%**, the enclosed room's mean pixel **127.5 → 150.2** with
+speckle 16.1 → 12.8 and fireflies 9 → 0, the close camera 139.8 → 143.1 with fireflies 108 → 27, and
+the outdoor camera unmoved at 0.86 of 255 — because outdoors a gathering ray reaches sky and nothing
+was missing. Both `darkroom.ps1` arms still BLACK at 0 of 255.
+
+**Two things to know before touching the budget.** Its cost is a **tail and not a rate** — 35 faces
+shaded cost 0.85 ms and the next 2,335 cost 0.94, so a smaller budget gives up most of the win for a
+tenth of the cost, and three explanations for that were priced and rejected (D566). And the **moving
+case pays most of the cost for a tenth of the win**: flying, the faces pass goes 6.69 → 7.91 ms on a
+pass already over its 4.40 ms budget, for one point of what standing still gains eleven (D568).
+
+**R9c — the halo, which is the "reprojection" half. Not started, and R9b's ray share had to land
+first or it would have changed no pixel** — it claims *off-screen* faces, and until D561 an
+off-screen face held nothing. **It is now the whole of what is left in that measurement**: with the
+class lit, the bucket R9c addresses is unchanged at **21.9% of gathering rays landing on a surface
+with no face in the store at all**, and it is the largest remaining source of black in the bounce.
+
+Faces do not leave the store the moment they leave the screen: they leave when they go cold, and
+`cold_frames` is already 600. That is most of what is wanted from reprojection and it exists. What is
+missing is the *entry* side — a face just off the edge of the screen is never claimed until it comes
+on, so a pan reveals unlit geometry that then lights over several frames. The primary pass therefore
+claims over a frustum widened by a margin, at a coarser request lattice than the on-screen one:
+geometry arrives already lit, and the cost is a fraction of a pass that is already sparse. Margin from
+the camera's angular velocity, so standing still costs nothing.
+
+One caution, from what R9b's ray share measured: a halo face is an off-screen face and inherits that
+class's cost shape, which is a tail rather than a rate. Claiming a margin is cheap; *lighting* it is
+priced by D566 and not by how many faces the margin holds.
 
 **R9d — coarse light for a face that has none. Done, early — D308–D309.** A face that has just
 entered any of these sets has zero samples, and the composite falls back to full sun on it, which

@@ -225,10 +225,18 @@ inline constexpr i32 kFeedbackSecondary = 0x200000;
 // The gathering ray's counters: one word a question, over the whole dispatch, cleared every frame
 // and read back at the screenshot audit. Must match kLightProbeWords in shaders/node.glsl, which
 // carries the word map -- the shader is the authority because it is the only writer.
-inline constexpr u32 kLightProbeWords = 24;
+inline constexpr u32 kLightProbeWords = 25;
 // Where the by-level histogram of "stopped by a cell the pool has not built" starts in it. Must
 // match kLightProbeLevels in shaders/node.glsl.
 inline constexpr u32 kLightProbeLevels = 9;
+// The last word, which is not a counter at all: the OFF-SCREEN set's stride, in frames, host-written
+// exactly as the dials are. Must match kProbeSecondaryStride in shaders/node.glsl.
+//
+// At the far END of the buffer on purpose. The host writes the dials, writes this, and fills what is
+// between them with nought -- three ranges that do not touch, because transfer commands in one
+// command buffer have no ordering between them and a host word inside the filled span would be a
+// race. See the write site in main.cpp.
+inline constexpr u32 kProbeSecondaryStride = 24;
 
 // The dials in word 0 of that buffer, host-written and card-read.
 //

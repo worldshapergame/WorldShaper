@@ -333,6 +333,42 @@ layout(std430, binding = 17) buffer NodeSeen { uint frames[]; } node_seen;
 // into a buffer that holds 131,072.
 layout(std430, binding = 18) buffer FaceRead { uint frames[]; } face_read;
 
+// When a GATHERING ray last read this face, one word a slot, card-owned exactly as face_seen is.
+//
+// # Why the off-screen set needed this before it was worth anything
+//
+// R9a claims a face for the surface a bounce ray landed on, so the store holds geometry no pixel is
+// looking at. It then held it and did nothing with it: `may_cast` is `node_face_recently_seen`, and
+// that stamp is written by the VISIBILITY pass, which only ever runs on pixels. Measured on the
+// close camera, settled: **229,413 off-screen faces of a cap of 262,144, every one of them at nought
+// sun samples and nought with a finished ambient term** -- a quarter of the table holding empty
+// records. The gathering rays that asked for them then read those empty records back: 12.4% of every
+// gathering ray in the frame landed on a face that is in the store and has measured nothing.
+//
+// So the set existed and the light did not, and the next thing the plan called for -- R9c, claiming
+// a margin of faces just off the edge of the screen -- would have moved rays from "no face at all"
+// (21.2%) into "a face with nothing measured yet" and changed no pixel anywhere.
+//
+// # Why a second array rather than stamping face_seen
+//
+// Because the two must be COUNTED apart, not merely told apart. `face_seen`'s population is what the
+// sun's ray budget is divided by, and D527 and D557 are the same fault twice: anything that adds
+// faces to that denominator refreshes every face on screen less often, the pass gets CHEAPER, and
+// the cost lands in a convergence number no pass table carries. An off-screen face must get its own
+// rate out of its own budget and take nothing from the screen's, which is R9b's whole sentence, and
+// a shared stamp cannot express it.
+//
+// It is also the exact signal, in the same way `face_seen` is for the pixel and `node_seen` is for
+// the light's geometry (D414, D431): a face is worth a ray when something is INTEGRATING it, and the
+// thing that integrates an off-screen face is the gathering ray that landed on it. A face nothing
+// gathers from is stamped by nobody and casts nothing, so the ten seconds of history the store keeps
+// behind a moving camera stays as dark and as free as D414 made it.
+//
+// Card-owned, and it must stay that way for D528's reason: the host writes whole `GpuFace` records
+// for dirty slots, so a class kept in the record would send the host's zeroed counters over the light
+// the card accumulated.
+layout(std430, binding = 20) buffer FaceGathered { uint frames[]; } face_gathered;
+
 // ---- what a gathering ray found, counted ------------------------------------------------------
 //
 // The light pass has three audit lines about what it has FINISHED (`ambient on the card`, `lamps on
@@ -367,16 +403,18 @@ layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
 //   [6]  ...of [4] and [5], how many the coarse face standing over them could answer. This is the
 //        number R9f is worth, measurable before R9f exists, which is why it is here.
 //   [7]  ...that were stopped by a cell the world claims and the pool has not built.
-//   [8]  unused, and it is left named rather than removed: it was to be "of [7], how many a coarse
-//        face could answer", and it cannot be measured from here. An ignorance stop carries NO face
-//        key -- `node_face_hit` runs at the leaf hit and nowhere else -- so there is nothing to walk
-//        up from. That is a fact about the marcher and it is the gate on any rule that would read
-//        light where the pool has not built.
+//   [8]  faces the OFF-SCREEN class shaded this frame -- R9b's budget, counted where it is spent
+//        rather than predicted from a population and a stride on the host. It took this word over
+//        from a question that turned out to be unanswerable from here ("of [7], how many a coarse
+//        face could answer": an ignorance stop carries NO face key, because `node_face_hit` runs at
+//        the leaf hit and nowhere else, which is the gate on any rule that would read light where
+//        the pool has not built).
 //   [9..23] where [7] happened, by LEVEL. R10's open item -- 6% of surface held short of
 //        convergence by unbuilt geometry -- has never had this and cannot be reasoned about
 //        without it: a ray stopped by an unbuilt brick has lost 25 cm of sky and one stopped by a
 //        shed 512 m subtree has lost a quarter of the county.
-const uint kLightProbeWords = 24u;
+//   [24] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
+const uint kLightProbeWords = 25u;
 const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 
 // The dials, in word 0. A bit each, because the push block is exactly full (128 bytes, and the
@@ -385,11 +423,29 @@ const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 const uint kProbeOn = 1u << 0;          // count at all
 const uint kProbeCoarseBounce = 1u << 1;  // a gathering ray may read the coarse face over its hit
 
+// How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
+// slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
+// in the feedback buffer.
+//
+// A value and not a bit, so it needs a word of its own, and it is host-written every frame for the
+// reason the dials are: it is derived from how many off-screen faces there ARE, so that the class
+// costs a bounded number of shaded faces a frame rather than a number that grows with the set. R9b:
+// a class that overruns degrades its own refresh rate and nothing else's. 0 is the control arm and
+// restores the state every figure taken before this measured -- an off-screen face casting nothing.
+//
+// It lives at the far END of this buffer, past the card's counters, so the host's two writes and the
+// host's one fill cover three DISJOINT ranges. Transfer commands in a command buffer have no implicit
+// ordering between them, so a host word inside the zeroed span would be a race whose loser is
+// whichever the driver ran second -- and a stride that reads nought half the time is a class that
+// silently stops casting.
+const uint kProbeSecondaryStride = 24u;
+
 void probe_add(uint at) {
     if ((light_probe.words[0] & kProbeOn) == 0u) return;
     atomicAdd(light_probe.words[at], 1u);
 }
 bool probe_coarse_bounce() { return (light_probe.words[0] & kProbeCoarseBounce) != 0u; }
+uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
 // live value is `node_push.seen_window`, so `--face-gate` can widen it to the whole run and give
@@ -576,6 +632,38 @@ void node_face_seen(uint slot) {
 bool node_face_recently_seen(uint slot) {
     if (slot >= face_seen.frames.length()) return true;   // cannot tell, so light it
     return (node_push.frame - face_seen.frames[slot]) <= node_push.seen_window;
+}
+
+// Say that a GATHERING ray read this face on this frame. R9b's half of `node_face_seen`, and the
+// same three lines for the same three reasons: conditional so a face many rays land on writes once,
+// on a record the caller has already fetched, and two invocations racing to write one value is not a
+// race worth ordering.
+//
+// Stamped where the light is READ and not where the face is claimed. A claim happens once and the
+// store's cold window then keeps the record for six hundred frames whether or not anything is still
+// integrating it; this has to mean "somebody is reading this NOW", because it is what decides
+// whether the face is worth a ray. That is D554 and D508 in one sentence -- a clock stamped by an
+// event that happens once is a clock about the past.
+void node_face_gathered(uint slot) {
+    if (slot == kNoFace || slot == kFaceTombstone) return;
+    if (slot >= face_gathered.frames.length()) return;
+    if (face_gathered.frames[slot] != node_push.frame) face_gathered.frames[slot] = node_push.frame;
+}
+
+// Is a gathering ray reading this face recently enough to be worth a ray of its own?
+//
+// False when it cannot tell, which is the opposite of `node_face_recently_seen` above and is
+// deliberate: that one errs towards lighting a face the composite may be about to draw, and this one
+// errs towards NOT paying for a face nobody can see. The two are read together in `face_work_of`, so
+// an unanswerable slot is already covered by the first.
+//
+// The window is the same `seen_window` the pixel's stamp uses. It is the same question -- how long
+// after the last reader a face goes on measuring -- and giving the off-screen set a second window
+// would be a second number to get wrong for no measured reason. What differs between the classes is
+// the RATE, which is `probe_secondary_stride`, and that is the one this class is budgeted by.
+bool node_face_recently_gathered(uint slot) {
+    if (slot >= face_gathered.frames.length()) return false;
+    return (node_push.frame - face_gathered.frames[slot]) <= node_push.seen_window;
 }
 
 uint face_level_of(uint packed) { return packed & 0xFFu; }
@@ -1054,6 +1142,7 @@ float face_visibility_of(uint counters) {
 struct FaceWork {
     bool owed;               // is this slot worth an invocation at all
     bool may_cast;           // ...and is it worth a RAY, which is the narrower question
+    bool off_screen;         // ...and is it casting for a gathering ray rather than for a pixel
     bool near_edit;
     bool near_edit_contact;
     bool edit_reset;
@@ -1068,6 +1157,7 @@ FaceWork face_work_of(uint slot, Face face, bool provisional_face) {
     FaceWork w;
     w.owed = false;
     w.may_cast = false;
+    w.off_screen = false;
     w.near_edit = false;
     w.near_edit_contact = false;
     w.edit_reset = false;
@@ -1093,7 +1183,43 @@ FaceWork face_work_of(uint slot, Face face, bool provisional_face) {
                               all(lessThanEqual(low, tight_max));
     }
     w.edit_reset = (push.edit_min.w == 2) && w.near_edit;
-    w.may_cast = provisional_face || node_face_recently_seen(slot);
+    const bool on_screen = provisional_face || node_face_recently_seen(slot);
+
+    // ...and the off-screen set, which is worth a ray for a different reason and at a different rate.
+    //
+    // R9b. A pixel reading a face is one reason to measure it; a GATHERING RAY reading it is the
+    // other, and until now only the first bought anything. The store held 229,413 faces claimed by
+    // light rays with nought samples in every one of them, and 12.4% of the frame's gathering rays
+    // read those empty records straight back out (see `face_gathered`).
+    //
+    // The rate is the whole of the budget and it is set by the host from how many of these there are,
+    // so a class that grows refreshes itself more slowly and takes nothing from the screen. Phased on
+    // the slot, or half a million faces come due on one frame and the pass spikes -- D431's shape in
+    // the dispatch rather than in the feedback buffer.
+    //
+    // A face that is BOTH is on-screen: `on_screen` is tested first and the stride never applies to
+    // it, because a face a pixel is reading must not be slowed down by a class it is only incidentally
+    // in. That is also what keeps this out of the sun's denominator, which counts the on-screen set on
+    // the host and is the number D527 and D557 were both lost in.
+    // The arithmetic before the LOAD, and this is not the pre-gate D432 forbids.
+    //
+    // The four tests are a conjunction and reordering them cannot change which faces are eligible on
+    // which frame -- the predicate is identical, and only where the memory traffic happens moves.
+    // D432's gate was different in kind: it decided whether a node was ever REPORTED, and a report
+    // could only happen on a frame a ray happened to read it, so making the two coincide threw most
+    // of them away. Nothing here is thrown away.
+    //
+    // It is worth stating what it cost to have this the other way round, because the shape recurs:
+    // `face_work_of` runs for every live slot in BOTH passes, so a load in front of the stride was
+    // three quarters of a million scattered four-byte reads a frame, twice -- and the tell was that
+    // the faces pass barely responded to the budget at all. Eight times fewer off-screen faces shaded
+    // moved it 3.58 ms to 3.14; the load was most of what had been added, and it is charged whether
+    // or not a single face casts.
+    const uint secondary_stride = probe_secondary_stride();
+    w.off_screen = !on_screen && secondary_stride != 0u &&
+                   ((node_push.frame + slot) % secondary_stride) == 0u &&
+                   node_face_recently_gathered(slot);
+    w.may_cast = on_screen || w.off_screen;
 
     // Nothing to do at all: nobody is looking at it and the host has announced nothing.
     if (!w.may_cast && !w.edit_reset && node_push.light_reset == 0u) return w;
@@ -1102,7 +1228,14 @@ FaceWork face_work_of(uint slot, Face face, bool provisional_face) {
     // zeroing this is what made every edit turn the room into flashing blocks.
     w.counters = w.edit_reset ? face_reseed(face.counters, node_push.edit_seed) : face.counters;
     w.samples = face_samples_of(w.counters);
-    w.sun_due = !(node_push.face_stride > 1u && w.samples >= kFaceEager && !w.near_edit &&
+    // The sun's stride is the ON-SCREEN class's budget and must not be applied on top of the
+    // off-screen one. A face that got here because a gathering ray is reading it has already been
+    // thinned by `secondary_stride`, and the two thinnings do not compose: unless one stride divides
+    // the other, `(slot + frame)` is nought modulo both on almost no frame at all, and the off-screen
+    // set would be visited and then given no sun ray -- lit by sky and lamps only, for ever, with
+    // every audit line reading exactly as it does when the class is working. Trap 7 in the budget.
+    w.sun_due = w.off_screen ||
+                !(node_push.face_stride > 1u && w.samples >= kFaceEager && !w.near_edit &&
                   ((slot + node_push.frame) % node_push.face_stride) != 0u);
     w.ambient_idle = (face.photons & kFaceAmbientIdle) != 0u && !w.edit_reset;
     w.lamp_idle = (face.photons & kFaceLampIdle) != 0u && !w.edit_reset &&

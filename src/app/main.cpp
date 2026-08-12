@@ -270,6 +270,21 @@ struct Options {
     // The most of the face table the off-screen set may hold, as a divisor. 0 keeps the store's own
     // figure. R9b: a class that overruns must degrade its own refresh rate and nothing else's.
     u32 secondary_share = 0;
+    // How many faces the OFF-SCREEN set may have shaded in one frame, as a divisor of how many the
+    // on-screen set has. 0 is the control arm (`--no-secondary-light`) and restores an off-screen
+    // face casting nothing at all, which is the state every figure taken before this was measured in.
+    //
+    // R9b's ray share, which had never been spent. R9a put faces in the store for the surfaces a
+    // gathering ray lands on and `may_cast` then refused every one of them a ray, because that gate
+    // is a stamp written by the VISIBILITY pass and the visibility pass only runs on pixels. Measured
+    // on the close camera, settled: 229,413 off-screen records, nought samples in all of them, and
+    // 12.4% of the frame's gathering rays reading them straight back out as black.
+    //
+    // Eight, which is to say the class may cost about an eighth of what the screen's own faces cost.
+    // The number is a trade and not a constant for D430's reason -- a trade nobody can sweep at run
+    // time is a trade somebody guesses at -- and what it buys is how fast the room behind you fills
+    // in, paid in frames, against a light pass with a 4.40 ms budget.
+    u32 secondary_light_share = 8;
     // R9's bounce: a gathering ray reads the surface it lands on, and the composite adds what it
     // found. It replaced `kIndirectFloor` — the constant that stood in for every bounce of indirect
     // light in the building — and that constant is now DELETED rather than switched off, along with
@@ -644,6 +659,15 @@ Options parse_options(int argc, char** argv) {
             options.secondary_period = 0;   // R9a's control arm
         } else if (arg == "--secondary-share" && i + 1 < argc) {
             options.secondary_share = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--secondary-light-share" && i + 1 < argc) {
+            // R9b's ray share: how much of the on-screen set's shading rate the off-screen set gets,
+            // as a divisor. Larger is cheaper and slower. Not rounded and not clamped here, so the
+            // figure an A/B is read against is the figure that was asked for.
+            options.secondary_light_share = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--no-secondary-light") {
+            // R9b's control arm: a face nobody is looking at casts nothing, whatever is reading it.
+            // This is the state every figure taken before this change was measured in.
+            options.secondary_light_share = 0;
         } else if (arg == "--no-coarse-keep") {
             // R9f's first control arm: the store gives a coarse stand-in up on the same clock as
             // any other face, which is what it did before. Two flags of one build, as D407
@@ -1597,6 +1621,10 @@ private:
                   "host struct SMALLER than the shader's block is a range the pipeline rejects "
                   "under validation and reads past silently without it");
     NodePush make_node_push(u32 face_count) const;
+    // How often a face nobody is looking at may cast, in frames. R9b's ray share; see
+    // `secondary_light_share` and kProbeSecondaryStride. Not in the push block because that block is
+    // exactly 128 bytes full, which is what the probe buffer's spare words are for.
+    u32 secondary_light_stride() const;
 
 
     // The node pool, beside the chunk grid rather than replacing it yet. See
@@ -1626,6 +1654,11 @@ private:
     // by the shading pass, and the reason the light pass stopped shading the six hundred frames of
     // scenery behind the camera. See `face_seen` in shaders/node.glsl.
     FaceLight face_seen_;
+    // One word a slot: the frame a GATHERING RAY last read that face. Written and read by the face
+    // pass alone, and the reason the off-screen set stopped being a table of empty records. See
+    // `face_gathered` in shaders/node.glsl for why it is a second array and not a second meaning for
+    // the one above.
+    FaceLight face_gathered_;
     // One word a node slot: when the card last REPORTED that node as read by a light ray. A
     // deduplicator, and the reason D429's rule fits down the feedback buffer at all (D430).
     FaceLight node_seen_;
@@ -3841,8 +3874,11 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     //
     // That is precisely what the plan says the per-class budget is for: one shared budget lets the
     // off-screen set starve the on-screen one, and the on-screen one is what the player is looking
-    // at. A class that overruns must degrade its own refresh rate and nothing else's, and the
-    // off-screen class casts no rays at all today, so its share of this budget is nought.
+    // at. A class that overruns must degrade its own refresh rate and nothing else's -- so the
+    // off-screen class has a budget of its OWN now (`secondary_light_stride`, R9b), taken out of a
+    // separate figure and never out of this one. Subtracting it here is what makes that true rather
+    // than intended: the two classes are two divisions of two budgets, and the day they share a
+    // denominator is the day D527 happens for the fourth time.
     // The LIVE on-screen faces, and neither word in that is spare.
     //
     // It was the watermark, which counts every slot ever used — so a store that has evicted a
@@ -3907,6 +3943,39 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.sun_colour[2] = kSunColour[2];
     push.sun_colour[3] = 0.0f;
     return push;
+}
+
+// The off-screen set's own ray budget, as a stride in frames. R9b, and it is the half of that
+// sub-step that had never been spent.
+//
+// The shape is deliberately the same as the sun stride above -- a population divided by a budget --
+// because the two are the same kind of number and the failure they share is the one D527, D557 and
+// the comment above all describe: a budget divided by the wrong population is a silent quality
+// setting. Keeping them apart in two functions over two populations is what makes "a class that
+// overruns degrades its own refresh rate and nothing else's" a property of the code.
+//
+// The budget is a SHARE of the screen's rather than a constant of its own, so the class scales with
+// what the machine is already spending rather than with a number somebody picked once. Nought is the
+// control arm and means the class casts nothing at all, which is the state everything measured before
+// this was measured in; the shader reads a stride of nought as "off" for the same reason
+// `secondary_period` does.
+//
+// What it does NOT do is bound the transient. A face that has just entered this class bursts its
+// ambient term exactly as any other face does, because D394 measured every attempt at metering that
+// burst as making the transient worse -- what an unconverged face spends is mostly the face and not
+// the ray. So this bounds how many such faces exist per frame and lets each of them get on with it.
+u32 Application::secondary_light_stride() const {
+    if (options_.secondary_light_share == 0) return 0;
+    const FaceStoreStats set = face_store_.stats();
+    if (set.secondary == 0 && set.stand_ins == 0) return 0;
+    // The stand-ins are in this budget too. They are faces no pixel reads by construction -- R9f
+    // keeps them precisely so they outlive the fine faces under them -- and a gathering ray falling
+    // back to one is reading it just as surely as it reads a face it landed on. They were also, until
+    // now, the emptiest records in the store: `the coarse pyramid on the card` reported nought of
+    // 21,790 with a finished ambient term.
+    const u32 population = set.secondary + set.stand_ins;
+    const u32 budget = std::max(1u, kFacesPerFrame / options_.secondary_light_share);
+    return std::max(1u, (population + budget - 1) / budget);
 }
 
 TracePush Application::make_trace_push() {
@@ -4850,6 +4919,49 @@ void Application::record_frame(f32 time_seconds) {
         const u32 face_count = face_store_.watermark();
         const u32 provisional_base = face_buffers_.provisional_base();
         const u32 provisional_count = FaceBuffers::provisional_count();
+
+        // ---- the probe buffer, which is now a lever as well as an instrument ------------------
+        //
+        // The host's dials in word 0, the off-screen set's stride in the last word, and the card's
+        // counters cleared between them. THREE DISJOINT RANGES, and that is the whole reason the
+        // stride sits at the far end rather than next to the dials: transfer commands in one command
+        // buffer are not ordered against each other, so a host word inside the filled span would be
+        // whichever of the two the driver happened to run second.
+        //
+        // Two commands rather than one fill for the dials was already the ownership rule made
+        // structural rather than remembered (D528), and the third is the same rule again.
+        //
+        // # Why this moved above the work list
+        //
+        // `face_work_of` reads the stride, and BOTH passes call it -- the worklist to decide which
+        // slots are dispatched at all and the shading pass to decide what to do with them. It is one
+        // function precisely so the two cannot disagree (D420), and writing the stride between them
+        // would have handed the worklist last frame's value and the shading pass this frame's. That
+        // divergence is silent in the direction that costs: a worklist that is stricter drops faces
+        // out of the dispatch and nothing anywhere says a face stopped being lit.
+        {
+            const u32 dials = (options_.light_probe ? kProbeOn : 0u) |
+                              (options_.coarse_bounce ? kProbeCoarseBounce : 0u);
+            vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
+            const u32 secondary_stride = secondary_light_stride();
+            vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),
+                              sizeof(secondary_stride), &secondary_stride);
+            // Everything between the two host words, and the bounds are named rather than counted:
+            // words 1 up to but not including the stride.
+            vkCmdFillBuffer(cmd, light_probe_.buffer(), sizeof(u32),
+                            (kProbeSecondaryStride - 1) * sizeof(u32), 0u);
+            VkMemoryBarrier2 probe_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            probe_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            probe_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            probe_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            probe_barrier.dstAccessMask =
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            VkDependencyInfo probe_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            probe_dependency.memoryBarrierCount = 1;
+            probe_dependency.pMemoryBarriers = &probe_barrier;
+            vkCmdPipelineBarrier2(cmd, &probe_dependency);
+        }
+
         // ---- which faces owe work, packed ---------------------------------------------------
         //
         // The shading dispatch is sized by this rather than by the store, so every workgroup it
@@ -4906,28 +5018,6 @@ void Application::record_frame(f32 time_seconds) {
         }
 
         if (face_count > 0 || provisional_count > 0) {
-            // The probe: the host's dials in word 0, then the card's counters cleared behind them.
-            //
-            // Two commands rather than one fill, and that is the ownership rule made structural
-            // rather than remembered (D528). The dials are written every frame rather than once,
-            // because a buffer written at creation is a buffer whose value nobody can find when
-            // they go looking for why an instrument is silent.
-            const u32 dials = (options_.light_probe ? kProbeOn : 0u) |
-                              (options_.coarse_bounce ? kProbeCoarseBounce : 0u);
-            vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
-            vkCmdFillBuffer(cmd, light_probe_.buffer(), sizeof(u32),
-                            (kLightProbeWords - 1) * sizeof(u32), 0u);
-            VkMemoryBarrier2 probe_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-            probe_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
-            probe_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            probe_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-            probe_barrier.dstAccessMask =
-                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
-            VkDependencyInfo probe_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-            probe_dependency.memoryBarrierCount = 1;
-            probe_dependency.pMemoryBarriers = &probe_barrier;
-            vkCmdPipelineBarrier2(cmd, &probe_dependency);
-
             profiler_.begin_pass(cmd, "faces", 4.4);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.pipeline());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.layout(), 0,
@@ -5388,6 +5478,16 @@ int Application::play(const Options& options) {
             WS_LOG_FATAL("app", "could not create the face seen buffer");
             return 1;
         }
+        // And one word a slot for when a GATHERING RAY last read that face, over the same range
+        // again. It is what tells the shading pass that a face nobody can see is nonetheless being
+        // integrated by somebody, which is the only reason to spend a ray on one. R9b.
+        if (!face_gathered_.create(device_,
+                                   face_buffers_.provisional_base() +
+                                       FaceBuffers::provisional_count(),
+                                   "face gathered")) {
+            WS_LOG_FATAL("app", "could not create the face gathered buffer");
+            return 1;
+        }
         // And one word a slot for when that face last told the HOST it was being read. Over the same
         // range as `face seen`, so a provisional slot has a word even though it never reports.
         if (!face_read_.create(device_,
@@ -5453,8 +5553,11 @@ int Application::play(const Options& options) {
         // Nineteen: 18 is the face READ stamp, the same thing again for the store (D508).
         // Twenty: 19 is the light probe -- the gathering ray's own counters, and the dials that
         // could not fit in a push block that is exactly 128 bytes full. R9f.
-        VkDescriptorSetLayoutBinding node_bindings[20]{};
-        for (u32 i = 0; i < 20; ++i) {
+        // Twenty-one: 20 is the face GATHERED stamp, which is to a gathering ray's reads what 15 is
+        // to a pixel's. It is what makes the off-screen set worth having: without it every face in
+        // that class held nought samples for its whole life. R9b.
+        VkDescriptorSetLayoutBinding node_bindings[21]{};
+        for (u32 i = 0; i < 21; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -5465,7 +5568,7 @@ int Application::play(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 20;
+        node_layout_info.bindingCount = 21;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -5476,25 +5579,25 @@ int Application::play(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[16]{
+        const VkBuffer node_pool_buffers[17]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
             face_light_.buffer(),      light_buffer_.buffer,    face_seen_.buffer(),
             face_work_.buffer,         node_seen_.buffer(),     face_read_.buffer(),
-            light_probe_.buffer(),
+            light_probe_.buffer(),     face_gathered_.buffer(),
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[16]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19};
-        VkDescriptorBufferInfo node_infos[16]{};
-        // Seventeen writes for sixteen buffers and one uniform block, and the COUNT a few lines
+        const u32 node_bindings_for[17]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20};
+        VkDescriptorBufferInfo node_infos[17]{};
+        // Eighteen writes for seventeen buffers and one uniform block, and the COUNT a few lines
         // below is the thing to change with them. Adding a descriptor here and leaving that literal
         // alone writes every binding but the new one, silently, and `--validation` is the only thing
         // that says so -- which is D518 exactly, in the other direction.
-        VkWriteDescriptorSet node_writes[17]{};
-        for (u32 i = 0; i < 16; ++i) {
+        VkWriteDescriptorSet node_writes[18]{};
+        for (u32 i = 0; i < 17; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -5509,13 +5612,13 @@ int Application::play(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[16].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[16].dstSet = node_set_;
-        node_writes[16].dstBinding = 8;
-        node_writes[16].descriptorCount = 1;
-        node_writes[16].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[16].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 17, node_writes, 0, nullptr);
+        node_writes[17].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[17].dstSet = node_set_;
+        node_writes[17].dstBinding = 8;
+        node_writes[17].descriptorCount = 1;
+        node_writes[17].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[17].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 18, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -6361,7 +6464,7 @@ int Application::play(const Options& options) {
                 WS_LOG_INFO("frame",
                             "faces: {} live of {}, {} seen this frame, {} claims {} already there, "
                             "{} evicted, {} REFUSED, cold window {} frames (floor {}), "
-                            "{} read-reports this frame, sun stride {}, "
+                            "{} read-reports this frame, sun stride {}, off-screen stride {}, "
                             "{} bytes of faces ({} with the table)",
                             face_stats.faces, face_budget_max_, last_faces_seen_,
                             face_stats.claims, face_stats.hits, face_stats.evictions,
@@ -6374,6 +6477,12 @@ int Application::play(const Options& options) {
                             // way to see it. Trap 17: the pass table gives one number to a pass whose
                             // cost is a rate, and a rate is not visible in a total.
                             make_node_push(face_stats.faces).face_stride,
+                            // ...and the same number for the other class, beside it, because a
+                            // budget that is only visible in one of two classes is the half of the
+                            // picture that made D527 readable and D557 not. Nought means the class
+                            // casts nothing, which is `--no-secondary-light` and was the only state
+                            // this renderer had until R9b's share was spent.
+                            secondary_light_stride(),
                             face_stats.face_bytes, face_stats.total_bytes);
 
                 // What SIZE the faces are, which is the size of the smallest shadow the frame can
@@ -6559,6 +6668,7 @@ int Application::play(const Options& options) {
     face_buffers_.destroy();
     face_light_.destroy();
     face_seen_.destroy();
+    face_gathered_.destroy();
     node_seen_.destroy();
     face_read_.destroy();
     light_probe_.destroy();

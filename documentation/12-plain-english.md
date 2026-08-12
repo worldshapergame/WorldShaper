@@ -1519,3 +1519,71 @@ number that got faster with nothing to show for it has usually just stopped doin
 third of them still land on something with no record at all — surfaces off to the side of the screen,
 or behind you. That is the next piece of work in this stage, and I now have a number for it instead of
 an opinion.
+
+## The light was being collected from surfaces that had never been lit
+
+**This is the piece I said was next, and the shape of it turned out to be one word different from
+what I expected — worth telling, because the correction is the useful part.**
+
+Two changes ago the game started keeping a lighting record for surfaces you cannot see: when a light
+ray lands on something off to the side of the screen, or behind you, the game now remembers that
+surface. The idea is that a room is lit by the whole room, not by the part of it that happens to be in
+front of your eyes.
+
+**What I found when I looked at the counters is that it kept a quarter of a million of those records
+and never put anything in a single one of them.** There is a rule in the lighting pass that says a
+surface only gets rays spent on it if somebody is looking at it — that rule is what made the lights
+2.1x faster while flying, and it is a good rule. But it asks the wrong question for these records.
+Nobody is *looking* at them, by definition. Something is *reading* them: the light rays that asked for
+them in the first place. So the game claimed them, refused to light them, and then read the emptiness
+back out. **One light ray in eight was collecting light from a surface it had itself asked for and
+which had never been lit.**
+
+**What I was about to build instead.** My own notes said the next job was to widen the net slightly —
+to start keeping surfaces just off the edge of the screen, so that turning around finds them already
+lit. That would have added *more* of exactly these empty records and changed nothing you could see. I
+found this out by reading one line of the game's own log before starting, which took about five
+minutes and saved a session.
+
+**The fix** is that a surface now counts as worth lighting if a light ray is reading it, not only if
+your eye is. It gets its own separate ration of rays, so it can never slow down the surfaces you are
+actually looking at — that mistake has now been made three times in this project and the ration is
+what stops it happening a fourth.
+
+**What it looks like.** Stand in the domed room and look around:
+
+- the room is **127.5 → 150.2 of 255 brighter** — and that is the honest kind of brighter: it is
+  light bouncing off surfaces that were being counted as pure black;
+- the speckle goes **16.1 → 12.8** and the stray bright dots go from 9 to **none**;
+- outside the building, nothing changes at all (161.75 against 161.83), which is exactly right —
+  outdoors most light rays reach the sky and there was never anything missing;
+- standing at the steps is in between: 139.8 → 143.1, with the stray dots 108 → 27.
+
+**The more enclosed you are, the more it matters**, which is the whole point of this stage.
+
+**The safety check still passes.** The sealed pitch-black room test is still pure black in every
+pixel, with and without fog, so nothing here is inventing light — it is collecting light that was
+already measured and then thrown away.
+
+**What it costs, and this is the part you may want to overrule me on.** Standing still in the domed
+room it costs about 1.2 ms while the new surfaces fill in, and about 0.2 ms once they have settled
+(around forty seconds). **While flying it costs 1.2 ms and buys almost nothing** — one percent more
+of the light rays find something, against eleven percent when you stand still. That is because when
+you fly, most rays go to the sky anyway and no off-screen surface lives long enough to be measured
+before you have moved on.
+
+So: it is a big win where you stop to build and look, and close to a pure cost while you travel. It is
+on by default and it is one switch away if you would rather have the frames. Tell me which you prefer
+after you have played with it.
+
+**One honest loose end.** I could not explain the shape of the cost. Lighting **35** of these surfaces
+costs 0.85 ms; lighting another 2,335 on top costs only 0.94 ms more. So the price is almost all
+"doing this at all" rather than "doing a lot of it", which means turning the ration down saves very
+little and gives up most of the benefit. I tried three explanations and measured all three away. The
+one that fits the numbers is that the whole pass has to wait for its slowest piece of work, and one
+surface being lit for the first time is slow enough to set that floor on its own — but I have not
+proved it, and I have written down exactly what would.
+
+**And one thing this makes worse rather than better:** the game still has no automatic exposure. The
+brightness dial is a fixed number, and now that interiors are genuinely brighter, that fixed number is
+doing less of a good job. That is its own piece of work.

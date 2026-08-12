@@ -361,6 +361,7 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
         const u32 no_light = probe_words[5];
         const u32 coarse = probe_words[6];
         const u32 unbuilt = probe_words[7];
+        const u32 off_screen_shaded = probe_words[8];
         if ((probe_words[0] & kProbeOn) == 0) {
             // Said out loud, because nought counters and a switched-off instrument are the same
             // reading and only one of them is a result (trap 15).
@@ -384,6 +385,15 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                         (no_face + no_light) > 0
                             ? 100.0 * coarse / static_cast<f64>(no_face + no_light) : 0.0,
                         (probe_words[0] & kProbeCoarseBounce) != 0 ? "IS" : "is NOT");
+            // R9b's budget, counted where it is spent. Read it against the `off-screen stride` on
+            // the `faces:` line, which is what the host PREDICTED this would be: the two agreeing is
+            // the only thing that says the class is being budgeted rather than merely divided.
+            // Nought here with a non-nought stride is the class silently not casting -- which is the
+            // shape trap 20 takes in this pass, and the reason a convergence figure is printed beside
+            // every timing in it.
+            WS_LOG_INFO("faces",
+                        "the off-screen set cast on {} faces this frame, out of its own budget",
+                        off_screen_shaded);
             if (unbuilt > 0) {
                 std::string levels;
                 for (u32 level = 0; level < 15; ++level) {

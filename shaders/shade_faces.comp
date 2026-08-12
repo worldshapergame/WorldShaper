@@ -387,6 +387,11 @@ vec3 bounce_face_light(uint slot, NodeHit hit) {
 
 vec3 bounce_radiance(NodeHit hit) {
     const uint slot = node_face_lookup(hit.face_node, hit.face_level, hit.face_dir);
+    // This ray is INTEGRATING that face, so the face is worth measuring. R9b, and it is stamped
+    // before the readiness test rather than after it, because the case this exists for is exactly the
+    // one that fails it: a face the store holds and nothing has ever lit. That was 229,413 records
+    // and 12.4% of every gathering ray in the frame. See `node_face_gathered` in node.glsl.
+    node_face_gathered(slot);
     if (bounce_face_ready(slot)) {
         probe_add(3u);
         return bounce_face_light(slot, hit);
@@ -421,6 +426,14 @@ vec3 bounce_radiance(NodeHit hit) {
     for (int step = 1; step <= kFaceAncestorStep; ++step) {
         const uint at_level = hit.face_level + uint(step);
         const uint anc = node_face_lookup(hit.face_node >> step, at_level, hit.face_dir);
+        // The stand-in is being read too, and by the same rule it is worth its own rays. R9f keeps
+        // these records alive past their cold window and says in as many words that a coarse face
+        // "measures itself with its own rays at its own scale" -- and until now none of them ever
+        // did: `the coarse pyramid on the card` reported 21,790 stand-ins with nought of them read by
+        // a pixel and nought with a finished ambient term. They are the records everything else is
+        // rebuilt from when a camera comes back to a room, so they are the last ones that should be
+        // empty.
+        node_face_gathered(anc);
         if (!bounce_face_ready(anc)) continue;
         probe_add(missing);
         probe_add(6u);
@@ -934,6 +947,18 @@ void main() {
     // Anything else that can invalidate a face reaches it through one of those two, so there is no
     // third case to miss and no need for a "has it just come back" test on the way in.
     if (!may_cast && !edit_reset && node_push.light_reset == 0u) return;
+
+    // How many faces the OFF-SCREEN class actually shaded this frame. R9b's budget, counted rather
+    // than predicted.
+    //
+    // The host divides a population by a budget and hands down a stride; that arithmetic is a
+    // PREDICTION, and trap 15's whole lesson is that a prediction and a measurement look identical
+    // in a log. This is the measurement, and it is here because the cost of this class turned out not
+    // to respond to its own budget: eight times fewer faces shaded moved the faces pass 3.48 ms to
+    // 3.06, where it should have moved it most of the way back to the control's 1.76. Three
+    // explanations were tried and priced and none of them fits (see the decision log), so the next
+    // person gets the count instead of the fourth guess.
+    if (work.off_screen) probe_add(8u);
 
     const uint samples = work.samples;
     // Whether the SUN is due a ray this frame. The ambient term used to be gated by this same test
