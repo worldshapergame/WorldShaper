@@ -330,6 +330,63 @@ const uint kLobeWays = 8u;   // how many blocks of the pool one face may try
 const uint kLobeBlockWords = kLobeBins * 2u;
 const uint kNoLobe = 0xFFFFFFFFu;
 
+// ---- R4b: a second size, for the faces whose material is sharper than thirty-six bins ----------
+//
+// **D186 says the bin count comes from roughness AND from how many pixels the face covered, and
+// building it turned up that those two do not do what the plan expects of them here.** The
+// distinction is worth writing down, because it is a fact about a VOXEL renderer that a triangle
+// renderer would not meet:
+//
+// - **roughness decides how sharp the answer needs to be, and it is the whole of that.** A bin is a
+//   cone; a reflection cannot be sharper than the cone it is averaged over, whatever else is true.
+//   Gilt is a 3.6 degree lobe and thirty-six bins are 13.5, so gilt is drawn four times blurrier
+//   than it is and reads as a wash. That is the reported *"way too subtle"*, and it is arithmetic;
+// - **coverage decides nothing about sharpness at all**, which is the surprise. A face here is one
+//   voxel. Standing two metres from the bronze door a face covers about eleven pixels and those
+//   eleven pixels look at it over **0.86 degrees** — far inside one bin however many bins there
+//   are. Neighbouring faces do not help either: they are 3 cm apart and see the same room 0.86
+//   degrees apart. The reflected image is blurred to the BIN, and the number of faces or pixels
+//   looking at it does not enter.
+//
+// So coverage is not the demand, it is the AFFORDABILITY: it says which faces are worth spending
+// the expensive class on when there is not room for every face that wants one. That is the same job
+// `kLobeWorthFloor` already does one level up, and it is why this is a priority and not a rule.
+//
+// A big block is **four consecutive small ones**, taken from the same set. Twelve by twelve is 144
+// bins, 6.8 degrees, and 288 words — exactly four blocks of 72 — so it needs no second pool, no
+// second buffer and no host change. The bins and the weights each become one run of 144 rather than
+// two runs of 36, which is why the accessors below take the count.
+const uint kLobeBigSide = 12u;
+const uint kLobeBigBins = kLobeBigSide * kLobeBigSide;
+const uint kLobeBigWays = 4u;   // how many consecutive blocks one big block is
+
+// **How many pixels a face covers is NOT what decides the class, and this is where D186's second
+// half was measured and not carried.**
+//
+// It was built: a face is `size` voxels across at `distance` from the eye and a pixel subtends
+// `pixel_angle`, so the exact coverage is three lines of arithmetic and needs no counter at all.
+// Gating the expensive class on it at sixteen pixels **speckled the great bronze door**. Coverage
+// varies smoothly across one flat surface, so the class flipped face to face along the middle of it
+// -- and a lobe cut into 144 directions and one cut into 36 share no bin for the cross-face blend
+// to pair, so exactly the faces at the boundary got no blending and stood out as noise. D387's
+// standing measurement is that **a hard per-face decision is a new discontinuity per face**, and
+// this is that arriving in a size class.
+//
+// The deeper reason it buys nothing is in the note above `kLobeBigSide`: coverage does not drive
+// SHARPNESS in a voxel renderer, because a face is one voxel and the pixels looking at it span less
+// than a degree. It could only ever have been an affordability lever, and the pool is not short --
+// 5,324 faces of 19,026 held the sharp class at the door with room to spare.
+//
+// So the class follows ROUGHNESS, which is a material property and therefore agrees between
+// neighbours by construction. If the pool does run short the decline path already handles it, and
+// the audit line already says so.
+
+// And how many samples a bin of a big block asks for. FEWER than a small one's, and deliberately:
+// the total rays a face spends over its life is then 144 x 8 against 36 x 24 — **the same 1,152**,
+// so the expensive class costs the ray budget nothing at all and buys its sharpness out of the
+// cross-face blend instead. R5 blends nine faces, which is what carries a bin at eight samples.
+const uint kLobeBigSamples = 24u;
+
 // How cold a block's holder has to be before another face may take it. The same six hundred frames
 // the face store gives up a slot at, and for the same reason: a face the camera comes back to
 // should find its own answer where it left it. A face on screen stamps its block every time the
@@ -398,6 +455,11 @@ uint face_lobe_count_at(uint block) { return block * kLobeHeaderWords + 2u; }
 // filter that reads the array it writes may run once and must not run twice.
 uint face_lobe_state_at(uint block) { return block * kLobeHeaderWords + 3u; }
 const uint kLobeFiltered = 1u;
+// ...and which SIZE this block is. `kLobeBig` marks the head of a run of four; `kLobeFollower`
+// marks the other three, so a reader that lands on one of them knows to step back to the head
+// rather than reading three quarters of a lobe as a whole one.
+const uint kLobeBig = 2u;
+const uint kLobeFollower = 4u;
 uint face_lobe_holder(uint slot, float worth) {
     return ((slot + 1u) & kLobeSlotMask) |
            (uint(clamp(worth, 0.0, 1.0) * 255.0 + 0.5) << kLobeSlotBits);
@@ -410,11 +472,42 @@ float face_lobe_holder_worth(uint held) {
 
 // ...and the bins are behind every header, kLobeBlockWords a block: the packed means as one run,
 // then the weight sums behind them, so four bilinear taps are four words inside 64 bytes.
+// The bins, and the count is passed because a big block's are one run of 144 where a small block's
+// are one run of 36. A block whose bins were indexed with the wrong count reads its own weights as
+// colours, which is the shape of fault kFaceLightWords is declared in this file to prevent.
 uint face_lobe_bin_at(uint block, uint bin) {
     return kLobeBlocks * kLobeHeaderWords + block * kLobeBlockWords + bin;
 }
-uint face_lobe_weight_at(uint block, uint bin) {
-    return kLobeBlocks * kLobeHeaderWords + block * kLobeBlockWords + kLobeBins + bin;
+uint face_lobe_weight_at(uint block, uint bin, uint bins) {
+    return kLobeBlocks * kLobeHeaderWords + block * kLobeBlockWords + bins + bin;
+}
+
+// How many bins a block holds and how wide across it is, from the class recorded in its head.
+uint face_lobe_bins_of(uint state) {
+    return (state & kLobeBig) != 0u ? kLobeBigBins : kLobeBins;
+}
+uint face_lobe_side_of(uint state) {
+    return (state & kLobeBig) != 0u ? kLobeBigSide : kLobeSide;
+}
+
+// Where the centre of bin `index` points, on the square, at a given grid width.
+vec2 face_lobe_centre_of(uint index, uint side) {
+    return (vec2(float(index % side), float(index / side)) + 0.5) * (1.0 / float(side));
+}
+
+// The width the bins themselves impose at a given grid, as a GGX alpha. See face_lobe_bin_alpha.
+float face_lobe_alpha_of(uint bins) {
+    return acos(clamp(1.0 - 1.0 / float(bins), -1.0, 1.0));
+}
+
+// How many bins this material would actually use, from its roughness alone.
+//
+// A GGX lobe of width alpha covers about pi*alpha^2 steradians of the 2*pi a hemisphere has, so it
+// takes about 2/alpha^2 bins to hold it without blurring it. Gilt at 0.063 wants five hundred and
+// gets what the pool can give; limestone at 0.646 wants five and is nowhere near the floor to ask.
+float face_lobe_bins_wanted(uint rough_byte) {
+    const float alpha = face_alpha_of(rough_byte);
+    return 2.0 / max(alpha * alpha, 1e-6);
 }
 
 // ---- R4b: a ray aimed into the cone one bin gathers from ---------------------------------------

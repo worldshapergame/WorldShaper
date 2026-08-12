@@ -527,17 +527,21 @@ layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
 //        the ambient term's, so neither rate has to be inferred from the other.
 //   [28] ...and how many faces were still bursting for their lobe, which is the convergence figure
 //        that has to be printed beside any timing of this pass (trap 20).
-//   [29] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
-//   [30] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
+//   [29] R4b: how many of the faces holding a block are holding the EXPENSIVE class, which is four
+//        blocks and a hundred and forty-four bins. Read against [24] -- what it says is how much of
+//        the pool the sharp surfaces are taking.
+//   [30] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
+//   [31] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
 //        arm -- the dispatch is then exactly the screen and this stage does not exist.
-//   [31] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
-const uint kLightProbeWords = 32u;
+//   [32] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
+const uint kLightProbeWords = 33u;
 const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 const uint kProbeLobeHeld = 24u;
 const uint kProbeLobeDeclined = 25u;
 const uint kProbeLobeTaken = 26u;
 const uint kProbeLobeRays = 27u;
 const uint kProbeLobeBursting = 28u;
+const uint kProbeLobeBig = 29u;
 
 // The dials, in word 0. A bit each, because the push block is exactly full (128 bytes, and the
 // static_assert on NodePush says so) and a lever that cannot fit in it must live somewhere -- and
@@ -573,6 +577,10 @@ const uint kProbeLobe = 1u << 5;
 // found could not carry a reflection. It is the control arm for the RAY on its own: the bins, the
 // pool and the energy split are all identical in both arms, so what an A/B prices is the march.
 const uint kProbeLobeRay = 1u << 6;
+// R4b's coverage rule. Off, every lobe is the cheap thirty-six-bin class however polished the
+// surface and however much of the screen it fills -- which is what R4b landed with, and is the arm
+// that prices the expensive class on its own.
+const uint kProbeLobeCoverage = 1u << 7;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -589,7 +597,7 @@ const uint kProbeLobeRay = 1u << 6;
 // ordering between them, so a host word inside the zeroed span would be a race whose loser is
 // whichever the driver ran second -- and a stride that reads nought half the time is a class that
 // silently stops casting.
-const uint kProbeSecondaryStride = 29u;
+const uint kProbeSecondaryStride = 30u;
 
 // ---- R9c, the halo: how far past the screen the primary pass claims ---------------------------
 //
@@ -613,8 +621,8 @@ const uint kProbeSecondaryStride = 29u;
 // rays, it moves them EARLIER -- so over a pan the total is unchanged and what changes is how many
 // faces are mid-burst at any instant. The honest risk is therefore the peak rather than the total,
 // and the honest measurement is the faces pass while panning, beside the convergence gate.
-const uint kProbeHaloMargin = 30u;
-const uint kProbeHaloStride = 31u;
+const uint kProbeHaloMargin = 31u;
+const uint kProbeHaloStride = 32u;
 
 uint probe_halo_margin() { return light_probe.words[kProbeHaloMargin]; }
 uint probe_halo_stride() { return max(light_probe.words[kProbeHaloStride], 1u); }
@@ -629,6 +637,7 @@ bool probe_material() { return (light_probe.words[0] & kProbeMaterial) != 0u; }
 bool probe_fold() { return (light_probe.words[0] & kProbeFold) != 0u; }
 bool probe_lobe() { return (light_probe.words[0] & kProbeLobe) != 0u; }
 bool probe_lobe_ray() { return (light_probe.words[0] & kProbeLobeRay) != 0u; }
+bool probe_lobe_big() { return (light_probe.words[0] & kProbeLobeCoverage) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
@@ -1882,15 +1891,87 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
     const uint base = face_lobe_set(slot);
     const uint mine = face_lobe_holder(slot, worth);
 
-    // Already holding one, which is what nearly every visit after the first is.
+    // R4b: whether this face earns the expensive class. Its material has to be sharper than
+    // thirty-six bins can hold AND it has to be filling enough of the screen to be worth four
+    // blocks -- see kLobeBigPixels, and the note above it about why coverage is the affordability
+    // rather than the demand.
+    // **The gate is the MATERIAL and not the coverage, and that is a reversal of D186 with a
+    // measurement behind it.** Gating on how many pixels the face covers was built first and it
+    // speckled the great door: coverage varies smoothly across one surface, so the class flipped
+    // face to face along the middle of it, and a lobe cut into 144 directions and one cut into 36
+    // share no bin for the cross-face blend to pair. **A hard per-face decision is a new
+    // discontinuity per face** -- D387's standing measurement, arriving in a size class.
+    //
+    // Roughness is a material property, so neighbouring faces of one material agree by
+    // construction and the blend has like to pair with like. See kLobeBigSide for what coverage
+    // was supposed to buy and why it does not.
+    const bool wants_big = probe_lobe_big() &&
+                           face_lobe_bins_wanted(face_material_rough(material)) > float(kLobeBins);
+
+    // Already holding one, which is what nearly every visit after the first is. A follower way
+    // steps back to the head of its run, because that is the block the whole lobe is addressed
+    // from.
     for (uint way = 0u; way < kLobeWays; ++way) {
         const uint header = face_lobe_header(base + way);
         if (header + 1u >= face_lobe.words.length()) return kNoLobe;
         const uint held = face_lobe.words[header];
         if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) {
-            face_lobe.words[header + 1u] = frame;
+            const uint state = face_lobe.words[face_lobe_state_at(base + way)];
+            const uint head = ((state & (kLobeBig | kLobeFollower)) != 0u)
+                                  ? base + (way & ~(kLobeBigWays - 1u))
+                                  : base + way;
+            face_lobe.words[face_lobe_header(head) + 1u] = frame;
             probe_add(kProbeLobeHeld);
-            return base + way;
+            if ((face_lobe.words[face_lobe_state_at(head)] & kLobeBig) != 0u) {
+                probe_add(kProbeLobeBig);
+            }
+            return head;
+        }
+    }
+
+    // ---- the expensive class, which is four consecutive blocks of one set --------------------
+    //
+    // Tried first and given up on quietly: a face that cannot get four falls through to asking for
+    // one, which is a coarser lobe rather than none. A decline here must never become a decline
+    // altogether, or the sharpest surfaces in the building would be the only ones with no
+    // reflection at all -- trap 7, arriving in a size class.
+    if (wants_big) {
+        for (uint run = 0u; run + kLobeBigWays <= kLobeWays; run += kLobeBigWays) {
+            bool free_run = true;
+            for (uint way = run; way < run + kLobeBigWays; ++way) {
+                const uint header = face_lobe_header(base + way);
+                const uint held = face_lobe.words[header];
+                if (!face_lobe_is_held(held)) continue;
+                const uint since = frame - face_lobe.words[header + 1u];
+                // A run is taken whole, so every block in it has to be free or cold. Worth is not
+                // enough here: taking four warm blocks off four faces to serve one is a trade this
+                // has no way to price, and the cheap class is what most of the picture is.
+                if (since <= kLobeCold) { free_run = false; break; }
+            }
+            if (!free_run) continue;
+
+            const uint head = base + run;
+            const uint header = face_lobe_header(head);
+            const uint was = face_lobe.words[header];
+            if (atomicCompSwap(face_lobe.words[header], was, mine) != was) continue;
+            for (uint way = 1u; way < kLobeBigWays; ++way) {
+                face_lobe.words[face_lobe_header(head + way)] = mine;
+                face_lobe.words[face_lobe_header(head + way) + 1u] = frame;
+                face_lobe.words[face_lobe_state_at(head + way)] = kLobeFollower;
+            }
+            face_lobe.words[header + 1u] = frame;
+            face_lobe.words[face_lobe_state_at(head)] = kLobeBig;
+            face_lobe.words[face_lobe_count_at(head)] = 0u;
+            for (uint bin = 0u; bin < kLobeBigBins; ++bin) {
+                const uint at = face_lobe_bin_at(head, bin);
+                if (at >= face_lobe.words.length()) return kNoLobe;
+                face_lobe.words[at] = 0u;
+                face_lobe.words[face_lobe_weight_at(head, bin, kLobeBigBins)] = 0u;
+            }
+            if (face_lobe_is_held(was)) probe_add(kProbeLobeTaken);
+            probe_add(kProbeLobeBig);
+            probe_add(kProbeLobeHeld);
+            return head;
         }
     }
 
@@ -1946,6 +2027,10 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
     // Zeroing it is what makes a taken-over block a new lobe rather than a converged one holding
     // somebody else's answer.
     face_lobe.words[face_lobe_count_at(block)] = 0u;
+    // ...and the class, because this block may have been the head of a big run a moment ago. A
+    // stale kLobeBig here would have the next reader index thirty-six bins as a hundred and
+    // forty-four and walk into three blocks it does not hold.
+    face_lobe.words[face_lobe_state_at(block)] = 0u;
     // Whatever the last holder measured is about a different surface pointing a different way, and
     // it must not be averaged into this one. Zeroed rather than seeded: there is no ancestor to
     // inherit a lobe from -- a coarse face has no material and so never holds a block -- and a
@@ -1954,7 +2039,7 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
         const uint at = face_lobe_bin_at(block, bin);
         if (at >= face_lobe.words.length()) return kNoLobe;
         face_lobe.words[at] = 0u;
-        face_lobe.words[face_lobe_weight_at(block, bin)] = 0u;
+        face_lobe.words[face_lobe_weight_at(block, bin, kLobeBins)] = 0u;
     }
     // Counted only where it was somebody ELSE's. A first claim on an empty pool is not churn, and
     // counting the two together would make an empty pool and a thrashing one read the same -- which
@@ -1981,7 +2066,12 @@ uint node_face_lobe_find(uint slot) {
         const uint header = face_lobe_header(base + way);
         if (header + 1u >= face_lobe.words.length()) return kNoLobe;
         const uint held = face_lobe.words[header];
-        if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) return base + way;
+        if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) {
+            const uint state = face_lobe.words[face_lobe_state_at(base + way)];
+            return ((state & (kLobeBig | kLobeFollower)) != 0u)
+                       ? base + (way & ~(kLobeBigWays - 1u))
+                       : base + way;
+        }
     }
     return kNoLobe;
 }
@@ -1994,8 +2084,11 @@ void node_face_lobe_forget(uint slot) {
         if (header + 1u >= face_lobe.words.length()) return;
         const uint held = face_lobe.words[header];
         if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) {
+            // Every block of the run, not just the one that was found: three quarters of a released
+            // big block still marked as held is three blocks nobody can ever take again.
             face_lobe.words[header] = 0u;
-            return;
+            face_lobe.words[face_lobe_state_at(base + way)] = 0u;
+            continue;
         }
     }
 }

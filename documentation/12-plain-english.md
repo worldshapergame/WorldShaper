@@ -2140,3 +2140,44 @@ camera keeps finishing new faces. 527 tests pass.
 **What's left**, and it's the same one as last time: a mirror filling your screen gets the same
 thirty-six directions as one across the room. It should get hundreds. That's the "directions from
 how much of the screen it covers" piece, and it's the biggest remaining part of this stage.
+
+## Directions from screen coverage: built, measured, and switched off
+
+You said continue, so I built the piece I'd been calling "directions from how much of the screen it
+covers" — the one that was supposed to make polished gold actually polished. It does not work, and I
+want to be straight about that rather than ship it quietly turned down.
+
+**What the plan said.** A surface that fills your screen should store hundreds of directions; one
+across the room should store a dozen. I wrote that rule into the plan myself, two years of decisions
+ago.
+
+**Why it does not apply here, and this is the interesting bit.** A face in this game is one voxel —
+about three centimetres. Stand two metres from the bronze door and one face covers about eleven
+pixels, and those eleven pixels are looking at it from within **less than one degree** of each
+other. Neighbouring faces are three centimetres apart, so they see the room from within a degree of
+each other too. **How blurry a reflection looks is decided by how wide each stored direction is, and
+nothing else** — not by how many pixels are looking, not by how many faces there are. The rule was
+written for a renderer whose surfaces are big flat things; here the surface *is* the pixel, which is
+the whole point of the rewrite, and the rule does not survive that change.
+
+**And using it made things worse.** Coverage changes smoothly across a flat door, so the "gets more
+directions" decision flipped from face to face along the middle of it — and two faces cut into
+different numbers of directions cannot compare notes, so exactly the faces on that boundary got no
+smoothing and stood out as speckle. That is a mistake I have made in this renderer before, in three
+other places: **a hard yes/no decision taken per face, on something that varies smoothly, puts a new
+edge on every face.**
+
+**So I drove it off the material instead, and then it hit the real wall.** Storing four times as many
+directions needs four times as many rays to fill them to the same quality. I measured it twice: at
+the cheap ray rate the door speckles outright, and at four times the rays it **still** speckles,
+because two dozen samples of a reflection is what it is however finely you slice the directions.
+This is the third time this session that the same wall has come up: **finer directions cost rays,
+one for one.**
+
+**What I did with it.** Built, priced, and off by default — `--lobe-coverage` turns it on. The
+machinery, the sizes, the counter and the debug colour are all there for whoever comes back with a
+budget that can pay it. The default picture is unchanged: 4.342 ms against 4.369, 527 tests pass.
+
+**What it would actually take** is not a constant I can tune: it is a way to spend roughly ten times
+more rays on a few thousand surfaces. That is its own piece of work, and I would want you to decide
+it is worth a session before I start it.

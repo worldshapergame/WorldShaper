@@ -431,9 +431,9 @@ uint lobe_block_of(uint slot) {
 // picture cannot tell a term that is wrong from a term that is absent.
 vec3 g_lobe_specular = vec3(0.0);
 
-bool lobe_radiance(uint block, vec2 at, out vec3 radiance) {
+bool lobe_radiance(uint block, uint bins, uint side, vec2 at, out vec3 radiance) {
     radiance = vec3(0.0);
-    const vec2 f = at * float(kLobeSide) - 0.5;
+    const vec2 f = at * float(side) - 0.5;
     const vec2 frac = fract(f);
     const ivec2 low = ivec2(floor(f));
     float total = 0.0;
@@ -446,9 +446,10 @@ bool lobe_radiance(uint block, vec2 at, out vec3 radiance) {
         // grazing ring, and a tap that walked round would fetch the direction on the far side of
         // the face -- geometrically correct on the sphere and wrong here, because the two are not
         // the same surface's hemisphere.
-        const ivec2 taken = clamp(corner, ivec2(0), ivec2(int(kLobeSide) - 1));
-        const uint bin = uint(taken.y) * kLobeSide + uint(taken.x);
-        const float measured = uintBitsToFloat(face_lobe.words[face_lobe_weight_at(block, bin)]);
+        const ivec2 taken = clamp(corner, ivec2(0), ivec2(int(side) - 1));
+        const uint bin = uint(taken.y) * side + uint(taken.x);
+        const float measured =
+            uintBitsToFloat(face_lobe.words[face_lobe_weight_at(block, bin, bins)]);
         if (!(measured > 0.0)) continue;
         const float w = share * min(measured, 1.0);
         total += w;
@@ -910,7 +911,9 @@ void main() {
                     // the controlled test could tell the two apart — `face_lobe_frame`'s comment
                     // says a fault of this shape "looks very nearly right", and it looked BETTER
                     // than right, which is worse. D598.
-                    if (lobe_radiance(block, face_lobe_at(view, normal, side, other), found)) {
+                    const uint state = face_lobe.words[face_lobe_state_at(block)];
+                    if (lobe_radiance(block, face_lobe_bins_of(state), face_lobe_side_of(state),
+                                      face_lobe_at(view, normal, side, other), found)) {
                         reflected = found;
                     }
                 }
@@ -1228,9 +1231,18 @@ void main() {
                         face_lobe_frame(face_normal, side, other);
                         // The direction the eye is in, exactly as the shaded path reads it -- see
                         // the note there and D598 for the test that settled which of the two.
-                        const bool measured = lobe_radiance(
-                            block, face_lobe_at(-dir, face_normal, side, other), found);
-                        colour = measured ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.9, 0.0);
+                        const uint state = face_lobe.words[face_lobe_state_at(block)];
+                        const bool measured =
+                            lobe_radiance(block, face_lobe_bins_of(state),
+                                          face_lobe_side_of(state),
+                                          face_lobe_at(-dir, face_normal, side, other), found);
+                        // CYAN-GREEN for a face holding the expensive four-block class, so the two
+                        // sizes can be told apart in the one view that says who holds what. A green
+                        // screen with no blue in it anywhere is R4b's coverage rule reaching nobody,
+                        // which is a different fault from the pool being full.
+                        const bool big = (state & kLobeBig) != 0u;
+                        colour = measured ? (big ? vec3(0.0, 1.0, 0.6) : vec3(0.0, 1.0, 0.0))
+                                          : vec3(1.0, 0.9, 0.0);
                     }
                 }
             }

@@ -351,6 +351,17 @@ struct Options {
     // from. `--no-lobe-ray` is its control arm and leaves the bins to be filled by the far ray
     // alone, which is what R4c landed with and what D592 measured as unable to carry a reflection.
     bool lobe_ray = true;
+    // R4b's second size class: a face whose material is sharper than thirty-six bins can hold gets
+    // four blocks and a hundred and forty-four.
+    //
+    // **OFF by default, and that is a measurement rather than caution** (D599). Four times the bins
+    // is four times the rays for the same noise, and the ray budget will not pay it: at eight
+    // samples a bin the great door speckles outright, and at twenty-four -- the same rate the cheap
+    // class uses, so four times the rays -- it still speckles, because twenty-four samples of a
+    // RADIANCE is what it is however many bins there are. `--lobe-coverage` turns it on for
+    // whoever comes back to it with a bigger budget; the machinery, the sizes and the audit line
+    // are all built and priced.
+    bool lobe_coverage = false;
     // R9f's fold: a coarse face's sky and bounce are the average of the four faces under it rather
     // than its own rays at its own scale.
     //
@@ -784,6 +795,11 @@ Options parse_options(int argc, char** argv) {
             // R4a's control arm: no face asks what it is made of, so the descent, the two table
             // reads and the load that finds out all go. The picture is the same in both arms.
             options.face_materials = false;
+        } else if (arg == "--lobe-coverage") {
+            // R4b's second size class on. Off by default -- see the option for the measurement.
+            options.lobe_coverage = true;
+        } else if (arg == "--no-lobe-coverage") {
+            options.lobe_coverage = false;   // the default, and every lobe is the cheap class
         } else if (arg == "--no-lobe-ray") {
             // R4b's control arm: the pool, the bins and the energy split all stay, and only the
             // march goes -- so an A/B prices the ray and nothing else.
@@ -5322,7 +5338,8 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.face_materials ? kProbeMaterial : 0u) |
                               (options_.face_fold ? kProbeFold : 0u) |
                               (options_.face_lobe ? kProbeLobe : 0u) |
-                              (options_.lobe_ray ? kProbeLobeRay : 0u);
+                              (options_.lobe_ray ? kProbeLobeRay : 0u) |
+                              (options_.lobe_coverage ? kProbeLobeCoverage : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),

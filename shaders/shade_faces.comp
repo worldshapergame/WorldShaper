@@ -1057,10 +1057,10 @@ void sky_accumulate(SkySample s, inout uint near_n, inout uint near_sum, inout i
 // partly a measurement of a darker room. It also keeps the step above what an rgb9e5 mantissa can
 // represent -- an update smaller than a five-hundredth of the value rounds back to where it was,
 // which is D293's fault arriving in a different format.
-void face_lobe_add(uint block, uint bin, float w, vec3 radiance) {
+void face_lobe_add(uint block, uint bin, uint bins, float w, vec3 radiance) {
     if (!(w > 0.0)) return;
     const uint at = face_lobe_bin_at(block, bin);
-    const uint weight_at = face_lobe_weight_at(block, bin);
+    const uint weight_at = face_lobe_weight_at(block, bin, bins);
     if (weight_at >= face_lobe.words.length()) return;
     const float had = min(uintBitsToFloat(face_lobe.words[weight_at]), float(kBounceMemory));
     const vec3 was = face_unpack_rgb9e5(face_lobe.words[at]);
@@ -1069,10 +1069,10 @@ void face_lobe_add(uint block, uint bin, float w, vec3 radiance) {
     face_lobe.words[weight_at] = floatBitsToUint(now);
 }
 
-void face_lobe_accumulate(uint block, vec3 dir, vec3 radiance) {
+void face_lobe_accumulate(uint block, uint bins, uint side, vec3 dir, vec3 radiance) {
     // The face's own frame, which is the one `face_lobe_at` and the composite both work in.
     const vec3 normal = vec3(g_sky_normal);
-    const float alpha = max(face_lobe_bin_alpha(), kFaceAlphaMin);
+    const float alpha = max(face_lobe_alpha_of(bins), kFaceAlphaMin);
 
     // **Normalised across the bins, so one sample is worth one sample.**
     //
@@ -1088,17 +1088,17 @@ void face_lobe_accumulate(uint block, vec3 dir, vec3 radiance) {
     // it is short of, and the arithmetic is a dot product and a divide -- see the note above
     // `g_sky_corner`, which is this trade measured from the other side.
     float total = 0.0;
-    for (uint bin = 0u; bin < kLobeBins; ++bin) {
-        const vec3 towards = face_lobe_direction(face_lobe_centre(bin), normal, g_sky_side,
+    for (uint bin = 0u; bin < bins; ++bin) {
+        const vec3 towards = face_lobe_direction(face_lobe_centre_of(bin, side), normal, g_sky_side,
                                                  g_sky_other);
         total += face_ggx_d(max(dot(normal, normalize(towards + dir)), 0.0), alpha);
     }
     if (!(total > 0.0)) return;
     const float inv = 1.0 / total;
-    for (uint bin = 0u; bin < kLobeBins; ++bin) {
-        const vec3 towards = face_lobe_direction(face_lobe_centre(bin), normal, g_sky_side,
+    for (uint bin = 0u; bin < bins; ++bin) {
+        const vec3 towards = face_lobe_direction(face_lobe_centre_of(bin, side), normal, g_sky_side,
                                                  g_sky_other);
-        face_lobe_add(block, bin,
+        face_lobe_add(block, bin, bins,
                       face_ggx_d(max(dot(normal, normalize(towards + dir)), 0.0), alpha) * inv,
                       radiance);
     }
@@ -1134,17 +1134,17 @@ void face_lobe_accumulate(uint block, vec3 dir, vec3 radiance) {
 // surface. That is Karis's split-sum prefilter with the view direction taken as the BIN rather than
 // as the normal -- and taking it as the bin instead of as the normal is the whole of what puts
 // samples in the grazing bins.
-void lobe_cast(uint block, uint bin, uint index, float pixel_angle, vec3 corner, vec3 across,
-               vec3 down, float size, vec3 chunk_origin) {
+void lobe_cast(uint block, uint bin, uint bins, uint side, uint index, float pixel_angle,
+               vec3 corner, vec3 across, vec3 down, float size, vec3 chunk_origin) {
     const vec3 normal = vec3(g_sky_normal);
-    const vec3 towards = face_lobe_direction(face_lobe_centre(bin), normal, g_sky_side,
+    const vec3 towards = face_lobe_direction(face_lobe_centre_of(bin, side), normal, g_sky_side,
                                              g_sky_other);
     const vec4 r = node_r4(index, g_sky_rotation);
     // In the face's own frame, because the visible-normal sample is defined there.
     const vec3 local = vec3(dot(towards, g_sky_side), dot(towards, g_sky_other),
                             max(dot(towards, normal), 1e-4));
     const vec3 half_local =
-        face_lobe_visible_normal(local, max(face_lobe_bin_alpha(), kFaceAlphaMin), r.zw);
+        face_lobe_visible_normal(local, max(face_lobe_alpha_of(bins), kFaceAlphaMin), r.zw);
     const vec3 half_vector =
         g_sky_side * half_local.x + g_sky_other * half_local.y + normal * half_local.z;
     const vec3 dir = normalize(2.0 * dot(towards, half_vector) * half_vector - towards);
@@ -1177,7 +1177,7 @@ void lobe_cast(uint block, uint bin, uint index, float pixel_angle, vec3 corner,
     } else {
         radiance = bounce_radiance(hit);
     }
-    face_lobe_add(block, bin, cosine, radiance);
+    face_lobe_add(block, bin, bins, cosine, radiance);
 }
 
 // ---- R5: a lobe blended with the lobes of the faces around it ----------------------------------
@@ -1213,7 +1213,7 @@ void lobe_cast(uint block, uint bin, uint index, float pixel_angle, vec3 corner,
 // and a half applications over a patch rather than an unbounded number, and it stops there because
 // nothing runs it again. An edit forgets the block, so the whole thing is measured and blended
 // again from nothing, which is the same discipline the rest of the record follows.
-void face_lobe_denoise(uint block, ivec3 node, uint level, uint dir) {
+void face_lobe_denoise(uint block, uint bins, ivec3 node, uint level, uint dir) {
     const ivec2 axes = face_axes(dir);
     ivec3 du = ivec3(0);
     ivec3 dv = ivec3(0);
@@ -1238,18 +1238,23 @@ void face_lobe_denoise(uint block, ivec3 node, uint level, uint dir) {
         if (found == kNoFace || found == kFaceTombstone || found >= faces.items.length()) continue;
         const uint block_at = node_face_lobe_find(found);
         if (block_at == kNoLobe) continue;
+        // ...and only a neighbour of the SAME size. Two lobes cut into different numbers of
+        // directions do not have a bin j in common, and blending them would be reading one
+        // surface's answer for a cone the other never measured. A polished face beside a rough one
+        // simply keeps its own, which is the honest thing and is rare -- a size class follows the
+        // material, and neighbouring faces are nearly always the same material.
+        if (face_lobe_bins_of(face_lobe.words[face_lobe_state_at(block_at)]) != bins) continue;
         // Weighted by how far along the neighbour's own burst is, capped at converged. A face two
         // visits into its measurement is noise, and noise averaged nine ways is noise one scale
         // coarser -- which is D387's measurement and the same reason `face_light_seed` refuses a
         // thin ancestor.
-        const float count = float(min(face_lobe.words[face_lobe_count_at(block_at)],
-                                      kLobeConverged));
+        const float count = float(face_lobe.words[face_lobe_count_at(block_at)]);
         if (count <= 0.0) continue;
         at[i] = block_at;
-        trust[i] = spatial[i] * (count / float(kLobeConverged));
+        trust[i] = spatial[i] * min(count / float(bins * kLobeSamples), 1.0);
     }
 
-    for (uint bin = 0u; bin < kLobeBins; ++bin) {
+    for (uint bin = 0u; bin < bins; ++bin) {
         const uint mine = face_lobe_bin_at(block, bin);
         float weight = kDenoiseCentre;
         vec3 blended = face_unpack_rgb9e5(face_lobe.words[mine]) * kDenoiseCentre;
@@ -1258,7 +1263,7 @@ void face_lobe_denoise(uint block, ivec3 node, uint level, uint dir) {
             // A bin the neighbour has not reached yet adds nothing at all, which is what makes the
             // kernel shrink gracefully instead of pulling the answer towards nought. Its weight is
             // stored beside it and is nought exactly when no ray has landed in it.
-            const uint neighbour = face_lobe_weight_at(at[i], bin);
+            const uint neighbour = face_lobe_weight_at(at[i], bin, bins);
             if (!(uintBitsToFloat(face_lobe.words[neighbour]) > 0.0)) continue;
             weight += trust[i];
             blended += trust[i] * face_unpack_rgb9e5(face_lobe.words[face_lobe_bin_at(at[i], bin)]);
@@ -2040,6 +2045,14 @@ void main() {
     // it is needed, so it cannot accumulate anything -- which is the same sentence the lamp burst
     // and the ambient burst above both carry, and a lobe is the slowest accumulator here.
     const uint lobe = provisional_face ? kNoLobe : node_face_lobe(slot, material, node_push.frame);
+    // The size this block was given, which decides every index into it from here down.
+    const uint lobe_state = lobe == kNoLobe ? 0u : face_lobe.words[face_lobe_state_at(lobe)];
+    const uint lobe_bins = face_lobe_bins_of(lobe_state);
+    const uint lobe_side = face_lobe_side_of(lobe_state);
+    // A big block asks fewer samples of each of its bins, so a face's whole life costs the same
+    // 1,152 rays either way. See kLobeBigSamples.
+    const uint lobe_target =
+        lobe_bins * ((lobe_state & kLobeBig) != 0u ? kLobeBigSamples : kLobeSamples);
 
     // ---- R4b: the rays that lobe casts for itself ---------------------------------------------
     //
@@ -2055,7 +2068,7 @@ void main() {
     if (lobe != kNoLobe && may_cast && node_push.bounce != 0u && probe_lobe_ray()) {
         const uint count_at = face_lobe_count_at(lobe);
         const uint taken = face_lobe.words[count_at];
-        if (taken < kLobeConverged) {
+        if (taken < lobe_target) {
             probe_add(kProbeLobeBursting);
             // The face's frame is already set, above the lamps, by the one function that answers
             // that question -- so the bins are indexed here in exactly the frame the composite
@@ -2071,8 +2084,8 @@ void main() {
             // with holes in it that fill in one patch at a time.
             for (uint i = 0u; i < kLobeBurst; ++i) {
                 const uint index = taken + i;
-                lobe_cast(lobe, index % kLobeBins, index / kLobeBins, pixel_angle, corner, across,
-                          down, size, chunk_origin);
+                lobe_cast(lobe, index % lobe_bins, lobe_bins, lobe_side, index / lobe_bins,
+                          pixel_angle, corner, across, down, size, chunk_origin);
             }
             face_lobe.words[count_at] = taken + kLobeBurst;
         } else if (probe_denoise() &&
@@ -2086,7 +2099,7 @@ void main() {
             // Under `--no-face-denoise` with the rest of the cross-face filter, because it is the
             // same idea about the same geometry and a dial that switched one on and the other off
             // would be two names for one question.
-            face_lobe_denoise(lobe, ivec3(face.x, face.y, face.z), level, direction);
+            face_lobe_denoise(lobe, lobe_bins, ivec3(face.x, face.y, face.z), level, direction);
         }
     }
 
@@ -2456,7 +2469,7 @@ void main() {
         // the ray does not, which keeps `--no-lobe-ray` meaning "the bins as R4c filled them"
         // rather than "no bins at all", and takes its cost out of the shipped path entirely.
         if (lobe != kNoLobe && node_push.bounce != 0u && !probe_lobe_ray()) {
-            face_lobe_accumulate(lobe, s.dir, s.radiance);
+            face_lobe_accumulate(lobe, lobe_bins, lobe_side, s.dir, s.radiance);
         }
     }
 

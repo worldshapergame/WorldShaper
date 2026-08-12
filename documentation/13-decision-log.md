@@ -3875,3 +3875,55 @@ the fix is one expression and costs nothing.
 | D598 | **A slab placed on each side, one flag of one build** | process | The only thing that can settle an orientation. It found the fault and then proved the fix, with the same two runs |
 | D598 | **The gilt getting darker is the fix and not a regression** | correctness | Under a soffit the correct reflection is the dark ceiling. The gold was the floor arriving through the flip |
 | D598 | **A picture that is not a controlled pair is not evidence** | process | D597 reverted a correct change on one screenshot, because the fault made the surface prettier |
+
+## D599 — R4b's second half: the coverage rule is not the lever, and the sharp class is not affordable
+
+**Built, measured three ways, and OFF by default.** D186 says the bin count comes from roughness and
+from how many pixels the face covered. Both halves were built. Neither does what the plan expects,
+and the reasons are worth more than the code.
+
+**Coverage does not drive sharpness in a voxel renderer, and this is the part that generalises.** A
+face here is one voxel. Standing two metres from the bronze door a face covers about eleven pixels
+and those eleven pixels look at it over **0.86 degrees** — far inside one bin however many bins
+there are. Neighbouring faces do not help: they are 3 cm apart and see the same room 0.86 degrees
+apart. **The reflected image is blurred to the BIN, and the number of pixels or faces looking at it
+does not enter.** Coverage could only ever have been an affordability lever. D186 was written for a
+renderer whose surfaces are large; here the surface IS the pixel footprint, which is the whole
+premise of the rewrite, and the rule does not survive the change.
+
+**And gating on it makes the class patchy, which is worse than not gating at all.** Coverage varies
+smoothly across one flat surface, so the class flipped face to face along the middle of the great
+door — and a lobe cut into 144 directions and one cut into 36 share no bin for the cross-face blend
+to pair, so exactly the faces at the boundary got no blending and stood out as noise. **A hard
+per-face decision is a new discontinuity per face**, which is D387 arriving in a size class. Driving
+it from ROUGHNESS instead makes neighbours agree by construction, because roughness is a material
+property.
+
+**The sharp class itself is not affordable, and that is the third measurement of D592's constraint.**
+A big block is four consecutive small ones — 144 bins, 6.8 degrees against 13.5 — which needs no
+second pool, no second buffer and no host change, and the pool has room: **17,389 of 21,200 holders
+qualify by roughness** with nought declined. What it cannot pay for is samples:
+
+| samples a bin | rays a face | the great door, `--debug-mode 23` |
+|---|---|---|
+| 8 (the same 1,152 rays as the cheap class) | 1,152 | speckled outright |
+| 24 (the cheap class's own rate, so four times the rays) | 3,456 | **still speckled** |
+
+Twenty-four samples of a RADIANCE is what it is however many bins there are, and four times the bins
+is four times the rays for the same noise. **Bins cost rays one for one** — D592 measured it at 256
+bins, D594 at 36 with a proper ray, and this is the third time.
+
+So `--lobe-coverage` is opt-in and the default is one size. The machinery, the sizes, the audit line
+(`...of which N hold the sharp class`) and the debug colour (cyan-green in view 22) are all built and
+priced, for whoever comes back to this with a ray budget that can pay. **What it would take is not a
+constant**: it is a way to spend an order of magnitude more rays on a few thousand faces, which is
+its own stage.
+
+Default arm unchanged: close camera **4.342 ms against 4.369**, 527 tests, 18.67 M assertions.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D599 | **Coverage is measured, understood and NOT carried** | measurement | A face is one voxel; the pixels on it span under a degree. Sharpness is the bin, and coverage does not enter it |
+| D599 | **The class follows roughness, which neighbours agree about** | D387 | A hard per-face decision on a smooth quantity is a discontinuity per face, and the blend cannot pair unlike sizes |
+| D599 | **A big block is four consecutive small ones** | design | 144 bins is exactly four blocks of 72 words, so there is no second pool, no second buffer and no host change |
+| D599 | **Off by default, built and priced** | measurement | Four times the bins is four times the rays for the same noise. Speckled at 8 samples a bin and still speckled at 24 |

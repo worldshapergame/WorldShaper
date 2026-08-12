@@ -432,6 +432,17 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                             cast > 0 ? 100.0 * probe_words[kProbeLobeRays] / static_cast<f64>(cast)
                                      : 0.0,
                             probe_words[kProbeLobeBursting]);
+                // R4b's coverage rule, and it needs its own line because "nobody earns the
+                // expensive class" and "the pool has no room for it" are different faults with
+                // different fixes, and both print as an unchanged picture.
+                WS_LOG_INFO("faces",
+                            "...of which {} hold the sharp class ({:.1f}%), which is four blocks "
+                            "and {} bins against {}",
+                            probe_words[kProbeLobeBigHeld],
+                            held > 0 ? 100.0 * probe_words[kProbeLobeBigHeld]
+                                           / static_cast<f64>(held)
+                                     : 0.0,
+                            kLobeBigBins, kLobeBins);
             } else {
                 // Trap 15 once more: a pool nobody is asking about and a pool with nothing in it
                 // print the same nought, and only one of the two is a measurement.

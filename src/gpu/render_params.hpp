@@ -235,7 +235,7 @@ inline constexpr i32 kFeedbackSecondary = 0x200000;
 // The gathering ray's counters: one word a question, over the whole dispatch, cleared every frame
 // and read back at the screenshot audit. Must match kLightProbeWords in shaders/node.glsl, which
 // carries the word map -- the shader is the authority because it is the only writer.
-inline constexpr u32 kLightProbeWords = 32;
+inline constexpr u32 kLightProbeWords = 33;
 // Where the by-level histogram of "stopped by a cell the pool has not built" starts in it. Must
 // match kLightProbeLevels in shaders/node.glsl.
 inline constexpr u32 kLightProbeLevels = 9;
@@ -247,6 +247,8 @@ inline constexpr u32 kProbeLobeDeclined = 25;
 inline constexpr u32 kProbeLobeTaken = 26;
 inline constexpr u32 kProbeLobeRays = 27;
 inline constexpr u32 kProbeLobeBursting = 28;
+// R4b: how many of the held blocks are the expensive four-block class.
+inline constexpr u32 kProbeLobeBigHeld = 29;
 // The last word, which is not a counter at all: the OFF-SCREEN set's stride, in frames, host-written
 // exactly as the dials are. Must match kProbeSecondaryStride in shaders/node.glsl.
 //
@@ -254,12 +256,12 @@ inline constexpr u32 kProbeLobeBursting = 28;
 // between them with nought -- three ranges that do not touch, because transfer commands in one
 // command buffer have no ordering between them and a host word inside the filled span would be a
 // race. See the write site in main.cpp.
-inline constexpr u32 kProbeSecondaryStride = 29;
+inline constexpr u32 kProbeSecondaryStride = 30;
 // R9c's two, past the counters for the same reason: host-written, outside the span the host fills
 // with nought, so the three ranges do not touch. Must match kProbeHaloMargin and kProbeHaloStride
 // in shaders/node.glsl. The margin is in pixels each side and nought means the stage is off.
-inline constexpr u32 kProbeHaloMargin = 30;
-inline constexpr u32 kProbeHaloStride = 31;
+inline constexpr u32 kProbeHaloMargin = 31;
+inline constexpr u32 kProbeHaloStride = 32;
 
 // The dials in word 0 of that buffer, host-written and card-read.
 //
@@ -290,6 +292,10 @@ inline constexpr u32 kProbeLobe = 1u << 5;
 // identical in both arms and the bins are then filled only by the far ray that was being cast
 // anyway, which is the state D592 measured as unable to carry a reflection.
 inline constexpr u32 kProbeLobeRay = 1u << 6;
+// R4b's coverage rule: a polished face that fills enough of the screen gets four blocks and a
+// hundred and forty-four bins instead of one block and thirty-six. Cleared by
+// `--no-lobe-coverage`, which is the arm that prices the expensive class on its own.
+inline constexpr u32 kProbeLobeCoverage = 1u << 7;
 
 // R4c's pool: how many blocks of outgoing bins there are and how many words each is. Must match
 // kLobeBlocks, kLobeBins and the layout in shaders/face_terms.glsl, which is the authority because
@@ -299,6 +305,9 @@ inline constexpr u32 kProbeLobeRay = 1u << 6;
 // The host's only interest in any of this is how large the buffer has to be. Sized against R4a's
 // census: 35,950 faces of 801,175 on the facility carry any metal at all.
 inline constexpr u32 kLobeBins = 36;
+// ...and R4b's expensive class, which is four consecutive blocks used as one grid. Must match
+// kLobeBigSide in shaders/face_terms.glsl.
+inline constexpr u32 kLobeBigBins = 144;
 inline constexpr u32 kLobeBlocks = 131072;
 inline constexpr u32 kLobePoolWords = kLobeBlocks * (4 + kLobeBins * 2);
 
