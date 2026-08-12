@@ -1140,13 +1140,19 @@ void lobe_cast(uint block, uint bin, uint index, float pixel_angle, vec3 corner,
     const vec3 towards = face_lobe_direction(face_lobe_centre(bin), normal, g_sky_side,
                                              g_sky_other);
     const vec4 r = node_r4(index, g_sky_rotation);
-    const vec3 half_vector = face_lobe_half_vector(max(face_lobe_bin_alpha(), kFaceAlphaMin),
-                                                   r.zw, normal, g_sky_side, g_sky_other);
+    // In the face's own frame, because the visible-normal sample is defined there.
+    const vec3 local = vec3(dot(towards, g_sky_side), dot(towards, g_sky_other),
+                            max(dot(towards, normal), 1e-4));
+    const vec3 half_local =
+        face_lobe_visible_normal(local, max(face_lobe_bin_alpha(), kFaceAlphaMin), r.zw);
+    const vec3 half_vector =
+        g_sky_side * half_local.x + g_sky_other * half_local.y + normal * half_local.z;
     const vec3 dir = normalize(2.0 * dot(towards, half_vector) * half_vector - towards);
     const float cosine = dot(dir, normal);
-    // Under the surface. It carries no information about this bin and must not be counted as a
-    // black sample, which is trap 7 in an estimator: "nothing came back" and "I did not look" are
-    // different answers.
+    // Under the surface. Rare now that the half vector is drawn from the visible distribution --
+    // that is the whole point of it -- but it still happens at the very rim, and such a sample
+    // carries no information about this bin. Dropped rather than counted as black, which is trap 7
+    // in an estimator: "nothing came back" and "I did not look" are different answers.
     if (cosine <= 0.0) return;
 
     const vec2 at = r.xy * 2.0 - 1.0;

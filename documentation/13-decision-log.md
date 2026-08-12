@@ -3763,3 +3763,67 @@ sub-step in the plan, and it is a bigger piece than either of the two before it.
 | D596 | **The gathering ray does not apply it and cannot** | stated limit | It has no outgoing direction, so it has no angle to take a Fresnel at. The two readers still agree about metalness and differ about grazing, which over-counts what a glancing surface gives the room |
 | D596 | **Views 22 and 23 separated storage from physics in one shot** | process | Green everywhere and a black term is "the bins are full and the read is small", which is a different session's work from "nothing is being measured" |
 | D596 | **The basin's geometry is recorded, not argued with** | process | The clip's author measured what this water can reflect and wrote it down. A renderer change cannot make a pool mirror a colonnade that is behind a wall |
+
+## D597 — three changes chasing "the reflection is mirrored", two kept and the one that was asked for reverted
+
+**Reported, and the report is precise enough to be a diagnosis: *"i suspect those reflections of
+gold are actually on the opposite side where they should be horizontally, something red on the right
+doesnt reflect on the right of the material but on its left"*.** That is exactly the failure
+`face_lobe_frame`'s own comment warns about — a reflection mirrored about the normal looks very
+nearly right and is the hardest kind of wrong to see. It is also **still open**, and this entry is
+mostly about why.
+
+**The derivation said the read was mirroring twice.** `lobe_cast` aims at the mirror of the bin's
+own direction, so the bin already holds what an eye at that direction sees; indexing the read with
+`reflect(dir, normal)` mirrors again, and a second mirroring about the normal is (dx, dy) →
+(−dx, −dy), which is the hemi-octahedral square turned a half turn — flipped left for right and top
+for bottom. Invisible head on, growing with the angle, worst exactly where a reflection is worth
+looking at.
+
+**The measurement contradicted it.** Reading `face_lobe_at(view, ...)` sent the gilt paterae on the
+frieze **from gold to grey**: the bins it then reads are dark. The bins that direction lands in are
+near the centre of the square, which is the best-sampled part, so "the grazing bins are starved" does
+not explain it either. **Reverted.** One of the two indexings is right, the arithmetic says one and
+the picture says the other, and neither is evidence enough on its own.
+
+**What settles it is a controlled test, and it has not been run**: put an unmistakable colour on one
+known side of a polished face with `--edit`, and photograph which side of the reflection it lands
+on. That is one run and it is the next thing to do here. Reasoning about it has now been wrong once.
+
+**Two changes from the same session are kept, because both are right independently of that.**
+
+1. **What the diffuse loses is the HEMISPHERICAL AVERAGE Fresnel, not the view-angle one.** D596
+   subtracted Schlick at `n_dot_v`, which is the obvious reading of "what the lobe takes the diffuse
+   does not get" and is wrong twice: it sent the gilt grey on its own, because the frieze is seen at
+   a glancing angle where that term approaches one, and what should have replaced it is a
+   mirror-sharp reflection that thirty-six bins cannot resolve. The physics agrees with the picture —
+   what reaches the diffuse is what was not turned away **on the way in**, over the whole incident
+   hemisphere, which is `F0 + (1 - F0)/21`, about nine per cent for a dielectric. The view-angle
+   Fresnel remains exactly right for the specular, which leaves along one direction. One quantity,
+   two averages, and the wrong one darkens a surface exactly where a reflection should appear.
+2. **The lobe ray samples the DISTRIBUTION OF VISIBLE NORMALS** (Heitz), not the plain normal
+   distribution. The plain sample draws a half vector about the normal and mirrors the bin's
+   direction about it — so for a bin near the rim, which is a grazing direction and is where every
+   reflection worth looking at is read, the bin's direction and a half vector near the normal are
+   almost ninety degrees apart and the ray comes back **below the surface** and is thrown away. The
+   bins hardest to fill were being sampled by the one scheme that cannot fill them. It is the
+   standard fix for the standard fault and it is fifteen lines.
+
+**The metals are still too subtle and that is the bin count.** Gilt is `rough=64`, a lobe **3.6
+degrees** across, and thirty-six bins resolve **13.5**. A reflection blurred four times wider than
+the material's own lobe averages to a wash, and a wash is what "too subtle" means. That is R4b's
+unbuilt half — bins from pixel coverage — and no constant fixes it: 3.6 degrees needs about five
+hundred bins, and five hundred bins at the present sample rate is two samples apiece (D592).
+
+**And the water is still flat, for the reason D596 gives and this session did not change**: it is
+drawn opaque. `opacity=110 ior=1.33` with no transmission in the renderer is a blue Lambertian slab,
+and nothing done to a reflection makes that read as water. R4d.
+
+527 tests, 18.67 M assertions. Close camera 4.368 ms against 4.294 before these two, inside spread.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D597 | **The read direction is left as it was and the question recorded** | process | The arithmetic says one thing and the picture says the other. A controlled edit test decides it; a third guess would not |
+| D597 | **Hemispherical-average Fresnel out of the diffuse, view-angle Fresnel into the specular** | correctness | Two averages of one quantity. The view-angle one on the diffuse blackens every glancing surface, which is where a reflection is seen |
+| D597 | **Visible-normal sampling for the lobe ray** | correctness | The plain sample cannot fill a grazing bin at all, and grazing bins are the whole point of the ray |
+| D597 | **"Too subtle" is named as the bin count and not fixed** | measurement | 3.6 degrees of material against 13.5 degrees of bin. It is R4b's coverage rule and not a constant |

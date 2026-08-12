@@ -434,6 +434,42 @@ vec3 face_lobe_half_vector(float alpha, vec2 at, vec3 normal, vec3 side, vec3 ot
                      normal * cos_theta);
 }
 
+// ...and the same thing done properly, which is the DISTRIBUTION OF VISIBLE NORMALS.
+//
+// **The plain sample above starves exactly the bins a reflection is read from, and that is why it
+// had to be replaced.** It draws a half vector about the NORMAL, and the ray is then the bin's own
+// direction mirrored about that half vector. For a bin near the rim — a grazing direction, which is
+// where every reflection worth looking at is read — the bin's direction and a half vector near the
+// normal are almost ninety degrees apart, so the mirrored ray comes back **below the surface** and
+// is thrown away. The bins that are hardest to fill were being sampled by the one scheme that
+// cannot fill them.
+//
+// Heitz's method samples the half vectors that are actually VISIBLE from the direction in question,
+// so a grazing bin gets grazing half vectors and its rays land above the surface by construction.
+// It is the standard fix for the standard fault and it is fifteen lines.
+//
+// `towards` is in the face's own frame, z along the normal. What comes back is too.
+vec3 face_lobe_visible_normal(vec3 towards, float alpha, vec2 at) {
+    // Stretch into the space where the lobe is a hemisphere.
+    const vec3 stretched = normalize(vec3(alpha * towards.x, alpha * towards.y, towards.z));
+    const float flat_sq = stretched.x * stretched.x + stretched.y * stretched.y;
+    const vec3 t1 = flat_sq > 0.0 ? vec3(-stretched.y, stretched.x, 0.0) * inversesqrt(flat_sq)
+                                  : vec3(1.0, 0.0, 0.0);
+    const vec3 t2 = cross(stretched, t1);
+    const float radius = sqrt(clamp(at.x, 0.0, 1.0));
+    const float phi = at.y * 6.28318530718;
+    const float u = radius * cos(phi);
+    float v = radius * sin(phi);
+    // The half of the disc behind the horizon is folded rather than clipped, which is what makes
+    // this a sample of the VISIBLE half and not of the whole distribution.
+    const float lean = 0.5 * (1.0 + stretched.z);
+    v = (1.0 - lean) * sqrt(max(1.0 - u * u, 0.0)) + lean * v;
+    const vec3 lifted =
+        u * t1 + v * t2 + sqrt(max(1.0 - u * u - v * v, 0.0)) * stretched;
+    // ...and unstretch.
+    return normalize(vec3(alpha * lifted.x, alpha * lifted.y, max(lifted.z, 1e-6)));
+}
+
 // How many words the whole pool is, which is what the host allocates.
 uint face_lobe_pool_words() { return kLobeBlocks * (kLobeHeaderWords + kLobeBlockWords); }
 

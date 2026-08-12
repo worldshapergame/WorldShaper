@@ -882,6 +882,26 @@ void main() {
                     vec3 other;
                     face_lobe_frame(normal, side, other);
                     vec3 found;
+                    // ---- which direction a bin is indexed by, and it is OPEN ------------------
+                    //
+                    // **Reported, and not settled**: *"something red on the right doesnt reflect on
+                    // the right of the material but on its left"*. That is a real observation and
+                    // it names exactly the failure `face_lobe_frame`'s comment warns about — a
+                    // reflection mirrored about the normal looks very nearly right, and it is the
+                    // hardest kind of wrong to see.
+                    //
+                    // Reading `face_lobe_at(view, ...)` instead is the change that follows from the
+                    // arithmetic: `lobe_cast` already aims at the mirror of the bin's own
+                    // direction, so mirroring again here would be a second half-turn of the
+                    // hemi-octahedral square. **It was tried and it is not carried**, because it
+                    // sent the gilt paterae on the frieze from gold to grey — the bins it then
+                    // reads are dark, and that is a measurement that contradicts the derivation.
+                    //
+                    // So one of the two is right and the argument does not decide which. What
+                    // decides it is a CONTROLLED test and not more reasoning: put an unmistakable
+                    // colour on one known side of a polished face, with `--edit`, and photograph
+                    // which side of the reflection it lands on. Until somebody does that, this
+                    // stays as the arm that draws gold as gold. See D597.
                     if (lobe_radiance(block, face_lobe_at(reflect(dir, normal), normal, side, other),
                                       found)) {
                         reflected = found;
@@ -908,12 +928,32 @@ void main() {
                 // cent is the head-on figure, and the whole point of a reflection is that you see
                 // it at a glancing angle. A metal has almost no diffuse to lose either way.
                 //
-                // The gathering ray does NOT apply this, and cannot: it has no outgoing direction,
-                // so it has no angle to take a Fresnel at. It keeps `face_diffuse_share` alone, so
-                // the two readers still agree about metalness and differ about grazing —
-                // over-counting what a glancing surface gives the room, on the term that is
-                // already the smallest thing in it. That is R4d's to close, with the transmission.
-                turned_away = face_fresnel(f0, n_dot_v) * lobe_share;
+                // # The HEMISPHERICAL AVERAGE and not the view angle, and the first version was
+                // the view angle
+                //
+                // Taking Schlick at `n_dot_v` and subtracting it from the diffuse is the obvious
+                // reading of "what the lobe takes, the diffuse does not get", and it is wrong twice
+                // over. It sent the gilt paterae on the frieze **grey**: they are seen from below at
+                // a glancing angle, where that Fresnel approaches one, so almost the whole diffuse
+                // went — and what should have replaced it is a mirror-sharp reflection that
+                // thirty-six bins cannot resolve, so nothing came back and the gold went out.
+                //
+                // The physics says the same thing the picture did. What reaches the diffuse under a
+                // surface is what was not turned away **on the way IN**, integrated over the whole
+                // incident hemisphere, and that is a property of the material rather than of where
+                // the eye happens to be. The average of Schlick over the hemisphere is
+                // F0 + (1 - F0)/21, which is about nine per cent for a dielectric and nearly all of
+                // it for a metal — where `face_diffuse_share` has already taken the diffuse away in
+                // any case.
+                //
+                // The view-angle Fresnel is still exactly right for the SPECULAR above, which is
+                // what leaves along one direction. One quantity, two averages, and using the wrong
+                // one of the two is a surface that goes dark exactly where a reflection should
+                // appear.
+                //
+                // The gathering ray does not apply this, and now it barely needs to: what it misses
+                // is nine per cent of a dielectric's diffuse rather than a view-dependent share.
+                turned_away = mix(f0, vec3(1.0), 1.0 / 21.0) * lobe_share;
             }
         }
 
@@ -1179,6 +1219,8 @@ void main() {
                         else if (face == 4u) face_normal = vec3(0, 0, 1);
                         else face_normal = vec3(0, 0, -1);
                         face_lobe_frame(face_normal, side, other);
+                        // The same direction the shaded path reads with -- see the open question
+                        // recorded there about which of the two it should be.
                         const bool measured = lobe_radiance(
                             block,
                             face_lobe_at(reflect(dir, face_normal), face_normal, side, other),
