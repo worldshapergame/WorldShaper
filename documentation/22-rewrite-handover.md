@@ -1180,14 +1180,28 @@ the next thing to do — see below.
    name, it would have cost **29,882 faces a flight** their light, and the picture, the mirror and
    every audit would all have looked right.
 
-**And one measurement that is bigger than the change that found it.** The face pass's cost while
-moving is a function of how many live records the **card** holds, not how many the store holds — and
-the card runs **up to 434,838 records ahead of the store** while flying, because an upload that runs
-out of staging clears nothing and retries the whole dirty set next frame (165 frames of 400 did).
-R9a's flying win (**faces 3.123 → 1.621 ms median, total GPU 10.512 → 9.621**, five interleaved rounds
-with no overlap) is that backlog moving rather than the light getting cheaper. **The backlog is the
-next performance item in this file** and it predates every stage of the rewrite. The instruments are
-`the card is N records ahead of the store` and `the card's own stand-ins`, both at every screenshot.
+**And one measurement that is bigger than the change that found it — now closed, and it was not what
+it looked like.** The face pass's cost while moving is a function of how many live records the
+**card** holds, and the card ran **up to 434,838 records ahead of the store** while flying, because
+an upload that ran out of staging cleared nothing and retried the whole dirty set next frame (165
+frames of 400 did). R9a's flying win (**faces 3.123 → 1.621 ms median**, five interleaved rounds with
+no overlap) was that backlog moving rather than the light getting cheaper.
+
+**D544 fixes it and D545 is the part to read.** A partial upload now marks clean exactly what it sent:
+the card is **0 records ahead against 80,211**, and the upload runs out on **1 frame against 253**.
+What that uncovered is that the backlog was not making the pass shade too much — it was making it
+shade almost **nothing**. The audit line says it without a picture: **`seen on the card: 0 of
+721,911`** in the control arm, because the card's bucket table was too far behind for a pixel to find
+its own face, so `may_cast` was false everywhere and the frame was drawn from **8,255 throwaway
+provisional stand-ins a frame against 723**. The faces pass therefore goes **2.0 → 6.8 ms** flying and
+none of it is new work. The picture goes from hard-edged black and white blocks on the balustrade and
+the cornice to lit stone: **44.90 of 255 over 2.76 M pixels of 3.69 M**, speckle **23.86 with 2,720
+fireflies → 19.92 with 944**.
+
+**So the faces pass is over its 4.40 ms budget while flying, honestly, for the first time.** That is a
+budget question for R5 rather than a reason to put the backlog back. The instruments to read first
+are `the card is N records ahead of the store`, `seen on the card` and `the card's own stand-ins`, all
+at every screenshot.
 
 ### Where to start now, and the two orders are not the same order
 
@@ -1685,6 +1699,8 @@ D504's control arm, `--face-pressure-from N` is how little free space starts the
 face telling the host that a pixel read it and is D508's control arm, `--face-read-period N` is the
 window it says it in, and `--face-budget N` shrinks the table so the full-table state — the blocky
 flicker of D502 — is reachable in ninety seconds instead of after minutes of play;
+`--whole-set-retry` puts the face upload back to clearing its dirty sets only when the whole set
+fitted, which is D544's control arm and the state every figure above it was measured in;
 `--no-bounce` is the bounce control arm — and it is **not** a way back to the picture before R9, since
 the ambient floor that stood in for that light is deleted rather than switched off: with it, an
 interior is lit by the sun, the sky and the lamps it can see, and by nothing else. `--bounce-min N` is

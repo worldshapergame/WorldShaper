@@ -436,6 +436,15 @@ public:
         dirty_faces_.clear();
         dirty_entries_.clear();
     }
+    // Mark clean exactly the span that was just sent, and nothing else.
+    //
+    // For an upload that ran out of staging part way through. Clearing the whole set there would
+    // mark clean what the card was never sent, which is the stale byte this arrangement exists to
+    // avoid; clearing NOTHING is what it used to do, and that restages the same prefix next frame,
+    // runs out in the same place, and leaves the card holding records the store gave up long ago.
+    // Clearing per staged run is the only one of the three that drains.
+    void clear_dirty_faces(u64 first, u64 count) { dirty_faces_.clear_range(first, count); }
+    void clear_dirty_entries(u64 first, u64 count) { dirty_entries_.clear_range(first, count); }
 
     FaceStoreStats stats() const;
     bool validate() const;

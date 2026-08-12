@@ -1946,3 +1946,29 @@ bright on purpose, and making it err dark instead is a separate decision with it
 **And `--no-bounce` is no longer a way back to the old picture**, which is worth saying because it
 was one yesterday. The floor it used to restore does not exist. With the bounce off, an interior is
 lit by the sun, the sky and the lamps it can actually see, and by nothing else.
+
+## D544 — the upload sends what fits, and the light while moving turns out to have been missing
+
+*The face pass shades what the CARD holds, and D531 measured the card running up to 434,838 records
+behind the store while flying. The cause was one line: an upload that ran out of staging cleared
+NOTHING and restaged the whole dirty set next frame, so it ran out in the same place for ever. This
+is the fix, and what it uncovered is worth more than the fix.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D544 | **A partial upload marks clean exactly what it sent** | change | `DirtySet::clear_range` is the primitive that was missing, and each staged run is marked clean as it is staged — so a frame that runs out of staging still makes progress and the next one carries on from where it stopped. The old rule sounds like the safe one and is not: what it guards against is marking clean what was never sent, and per-run clearing never does that, while the whole-set retry restages the same prefix until the camera stops moving. Measured flying at 1440p over 400 frames: **the card is 0 records ahead of the store against 80,211**, and the upload **ran out of staging on 1 frame against 253**. `--whole-set-retry` is the control arm and `tests/test_dirty_set.cpp` is the gate — six cases, including that clearing every run of a `runs()` snapshot drains the set exactly as `clear()` does, because that is the property the change rests on |
+| D545 | **The backlog was not costing frames, it was skipping the light — and the pass got THREE TIMES more expensive because it started doing its job** | measurement | The obvious reading of D531 was that the card holding stale records made the pass shade more than it should. It was the other way round, and the audit says so in one line: **`seen on the card: 0 of 721,911`** in the control arm. Nought. The card's bucket table was so far behind that `node_face_lookup` could not find the faces the pixels were resolving, so nothing was stamped as seen, `may_cast` was false everywhere, and **the shading pass was skipping almost all of it**. The same run claimed **8,255 provisional stand-ins in one frame against 723**, each taking a fresh unbounded ray and lamp burst every frame, and sent the host **0 read-reports against 22,702**. So the light while flying was not being computed at all; it was being replaced, frame by frame, by throwaway coarse guesses. With the upload draining, the faces pass reads **6.784–7.188 ms against 1.992–2.007** and total GPU **14.099 against 10.020** — and none of that is new work, it is the work that was being dropped. **A pass that got cheaper because its inputs never arrived is D527's trap arriving through the upload**, and the number that tells them apart is the same kind: not a time, but how much of the store the frame could actually see |
+| D546 | **What it looks like, which is the blocky flicker again through a third door** | measurement | Same frame, same flight, two flags of one build: the control draws the balustrade, the window reveal and the cornice as hard-edged black and white **blocks**, and the fix draws them as lit stone. **44.90 of 255 over 2,761,206 pixels of 3,686,400**, with speckle **23.86 and 2,720 fireflies against 19.92 and 944**. That is D502's reported picture — *"the light becomes like squares and they flicker rapidly"* — with a cause that has nothing to do with the store filling up: the store was fine, and the card simply had not been told. **Three separate roads now lead to that one picture** (a full store, a refused claim, and an upload that could not keep up), which is worth remembering the next time it is reported: read `the card is N records ahead of the store` and `seen on the card` before believing any theory about the store itself |
+
+**What is left, and it is a budget question rather than a fault.** The faces pass is now **6.8–7.2 ms
+against its 4.40 ms budget** while flying at 1440p, because it is doing the work it used to skip.
+That is the honest state and it should not be hidden by comparing it against a control that was
+drawing blocks. The levers that exist are `--bounce-min`, `kSkyBurst`, `kLampBurst` and the face gate;
+the one the plan already owes is **R5's denoise**, which is what lets every one of those converge on
+fewer samples. Nothing here is a reason to put the backlog back.
+
+**One thing to know before touching the upload again.** `stage_regions` takes the store by reference
+now, and marks each run clean *inside* the loop that walks `runs()`. That is safe only because
+`runs()` hands back a snapshot vector rather than a view, and the test named *"clearing every staged
+run drains a set the same as clear()"* is what pins it. If `runs()` is ever made lazy, that loop
+becomes a walk over a container being mutated underneath it.

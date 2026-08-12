@@ -125,8 +125,10 @@ bool FaceBuffers::stage_at(VkCommandBuffer cmd, const void* source, u64 bytes,
 //
 // Runs are still coalesced where they are genuinely adjacent -- that costs nothing and is not
 // what the gap was for.
-void FaceBuffers::stage_regions(VkCommandBuffer cmd, const FaceStore& store) {
+void FaceBuffers::stage_regions(VkCommandBuffer cmd, FaceStore& store) {
     regions_.clear();
+    // runs() hands back a snapshot vector, so marking a run clean inside the loop cannot disturb
+    // the iteration.
     for (const auto& run : store.dirty_faces().runs(0)) {
         const u64 bytes = run.second * sizeof(GpuFace);
         if (staging_cursor_ + bytes > staging_capacity_) {
@@ -144,6 +146,9 @@ void FaceBuffers::stage_regions(VkCommandBuffer cmd, const FaceStore& store) {
         staging_cursor_ += bytes;
         stats_.uploaded_this_frame += bytes;
         stats_.total_uploaded += bytes;
+        // Staged, so clean. The bytes are in the ring and the copy is recorded on the same command
+        // buffer as the pass that reads them; nothing that follows can un-send them.
+        if (!whole_set_retry_) store.clear_dirty_faces(run.first, run.second);
     }
     if (!regions_.empty()) {
         vkCmdCopyBuffer(cmd, staging_.buffer, faces_.buffer,
@@ -165,9 +170,14 @@ void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store, u32 frame_index)
     // own: sending a few spare records inside one is cheaper than issuing a second.
     const u64 kEntryGap = 256;  // 1 KB of u32
 
+    // No break on failure: a later run may be small enough to fit in what is left. Each run that
+    // DID fit is marked clean here, so next frame carries on from where this one stopped rather
+    // than restaging the same prefix and running out in the same place.
     for (const auto& run : store.dirty_entries().runs(kEntryGap)) {
-        stage_at(cmd, store.entries().data() + run.first, run.second * sizeof(u32),
-                 run.first * sizeof(u32), entries_);
+        if (stage_at(cmd, store.entries().data() + run.first, run.second * sizeof(u32),
+                     run.first * sizeof(u32), entries_)) {
+            if (!whole_set_retry_) store.clear_dirty_entries(run.first, run.second);
+        }
     }
 
     // No gap at all on the faces, and this is not a tuning choice.
@@ -189,13 +199,14 @@ void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store, u32 frame_index)
     // once rather than per run.
     stage_regions(cmd, store);
 
-    // Only when all of it fitted. Clearing after a partial upload marks clean what the card has
-    // not been sent, which is the stale byte this whole arrangement exists to avoid.
-    if (!stats_.staging_exhausted) {
-        store.clear_dirty();
-    } else {
-        ++stats_.exhausted_frames;
-    }
+    // Nothing left to clear in the normal arm: every run that was staged was marked clean as it
+    // went, and every run that was not is still marked. That is the whole of the backlog fix
+    // (D544). The old rule -- clear only when ALL of it fitted -- sounds like the safe one and is
+    // not: what it protects against is marking clean what was never sent, and per-run clearing
+    // never does that, while the whole-set retry restages the same prefix for ever and leaves the
+    // card holding records the store gave up thousands of frames ago.
+    if (whole_set_retry_ && !stats_.staging_exhausted) store.clear_dirty();
+    if (stats_.staging_exhausted) ++stats_.exhausted_frames;
     ++stats_.uploads;
 
     VkMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
@@ -509,17 +520,18 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             // in this pass has to be read against and which nothing printed.
             //
             // The shading pass shades what the CARD holds. The host evicting a face marks the slot
-            // dirty; if the upload runs out of staging that frame it clears NOTHING and retries the
-            // whole dirty set next frame, so a moving camera can leave the card holding hundreds of
-            // thousands of live records the store gave up long ago -- and every one of them is a
-            // face the worklist may still pack and the shading pass may still pay for. Measured
-            // flying at 1440p: 982,507 live on the card against 548,601 in the store.
+            // dirty, and an upload that runs out of staging sends what fits and leaves the rest
+            // marked -- so the gap is at most the backlog still owed, and it shrinks by a staging
+            // region a frame. Before D544 an exhausted frame cleared NOTHING and restaged the same
+            // prefix, so the gap did not shrink at all: measured flying at 1440p, 982,507 live on
+            // the card against 548,601 in the store, and every one of those is a face the worklist
+            // may still pack and the shading pass may still pay for.
             const i64 behind = static_cast<i64>(ambient_live) + static_cast<i64>(secondary_live) -
                                static_cast<i64>(store.stats().faces);
             WS_LOG_INFO("faces",
                         "the card is {} records ahead of the store ({} live there, {} here); the "
-                        "upload ran out of staging on {} frames, and a frame that runs out clears "
-                        "nothing and sends the whole set again",
+                        "upload ran out of staging on {} frames, and a frame that runs out sends "
+                        "what fits and carries the rest over",
                         behind, ambient_live + secondary_live, store.stats().faces,
                         stats_.exhausted_frames);
             // R9e, and it is printed whether or not the off-screen set has anything in it: nought

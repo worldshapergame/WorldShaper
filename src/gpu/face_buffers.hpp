@@ -30,10 +30,10 @@ struct FaceBufferStats {
     // A state rather than an event was all this had, and a state answers "is it happening now" --
     // which for something that happens on a burst of frames while the camera moves reads as false
     // at every moment anybody asks. The same distinction `FaceStoreStats::refusals` draws against
-    // `out_of_room()`, and the same trap (16). It matters because an exhausted upload clears NOTHING
-    // -- the whole dirty set is retried next frame -- so the card can fall arbitrarily far behind
-    // the store and stay there, holding live records for faces the host gave up long ago. The face
-    // pass shades what the CARD holds.
+    // `out_of_room()`, and the same trap (16). It still matters after D544: an exhausted frame now
+    // clears what it managed to send, so the backlog drains a staging region a frame instead of
+    // never, but the card is still behind the store until it has drained, and the face pass shades
+    // what the CARD holds. Read it against `the card is N records ahead of the store`.
     u32 exhausted_frames = 0;
 };
 
@@ -49,6 +49,10 @@ public:
     // host writes those bytes while recording and the card reads them when it reaches the copy.
     // See the note over the allocation in create().
     void upload(VkCommandBuffer cmd, FaceStore& store, u32 frame_index);
+
+    // The control arm for D544: go back to clearing the dirty sets only when the WHOLE set fitted,
+    // which is what this did before. Two flags of one build, as D407 requires. --whole-set-retry.
+    void set_whole_set_retry(bool on) { whole_set_retry_ = on; }
 
     // Decodes what the card holds and compares it against the store, byte for byte.
     //
@@ -75,7 +79,8 @@ public:
 private:
     bool stage_at(VkCommandBuffer cmd, const void* source, u64 bytes, u64 destination_offset,
                   GpuBuffer& destination);
-    void stage_regions(VkCommandBuffer cmd, const FaceStore& store);
+    // By reference, not const reference: a run is marked clean the moment it is staged.
+    void stage_regions(VkCommandBuffer cmd, FaceStore& store);
 
     // How many faces the card may claim for itself, and it is a small number on purpose.
     //
@@ -101,6 +106,7 @@ private:
     u32 entry_capacity_ = 0;
     // Kept between frames so a few hundred regions a frame is not a few hundred allocations.
     std::vector<VkBufferCopy> regions_;
+    bool whole_set_retry_ = false;
     FaceBufferStats stats_;
 };
 

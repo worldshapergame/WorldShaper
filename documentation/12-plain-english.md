@@ -1361,6 +1361,34 @@ fixes itself when you leave and come back — points at something narrower: a su
 once it is confident, so surfaces that finished while the room was still filling with light keep the
 darker answer they had. That one I can test.
 
+## The lights while you fly were not slow — they were not being drawn
+
+This is the one I would most want you to look at, because it is a bug that has been in every build
+you have flown around in, and it was hiding as a *good* number.
+
+The graphics card keeps its own copy of the lighting table. When you move, that copy changes fast —
+surfaces appear, others are thrown away — and the game sends the changes across a few megabytes at a
+time. If a frame ran out of room mid-send, it **threw away everything it had just sent and started
+the whole list again next frame**. Moving fast, it never got to the end. The card's copy fell up to
+**434,838 surfaces behind** and stayed there.
+
+What that did is worse than being out of date: pixels could no longer find their own surface in the
+card's copy, so the game gave up on them and drew each one with a **throwaway coarse guess, made
+fresh every single frame** — 8,255 of them per frame. That is the blocky, flickering light you have
+reported more than once. Same picture, third different cause.
+
+It now sends what fits and keeps the rest for next frame. The card's copy is **0 surfaces behind**,
+and it runs out of room on **1 frame in 400 instead of 253**.
+
+**What you will see while flying:** balustrades, window reveals and cornices that used to break into
+hard black and white blocks now stay lit stone. Nearly three quarters of the screen changes. Stray
+bright pixels drop from 2,720 to 944.
+
+**And it costs, honestly.** The lighting pass goes from 2.0 ms to about 7 ms while flying, which is
+over its budget. None of that is new work — it is the work that was being skipped. The old number was
+cheap because the lights were not being worked out at all. Making that fast again is the denoiser's
+job, which is the next stage in the plan.
+
 **And one measurement that is bigger than the change that found it.** While hunting the above I
 finally got the game to report, while you are *moving*, how far the graphics card's copy of the
 lighting table is behind ours. The answer is **up to 434,838 surfaces**: we throw a surface away, the

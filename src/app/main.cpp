@@ -248,6 +248,7 @@ struct Options {
     u64 screenshot_frame = 30;
     u32 debug_mode = 0;   // 0 shaded, 1 step count, 2 face normals
     u32 face_budget = 0;  // faces the store may hold; 0 keeps FaceStoreBudget's own figure
+    bool whole_set_retry = false;  // the control arm for D544: clear only when it ALL fitted
     bool face_pressure = true;   // shorten the cold window as the table fills (D502)
     u32 face_pressure_from = 0;  // 0 keeps kFacePressureFrom; 2 means "from half free"
     // How often a face a pixel read reports itself to the store, in frames, a power of two. 0 is off
@@ -610,6 +611,11 @@ Options parse_options(int argc, char** argv) {
             options.bounce_min = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--face-pressure-from" && i + 1 < argc) {
             options.face_pressure_from = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--whole-set-retry") {
+            // The control arm for D544: an upload that runs out of staging clears nothing and
+            // resends the whole dirty set next frame, which is what it did before. Two flags of one
+            // build, as D407 requires.
+            options.whole_set_retry = true;
         } else if (arg == "--no-face-pressure") {
             // The control arm for D502: the store waits until it is FULL before giving anything up,
             // which is what it did before. Two flags of one build, as D407 requires.
@@ -5233,6 +5239,7 @@ int Application::play(const Options& options) {
             WS_LOG_FATAL("app", "could not create the face store buffers");
             return 1;
         }
+        face_buffers_.set_whole_set_retry(options_.whole_set_retry);
         // Every slot the face pass may write: the store's capacity plus the card's provisional
         // tail. Not the watermark, which grows.
         // Twelve words a slot: the two ambient sample counts packed in one word, the near-field

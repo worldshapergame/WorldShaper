@@ -7,6 +7,8 @@
 // written twice and drifting -- and a dirty map that disagrees with itself is a stale byte on the
 // GPU, which is the one class of fault that shows up as a wrong picture rather than an error.
 
+#include <algorithm>
+#include <bit>
 #include <utility>
 #include <vector>
 
@@ -46,6 +48,34 @@ public:
     }
     void mark_range(u64 first, u64 count) {
         for (u64 i = 0; i < count; ++i) mark(first + i);
+    }
+    // Clear exactly this span and nothing outside it.
+    //
+    // The primitive a PARTIAL upload needs. An upload that ran out of staging has still sent the
+    // runs it managed to stage; clearing those while the rest stays marked is the difference
+    // between a backlog that drains one staging region a frame and one that never drains at all,
+    // because a whole-set retry restages the same prefix and runs out in the same place for ever.
+    //
+    // Word at a time rather than bit at a time: a coalesced entry run can span the whole two
+    // million bucket table, and doing that per bit once a frame is a millisecond of nothing.
+    void clear_range(u64 first, u64 count) {
+        if (count == 0 || first >= count_) return;
+        u64 end = first + count;
+        if (end > count_) end = count_;
+        u64 i = first;
+        while (i < end) {
+            const usize word = static_cast<usize>(i >> 6);
+            const u64 offset = i & 63;
+            u64 span = 64 - offset;
+            if (i + span > end) span = end - i;
+            const u64 mask = (span == 64) ? ~0ull : (((1ull << span) - 1ull) << offset);
+            const u64 hit = words_[word] & mask;
+            if (hit != 0) {
+                words_[word] &= ~mask;
+                marked_ -= static_cast<u64>(std::popcount(hit));
+            }
+            i += span;
+        }
     }
     bool empty() const { return marked_ == 0; }
     u64 marked() const { return marked_; }
