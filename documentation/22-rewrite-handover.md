@@ -1811,6 +1811,38 @@ what fills the table and the cap collapses on its own. **And the coarse pyramid 
 them there. That is unexplained, it is not this change's doing, and it is the next thing to find in
 this pass.
 
+### R9g: the two faults it names cannot happen here, and the one it does not name cost 14 ms an edit
+
+**Asked for as "do R9g", and one run said the stage was written against a symptom this engine cannot
+produce** (D587). §8 R9g's case is that a lamp in an unloaded region does not exist and one past the
+cap blinks out. The facility has **21 emitters against a cap of 1,024**, and nothing anywhere
+unloads a chunk from `World` — `chunks_` is erased only when a chunk is emptied. Neither is
+reachable.
+
+**What was real was standing beside it, unprinted.** `build_light_list` walks every brick of every
+chunk, and `announce_world_change` sets `lights_dirty_` — so it ran on every chisel stroke and every
+region the ladder pastes:
+
+| facility, `--chisel 20,16` | `--no-emitter-cache` | default |
+|---|---|---|
+| each rebuild | **13.99 / 13.99 ms** | **2.54 / 2.48 ms** |
+| chunks rescanned by the last | 74 of 74 | **8, 66 reused** |
+| emitters, list version | 21, v2 | 21, v2 |
+
+against the edit's own **0.19 ms** to apply and undo. Finding the lamps was 74× the cost of the edit
+that provoked it and the largest single thing a chisel stroke spent on the CPU. **That is
+`rebuild_coarse_grids` — O(world) for a change one metre across, D522 — four times over, three
+stages later, in a different file.** The class is worth more than the fix: *anything rebuilt from
+the whole world on an announcement is this*, and two have now been found by timing the suspect
+beside the thing it was reacting to.
+
+**Why the split is safe, and it is arithmetic rather than care.** A cluster cell is four voxels and
+a chunk is 256, and **4 divides 256 exactly**, so no cell straddles a chunk and two chunks' cells
+have disjoint keys — the cached halves concatenate. The MERGE is not cached and must not be: it
+ranks and caps globally, and a fitting may straddle a boundary. The gate is identity, not
+plausibility — `light_list_hash` against the whole-world scan, on a world built to contain a
+straddling fitting.
+
 ### R9c is built and switched off, and the measurement is why
 
 **The premise had never been measured and half of it was wrong** (D585, D586). The plan says a pan
@@ -2497,6 +2529,9 @@ lit (D581);
 of the rewrite, which is R6's control arm and the state every picture figure above that section was
 measured in — it works by having the host zero both of the meter's slots every frame, so the shader
 takes its own "nothing has been measured" branch and no flag reaches it;
+`--no-emitter-cache` makes the emitter list rediscover every chunk on every announced change again,
+which is R9g's control arm and the state every figure before it was measured in — it is a cleared
+map rather than a second code path, so the arms cannot differ by a branch;
 `--halo` claims faces past the edge of the screen over a margin sized by how fast the camera is
 turning, which is R9c — **off by default**, because it costs the sun's stride (6 → 7) for about a
 quarter of one edge's ambient deficit, and `--halo-lead N` is how many frames of head start it aims

@@ -156,21 +156,16 @@ void note_overflow(usize dropped) {
 
 }  // namespace
 
-std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTable& types,
-                                          i64 centre_x, i64 centre_y, i64 centre_z) {
-    // The fine grid first. It is not the answer — a sconce is bigger than one cell and would
-    // come out as a dozen lights — but it is what makes the scan cheap, and it reduces a solid
-    // emissive wall to something the fitting pass below can afford to walk.
+std::vector<EmissiveCell> scan_chunk_emitters(const Chunk& chunk, i64 base_x, i64 base_y,
+                                              i64 base_z, const VoxelTypeTable& types) {
+    // The fine grid. It is not the answer — a sconce is bigger than one cell and would come out
+    // as a dozen lights — but it is what makes the scan cheap, and it reduces a solid emissive
+    // wall to something the fitting pass can afford to walk.
     std::unordered_map<ClusterKey, u32, ClusterKeyHash> cell_of;
     std::vector<ClusterKey> cell_keys;
     std::vector<Cluster> cells;
 
-    world.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
-        if (chunk.empty()) return;
-        const i64 base_x = coord.x * static_cast<i64>(kChunkEdge);
-        const i64 base_y = coord.y * static_cast<i64>(kChunkEdge);
-        const i64 base_z = coord.z * static_cast<i64>(kChunkEdge);
-
+    if (!chunk.empty()) {
         for (u32 bz = 0; bz < kChunkBricks; ++bz) {
             for (u32 by = 0; by < kChunkBricks; ++by) {
                 for (u32 bx = 0; bx < kChunkBricks; ++bx) {
@@ -222,7 +217,54 @@ std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTab
                 }
             }
         }
-    });
+    }
+
+    // Out in the form the host can keep: the key beside the box and the sums, so a cached chunk
+    // needs nothing else to be merged with any other chunk's.
+    std::vector<EmissiveCell> out;
+    out.reserve(cells.size());
+    for (usize i = 0; i < cells.size(); ++i) {
+        const Cluster& c = cells[i];
+        out.push_back(EmissiveCell{cell_keys[i].x, cell_keys[i].y, cell_keys[i].z, c.min_x,
+                                   c.min_y, c.min_z, c.max_x, c.max_y, c.max_z, c.red, c.green,
+                                   c.blue, c.voxels});
+    }
+    return out;
+}
+
+std::vector<LightSource> merge_light_list(const std::vector<EmissiveCell>& source, i64 centre_x,
+                                          i64 centre_y, i64 centre_z) {
+    // Back into the two parallel arrays the merge below has always walked. A cluster cell is four
+    // voxels and a chunk is 256, so cells from two different chunks can never share a key and this
+    // is a copy rather than a merge -- the property the caching rests on, stated where it is used.
+    std::unordered_map<ClusterKey, u32, ClusterKeyHash> cell_of;
+    std::vector<ClusterKey> cell_keys;
+    std::vector<Cluster> cells;
+    cell_keys.reserve(source.size());
+    cells.reserve(source.size());
+    for (const EmissiveCell& in : source) {
+        const ClusterKey key{in.key_x, in.key_y, in.key_z};
+        const auto [at, fresh] = cell_of.try_emplace(key, static_cast<u32>(cells.size()));
+        if (fresh) {
+            cell_keys.push_back(key);
+            cells.push_back(Cluster{in.min_x, in.min_y, in.min_z, in.max_x, in.max_y, in.max_z,
+                                    in.red, in.green, in.blue, in.voxels});
+            continue;
+        }
+        // Cannot happen while the divisibility above holds, and it is folded rather than asserted
+        // because the arithmetic that makes it impossible is in a different file from this one.
+        Cluster& have = cells[at->second];
+        have.min_x = std::min(have.min_x, in.min_x);
+        have.min_y = std::min(have.min_y, in.min_y);
+        have.min_z = std::min(have.min_z, in.min_z);
+        have.max_x = std::max(have.max_x, in.max_x);
+        have.max_y = std::max(have.max_y, in.max_y);
+        have.max_z = std::max(have.max_z, in.max_z);
+        have.red += in.red;
+        have.green += in.green;
+        have.blue += in.blue;
+        have.voxels += in.voxels;
+    }
 
     // Cells joined into fittings, and this is the part that decides whether a building fits
     // under the cap at all. A wall sconce is a few hundred voxels across a dozen cells; a hall
@@ -341,6 +383,22 @@ std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTab
     if (dropped > 0) lights.resize(kMaxLights);
     note_overflow(dropped);
     return lights;
+}
+
+std::vector<LightSource> build_light_list(const World& world, const VoxelTypeTable& types,
+                                          i64 centre_x, i64 centre_y, i64 centre_z) {
+    // The whole world, scanned from scratch. Kept as what it always was, because it is the
+    // reference the incremental path in the application is checked against -- the two must produce
+    // an identical list, and `light_list_hash` is what says so.
+    std::vector<EmissiveCell> cells;
+    world.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
+        std::vector<EmissiveCell> mine =
+            scan_chunk_emitters(chunk, coord.x * static_cast<i64>(kChunkEdge),
+                                coord.y * static_cast<i64>(kChunkEdge),
+                                coord.z * static_cast<i64>(kChunkEdge), types);
+        cells.insert(cells.end(), mine.begin(), mine.end());
+    });
+    return merge_light_list(cells, centre_x, centre_y, centre_z);
 }
 
 u64 light_list_hash(const std::vector<LightSource>& lights) {

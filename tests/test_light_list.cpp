@@ -418,3 +418,91 @@ TEST_CASE("an edit that touches no emitter leaves the list identity alone") {
     fill(world, 200, 0, 0, 231, 31, 31, make_stone(types));
     CHECK(light_list_hash(build_light_list(world, types, 0, 0, 0)) == before);
 }
+
+// R9g. The expensive half of finding the lamps is per chunk and only changes when that chunk
+// does, so the application keeps each chunk's cells and rescans only what an edit touched. That
+// is worth 14.15 ms an edit on the facility — and it is only worth anything if the answer does
+// not move, because a list that is nearly right is a room lit by nearly the right lamps.
+//
+// The gate is therefore identity against the whole-world scan, not plausibility: same fittings,
+// same order, same hash. A fitting that STRADDLES a chunk boundary is the case that would break a
+// naive split, so the world here is built to contain one.
+TEST_CASE("scanning chunk by chunk gives the same lights as scanning the world") {
+    VoxelTypeTable types;
+    World world;
+    const VoxelTypeId lamp = make_lamp(types, 200);
+
+    // One fitting inside a chunk, one lying across the boundary at x = 256, and one far away so
+    // the ranking has something to order.
+    fill(world, 10, 10, 10, 13, 13, 13, lamp);
+    fill(world, 254, 40, 40, 258, 43, 43, lamp);
+    fill(world, 700, 12, 12, 703, 15, 15, lamp);
+    fill(world, -260, 5, 5, -256, 8, 8, lamp);
+
+    const std::vector<LightSource> whole = build_light_list(world, types, 0, 0, 0);
+    REQUIRE(whole.size() >= 3);
+
+    std::vector<EmissiveCell> cells;
+    world.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
+        std::vector<EmissiveCell> mine =
+            scan_chunk_emitters(chunk, coord.x * static_cast<i64>(kChunkEdge),
+                                coord.y * static_cast<i64>(kChunkEdge),
+                                coord.z * static_cast<i64>(kChunkEdge), types);
+        cells.insert(cells.end(), mine.begin(), mine.end());
+    });
+    const std::vector<LightSource> piecewise = merge_light_list(cells, 0, 0, 0);
+
+    REQUIRE(piecewise.size() == whole.size());
+    for (usize i = 0; i < whole.size(); ++i) {
+        CHECK(piecewise[i].x == whole[i].x);
+        CHECK(piecewise[i].y == whole[i].y);
+        CHECK(piecewise[i].z == whole[i].z);
+        CHECK(piecewise[i].voxels == whole[i].voxels);
+        CHECK(piecewise[i].red == doctest::Approx(whole[i].red));
+    }
+    // And the identity the renderer actually reads, which is what decides whether every face in
+    // the store throws its lamp light away and measures again.
+    CHECK(light_list_hash(piecewise) == light_list_hash(whole));
+}
+
+// The half of the same claim that the test above cannot see: a chunk that was NOT rescanned must
+// contribute exactly what it contributed before. This is the cache, played out by hand — scan
+// everything, drop one chunk's cells, rescan only that one, and the answer must not move.
+TEST_CASE("rescanning one chunk and keeping the rest changes nothing") {
+    VoxelTypeTable types;
+    World world;
+    const VoxelTypeId lamp = make_lamp(types, 180);
+    fill(world, 20, 20, 20, 23, 23, 23, lamp);
+    fill(world, 300, 30, 30, 303, 33, 33, lamp);
+    fill(world, 600, 60, 60, 603, 63, 63, lamp);
+
+    std::unordered_map<ChunkCoord, std::vector<EmissiveCell>, ChunkCoordHash> cache;
+    auto rebuild = [&]() {
+        std::vector<EmissiveCell> cells;
+        world.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
+            auto found = cache.find(coord);
+            if (found == cache.end()) {
+                found = cache.emplace(coord,
+                                      scan_chunk_emitters(chunk,
+                                                          coord.x * static_cast<i64>(kChunkEdge),
+                                                          coord.y * static_cast<i64>(kChunkEdge),
+                                                          coord.z * static_cast<i64>(kChunkEdge),
+                                                          types))
+                            .first;
+            }
+            cells.insert(cells.end(), found->second.begin(), found->second.end());
+        });
+        return merge_light_list(cells, 0, 0, 0);
+    };
+
+    const std::vector<LightSource> first = rebuild();
+    CHECK(light_list_hash(rebuild()) == light_list_hash(first));   // nothing dropped: cache only
+
+    // Now place a fourth lamp and drop only the chunk it landed in, which is what
+    // announce_world_change does with the edited box.
+    fill(world, 310, 40, 40, 313, 43, 43, lamp);
+    cache.erase(ChunkCoord{1, 0, 0});
+    const std::vector<LightSource> after = rebuild();
+    CHECK(after.size() == first.size() + 1);
+    CHECK(light_list_hash(after) == light_list_hash(build_light_list(world, types, 0, 0, 0)));
+}

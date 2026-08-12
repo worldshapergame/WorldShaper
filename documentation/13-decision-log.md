@@ -3265,3 +3265,56 @@ third population with the same shape. Until it has one, this stage cannot be fre
 | D586 | **The halo reports no node misses** | R9h | Claiming a margin is bounded; STREAMING a margin is not, and "no light path may cause streaming" is the rule this stage sits next to. So the halo claims faces out of geometry the pool already holds |
 | D586 | **Off by default, on the sun stride** | D527, D557 | The frame time is identical in both arms and the cost is entirely in a convergence figure. Shipping it on would be the third time this project mistook a diluted refresh rate for a free change |
 | D586 | **The gate is the mirror pair, not a whole-frame share** | D585 | A deficit down one edge is a rounding error in a share of the frame. `tools\bands.ps1` and two arms arriving at one pose from opposite directions are what make it a number |
+
+## D587 — R9g: what the emitter list actually costs, which is not what R9g says it costs
+
+**Asked for as "do R9g", and the first run said the stage's two named faults cannot happen here.**
+§8 R9g says the emitter list is camera-centric and needs voxels, so *a lamp in a region that is not
+loaded does not exist* and *one just past the cap blinks out*. Measured on the facility: **21
+emitters against a cap of 1,024**, and nothing anywhere unloads a chunk from `World` — `chunks_` is
+only erased when a chunk is emptied. Neither fault is reachable in the only scene this engine is
+judged against, and building against them would have been building against a symptom nobody can see.
+
+**What is real is a third thing the plan does not name, and it is large.** `build_light_list` walks
+**every brick of every chunk**, and `lights_dirty_` is set by `announce_world_change` — so it runs
+on every chisel stroke and, since D397, on every region the clip ladder pastes. Timed:
+
+| facility, `--chisel 20,16`, 400 frames | rediscover every time | keep what did not change |
+|---|---|---|
+| rebuilds over the run | 32 | 32 |
+| **each** | **13.99 / 13.99 ms** | **2.54 / 2.48 ms** |
+| chunks rescanned by the last one | 74 of 74 | **8, with 66 reused** |
+| worst (the first, with nothing cached) | 14.55 / 14.80 | 14.19 / 14.25 |
+| emitters found, list version | 21, v2 | 21, v2 |
+
+Against the edit that provokes it costing **0.19 ms to apply and undo**. So finding the lamps was
+**74× the cost of the edit**, it was the largest single thing a chisel stroke spent on the CPU, and
+no line anywhere printed it. That is `rebuild_coarse_grids` exactly — O(world) for a change one
+metre across, D522, 3.86 ms — four times over, three stages later, in a different file.
+
+**The split, and the arithmetic that makes it safe.** Finding the emitters is two halves: a SCAN
+that is per chunk and only changes when that chunk does, and a MERGE — cells joined into fittings,
+ranked, capped — that must see every cell at once because a fitting may straddle a chunk boundary.
+Only the first is expensive and only the first is cached. **A cluster cell is four voxels and a
+chunk is 256, and 4 divides 256 exactly**, so no cell ever straddles a chunk and two chunks' cells
+have disjoint keys — which is what makes the cached halves concatenate rather than merge.
+
+**The gate is identity and not plausibility**, because a list that is nearly right is a room lit by
+nearly the right lamps: `scanning chunk by chunk gives the same lights as scanning the world` builds
+a world containing a fitting that deliberately straddles x = 256 and requires the same fittings in
+the same order with the same `light_list_hash`; `rescanning one chunk and keeping the rest changes
+nothing` plays the cache out by hand. 525 tests.
+
+**What is left of R9g, and it is most of it.** The persistence half — emitters written into the
+world cache beside the region index so they load with the index rather than with the voxels — is not
+built, because the fault it fixes needs a world that unloads chunks and this engine does not have
+one yet. The scan cache is the shape that half will be built on: a chunk's cells are already a
+standalone record.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D587 | **Measure the named fault before building the named fix** | D569, D584 | Twice in this session a stage's stated justification did not survive one run. Here the justification was unreachable and the real cost was 14 ms an edit standing beside it, unprinted |
+| D587 | **Cache the scan, never the merge** | correctness | The merge decides which fittings survive the cap and in what order, and both are global. Caching it would make the answer depend on which chunks happened to be rescanned |
+| D587 | **Invalidate on the EDIT's box, not the announcement's** | measurement | `announce_world_change` grows its box by `kEditShadowReach`, sixteen metres, because that is how far a SHADOW reaches. A lamp can only have moved where the geometry did |
+| D587 | **The gate is `light_list_hash`, over a world with a straddling fitting** | trap 15 | A split that got boundaries wrong would still produce a plausible list. Identity against the whole-world scan is the only check that cannot pass by accident |
+| D587 | **`--no-emitter-cache` is a cleared map, not a second path** | D407 | The two arms run the same code and differ by what is in a container, so the A/B cannot be measuring a branch |

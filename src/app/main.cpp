@@ -348,6 +348,9 @@ struct Options {
     // three times. `--halo` turns it on and the margin is otherwise nought, which is a dispatch
     // exactly the size of the screen and no second code path anywhere.
     bool halo = false;
+    // R9g: each chunk's emissive cells are kept between rebuilds and only what an edit touched is
+    // rescanned. False rediscovers the whole world every time, which is D587's control arm.
+    bool emitter_cache = true;
     // How many frames of head start to aim for. The ambient burst is kSkyBurst a frame, so this
     // times sixteen is roughly how many samples a face gains before it comes on screen -- and the
     // deficit it is closing is 112 samples against 707 (D585). Larger is a wider margin and more
@@ -739,6 +742,9 @@ Options parse_options(int argc, char** argv) {
             // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
             // is the state every figure taken before R5 was measured in.
             options.face_denoise = false;
+        } else if (arg == "--no-emitter-cache") {
+            // R9g's control arm: rediscover every chunk's emitters on every announced change.
+            options.emitter_cache = false;
         } else if (arg == "--halo") {
             // R9c on: claim a margin past the screen, sized by how fast the camera is turning.
             options.halo = true;
@@ -1474,6 +1480,24 @@ private:
     GpuBuffer light_buffer_;
     u32 light_count_ = 0;
     bool lights_dirty_ = true;
+    // What the emitter scan costs over a run, because it is O(world) and runs on every announced
+    // change to the world. See update_lights, and R9g in documentation/21-renderer-rewrite.md.
+    u64 light_build_ns_ = 0;
+    u64 light_build_worst_ns_ = 0;
+    u64 light_builds_ = 0;
+    // R9g: the emissive cells of each chunk, kept between rebuilds. A chunk is dropped from here
+    // when the world changes inside it and rescanned on the next rebuild; everything else is
+    // reused. See announce_world_change for why a cell can never straddle a chunk.
+    std::unordered_map<ChunkCoord, std::vector<EmissiveCell>, ChunkCoordHash> emitter_cache_;
+    // How many chunks the last rebuild had to look at, against how many it did not. The figure
+    // this stage is judged on, and it belongs beside the time for the reason trap 20 gives.
+    u32 last_emitter_scans_ = 0;
+    u32 last_emitter_reused_ = 0;
+    // Floor division for the chunk a voxel falls in, which is not `/` for a negative coordinate --
+    // and the origin is INSIDE this building, so half the world has negative coordinates.
+    static i64 floor_div_i64(i64 value, i64 divisor) {
+        return (value >= 0) ? (value / divisor) : -(((-value) + divisor - 1) / divisor);
+    }
     // The identity of the list on the card, and a counter over it.
     //
     // The face pass accumulates lamp light per face and then stops casting rays, so it cannot
@@ -3300,6 +3324,28 @@ void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
     shadow_refresh_frames_ = kShadowRefreshFrames;
     edit_window_opened_ = true;   // see the member: the faces in the box drop their history once
     lights_dirty_ = true;   // a placed lamp is a light nothing can aim at until this is rebuilt
+    // ...and WHICH chunks have to be looked at again, which is the whole of R9g's first half.
+    //
+    // Finding the emitters was a walk of every brick of every chunk, run from scratch on every one
+    // of these announcements -- every chisel stroke and, since D397, every region the clip ladder
+    // pastes. Measured on the facility before this: **14.15 ms on average and 14.99 at worst, to
+    // rediscover the same twenty-one fittings**, against the edit that provoked it costing 0.19 ms
+    // to apply and undo. That is `rebuild_coarse_grids` exactly (D522, O(world) for a change one
+    // metre across) four times over, and no line anywhere printed it.
+    //
+    // A cluster cell is four voxels and a chunk is 256, so no cell straddles a chunk and a chunk's
+    // cells can simply be kept and concatenated. Only the chunks the edited box touches are dropped
+    // from the cache; the merge below still sees every cell in the world, so a fitting that
+    // straddles a boundary is unaffected and the list is identical either way.
+    for (i64 cz = floor_div_i64(lo[2], kChunkEdge); cz <= floor_div_i64(hi[2], kChunkEdge); ++cz) {
+        for (i64 cy = floor_div_i64(lo[1], kChunkEdge); cy <= floor_div_i64(hi[1], kChunkEdge);
+             ++cy) {
+            for (i64 cx = floor_div_i64(lo[0], kChunkEdge); cx <= floor_div_i64(hi[0], kChunkEdge);
+                 ++cx) {
+                emitter_cache_.erase(ChunkCoord{cx, cy, cz});
+            }
+        }
+    }
 
     // And it says it to the region rather than to the world. Everything the change could have
     // altered the light of is inside its own bounds grown by the reach of a shadow; nothing
@@ -3824,13 +3870,54 @@ void Application::update_lights() {
         }
     }
 
-    const std::vector<LightSource> lights =
-        can_emit ? build_light_list(
-                       world_, types_,
-                       camera_.chunk_x() * kChunkEdge + static_cast<i64>(camera_.local_x()),
-                       camera_.chunk_y() * kChunkEdge + static_cast<i64>(camera_.local_y()),
-                       camera_.chunk_z() * kChunkEdge + static_cast<i64>(camera_.local_z()))
-                 : std::vector<LightSource>{};
+    // Timed, because this walk is O(WORLD) and it is run on every announced change to it -- which
+    // since D397 includes every region the clip ladder pastes. That is the shape of the two largest
+    // costs this rewrite has already deleted: `rebuild_coarse_grids` was O(world) for a change one
+    // metre across at 3.86 ms an edit (D522), and `announce_world_change` named every brick in the
+    // edited box at 718 ms in a single frame (D515). Neither was suspected until somebody printed
+    // its cost beside the thing it was supposed to be part of. R9g's whole mechanism -- emitters
+    // persisted per region rather than rediscovered by scanning -- is what would remove this, so the
+    // number belongs here before the change rather than after it.
+    const u64 build_began = now_ns();
+    std::vector<LightSource> lights;
+    last_emitter_scans_ = 0;
+    last_emitter_reused_ = 0;
+    // R9g's control arm: every rebuild rediscovers every chunk, which is what this did before and
+    // is the state every figure taken before it was measured in. It is a cleared cache rather than
+    // a second path, so the two arms run the same code and differ by what is in a map.
+    if (!options_.emitter_cache) emitter_cache_.clear();
+    if (can_emit) {
+        // Scan only the chunks whose cells are not already known, and keep the rest. What was
+        // dropped from the cache is exactly what `announce_world_change` said had changed.
+        //
+        // The MERGE still sees every cell in the world, which is what keeps the answer identical:
+        // a fitting that straddles a chunk boundary is joined here exactly as it was when every
+        // chunk was rescanned, and the ranking and the cap see the same set in the same order.
+        std::vector<EmissiveCell> cells;
+        world_.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
+            auto found = emitter_cache_.find(coord);
+            if (found == emitter_cache_.end()) {
+                ++last_emitter_scans_;
+                found = emitter_cache_
+                            .emplace(coord, scan_chunk_emitters(
+                                                chunk, coord.x * static_cast<i64>(kChunkEdge),
+                                                coord.y * static_cast<i64>(kChunkEdge),
+                                                coord.z * static_cast<i64>(kChunkEdge), types_))
+                            .first;
+            } else {
+                ++last_emitter_reused_;
+            }
+            cells.insert(cells.end(), found->second.begin(), found->second.end());
+        });
+        lights = merge_light_list(
+            cells, camera_.chunk_x() * kChunkEdge + static_cast<i64>(camera_.local_x()),
+            camera_.chunk_y() * kChunkEdge + static_cast<i64>(camera_.local_y()),
+            camera_.chunk_z() * kChunkEdge + static_cast<i64>(camera_.local_z()));
+    }
+    const u64 build_ns = now_ns() - build_began;
+    light_build_ns_ += build_ns;
+    light_build_worst_ns_ = std::max(light_build_worst_ns_, build_ns);
+    ++light_builds_;
 
     // Did anything the renderer can see actually change?
     //
@@ -6829,6 +6916,24 @@ int Application::play(const Options& options) {
                             face_stats.secondary_window, face_stats.cold_window,
                             faces_secondary_offered_, faces_secondary_claimed_,
                             face_stats.secondary_declined, face_stats.promotions);
+                // What finding the lamps costs, which nothing has ever printed. The list is
+                // rebuilt by walking every brick of every chunk, and it is rebuilt on every
+                // announced change to the world -- every chisel stroke and every region the clip
+                // ladder pastes. Printed beside the count so the two are read together: twenty-one
+                // emitters found by a scan of the whole building is the shape R9g exists to fix.
+                // Read the two halves together. A time alone cannot tell a rebuild that reused
+                // everything from one that had nothing to reuse, and the second is what the cost
+                // used to be on EVERY announcement -- trap 20, in the one pass where the work and
+                // the cost are supposed to have come apart.
+                WS_LOG_INFO("light",
+                            "the emitter scan: {} rebuilds over the run, {:.2f} ms each on average, "
+                            "worst {:.2f} ms; the last one rescanned {} chunks and reused {}",
+                            light_builds_,
+                            light_builds_ > 0
+                                ? ns_to_ms(light_build_ns_) / static_cast<f64>(light_builds_)
+                                : 0.0,
+                            ns_to_ms(light_build_worst_ns_), last_emitter_scans_,
+                            last_emitter_reused_);
                 // R9f from the host's side, and the two numbers have to be read as a pair. A live
                 // count alone says what the rule costs and nothing about whether it is working; an
                 // eviction count alone cannot tell "the rule is holding them" from "there were none

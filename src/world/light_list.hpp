@@ -19,6 +19,7 @@
 namespace ws {
 
 class World;
+class Chunk;
 
 // One emitter, in absolute world voxels, with the radiance it gives off.
 struct LightSource {
@@ -76,6 +77,47 @@ inline constexpr u32 kLightMergeSlack = 8;
 // Raising it is a shader edit as well as this one, and costs 28 bytes of host-visible buffer
 // per light (1024 lights is 28 KB today).
 inline constexpr usize kMaxLights = 1024;
+
+// ---- the two halves of finding the lamps, split so only one of them has to be redone ----------
+//
+// Finding the emitters is a walk of every brick of every chunk, and it was run again from scratch
+// on every announced change to the world -- every chisel stroke and every region the clip ladder
+// pastes. Measured on the facility: **14.15 ms on average and 14.99 ms at worst, against the edit
+// that provoked it costing 0.19 ms**, to rediscover the same twenty-one fittings. That is the shape
+// of the two largest costs this rewrite has already deleted (D515, D522) and it had never been
+// printed.
+//
+// The split is where the expense is. The SCAN is per chunk and only changes when that chunk does.
+// The MERGE -- cells joined into fittings, ranked, capped -- runs over a few hundred cells however
+// large the world is, and it has to stay global because a fitting may straddle a chunk boundary.
+//
+// A cluster cell is four voxels and a chunk is 256, so cells never straddle a chunk: 4 divides 256
+// exactly, and the cells of two chunks therefore have disjoint keys. That is what makes the cached
+// halves simply concatenate, with no key merging and no double counting.
+
+// One cluster cell of emissive voxels: the key it was gathered under, the box it occupies and the
+// radiance summed over it. Everything `Cluster` carries inside the merge, in a form the host can
+// keep between frames.
+struct EmissiveCell {
+    i64 key_x = 0, key_y = 0, key_z = 0;
+    i64 min_x = 0, min_y = 0, min_z = 0;
+    i64 max_x = 0, max_y = 0, max_z = 0;
+    f32 red = 0.0f, green = 0.0f, blue = 0.0f;
+    u32 voxels = 0;
+};
+
+// The emissive cells of one chunk. `base` is that chunk's origin in absolute voxels.
+//
+// A brick whose palette holds no emitter is rejected in a handful of comparisons, which is what
+// makes this affordable per chunk; what was never affordable was doing it for every chunk in the
+// world on every edit.
+std::vector<EmissiveCell> scan_chunk_emitters(const Chunk& chunk, i64 base_x, i64 base_y, i64 base_z,
+                                              const VoxelTypeTable& types);
+
+// Cells into fittings, ranked by what each delivers at `centre`, capped. The half that must see
+// every cell at once, and the half that costs nothing because there are only ever a few hundred.
+std::vector<LightSource> merge_light_list(const std::vector<EmissiveCell>& cells, i64 centre_x,
+                                          i64 centre_y, i64 centre_z);
 
 // Collect every emissive voxel in the world, merged into whole fittings, strongest first.
 //
