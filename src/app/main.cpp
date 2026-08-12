@@ -2476,6 +2476,26 @@ void Application::save_refined_world() {
         out.done = box.done;
         cache.regions.push_back(out);
     }
+    // Where the lamps are, so the run that loads this file does not have to read every brick of
+    // every chunk to find out. R9g, and D587 is what it costs when nobody keeps it: 14 ms of scan
+    // to rediscover twenty-one fittings.
+    //
+    // Scanned here for anything not already known rather than assumed complete. The cache is a
+    // fixed point of refinement and a chunk may never have been asked about -- writing only what
+    // happens to be in the map would put a world on disk whose lamps depend on where the camera
+    // stood while it was built, which is precisely the fault R9 as a whole is about.
+    world_.for_each_chunk([&](const ChunkCoord& coord, const Chunk& chunk) {
+        auto found = emitter_cache_.find(coord);
+        if (found == emitter_cache_.end()) {
+            found = emitter_cache_
+                        .emplace(coord, scan_chunk_emitters(
+                                            chunk, coord.x * static_cast<i64>(kChunkEdge),
+                                            coord.y * static_cast<i64>(kChunkEdge),
+                                            coord.z * static_cast<i64>(kChunkEdge), types_))
+                        .first;
+        }
+        cache.emitters.push_back(CachedEmitters{coord.x, coord.y, coord.z, found->second});
+    });
     if (!write_world_cache(refine_cache_path_, refine_cache_key_, cache)) return;
     refine_saved_regions_ = done;
     WS_LOG_INFO("clip", "kept the world with {} of {} regions sharpened", done,
@@ -2810,6 +2830,19 @@ void Application::build_world() {
                 }
                 material_index_ = options_.material % materials_.size();
                 chisel_.set_material(materials_[material_index_]);
+                // And where the lamps are, which comes back with the world rather than being read
+                // out of it again. R9g. An OLD file carries none, and that has to mean "nobody
+                // wrote any" rather than "there are none" -- so the map is simply left empty and
+                // every chunk is scanned on the first rebuild, exactly as before. Trap 7, and here
+                // the wrong answer is a building with its lights off.
+                for (const CachedEmitters& chunk : cache.emitters) {
+                    emitter_cache_.emplace(ChunkCoord{chunk.chunk_x, chunk.chunk_y, chunk.chunk_z},
+                                           chunk.cells);
+                }
+                if (!cache.emitters.empty()) {
+                    WS_LOG_INFO("light", "the lamps came back with the world: {} chunks of cells",
+                                cache.emitters.size());
+                }
                 // Logged because a palette of one is indistinguishable from a key that does not
                 // work, and the two have different fixes. That is how this was found.
                 WS_LOG_INFO("tool", "palette: {} materials from {}", materials_.size(),

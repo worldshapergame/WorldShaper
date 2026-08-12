@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "core/types.hpp"
+#include "world/light_list.hpp"
 #include "world/voxel_type.hpp"
 
 namespace ws {
@@ -72,6 +73,21 @@ struct CachedRegion {
     bool done = false;
 };
 
+// One chunk's emissive cells, kept so that finding the lamps does not mean reading the world again.
+//
+// R9g. Emitters are the one thing about a world that is expensive to find and tiny to store: the
+// facility's 21 fittings come out of a scan of every brick of every chunk that cost **14 ms**, and
+// the cells they were built from are a few hundred bytes. So they are written beside the world
+// rather than rediscovered from it, and a cached world comes back knowing where its lamps are.
+//
+// Per CHUNK and not per region, because that is the granularity an edit invalidates at and the
+// granularity the application already keeps them at -- and because a cluster cell is four voxels
+// and a chunk is 256, so no cell straddles a chunk and the pieces simply concatenate.
+struct CachedEmitters {
+    i64 chunk_x = 0, chunk_y = 0, chunk_z = 0;
+    std::vector<EmissiveCell> cells;
+};
+
 // Everything a cached world needs to come back complete. The materials a clip declared are part
 // of it, because they are what the chisel is loaded with and there is nowhere else to get them
 // once the script is no longer being read.
@@ -86,6 +102,10 @@ struct WorldCache {
     // what a clip built at its authored detail in one pass looks like. It is not the same as a
     // ladder with nothing done, which is a list of boxes all reading false.
     std::vector<CachedRegion> regions;
+    // Where the lamps are, per chunk. Empty means "this file predates R9g or was written by a run
+    // that had not scanned", and the reader treats that as "scan on demand" rather than as "there
+    // are no lamps" -- which is trap 7, and here it would be a building with its lights off.
+    std::vector<CachedEmitters> emitters;
 };
 
 // A number that changes whenever anything that would change the world changes: the source text,

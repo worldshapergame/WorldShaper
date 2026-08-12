@@ -1811,6 +1811,35 @@ what fills the table and the cap collapses on its own. **And the coarse pyramid 
 them there. That is unexplained, it is not this change's doing, and it is the next thing to find in
 this pass.
 
+### R9g's persistence is in, and R9h needed a correction rather than code
+
+**The lamps come back with the world** (D588). A chunk's emissive cells are written into the world
+cache beside the region index, so a loaded world knows where its lamps are instead of reading every
+brick to find out: the rebuild at load goes **14.2 ms scanning 74 chunks to 0.09 ms scanning none**,
+same 21 emitters, same list version. Two things about it are trap 7 and both would be silent: an old
+file carries no emitters and that means *unknown*, never *none* — the other way is a building that
+loads with its lights off; and the file is written by scanning anything not already known rather
+than by dumping whatever is in memory, or its contents would depend on where the camera stood while
+it was built, which is R9's own fault arriving through the cache.
+
+**R9h was measured and mostly needs nothing** (D589). Its three claims have three answers. *The
+analytic sky past the last node* is already done — a gathering ray that leaves the world returns
+`sky_radiance`. *The coarsest folded colour* is worth **3 gathering rays of 482,773** on the close
+camera under continuous editing, which is the most unbuilt geometry this engine can be put in; it is
+not built, and the number is here so nobody re-derives it. Giving those rays a colour needs an
+irradiance to multiply it by, there is not one, and inventing it is D541–D543's deleted light floor
+arriving through a third door — `darkroom.ps1` is the gate that would catch it.
+
+**What was actually wrong was the rule.** *"No light path may cause streaming"* is stated as
+absolute with R9a as the single deliberate exception, and **R9i is a second one that postdates the
+sentence**: a shadow ray reports the cell that stopped it, and D430 lets it say it is using that
+cell. Both are deliberate, both are bounded to one entry per node per window by `node_seen` (D431),
+and over a settled run the pool builds **1 node** with them on against 4 with
+`--no-light-keeps-geometry`. The rule now reads *a light path may name the one cell that stopped it
+and the one face it landed on, never what it crossed* — which is what the code does. **An absolute
+the code deliberately breaks in two places is worse than no rule**: the next reader either "fixes" a
+working mechanism or stops believing the document.
+
 ### R9g: the two faults it names cannot happen here, and the one it does not name cost 14 ms an edit
 
 **Asked for as "do R9g", and one run said the stage was written against a symptom this engine cannot

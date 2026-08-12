@@ -3318,3 +3318,79 @@ standalone record.
 | D587 | **Invalidate on the EDIT's box, not the announcement's** | measurement | `announce_world_change` grows its box by `kEditShadowReach`, sixteen metres, because that is how far a SHADOW reaches. A lamp can only have moved where the geometry did |
 | D587 | **The gate is `light_list_hash`, over a world with a straddling fitting** | trap 15 | A split that got boundaries wrong would still produce a plausible list. Identity against the whole-world scan is the only check that cannot pass by accident |
 | D587 | **`--no-emitter-cache` is a cleared map, not a second path** | D407 | The two arms run the same code and differ by what is in a container, so the A/B cannot be measuring a branch |
+
+## D588 — R9g's persistence: the lamps come back with the world
+
+**The second half of R9g, and what it is worth today is not what §8 R9g says it is worth.** That
+section's case is that a lamp in a region which is not loaded does not exist; D587 measured that
+this engine never unloads a chunk, so the case is unreachable. What persistence buys *here* is the
+one cost D587 left behind — the **first** rebuild, which has nothing cached and must read every
+brick of every chunk:
+
+| facility, from a warm cache | before | after |
+|---|---|---|
+| the rebuild at load | **14.2 ms**, 74 chunks scanned | **0.09 ms**, 0 scanned, 74 reused |
+| emitters found, list version | 21, v2 | 21, v2 |
+
+A chunk's emissive cells are a few hundred bytes and are exactly what is expensive to find and
+trivial to keep, so they are written beside the world rather than rediscovered from it: 108 chunks
+of cells for the facility, and `the lamps came back with the world` says so at load.
+
+**Two things about the shape, and both are trap 7.**
+
+An **old file carries no emitters**, and that has to mean *nobody wrote any* rather than *there are
+none*. The map is simply left empty and every chunk is scanned on the first rebuild, exactly as
+before — the wrong reading would be a building loading with its lights off.
+
+And the file is written by **scanning anything not already known**, rather than by writing whatever
+happens to be in the map. The cache is a fixed point of refinement and a chunk may never have been
+asked about; writing only what was in memory would put a world on disk whose lamps depend on where
+the camera stood while it was built, which is the fault R9 exists to remove, arriving through the
+cache instead of through the store.
+
+**The format version goes to 3, and that costs nothing extra**: `src/world` is already one of the
+directories the cache key is stamped from, so any edit here invalidates every cached world anyway.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D588 | **Per chunk, not per region** | D587 | It is the granularity an edit invalidates at, the granularity the application already keeps, and the one where a cluster cell cannot straddle a boundary |
+| D588 | **An absent list means "unknown", never "none"** | trap 7 | Every file written before this carries nothing, and reading that as "no lamps" is a world that loads dark |
+| D588 | **Scan at save for anything unknown** | R9 | A file whose contents depend on where the camera stood is the screen-space light set wearing a third disguise |
+
+## D589 — R9h: the fallback it calls for is worth three rays in half a million
+
+**R9h says: past the last node and the last region record, the answer is the analytic sky and the
+coarsest folded colour on the path — never black, never a stall, never a request.** Measured before
+building any of it, and it is three separate claims with three different answers.
+
+**The sky half is already done.** A gathering ray that leaves the world returns `sky_radiance(dir)`
+and has since R9's bounce landed. Nothing to do.
+
+**The folded-colour half is worth almost nothing here.** The case is a ray stopped by a cell the
+world claims and the pool has not built. On the close camera under continuous editing — the state
+that produces the most unbuilt geometry this engine can be put in — **3 gathering rays of 482,773
+were stopped that way (0.0%)**, with 28 faces of 227,991 shadowed by one. `shade_faces.comp` returns
+nought for those on purpose, and the comment there is right: ignorance errs dark, which is the
+direction this renderer is required to err in. Giving them a folded colour would need an irradiance
+to multiply it by, and there isn't one — inventing it is D541–D543's deleted light floor arriving
+through a third door, and `darkroom.ps1` is the gate that would catch it. **Not built, with the
+number, so nobody re-derives it.**
+
+**The rule is the part that is wrong, and it is wrong because something better was built.** *"No
+light path may cause streaming"* is stated as absolute with R9a as "the single exception,
+deliberately". R9i is a second exception and it postdates the sentence: a shadow ray reports the one
+cell that STOPPED it (D341–D343), and D430 lets it say it is USING that cell. Both are deliberate,
+both are bounded — `node_seen` makes it one entry per node per window however many rays hit it
+(D431) — and both are measurable: over a settled run the pool **built 1 node** with the light rules
+on and 4 with `--no-light-keeps-geometry`. So the honest rule is not "never" but:
+
+> A light path may name the one cell that stopped it and the one face it landed on. Never what it
+> crossed, and never more than one entry per node per window.
+
+That is what the code does, it is what D292 narrowed to, and stating it as an absolute made a
+correctly-built mechanism look like a violation.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D589 | **The folded-colour fallback is not built** | measurement | Three rays of 482,773 in the worst state this engine reaches. The cost of being wrong about it is a light floor, which two entries of this log exist to have removed |
+| D589 | **The rule is restated to what was built** | D292, D341, D430 | An absolute that the code deliberately breaks in two places is worse than no rule: the next reader either "fixes" a working mechanism or stops trusting the sentence |

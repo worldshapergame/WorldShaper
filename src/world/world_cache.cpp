@@ -21,7 +21,7 @@ namespace {
 constexpr u32 kMagic = 0x57534357u;   // "WSCW"
 // 2 — the sharpened-region list, so a world cached before it finished can be carried on rather
 // than mistaken for a finished one. An older file is rejected by the header check and rebuilt.
-constexpr u32 kVersion = 2u;
+constexpr u32 kVersion = 3u;   // R9g: a chunk's emissive cells are written beside the world
 
 // A brick, exactly as it is held. No canonical form, no re-encode: the whole reason this file
 // exists is that it can be read faster than the world can be rebuilt, and a normalisation pass
@@ -247,6 +247,18 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
         put_pod(out, static_cast<u8>(region.done ? 1u : 0u));
     }
 
+    // Where the lamps are, so a loaded world does not have to be read again to find them. R9g,
+    // and the same argument as the ledger below: rediscovering them is the order of work this file
+    // exists to skip.
+    put_pod(out, static_cast<u32>(cache.emitters.size()));
+    for (const CachedEmitters& chunk : cache.emitters) {
+        put_pod(out, chunk.chunk_x);
+        put_pod(out, chunk.chunk_y);
+        put_pod(out, chunk.chunk_z);
+        put_pod(out, static_cast<u32>(chunk.cells.size()));
+        for (const EmissiveCell& cell : chunk.cells) put_pod(out, cell);
+    }
+
     // The ledger's running totals. Recomputing them means counting every voxel in the world,
     // which is the same order of work the cache exists to skip.
     if (cache.ledger != nullptr) {
@@ -428,6 +440,23 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         for (f64& v : region.high) v = in.pod<f64>();
         region.done = in.pod<u8>() != 0u;
         cache.regions.push_back(region);
+    }
+    if (!in.ok) return false;
+
+    const u32 emitter_chunks = in.pod<u32>();
+    cache.emitters.clear();
+    if (!in.ok) return false;
+    cache.emitters.reserve(emitter_chunks);
+    for (u32 i = 0; i < emitter_chunks && in.ok; ++i) {
+        CachedEmitters chunk;
+        chunk.chunk_x = in.pod<i64>();
+        chunk.chunk_y = in.pod<i64>();
+        chunk.chunk_z = in.pod<i64>();
+        const u32 cell_count = in.pod<u32>();
+        if (!in.ok) return false;
+        chunk.cells.reserve(cell_count);
+        for (u32 c = 0; c < cell_count && in.ok; ++c) chunk.cells.push_back(in.pod<EmissiveCell>());
+        cache.emitters.push_back(std::move(chunk));
     }
     if (!in.ok) return false;
 
