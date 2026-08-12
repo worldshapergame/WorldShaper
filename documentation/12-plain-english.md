@@ -2181,3 +2181,27 @@ budget that can pay it. The default picture is unchanged: 4.342 ms against 4.369
 **What it would actually take** is not a constant I can tune: it is a way to spend roughly ten times
 more rays on a few thousand surfaces. That is its own piece of work, and I would want you to decide
 it is worth a session before I start it.
+
+## Light comes through the windows now
+
+Every window in the building was lit as though it were made of stone. A room with four windows in it
+received **nothing** — no sun, no sky, nothing — and was drawn by whatever lamps happened to be in
+it. Stand in one of the wing halls on the old build and it is pitch black.
+
+The rays that carry light now pass through glass instead of stopping dead on it. Same room, same
+camera: **the picture changes on 1,018,413 pixels out of 1,024,000**, which is the largest single
+change anything in this stage has made. The reveals are bright, the light falls off across the floor,
+and you can see the room.
+
+**One deliberate asymmetry, and it is the whole design.** The ray from your eye still stops at the
+glass — it has to, because the game works out a surface's light where your eye lands on it, and a
+window your eye passed straight through would have no light of its own and no reflection. It is only
+the *light* rays that go through. What a shadow ray wants to know is whether the sun reaches, and a
+window does not stop the sun.
+
+It costs half a millisecond on the light pass, because those rays now travel further before they
+find something. The pass that draws what you see does not move at all, because it never asks.
+
+**Still owed**: the glass does not tint or dim what passes by distance yet — a thick pane and a thin
+one let the same amount through — and looking *at* a window still shows a pale panel rather than the
+room behind it. That second one is the bigger piece and it is where this goes next.

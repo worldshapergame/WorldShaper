@@ -296,6 +296,9 @@ inline constexpr u32 kProbeLobeRay = 1u << 6;
 // hundred and forty-four bins instead of one block and thirty-six. Cleared by
 // `--no-lobe-coverage`, which is the arm that prices the expensive class on its own.
 inline constexpr u32 kProbeLobeCoverage = 1u << 7;
+// R4d: a light ray carries on through transmissive matter instead of stopping dead on it. Cleared
+// by `--no-see-through`, which is the state every figure before R4d was taken in.
+inline constexpr u32 kProbeSeeThrough = 1u << 8;
 
 // R4c's pool: how many blocks of outgoing bins there are and how many words each is. Must match
 // kLobeBlocks, kLobeBins and the layout in shaders/face_terms.glsl, which is the authority because

@@ -921,7 +921,8 @@ SkySample sky_cast(uint index, float max_t) {
                                    g_sky_size, s.at) - g_sky_chunk_origin;
 
     const NodeHit hit =
-        node_march(origin, dir, g_sky_pixel_angle, 0.0, false, false, false, false, true, max_t);
+        node_march(origin, dir, g_sky_pixel_angle, 0.0, false, false, false, false, true,
+                   probe_see_through(), max_t);
 
     s.unknown = hit.hit && hit.unknown;
     s.sky = !hit.hit;
@@ -1159,7 +1160,8 @@ void lobe_cast(uint block, uint bin, uint bins, uint side, uint index, float pix
     const vec3 origin =
         face_point(corner, across, down, g_sky_normal, size, at) - chunk_origin;
     const NodeHit hit =
-        node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true, kNodeUnbounded);
+        node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
+                   probe_see_through(), kNodeUnbounded);
 
     probe_add(1u);
     probe_add(kProbeLobeRays);
@@ -1486,7 +1488,8 @@ vec3 lamp_cast(uint index, out bool unknown, out vec3 to_lamp) {
     if (reach <= 0.0) return chosen_radiance * (cos_surface * inv_pdf);   // standing inside it
 
     const NodeHit hit =
-        node_march(from, dir, g_sky_pixel_angle, 0.0, false, false, false, false, true, reach);
+        node_march(from, dir, g_sky_pixel_angle, 0.0, false, false, false, false, true,
+                   probe_see_through(), reach);
     if (hit.hit) {
         unknown = hit.unknown;
         return vec3(0.0);
@@ -1814,7 +1817,7 @@ void main() {
                                    bitangent * (sin_theta * sin(phi)));
 
         NodeHit hit = node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
-                                 kNodeUnbounded);
+                                 probe_see_through(), kNodeUnbounded);
 
         // The penumbra resolves over samples on the FACE, which is what takes it off the pixel: a
         // soft edge costs the face a few frames instead of costing every pixel that looks at it a

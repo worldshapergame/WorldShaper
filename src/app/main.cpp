@@ -362,6 +362,10 @@ struct Options {
     // whoever comes back to it with a bigger budget; the machinery, the sizes and the audit line
     // are all built and priced.
     bool lobe_coverage = false;
+    // R4d: a light ray carries on through glass and water instead of stopping dead on them, so a
+    // room behind a window is lit through it. `--no-see-through` is the control arm and a window
+    // blocks the sun exactly as a wall does, which is what this renderer has always done.
+    bool see_through = true;
     // R9f's fold: a coarse face's sky and bounce are the average of the four faces under it rather
     // than its own rays at its own scale.
     //
@@ -795,6 +799,9 @@ Options parse_options(int argc, char** argv) {
             // R4a's control arm: no face asks what it is made of, so the descent, the two table
             // reads and the load that finds out all go. The picture is the same in both arms.
             options.face_materials = false;
+        } else if (arg == "--no-see-through") {
+            // R4d's control arm: transmissive matter stops a light ray dead, as it always has.
+            options.see_through = false;
         } else if (arg == "--lobe-coverage") {
             // R4b's second size class on. Off by default -- see the option for the measurement.
             options.lobe_coverage = true;
@@ -5344,7 +5351,8 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.face_fold ? kProbeFold : 0u) |
                               (options_.face_lobe ? kProbeLobe : 0u) |
                               (options_.lobe_ray ? kProbeLobeRay : 0u) |
-                              (options_.lobe_coverage ? kProbeLobeCoverage : 0u);
+                              (options_.lobe_coverage ? kProbeLobeCoverage : 0u) |
+                              (options_.see_through ? kProbeSeeThrough : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),

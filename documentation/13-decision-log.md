@@ -4035,3 +4035,54 @@ them pay, and the census this entry adds is what will size it.
 | D601 | **A second word a slot rather than repacking the first** | design | Opacity and the index need sixteen bits and the material word has six. 4.2 MB is what every card-owned array here costs |
 | D601 | **A debug view before a consumer** | trap 1 | And it earned itself immediately, by making an unpacking that looked wrong provably right |
 | D601 | **The marcher is named as the remaining work, with the three alternatives eliminated** | process | Each of the three is the obvious way to avoid it, and each fails for a reason that is a measurement rather than an opinion |
+
+## D602 — R4d: light stops being blocked by a window
+
+**The marcher can see through transmissive matter, and the first ray to use it is not the primary
+one.** D601 named this as the remaining work and said it needed the hottest loop in the renderer;
+this is the half of it that needs no buffer change at all.
+
+**The division is the whole design.** `see_through` is FALSE for the primary ray and TRUE for the
+light rays:
+
+- the **primary** ray has to stop on the glass, because a face is claimed where a pixel lands — a
+  window a pixel passed through would have no face, no sun, no lamps and no reflection, and R4c's
+  whole lobe would vanish from exactly the surfaces it was built for;
+- a **shadow, ambient, gathering or lamp** ray has no such need. What a shadow ray wants to know is
+  whether the sun reaches, and **a window does not stop the sun**.
+
+**Asked at the leaf and only at the leaf**, because a coarse node stands over as many as 512 voxels
+which need not agree about being glass — the same reason `face_material` answers NONE above level 0.
+And asked only when the caller wants it, so the primary ray's inner loop is byte for byte what it
+was: what it costs when it does not fire is a branch on a uniform.
+
+**What it is worth, and it is the largest single number this stage has produced.** A camera in a
+wing hall, one flag of one build, settled:
+
+| | mean of 255 | pixels past 8 |
+|---|---|---|
+| **a wing hall** | **95.577** | **1,018,413 of 1,024,000** |
+| enclosed | 1.830 | 11,461 |
+| close | 2.080 | 36,367 |
+
+The hall was **black**. Every window in this building was lit as though it were stone, so a room
+with four windows in it received nothing at all and was drawn by the lamp term alone. It is now
+daylit, with the reveals bright and the light falling off across the floor.
+
+**Cost:** close camera faces **4.872 ms against 4.386**, visibility **1.777 against 1.727** — the
+light rays travel further because they no longer stop at the first pane, and the visibility pass
+does not move at all because it never asks. 527 tests, 18.67 M assertions, `--validation` clean.
+`--no-see-through` is the control arm.
+
+**What is still owed.** The tint is the medium's own colour mixed by its opacity, and there is **no
+Beer-Lambert over the path** — the exact voxel distance and the `absorb` bytes it needs are the next
+sub-step. And the PRIMARY ray still stops on glass, so a window is still drawn as a pale panel
+rather than as something you see through; that is the half that needs the visibility buffer to carry
+both the pane and what is behind it, and it is where R4d goes next.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D602 | **See-through is per RAY, and off for the primary one** | correctness | A face is claimed where a pixel lands, so a window the primary ray passed through would lose its own light and its reflection |
+| D602 | **Asked at the leaf only** | D132 | A coarse node stands over 512 voxels that need not agree about being glass, which is why `face_material` answers NONE above level 0 |
+| D602 | **Bounded by what survives, not by a layer count** | correctness | A ray down the length of a pane would multiply a hundred times; below two per cent the medium has taken everything and the ray has its answer |
+| D602 | **No Beer-Lambert yet, and said so** | process | The exact voxel path and the absorb bytes are a sub-step of their own. What this is is light no longer being blocked outright |

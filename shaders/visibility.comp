@@ -165,8 +165,11 @@ void main() {
     // of geometry the pool ALREADY holds, and where the pool holds nothing the halo finds nothing
     // and the face is claimed the ordinary way when a pixel lands on it.
     if (!on_screen) {
+        // `see_through` is FALSE for the primary ray, and that is R4d's design rather than an
+        // omission: a face is claimed where a pixel lands, so a window that a pixel passed through
+        // would have no face, no light of its own and no reflection. See node_march.
         NodeHit halo = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), false,
-                                  false, true, true, false, kNodeUnbounded);
+                                  false, true, true, false, false, kNodeUnbounded);
         if (halo.hit && halo.face_level != kNoFaceLevel) {
             node_face_seen(node_face_lookup(halo.face_node, halo.face_level, halo.face_dir));
         }
@@ -174,7 +177,7 @@ void main() {
     }
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
-                             report_used, report_face, true, false, kNodeUnbounded);
+                             report_used, report_face, true, false, false, kNodeUnbounded);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {

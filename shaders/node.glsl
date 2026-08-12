@@ -619,6 +619,11 @@ const uint kProbeLobeRay = 1u << 6;
 // surface and however much of the screen it fills -- which is what R4b landed with, and is the arm
 // that prices the expensive class on its own.
 const uint kProbeLobeCoverage = 1u << 7;
+// R4d's first half: a LIGHT ray carries on through transmissive matter instead of stopping dead on
+// it. Off, a window blocks the sun, the sky and every lamp exactly as a wall does, which is what
+// this renderer has always done and is the state every figure before this was taken in.
+// `--no-see-through` clears it.
+const uint kProbeSeeThrough = 1u << 8;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -676,6 +681,7 @@ bool probe_fold() { return (light_probe.words[0] & kProbeFold) != 0u; }
 bool probe_lobe() { return (light_probe.words[0] & kProbeLobe) != 0u; }
 bool probe_lobe_ray() { return (light_probe.words[0] & kProbeLobeRay) != 0u; }
 bool probe_lobe_big() { return (light_probe.words[0] & kProbeLobeCoverage) != 0u; }
+bool probe_see_through() { return (light_probe.words[0] & kProbeSeeThrough) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
@@ -2383,9 +2389,35 @@ struct NodeHit {
     uint face_dir;
     int level;
     uint steps;
+    // R4d: what fraction of a ray survived the transmissive matter it crossed on the way here.
+    //
+    // One for a ray that crossed nothing, which is every ray on nine tenths of this building, and
+    // the product of what each pane let through otherwise. It is a COLOUR because glass is coloured:
+    // a green pane turns white sun green on its way in, and the tint is the medium's own albedo.
+    vec3 through;
 };
 
 const uint kNoFaceLevel = 0xFFFFFFFFu;
+
+// How far a ray gets through one voxel of a transmissive material, as a tint.
+//
+// `opacity` is what the clip author wrote and what `face_medium` carries; the colour is the voxel's
+// own, because a pane of green glass makes what passes through it green. There is no Beer-Lambert
+// over the path here and there deliberately is not yet: the exact voxel distance is R4d's own
+// sub-step and the `absorb` bytes it needs are not on the face. What this is is the first half --
+// light stops being blocked outright by a window.
+vec3 node_medium_through(uint type_id) {
+    const uint type_at = min(type_id, uint(types.items.length()) - 1u);
+    const uint visual_at = min(types.items[type_at].x, uint(visuals.items.length()) - 1u);
+    const uvec4 visual = visuals.items[visual_at];
+    const float opacity = float((visual.x >> 24u) & 0xFFu) * (1.0 / 255.0);
+    if (opacity >= 1.0) return vec3(0.0);
+    const vec3 tint = vec3(float(visual.x & 0xFFu), float((visual.x >> 8u) & 0xFFu),
+                           float((visual.x >> 16u) & 0xFFu)) * (1.0 / 255.0);
+    // Mixed towards white rather than multiplied outright: a pane a quarter opaque should tint what
+    // passes by a quarter, not paint it its own colour. At opacity nought it is clear glass.
+    return mix(vec3(1.0), tint, opacity) * (1.0 - opacity);
+}
 
 // Coverage along one face direction, out of the six bytes a node carries.
 //
@@ -2516,9 +2548,17 @@ const uint kNodeMaxSteps = 512u;
 // and the two counts are kept apart in the record so neither can be read as the other.
 const float kNodeUnbounded = 3.4e38;
 
+// `see_through` is R4d's first half: a ray that meets transmissive matter carries on through it,
+// multiplying `result.through` by what it let past, instead of stopping dead.
+//
+// It is off for the PRIMARY ray and on for the light rays, and that division is the whole design.
+// The primary ray has to stop on the glass, because a face is claimed where a pixel lands and the
+// window's own surface -- its sun, its sky, its lamps and its reflection -- exists only if it is
+// claimed. The light rays have no such need: what a shadow ray wants to know is whether the sun
+// reaches, and a window does not stop the sun.
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
                    bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
-                   float max_t) {
+                   bool see_through, float max_t) {
     NodeHit result;
     result.hit = false;
     result.unknown = false;
@@ -2527,6 +2567,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     result.type_id = 0u;
     result.colour = 0u;
     result.coverage = 255u;
+    result.through = vec3(1.0);
     result.face_node = ivec3(0);
     result.face_level = kNoFaceLevel;
     result.face_dir = 0u;
@@ -2701,6 +2742,39 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
             for (int inner_step = 0; inner_step < 3 * 8; ++inner_step) {
                 if (any(lessThan(inner, ivec3(0))) || any(greaterThanEqual(inner, ivec3(8)))) break;
                 if (leaf_voxel_solid(leaf, inner)) {
+                    // ---- R4d: matter a ray can see through -------------------------------
+                    //
+                    // Asked at the LEAF and only at the leaf, because a coarse node stands over as
+                    // many as 512 voxels which need not agree about being glass -- the same reason
+                    // `face_material` answers NONE above level 0. And asked only when the caller
+                    // wants it, so the primary ray's inner loop is byte for byte what it was.
+                    //
+                    // What it costs when it fires is one table lookup and one more step of a DDA
+                    // that was already running. What it costs when it does not fire is a branch on
+                    // a uniform.
+                    if (see_through && level == 0) {
+                        const vec3 past = node_medium_through(leaf_voxel_type(leaf, inner));
+                        if (past.r + past.g + past.b > 0.0) {
+                            result.through *= past;
+                            // Bounded, or a ray down the length of a pane would multiply a hundred
+                            // times and a ray inside a solid block of glass would never stop at all.
+                            // Below this the medium has taken everything and the ray has its answer.
+                            if (result.through.r + result.through.g + result.through.b > 0.02) {
+                                if (i_max.x < i_max.y && i_max.x < i_max.z) {
+                                    t_inner = i_max.x; inner.x += step_dir.x; i_max.x += i_delta.x;
+                                    inner_normal = ivec3(-step_dir.x, 0, 0);
+                                } else if (i_max.y < i_max.z) {
+                                    t_inner = i_max.y; inner.y += step_dir.y; i_max.y += i_delta.y;
+                                    inner_normal = ivec3(0, -step_dir.y, 0);
+                                } else {
+                                    t_inner = i_max.z; inner.z += step_dir.z; i_max.z += i_delta.z;
+                                    inner_normal = ivec3(0, 0, -step_dir.z);
+                                }
+                                if (t_inner > limit) break;
+                                continue;
+                            }
+                        }
+                    }
                     result.hit = true;
                     result.t = max(t_inner, 0.0);
                     result.normal = inner_normal;
