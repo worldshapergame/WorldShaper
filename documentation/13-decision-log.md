@@ -2709,3 +2709,73 @@ in this commit would mean neither of the two rules had a measurement of its own.
 | # | Decision | Kind | Why |
 |---|---|---|---|
 | D575 | **One rule, one measurement, even when the second is one character** | judgement | The prediction R5 was landed on has come true and the numbers are here so nobody re-derives them. What is left to check is the flying cost, which is where this pass has no headroom at all |
+
+## D576 — the lamps were the noisiest term indoors, and the photograph is what said so
+
+D573 filtered the two answers of the one unbounded ray and left the lamps, on the strength of a
+photograph of every term on its own: at the enclosed camera the lamp term reads a **speckle of 23.0
+of 255** against the near field's 6.0, and it is the term that lights an interior. That photograph
+was taken before any of R5 was built and it is what chose the order; this is the tap it named.
+
+**Why a lamp estimate is noisy at all**, since it is not the unbounded ray's: `pick_light` scores
+`kLampCandidates` fittings by what each would deliver here unshadowed, keeps ONE in proportion, draws
+a direction inside its cone and corrects by the density that chose it (D401–D409). That is what makes
+*a face never loops over lights* true and a hall of a thousand sconces cost what a hall with one
+costs — and it means a face's answer is a few hundred samples of a distribution over every emitter in
+the building. The variance is the price of the constant cost, and it is paid per face, which is
+exactly the shape a coplanar blend removes.
+
+**Measured, two interleaved rounds of one build, `--no-face-denoise` the control**, 1280×800,
+`--settle`, frame 900. The middle column is D573 as it landed, for what the lamp tap adds on its own:
+
+| | control | sky and bounce | ...and the lamps |
+|---|---|---|---|
+| **enclosed** roughness | 3.0087 / 3.0107 | 2.4458 / 2.4495 | **1.7292 / 1.7172** |
+| **enclosed** speckle | 12.113 / 12.137 | 9.975 / 9.971 | **7.986 / 7.842** |
+| **enclosed** mean pixel | 157.494 / 157.390 | 157.497 / 157.395 | 157.452 / 157.471 |
+| **enclosed** faces pass | 2.625 / 2.620 ms | 2.759 / 2.786 | 2.777 / 2.769 |
+| **close** roughness | 4.3539 / 4.3434 | 3.1410 / 3.1452 | **2.9693 / 2.9673** |
+| **close** speckle | 35.199 / 35.176 | 28.686 / 28.354 | **27.525 / 27.703** |
+| **close** faces pass | 3.625 / 3.454 ms | 3.901 / 3.871 | **4.057 / 3.939** |
+| **outdoor** roughness, speckle | 1.4783, 15.853 | 1.4610, 14.745 | 1.4568, 14.640 |
+
+So the whole of R5a takes the enclosed room's roughness **3.01 → 1.72** and its speckle **12.1 → 7.9**,
+and the lamp tap is more than half of both — on a camera where the sky term is nought by construction
+and the bounce is what the room is lit by. Outdoors it adds almost nothing, correctly: the portico is
+the only lamp-lit surface in that frame.
+
+**The mean pixel moves by 0.02 to 0.19 of 255 on every camera**, against a run-to-run floor of 0.018
+and 0.07. **Flying at 1440p**, two interleaved rounds: faces **7.140 / 6.801** control against
+**6.993 / 7.086**, inside each other's spread.
+
+**The two checks D574 built are what make this readable**, and both say the same thing more loudly
+than they did for the bounce:
+
+- the **absolute** tail: the enclosed camera's brightest pixel goes 233 → 232 and its pixels over 230
+  go **2,764 → 1,463**, while the firefly count — which is measured against a neighbourhood — goes
+  18 → 45. The background got dramatically smoother (roughness 3.01 → 1.73), so the bar every pixel
+  is judged against fell. Nothing got brighter;
+- the **edge** population beside the flat one: enclosed 91,364 edges at a mean strength of 63.74
+  become 80,076 at **66.62**. The count falls 12% and the strength rises 4.5%, which is only possible
+  if what left the population was noise spikes that had crossed the threshold. A filter that was
+  flattening the picture would take the strength down with the count.
+
+**One thing it does soften and it is worth stating**: a lamp's own shadow boundary across a single
+flat plane. The lamp term carries occlusion — one ray per sample, bounded at the fitting — so a hard
+edge where a sconce's light stops on a floor is a real feature of this term, and 9.4 cm of it is now
+blurred. Across a change of plane nothing is crossed at all, because that is a different face key.
+
+**What this costs is the record and it is now the largest allocation in the renderer**: three more
+words a face, **67,584 → 80,256 KB**, and 50,688 → 80,256 for the whole of R5a. Packing the two
+filtered radiances as half floats or as a shared exponent would halve that and has not been needed.
+
+**And the number to watch is the close camera's budget.** The faces pass reads 3.94–4.06 ms there
+against 4.40, standing still, where it read 3.45–3.63 before. Flying it is unchanged, which is the
+case that has no headroom — but the settled margin is now 8%, and the next thing added to this pass
+should be measured against that rather than against the flying figure.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D576 | **The lamps are filtered, the sun and the near field are not** | measurement | Chosen from a photograph of each term on its own, taken before any of R5 existed. The lamps read 23.0 of 255 at the enclosed camera and the near field 6.0; the sun carries a real hard edge and must keep it |
+| D576 | **One filtered count answers for all three terms** | design | A face's first visit writes nought there and takes its first far ray and its first lamp burst together, so the two are never separately absent; and a scene with no emitters gives every tap a lamp mean of nought, which is the answer rather than a fallback |
+| D576 | **Two weight sums, not one** | correctness | A face whose far field has finished and whose lamp term was reopened by a light-list version bump holds hundreds of one and eight of the other. One shared weight would let whichever estimator is further along decide how much of the other to take from that neighbour |

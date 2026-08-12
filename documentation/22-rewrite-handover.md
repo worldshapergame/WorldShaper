@@ -174,7 +174,7 @@ written for the person the work is for, so it is the one to keep current.
 | R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
-| R5 face denoise, composite | M | **a done** (D573–D575) — the first thing here that filters ACROSS faces. `open_sky` and the bounce blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 3.14** at the steps and 3.02 → 2.45 enclosed, speckle 35.27 → 28.69 and 12.12 → 9.98, mean pixel unmoved, flying inside its own spread. **b, c, d not started**, and the lamps are the noisiest term indoors and are still unfiltered |
+| R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
 | R6 post | M | not started |
 | R7 the primary ray | L | not started |
 | R8 infinite detail | XL | not started |
@@ -1517,16 +1517,22 @@ voxels wide, which at the leaf is 9.4 cm.
 
 | 1280×800, `--settle`, frame 900, two interleaved rounds | `--no-face-denoise` | default |
 |---|---|---|
-| **close** roughness (mean \|2nd difference\|) | 4.3515 / 4.3426 | **3.1410 / 3.1452** |
-| **close** speckle | 35.273 / 35.020 | **28.686 / 28.354** |
-| **close** mean pixel | 143.922 / 143.905 | 143.984 / 144.023 |
-| **close** faces pass | 3.561 / 3.517 ms | 3.901 / 3.871 |
-| **enclosed** roughness | 3.0165 / 3.0104 | **2.4458 / 2.4495** |
-| **enclosed** speckle | 12.118 / 12.200 | **9.975 / 9.971** |
-| **enclosed** faces pass | 2.635 / 2.628 ms | 2.759 / 2.786 |
-| **outdoor** roughness, speckle | 1.4790, 15.765 | 1.4610, 14.745 |
+| **close** roughness (mean \|2nd difference\|) | 4.3539 / 4.3434 | **2.9693 / 2.9673** |
+| **close** speckle | 35.199 / 35.176 | **27.525 / 27.703** |
+| **close** mean pixel | 143.912 / 143.926 | 144.099 / 144.054 |
+| **close** faces pass | 3.625 / 3.454 ms | 4.057 / 3.939 |
+| **enclosed** roughness | 3.0087 / 3.0107 | **1.7292 / 1.7172** |
+| **enclosed** speckle | 12.113 / 12.137 | **7.986 / 7.842** |
+| **enclosed** mean pixel | 157.494 / 157.390 | 157.452 / 157.471 |
+| **enclosed** faces pass | 2.625 / 2.620 ms | 2.777 / 2.769 |
+| **outdoor** roughness, speckle | 1.4783, 15.853 | 1.4568, 14.640 |
 | walked out and back (`--cut` twice), roughness and speckle | 3.2157, 13.210 | **2.6859, 10.847** |
-| flying at 1440p, faces pass | 7.184 / 8.024 | 7.413 / 8.165 — inside each other's spread |
+| flying at 1440p, faces pass | 7.140 / 6.801 | 6.993 / 7.086 — inside each other's spread |
+
+**The lamp tap is more than half of the enclosed figures on its own** (D576), which is why the term
+order was decided by photographing each on its own before anything was built rather than by argument:
+sky and bounce alone took that room to 2.4458 and 9.975, and the lamps took it the rest of the way.
+The walk-out-and-back row is from the sky-and-bounce build and has not been retaken.
 
 The mean pixel moves by 0.02 to 0.10 of 255 on every camera, against a run-to-run floor of 0.018 and
 0.07 — which is what a filter that only takes variance out should do. Gates: 523 tests,
@@ -1543,22 +1549,35 @@ The mean pixel moves by 0.02 to 0.10 of 255 on every camera, against a run-to-ru
    through the buffer. **The filter is a display of an estimate, never part of the estimator.**
 3. **Which terms, and the two that are deliberately left alone.** The two answers of the one
    unbounded ray — `open_sky` and the bounce — because they are the slowest estimator here and the
-   bounce is a radiance with no bound to average against. Not the SUN: a shadow edge is a real
-   high-frequency feature. Not the NEAR FIELD, and that was measured rather than assumed —
-   photographed on its own it is the smoothest term in the renderer. **The LAMPS are the noisiest
-   term indoors** (speckle 23.0 of 255 against the near field's 6.0) and are the obvious next tap.
+   bounce is a radiance with no bound to average against; and the **LAMPS**, which that photograph
+   says are the noisiest term indoors, 23.0 of 255 at the enclosed camera. A lamp estimate is noisy
+   because `pick_light` keeps ONE fitting per face per frame in proportion to what it would deliver,
+   which is what makes *a face never loops over lights* true and a hall of a thousand sconces cost
+   what a hall with one costs — the variance is the price of that constant cost, and it is paid per
+   face, which is exactly the shape a coplanar blend removes. Not the SUN: a shadow edge is a real
+   high-frequency feature. Not the NEAR FIELD, photographed at 6.0 of 255 and the smoothest thing
+   here. **One thing the lamp tap does soften** and it is worth knowing: a sconce's own shadow
+   boundary across a single flat plane is a real feature of that term, and 9.4 cm of it is blurred.
+   Across a change of plane nothing is crossed at all, because that is a different face key.
 4. **A metric defined against a neighbourhood cannot judge a change whose purpose is to move the
    neighbourhood** (D574). The firefly count doubled in the first round and was unchanged in the
    second, and the reading that settles it is absolute: pixels over 250 go 902 → 892 at the steps,
-   over 254 stay at 391, and **the enclosed camera's brightest pixel FALLS from 235 to 233 while its
-   firefly count doubles**. Nothing got brighter anywhere. Trap 10 living in the harness.
+   over 254 stay at 391, and **the enclosed camera's brightest pixel FALLS from 233 to 232 while its
+   pixels over 230 go 2,764 → 1,463 and its firefly count goes 18 → 45**. Nothing got brighter
+   anywhere. Trap 10 living in the harness.
 5. **A roughness figure alone cannot tell a denoiser from a flattener**, so `rough.ps1` reports the
-   edge population beside it, split at 24 of 255. Edges fall 4–6% in COUNT while their mean strength
-   holds — 265,036 at 63.47 → 249,675 at 63.27 at the steps, and indoors the strength goes slightly
-   *up*. What left that population was noise spikes that had crossed the threshold, not silhouettes.
+   edge population beside it, split at 24 of 255. The count falls while the mean STRENGTH holds or
+   rises, which is only possible if what left was noise spikes rather than silhouettes: enclosed
+   91,364 edges at 63.74 → **80,076 at 66.62**, and at the steps 264,454 at 63.39 → 245,697 at 63.29.
+   A filter that was flattening the picture would take the strength down with the count.
 
-**What it costs is memory and it is the only thing it spends**: the face light record goes from
-twelve words to sixteen, **50,688 → 67,584 KB**.
+**What it costs is memory and the close camera's budget.** The face light record goes from twelve
+words to nineteen, **50,688 → 80,256 KB**, and it is now the largest allocation in the renderer —
+packing the two filtered radiances as half floats would halve that and has not been needed. And the
+faces pass reads **3.94–4.06 ms settled at the close camera against a 4.40 budget**, where it read
+3.45–3.63 before. Flying is unchanged, which is the case with no headroom, but **the settled margin
+is 8% now and the next thing added to this pass should be measured against that figure** rather than
+against the flying one.
 
 **What did not land, with its numbers, so nobody re-derives them** (D575). D572 measured
 `--secondary-period 32` as brighter and quieter by speckle and worse by fireflies, and said the

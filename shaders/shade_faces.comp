@@ -144,16 +144,23 @@ ivec2 face_axes(uint dir) {
 //
 // # What is filtered, and what deliberately is not
 //
-// The two answers of the ONE UNBOUNDED RAY: `open_sky` and the bounce. They are the slowest
-// estimator in the renderer — one sample every `face_stride` frames after the eager phase — so they
-// are the noisiest, and the bounce is a radiance with no bound to average against, which is why it
-// needed `kBounceBelieve` in the composite in the first place (D535: "one ray landing on a sunlit
-// sill returns something twenty times what the wall around it returns").
+// The two answers of the ONE UNBOUNDED RAY — `open_sky` and the bounce — and the LAMPS. Those three
+// are chosen from a photograph of every term on its own rather than from an argument, which is the
+// only way this question can be asked: at the enclosed camera the lamp term reads a speckle of 23.0
+// of 255 and the near field 6.0, and at the close camera the far field reads 90.3 against the near
+// field's 36.6. The far field and the bounce are the slowest estimator here, one sample every
+// `face_stride` frames after the eager phase, and the bounce is a radiance with no bound to average
+// against — which is why it needed `kBounceBelieve` in the composite in the first place (D535: "one
+// ray landing on a sunlit sill returns something twenty times what the wall around it returns"). The
+// lamp is the same shape one door along: `pick_light` keeps ONE fitting per face per frame in
+// proportion to what it would deliver and divides by the density that chose it, so a face's estimate
+// is a few hundred samples of a distribution over every emitter in the building, and indoors that is
+// the whole of the light.
 //
 // The SUN is not filtered and must not be by this: a shadow edge is a real high-frequency feature
 // and it lives in `counters`, which the host mirrors. The NEAR field is not either — measured on
-// this building it is the smoothest term there is (speckle 6.0 of 255 at the enclosed camera against
-// the lamps' 23.0), because it takes sixteen bounded rays a frame rather than one unbounded one.
+// this building it is the smoothest term there is, because it takes sixteen bounded rays a frame
+// rather than one of anything.
 //
 // # How a face that has just appeared gets a converged answer
 //
@@ -185,13 +192,29 @@ const float kDenoiseCorner = 1.0;
 
 // One tap. Adds nothing at all when there is no face there, which is what makes the kernel shrink
 // gracefully at a corner instead of pulling the answer towards nought.
+// Two weight sums and not one, because the two estimators have their own sample counts and they run
+// out at different times. A face whose far field has finished and whose lamp term was reopened by a
+// light-list version bump has hundreds of one and eight of the other, and a shared weight would let
+// whichever is further along decide how much of the other to take from that neighbour.
 void face_denoise_tap(ivec3 node, uint level, uint dir, float spatial, inout float weight,
                       inout float spatial_used, inout float sky, inout vec3 bounce,
-                      inout float counted) {
+                      inout float counted, inout float lamp_weight, inout vec3 lamp) {
     const uint found = node_face_lookup(node, level, dir);
     if (found == kNoFace || found == kFaceTombstone) return;
     const uint at = found * kFaceLightWords;
     if (at + kFaceLightWords - 1u >= face_light.words.length()) return;
+
+    // The lamps, as a mean: the record keeps a SUM over its own count, because unlike the sun and the
+    // sky a lamp's answer is not a fraction in [0, 1] and has no bound to scale against.
+    const uint lamp_n = face_light.words[at + 8u] & 0xFFFFu;
+    if (lamp_n > 0u) {
+        const float lw = spatial * float(min(lamp_n, kLampConverged));
+        lamp_weight += lw;
+        lamp += (lw / float(lamp_n)) * vec3(uintBitsToFloat(face_light.words[at + 5u]),
+                                            uintBitsToFloat(face_light.words[at + 6u]),
+                                            uintBitsToFloat(face_light.words[at + 7u]));
+    }
+
     const uint far_n = (face_light.words[at] >> 16) & 0xFFFFu;
     if (far_n == 0u) return;
     const float w = spatial * float(min(far_n, kBounceMin));
@@ -219,8 +242,11 @@ void face_denoise(uint light_at, ivec3 node, uint level, uint dir) {
     float spatial_used = 0.0;
     float sky = 0.0;
     float counted = 0.0;
+    float lamp_weight = 0.0;
     vec3 bounce = vec3(0.0);
-    face_denoise_tap(node, level, dir, kDenoiseCentre, weight, spatial_used, sky, bounce, counted);
+    vec3 lamp = vec3(0.0);
+    face_denoise_tap(node, level, dir, kDenoiseCentre, weight, spatial_used, sky, bounce, counted,
+                     lamp_weight, lamp);
 
     // The two axes the normal is not along, from the one function that answers that question. Three
     // copies of "which axis is u" is three chances for one of them to be the other.
@@ -231,26 +257,34 @@ void face_denoise(uint light_at, ivec3 node, uint level, uint dir) {
         du[axes.x] = 1;
         dv[axes.y] = 1;
         face_denoise_tap(node - du, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
-                         counted);
+                         counted, lamp_weight, lamp);
         face_denoise_tap(node + du, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
-                         counted);
+                         counted, lamp_weight, lamp);
         face_denoise_tap(node - dv, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
-                         counted);
+                         counted, lamp_weight, lamp);
         face_denoise_tap(node + dv, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
-                         counted);
+                         counted, lamp_weight, lamp);
         face_denoise_tap(node - du - dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
-                         bounce, counted);
+                         bounce, counted, lamp_weight, lamp);
         face_denoise_tap(node - du + dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
-                         bounce, counted);
+                         bounce, counted, lamp_weight, lamp);
         face_denoise_tap(node + du - dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
-                         bounce, counted);
+                         bounce, counted, lamp_weight, lamp);
         face_denoise_tap(node + du + dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
-                         bounce, counted);
+                         bounce, counted, lamp_weight, lamp);
     }
     if (weight <= 0.0 || spatial_used <= 0.0) {
         face_light.words[light_at + kFaceFilteredSky] = 0u;
         return;
     }
+
+    // The lamps, written as a mean. Nought weight is a scene with no emitters reaching this
+    // neighbourhood at all, and nought is the right answer there rather than a fallback -- the raw
+    // record says the same thing.
+    const vec3 lamp_f = lamp_weight > 0.0 ? lamp / lamp_weight : vec3(0.0);
+    face_light.words[light_at + kFaceFilteredLamp] = floatBitsToUint(lamp_f.r);
+    face_light.words[light_at + kFaceFilteredLamp + 1u] = floatBitsToUint(lamp_f.g);
+    face_light.words[light_at + kFaceFilteredLamp + 2u] = floatBitsToUint(lamp_f.b);
 
     const float inv = 1.0 / weight;
     const float sky_f = clamp(sky * inv, 0.0, 1.0);

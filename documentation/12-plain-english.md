@@ -1738,3 +1738,51 @@ I have still not turned it on, for one reason: at the steps it takes the lightin
 against a 4.40 budget while standing still, and that pass is already at 7–8 ms while flying. It needs
 its own measurement of the flying case before I change a default that affects every frame. That is a
 short piece of work and it is the next thing I would do unless you want something else first.
+
+## And then the lamps, which turned out to be the biggest one
+
+**The domed room is now nearly half as rough as it was this morning, and most of that is the lamps.**
+
+When I built the smoothing pass I photographed each kind of light on its own first, so that I picked
+what to smooth from a measurement instead of a hunch. That photograph said something I would not have
+guessed: indoors, **the lamps are by far the noisiest thing in the picture** — three or four times
+noisier than the soft shading in creases and corners. So they were the next thing to smooth, and they
+were worth more than the two I did first.
+
+**Why lamp light is noisy at all**, since it is not the slow kind: when a face works out how much
+lamplight reaches it, it does **not** look at every lamp in the building. It picks *one*, at random,
+weighted towards the ones likely to matter, and corrects for having picked that one. That is the trick
+that makes a hall with a thousand sconces cost exactly what a hall with one costs — and the price of
+it is that each face's answer wobbles until it has taken a few hundred picks. The wobble is per face,
+which is exactly the shape the neighbour blend removes.
+
+**What it looks like.** Stand in the domed room:
+
+| | before any smoothing | sky and bounce | ...and the lamps |
+|---|---|---|---|
+| roughness | 3.01 | 2.45 | **1.72** |
+| speckle | 12.11 | 9.98 | **7.99** |
+| brightness | 157.49 | 157.50 | 157.45 |
+
+Roughness down **43%** and speckle down **35%** from where it started, with the brightness moving by
+five hundredths of a shade. At the steps outside: roughness 4.35 → 2.97, speckle 35.20 → 27.53.
+Outdoors it adds almost nothing, correctly — the portico is the only lamp-lit surface out there.
+
+**The same two sanity checks as before, and they both speak louder this time.** The stray-dot count
+went 18 → 45 — and the room's brightest pixel got *dimmer* (233 → 232) while the number of pixels
+over 230 nearly halved, 2,764 → 1,463. The background got so much smoother that the "four times your
+neighbours" bar dropped under a lot of perfectly ordinary pixels. And the sharp edges: their count
+falls 12% while their average sharpness goes **up** 4.5%, which can only happen if what left the
+count was noise and not the building.
+
+**One honest loss.** A sconce's light stopping sharply on a flat floor is a real edge, and about
+9.4 cm of it is now softened. Where the surface turns a corner nothing is blended at all, so the
+architecture's own edges are untouched — this only affects a hard lamp-shadow line drawn across one
+continuous flat face.
+
+**What it costs.** Nothing while flying — the two versions land inside each other's normal wobble.
+Standing at the steps the lighting pass goes from about 3.5 ms to 4.06, against a budget of 4.40, so
+that camera now has about 8% of headroom left standing still. And 29.6 MB of graphics memory for the
+whole smoothing pass, which is now the biggest single thing the renderer allocates. Both of those are
+worth knowing before I add anything else to that pass, and I have written them down where the next
+piece of work will trip over them.

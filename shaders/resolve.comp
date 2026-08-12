@@ -388,24 +388,22 @@ void main() {
         // levels above it (kLampSeedMin) is what covers the frames in between.
         vec3 lamp = vec3(0.0);
         if (face_slot < faces.items.length()) {
-            uint lamp_n = face_light.words[face_slot * kFaceLightWords + 8u] & 0xFFFFu;
-            if (lamp_n > 0u) {
-                lamp = vec3(uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 5u]),
-                            uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 6u]),
-                            uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 7u])) /
-                       float(lamp_n);
-            }
             uint sky_counters = face_light.words[face_slot * kFaceLightWords];
             uint sky_samples = sky_counters & 0xFFFFu;          // near-field rays
             uint far_samples = (sky_counters >> 16u) & 0xFFFFu;  // far-field rays
 
-            // R5a: this face's two slowest answers, blended with its coplanar neighbours'.
+            // R5a: the three noisiest things a face measures, blended with its coplanar neighbours'.
             //
-            // Both come from the one unbounded ray, so both carry its sample count and its noise:
-            // one sample every `face_stride` frames after the eager phase, against sixteen bounded
-            // rays a frame for the near field. Nothing in this renderer filtered ACROSS faces until
-            // now, which is the class the fine grid on flat surfaces belongs to (D539's eight
-            // eliminations found no ninth cause because there was not one to find).
+            // Which three came from photographing every term on its own rather than from an
+            // argument: at the enclosed camera the LAMPS read a speckle of 23.0 of 255 against the
+            // near field's 6.0, and at the close camera the far field reads 90.3 against 36.6. The
+            // far field and the bounce are the one unbounded ray's two answers, so both carry its
+            // count -- one sample every `face_stride` frames after the eager phase. The lamp is one
+            // fitting per face per frame drawn in proportion to what it would deliver, so a face's
+            // estimate is a few hundred samples of a distribution over every emitter in the
+            // building. Nothing in this renderer filtered ACROSS faces until now, which is the class
+            // the fine grid on flat surfaces belongs to (D539's eight eliminations found no ninth
+            // cause because there was not one to find).
             //
             // The low sixteen bits are the filtered answer's effective sample count and nought
             // means "no filtered answer here yet" -- a slot claimed since the light pass last
@@ -423,6 +421,27 @@ void main() {
             const uint bounce_at = face_slot * kFaceLightWords +
                                    (filtered_n > 0u ? kFaceFilteredBounce : 9u);
             const uint bounce_n = filtered_n > 0u ? filtered_n : far_samples;
+
+            // The lamps, which are stored as a MEAN once filtered and as a sum over their own count
+            // before that. One count answers for all three terms: the first visit of a face writes
+            // nought there and takes its first far ray and its first lamp burst together, so the two
+            // are never separately absent -- and a scene with no emitters gives every tap a lamp
+            // mean of nought, which is the answer rather than a fallback.
+            uint lamp_n = face_light.words[face_slot * kFaceLightWords + 8u] & 0xFFFFu;
+            if (filtered_n > 0u) {
+                lamp = vec3(
+                    uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
+                                                     kFaceFilteredLamp]),
+                    uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
+                                                     kFaceFilteredLamp + 1u]),
+                    uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
+                                                     kFaceFilteredLamp + 2u]));
+            } else if (lamp_n > 0u) {
+                lamp = vec3(uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 5u]),
+                            uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 6u]),
+                            uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 7u])) /
+                       float(lamp_n);
+            }
             if (far_samples > 0u) {
                 // Read as it is stored: a running MEAN with a memory of kBounceMemory samples, not
                 // a sum over `far_samples`. The count still says how far to believe it -- see

@@ -5491,17 +5491,17 @@ int Application::play(const Options& options) {
         face_buffers_.set_whole_set_retry(options_.whole_set_retry);
         // Every slot the face pass may write: the store's capacity plus the card's provisional
         // tail. Not the watermark, which grows.
-        // Sixteen words a slot: the two ambient sample counts packed in one word, the near-field
+        // Nineteen words a slot: the two ambient sample counts packed in one word, the near-field
         // contact sum, its gradient along each of the face's two axes, the far field's own count of
         // rays that reached open sky, three floats of accumulated lamp irradiance, one word holding
         // the lamp sample count with the emitter-list version those samples were taken under, and
-        // three floats of accumulated BOUNCE radiance over the far field's own count -- then four
-        // more holding the FILTERED far field and bounce, which R5a writes from this face's
+        // three floats of accumulated BOUNCE radiance over the far field's own count -- then seven
+        // more holding the FILTERED far field, bounce and lamp, which R5a writes from this face's
         // coplanar neighbours and which only the composite reads.
-        // kFaceLightWords in shaders/face_terms.glsl is the same sixteen, and the shader bounds its
+        // kFaceLightWords in shaders/face_terms.glsl is the same nineteen, and the shader bounds its
         // writes against this length because a disagreement here is a write into whatever the
         // allocator placed next (D332).
-        if (!face_light_.create(device_, 16 * (face_buffers_.provisional_base() +
+        if (!face_light_.create(device_, 19 * (face_buffers_.provisional_base() +
                                                FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;

@@ -41,8 +41,16 @@
 //   0-11  what this face measured for itself. Sample counts, the near field and its two gradients,
 //         the far field, the lamp sum and its version, and the bounce mean. Every ray this pass
 //         casts lands in one of these, and nothing but this face's own rays ever writes them.
-//   12    the filtered far field, as a float in [0, 1].
+//   12    the filtered far field, as a float in [0, 1], with the filter's own effective sample
+//         count in the low sixteen bits. That count is nought exactly when this face has no
+//         filtered answer at all, which is what tells the composite to read the raw record.
 //   13-15 the filtered bounce, as three floats of radiance.
+//   16-18 the filtered LAMP irradiance, as three floats. Stored as the MEAN and not as the sum the
+//         accumulator keeps in words 5-7, because a weighted blend of neighbours has no single
+//         count to divide by afterwards. Word 12's count is its validity too: the first visit of a
+//         face writes nought there and takes both its first far ray and its first lamp burst, so
+//         the two are never separately absent in practice, and a scene with no emitters at all
+//         gives every tap a lamp mean of nought, which is the answer.
 //
 // The filtered pair is R5a: a face's own estimate blended with its COPLANAR NEIGHBOURS' estimates,
 // written by `face_denoise` in shade_faces.comp. It is a separate four words and not a rewrite of
@@ -55,9 +63,10 @@
 // chain is already a progressive radiosity solve over many frames, and feeding a filtered value back
 // into it is the same unbounded blur arriving through the light transport instead of through the
 // buffer. The filter is a display of an estimate, not part of the estimator.
-const uint kFaceLightWords = 16u;
+const uint kFaceLightWords = 19u;
 const uint kFaceFilteredSky = 12u;      // the filtered far field
 const uint kFaceFilteredBounce = 13u;   // ...and the three words of filtered bounce after it
+const uint kFaceFilteredLamp = 16u;     // ...and the three of filtered lamp irradiance after that
 
 // The two occlusion terms a face carries, combined the one way that does not darken a crease twice.
 //
