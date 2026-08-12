@@ -3980,3 +3980,58 @@ resolve **0.771 against 0.752**, enclosed 0.976 against 0.980 — all inside spr
 | D600 | **The weight comes from the lamp sum already stored** | design | A running mean of direction needs a running total, and the record has one. Nothing new accumulates |
 | D600 | **One view direction for the whole face** | §1 | A face is flat. Evaluating a per-face quantity at a per-pixel point ramps it, and it was the only term in the composite still doing so |
 | D600 | **R10c's gradient stays** | distinction | That one is a measurement of how occlusion varies across the voxel, not an artefact of where the pixel is |
+
+## D601 — R4d begins the way R4a did: the face learns what it lets through
+
+**The thing in the way, and it is the same shape it was for R4a.** A face is *(node, level,
+direction)*. R4a brought roughness and metalness across and that was enough for a lobe. It is not
+enough for **transmission**, which is the last thing on this building drawn plainly wrong: the
+window glass is `opacity=64 ior=1.5`, the two basins are `opacity=110 ior=1.33`, the marble is
+`translucent=110` — and nothing on the card knew any of it. D596 measured that and could not fix it.
+
+**One more card-owned word a slot** (`face_medium`, binding 25), filled on the same visit, by the
+same descent, out of the same two interned tables: opacity, the index of refraction, translucency,
+and the same third KNOWN state `face_material` carries so that "has not looked" can never become
+sticky (trap 7). It is a second word rather than six spare bits of the first because opacity and the
+index need sixteen between them and the first word has six left; a word a slot is **4.2 MB**, which
+is what every other card-owned array here costs.
+
+**It has a reader before it has a consumer, which is trap 1's standing rule** — a pass whose output
+nothing reads is a pass talking to nothing, and five traversal changes were once measured against a
+picture that could not have moved. `--debug-mode 24` draws it: blue rising with how much passes
+through, red with translucency. **It caught its own unpacking**: the whole facade read red, which
+looked wrong until the rotunda separated marble (red, translucent 110) from the porphyry inlay
+(black, nought) and the glass (blue) — the facade is marble-faced, and the byte was right.
+
+**Costs nothing and moves no pixel**, which is what it should do: close camera **4.274 ms against
+4.331**, resolve 0.750 against 0.771, and the picture differs from the previous commit by 1.68 of
+255 over 27,448 pixels against a frame-to-frame floor of 1.95 and 17,196. 527 tests, 18.67 M
+assertions, `--validation` clean.
+
+### What is left, and it is the marcher
+
+**The visible half of R4d needs `node_march` to see THROUGH a transmissive voxel**, and that is the
+whole of the remaining work. Every approach that avoids it was considered and each fails for a
+reason worth recording:
+
+- **transmitted bins on the face**, which is what §4 of the plan calls for, blur the transmitted
+  image to the bin's width exactly as the reflected one is blurred — 13.5 degrees. A frosted window
+  is not an improvement on an opaque one, and D592, D594 and D599 are three measurements that the
+  bin count cannot be raised without a ray budget that does not exist;
+- **a single transmitted ray down the face's own normal** avoids the view dependence and the
+  blurring, and cannot be cast at all: it starts inside the medium and the marcher stops on the
+  first solid voxel, which is the water itself;
+- **scaling the diffuse by the transmittance** with nothing behind it draws a black pane.
+
+So the work is: on a hit, read the voxel's opacity and, if it transmits, accumulate the tint and
+continue the march past it, bounded to a few layers. That is a change to the hottest loop in the
+renderer — shared by the primary ray, the shadow ray, the ambient burst and both gathering rays —
+and it needs its own session and its own control arm. **The cost is bounded by what it touches**: on
+this building only the windows and the two basins are transmissive at all, so only rays that hit
+them pay, and the census this entry adds is what will size it.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D601 | **A second word a slot rather than repacking the first** | design | Opacity and the index need sixteen bits and the material word has six. 4.2 MB is what every card-owned array here costs |
+| D601 | **A debug view before a consumer** | trap 1 | And it earned itself immediately, by making an unpacking that looked wrong provably right |
+| D601 | **The marcher is named as the remaining work, with the three alternatives eliminated** | process | Each of the three is the obvious way to avoid it, and each fails for a reason that is a measurement rather than an opinion |

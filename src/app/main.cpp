@@ -1870,6 +1870,11 @@ private:
     // owned. It borrows FaceLight for the same reason `light_probe_` does: what that class provides
     // is a device-local word array the host allocates, zeroes and never writes again.
     FaceLight face_lobe_;
+    // One word a slot: what the surface under that face lets THROUGH -- its opacity, its index of
+    // refraction and its translucency, resolved by the light pass on the same visit that resolves
+    // the material and out of the same two tables. R4d, and see `face_medium` in shaders/node.glsl
+    // for the word and for why it is a second one rather than six spare bits of the first.
+    FaceLight face_medium_;
     // R9c. How far past the screen the primary pass claims, in pixels each side, and how sparsely
     // it samples out there. Both are worked out every frame from how fast the camera is turning, and
     // are nought when it is not. See the block that fills them for what they are measured against.
@@ -5791,7 +5796,7 @@ int Application::play(const Options& options) {
     // have to care which pass included them.
     // Nine now: 6 is the face store and 7 is the face-slot image, which together are how the
     // picture stops lighting itself per pixel and starts reading light off the surface.
-    VkDescriptorSetLayoutBinding resolve_bindings[13]{};
+    VkDescriptorSetLayoutBinding resolve_bindings[14]{};
     for (u32 i = 0; i < 6; ++i) {
         resolve_bindings[i].binding = i;
         // 0-1 images, 2-3 the type and visual tables, 4 the parameter block, 5 the
@@ -5832,10 +5837,14 @@ int Application::play(const Options& options) {
     resolve_bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     resolve_bindings[12].descriptorCount = 1;
     resolve_bindings[12].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_bindings[13].binding = 12;   // ...and what it lets THROUGH (R4d)
+    resolve_bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resolve_bindings[13].descriptorCount = 1;
+    resolve_bindings[13].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo resolve_layout_info{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    resolve_layout_info.bindingCount = 13;
+    resolve_layout_info.bindingCount = 14;
     resolve_layout_info.pBindings = resolve_bindings;
     WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &resolve_layout_info, nullptr,
                                       &resolve_layout_));
@@ -6018,6 +6027,14 @@ int Application::play(const Options& options) {
             WS_LOG_FATAL("app", "could not create the face lobe pool");
             return 1;
         }
+        // And what each face lets THROUGH, over the same range as the material beside it. R4d.
+        if (!face_medium_.create(device_,
+                                 face_buffers_.provisional_base() +
+                                     FaceBuffers::provisional_count(),
+                                 "face medium")) {
+            WS_LOG_FATAL("app", "could not create the face medium buffer");
+            return 1;
+        }
         // And the gathering ray's own counters, which are not per slot at all: one word a QUESTION,
         // over the whole dispatch. See kLightProbeWords in shaders/node.glsl for the word map and
         // for why word 0 is the host's and the rest are the card's.
@@ -6083,8 +6100,8 @@ int Application::play(const Options& options) {
         // bindings 2 and 3. Until R4 no pass on this set had any reason to read them, which is why
         // the light pass reads the marcher's folded average colour for an albedo and has never been
         // able to ask about a roughness at all.
-        VkDescriptorSetLayoutBinding node_bindings[25]{};
-        for (u32 i = 0; i < 25; ++i) {
+        VkDescriptorSetLayoutBinding node_bindings[26]{};
+        for (u32 i = 0; i < 26; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -6095,7 +6112,7 @@ int Application::play(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 25;
+        node_layout_info.bindingCount = 26;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -6106,7 +6123,7 @@ int Application::play(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[21]{
+        const VkBuffer node_pool_buffers[22]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
@@ -6114,19 +6131,20 @@ int Application::play(const Options& options) {
             face_work_.buffer,         node_seen_.buffer(),     face_read_.buffer(),
             light_probe_.buffer(),     face_gathered_.buffer(), face_material_.buffer(),
             type_tables_.types(),      type_tables_.visuals(),  face_lobe_.buffer(),
+            face_medium_.buffer(),
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[21]{2,  3,  4,  5,  6,  7,  9,  10, 12, 13, 14,
-                                        15, 16, 17, 18, 19, 20, 21, 22, 23, 24};
-        VkDescriptorBufferInfo node_infos[21]{};
+        const u32 node_bindings_for[22]{2,  3,  4,  5,  6,  7,  9,  10, 12, 13, 14,
+                                        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25};
+        VkDescriptorBufferInfo node_infos[22]{};
         // Twenty-two writes for twenty-one buffers and one uniform block, and the COUNT a few lines
         // below is the thing to change with them. Adding a descriptor here and leaving that literal
         // alone writes every binding but the new one, silently, and `--validation` is the only thing
         // that says so -- which is D518 exactly, in the other direction.
-        VkWriteDescriptorSet node_writes[22]{};
-        for (u32 i = 0; i < 21; ++i) {
+        VkWriteDescriptorSet node_writes[23]{};
+        for (u32 i = 0; i < 22; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -6141,13 +6159,13 @@ int Application::play(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[21].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[21].dstSet = node_set_;
-        node_writes[21].dstBinding = 8;
-        node_writes[21].descriptorCount = 1;
-        node_writes[21].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[21].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 22, node_writes, 0, nullptr);
+        node_writes[22].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[22].dstSet = node_set_;
+        node_writes[22].dstBinding = 8;
+        node_writes[22].descriptorCount = 1;
+        node_writes[22].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[22].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 23, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -6271,7 +6289,8 @@ int Application::play(const Options& options) {
     const VkBuffer resolve_buffers[]{type_tables_.types(), type_tables_.visuals(),
                                      clip_buffer_.buffer, face_buffers_.faces(),
                                      face_light_.buffer(), frame_stats_.buffer,
-                                     face_material_.buffer(), face_lobe_.buffer()};
+                                     face_material_.buffer(), face_lobe_.buffer(),
+                                     face_medium_.buffer()};
 
     // The parameter block, bound to the composite and to the cloud pass with a dynamic offset
     // chosen per frame.
@@ -6291,12 +6310,12 @@ int Application::play(const Options& options) {
     vkUpdateDescriptorSets(device_.handle(), 2, params_writes, 0, nullptr);
 
     // types, visuals, clip cells, faces, face light, the meter, the face material, the lobe pool
-    constexpr u32 kResolveBuffers = 8;
+    constexpr u32 kResolveBuffers = 9;
     VkDescriptorBufferInfo buffer_infos[kResolveBuffers]{};
     VkWriteDescriptorSet buffer_writes[kResolveBuffers]{};
     // Resolve's storage buffers are bindings 2, 3, 5, 6, 8, 9, 10 and 11 -- 4 is the parameter block
     // and 7 is an image. Spelled out for the same reason the node set's mapping is.
-    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8, 9, 10, 11};
+    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8, 9, 10, 11, 12};
     for (u32 i = 0; i < kResolveBuffers; ++i) {
         buffer_infos[i].buffer = resolve_buffers[i];
         buffer_infos[i].offset = 0;
@@ -7260,6 +7279,7 @@ int Application::play(const Options& options) {
     face_read_.destroy();
     face_material_.destroy();
     face_lobe_.destroy();
+    face_medium_.destroy();
     light_probe_.destroy();
     face_worklist_.destroy();
     destroy_buffer(device_, face_work_);

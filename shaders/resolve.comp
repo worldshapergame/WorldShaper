@@ -73,6 +73,17 @@ const uint kFaceMaterialNone = 1u << 30;
 // records, which is that the day a stride was declared twice the picture came out as salt and
 // pepper and looked like a different bug entirely.
 layout(std430, binding = 11) readonly buffer FaceLobe { uint words[]; } face_lobe;
+// ...and what each face lets THROUGH (R4d). The word is documented once beside the binding in
+// shaders/node.glsl; these accessors are the same shifts spelled where the reader is.
+layout(std430, binding = 12) readonly buffer FaceMedium { uint words[]; } face_medium;
+const uint kFaceMediumKnown = 1u << 31;
+uint face_medium_opacity(uint word) { return word & 0xFFu; }
+uint face_medium_ior(uint word) { return (word >> 8u) & 0xFFu; }
+uint face_medium_translucency(uint word) { return (word >> 16u) & 0xFFu; }
+float face_medium_transmits(uint word) {
+    if ((word & kFaceMediumKnown) == 0u) return 0.0;
+    return 1.0 - float(face_medium_opacity(word)) * (1.0 / 255.0);
+}
 // Must match kSkyConverged in shaders/node.glsl. Read by debug view 19 only -- the shaded path
 // never asks whether a face has finished, it asks what the face says.
 const uint kSkyConverged = 2048u;
@@ -1301,6 +1312,31 @@ void main() {
                         colour = measured ? (big ? vec3(0.0, 1.0, 0.6) : vec3(0.0, 1.0, 0.0))
                                           : vec3(1.0, 0.9, 0.0);
                     }
+                }
+            }
+        }
+    } else if (push.resolution.z == 24u) {
+        // What each face lets THROUGH (R4d), and it exists before anything shades with it for the
+        // reason view 21 does: a pass whose output nothing reads is a pass talking to nothing, and
+        // five traversal changes were once measured against a picture that could not have moved.
+        //
+        // BLUE rising with how much passes through, so the window glass and the two basins light up
+        // and the stone stays black. RED is translucency, which is the other way light gets through
+        // a surface -- scattered rather than refracted, which is what the marble does. MAGENTA is a
+        // pixel with no face, DARK BLUE a face that has not looked yet, and GREEN at a third is no
+        // geometry, the same three as views 21 and 22.
+        colour = vec3(0.0, 0.35, 0.0);
+        if (hit) {
+            uint slot = imageLoad(in_face, pixel).x;
+            if (slot >= faces.items.length() || slot >= face_medium.words.length()) {
+                colour = vec3(1.0, 0.0, 1.0);
+            } else {
+                const uint word = face_medium.words[slot];
+                if ((word & kFaceMediumKnown) == 0u) {
+                    colour = vec3(0.0, 0.3, 1.0);
+                } else {
+                    colour = vec3(float(face_medium_translucency(word)) / 255.0, 0.0,
+                                  face_medium_transmits(word));
                 }
             }
         }

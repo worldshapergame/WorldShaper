@@ -469,6 +469,44 @@ uint face_material_flags(uint word) { return (word >> 16u) & 0xFFu; }
 // 64 bytes; the weights are only read by the pass that writes them.
 layout(std430, binding = 24) buffer FaceLobe { uint words[]; } face_lobe;
 
+// ---- and what a face lets THROUGH, which nothing on the card has ever known (R4d) --------------
+//
+// One word a face slot, card-owned, filled beside the material and for the same reason: a face is
+// (node, level, direction), and the two numbers that say a surface is glass rather than stone live
+// in the visual record and nowhere else.
+//
+// R4a brought roughness and metalness across and that was enough for a lobe. It is not enough for
+// **transmission**, which is the last thing on this building that is drawn plainly wrong: the
+// window glass is `opacity=64 ior=1.5` and the two basins are `opacity=110 ior=1.33`, and the
+// renderer paints both as opaque Lambertian slabs. No amount of reflection makes that read as glass
+// or as water, which is what D596 measured and could not fix.
+//
+// # The word
+//
+//   0-7    opacity, as the visual record stores it. 255 is opaque and is nine faces in ten
+//   8-15   the index of refraction, as the record's offset from vacuum: 1.0 + ior/128
+//   16-23  translucency, which is the other way light gets through a surface -- scattered rather
+//          than refracted, which is what marble and a leaf do
+//   31     KNOWN, the same third state `face_material` carries and for the same reason: nought is
+//          "has not looked" and must never become sticky (trap 7)
+//
+// It is a SECOND word rather than six spare bits of the first because opacity and the index need
+// sixteen between them and the first word has six left. A word a slot is 4.2 MB, which is what
+// every other card-owned array here costs, and the alternative is repacking a field that four
+// shaders already agree about.
+layout(std430, binding = 25) buffer FaceMedium { uint words[]; } face_medium;
+
+const uint kFaceMediumKnown = 1u << 31;
+uint face_medium_opacity(uint word) { return word & 0xFFu; }
+uint face_medium_ior(uint word) { return (word >> 8u) & 0xFFu; }
+uint face_medium_translucency(uint word) { return (word >> 16u) & 0xFFu; }
+// How much of what arrives goes THROUGH, in [0, 1]. The one number the composite needs before it
+// can stop drawing a pane of glass as a wall.
+float face_medium_transmits(uint word) {
+    if ((word & kFaceMediumKnown) == 0u) return 0.0;
+    return 1.0 - float(face_medium_opacity(word)) * (1.0 / 255.0);
+}
+
 // ---- what a gathering ray found, counted ------------------------------------------------------
 //
 // The light pass has three audit lines about what it has FINISHED (`ambient on the card`, `lamps on
@@ -1840,6 +1878,15 @@ uint node_face_material(uint slot, ivec3 node, uint level) {
         // authority, and pt_material.glsl, which unpacks the same bytes for the deleted tracer.
         word |= visual.y & 0xFFFFu;
         word |= ((visual.w >> 16u) & 0xFFu) << 16u;
+
+        // ...and what it lets through, into the second word (R4d). The same descent, the same two
+        // table reads, the same visit: opacity is byte 3 of the first word, the index of refraction
+        // is byte 2 of the second and translucency is byte 3 of the third.
+        if (slot < face_medium.words.length()) {
+            face_medium.words[slot] = kFaceMediumKnown | ((visual.x >> 24u) & 0xFFu) |
+                                      (((visual.y >> 16u) & 0xFFu) << 8u) |
+                                      (((visual.z >> 24u) & 0xFFu) << 16u);
+        }
     }
     face_material.words[slot] = word;
     return word;
@@ -1852,6 +1899,9 @@ uint node_face_material(uint slot, ivec3 node, uint level) {
 void node_face_material_forget(uint slot) {
     if (slot >= face_material.words.length()) return;
     face_material.words[slot] = 0u;
+    // ...and what it lets through, which was worked out on the same visit and is stale for exactly
+    // the same reasons (R4d).
+    if (slot < face_medium.words.length()) face_medium.words[slot] = 0u;
 }
 
 // ---- R4c: the block of outgoing bins this face is holding, if it can get one -------------------
