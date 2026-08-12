@@ -271,6 +271,9 @@ inline constexpr u32 kProbeDenoise = 1u << 2;
 // census in the audit reads this bit so that "nothing is specular here" and "nobody looked" cannot
 // print the same line (trap 15).
 inline constexpr u32 kProbeMaterial = 1u << 3;
+// R9f's fold: a coarse face takes the average of the four faces under it rather than its own rays.
+// Cleared by `--no-face-fold`, which is the control arm.
+inline constexpr u32 kProbeFold = 1u << 4;
 
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.

@@ -3394,3 +3394,67 @@ correctly-built mechanism look like a violation.
 |---|---|---|---|
 | D589 | **The folded-colour fallback is not built** | measurement | Three rays of 482,773 in the worst state this engine reaches. The cost of being wrong about it is a light floor, which two entries of this log exist to have removed |
 | D589 | **The rule is restated to what was built** | D292, D341, D430 | An absolute that the code deliberately breaks in two places is worse than no rule: the next reader either "fixes" a working mechanism or stops trusting the sentence |
+
+## D590 — R9f's fold: a third more light in the bounce, at two and a half milliseconds
+
+**The last piece of R9.** A coarse face has always measured itself, with its own rays, at its own
+scale — R9d measured that as about a tenth too bright — and a ray leaving a face four voxels across
+marches with a footprint four voxels wide, so it never sees the window reveal, the cornice or the
+step that its children can see. The fold gives it what its children measured instead.
+
+**It is a PULL, and that is why this sub-step waited.** D191's *one invocation owns each face* is
+what removed the halving compare-and-swap, the read-twice-take-the-minimum and the eight-probe
+eviction from this pass, and 512 children pushing into one parent is exactly the arrangement it
+removed. So the parent reads: **four** lookups — the 2×2 of children pointing the same way, with the
+third index pinned to the side the face is on — on a frame it was going to be visited anyway, one
+writer, no atomics, no ordering to depend on. The whole pyramid folds one level per visit.
+
+**Measured, one build, two flags, close camera, settled, two interleaved rounds:**
+
+| | `--no-face-fold` | `--face-fold` |
+|---|---|---|
+| gathering rays landing on a **lit** face | 31.0 / 31.1% | **41.8 / 41.8%** |
+| faces pass | 3.66 / 3.72 ms | **6.43 / 6.57** |
+
+A third more of what the bounce integrates now finds light instead of black, and the pass goes 75%
+over a 4.40 ms budget it was inside. **So it is off by default and `--face-fold` turns it on**,
+which is the same call D586 made for the halo and for the same reason: a real improvement whose cost
+lands somewhere the user has not agreed to spend it.
+
+**What is folded and what is not.** The sky, the near field and the bounce — the terms a gathering
+ray and the composite read. Not the LAMPS: `pick_light` chose one fitting for the child from the
+child's own position, and averaging four of those is four samples of a different integral, not what
+a coarse face receives. Not the GRADIENTS: they are fits over the children's own extents and do not
+rescale by averaging, so they are dropped, which `face_light_seed` already argues is better than a
+borrowed tilt. And not the SUN COUNTERS, which is the first of three things that were built and
+taken out again.
+
+**Three attempts to make it cheaper, all measured, none of which worked.**
+
+1. **Folding the sun counters too.** That rewrites the sample count, `face_work_of` reads that to
+   decide whether a face has settled, and an unsettled face is never held back — so every coarse
+   face re-entered the queue every frame for ever and the pass read **7.79 ms**. Removing it is
+   kept, because it is a real fault; it was not the cost.
+2. **Not stamping a folded stand-in into the off-screen shading class.** A face whose answer comes
+   from its children cannot need rays of its own, so this should have removed twenty-two thousand
+   records from that budget. It moved the figure by nothing.
+3. **Folding one visit in eight, phased on the slot.** It cost **more** — 7.5 against 6.4 — and won
+   less, 36.3% against 41.8%. That is the useful one: whatever this costs, it is **not proportional
+   to how often it runs**, and a rate that low stops tracking children that are still converging.
+
+The next person should therefore look somewhere other than the fold's own arithmetic. The obvious
+unexamined candidate is what it makes *other* passes do: a coarse face that is answerable is read by
+`visibility.comp`'s stand-in path and by every gathering ray that walks up, and neither was doing
+that work before.
+
+**One measurement to distrust.** The control arm itself read **3.66 ms** in one round and **4.02** in
+another twenty minutes later, which is D407's ten per cent of machine drift over a long session. The
+figures above are from interleaved rounds; anything compared across rounds here is not evidence.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D590 | **A pull of four, never a push of 512** | D191 | One invocation owns each face is what makes this pass free of atomics, and a push would put them back for a fold that is O(coarse nodes) either way |
+| D590 | **Fold the light words, never the counters** | measurement | The counters schedule work. Writing them made every coarse face permanently unsettled and doubled the pass |
+| D590 | **Refold every visit, not once** | measurement | Folding once captured the children too early and was worth **0.3%** against 10.8%. What makes this worth anything is that it keeps up as the children converge |
+| D590 | **Off by default** | D586 | 75% over a budget it was inside, for light nobody asked to spend it on. The same call as the halo, one sub-step along |
+| D590 | **Three eliminations recorded with their numbers** | process | Each cost a build and a measurement, and the third one is a fact about where the cost is NOT |

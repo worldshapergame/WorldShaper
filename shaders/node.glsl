@@ -493,6 +493,10 @@ const uint kProbeDenoise = 1u << 2;
 // construction, so a timing is the only evidence there is and a timing needs two arms of ONE build
 // (D407).
 const uint kProbeMaterial = 1u << 3;
+// R9f's fold. Off, a coarse face measures itself with its own rays at its own scale and nothing
+// reads its children -- which is what it has always done and is the state every figure before this
+// was taken in. See `face_fold` in shade_faces.comp.
+const uint kProbeFold = 1u << 4;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -546,6 +550,7 @@ void probe_add(uint at) {
 bool probe_coarse_bounce() { return (light_probe.words[0] & kProbeCoarseBounce) != 0u; }
 bool probe_denoise() { return (light_probe.words[0] & kProbeDenoise) != 0u; }
 bool probe_material() { return (light_probe.words[0] & kProbeMaterial) != 0u; }
+bool probe_fold() { return (light_probe.words[0] & kProbeFold) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the

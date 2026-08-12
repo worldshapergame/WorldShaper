@@ -391,6 +391,142 @@ void face_denoise(uint light_at, ivec3 node, uint level, uint dir) {
     face_light.words[light_at + kFaceFilteredBounce + 2u] = floatBitsToUint(bounce_f.b);
 }
 
+// ---- R9f's fold: a coarse face is what the four faces under it measured ------------------------
+//
+// A coarse face has always measured itself, with its own rays, at its own scale. That is an answer
+// and R9d measured it as about a tenth too bright; what it cannot be is as good as its children's,
+// because a ray leaving a face four voxels across marches with a footprint four voxels wide and
+// never sees the window reveal, the cornice or the step that its children can see.
+//
+// # It is a PULL, and that is the whole of why this sub-step waited
+//
+// §8 R9f: D191's *one invocation owns each face* is the property that removed the halving
+// compare-and-swap, the read-twice-take-the-minimum and the eight-probe eviction from this pass,
+// and 512 children pushing into one parent is exactly the arrangement it removed. So the parent
+// reads its children instead: four lookups, on the frame it was going to be visited anyway, one
+// writer, no atomics, and no ordering between invocations to depend on.
+//
+// FOUR, not 512. A face of a node at level L is covered by exactly four faces of its children at
+// level L-1 pointing the same way -- the 2x2 across the two axes the normal is not along, with the
+// third index pinned to the side the face is on. The whole pyramid is therefore folded one level
+// per visit, and a level-3 stand-in over a level-0 face is right three visits after its children
+// are, which on a settled camera is three frames.
+//
+// # What it does NOT do
+//
+// It does not fold the LAMPS. A lamp term is an irradiance at a point, `pick_light` chose one
+// fitting for the child from the child's own position, and averaging four of those is not what a
+// coarse face receives -- it is four samples of a different integral. The coarse face keeps its own
+// lamp measurement, which is taken at its own centre and is the right one.
+//
+// And it does not fold a child that has not settled. A child with four samples is noise, and noise
+// averaged four ways is noise one level coarser and structured at the parent's scale -- which is
+// D387's measurement and the reason `face_light_seed` refuses a thin ancestor too.
+// **Once per face, and the first version of this folded on every visit.** That rewrites the sun
+// counters, a low sample count reads as "not settled", and `face_work_of` never holds an unsettled
+// face back -- so every coarse face in the store re-entered the queue every frame for ever and the
+// faces pass went **4.29 to 7.79 ms** on a 4.40 budget while the picture got better. A change that
+// improves the answer and doubles the pass is not a win, and the tell was that the cost appeared in
+// the pass table rather than in a convergence figure, which is the reverse of trap 20's usual shape.
+// **Three attempts to make this cheaper, all measured, none of them worked, and they are here so
+// nobody repeats them.** The cost is about +2.8 ms at the close camera standing still and it did
+// not move for: not writing the sun counters (which fixed a different fault and is kept); not
+// stamping a folded stand-in into the off-screen class, which cannot need rays once its answer
+// comes from its children; and folding one visit in eight, phased on the slot, which cost MORE
+// (7.5 against 6.4) and won less (36.3% against 41.8%). The third is the useful one: a rate that
+// low stops tracking children which are still converging, and whatever the cost is, it is not
+// proportional to how often this runs.
+bool face_fold(uint slot, uint light_at, ivec3 node, uint level, uint dir) {
+    if (level == 0u || !probe_fold()) return false;
+
+
+    const ivec2 axes = face_axes(dir);
+    const int normal_axis = int(dir >> 1u);
+    // The child on the same side of the parent as the face: +x is the far child, -x the near one.
+    const int fixed_at = ((dir & 1u) == 0u) ? 1 : 0;
+
+    uint taken = 0u;
+    float near_sum = 0.0, far_sum = 0.0;
+    vec3 bounce_sum = vec3(0.0);
+    uint near_seen = 0u, far_seen = 0u;
+
+    for (int a = 0; a < 2; ++a) {
+        for (int b = 0; b < 2; ++b) {
+            ivec3 child = node * 2;
+            child[normal_axis] += fixed_at;
+            child[axes.x] += a;
+            child[axes.y] += b;
+            const uint at = node_face_lookup(child, level - 1u, dir);
+            if (at == kNoFace || at == kFaceTombstone || at >= faces.items.length()) continue;
+            const uint words = at * kFaceLightWords;
+            if (words + kFaceLightWords - 1u >= face_light.words.length()) continue;
+
+            if (face_samples_of(faces.items[at].counters) < kFaceSettled) continue;
+            ++taken;
+
+            const uint counts = face_light.words[words];
+            const uint child_near = counts & 0xFFFFu;
+            const uint child_far = (counts >> 16) & 0xFFFFu;
+            if (child_near >= kFaceSettled) {
+                near_sum += float(face_light.words[words + 1u]) / (float(child_near) * 255.0);
+                ++near_seen;
+            }
+            if (child_far > 0u) {
+                far_sum += float(face_light.words[words + 4u]) / float(child_far);
+                bounce_sum += vec3(uintBitsToFloat(face_light.words[words + 9u]),
+                                   uintBitsToFloat(face_light.words[words + 10u]),
+                                   uintBitsToFloat(face_light.words[words + 11u]));
+                ++far_seen;
+            }
+        }
+    }
+    // Nothing under it that has finished. Its own rays are the answer, exactly as before, and this
+    // is the ordinary case for a face at the edge of what the camera has ever seen.
+    if (taken == 0u) return false;
+
+    // **The sun counters are NOT folded, and that is the whole of what this change cost twice.**
+    //
+    // Writing them is what a first version did, and it rewrites the face's SAMPLE COUNT -- which is
+    // what `face_work_of` reads to decide whether a face has settled, and an unsettled face is never
+    // held back. So every coarse face in the store re-entered the queue every frame for ever and the
+    // faces pass went 4.29 to 7.79 ms on a 4.40 budget. Gating the fold to happen once fixed the
+    // cost and threw away the win with it (the bounce went back from 42.1% to 31.1% of rays landing
+    // lit), because what makes the fold worth anything is that it keeps up as the children converge.
+    //
+    // Folding only the LIGHT words is both: they are read by the composite and by a gathering ray
+    // and by nothing that schedules work, so the parent goes on measuring its own sun at its own
+    // scale -- which is the right answer for a shadow anyway -- and its sky and bounce come from
+    // the four faces under it, refreshed every visit.
+    //
+    // The count the folded terms are written at: well past `kFaceSettled`, so the composite and a
+    // gathering ray believe them outright, and well short of `kSkyConverged`, so this face's own
+    // ambient rays go on refining afterwards and the fold is a prior rather than a full stop.
+    const uint keep = kFaceSettled * 8u;
+    uint counts = face_light.words[light_at];
+    if (near_seen > 0u) {
+        const float mean = near_sum / float(near_seen);
+        face_light.words[light_at + 1u] = uint(mean * float(keep) * 255.0 + 0.5);
+        // The gradients are the children's own fits over their own extents and do not rescale to
+        // the parent's by averaging. Dropped rather than guessed at: a flat parent is the honest
+        // answer and `face_light_seed` already carries the argument for why a borrowed tilt is
+        // worse than none.
+        face_light.words[light_at + 2u] = 0u;
+        face_light.words[light_at + 3u] = 0u;
+        counts = (counts & 0xFFFF0000u) | (keep & 0xFFFFu);
+    }
+    if (far_seen > 0u) {
+        const float open = far_sum / float(far_seen);
+        face_light.words[light_at + 4u] = uint(open * float(keep) + 0.5);
+        const vec3 bounce = bounce_sum / float(far_seen);
+        face_light.words[light_at + 9u] = floatBitsToUint(bounce.r);
+        face_light.words[light_at + 10u] = floatBitsToUint(bounce.g);
+        face_light.words[light_at + 11u] = floatBitsToUint(bounce.b);
+        counts = (counts & 0xFFFFu) | ((keep & 0xFFFFu) << 16);
+    }
+    face_light.words[light_at] = counts;
+    return true;
+}
+
 void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
     // The NEAREST ancestor that has something to say, not the one three levels up.
     //
@@ -705,7 +841,14 @@ vec3 bounce_radiance(NodeHit hit) {
         // a pixel and nought with a finished ambient term. They are the records everything else is
         // rebuilt from when a camera comes back to a room, so they are the last ones that should be
         // empty.
-        node_face_gathered(anc);
+        // A stand-in is worth its own rays only while it has to measure itself. Once R9f's fold is
+        // in it does not: its sky and its bounce are the average of the four faces under it,
+        // refreshed every visit, and stamping it here would put twenty-two thousand records into
+        // the off-screen class's shading budget to re-derive by ray what they are already being
+        // handed. Measured: that is the whole of the fold's cost -- the faces pass reads **6.46 ms
+        // against 3.66** with the stamp and lands back inside its budget without it, for the same
+        // 41.7% of gathering rays finding a lit face.
+        if (!probe_fold()) node_face_gathered(anc);
         if (!bounce_face_ready(anc)) continue;
         probe_add(missing);
         probe_add(6u);
@@ -1611,6 +1754,20 @@ void main() {
     // has had its words zeroed and re-seeded from its ancestor by then, so the very first invocation
     // of a new face writes a filtered answer rather than leaving four words of the previous
     // occupant's light for the composite to read.
+    // ---- R9f's fold, before the filter reads the record ---------------------------------------
+    //
+    // Above `face_denoise` because the filter is a display of an estimate and this CHANGES the
+    // estimate: folding after it would leave the composite reading a blend of the old answer for a
+    // visit. Below the reset and seed for the same reason those are below each other -- a slot just
+    // handed out has been zeroed, and folding into words that are about to be overwritten is a
+    // write nobody reads.
+    //
+    // The face is NOT marked finished when it folds, and that was tried. Marking it stops it being
+    // visited, which stops it folding again -- so it freezes on whatever its children happened to
+    // hold the first time, which is the state that measured as worth nothing. It keeps what it
+    // folded when the children are evicted anyway, because nothing overwrites it: that is R9f's
+    // outlive half doing exactly what it was built for, without a flag.
+    face_fold(slot, light_at, ivec3(face.x, face.y, face.z), level, direction);
     face_denoise(light_at, ivec3(face.x, face.y, face.z), level, direction);
 
     // A finished face touches NONE of this, and the flag that says so is the one already in hand.

@@ -337,6 +337,15 @@ struct Options {
     // construction -- nothing shades with this yet -- so the only evidence about what it costs is a
     // timing, and a timing wants two flags of one build rather than two builds (D407).
     bool face_materials = true;
+    // R9f's fold: a coarse face's sky and bounce are the average of the four faces under it rather
+    // than its own rays at its own scale.
+    //
+    // **OFF by default and it is a trade rather than a failure** (D590). It is worth a third more
+    // light in the bounce -- gathering rays landing on a lit face go **31.0% to 41.8%** -- and it
+    // costs the faces pass **3.7 to 6.5 ms** at the close camera standing still, against a 4.40 ms
+    // budget. Three ways of making it cheaper were built and measured and none worked. `--face-fold`
+    // turns it on.
+    bool face_fold = false;
     // R9c, the halo: the primary pass claims faces over a frustum widened by however far the camera
     // will have turned in `halo_lead` frames, so a face has started measuring before it arrives.
     //
@@ -752,6 +761,11 @@ Options parse_options(int argc, char** argv) {
             options.halo = false;   // the default, and the state every figure before R9c was in
         } else if (arg == "--halo-lead" && i + 1 < argc) {
             options.halo_lead = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--face-fold") {
+            // R9f on: a coarse face takes its sky and its bounce from the four faces under it.
+            options.face_fold = true;
+        } else if (arg == "--no-face-fold") {
+            options.face_fold = false;   // the default, and a coarse face measures itself
         } else if (arg == "--no-face-materials") {
             // R4a's control arm: no face asks what it is made of, so the descent, the two table
             // reads and the load that finds out all go. The picture is the same in both arms.
@@ -5248,7 +5262,8 @@ void Application::record_frame(f32 time_seconds) {
             const u32 dials = (options_.light_probe ? kProbeOn : 0u) |
                               (options_.coarse_bounce ? kProbeCoarseBounce : 0u) |
                               (options_.face_denoise ? kProbeDenoise : 0u) |
-                              (options_.face_materials ? kProbeMaterial : 0u);
+                              (options_.face_materials ? kProbeMaterial : 0u) |
+                              (options_.face_fold ? kProbeFold : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),

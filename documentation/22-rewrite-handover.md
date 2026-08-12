@@ -1811,6 +1811,30 @@ what fills the table and the cap collapses on its own. **And the coarse pyramid 
 them there. That is unexplained, it is not this change's doing, and it is the next thing to find in
 this pass.
 
+### R9 is finished: the fold is in, measured, and opt-in
+
+**R9f's fold, the last piece** (D590). A coarse face takes its sky, its near field and its bounce
+from the four faces under it pointing the same way, pulled on a visit it was making anyway — four
+lookups, one writer, no atomics, which keeps D191's *one invocation owns each face* rather than
+arguing around it.
+
+| close camera, settled, two interleaved rounds | `--no-face-fold` | `--face-fold` |
+|---|---|---|
+| gathering rays landing on a **lit** face | 31.0 / 31.1% | **41.8 / 41.8%** |
+| faces pass | 3.66 / 3.72 ms | **6.43 / 6.57** |
+
+A third more of what the bounce integrates finds light instead of black, and the pass goes 75% over
+a budget it was inside — so it is **off by default**, the same call D586 made for the halo.
+
+**Three attempts to make it cheaper, all measured, none of which worked**, and the third is the one
+to keep: folding one visit in eight cost **more** (7.5 against 6.4) and won less (36.3% against
+41.8%), so whatever this costs is **not proportional to how often it runs**. Look at what it makes
+*other* passes do rather than at its own arithmetic — a coarse face that is answerable is suddenly
+read by `visibility.comp`'s stand-in path and by every gathering ray that walks up.
+
+**And one figure to distrust**: the control arm read 3.66 ms in one round and 4.02 twenty minutes
+later, which is D407's machine drift. Only interleaved rounds are evidence here.
+
 ### R9g's persistence is in, and R9h needed a correction rather than code
 
 **The lamps come back with the world** (D588). A chunk's emissive cells are written into the world
@@ -2558,6 +2582,9 @@ lit (D581);
 of the rewrite, which is R6's control arm and the state every picture figure above that section was
 measured in — it works by having the host zero both of the meter's slots every frame, so the shader
 takes its own "nothing has been measured" branch and no flag reaches it;
+`--face-fold` makes a coarse face take its sky and bounce from the four faces under it rather than
+from its own rays, which is R9f's fold — **off by default**, worth a third more light in the bounce
+and 2.8 ms of the faces pass;
 `--no-emitter-cache` makes the emitter list rediscover every chunk on every announced change again,
 which is R9g's control arm and the state every figure before it was measured in — it is a cleared
 map rather than a second code path, so the arms cannot differ by a branch;
