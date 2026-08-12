@@ -102,4 +102,357 @@ vec3 face_direct_irradiance(vec3 sun_radiance_in, float lambert, vec3 sky_radian
 vec3 face_outgoing_radiance(vec3 albedo, vec3 direct_irradiance, vec3 bounce, float kPi_in) {
     return albedo * (direct_irradiance * (1.0 / kPi_in) + bounce);
 }
+
+// ---- R4c: the lobe, which is the other half of what leaves a face ------------------------------
+//
+// Everything above this line treats every surface in the world as Lambertian: one albedo, one
+// outgoing radiance, the same in every direction. That is why the bronze doors, the gilt paterae,
+// the lead flashing and the copper dome read as coloured chalk — the two bytes that say they are
+// metal reached the face in R4a and nothing did anything with them.
+//
+// A surface reflects in two ways and the split between them is `metalness`, read as a quantity and
+// never as an identity (§8 R4: *nothing in this stage may branch on a material's identity*). What
+// is diffuse goes through the arithmetic above, unchanged. What is specular is a **lobe**: a
+// distribution over outgoing direction, narrow where the surface is smooth and wide where it is
+// rough, and it is what makes a reflection move across a surface as you walk past it.
+//
+// # The two halves of a lobe, and only one of them needs storing
+//
+// - **the sun**, which is one direction and is already measured on the face: `face_lit_of` is the
+//   fraction of the disc this face can see. Evaluating a lobe towards it is arithmetic, per pixel,
+//   exactly as `lambert` above already is — no ray, no storage, nothing that scales with the
+//   window except a multiply. That is the highlight that slides across a door as you move;
+// - **everything else** — the sky, the portico, the room — which is a whole hemisphere and cannot
+//   be arithmetic. That is the BINS, measured by the face's own gathering rays and read by the
+//   composite along the one direction the eye is looking down. See `face_lobe_*` below.
+//
+// # What a face with no bins does, and why it is not a special case
+//
+// The bins are a payload allocated only where they are read (§4 of the plan: *a matte stone wall
+// allocates no payload at all*), so most faces have none. A face with no bins is not a face with no
+// lobe: its lobe is the whole hemisphere averaged into one direction, which is exactly the number
+// the bounce already holds. So `bins = 0` is the continuous end of the same law rather than a
+// branch — a fully rough surface's lobe IS its hemispherical mean, and storing sixteen copies of
+// one number would buy nothing. That is what keeps this free of a roughness threshold: what the
+// bin count does is decide how much DIRECTION survives, and nought is a legal answer.
+
+const float kFacePi = 3.14159265358979;
+
+// Roughness as the GGX width. Squared, which is the convention `pt_material.glsl` used and the one
+// the clips were authored against, so `rough=64` means to a clip author what it always meant.
+//
+// Floored, because a width of nought is a division by nought in the distribution below and a clip
+// may legitimately write `rough=0`. The floor is well under the angular size of one bin, so it can
+// never be what decides how sharp a stored reflection is — that is the bin count's job, and a floor
+// that could bind would be a roughness threshold wearing a safety guard's coat.
+const float kFaceAlphaMin = 0.004;
+float face_alpha_of(uint rough_byte) {
+    const float r = float(rough_byte) * (1.0 / 255.0);
+    return max(r * r, kFaceAlphaMin);
+}
+
+// What fraction of this surface reflects diffusely. A metal has no diffuse lobe at all; a
+// dielectric has very nearly all of it.
+//
+// **Both readers of a face's light apply this**, which is the whole reason it lives in this file:
+// if the composite darkened a bronze door's diffuse and the gathering ray went on reading it as
+// full Lambertian, the room would be lit by one renderer and drawn by another — which is the
+// sentence at the top of this file, and it was learned the expensive way (D420).
+float face_diffuse_share(uint metal_byte) {
+    return 1.0 - float(metal_byte) * (1.0 / 255.0);
+}
+
+// The specular colour at normal incidence. A dielectric reflects about four per cent of what falls
+// on it, whatever colour it is; a metal reflects its own colour and nothing else. Mixed rather than
+// chosen, so a clip writing `metal=110` gets the mixture it asked for.
+const float kFaceDielectricF0 = 0.04;
+vec3 face_f0_of(vec3 albedo, uint metal_byte) {
+    return mix(vec3(kFaceDielectricF0), albedo, float(metal_byte) * (1.0 / 255.0));
+}
+
+// Schlick's Fresnel: how much more a surface reflects at a glancing angle than head on. It is what
+// makes a polished floor a mirror at the far end of a hall and matte under your feet, and it costs
+// four multiplies.
+vec3 face_fresnel(vec3 f0, float cos_theta) {
+    const float m = clamp(1.0 - cos_theta, 0.0, 1.0);
+    const float m2 = m * m;
+    return f0 + (1.0 - f0) * (m2 * m2 * m);
+}
+
+// The GGX microfacet distribution, which is the shape of the lobe.
+float face_ggx_d(float n_dot_h, float alpha) {
+    const float a2 = alpha * alpha;
+    const float d = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+    return a2 / max(kFacePi * d * d, 1e-9);
+}
+
+// Smith's height-correlated visibility, which is G / (4 (n.v)(n.l)) with the divide folded in.
+float face_ggx_vis(float n_dot_v, float n_dot_l, float alpha) {
+    const float a2 = alpha * alpha;
+    const float lv = n_dot_l * sqrt(n_dot_v * n_dot_v * (1.0 - a2) + a2);
+    const float ll = n_dot_v * sqrt(n_dot_l * n_dot_l * (1.0 - a2) + a2);
+    return 0.5 / max(lv + ll, 1e-6);
+}
+
+// ---- the outgoing bins: which directions a face stores, and where each one points --------------
+//
+// A face's hemisphere, cut into `kLobeSide` by `kLobeSide` patches of very nearly equal solid angle
+// by the hemi-octahedral map. The centre of the square is the face's own normal and its four
+// corners are the four grazing directions, so the parameterisation has no pole and no seam
+// anywhere a reflection is worth looking at.
+//
+// **Sixteen is a constant here and it is R4b's job to make it a function.** D186 says the bin count
+// comes from roughness and from how many pixels the face covered, and neither is read here: what
+// this landing fixes is that a face has a direction-dependent answer at all. What sixteen costs is
+// stated where it can be checked rather than left to be discovered — a patch is 2*PI/16 steradians,
+// which is a cone of 20.4 degrees half-angle, so a reflection is blurred to 20.4 degrees however
+// polished the surface is. Copper at 24 degrees and lead at 25.4 on this building are rougher than
+// that and are drawn correctly; bronze at 10.7 and gilt at 3.6 are drawn softer than they are. That is the plan's
+// own stated honest limit ("a reflection is soft where the surface is polished") arriving at a
+// number, and R4b is what lifts it where the pixels earn it.
+const uint kLobeSide = 4u;
+const uint kLobeBins = kLobeSide * kLobeSide;
+
+// A direction in the face's own frame (z along the normal, z >= 0) to a point on the unit square.
+vec2 face_lobe_encode(vec3 d) {
+    d /= max(abs(d.x) + abs(d.y) + abs(d.z), 1e-6);
+    // The 45-degree rotation is what turns the octahedron's upper half into a full square rather
+    // than into the diamond inscribed in one, which is the whole of why this map wastes no bins.
+    return vec2(d.x + d.y, d.x - d.y) * 0.5 + 0.5;
+}
+
+// ...and back, which is what a bin's centre direction is.
+vec3 face_lobe_decode(vec2 at) {
+    const vec2 p = at * 2.0 - 1.0;
+    vec3 d = vec3((p.x + p.y) * 0.5, (p.x - p.y) * 0.5, 0.0);
+    d.z = 1.0 - abs(d.x) - abs(d.y);
+    return normalize(d);
+}
+
+// The two axes across a face, which is the frame every bin is indexed in.
+//
+// **One function, and it is the reason there is one at all**: the pass that writes a bin and the
+// pass that reads one derive this frame independently, and a frame that disagrees by a swap or a
+// sign is a reflection that is mirrored or upside down and looks very nearly right — the hardest
+// kind of wrong to see in a picture. It is `face_point`'s discipline for positions, applied to
+// directions.
+//
+// The same expression `shade_faces.comp` has always used for its ambient rays, moved here rather
+// than copied: `g_sky_side` and `g_sky_other` are this.
+void face_lobe_frame(vec3 normal, out vec3 side, out vec3 other) {
+    side = normalize(abs(normal.y) < 0.9 ? cross(normal, vec3(0.0, 1.0, 0.0))
+                                         : cross(normal, vec3(1.0, 0.0, 0.0)));
+    other = cross(normal, side);
+}
+
+// A world direction into the face's frame and out again. `side` and `other` come from
+// `face_lobe_frame` above, handed in by the caller because the writer has them in registers
+// already.
+vec2 face_lobe_at(vec3 dir, vec3 normal, vec3 side, vec3 other) {
+    return face_lobe_encode(vec3(dot(dir, side), dot(dir, other), max(dot(dir, normal), 0.0)));
+}
+vec3 face_lobe_direction(vec2 at, vec3 normal, vec3 side, vec3 other) {
+    const vec3 local = face_lobe_decode(at);
+    return normalize(side * local.x + other * local.y + normal * local.z);
+}
+
+// Where the centre of bin `index` points, on the square.
+vec2 face_lobe_centre(uint index) {
+    return (vec2(float(index % kLobeSide), float(index / kLobeSide)) + 0.5) *
+           (1.0 / float(kLobeSide));
+}
+
+// The width the bins themselves impose, as a GGX alpha.
+//
+// A patch of 2*PI/kLobeBins steradians is a cone of half-angle acos(1 - 1/kLobeBins), and a GGX
+// lobe's half-angle is very nearly its alpha for small alpha. So a lobe narrower than this cannot
+// be represented however sharp the material is, and pretending otherwise is what would make the
+// estimate noise rather than blur: every sample would land in the tail of every bin's kernel and
+// the bins would be decided by the handful of rays that happened to fall near a centre.
+//
+// Widening the KERNEL to the bin instead spends the same rays on an answer that is smooth and one
+// bin blurry, which is the honest reading of what sixteen bins can say. It is the reason this term
+// has no firefly problem while the bounce beside it needed `kBounceBelieve`.
+float face_lobe_bin_alpha() {
+    return acos(clamp(1.0 - 1.0 / float(kLobeBins), -1.0, 1.0));
+}
+
+// ---- where a face's bins live, which is a cache and not an allocator ---------------------------
+//
+// The pool is laid out in `shaders/node.glsl` beside the buffer it is; what is here is the
+// arithmetic, because the pass that writes a bin and the pass that reads one are different shaders
+// and a second copy of an index is a second chance to be wrong about a stride (D332 and the whole
+// reason kFaceLightWords is in this file).
+//
+// Sixty-five thousand five hundred and thirty-six blocks against the 35,950 faces on this building
+// that carry any metal at all. Sized from the census R4a was built to produce rather than from a
+// guess, with room to be opened to glass and polished stone by lowering the floor below.
+const uint kLobeBlocks = 65536u;
+const uint kLobeWays = 4u;   // how many blocks of the pool one face may try
+const uint kLobeBlockWords = kLobeBins * 2u;
+const uint kNoLobe = 0xFFFFFFFFu;
+
+// How cold a block's holder has to be before another face may take it. The same six hundred frames
+// the face store gives up a slot at, and for the same reason: a face the camera comes back to
+// should find its own answer where it left it. A face on screen stamps its block every time the
+// shading pass visits it, which is one frame in `face_stride`.
+const uint kLobeCold = 600u;
+
+// And how much a face has to be worth before it asks at all. See `face_lobe_worth`.
+//
+// This admits every metal on the facility -- copper is the weakest at 0.375 -- and leaves out
+// limestone at 0.023, marble at 0.036, and glass and water at 0.040. It is a CAPACITY dial and not
+// a material one: it says how far down the pool's room reaches, which is the question
+// `face_pressure` answers about slots, and R4b replaces it with the honest one -- how many pixels
+// the face covers. `--lobe-floor N`, in hundredths, sweeps it; 100 is the arm where nobody asks.
+const float kLobeWorthFloor = 0.05;
+
+// Which four blocks a slot may hold. Set-aligned, so the four ways are adjacent and their headers
+// are four adjacent pairs -- one cache line for the probe the composite runs per metal pixel.
+uint face_lobe_set(uint slot) {
+    uint h = slot * 0x9E3779B9u;
+    h ^= h >> 16;
+    h *= 0x7FEB352Du;
+    h ^= h >> 15;
+    return (h & (kLobeBlocks - 1u)) & ~(kLobeWays - 1u);
+}
+
+// The headers are the front of the buffer, two words a block: who holds it, then the frame that
+// holder last touched it.
+//
+// The holder's WORTH rides in the same word as its slot, above the twenty-one bits a slot needs, so
+// that one compare-and-swap decides a take-over on both at once. Split across two words it would be
+// possible to lose a race and read the loser's worth beside the winner's slot -- which is the one
+// state this arrangement must not be able to reach, because the next face to arrive would then
+// compare itself against a number nobody holds.
+//
+// The frame is a whole word rather than sixteen bits beside the worth, and that is not thrift. A
+// sixteen-bit frame wraps every eighteen minutes at sixty a second, and a block whose holder went
+// away just before the wrap reads as touched a moment ago for ever -- a block that can never be
+// taken, in a pool whose whole recovery mechanism is that a cold block can be.
+// The slot is stored **one greater than it is**, so that a header of nought means "nobody holds
+// this" and a pool that has merely been allocated is an empty one. A sentinel of all-ones would
+// need the whole 512 KB of headers filled before the first frame -- a pass, a barrier and an
+// ordering to get right -- to say what zero says for free, and every other card-owned array here
+// already relies on the allocator's zero meaning exactly what it looks like.
+const uint kLobeSlotBits = 21u;             // 2,097,152, against a store of 1,081,344 slots
+const uint kLobeSlotMask = (1u << kLobeSlotBits) - 1u;
+uint face_lobe_header(uint block) { return block * 2u; }
+uint face_lobe_holder(uint slot, float worth) {
+    return ((slot + 1u) & kLobeSlotMask) |
+           (uint(clamp(worth, 0.0, 1.0) * 255.0 + 0.5) << kLobeSlotBits);
+}
+bool face_lobe_is_held(uint held) { return (held & kLobeSlotMask) != 0u; }
+uint face_lobe_holder_slot(uint held) { return (held & kLobeSlotMask) - 1u; }
+float face_lobe_holder_worth(uint held) {
+    return float((held >> kLobeSlotBits) & 0xFFu) * (1.0 / 255.0);
+}
+
+// ...and the bins are behind every header, kLobeBlockWords a block: the packed means as one run,
+// then the weight sums behind them, so four bilinear taps are four words inside 64 bytes.
+uint face_lobe_bin_at(uint block, uint bin) {
+    return kLobeBlocks * 2u + block * kLobeBlockWords + bin;
+}
+uint face_lobe_weight_at(uint block, uint bin) {
+    return kLobeBlocks * 2u + block * kLobeBlockWords + kLobeBins + bin;
+}
+// How many words the whole pool is, which is what the host allocates.
+uint face_lobe_pool_words() { return kLobeBlocks * (2u + kLobeBlockWords); }
+
+// How much this face's lobe is worth storing bins for, in [0, 1].
+//
+// It decides RESIDENCY and nothing about the picture: the pool of bin blocks is a fraction of the
+// store, so something has to say which faces get one, and this is the same shape of question the
+// face store's own pressure answers about slots. Two continuous factors, both out of the two bytes
+// R4a put on the face:
+//
+//   - how much of what leaves the surface is specular at all, which is metalness. A dielectric
+//     reflects four per cent and a metal all of it;
+//   - how much DIRECTION a lobe of this width has left after the bins have blurred it. A fully
+//     rough surface's lobe is the hemisphere, its bins would all hold the same number, and the
+//     number is one the face already stores.
+//
+// Deliberately NOT a function of the albedo, which the light pass does not have for its own face —
+// it reads the marcher's folded colour for a surface a ray LANDS on and has never needed one for
+// itself. Metalness alone is the upper bound on the true worth, which is the right direction for a
+// residency test: it can admit a face whose lobe turns out dim, and it cannot turn one away.
+float face_lobe_worth(uint rough_byte, uint metal_byte) {
+    const float alpha = face_alpha_of(rough_byte);
+    const float strength = mix(kFaceDielectricF0, 1.0, float(metal_byte) * (1.0 / 255.0));
+    return strength * clamp(1.0 - alpha * alpha, 0.0, 1.0);
+}
+
+// ---- rgb9e5, which is what a bin is stored in --------------------------------------------------
+//
+// One word for three channels of radiance with a shared exponent, which is the format §4 of the
+// plan names for exactly this. A bin holds an unbounded quantity — the sky is thousands of times a
+// wall — so a fixed point would either clip the sky or quantise the wall, and three halves would be
+// two words a bin for a precision nothing here can use.
+const int kFaceRgb9e5Bias = 15;
+const int kFaceRgb9e5Mantissa = 9;
+const float kFaceRgb9e5Max = 65408.0;   // (511/512) * 2^16, the largest the format holds
+
+uint face_pack_rgb9e5(vec3 c) {
+    c = clamp(c, vec3(0.0), vec3(kFaceRgb9e5Max));
+    const float largest = max(max(c.r, c.g), c.b);
+    // The exponent that puts the largest channel just under one, and the floor is what keeps a
+    // black bin from taking the logarithm of nought.
+    int e = max(-kFaceRgb9e5Bias - 1, int(floor(log2(max(largest, 1e-30))))) + 1 + kFaceRgb9e5Bias;
+    float unit = exp2(float(e - kFaceRgb9e5Bias - kFaceRgb9e5Mantissa));
+    // Rounding the largest channel can carry it past the mantissa's range, which is one step of
+    // exponent rather than an overflow. Checked rather than clamped, because clamping it would make
+    // the brightest bin in the frame darker than the one beside it.
+    if (int(floor(largest / unit + 0.5)) > 511) {
+        e += 1;
+        unit *= 2.0;
+    }
+    const uvec3 m = uvec3(clamp(floor(c / unit + 0.5), vec3(0.0), vec3(511.0)));
+    return (uint(clamp(e, 0, 31)) << 27) | (m.b << 18) | (m.g << 9) | m.r;
+}
+
+vec3 face_unpack_rgb9e5(uint packed) {
+    const float unit = exp2(float(int(packed >> 27) - kFaceRgb9e5Bias - kFaceRgb9e5Mantissa));
+    return vec3(float(packed & 0x1FFu), float((packed >> 9) & 0x1FFu),
+                float((packed >> 18) & 0x1FFu)) * unit;
+}
+
+// ---- what the lobe is worth to a pixel, once the environment along it is known -----------------
+//
+// The environment half. `reflected` is the radiance arriving along the mirror direction — a bin if
+// the face has them and its hemispherical mean if it has not — and what comes back is what the eye
+// sees of it.
+//
+// The Fresnel is taken at the VIEW angle rather than at the half vector, which is the split-sum
+// approximation every real-time renderer uses for a prefiltered environment and is exact for a
+// mirror. What it costs is a little too much grazing reflection on a rough surface, which is far
+// below what sixteen bins are already doing to the same picture.
+vec3 face_lobe_environment(vec3 f0, float n_dot_v, vec3 reflected) {
+    return face_fresnel(f0, n_dot_v) * reflected;
+}
+
+// The sun half, which needs no storage at all: the face has already measured what fraction of the
+// disc it can see, and the rest is the same arithmetic the diffuse `lambert` above is.
+//
+// This is the term a player reads as metal before any of the others — a highlight that slides
+// across a door as they walk past it — and it is the sharpest thing in the frame, because it is not
+// quantised by the bins.
+//
+// **The clamp is the engine's own sun and not a taste constant.** `pt_sky.glsl` draws the disc at
+// `sun_radiance()` — see the comment there, which says in as many words that it exists "so a mirror
+// reflects something rather than a flat gradient" — so a perfect mirror must show the sun at exactly
+// that and no brighter. A GGX lobe narrower than the sun's own disc integrates to more than one
+// without it, and what that draws is a single blinding pixel that the light meter then exposes the
+// whole building down to avoid.
+vec3 face_lobe_sun(vec3 f0, vec3 normal, vec3 view, vec3 to_sun, float alpha, float visible) {
+    const float n_dot_l = dot(normal, to_sun);
+    const float n_dot_v = dot(normal, view);
+    if (n_dot_l <= 0.0 || n_dot_v <= 0.0 || visible <= 0.0) return vec3(0.0);
+    const vec3 half_vector = normalize(view + to_sun);
+    const float n_dot_h = max(dot(normal, half_vector), 0.0);
+    const float v_dot_h = max(dot(view, half_vector), 0.0);
+    const float reflectance = min(face_ggx_d(n_dot_h, alpha) *
+                                      face_ggx_vis(n_dot_v, n_dot_l, alpha) * n_dot_l,
+                                  1.0);
+    return face_fresnel(f0, v_dot_h) * (reflectance * visible);
+}
 #endif  // WS_FACE_TERMS_GLSL

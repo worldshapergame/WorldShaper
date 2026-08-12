@@ -173,7 +173,7 @@ written for the person the work is for, so it is the one to keep current.
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
 | R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
-| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a's material half is in (D582, D583). A face resolves what the surface under it is made of, once, out of the interned tables the light pass had never had bound; it costs nothing measurable and no pixel moves. What it buys is the two numbers a lobe is: **of the faces a pixel is reading, 14,130 of 111,373 carry metal enclosed and 22,158 of 416,143 close**. R4b–R4d not started |
+| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a is done, both halves (D582, D583, D591), and **R4c's storage and energy split are in** (D591, D592). A face resolves what it is made of once; the composite then splits what leaves it by metalness, so the metals stop being Lambertian — bronze, gilt, lead and copper read as metal rather than chalk. The sun comes back through a GGX lobe with no storage; the environment out of **sixteen outgoing bins** in a pool of 65,536 blocks (8.7 MB) that faces HOLD, filled by the gathering ray they were already casting. Costs **nothing measurable** in any arm. **What it does NOT do is draw a reflection you can recognise**, which is the first thing the user said when shown it — see D592 and §5. R4b and R4d not started |
 | R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
 | R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
@@ -1988,14 +1988,85 @@ population that matters:
    resolves to nought and asks again next visit; a face over polished granite must not. Trap 7, in
    a new array.
 
-**What is next, and it is the one a player will see**: R4c, the outgoing bins — a face measures what
-it reflects along each of a set of directions, out of the same machinery the bounce already uses,
-and the composite reads the bin the eye is looking down. **In game:** the bronze doors, the gilt
-paterae, the copper dome and the window glass stop being coloured chalk and start behaving like
-metal and glass — they will show the portico and the sky in them, and what they show will change as
-you walk past. **What would mean it went wrong:** the reflection swims or crawls as you move rather
-than sitting still on the surface; a metal surface goes black; or the faces pass, which is already
-at 3.9–4.1 ms of a 4.40 ms budget standing still and 7–8 ms flying, moves outside that.
+**What is next, and it is the one a player will see**: R4c, the outgoing bins. **Done — see the
+section below, and read it before believing the sentence that used to be here.**
+
+> **This paragraph over-promised and the next section is what it cost.** It said the bronze doors
+> and the gilt paterae *"will show the portico and the sky in them"*. They do not, and the first
+> thing the user said on being shown the result was *"i dont see any reflection in any picture"*.
+> Bronze at `rough=110` is a lobe 10.7 degrees across and a brushed bronze door does not mirror a
+> portico in life either — but the promise was made in this file, in those words, and it should not
+> have been made from the plan's prose without a number beside it. D592.
+
+### R4c is in: the metals stop being Lambertian, and there is still no reflection
+
+**The energy split landed, it costs nothing, and the picture moved in the direction it was asked to.
+The reflected IMAGE did not arrive, the user said so immediately, and D592 is the measurement of
+why.** Read that entry before sizing R4b; it changes what R4b is.
+
+**What a player sees now.** Walk up to the great bronze door on the portico, or look at the gilt
+paterae under the entablature, or the lead flashing and the copper dome. Before, every one of them
+was drawn as chalk with a colour on it: one albedo, the same in every direction. Now what leaves a
+metal is split — the diffuse loses the metal's share, and what it loses comes back as a lobe. The
+doors read as darker, deeper, more saturated bronze with tonal variation across a panel, the paterae
+read as gold discs rather than pale blobs, and the window glazing bars stop being cream. A sunlit
+metal also gets a proper highlight that slides across it as you move, which needs no storage at all.
+
+**What a player does NOT see, and it is the thing they asked about first.** There is no recognisable
+reflected image anywhere: no portico in the door, no building in the water. Three separate causes and
+they are worth keeping apart, because only one of them is a choice that can be changed cheaply:
+
+- **sixteen bins is 20.4 degrees of half-angle**, and no image survives that;
+- **this building's metals are genuinely rough** — copper at 24 degrees and lead at 25.4 are
+  *wider than one bin*, so for those two the bins are already the right resolution;
+- **the near-mirrors are dielectrics and are shut out of the pool.** Glass and water are the only
+  polished surfaces in the facility and `face_lobe_worth` ranks them at 0.040 against a floor of
+  0.050. `--lobe-floor 0.038` admits them.
+
+**The experiment that settled it is the part to keep.** 256 bins — 5.1 degrees — were built,
+measured on the water basin at a grazing angle where a dielectric reflects hardest, and **reverted**:
+
+> **A bin is filled by the face's own gathering rays and there are about five hundred of them.**
+> `kBounceMin` is 512, so sixteen bins get thirty-two samples apiece and 256 get two. Angular
+> resolution is bought one for one with noise, and the currency is rays.
+>
+> **And the rays are cosine-weighted about the normal while a reflection is read at a GRAZING
+> angle.** The density at 80 degrees is 0.17 of the peak, so the bins a visible reflection comes out
+> of are the emptiest a face has. Water across a pool is where a reflection is most visible and
+> where this sampling serves it worst.
+
+So a sharp reflection is **R4b plus a second ray**, not two constants. It is one ray for one face in
+nineteen — 22,158 of 416,143 at the close camera carry any metal — and it is sized by the census R4a
+was built to produce.
+
+**The instruments, and use them before believing anything here.** `--debug-mode 22` is the pool's
+residency: green holds a block and has measured into it, yellow holds one and has not, **red asked
+and was turned away**, dark grey is a face whose lobe is not worth a block, cyan a coarse face and
+blue one that has not looked yet. `--debug-mode 23` is the lobe on its own, tone mapped, with the
+diffuse taken away — that is the view the claim above is checked against. The audit prints *the lobe
+pool: N faces holding a block of 65,536, M asked and were turned away, K taken over from another
+face*, and the third number is the one that separates a full pool from a thrashing one.
+
+**The control arms are run-time flags, so D407 is satisfied by construction.** `--no-face-lobe`
+takes the bins away and leaves everything else (a metal then reflects its hemispherical mean, which
+is the same lobe with one bin in it); `--no-face-materials` takes the whole of R4 away and is the
+picture as it was; `--lobe-floor N` is the pool's capacity dial, in worth, and `--lobe-floor 0` gives
+a block to every face that knows what it is made of.
+
+**Three things to know before touching it.**
+
+1. **A coarse face has no material, so it has no lobe.** At the outdoor camera **one** face in the
+   whole frame holds a block, because at 60 m the dome is drawn from level-1 and coarser faces.
+   Distant metal is matte and will stay matte until R9f's fold carries a material up the tree.
+2. **The diffuse share is applied by BOTH readers and the lobe by only one.** `face_terms.glsl`
+   exists so the composite and the gathering ray cannot disagree, and they do not — about the
+   diffuse. The bounce does not read a lobe, so **a mirror still does not light the room**; that
+   errs dark, which is the direction this renderer errs in, and it is what R4c's remaining half owes.
+3. **The pool is a cache, not an allocator, and that is deliberate.** A face has no destructor: the
+   store hands a slot to a different face and nothing tells the card. A block is *held* — four-way on
+   the slot, taken when a way is free, cold at 600 frames, or held by a face worth less — so a
+   forgotten block is recovered rather than leaked. A DECLINE is not a black surface; it is a face
+   reading its hemispherical mean.
 
 ### Where to start now, and the two orders are not the same order
 
@@ -2593,8 +2664,16 @@ turning, which is R9c — **off by default**, because it costs the sun's stride 
 quarter of one edge's ambient deficit, and `--halo-lead N` is how many frames of head start it aims
 for; the margin is nought whenever the camera is still, so the settled case is identical either way;
 `--no-face-materials` stops a face working out what the surface under it is made of, which is R4a's
-control arm — and the two arms draw the **identical picture** by construction, since nothing shades
-with it yet, so it exists because a timing is the only evidence a stage like this can have (D407);
+control arm and, since R4c shades with it, is now the arm for **the whole of R4**: the composite sees
+no material, applies no energy split and adds no lobe, which is the picture as it was before the
+stage;
+`--no-face-lobe` is R4c's own control arm and takes only the BINS away — a metal still loses its
+diffuse share and still gets its sun highlight, and its environment comes back as the hemispherical
+mean it already stores, which is the same lobe with one bin in it. So the two arms differ by exactly
+the stored direction and by nothing else;
+`--lobe-floor N` is the pool's capacity dial, in worth: 0.05 is the default and admits every metal,
+0.038 reaches glass and water, and 0 gives a block to every face that knows what it is made of, which
+is the arm that says what the pool's size is costing;
 `--no-face-denoise` reads a face's far field and bounce raw rather than blended with its coplanar
 neighbours', which is R5a's control arm and the state everything above that section was measured in —
 it leaves the WRITE in place and takes the eight neighbour lookups out, so the composite reads the
@@ -2680,7 +2759,13 @@ metalness and green is smoothness, so limestone reads near black, gilt and bronz
 glass reads bright green; magenta no face, blue a face that has not looked yet, **cyan a coarse face,
 which has looked and has no one material to have**, green at a third no geometry. It draws what the
 *face* knows and not what the pixel knows, which is the only way to tell that the material reached
-the light pass at all. The node pool's
+the light pass at all. **`22` is R4c's pool** — green a face holding a block of outgoing bins and
+measuring into it, yellow holding one with nothing in the bin the eye is reading, **red asked and was
+turned away**, dark grey a face whose lobe is not worth a block (which is most of a stone building
+and is the ordinary answer), and the same magenta, blue, cyan and green-at-a-third as 21 so the two
+can be read against each other without a legend. **`23` is the lobe on its own**, tone mapped, with
+the diffuse taken away — the view to check "does the reflection sit still on the surface as I walk"
+against, because in a shaded frame a metal's lobe and its diffuse are the same brown. The node pool's
 GPU mirror is checked automatically at the screenshot and logs either
 `GPU mirror matches` or the first differing byte.
 

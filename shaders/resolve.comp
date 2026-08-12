@@ -67,6 +67,12 @@ layout(std430, binding = 8) readonly buffer FaceLight { uint words[]; } face_lig
 layout(std430, binding = 10) readonly buffer FaceMaterial { uint words[]; } face_material;
 const uint kFaceMaterialKnown = 1u << 31;
 const uint kFaceMaterialNone = 1u << 30;
+// ...and what each face REFLECTS, along sixteen directions (R4c). The pool's layout is documented
+// once beside the binding in shaders/node.glsl and its arithmetic is in face_terms.glsl, which both
+// this pass and the pass that fills it include -- for the reason the paragraph above kFaceLightWords
+// records, which is that the day a stride was declared twice the picture came out as salt and
+// pepper and looked like a different bug entirely.
+layout(std430, binding = 11) readonly buffer FaceLobe { uint words[]; } face_lobe;
 // Must match kSkyConverged in shaders/node.glsl. Read by debug view 19 only -- the shaded path
 // never asks whether a face has finished, it asks what the face says.
 const uint kSkyConverged = 2048u;
@@ -387,6 +393,70 @@ const float kBounceBelieve = 32.0;
 vec3 unpack_rgb(uint packed) {
     return vec3(float(packed & 0xFFu), float((packed >> 8u) & 0xFFu),
                 float((packed >> 16u) & 0xFFu)) / 255.0;
+}
+
+// ---- R4c: reading the bins a face reflects into -------------------------------------------------
+//
+// Which block of the pool this face is holding, by the same four-way probe the light pass claims
+// with. The four headers are adjacent, so this is one cache line however many ways are tried, and
+// it is the only part of R4c whose cost is a function of the window -- which is why it runs on a
+// metal pixel and not on every pixel: `face_lobe_worth` is checked first, out of a word this pass
+// was going to read anyway.
+uint lobe_block_of(uint slot) {
+    if (slot >= kLobeSlotMask) return kNoLobe;
+    const uint base = face_lobe_set(slot);
+    for (uint way = 0u; way < kLobeWays; ++way) {
+        const uint header = face_lobe_header(base + way);
+        if (header + 1u >= face_lobe.words.length()) return kNoLobe;
+        const uint held = face_lobe.words[header];
+        if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) return base + way;
+    }
+    return kNoLobe;
+}
+
+// What the block says about one direction, bilinearly across the hemi-octahedral square.
+//
+// Nearest-bin was the first shape of this and it is what §10 of the plan lists as R4's own risk --
+// *"bin quantisation on a large polished surface: a reflection in visible angular blocks"*. A
+// reflection made of sixteen flat patches is exactly that, and it is worse than the blur it is
+// trying to avoid because the eye finds an edge that nothing in the world put there. Four taps and
+// a lerp cost three more words out of the same 64 bytes.
+//
+// Each tap is weighted by how much that BIN has measured as well as by where the direction fell, so
+// a bin no ray has reached yet pulls nothing towards nought. If none of the four has anything, this
+// says so and the caller falls back to the hemispherical mean -- which is the same lobe with one
+// bin in it, and is what a face with no block reads.
+// What the lobe contributed to this pixel, kept so debug view 23 can draw the term on its own.
+// Every other term in this pass has such a view for the reason view 16's comment gives: a shaded
+// picture cannot tell a term that is wrong from a term that is absent.
+vec3 g_lobe_specular = vec3(0.0);
+
+bool lobe_radiance(uint block, vec2 at, out vec3 radiance) {
+    radiance = vec3(0.0);
+    const vec2 f = at * float(kLobeSide) - 0.5;
+    const vec2 frac = fract(f);
+    const ivec2 low = ivec2(floor(f));
+    float total = 0.0;
+    for (int step = 0; step < 4; ++step) {
+        const ivec2 corner = low + ivec2(step & 1, step >> 1);
+        const float share = ((step & 1) == 0 ? 1.0 - frac.x : frac.x) *
+                            ((step >> 1) == 0 ? 1.0 - frac.y : frac.y);
+        if (share <= 0.0) continue;
+        // Clamped rather than wrapped. The hemi-oct square's edges join each other across the
+        // grazing ring, and a tap that walked round would fetch the direction on the far side of
+        // the face -- geometrically correct on the sphere and wrong here, because the two are not
+        // the same surface's hemisphere.
+        const ivec2 taken = clamp(corner, ivec2(0), ivec2(int(kLobeSide) - 1));
+        const uint bin = uint(taken.y) * kLobeSide + uint(taken.x);
+        const float measured = uintBitsToFloat(face_lobe.words[face_lobe_weight_at(block, bin)]);
+        if (!(measured > 0.0)) continue;
+        const float w = share * min(measured, 1.0);
+        total += w;
+        radiance += w * face_unpack_rgb9e5(face_lobe.words[face_lobe_bin_at(block, bin)]);
+    }
+    if (total <= 0.0) return false;
+    radiance /= total;
+    return true;
 }
 
 #include "preview.glsl"
@@ -758,8 +828,78 @@ void main() {
         // face_outgoing_radiance in face_terms.glsl, which is the same arithmetic and is what the
         // gathering ray reads a surface with — one function, two callers, so the light this frame is
         // drawn with and the light the next bounce is computed from cannot drift apart.
-        colour *= (sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) * (1.0 / kPi) +
-                  bounce * bounce_confidence;
+
+        // ---- R4c: the lobe, which is what stops a metal reading as coloured chalk -------------
+        //
+        // Everything above this line treats the surface as Lambertian. The two bytes R4a put on the
+        // face say how much of that is true: a metal reflects nothing diffusely and everything in a
+        // lobe, and the split between the two is `metalness` read as a quantity.
+        //
+        // Three things happen, and the third is what a player sees first:
+        //
+        //   the DIFFUSE loses the metal's share, so bronze stops being brown chalk;
+        //   the ENVIRONMENT comes back along the mirror direction, out of the bins the face
+        //   measured with the rays it was already casting -- or, where a face holds no block, out
+        //   of the hemispherical mean it stores anyway, which is the same lobe with one bin in it;
+        //   the SUN comes back through the same lobe, which needs no storage at all because the
+        //   face has already measured what fraction of the disc it can see. That is the highlight
+        //   that slides across a door as you walk past it.
+        //
+        // # It is mixed in by how far the environment behind it is measured, and that is not caution
+        //
+        // A face that has taken no gathering rays has not found its surroundings dark, it has not
+        // looked -- the same sentence `bounce_known` above already carries. Reducing its diffuse on
+        // the strength of a material it has and an environment it has not would draw a black door
+        // for the second it takes to converge, which is R9d's flash arriving through a fifth door.
+        // So the whole of R4c ramps in on `bounce_confidence`, and a face with nothing measured is
+        // drawn exactly as this pass drew it before the stage existed.
+        const vec3 albedo = colour;
+        vec3 specular = vec3(0.0);
+        float lobe_share = 0.0;
+        uint material = 0u;
+        if (face_slot < face_material.words.length()) material = face_material.words[face_slot];
+        if ((material & kFaceMaterialKnown) != 0u) {
+            const uint rough = material & 0xFFu;
+            const uint metal = (material >> 8u) & 0xFFu;
+            lobe_share = bounce_confidence;
+            if (lobe_share > 0.0) {
+                const vec3 view = -dir;
+                const vec3 f0 = face_f0_of(albedo, metal);
+                const float alpha = face_alpha_of(rough);
+                const float n_dot_v = max(dot(normal, view), 1e-4);
+
+                // The environment, along the direction the eye is looking down. The bins if this
+                // face holds a block and the hemispherical mean if it does not, and the second is
+                // not a fallback in the sense of being worse than nothing -- it is what a fully
+                // rough surface's lobe genuinely is.
+                vec3 reflected = bounce;
+                const uint block = lobe_block_of(face_slot);
+                if (block != kNoLobe) {
+                    vec3 side;
+                    vec3 other;
+                    face_lobe_frame(normal, side, other);
+                    vec3 found;
+                    if (lobe_radiance(block, face_lobe_at(reflect(dir, normal), normal, side, other),
+                                      found)) {
+                        reflected = found;
+                    }
+                }
+                specular = face_lobe_environment(f0, n_dot_v, reflected);
+                specular += face_lobe_sun(f0, normal, view, trace.sun.xyz, alpha, sun_visible) *
+                            sun_radiance();
+                specular *= lobe_share;
+                g_lobe_specular = specular;
+            }
+        }
+
+        // The diffuse albedo, which is the whole of it for stone and none of it for a mirror. Mixed
+        // by the same ramp, so the two halves of the energy split arrive together — a frame in
+        // which the diffuse had been reduced and the specular had not is a frame with a hole in it.
+        colour = albedo * mix(1.0, face_diffuse_share((material >> 8u) & 0xFFu), lobe_share) *
+                     ((sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) *
+                          (1.0 / kPi) +
+                      bounce * bounce_confidence) +
+                 specular;
 
         // And what the surface gives off, added AFTER the albedo multiply because emission is not
         // reflected light: a lamp's own face is bright whether or not anything is shining on it.
@@ -969,6 +1109,73 @@ void main() {
                 }
             }
         }
+    } else if (push.resolution.z == 22u) {
+        // Which faces are holding a block of outgoing bins, and which asked and did not get one
+        // (R4c). This is the residency view for the pool, and it exists because the two states it
+        // separates are invisible in a shaded picture: a declined face draws its hemispherical mean,
+        // which is a perfectly reasonable reflection and is not the one it should have.
+        //
+        // GREEN holds a block and has measured into it. YELLOW holds one and has measured nothing
+        // yet, which after a second is a face nothing is casting for. RED asked and was turned away
+        // -- and a screen with red on it is the pool being too small, which is one constant.
+        // DARK GREY is a face whose lobe is not worth a block, which is most of a stone building and
+        // is the ordinary answer rather than a failure. MAGENTA is a pixel with no face, BLUE a face
+        // that has not looked at its own material yet, CYAN a coarse face, and GREEN at a third is
+        // no geometry -- the same four this view's neighbour 21 uses, so the two can be read
+        // against each other without a legend.
+        colour = vec3(0.0, 0.35, 0.0);
+        if (hit) {
+            uint slot = imageLoad(in_face, pixel).x;
+            if (slot >= faces.items.length() || slot >= face_material.words.length()) {
+                colour = vec3(1.0, 0.0, 1.0);
+            } else {
+                const uint word = face_material.words[slot];
+                if ((word & kFaceMaterialNone) != 0u) {
+                    colour = vec3(0.0, 0.75, 0.85);
+                } else if ((word & kFaceMaterialKnown) == 0u) {
+                    colour = vec3(0.0, 0.3, 1.0);
+                } else if (face_lobe_worth(word & 0xFFu, (word >> 8u) & 0xFFu) <
+                           (push.tone.z >= 0.0 ? push.tone.z : kLobeWorthFloor)) {
+                    colour = vec3(0.09);
+                } else {
+                    const uint block = lobe_block_of(slot);
+                    if (block == kNoLobe) {
+                        colour = vec3(1.0, 0.1, 0.1);
+                    } else {
+                        vec3 found;
+                        vec3 side;
+                        vec3 other;
+                        vec3 face_normal = vec3(0.0);
+                        if (face == 0u) face_normal = vec3(1, 0, 0);
+                        else if (face == 1u) face_normal = vec3(-1, 0, 0);
+                        else if (face == 2u) face_normal = vec3(0, 1, 0);
+                        else if (face == 3u) face_normal = vec3(0, -1, 0);
+                        else if (face == 4u) face_normal = vec3(0, 0, 1);
+                        else face_normal = vec3(0, 0, -1);
+                        face_lobe_frame(face_normal, side, other);
+                        const bool measured = lobe_radiance(
+                            block,
+                            face_lobe_at(reflect(dir, face_normal), face_normal, side, other),
+                            found);
+                        colour = measured ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.9, 0.0);
+                    }
+                }
+            }
+        }
+    } else if (push.resolution.z == 23u) {
+        // The lobe on its own, tone mapped, with the diffuse taken away entirely.
+        //
+        // This is the view the report's claim is checked against: walk past the bronze doors with
+        // it on and the bright patch should SLIDE ACROSS the surface and stay put on the world
+        // behind it. If it crawls with the camera, or fizzes frame to frame, the bins are being
+        // read in a frame that does not match the one they were written in -- which is the failure
+        // `face_lobe_frame` exists to make unrepresentable and is the first thing to suspect.
+        //
+        // GREEN at a third is no geometry, and black is a legitimate answer everywhere else: most
+        // of a stone building reflects almost nothing, and view 22 beside this one is what says
+        // whether a black pixel has a lobe at all.
+        colour = hit ? pow(tonemap_aces(g_lobe_specular * frame_exposure()), vec3(1.0 / 2.2))
+                     : vec3(0.0, 0.35, 0.0);
     } else if (push.resolution.z == 16u) {
         // The sun term on its own, with nothing else in the frame.
         //

@@ -235,10 +235,16 @@ inline constexpr i32 kFeedbackSecondary = 0x200000;
 // The gathering ray's counters: one word a question, over the whole dispatch, cleared every frame
 // and read back at the screenshot audit. Must match kLightProbeWords in shaders/node.glsl, which
 // carries the word map -- the shader is the authority because it is the only writer.
-inline constexpr u32 kLightProbeWords = 27;
+inline constexpr u32 kLightProbeWords = 30;
 // Where the by-level histogram of "stopped by a cell the pool has not built" starts in it. Must
 // match kLightProbeLevels in shaders/node.glsl.
 inline constexpr u32 kLightProbeLevels = 9;
+// R4c's three, which are counters and so live inside the span the host fills with nought: how many
+// faces are holding a block of outgoing bins, how many asked and were turned away, and how many
+// took one over this frame. The third is what tells a full pool from a thrashing one.
+inline constexpr u32 kProbeLobeHeld = 24;
+inline constexpr u32 kProbeLobeDeclined = 25;
+inline constexpr u32 kProbeLobeTaken = 26;
 // The last word, which is not a counter at all: the OFF-SCREEN set's stride, in frames, host-written
 // exactly as the dials are. Must match kProbeSecondaryStride in shaders/node.glsl.
 //
@@ -246,12 +252,12 @@ inline constexpr u32 kLightProbeLevels = 9;
 // between them with nought -- three ranges that do not touch, because transfer commands in one
 // command buffer have no ordering between them and a host word inside the filled span would be a
 // race. See the write site in main.cpp.
-inline constexpr u32 kProbeSecondaryStride = 24;
+inline constexpr u32 kProbeSecondaryStride = 27;
 // R9c's two, past the counters for the same reason: host-written, outside the span the host fills
 // with nought, so the three ranges do not touch. Must match kProbeHaloMargin and kProbeHaloStride
 // in shaders/node.glsl. The margin is in pixels each side and nought means the stage is off.
-inline constexpr u32 kProbeHaloMargin = 25;
-inline constexpr u32 kProbeHaloStride = 26;
+inline constexpr u32 kProbeHaloMargin = 28;
+inline constexpr u32 kProbeHaloStride = 29;
 
 // The dials in word 0 of that buffer, host-written and card-read.
 //
@@ -274,6 +280,21 @@ inline constexpr u32 kProbeMaterial = 1u << 3;
 // R9f's fold: a coarse face takes the average of the four faces under it rather than its own rays.
 // Cleared by `--no-face-fold`, which is the control arm.
 inline constexpr u32 kProbeFold = 1u << 4;
+// R4c: a face may hold a block of outgoing bins and a pixel may read one. Cleared by
+// `--no-face-lobe`, which is the control arm for the storage half of that stage -- the sun's
+// highlight is arithmetic and is drawn either way, so the arms differ by exactly the bins.
+inline constexpr u32 kProbeLobe = 1u << 5;
+
+// R4c's pool: how many blocks of outgoing bins there are and how many words each is. Must match
+// kLobeBlocks, kLobeBins and the layout in shaders/face_terms.glsl, which is the authority because
+// it is the only thing that indexes them. Two words a block of header and two a bin -- a packed
+// rgb9e5 mean and a float weight sum.
+//
+// The host's only interest in any of this is how large the buffer has to be. Sized against R4a's
+// census: 35,950 faces of 801,175 on the facility carry any metal at all.
+inline constexpr u32 kLobeBins = 16;
+inline constexpr u32 kLobeBlocks = 65536;
+inline constexpr u32 kLobePoolWords = kLobeBlocks * (2 + kLobeBins * 2);
 
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.

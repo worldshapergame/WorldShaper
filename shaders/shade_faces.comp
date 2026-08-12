@@ -732,7 +732,7 @@ bool bounce_face_ready(uint slot) {
 // normal come from the hit, which is the surface actually struck. So a stand-in lends its
 // measurement of the LIGHT and never its idea of what is there, which is the same division R9d
 // already draws for the composite: the coarse face is a measurement of a place, not of a material.
-vec3 bounce_face_light(uint slot, NodeHit hit) {
+vec3 bounce_face_light(uint slot, NodeHit hit, uint material) {
     const uint counters = faces.items[slot].counters;
     const uint samples = face_samples_of(counters);
     const uint at = slot * kFaceLightWords;
@@ -790,7 +790,19 @@ vec3 bounce_face_light(uint slot, NodeHit hit) {
 
     const vec3 direct = face_direct_irradiance(sun_radiance(), lambert, sky_radiance(normal),
                                                face_sky_visibility(open_sky, unoccluded), lamp);
-    return face_outgoing_radiance(albedo, direct, bounce, kPi);
+    // ...and how much of that albedo is DIFFUSE, which is the half of R4c's energy split that both
+    // readers have to agree about (R4c, and see face_diffuse_share).
+    //
+    // A metal reflects almost nothing diffusely, so a bronze door gives the room a quarter of what
+    // it used to. What this ray does NOT pick up is the other half — what the door reflects in the
+    // gathering ray's own direction — because that is a second lookup into a block this face may
+    // not hold, on the hottest path in the pass. **So a mirror still does not light the room.** It
+    // errs dark, which is the direction this renderer is required to err in, and it is what R4c's
+    // remaining half owes: the composite has the lobe and the bounce does not.
+    const vec3 diffuse = (material & kFaceMaterialKnown) != 0u
+                             ? albedo * face_diffuse_share(face_material_metal(material))
+                             : albedo;
+    return face_outgoing_radiance(diffuse, direct, bounce, kPi);
 }
 
 vec3 bounce_radiance(NodeHit hit) {
@@ -800,9 +812,17 @@ vec3 bounce_radiance(NodeHit hit) {
     // one that fails it: a face the store holds and nothing has ever lit. That was 229,413 records
     // and 12.4% of every gathering ray in the frame. See `node_face_gathered` in node.glsl.
     node_face_gathered(slot);
+    // What the surface is made of, read from the surface's OWN slot and not from whatever record
+    // ends up answering for the light. That is R9f's division said once more: a stand-in lends its
+    // measurement of a place and never its idea of what is there, and a coarse face has no material
+    // at all -- so a fine face standing under one keeps its own metalness while borrowing its
+    // ancestor's light. R4c.
+    const bool has_slot =
+        slot != kNoFace && slot != kFaceTombstone && slot < face_material.words.length();
+    const uint material = has_slot ? face_material.words[slot] : 0u;
     if (bounce_face_ready(slot)) {
         probe_add(3u);
-        return bounce_face_light(slot, hit);
+        return bounce_face_light(slot, hit, material);
     }
 
     // The surface's own face has nothing to say. R9f: read the coarse one standing over it.
@@ -852,7 +872,7 @@ vec3 bounce_radiance(NodeHit hit) {
         if (!bounce_face_ready(anc)) continue;
         probe_add(missing);
         probe_add(6u);
-        return probe_coarse_bounce() ? bounce_face_light(anc, hit) : vec3(0.0);
+        return probe_coarse_bounce() ? bounce_face_light(anc, hit, material) : vec3(0.0);
     }
     probe_add(missing);
     return vec3(0.0);
@@ -861,6 +881,8 @@ vec3 bounce_radiance(NodeHit hit) {
 // What one ambient ray found.
 struct SkySample {
     vec2 at;         // where on the face it left from, over the sampled span in [-1, 1]
+    vec3 dir;        // which way it went, in world space. Only R4c's bins need it, and they need
+                     // it because a lobe is a distribution over exactly this.
     float contact;   // the near field: one at the surface, nought at kContactMetres and beyond
     bool sky;        // it reached open sky. Only ever asked of an unbounded ray -- a bounded one
                      // that runs out of length returns this too and it means "I stopped looking"
@@ -894,6 +916,7 @@ SkySample sky_cast(uint index, float max_t) {
     const vec3 dir = normalize(g_sky_side * (radius * cos(around)) +
                                g_sky_other * (radius * sin(around)) +
                                vec3(g_sky_normal) * rise_cos);
+    s.dir = dir;
     const vec3 origin = face_point(g_sky_corner, g_sky_across, g_sky_down, g_sky_normal,
                                    g_sky_size, s.at) - g_sky_chunk_origin;
 
@@ -987,6 +1010,74 @@ void sky_accumulate(SkySample s, inout uint near_n, inout uint near_sum, inout i
     near_sum += uint(s.contact * 255.0 + 0.5);
     grad_u += int(round(s.contact * s.at.x * 255.0));
     grad_w += int(round(s.contact * s.at.y * 255.0));
+}
+
+// ---- R4c: one gathering sample, spread over the outgoing bins ----------------------------------
+//
+// **This casts no rays.** The face already sends one unbounded cosine-weighted ray a visit and
+// already asks it what it found -- that is R9's `s.radiance`, and it is what the bounce is a mean
+// of. All this does is stop throwing the DIRECTION away: the same sample, weighted into each of the
+// sixteen outgoing bins by how much a lobe pointing that way would have taken from it.
+//
+// So R4c's cost is not rays and is not passes. It is sixteen multiply-adds on the faces that hold a
+// block, on the frames they take their far ray, and it stops when the far field converges.
+//
+// # What a bin holds, and why it is a weighted mean rather than a sum
+//
+// The prefiltered environment: the average radiance arriving from the cone the lobe about this
+// bin's direction gathers from. In symbols, bin j is
+//
+//     L_j = sum over samples of D(h_j) * L  /  sum over samples of D(h_j)
+//
+// where h_j is the half vector between the sample's direction and bin j's. The cosine and the
+// sampling density cancel exactly, because the ray is drawn cosine-weighted and the lobe integral
+// carries the same cosine -- which is why this is a plain ratio and not an estimator with a
+// division by a pdf in it.
+//
+// A NORMALISED weighted mean rather than the unnormalised estimator is what keeps this free of the
+// firefly problem the bounce beside it needed `kBounceBelieve` for. A ratio of two sums is bounded
+// by the largest sample whatever the weights do; the estimator is not, and one ray landing on a
+// sunlit sill would put twenty times the wall's radiance into a bin with nothing to divide it by.
+//
+// # The kernel is widened to the bin and that is the whole variance argument
+//
+// Weighting by the material's own alpha would give gilt, whose lobe is 3.6 degrees across, a kernel
+// far narrower than the 20.4 degrees one bin covers -- so nearly every sample would land in the
+// tail of every bin and a bin would be decided by the one or two rays that happened to fall near
+// its centre. That is noise, and it would read as a reflection that fizzes.
+//
+// Widening the kernel to the bin spends the same rays on an answer that is smooth and exactly one
+// bin blurry, which is the honest reading of what sixteen bins can say about a mirror. It is the
+// same trade `face_lobe_bin_alpha` states from the other side, and it is why this term needs no
+// clamp, no outlier test and no belief ramp.
+void face_lobe_accumulate(uint block, vec3 dir, vec3 radiance) {
+    // The face's own frame, which is the one `face_lobe_at` and the composite both work in.
+    const vec3 normal = vec3(g_sky_normal);
+    const float alpha = max(face_lobe_bin_alpha(), kFaceAlphaMin);
+    const float memory = float(kBounceMemory);
+
+    for (uint bin = 0u; bin < kLobeBins; ++bin) {
+        const vec3 towards = face_lobe_direction(face_lobe_centre(bin), normal, g_sky_side,
+                                                 g_sky_other);
+        const vec3 half_vector = normalize(towards + dir);
+        const float w = face_ggx_d(max(dot(normal, half_vector), 0.0), alpha);
+        if (w <= 0.0) continue;
+
+        const uint at = face_lobe_bin_at(block, bin);
+        const uint weight_at = face_lobe_weight_at(block, bin);
+        if (weight_at >= face_lobe.words.length()) return;
+
+        // The same forgetting the bounce does, and for the same reason: the room is still filling
+        // with light while the early samples are taken, so a mean over everything since the face
+        // was claimed is partly a measurement of a darker room. It also keeps the step above what
+        // an rgb9e5 mantissa can represent -- an update smaller than a five-hundredth of the value
+        // rounds back to where it was, which is D293's fault arriving in a different format.
+        const float had = min(uintBitsToFloat(face_lobe.words[weight_at]), memory);
+        const vec3 was = face_unpack_rgb9e5(face_lobe.words[at]);
+        const float now = had + w;
+        face_lobe.words[at] = face_pack_rgb9e5(was + (radiance - was) * (w / now));
+        face_lobe.words[weight_at] = floatBitsToUint(now);
+    }
 }
 
 // ---- lamps (R3c) ---------------------------------------------------------------------------
@@ -1573,8 +1664,10 @@ void main() {
     g_sky_corner = corner;
     g_sky_across = across;
     g_sky_down = down;
-    g_sky_side = normalize(abs(up.y) < 0.9 ? cross(up, vec3(0, 1, 0)) : cross(up, vec3(1, 0, 0)));
-    g_sky_other = cross(up, g_sky_side);
+    // The two axes across the face, from the one function that answers that question -- R4c's bins
+    // are indexed in this frame and the composite derives it from the same place, so it cannot be
+    // one frame here and another there.
+    face_lobe_frame(up, g_sky_side, g_sky_other);
     g_sky_chunk_origin = chunk_origin;
     g_sky_normal = normal;
     g_sky_size = size;
@@ -1637,7 +1730,13 @@ void main() {
         // changed where the geometry did, so the near box governs it and the shadow's sixteen
         // metres do not. A voxel repainted under a face keeps its slot and its key, so nothing
         // else here would ever notice. R4a.
-        if (near_edit_contact) node_face_material_forget(slot);
+        if (near_edit_contact) {
+            node_face_material_forget(slot);
+            // ...and the block of outgoing bins with it, on the same reach and for the same reason:
+            // a lobe is a measurement of what this surface reflects, and if the surface changed it
+            // is a measurement of something that is no longer there. R4c.
+            node_face_lobe_forget(slot);
+        }
         uint near_n = face_light.words[light_at] & 0xFFFFu;
         uint far_n = (face_light.words[light_at] >> 16) & 0xFFFFu;
         if (near_edit_contact && near_n > seed) {
@@ -1713,6 +1812,10 @@ void main() {
         // ...and the same sentence about the same hazard, one array along: what this slot is MADE
         // of was worked out by whatever face held it before, and nothing uploads over that either.
         node_face_material_forget(slot);
+        // ...and the block of bins the slot's last occupant was holding, which is the same hazard
+        // once more and the one place it would be visible: a slot handed to a new face would find
+        // its own number in a header and read the previous face's reflection off it. R4c.
+        node_face_lobe_forget(slot);
         // ...and then start from the coarse face standing over this one rather than from nothing,
         // which is what makes a newly revealed surface right on the frame it appears. Not for a
         // stand-in itself -- it IS the coarse face, and the one three levels above it is six levels
@@ -1729,12 +1832,26 @@ void main() {
     // told, and note that a face over a brick the pool has not built resolves to nought and asks
     // again next visit rather than recording itself as matte.
     //
-    // Nothing in THIS pass reads it yet: the reflection that will is R4c, and what reads it today
-    // is the composite's debug view 21, which is the only way to tell a face that has looked and
-    // found stone from a face that has not looked. Trap 1 is the reason it has a reader at all
-    // before it has a consumer -- a pass whose output nothing reads is a pass talking to nothing,
-    // and five traversal changes were once measured against a picture that could not have moved.
-    node_face_material(slot, ivec3(face.x, face.y, face.z), level);
+    // What reads it is R4c, immediately below, and the composite -- which turns the same two bytes
+    // into a diffuse share, a specular colour and a lobe width. Debug view 21 draws it.
+    const uint material = node_face_material(slot, ivec3(face.x, face.y, face.z), level);
+
+    // ---- and the block of outgoing bins it reflects into (R4c) --------------------------------
+    //
+    // Asked on every visit rather than remembered, because the answer can change without this face
+    // doing anything: a block is HELD and not owned, so a face that has been off screen long enough
+    // to go cold finds somebody else in its header and takes another. The common case is two loads
+    // and a stamp -- see `node_face_lobe` in node.glsl.
+    //
+    // It is here, above the ambient block's four early returns, for the same reason `face_denoise`
+    // is: a converged face still has to keep its block alive, and a claim placed below any of those
+    // returns would let every settled metal in the building go cold and lose its reflection while a
+    // pixel was looking straight at it.
+    //
+    // A stand-in the card claimed for itself never gets one. Its record is rewritten on every frame
+    // it is needed, so it cannot accumulate anything -- which is the same sentence the lamp burst
+    // and the ambient burst above both carry, and a lobe is the slowest accumulator here.
+    const uint lobe = provisional_face ? kNoLobe : node_face_lobe(slot, material, node_push.frame);
 
     // ---- and what this face's neighbours make of the same two questions ------------------------
     //
@@ -2084,6 +2201,17 @@ void main() {
         // `--bounce-memory 4096`.
         const uint memory = node_push.bounce_memory != 0u ? node_push.bounce_memory : kBounceMemory;
         bounce_mean += (s.radiance - bounce_mean) / float(min(far_n, memory));
+
+        // ...and the same ray's third answer, which is the one R4c is: not how much light came
+        // back, but WHICH WAY it came from. One sample, sixteen weights, no extra ray. See
+        // face_lobe_accumulate.
+        //
+        // Gated on the block and not on the material, because the material is what decided the
+        // block: a face that asked and was declined has nowhere to put this and reads the
+        // hemispherical mean above instead, which is the same lobe with one bin in it.
+        if (lobe != kNoLobe && node_push.bounce != 0u) {
+            face_lobe_accumulate(lobe, s.dir, s.radiance);
+        }
     }
 
     // A burst that was stopped by geometry the pool has not built has not measured this face; it

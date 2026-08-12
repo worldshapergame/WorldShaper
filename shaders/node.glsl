@@ -36,6 +36,13 @@
 // containing p is p >> L by definition, so two points share every ancestor above the highest bit
 // in which they differ. One XOR and one findMSB, and the descent restarts from there.
 
+// What a face gives off, and what its lobe is shaped like. Declared here rather than only by the
+// two shaders that read a face's record, because this file owns the BUFFERS a lobe lives in and the
+// sizes of the arithmetic are what the buffer is laid out from -- so the file that says how many
+// bins there are and the file that reserves room for them have to be the same pair every time.
+// Guarded, so a shader that includes both in either order gets one copy.
+#include "face_terms.glsl"
+
 const uint kNoNode = 0xFFFFFFFFu;
 const int kLeafLevel = 3;       // a brick: 8 voxels
 const int kEntryLevel = 14;     // 16,384 voxels Ã¢â‚¬â€ 512 m. Must match src/world/node_pool.hpp.
@@ -423,6 +430,45 @@ uint face_material_rough(uint word) { return word & 0xFFu; }
 uint face_material_metal(uint word) { return (word >> 8u) & 0xFFu; }
 uint face_material_flags(uint word) { return (word >> 16u) & 0xFFu; }
 
+// ---- the outgoing bins, and the pool they come out of (R4c) ------------------------------------
+//
+// What a face reflects along each of sixteen directions, which is the payload §4 of the plan
+// reserved and R4a's first half could not fill. The arithmetic is in `shaders/face_terms.glsl`
+// because the pass that WRITES a bin and the pass that READS one are different shaders; what is
+// here is where it lives.
+//
+// # Why this is a pool and not a word a slot, which everything else on a face is
+//
+// Every other card-owned array here is one word for every slot the face pass may write: 1,081,344
+// of them, 4.2 MB apiece. A lobe is 34 words, so the same arrangement would be **147 MB** — more
+// than the whole renderer — to hold a number that is nought on nine faces in ten. The plan says so
+// in its own words: *a matte stone wall allocates no payload at all*. Measured on this building,
+// 35,950 faces of 801,175 carry any metal and 22,158 of the 416,143 a pixel is reading do.
+//
+// # The shape, which is a cache and not an allocator
+//
+// A free list needs a free, and a face has no destructor: the store hands a slot to a different
+// face and nothing tells the card. So blocks are not owned, they are HELD — each records the slot
+// holding it and the frame that slot last touched it, and a face wanting one takes any way of its
+// set that is empty, cold, or held by a face worth less than it is. There is nothing to leak,
+// because a block whose holder has stopped being shaded goes cold and is taken, exactly as the
+// face store gives up a slot nothing has read for `cold_frames`.
+//
+// The headers are a contiguous array of their own rather than the first words of each block, so a
+// four-way probe reads four adjacent pairs -- one cache line -- instead of four words 136 bytes
+// apart. The reader does this per PIXEL on a metal surface, which is the one place in R4c where
+// the cost is a function of the window.
+//
+//   words [0, 2 * kLobeBlocks)          two a block: the slot holding it, then the frame it was
+//                                       last touched in the low sixteen bits and how much its
+//                                       holder is worth, as a byte, in bits 16-23
+//   words [2 * kLobeBlocks, ...)        kLobeBlockWords a block: kLobeBins packed rgb9e5 means,
+//                                       then kLobeBins float weight sums behind them
+//
+// The means come first as a run so that the composite's four bilinear taps are four words inside
+// 64 bytes; the weights are only read by the pass that writes them.
+layout(std430, binding = 24) buffer FaceLobe { uint words[]; } face_lobe;
+
 // ---- what a gathering ray found, counted ------------------------------------------------------
 //
 // The light pass has three audit lines about what it has FINISHED (`ambient on the card`, `lamps on
@@ -467,12 +513,23 @@ layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
 //        convergence by unbuilt geometry -- has never had this and cannot be reasoned about
 //        without it: a ray stopped by an unbuilt brick has lost 25 cm of sky and one stopped by a
 //        shed 512 m subtree has lost a quarter of the county.
-//   [24] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
-//   [25] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
+//   [24] R4c: faces that asked the lobe pool for a block and are holding one.
+//   [25] ...that asked and were turned away, because every way of their set was held by a face the
+//        pool thinks is worth more or is not cold yet. A DECLINE is not a fault and not a black
+//        surface: the face falls back to the hemispherical mean it already stores, which is a lobe
+//        with one bin in it. The two are counted apart for D502's reason, one class along.
+//   [26] ...and how many took a block over from another face this frame, which is the number that
+//        says whether the pool is thrashing. A pool that is churning and a pool that is full look
+//        identical in the count above.
+//   [27] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
+//   [28] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
 //        arm -- the dispatch is then exactly the screen and this stage does not exist.
-//   [26] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
-const uint kLightProbeWords = 27u;
+//   [29] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
+const uint kLightProbeWords = 30u;
 const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
+const uint kProbeLobeHeld = 24u;
+const uint kProbeLobeDeclined = 25u;
+const uint kProbeLobeTaken = 26u;
 
 // The dials, in word 0. A bit each, because the push block is exactly full (128 bytes, and the
 // static_assert on NodePush says so) and a lever that cannot fit in it must live somewhere -- and
@@ -497,6 +554,12 @@ const uint kProbeMaterial = 1u << 3;
 // reads its children -- which is what it has always done and is the state every figure before this
 // was taken in. See `face_fold` in shade_faces.comp.
 const uint kProbeFold = 1u << 4;
+// R4c. Off, no face keeps outgoing bins and no pixel reads one -- so a metal is drawn by the
+// diffuse arithmetic alone with its lobe standing in as the hemispherical mean, which is the
+// picture this renderer has drawn since it existed. It is the control arm for the whole of R4c's
+// storage half: the sun's highlight is arithmetic and stays either way, so the two arms differ by
+// exactly the bins and by nothing else.
+const uint kProbeLobe = 1u << 5;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -513,7 +576,7 @@ const uint kProbeFold = 1u << 4;
 // ordering between them, so a host word inside the zeroed span would be a race whose loser is
 // whichever the driver ran second -- and a stride that reads nought half the time is a class that
 // silently stops casting.
-const uint kProbeSecondaryStride = 24u;
+const uint kProbeSecondaryStride = 27u;
 
 // ---- R9c, the halo: how far past the screen the primary pass claims ---------------------------
 //
@@ -537,8 +600,8 @@ const uint kProbeSecondaryStride = 24u;
 // rays, it moves them EARLIER -- so over a pan the total is unchanged and what changes is how many
 // faces are mid-burst at any instant. The honest risk is therefore the peak rather than the total,
 // and the honest measurement is the faces pass while panning, beside the convergence gate.
-const uint kProbeHaloMargin = 25u;
-const uint kProbeHaloStride = 26u;
+const uint kProbeHaloMargin = 28u;
+const uint kProbeHaloStride = 29u;
 
 uint probe_halo_margin() { return light_probe.words[kProbeHaloMargin]; }
 uint probe_halo_stride() { return max(light_probe.words[kProbeHaloStride], 1u); }
@@ -551,6 +614,7 @@ bool probe_coarse_bounce() { return (light_probe.words[0] & kProbeCoarseBounce) 
 bool probe_denoise() { return (light_probe.words[0] & kProbeDenoise) != 0u; }
 bool probe_material() { return (light_probe.words[0] & kProbeMaterial) != 0u; }
 bool probe_fold() { return (light_probe.words[0] & kProbeFold) != 0u; }
+bool probe_lobe() { return (light_probe.words[0] & kProbeLobe) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
@@ -1765,6 +1829,131 @@ uint node_face_material(uint slot, ivec3 node, uint level) {
 void node_face_material_forget(uint slot) {
     if (slot >= face_material.words.length()) return;
     face_material.words[slot] = 0u;
+}
+
+// ---- R4c: the block of outgoing bins this face is holding, if it can get one -------------------
+//
+// Called once a visit, from the shading pass, immediately after the face has worked out what it is
+// made of. It does three things and they are one walk over four adjacent headers:
+//
+//   - if this face already holds one of them, stamp it with this frame and hand it back. That is
+//     the common case by a wide margin and it costs two loads and one store;
+//   - if a way is free or its holder has gone cold, take it and zero the bins;
+//   - if every way is held by a face that is warm and worth more, hand back kNoLobe. That is a
+//     DECLINE and not a failure: the composite then reads the hemispherical mean this face already
+//     stores, which is the same lobe with one bin in it (see face_terms.glsl).
+//
+// # The compare-and-swap, which is the only atomic in this pass
+//
+// D191's *one invocation owns each face* is what removed every atomic from the face shader, and
+// this does not put them back for a face's own record: a block's BINS are written by its holder
+// alone, exactly as a face's light is. What needs an atomic is the take-over, because two faces in
+// the same dispatch can want the same way -- and the loser has to find out, or two faces write one
+// block's bins for the rest of the run and the picture disagrees with itself frame to frame.
+//
+// The loser finds the winner's slot in the word it wanted, exactly as `node_face_claim` above is
+// arranged, so the race resolves by reading rather than by retrying.
+uint node_face_lobe(uint slot, uint material, uint frame) {
+    if (!probe_lobe()) return kNoLobe;
+    if ((material & kFaceMaterialKnown) == 0u) return kNoLobe;
+    const float worth = face_lobe_worth(face_material_rough(material),
+                                        face_material_metal(material));
+    // Negative is the sentinel for "the shader's own figure", exactly as `--denoise-edge` beside it
+    // is: a dial whose control arm is spelled one greater than it means is a wrong measurement
+    // waiting to happen, and here nought is a legitimate setting that means EVERY face asks.
+    const float floor_worth = push.tone.z >= 0.0 ? push.tone.z : kLobeWorthFloor;
+    if (worth < floor_worth) return kNoLobe;
+    if (slot >= kLobeSlotMask) return kNoLobe;
+
+    const uint base = face_lobe_set(slot);
+    const uint mine = face_lobe_holder(slot, worth);
+
+    // Already holding one, which is what nearly every visit after the first is.
+    for (uint way = 0u; way < kLobeWays; ++way) {
+        const uint header = face_lobe_header(base + way);
+        if (header + 1u >= face_lobe.words.length()) return kNoLobe;
+        const uint held = face_lobe.words[header];
+        if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) {
+            face_lobe.words[header + 1u] = frame;
+            probe_add(kProbeLobeHeld);
+            return base + way;
+        }
+    }
+
+    // Nobody's, or somebody's who has gone cold, or somebody's who is worth less. Weakest first, so
+    // a full set gives up the block it will miss least -- and a face that finds no candidate at all
+    // takes nothing rather than the last one it looked at.
+    uint best = kLobeWays;
+    float best_worth = worth;
+    for (uint way = 0u; way < kLobeWays; ++way) {
+        const uint header = face_lobe_header(base + way);
+        const uint held = face_lobe.words[header];
+        if (!face_lobe_is_held(held)) {
+            best = way;
+            best_worth = -1.0;
+            continue;
+        }
+        // Cold is a stronger claim than worth: a block whose holder has stopped being shaded is
+        // holding an answer nobody is going to read, however valuable that answer would have been.
+        const uint since = frame - face_lobe.words[header + 1u];
+        const float against = since > kLobeCold ? -1.0 : face_lobe_holder_worth(held);
+        if (against < best_worth) {
+            best = way;
+            best_worth = against;
+        }
+    }
+    if (best == kLobeWays) {
+        probe_add(kProbeLobeDeclined);
+        return kNoLobe;
+    }
+
+    const uint block = base + best;
+    const uint header = face_lobe_header(block);
+    const uint was = face_lobe.words[header];
+    if (atomicCompSwap(face_lobe.words[header], was, mine) != was) {
+        // Somebody else took it between the look and the swap. One frame without a lobe, and the
+        // next visit sorts it out -- retrying here would be a loop whose length is decided by how
+        // many faces happen to share a set.
+        probe_add(kProbeLobeDeclined);
+        return kNoLobe;
+    }
+    face_lobe.words[header + 1u] = frame;
+    // Whatever the last holder measured is about a different surface pointing a different way, and
+    // it must not be averaged into this one. Zeroed rather than seeded: there is no ancestor to
+    // inherit a lobe from -- a coarse face has no material and so never holds a block -- and a
+    // weight of nought is exactly what tells every reader to fall back to the hemispherical mean.
+    for (uint bin = 0u; bin < kLobeBins; ++bin) {
+        const uint at = face_lobe_bin_at(block, bin);
+        if (at >= face_lobe.words.length()) return kNoLobe;
+        face_lobe.words[at] = 0u;
+        face_lobe.words[face_lobe_weight_at(block, bin)] = 0u;
+    }
+    // Counted only where it was somebody ELSE's. A first claim on an empty pool is not churn, and
+    // counting the two together would make an empty pool and a thrashing one read the same -- which
+    // is the whole reason this counter is beside the other two rather than folded into them.
+    if (face_lobe_is_held(was)) probe_add(kProbeLobeTaken);
+    probe_add(kProbeLobeHeld);
+    return block;
+}
+
+// A slot the store has handed to a different face gives its block up on the spot, rather than
+// waiting to go cold.
+//
+// Called from beside `node_face_material_forget` and for the same reason: this array is never
+// uploaded, so a claim cannot clear it. Without it a re-used slot would find its own number in a
+// header, decide the block was its own, and read the previous occupant's reflection.
+void node_face_lobe_forget(uint slot) {
+    if (slot >= kLobeSlotMask) return;
+    const uint base = face_lobe_set(slot);
+    for (uint way = 0u; way < kLobeWays; ++way) {
+        const uint header = face_lobe_header(base + way);
+        if (header + 1u >= face_lobe.words.length()) return;
+        const uint held = face_lobe.words[header];
+        if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) {
+            face_lobe.words[header] = 0u;
+            return;
+        }
+    }
 }
 
 // ---- reporting ------------------------------------------------------------------------------------

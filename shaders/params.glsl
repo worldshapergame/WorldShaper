@@ -56,5 +56,8 @@
     // 0 meaning the shader's own default. It is what decides whether a dark room is allowed to be
     // dark -- see kExposureMaxDefault in shaders/resolve.comp. y: how far above its neighbours a
     // face's light has to be before the denoise leaves it out, 0 meaning the shader's own default --
-    // see kDenoiseOutlier in shaders/shade_faces.comp. zw spare.
+    // see kDenoiseOutlier in shaders/shade_faces.comp. z: how much a face's lobe has to be worth
+    // before it asks the pool for a block of outgoing bins, NEGATIVE meaning the shader's own
+    // default -- see kLobeWorthFloor in shaders/face_terms.glsl, and note that nought is a real
+    // setting there and means every face asks. w spare.
     vec4 tone;

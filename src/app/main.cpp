@@ -337,6 +337,16 @@ struct Options {
     // construction -- nothing shades with this yet -- so the only evidence about what it costs is a
     // timing, and a timing wants two flags of one build rather than two builds (D407).
     bool face_materials = true;
+    // R4c: a face keeps a block of outgoing bins and the composite reads the one the eye is looking
+    // down. `--no-face-lobe` is the control arm and no face holds a block, so a metal is drawn with
+    // its lobe standing in as the hemispherical mean it already stores -- which is the picture
+    // before this stage. The sun's highlight is arithmetic and is drawn in both arms, so the two
+    // differ by exactly the bins and by nothing else.
+    bool face_lobe = true;
+    // How much a face's lobe has to be worth before it asks the pool for one, negative meaning the
+    // shader's own figure. A CAPACITY dial and not a material one -- see kLobeWorthFloor in
+    // shaders/face_terms.glsl, and note that nought means every face with a material asks.
+    f32 lobe_floor = -1.0f;
     // R9f's fold: a coarse face's sky and bounce are the average of the four faces under it rather
     // than its own rays at its own scale.
     //
@@ -770,6 +780,18 @@ Options parse_options(int argc, char** argv) {
             // R4a's control arm: no face asks what it is made of, so the descent, the two table
             // reads and the load that finds out all go. The picture is the same in both arms.
             options.face_materials = false;
+        } else if (arg == "--no-face-lobe") {
+            // R4c's control arm: no face holds a block of outgoing bins and no pixel probes for
+            // one, so a metal reflects its own hemispherical mean in every direction at once.
+            options.face_lobe = false;
+        } else if (arg == "--lobe-floor" && i + 1 < argc) {
+            // The worth itself, in [0, 1], so the dial and `face_lobe_worth` speak the same units
+            // and a figure from the census can be typed in without being converted. The gaps that
+            // matter are narrow -- glass and water sit at 0.040 and marble at 0.036 -- and a dial
+            // that could not tell those apart could not answer the question it exists for.
+            // `--lobe-floor 0` gives a block to every face that knows what it is made of, which is
+            // the arm that says what the pool's size is costing.
+            options.lobe_floor = static_cast<f32>(std::atof(argv[++i]));
         } else if (arg == "--no-class-eviction") {
             // Every cold record on one clock again, whoever asked for it, and the coarse pyramid
             // spent at the first step of the squeeze. Pair it with `--secondary-share 4` for the
@@ -1817,6 +1839,13 @@ private:
     // `face_material` in shaders/node.glsl for why it is the card that asks and why it cannot live
     // in `GpuFace::bins`, which is the field the plan reserved for it.
     FaceLight face_material_;
+    // R4c's pool of outgoing bins: what each face that earns one REFLECTS along sixteen directions.
+    // Not a word a slot like the four above it -- a lobe is thirty-four words and nine faces in ten
+    // have no use for one, so it is a small cache faces hold blocks in rather than an array they
+    // index. See `face_lobe` in shaders/node.glsl for the layout and for why it is held and not
+    // owned. It borrows FaceLight for the same reason `light_probe_` does: what that class provides
+    // is a device-local word array the host allocates, zeroes and never writes again.
+    FaceLight face_lobe_;
     // R9c. How far past the screen the primary pass claims, in pixels each side, and how sparsely
     // it samples out there. Both are worked out every frame from how fast the camera is turning, and
     // are nought when it is not. See the block that fills them for what they are measured against.
@@ -4777,7 +4806,11 @@ void Application::record_frame(f32 time_seconds) {
         // ...and how hard R5a's filter weighs a neighbour against what a face already holds.
         // Negative hands the shader its own figure. See kDenoiseEdgeSharp in shade_faces.comp.
         params.tone[1] = options_.denoise_edge;
-        params.tone[2] = 0.0f;
+        // ...and how much a face's lobe has to be worth before it asks for a block of outgoing
+        // bins. Negative hands the shader its own figure, and NOUGHT is a real setting there that
+        // means every face with a material asks -- which is why this one cannot use nought as the
+        // sentinel the way tone[0] does. See kLobeWorthFloor in shaders/face_terms.glsl.
+        params.tone[2] = options_.lobe_floor;
         params.tone[3] = 0.0f;
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
@@ -5263,7 +5296,8 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.coarse_bounce ? kProbeCoarseBounce : 0u) |
                               (options_.face_denoise ? kProbeDenoise : 0u) |
                               (options_.face_materials ? kProbeMaterial : 0u) |
-                              (options_.face_fold ? kProbeFold : 0u);
+                              (options_.face_fold ? kProbeFold : 0u) |
+                              (options_.face_lobe ? kProbeLobe : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),
@@ -5715,7 +5749,7 @@ int Application::play(const Options& options) {
     // have to care which pass included them.
     // Nine now: 6 is the face store and 7 is the face-slot image, which together are how the
     // picture stops lighting itself per pixel and starts reading light off the surface.
-    VkDescriptorSetLayoutBinding resolve_bindings[12]{};
+    VkDescriptorSetLayoutBinding resolve_bindings[13]{};
     for (u32 i = 0; i < 6; ++i) {
         resolve_bindings[i].binding = i;
         // 0-1 images, 2-3 the type and visual tables, 4 the parameter block, 5 the
@@ -5752,10 +5786,14 @@ int Application::play(const Options& options) {
     resolve_bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     resolve_bindings[11].descriptorCount = 1;
     resolve_bindings[11].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_bindings[12].binding = 11;   // ...and what it reflects, along sixteen directions (R4c)
+    resolve_bindings[12].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resolve_bindings[12].descriptorCount = 1;
+    resolve_bindings[12].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo resolve_layout_info{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    resolve_layout_info.bindingCount = 12;
+    resolve_layout_info.bindingCount = 13;
     resolve_layout_info.pBindings = resolve_bindings;
     WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &resolve_layout_info, nullptr,
                                       &resolve_layout_));
@@ -5923,6 +5961,19 @@ int Application::play(const Options& options) {
             WS_LOG_FATAL("app", "could not create the face material buffer");
             return 1;
         }
+        // And R4c's pool of outgoing bins, which is the first thing on a face that is NOT one word
+        // a slot. A lobe is thirty-four words; laying one out for all 1,081,344 slots would be
+        // 147 MB to hold nought on nine faces in ten, which is the sentence §4 of the plan writes
+        // as *a matte stone wall allocates no payload at all*. So it is sixty-five thousand blocks
+        // that faces hold and give up, sized against R4a's census -- 35,950 faces of 801,175 on
+        // this building carry any metal. kLobeBlocks and kLobeBins in shaders/face_terms.glsl are
+        // the same two numbers and the shader bounds every write against this length, because a
+        // stride the host and the shader disagree about is a write into whatever the allocator put
+        // next (D332).
+        if (!face_lobe_.create(device_, kLobePoolWords, "face lobe")) {
+            WS_LOG_FATAL("app", "could not create the face lobe pool");
+            return 1;
+        }
         // And the gathering ray's own counters, which are not per slot at all: one word a QUESTION,
         // over the whole dispatch. See kLightProbeWords in shaders/node.glsl for the word map and
         // for why word 0 is the host's and the rest are the card's.
@@ -5988,8 +6039,8 @@ int Application::play(const Options& options) {
         // bindings 2 and 3. Until R4 no pass on this set had any reason to read them, which is why
         // the light pass reads the marcher's folded average colour for an albedo and has never been
         // able to ask about a roughness at all.
-        VkDescriptorSetLayoutBinding node_bindings[24]{};
-        for (u32 i = 0; i < 24; ++i) {
+        VkDescriptorSetLayoutBinding node_bindings[25]{};
+        for (u32 i = 0; i < 25; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -6000,7 +6051,7 @@ int Application::play(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 24;
+        node_layout_info.bindingCount = 25;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -6011,27 +6062,27 @@ int Application::play(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[20]{
+        const VkBuffer node_pool_buffers[21]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
             face_light_.buffer(),      light_buffer_.buffer,    face_seen_.buffer(),
             face_work_.buffer,         node_seen_.buffer(),     face_read_.buffer(),
             light_probe_.buffer(),     face_gathered_.buffer(), face_material_.buffer(),
-            type_tables_.types(),      type_tables_.visuals(),
+            type_tables_.types(),      type_tables_.visuals(),  face_lobe_.buffer(),
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[20]{2,  3,  4,  5,  6,  7,  9,  10, 12, 13,
-                                        14, 15, 16, 17, 18, 19, 20, 21, 22, 23};
-        VkDescriptorBufferInfo node_infos[20]{};
-        // Twenty-one writes for twenty buffers and one uniform block, and the COUNT a few lines
+        const u32 node_bindings_for[21]{2,  3,  4,  5,  6,  7,  9,  10, 12, 13, 14,
+                                        15, 16, 17, 18, 19, 20, 21, 22, 23, 24};
+        VkDescriptorBufferInfo node_infos[21]{};
+        // Twenty-two writes for twenty-one buffers and one uniform block, and the COUNT a few lines
         // below is the thing to change with them. Adding a descriptor here and leaving that literal
         // alone writes every binding but the new one, silently, and `--validation` is the only thing
         // that says so -- which is D518 exactly, in the other direction.
-        VkWriteDescriptorSet node_writes[21]{};
-        for (u32 i = 0; i < 20; ++i) {
+        VkWriteDescriptorSet node_writes[22]{};
+        for (u32 i = 0; i < 21; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -6046,13 +6097,13 @@ int Application::play(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[20].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[20].dstSet = node_set_;
-        node_writes[20].dstBinding = 8;
-        node_writes[20].descriptorCount = 1;
-        node_writes[20].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[20].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 21, node_writes, 0, nullptr);
+        node_writes[21].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[21].dstSet = node_set_;
+        node_writes[21].dstBinding = 8;
+        node_writes[21].descriptorCount = 1;
+        node_writes[21].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[21].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 22, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -6169,12 +6220,14 @@ int Application::play(const Options& options) {
     // Five now: the face light joins them, so the composite can read how much sky a surface can
     // actually see instead of deciding it from which way the surface points (R10a).
     // Six now: the light meter's two slots join them (R6a).
-    // Seven now: what each face is made of, which this pass reads for debug view 21 today and for
-    // the specular lobe when R4c lands (R4a).
+    // Seven now: what each face is made of, which this pass turns into a diffuse share, a specular
+    // colour and a lobe width (R4a).
+    // Eight now: the pool of outgoing bins, which is what that lobe is FILLED with -- the composite
+    // reads the one bin the eye is looking down and adds it (R4c).
     const VkBuffer resolve_buffers[]{type_tables_.types(), type_tables_.visuals(),
                                      clip_buffer_.buffer, face_buffers_.faces(),
                                      face_light_.buffer(), frame_stats_.buffer,
-                                     face_material_.buffer()};
+                                     face_material_.buffer(), face_lobe_.buffer()};
 
     // The parameter block, bound to the composite and to the cloud pass with a dynamic offset
     // chosen per frame.
@@ -6193,13 +6246,13 @@ int Application::play(const Options& options) {
     }
     vkUpdateDescriptorSets(device_.handle(), 2, params_writes, 0, nullptr);
 
-    // types, visuals, clip cells, faces, face light, the meter, the face material
-    constexpr u32 kResolveBuffers = 7;
+    // types, visuals, clip cells, faces, face light, the meter, the face material, the lobe pool
+    constexpr u32 kResolveBuffers = 8;
     VkDescriptorBufferInfo buffer_infos[kResolveBuffers]{};
     VkWriteDescriptorSet buffer_writes[kResolveBuffers]{};
-    // Resolve's storage buffers are bindings 2, 3, 5, 6, 8, 9 and 10 -- 4 is the parameter block and
-    // 7 is an image. Spelled out for the same reason the node set's mapping is.
-    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8, 9, 10};
+    // Resolve's storage buffers are bindings 2, 3, 5, 6, 8, 9, 10 and 11 -- 4 is the parameter block
+    // and 7 is an image. Spelled out for the same reason the node set's mapping is.
+    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8, 9, 10, 11};
     for (u32 i = 0; i < kResolveBuffers; ++i) {
         buffer_infos[i].buffer = resolve_buffers[i];
         buffer_infos[i].offset = 0;
@@ -7162,6 +7215,7 @@ int Application::play(const Options& options) {
     node_seen_.destroy();
     face_read_.destroy();
     face_material_.destroy();
+    face_lobe_.destroy();
     light_probe_.destroy();
     face_worklist_.destroy();
     destroy_buffer(device_, face_work_);

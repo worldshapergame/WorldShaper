@@ -1978,3 +1978,83 @@ doors, the dome, the gilding and the glass stop being paint: they show the porti
 what they show changes as you walk past. If it goes wrong you will see the reflection *swim* or
 crawl as you move instead of sitting still on the surface, or a metal surface going black — tell me
 either of those and I will know where to look.
+
+## The metals stop being chalk — and you were right, there is still no reflection
+
+**The first thing you said when I showed you the pictures was "I don't see any reflection in any
+picture", and that is correct.** I want to put what I actually delivered and what I did not in front
+of you plainly, because the previous section promised you the portico in the bronze doors and that
+is not what happened.
+
+### What did land, and you can see it
+
+Every surface in this game has been drawn as chalk with a colour on it: one brightness, the same
+whichever way you look at it. That is what a wall does. It is not what metal does — metal sends
+almost nothing back diffusely and almost everything back in a *lobe*, a cone pointing away from you
+like a bounce off a snooker cushion, narrow if it is polished and wide if it is brushed.
+
+That split is now in, and it is driven by the metalness number on each voxel rather than by any list
+of materials. So:
+
+- the great bronze door reads as **darker, deeper bronze with shading across the panels**, instead of
+  a flat pale brown;
+- the gilt rosettes read as **gold discs** instead of pale blobs;
+- the bronze glazing bars in the windows, the lead, the copper — the same;
+- limestone, plaster and stucco look exactly as they did, which is the point;
+- a metal in **direct sun** now gets a proper highlight that slides across it as you move. That one
+  costs nothing at all to store, because the face has already measured how much of the sun it can see.
+
+It costs no frame time I can measure. I ran the feature against itself, on and off, alternating, at
+three cameras standing still, flying, and flying while chiselling — every pair is inside the other's
+run-to-run spread. 525 tests pass.
+
+### What did not land, and why — this is the part worth your time
+
+There is no reflected **image**. No portico in the door, no building in the water. I found three
+reasons, and I want to separate them because only one of them was my choice:
+
+1. **I stored too few directions.** Sixteen, which smears anything reflected across 20 degrees. You
+   cannot see a building through that.
+2. **The metals on this building are genuinely rough, and should be.** The bronze is specified at a
+   roughness that spreads a reflection over about 10 degrees, and the copper and lead over 24 and 25.
+   A brushed bronze door does not mirror a portico in real life either. For the copper and lead, my
+   sixteen directions are already *finer* than the material needs — the blur is not what is missing.
+3. **The two genuinely polished things in the building — the window glass and the water — were shut
+   out.** I had a rule deciding which surfaces are worth storing a reflection for, and glass and
+   water fell just under it.
+
+So I ran the experiment: **sixteen times more directions**, glass and water let in, camera down at
+the water's edge looking across the basin at a grazing angle, which is where a reflection is
+strongest. **Still nothing.** And that failure is the useful thing I got out of today, because it
+names the real limit:
+
+> **A face fills its reflection map with the same rays it already casts to gather light — about five
+> hundred of them.** Sixteen directions get thirty or so rays each, which is enough. Two hundred and
+> fifty-six get two each, which is noise. More directions costs noise, one for one, unless the face
+> also gets more rays.
+>
+> **And those rays are aimed mostly straight out from the surface, while a reflection is what you see
+> at a glancing angle.** So the directions a visible reflection would come out of are exactly the
+> ones with almost no rays in them. Water seen across a pool is the case where a reflection matters
+> most and the case my sampling serves worst.
+
+I reverted the experiment. What is on the branch is the sizing the ray budget actually supports.
+
+### So what does a real reflection cost, and is it worth it
+
+It is not two constants. It is: **give a face more directions when it fills more of your screen** —
+which was already the next step in the plan — **and give those faces a second ray aimed along the
+reflection**, which was not. That second ray is the new part and it is a real cost.
+
+The good news is how few surfaces need it. Of the 416,000 faces your screen is reading at the steps,
+**22,158 carry any metal at all** — one in nineteen. So it is one extra ray on one face in nineteen,
+not on everything.
+
+**What I would like from you before I spend a session on it**: is a reflection you can *recognise*
+worth an extra ray on the shiny surfaces, or would you rather I put that session somewhere else? I
+have been wrong about what you would care about before, and this is a big enough piece to be worth
+asking rather than assuming.
+
+**If you want to poke at what is there now**: `--debug-mode 23` draws the reflection on its own with
+everything else stripped out, which is the only way to see it at all, and `--debug-mode 22` shows
+which surfaces are storing one — green yes, red asked and there was no room, dark grey not worth it.

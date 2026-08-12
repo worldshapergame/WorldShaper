@@ -3458,3 +3458,115 @@ figures above are from interleaved rounds; anything compared across rounds here 
 | D590 | **Refold every visit, not once** | measurement | Folding once captured the children too early and was worth **0.3%** against 10.8%. What makes this worth anything is that it keeps up as the children converge |
 | D590 | **Off by default** | D586 | 75% over a budget it was inside, for light nobody asked to spend it on. The same call as the halo, one sub-step along |
 | D590 | **Three eliminations recorded with their numbers** | process | Each cost a build and a measurement, and the third one is a fact about where the cost is NOT |
+
+## D591 — R4c: a face gets a lobe, and the metals stop being Lambertian
+
+**The user chose R4 over R9c and this is its second sub-step.** R4a put two bytes on a face —
+roughness and metalness — and nothing read them. R4c is what reads them.
+
+**What landed, and it is three things rather than one.** The composite now splits what leaves a
+surface into a diffuse half and a **lobe**, by metalness read as a quantity and never as an identity:
+
+- the **diffuse loses the metal's share**, which is `face_diffuse_share` in `face_terms.glsl` and
+  is applied by BOTH readers of a face's light — the composite and the gathering ray — because that
+  file exists so the two cannot disagree (D420);
+- the **environment** comes back along the mirror direction out of sixteen **outgoing bins** per
+  face, stored in a pool of blocks faces hold, filled by the gathering ray the face was already
+  casting. No extra rays, no extra pass;
+- the **sun** comes back through the same GGX lobe with no storage at all, because the face has
+  already measured what fraction of the disc it can see. That is `face_lobe_sun`, and it is the
+  same arithmetic the per-pixel `lambert` beside it already is.
+
+**The pool, which is the first thing on a face that is not one word a slot.** A lobe is 34 words;
+laying one out for all 1,081,344 slots would be **147 MB** to hold nought on nine faces in ten,
+which is §4 of the plan's *a matte stone wall allocates no payload at all*. So it is 65,536 blocks
+(**8.7 MB**) that faces **hold** rather than own: four-way set-associative on the slot, taken when a
+way is free, cold at 600 frames, or held by a face worth less. There is no free list because a face
+has no destructor — the store hands a slot to a different face and nothing tells the card — and a
+cache recovers from that where an allocator leaks.
+
+**Measured, two flags of one build, interleaved, 1280×800 quality 7 settled:**
+
+| | R4c on | `--no-face-lobe` | `--no-face-materials` |
+|---|---|---|---|
+| enclosed, faces pass | 3.228 ms | 3.242 | 3.200 |
+| enclosed, resolve | 0.869 | 0.864 | 0.844 |
+| close, faces pass | 3.766 | 3.924 | 3.879 |
+| close, resolve | 0.772 | 0.773 | 0.765 |
+| flying 1440p, faces pass | 7.136 / 8.288 | — | 8.320 / 7.491 |
+| standing and chiselling 8,16 | 15.398 / 15.891 | — | 15.595 |
+
+The arms interleave everywhere. **R4c costs nothing measurable**, which is what a stage should cost
+whose whole content is arithmetic on a word already loaded and sixteen multiply-adds on a ray
+already cast. 525 tests, 18.67 M assertions, `--validation` clean.
+
+**What it is worth in the picture**, against `--no-face-materials`, which is the arm where the
+material never reaches the face and the composite is exactly what it was: **4.467 of 255 mean at the
+enclosed camera over 119,491 pixels, 4.340 over 123,249 close, and 8.778 over 251,607 at the great
+door**. The frame is also **steadier**, not noisier: two consecutive settled frames at the door
+differ by **1.95 of 255 with R4c on against 2.32 with it off**, because the noisy bounce no longer
+carries a metal's whole albedo.
+
+**And the picture is measurably better in the direction asked for**: the bronze doors, the gilt
+paterae, the lead and the copper stop being pale chalk and read as darker, more saturated metal with
+tonal variation across a panel. The light meter does not move (3.627× against 3.628×).
+
+## D592 — there is still no reflection you can recognise, and the reason is the ray budget
+
+**Reported the moment the first pictures were shown: *"i dont see any reflection in any picture"*.
+That is correct, it is the most useful thing anybody said this session, and the cause is not a bug.**
+
+What R4c draws is a metal that is no longer Lambertian. What it does not draw is an **image** — the
+portico in the bronze door, the building in the water. Three reasons, and they are separable:
+
+1. **Sixteen bins is 20.4 degrees of half-angle.** No recognisable image survives that. It is stated
+   in `face_lobe_bin_alpha`'s comment and it was a deliberate first sizing; it was too conservative
+   to show anything.
+2. **The metals on this building are rough and are supposed to be.** Bronze is `rough=110`, which is
+   a GGX alpha of 0.186 — a lobe **10.7 degrees** across. A brushed bronze door does not mirror a
+   portico in life either. Copper at 24 degrees and lead at 25.4 are *rougher than one bin*, so for
+   those two the bins are already the right resolution and the blur is not what is missing.
+3. **The near-mirrors are dielectrics and were shut out.** Glass at `rough=30` and water at
+   `rough=24` are the only polished surfaces in the facility, and `face_lobe_worth` ranks them at
+   **0.040** against a floor of 0.050. `--lobe-floor 0.038` lets them in.
+
+**The experiment that settled it, and it is the part to keep.** The bin count was raised to
+**sixteen by sixteen — 256 bins, 5.1 degrees** — and the floor lowered to admit water, aimed at the
+basin at a grazing angle, where a dielectric's Fresnel approaches one and a reflection is at its
+strongest. **Still no image.** That is the measurement that names the real constraint:
+
+> **A bin is filled by the face's own gathering rays, and there are about five hundred of them.**
+> `kBounceMin` is 512, so sixteen bins get about thirty-two samples each — usable — and 256 bins get
+> **two**. Raising the bin count without raising the ray budget buys angular resolution and pays for
+> it in noise, one for one.
+
+And the second half of the same constraint, which is worse and is the one nobody would have guessed:
+
+> **The rays are cosine-weighted about the normal, and a reflection is read at a GRAZING angle.**
+> The density at 80 degrees from the normal is 0.17 of the peak, so the bins a visible reflection is
+> actually read out of are the emptiest bins the face has. Water seen across a pool is the case
+> where a reflection is most visible and the case where this sampling serves it worst.
+
+**So a sharp reflection is not a matter of tuning two constants.** It needs the bin count to follow
+how many pixels the face covers — which is R4b, and is exactly what D186 says — **and** a ray drawn
+along the lobe rather than along the cosine hemisphere, which the far ray cannot be, because
+`open_sky` and the bounce are the same ray's other two answers and both need the cosine.
+
+That is a second ray for the faces that hold a block, and it is a real cost against a real win. It
+is sized by the census and not by the store: **22,158 faces of 416,143** carry any metal at the
+close camera, so it is a ray for one face in nineteen rather than for all of them.
+
+**None of that is a reason to hold this back.** The energy split is right, it is measured, it costs
+nothing, it is what every part of R4 above it stands on, and the picture moved in the direction it
+was asked to. What is recorded here is that the *reflection* is owed and what it will cost.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D591 | **The lobe is a POOL of blocks faces hold, not a word a slot** | plan §4 | 34 words × 1,081,344 slots is 147 MB for a number that is nought on nine faces in ten. 65,536 blocks is 8.7 MB and covers the 35,950 faces on this building that carry any metal |
+| D591 | **Held, not owned: four-way, cold at 600 frames, weakest loses** | trap 7 | A face has no destructor — the store re-uses a slot and nothing tells the card — so an allocator leaks where a cache recovers. A decline reads the hemispherical mean, which is the same lobe with one bin |
+| D591 | **No extra rays: the bins are the far ray's third answer** | measurement | Sixteen multiply-adds on a sample already taken. It is why the pass table does not move |
+| D591 | **The kernel is widened to the bin, not to the material** | measurement | A lobe narrower than a bin makes every sample land in a tail, which is noise rather than blur. This is why the term needs no clamp and no belief ramp |
+| D591 | **Both readers apply the diffuse share; only the composite adds the lobe** | D420 | A metal gives the room less light than it takes for itself. That errs DARK, which is the direction this renderer errs in, and the bounce reading a lobe is a second lookup on the hottest path |
+| D592 | **Landed with no recognisable reflection, and said so** | process | The energy split is right and measured; the image is owed. Naming which of the three causes is which is what makes the next step sizeable |
+| D592 | **The bin count is bounded by the RAY budget, not by memory** | measurement | 512 far samples over 256 bins is two apiece. 256 bins were built, measured and reverted |
+| D592 | **A cosine ray cannot fill a grazing bin** | measurement | 0.17 of peak density at 80 degrees, and grazing is where a reflection is visible. This is the finding that decides what R4b costs |

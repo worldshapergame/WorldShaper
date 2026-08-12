@@ -394,6 +394,38 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             WS_LOG_INFO("faces",
                         "the off-screen set cast on {} faces this frame, out of its own budget",
                         off_screen_shaded);
+            // R4c's pool, counted where the blocks are handed out. Three numbers because they are
+            // three different states and only one of them is a problem:
+            //
+            //   HELD is how many faces the pool is serving, and it is what the size of the pool has
+            //   to be read against. It is per FRAME and not per store: a face stamps its block on
+            //   the frames the shading pass visits it, which is one in `face_stride`, so this is
+            //   about a fifth of the population holding blocks;
+            //   DECLINED is a face that asked and found every way of its set held by something warm
+            //   and worth more. It is not a black surface -- that face reads the hemispherical mean
+            //   it already stores -- but it is a reflection that is not the one it should have, and
+            //   a large number here is the pool being too small;
+            //   TAKEN OVER is the one that separates a full pool from a THRASHING one. Two faces
+            //   trading a block every frame both show up as held, both look served, and neither
+            //   ever accumulates enough samples to say anything.
+            if ((probe_words[0] & kProbeLobe) != 0) {
+                const u32 held = probe_words[kProbeLobeHeld];
+                const u32 declined = probe_words[kProbeLobeDeclined];
+                WS_LOG_INFO("faces",
+                            "the lobe pool: {} faces holding a block of {} blocks this frame, "
+                            "{} asked and were turned away ({:.1f}%), {} taken over from another "
+                            "face",
+                            held, kLobeBlocks, declined,
+                            (held + declined) > 0
+                                ? 100.0 * declined / static_cast<f64>(held + declined) : 0.0,
+                            probe_words[kProbeLobeTaken]);
+            } else {
+                // Trap 15 once more: a pool nobody is asking about and a pool with nothing in it
+                // print the same nought, and only one of the two is a measurement.
+                WS_LOG_INFO("faces",
+                            "the lobe pool: not asked this run (--no-face-lobe), so no face has "
+                            "outgoing bins and a metal reflects its hemispherical mean");
+            }
             if (unbuilt > 0) {
                 std::string levels;
                 for (u32 level = 0; level < 15; ++level) {
