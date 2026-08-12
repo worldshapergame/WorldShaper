@@ -30,8 +30,39 @@ layout(binding = 11, r32ui) uniform writeonly uimage2D out_face;
 #include "node.glsl"
 
 void main() {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    if (pixel.x >= int(push.resolution.x) || pixel.y >= int(push.resolution.y)) return;
+    // ---- R9c: the dispatch is the screen plus a margin, and the margin is not the screen --------
+    //
+    // The host sizes this dispatch to cover the screen grown by `probe_halo_margin()` pixels on
+    // every side, so an invocation's coordinate is in EXTENDED space and the pixel is that minus the
+    // margin. Standing still the margin is nought, the subtraction is nought, and this is exactly
+    // the dispatch it has always been -- which is what makes the settled grid unable to see this
+    // stage at all, correctly.
+    //
+    // A coordinate outside the screen is a real direction through the same lens: `uv` simply leaves
+    // [-1, 1], which is a widened frustum and not a special case. What such an invocation does is
+    // claim the face it lands on and stamp it seen, so the light pass starts measuring it while it
+    // is still off screen; it writes no image, reports no node, and asks the world for nothing.
+    const int halo_margin = int(probe_halo_margin());
+    const ivec2 extended = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 pixel = extended - ivec2(halo_margin);
+    if (extended.x >= int(push.resolution.x) + 2 * halo_margin ||
+        extended.y >= int(push.resolution.y) + 2 * halo_margin) {
+        return;
+    }
+    const bool on_screen = pixel.x >= 0 && pixel.y >= 0 && pixel.x < int(push.resolution.x) &&
+                           pixel.y < int(push.resolution.y);
+    if (!on_screen) {
+        // Sparse, because a halo is a claim and not a picture. One sample in `halo_stride` each way
+        // names nearly every face out there for the same reason one pixel in sixteen does on screen
+        // (D205): a frame holds far fewer faces than pixels and the duplicates are the overwhelming
+        // majority. The invocations that fall between are a return, and the alternative -- packing
+        // the ring into a compact dispatch of its own -- is a second pipeline and a second barrier.
+        //
+        // The test is on the EXTENDED coordinate, which is never negative. `%` on a negative int is
+        // not something to find out about from a picture.
+        const int halo_stride = int(probe_halo_stride());
+        if ((extended.x % halo_stride) != 0 || (extended.y % halo_stride) != 0) return;
+    }
 
     vec2 uv = (vec2(pixel) + 0.5) / vec2(push.resolution) * 2.0 - 1.0;
     float aspect = float(push.resolution.x) / float(push.resolution.y);
@@ -119,6 +150,28 @@ void main() {
     const uvec2 face_phase = node_sample_phase(node_push.frame, stride);
     const bool report_face = (((uint(pixel.x) + face_phase.x) & face_mask) == 0u) &&
                              (((uint(pixel.y) + face_phase.y) & face_mask) == 0u);
+
+    // ---- the halo's own ray, which ends here -----------------------------------------------
+    //
+    // Everything below this belongs to a pixel: a visibility word, a depth, a face slot image, a
+    // stand-in claimed so the composite has something to read this frame. A halo sample has no
+    // pixel and needs none of it. What it does is the two lines that make the light pass start
+    // early -- name the face so the host claims it, and stamp it so `may_cast` is true.
+    //
+    // `report` and `report_used` are both OFF, deliberately, and that is the difference between a
+    // margin and a wider screen. A halo ray that reported its misses would stream the world beside
+    // the one you are looking at, which is unbounded in exactly the way this rewrite exists to
+    // stop -- R9h's rule for light rays, arriving in the primary pass. So the halo claims faces out
+    // of geometry the pool ALREADY holds, and where the pool holds nothing the halo finds nothing
+    // and the face is claimed the ordinary way when a pixel lands on it.
+    if (!on_screen) {
+        NodeHit halo = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), false,
+                                  false, true, true, false, kNodeUnbounded);
+        if (halo.hit && halo.face_level != kNoFaceLevel) {
+            node_face_seen(node_face_lookup(halo.face_node, halo.face_level, halo.face_dir));
+        }
+        return;
+    }
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
                              report_used, report_face, true, false, kNodeUnbounded);

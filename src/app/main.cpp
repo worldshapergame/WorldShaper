@@ -337,6 +337,23 @@ struct Options {
     // construction -- nothing shades with this yet -- so the only evidence about what it costs is a
     // timing, and a timing wants two flags of one build rather than two builds (D407).
     bool face_materials = true;
+    // R9c, the halo: the primary pass claims faces over a frustum widened by however far the camera
+    // will have turned in `halo_lead` frames, so a face has started measuring before it arrives.
+    //
+    // **OFF by default, on a measurement rather than on caution** (D586). It works and it costs no
+    // frame time -- but it claims faces into the store, the SUN's ray budget is divided by how many
+    // the store holds, and the stride went 6 to 7 in both arms of an interleaved pair. That is 17%
+    // fewer sun samples for every face on screen, bought for about a quarter of one edge's ambient
+    // deficit, and it is invisible in a pass table: D527, D557 and now this are the same fault
+    // three times. `--halo` turns it on and the margin is otherwise nought, which is a dispatch
+    // exactly the size of the screen and no second code path anywhere.
+    bool halo = false;
+    // How many frames of head start to aim for. The ambient burst is kSkyBurst a frame, so this
+    // times sixteen is roughly how many samples a face gains before it comes on screen -- and the
+    // deficit it is closing is 112 samples against 707 (D585). Larger is a wider margin and more
+    // faces measuring at once; the cost is the peak while turning, never the total, because these
+    // are the same faces that were about to be measured anyway.
+    u32 halo_lead = 24;
     // R6a's light meter. False zeroes both of the meter's slots every frame, which is the shader's
     // own "nothing has been measured" path and applies the constant `kPreviewExposure` this pass
     // used before the meter existed -- so `--no-auto-exposure` is the picture every figure in the
@@ -722,6 +739,13 @@ Options parse_options(int argc, char** argv) {
             // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
             // is the state every figure taken before R5 was measured in.
             options.face_denoise = false;
+        } else if (arg == "--halo") {
+            // R9c on: claim a margin past the screen, sized by how fast the camera is turning.
+            options.halo = true;
+        } else if (arg == "--no-halo") {
+            options.halo = false;   // the default, and the state every figure before R9c was in
+        } else if (arg == "--halo-lead" && i + 1 < argc) {
+            options.halo_lead = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--no-face-materials") {
             // R4a's control arm: no face asks what it is made of, so the descent, the two table
             // reads and the load that finds out all go. The picture is the same in both arms.
@@ -851,6 +875,10 @@ void print_help() {
         "                        with its coplanar neighbours'. R5a's control arm\n"
         "  --no-face-materials   no face works out what the surface under it is made of. R4a's\n"
         "                        control arm, and the picture is identical in both\n"
+        "  --halo                claim faces past the edge of the screen, over a margin sized by\n"
+        "                        how fast the camera is turning, so they are measuring before they\n"
+        "                        arrive. Off by default: it costs the sun's refresh rate (D586)\n"
+        "  --halo-lead N         how many frames of head start to aim for (24)\n"
         "  --no-class-eviction   the store gives every cold record up on one clock again, whoever\n"
         "                        asked for it, and spends the coarse pyramid at the first step of\n"
         "                        the squeeze. Pair with --secondary-share 4 for the whole control\n"
@@ -1751,6 +1779,13 @@ private:
     // `face_material` in shaders/node.glsl for why it is the card that asks and why it cannot live
     // in `GpuFace::bins`, which is the field the plan reserved for it.
     FaceLight face_material_;
+    // R9c. How far past the screen the primary pass claims, in pixels each side, and how sparsely
+    // it samples out there. Both are worked out every frame from how fast the camera is turning, and
+    // are nought when it is not. See the block that fills them for what they are measured against.
+    u32 halo_margin_ = 0;
+    u32 halo_stride_ = 8;
+    f32 halo_prev_forward_[3]{};
+    bool halo_forward_valid_ = false;
     // The gathering ray's counters, and the dials it reads. Not per slot -- see kLightProbeWords in
     // shaders/node.glsl. It borrows FaceLight because what that class provides is exactly what this
     // wants: a device-local word array, zeroed at creation, that the host can fill and copy back.
@@ -4502,6 +4537,56 @@ void Application::record_frame(f32 time_seconds) {
     params.origin[2] = camera_.local_z();
     camera_.forward_vector(params.forward);
     camera_.right_vector(params.right);
+
+    // ---- R9c: how far past the screen to claim, from how fast the camera is turning -----------
+    //
+    // Measured before it was built (D585): the leading edge of a pan carries about 112 ambient
+    // samples where the identical pixels arrived at from the other side carry 707. Nothing is
+    // MISSING there -- the full-sun fallback is nought at every band, panning or still -- so this
+    // is about a face having measured something by the time it arrives rather than about it
+    // existing.
+    //
+    // From the angle between this frame's forward and the last one's, which is exact for a mouse
+    // and for `--fly` alike and needs neither to say what it is doing. Standing still it is nought,
+    // the margin is nought, the dispatch is exactly the screen, and this stage costs nothing at all
+    // in the state the settled grid measures -- which is also why the grid cannot see it.
+    {
+        f64 turn = 0.0;
+        if (halo_forward_valid_) {
+            f64 d = 0.0;
+            for (u32 axis = 0; axis < 3; ++axis) {
+                d += static_cast<f64>(params.forward[axis]) * halo_prev_forward_[axis];
+            }
+            turn = std::acos(std::clamp(d, -1.0, 1.0));   // radians this frame
+        }
+        for (u32 axis = 0; axis < 3; ++axis) halo_prev_forward_[axis] = params.forward[axis];
+        halo_forward_valid_ = true;
+
+        // One pixel's angle, the same figure the marcher widens its cone by, so "how many pixels
+        // has the view moved" is a division rather than a second idea of what a pixel subtends.
+        const f64 pixel_angle =
+            2.0 * camera_.tan_half_fov() / std::max(1.0, static_cast<f64>(render_extent.height));
+        const f64 moved = (pixel_angle > 0.0) ? turn / pixel_angle : 0.0;
+        // Capped at a quarter of the smaller axis. The lead is what decides how much of the deficit
+        // this closes -- the ambient burst is kSkyBurst a frame, so N frames of lead is 16N samples
+        // -- and the cap is what stops a fast spin asking for a margin larger than the screen.
+        const f64 wanted = moved * static_cast<f64>(options_.halo_lead);
+        const u32 cap = std::min(render_extent.width, render_extent.height) / 4;
+        halo_margin_ = options_.halo ? static_cast<u32>(std::clamp(wanted, 0.0, f64(cap))) : 0;
+        // Sparse: a halo is a claim and not a picture, and these reports share the feedback buffer
+        // with the node reports and the on-screen face requests. Aimed at about twenty thousand a
+        // frame, which the buffer holds beside the sixty thousand the screen already asks for.
+        halo_stride_ = 8;
+        if (halo_margin_ > 0) {
+            const f64 ring =
+                static_cast<f64>(render_extent.width + 2 * halo_margin_) *
+                    static_cast<f64>(render_extent.height + 2 * halo_margin_) -
+                static_cast<f64>(render_extent.width) * render_extent.height;
+            while (ring / static_cast<f64>(halo_stride_ * halo_stride_) > 20000.0) {
+                halo_stride_ <<= 1;
+            }
+        }
+    }
     camera_.up_vector(params.up);
     params.camera_chunk[0] = static_cast<i32>(camera_.chunk_x());
     params.camera_chunk[1] = static_cast<i32>(camera_.chunk_y());
@@ -4982,7 +5067,11 @@ void Application::record_frame(f32 time_seconds) {
                            sizeof(node_constants), &node_constants);
     }
 
-    vkCmdDispatch(cmd, (render_extent.width + 7) / 8, (render_extent.height + 7) / 8, 1);
+    // The screen plus R9c's margin on every side. `halo_margin_` is nought whenever the camera is
+    // not turning, so this is the dispatch it has always been in the settled case, and the two arms
+    // of an A/B differ by a number rather than by a code path.
+    vkCmdDispatch(cmd, (render_extent.width + 2 * halo_margin_ + 7) / 8,
+                  (render_extent.height + 2 * halo_margin_ + 7) / 8, 1);
     profiler_.add_bytes(static_cast<u64>(render_extent.width) * render_extent.height * 20);
     profiler_.end_pass(cmd);
 
@@ -5044,6 +5133,12 @@ void Application::record_frame(f32 time_seconds) {
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),
                               sizeof(secondary_stride), &secondary_stride);
+            // R9c's two, in the same range past the counters and for the same reason: the host owns
+            // these words and the fill below must not touch them. They go as one update of two
+            // words, which is one command rather than two and cannot be half applied.
+            const u32 halo[2]{halo_margin_, halo_stride_};
+            vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeHaloMargin * sizeof(u32),
+                              sizeof(halo), halo);
             // Everything between the two host words, and the bounds are named rather than counted:
             // words 1 up to but not including the stride.
             vkCmdFillBuffer(cmd, light_probe_.buffer(), sizeof(u32),

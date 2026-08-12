@@ -235,7 +235,7 @@ inline constexpr i32 kFeedbackSecondary = 0x200000;
 // The gathering ray's counters: one word a question, over the whole dispatch, cleared every frame
 // and read back at the screenshot audit. Must match kLightProbeWords in shaders/node.glsl, which
 // carries the word map -- the shader is the authority because it is the only writer.
-inline constexpr u32 kLightProbeWords = 25;
+inline constexpr u32 kLightProbeWords = 27;
 // Where the by-level histogram of "stopped by a cell the pool has not built" starts in it. Must
 // match kLightProbeLevels in shaders/node.glsl.
 inline constexpr u32 kLightProbeLevels = 9;
@@ -247,6 +247,11 @@ inline constexpr u32 kLightProbeLevels = 9;
 // command buffer have no ordering between them and a host word inside the filled span would be a
 // race. See the write site in main.cpp.
 inline constexpr u32 kProbeSecondaryStride = 24;
+// R9c's two, past the counters for the same reason: host-written, outside the span the host fills
+// with nought, so the three ranges do not touch. Must match kProbeHaloMargin and kProbeHaloStride
+// in shaders/node.glsl. The margin is in pixels each side and nought means the stage is off.
+inline constexpr u32 kProbeHaloMargin = 25;
+inline constexpr u32 kProbeHaloStride = 26;
 
 // The dials in word 0 of that buffer, host-written and card-read.
 //

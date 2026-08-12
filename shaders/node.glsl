@@ -468,7 +468,10 @@ layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
 //        without it: a ray stopped by an unbuilt brick has lost 25 cm of sky and one stopped by a
 //        shed 512 m subtree has lost a quarter of the county.
 //   [24] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
-const uint kLightProbeWords = 25u;
+//   [25] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
+//        arm -- the dispatch is then exactly the screen and this stage does not exist.
+//   [26] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
+const uint kLightProbeWords = 27u;
 const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 
 // The dials, in word 0. A bit each, because the push block is exactly full (128 bytes, and the
@@ -507,6 +510,34 @@ const uint kProbeMaterial = 1u << 3;
 // whichever the driver ran second -- and a stride that reads nought half the time is a class that
 // silently stops casting.
 const uint kProbeSecondaryStride = 24u;
+
+// ---- R9c, the halo: how far past the screen the primary pass claims ---------------------------
+//
+// In PIXELS each side, and worked out on the host from how fast the camera is turning, so standing
+// still is nought and the dispatch is exactly the screen. That is not an optimisation, it is what
+// makes the stage free in the case the grid measures: a settled camera reveals nothing, so there is
+// nothing to claim ahead of.
+//
+// # What this is for, measured before it was built (D585)
+//
+// It is NOT that a pan reveals geometry with no face -- the full-sun fallback is nought pixels of
+// 605,945 at every band, panning or still, because R3e claims a stand-in in the pass that discovers
+// it and R9d reads the coarse face three levels up. It is that the face it arrives with has barely
+// measured anything: the leading edge of a pan carries **112 ambient samples against 707** for the
+// identical pixels arrived at from the other side, and the deficit reaches the outer third of the
+// frame.
+//
+// # Why this does not add work, which D566's tail argument would suggest it does
+//
+// The faces a halo lights are exactly the faces that were about to be lit anyway. It does not create
+// rays, it moves them EARLIER -- so over a pan the total is unchanged and what changes is how many
+// faces are mid-burst at any instant. The honest risk is therefore the peak rather than the total,
+// and the honest measurement is the faces pass while panning, beside the convergence gate.
+const uint kProbeHaloMargin = 25u;
+const uint kProbeHaloStride = 26u;
+
+uint probe_halo_margin() { return light_probe.words[kProbeHaloMargin]; }
+uint probe_halo_stride() { return max(light_probe.words[kProbeHaloStride], 1u); }
 
 void probe_add(uint at) {
     if ((light_probe.words[0] & kProbeOn) == 0u) return;

@@ -3201,3 +3201,67 @@ answer. R9c is about the QUALITY of that answer for a few dozen frames, never it
 | D585 | **A band is not a share of the frame** | measurement | Every instrument here reports a debug view as a share of the whole picture, which is right for a cut and wrong for a pan: a deficit down one edge is a rounding error in a whole-frame share and is the entire fault |
 | D585 | **Black gets its own column in `bands.ps1`** | trap 10 | The first version folded black into the grey mean, and view 19 paints SKY black while view 16 paints a fully SHADOWED face black. A band four fifths sky reported a convergence of 1.96 of 255 and read as a hole in the leading edge. Trap 10 inside a tool written to check for trap 10 |
 | D585 | **R9c is worth building, and the gate is band 7 at 14.0 → 88.8** | measurement | Not the 21.9% bucket, which D569 already explained away, and not the fallback, which is nought everywhere. The mirror pair is the only figure here with the content controlled for |
+
+## D586 — R9c is built, it works, and it is off by default because of what it costs the sun
+
+**Built against D585's gate**, which is the only figure about a pan with the content controlled for:
+the leading edge of a turn carries 112 ambient samples where the same pixels arrived at from the
+other side carry 707, and the deficit reaches the outer third of the frame.
+
+**What it is.** The primary dispatch covers the screen grown by a margin on every side. An
+invocation outside the screen is a real direction through the same lens — `uv` simply leaves
+[−1, 1] — and it does two things and no more: it names the face it landed on so the host claims it,
+and it stamps that face seen so `may_cast` is true and the light pass starts measuring while it is
+still off screen. It writes no image, reports no node and asks the world for nothing, which is the
+difference between a margin and a wider screen; a halo ray that reported its misses would stream the
+world beside the one you are looking at.
+
+**The margin comes from the angle between this frame's forward vector and the last one's**, so a
+mouse and `--fly` are the same input and neither has to declare itself, and standing still it is
+**nought** — the dispatch is then exactly the screen and there is no second code path to drift.
+That is also why the settled grid cannot see this stage at all, correctly.
+
+**Measured, one build, two flags, the mirror pair from D585:**
+
+| ambient convergence by band | `--no-halo` | `--halo` (lead 24) | `--halo-lead 96` |
+|---|---|---|---|
+| band 7, the leading edge | 14.04 | **18.18** | **21.25** |
+| band 6 | 40.40 | 47.76 | 53.79 |
+| band 5 | 78.65 | 93.25 | 107.43 |
+| band 4 | 136.99 | 158.14 | — |
+| trailing bands 0–2 | 91.7 / 90.6 / 97.2 | 91.5 / 89.9 / 90.1 | — |
+
+It scales with the margin and it is nowhere near closing the gap. Band 7's own trailing-edge value is
+**88.8**, and reaching it needs a face to have measured for the whole of `kSkyConverged / kSkyBurst`
+= 128 frames before it arrives — at 5 pixels of motion a frame that is a margin of 640 pixels, half
+a screen, on each side. What a 200-pixel margin buys is about a quarter of the deficit.
+
+**Frame time is free and that is exactly what makes it dangerous.** Interleaved, panning at 30°/s:
+faces **20.897 / 21.197 against 21.011 / 20.631 ms**, total GPU 23.678 / 24.003 against 23.828 /
+23.652. The arms sit inside each other's spread, and the reason is worth stating because it is not
+what D566's tail argument predicts: **a halo does not create rays, it moves them earlier**. The faces
+it lights are the faces that were about to be lit anyway, so the total over a pan is unchanged and
+only the instantaneous population mid-burst moves.
+
+**What it does cost is in a number no pass table carries.** `sun stride 6` in both control runs and
+**`sun stride 7` in both halo runs**. The sun's ray budget is divided by how many faces the store
+holds, a halo claims faces into the store, so every face on screen refreshes 17% less often. That is
+D527 and D557 for the third and fourth time, and the rule those wrote down — *print a convergence
+figure beside every timing in this pass* — is the only reason it was seen at all.
+
+**So it is off by default**, and that is a measurement rather than caution: a quarter of one edge's
+ambient deficit is not obviously worth 17% of every face's sun refresh, and the trade is not mine to
+make silently. `--halo` turns it on, `--halo-lead N` sizes it.
+
+**What would make it a default, and it is R9b's machinery rather than a new idea.** A halo face must
+be counted in a class of its own so it is out of the sun's denominator, exactly as the off-screen
+class already is — the store has `is_secondary` and a per-class cap and window, and a halo face is a
+third population with the same shape. Until it has one, this stage cannot be free.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D586 | **The margin is nought when the camera is still** | measurement | It makes the settled case identical by construction rather than by a flag, so the grid, the darkroom gate and every settled figure in this project are untouched |
+| D586 | **Widen the existing dispatch rather than add a second one** | simplicity | A second pipeline is a second barrier and a second place for the two to disagree about the lens. The invocations that fall between halo samples are a return, and it measured as nothing |
+| D586 | **The halo reports no node misses** | R9h | Claiming a margin is bounded; STREAMING a margin is not, and "no light path may cause streaming" is the rule this stage sits next to. So the halo claims faces out of geometry the pool already holds |
+| D586 | **Off by default, on the sun stride** | D527, D557 | The frame time is identical in both arms and the cost is entirely in a convergence figure. Shipping it on would be the third time this project mistook a diluted refresh rate for a free change |
+| D586 | **The gate is the mirror pair, not a whole-frame share** | D585 | A deficit down one edge is a rounding error in a share of the frame. `tools\bands.ps1` and two arms arriving at one pose from opposite directions are what make it a number |

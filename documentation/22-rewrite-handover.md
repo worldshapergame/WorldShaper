@@ -1811,6 +1811,38 @@ what fills the table and the cap collapses on its own. **And the coarse pyramid 
 them there. That is unexplained, it is not this change's doing, and it is the next thing to find in
 this pass.
 
+### R9c is built and switched off, and the measurement is why
+
+**The premise had never been measured and half of it was wrong** (D585, D586). The plan says a pan
+*"reveals unlit geometry that then lights over several frames"*. It reveals no unlit geometry at
+all: the full-sun fallback is **nought pixels of 605,945** at every band, panning or standing still,
+because R3e claims a stand-in in the pass that discovers it and R9d reads the coarse face three
+levels above. What is wrong is the *quality* of what arrives.
+
+**How to measure a pan, because three ways of doing it produced numbers that measured something
+else.** Two pan RATES end at different poses. A pan against a static camera at the computed end yaw
+ends at a different pose too, because the camera moves while the world settles — that pair read 8.09
+of 255 apart with **54% of pixels landing on a different face**, which `--debug-mode 11` says in one
+run. What works is **two arms arriving at ONE pose from opposite directions**, pinned with `--cut`
+so the settle frame drops out: cut to 90−195 and pan +30, against cut to 90+195 and pan −30. Then
+`tools\bands.ps1` splits the frame into vertical bands, because a deficit down one edge is a
+rounding error in a whole-frame share and is the entire fault.
+
+| ambient convergence by band | `--no-halo` | `--halo` | `--halo-lead 96` | *trailing edge, same pixels* |
+|---|---|---|---|---|
+| band 7, leading | 14.04 | 18.18 | 21.25 | **88.8** |
+| band 6 | 40.40 | 47.76 | 53.79 | 90.4 |
+| band 5 | 78.65 | 93.25 | 107.43 | 97.5 |
+
+**It works, it costs no frame time, and it is off by default.** Faces pass interleaved while panning:
+20.897 / 21.197 against 21.011 / 20.631 ms — inside each other's spread, and the reason is not what
+D566 predicts: a halo does not create rays, it **moves them earlier**, so the total over a pan is
+unchanged. What it costs is `sun stride 6` in both control runs and **7 in both halo runs** — every
+face on screen refreshing 17% less often, for a quarter of one edge's deficit. That is D527 and D557
+a third and fourth time, it is invisible in a pass table, and the rule those two wrote down is the
+only reason it was caught. **`--halo` is opt-in until a halo face is counted in a class of its
+own**, which is R9b's existing machinery rather than a new idea.
+
 ### R4a is in: a face knows what it is made of, and nothing looks different yet
 
 **The user was asked nothing and said it anyway: *"its not halo, its directional faces"*.** So R9c
@@ -2465,6 +2497,10 @@ lit (D581);
 of the rewrite, which is R6's control arm and the state every picture figure above that section was
 measured in — it works by having the host zero both of the meter's slots every frame, so the shader
 takes its own "nothing has been measured" branch and no flag reaches it;
+`--halo` claims faces past the edge of the screen over a margin sized by how fast the camera is
+turning, which is R9c — **off by default**, because it costs the sun's stride (6 → 7) for about a
+quarter of one edge's ambient deficit, and `--halo-lead N` is how many frames of head start it aims
+for; the margin is nought whenever the camera is still, so the settled case is identical either way;
 `--no-face-materials` stops a face working out what the surface under it is made of, which is R4a's
 control arm — and the two arms draw the **identical picture** by construction, since nothing shades
 with it yet, so it exists because a timing is the only evidence a stage like this can have (D407);
