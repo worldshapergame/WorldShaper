@@ -1587,3 +1587,80 @@ proved it, and I have written down exactly what would.
 **And one thing this makes worse rather than better:** the game still has no automatic exposure. The
 brightness dial is a fixed number, and now that interiors are genuinely brighter, that fixed number is
 doing less of a good job. That is its own piece of work.
+
+## The room's light was rationed to a quarter of the store while three quarters of it sat empty
+
+**Short version: indoors is brighter and smoother again, and this time nothing new was built — a
+limit that was set to the wrong thing was set to the right thing.**
+
+The section above added surfaces you cannot see to the lighting, so light can bounce off them. There
+is a table that holds all these surfaces, and to stop the invisible ones crowding out the ones you
+are actually looking at, the invisible ones were rationed to **a quarter of the table**.
+
+A quarter sounds sensible and it is a fraction of the wrong thing. What the invisible surfaces can
+safely have is **whatever the visible ones are not using**, and that is a wildly different number
+depending on where you stand. In the domed room you can only see about 111,000 surfaces out of a
+million slots — so the ration was turning away light while **three quarters of the table sat empty**.
+Over one settled run in that room it refused **222,587 requests** for no reason at all.
+
+The ration is now "everything the visible surfaces are not using, minus a safety margin", and the
+safety margin is the same one the table already keeps for itself. So the two rules are one rule, and
+when you fly — where the visible set is nearly the whole table — the ration shrinks by itself without
+anything having to notice you are moving.
+
+**What it looks like.** Stand in the domed room and look around:
+
+- the room goes **150.1 → 157.4 of 255** brighter, on top of the 127.5 → 150.2 from the section above;
+- the speckle goes 12.83 → **12.17**, and there are no stray bright dots in either version;
+- at the steps outside, a small improvement: 143.09 → 143.89, speckle 35.85 → 35.25;
+- from far back outside the building, **nothing at all** (161.821 against 161.822) — which is right,
+  because outdoors most light rays reach the sky and nothing was ever missing.
+
+**It costs nothing.** The lighting pass reads 2.613 ms against 2.652 in the room and 3.529 against
+3.560 at the steps — the same number twice. Flying, the two versions land inside each other's normal
+run-to-run wobble. The sealed pitch-black room is still pure black in every pixel with and without
+fog, so this is still light that was measured and thrown away rather than light invented.
+
+### The half of this that was a real bug, and I found it by doing the change wrong first
+
+Letting the invisible surfaces grow means the table runs closer to full. And when the table gets
+tight it gives things up — and it was giving them up **in the wrong order**.
+
+There are three kinds of thing in that table and they are not worth the same:
+
+- a surface **you are looking at**. Losing one means a wall in front of you with no light of its own,
+  which is the blocky flickering you reported months ago;
+- a surface **only a light ray has ever asked about**. Losing one costs a single bounce sample, and
+  there is usually a coarser stand-in above it that answers instead;
+- a **coarse stand-in** — one summary for every 512 fine surfaces, which is what a whole room is
+  rebuilt from when you walk back into it. It is **3% of the table** and it answers **31%** of the
+  light rays that would otherwise find nothing.
+
+All three were on one clock. So when I first made the ration bigger and measured it, the coarse
+stand-ins were the thing that paid: they went from **21,795 down to 62**, and the picture at the steps
+came out very slightly *worse* even though the number I was aiming at had halved. That is the useful
+part of this whole session — a measurement improved and the picture did not, because the things that
+paid for it were each worth more than the things that replaced them.
+
+They now go in order: the invisible surfaces first, then old surfaces nobody has looked at for a
+while, and the coarse stand-ins last of all.
+
+### What I measured and deliberately did not do
+
+With the ration fixed, the thing now holding the invisible surfaces back is **how often a light ray
+is allowed to report what it hit** — once every 64 frames per surface. I tried 32 and 16:
+
+- at **32**, the domed room gets another 5.6 of 255 brighter and the speckle drops further — but the
+  stray bright dots go from **none to eighteen**;
+- at **16**, brighter again, and the dots go to **eighty-one**.
+
+A stray bright dot is the one rendering fault that an average cannot see and your eye catches
+immediately, and going from zero of them to eighteen for a brightness gain is not a trade I wanted to
+make on your behalf. **The proper answer is the smoothing pass (R5)** that this project has owed for
+several sections now, which would let me take the brightness without the dots. The dial is one switch
+if you want to try it — tell me and I will show you both.
+
+**And one thing I could not explain, written down rather than glossed over.** While you *fly*, about
+22,000 coarse stand-ins are still being thrown away over a flight, in both the old and the new
+version — so something other than the ordinary give-up rule is spending them there. This change did
+not cause it and did not fix it. It is the next thing I want to find in this pass.

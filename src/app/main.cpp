@@ -267,8 +267,11 @@ struct Options {
     // eight thousand entries a frame, and only the faces still casting a far ray say anything at
     // all. What it buys is how fast the off-screen set fills in, which is paid in frames.
     u32 secondary_period = 64;
-    // The most of the face table the off-screen set may hold, as a divisor. 0 keeps the store's own
-    // figure. R9b: a class that overruns must degrade its own refresh rate and nothing else's.
+    // A hard ceiling on the off-screen set as a divisor of the face table. 0 keeps the store's own
+    // figure, which is no fixed ceiling at all -- the class is bounded by the table's SPARE room.
+    // R9b: a class that overruns must degrade its own refresh rate and nothing else's, and what it
+    // may hold before it overruns is what the on-screen set is not using. `--secondary-share 4`
+    // restores the fixed quarter and is the control arm.
     u32 secondary_share = 0;
     // How many faces the OFF-SCREEN set may have shaded in one frame, as a divisor of how many the
     // on-screen set has. 0 is the control arm (`--no-secondary-light`) and restores an off-screen
@@ -323,6 +326,11 @@ struct Options {
     // second's cost.
     bool coarse_keep = true;
     bool coarse_bounce = true;
+    // The store gives its three kinds of record up in an order — the off-screen class first, the
+    // on-screen set's history next, the coarse pyramid last. `--no-class-eviction` puts them all
+    // back on one clock, and with `--secondary-share 4` it is the full control arm for the class
+    // being bounded by the table's spare room rather than by a fixed quarter.
+    bool class_eviction = true;
     // The gathering ray's own counters, printed at the screenshot audit. See kLightProbeWords in
     // shaders/node.glsl for the word map. `--no-light-probe` is the arm that costs nothing.
     bool light_probe = true;
@@ -658,6 +666,9 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--no-secondary-faces") {
             options.secondary_period = 0;   // R9a's control arm
         } else if (arg == "--secondary-share" && i + 1 < argc) {
+            // A hard ceiling on the off-screen class, as a divisor of the table. The default is
+            // none, and the class is bounded by what the table has spare; 4 is the fixed quarter
+            // this used to be and is the control arm for that change.
             options.secondary_share = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--secondary-light-share" && i + 1 < argc) {
             // R9b's ray share: how much of the on-screen set's shading rate the off-screen set gets,
@@ -668,6 +679,11 @@ Options parse_options(int argc, char** argv) {
             // R9b's control arm: a face nobody is looking at casts nothing, whatever is reading it.
             // This is the state every figure taken before this change was measured in.
             options.secondary_light_share = 0;
+        } else if (arg == "--no-class-eviction") {
+            // Every cold record on one clock again, whoever asked for it, and the coarse pyramid
+            // spent at the first step of the squeeze. Pair it with `--secondary-share 4` for the
+            // whole control arm.
+            options.class_eviction = false;
         } else if (arg == "--no-coarse-keep") {
             // R9f's first control arm: the store gives a coarse stand-in up on the same clock as
             // any other face, which is what it did before. Two flags of one build, as D407
@@ -779,6 +795,10 @@ void print_help() {
         "  --no-lamp-edit-scope  an edit reopens the lamp term of every face within sixteen metres\n"
         "                        again, rather than only those it can stand in the light of. The\n"
         "                        control arm for the flicker while building\n"
+        "  --no-class-eviction   the store gives every cold record up on one clock again, whoever\n"
+        "                        asked for it, and spends the coarse pyramid at the first step of\n"
+        "                        the squeeze. Pair with --secondary-share 4 for the whole control\n"
+        "                        arm of the off-screen class growing into the table's spare room\n"
         "  --no-coarse-keep      the store gives a coarse stand-in up on the same clock as any\n"
         "                        other face, so the light of a room is gone ten seconds after you\n"
         "                        leave it. R9f's first control arm\n"
@@ -5449,6 +5469,7 @@ int Application::play(const Options& options) {
         if (options_.face_pressure_from > 0) face_budget.pressure_from = options_.face_pressure_from;
         if (options_.secondary_share > 0) face_budget.secondary_share = options_.secondary_share;
         face_budget.keep_stand_ins = options_.coarse_keep;
+        face_budget.class_eviction = options_.class_eviction;
         face_budget_max_ = face_budget.max_faces;
         face_store_.create(face_budget);
         if (!face_buffers_.create(device_, face_budget)) {
@@ -6511,11 +6532,18 @@ int Application::play(const Options& options) {
                 // DECLINED is the cap doing its job rather than a fault. A decline is not a refusal
                 // and the two are printed apart on purpose: a refusal is a visible surface with no
                 // light of its own (D502), a decline is one gathering ray reading a coarse stand-in.
+                //
+                // The cap is the table's SPARE room now rather than a fixed quarter, so it moves
+                // frame to frame with the size of the on-screen set, and the window this class is
+                // given up on is printed beside it for the same reason: the two together are the
+                // whole policy, and either alone cannot tell a class being held back from a class
+                // being spent.
                 WS_LOG_INFO("frame",
-                            "the off-screen set: {} of a cap of {} slots, {} offered by light rays "
-                            "over the run, {} of those new, {} declined by the cap, {} promoted "
-                            "when a pixel read them",
+                            "the off-screen set: {} of a cap of {} slots (cold at {} frames against "
+                            "{} for the rest), {} offered by light rays over the run, {} of those "
+                            "new, {} declined by the cap, {} promoted when a pixel read them",
                             face_stats.secondary, face_stats.secondary_cap,
+                            face_stats.secondary_window, face_stats.cold_window,
                             faces_secondary_offered_, faces_secondary_claimed_,
                             face_stats.secondary_declined, face_stats.promotions);
                 // R9f from the host's side, and the two numbers have to be read as a pair. A live

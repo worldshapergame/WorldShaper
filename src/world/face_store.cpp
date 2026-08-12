@@ -73,9 +73,36 @@ u32 FaceStore::find(const FaceKey& key) const {
     return kNoFace;
 }
 
+// What the off-screen class may hold, which is what the table has SPARE rather than a fixed share
+// of it.
+//
+// The fixed quarter this used to be is R9b's, and it was right about the danger and wrong about the
+// quantity. The danger is real and unchanged: the off-screen set is bounded by nothing the screen
+// knows about, so one shared budget lets it fill the table, and a full table is D502's blocky
+// flicker. But a quarter is a share of the WRONG THING. What the class may safely hold is whatever
+// the on-screen set is not using, and the on-screen set is a different size on every camera —
+// 111,377 faces in the enclosed room, 497,880 at the steps, and near a million while flying (D504).
+// A quarter therefore turned away 222,472 claims over a settled run in a room where three quarters
+// of the store sat idle, and a fifth of every gathering ray in the frame read a surface that had no
+// face because of it.
+//
+// So: the on-screen set takes what it takes, the same headroom the pressure rule already reserves is
+// left free, and the class may have the rest. The two rules then agree by construction rather than
+// by coincidence — a class that fills this cap has taken the table to exactly `pressure_from` free,
+// which is the frame `pressure_shift` starts squeezing on. Flying, where D568 measured this class
+// costing most and buying least, the on-screen set is large and this collapses to nearly nothing
+// without anything having to detect that the camera is moving.
+//
+// `secondary_share` is a hard ceiling ON TOP, for the control arm and for sweeping the trade.
 u32 FaceStore::secondary_cap() const {
-    const u32 share = std::max(2u, budget_.secondary_share);
-    return budget_.max_faces / share;
+    const u32 live = next_free_ - static_cast<u32>(free_faces_.size());
+    const u32 on_screen = live - std::min(live, secondary_live_);
+    const u32 reserve = budget_.max_faces / std::max(2u, budget_.pressure_from);
+    const u32 spare = (static_cast<u64>(on_screen) + reserve < budget_.max_faces)
+                          ? budget_.max_faces - on_screen - reserve
+                          : 0u;
+    if (budget_.secondary_share == 0) return spare;
+    return std::min(spare, budget_.max_faces / std::max(2u, budget_.secondary_share));
 }
 
 void FaceStore::promote(u32 slot) {
@@ -243,6 +270,32 @@ u32 FaceStore::cold_now() const {
     // — and the alternative to spending it is refusing a face somebody is looking at now.
 }
 
+// The same window for the class no pixel has ever read, and it is shorter the moment the table
+// tightens.
+//
+// This is the ORDER in which the store gives things up, and the order is the whole rule. There are
+// three kinds of record here and they are worth three different amounts:
+//
+//   - a face a pixel has read is what the picture is made of. Losing one is a visible surface with
+//     no light of its own, which is the fault D502 was reported as;
+//   - a face only a light ray has ever asked for is one bounce sample. Losing one costs a gathering
+//     ray its answer, and there is a coarse face over it that answers 31% of the time (D556);
+//   - a coarse stand-in is what a whole room is rebuilt from when the camera comes back to it, and
+//     there are 512 fine faces to one of them. It is 3.0% of the store and answers that 31%.
+//
+// So the class that can afford to wait goes first, on a window of its own: `min_cold`, which is
+// twice the lattice's period and is also about twice `secondary_period` — an off-screen face that a
+// gathering ray is still landing on says so inside that window and survives; one nothing has read
+// since does not. Then the on-screen set's history, on `cold_now`. The stand-ins last of all, which
+// is `keep_stand_ins` and is now held one pressure step longer than it was, because with the class
+// free to grow into the table the store now spends most of its life at shift 1 and the old rule gave
+// the pyramid up there. D554's measurement — 0 stand-ins live of 711,000 faces — is what that costs.
+u32 FaceStore::cold_secondary_now() const {
+    if (!budget_.class_eviction) return cold_now();
+    if (pressure_shift() == 0) return cold_now();
+    return min_cold();
+}
+
 void FaceStore::touch(u32 slot, u64 frame) {
     if (slot < last_read_.size()) last_read_[slot] = static_cast<u32>(frame);
 }
@@ -276,6 +329,7 @@ void FaceStore::evict_cold(u64 frame) {
     // shortens with the pressure. Never below `min_cold`, which is the lattice's own period and is
     // the number the old floor of 32 was wrong about. See kFaceMinCold.
     u32 cold = cold_now();
+    const u32 cold_secondary = cold_secondary_now();
     const u32 floor_frames = min_cold();
     if (out_of_room_ && free_faces_.empty() &&
         (last_emergency_ == 0 || now - last_emergency_ >= kFaceEmergencyGap)) {
@@ -291,7 +345,7 @@ void FaceStore::evict_cold(u64 frame) {
         // The coarse pyramid goes too, here. This path runs because the table has nothing left to
         // give a face a pixel is asking for, and R9f's rule is that a stand-in outlives its
         // children while there is ROOM for it to -- not that it outranks a visible surface.
-        sweep(now, cold, 0, next_free_, false);
+        sweep(now, cold, cold_secondary, 0, next_free_, false);
         // Down to the floor and no further, and the floor is now the lattice's period rather than
         // 32. The old loop tested `cold > kFaceMinCold` BEFORE halving, so the window it actually
         // reached was 18 -- under a third of the 64 frames the lattice takes to come back, so the
@@ -299,7 +353,7 @@ void FaceStore::evict_cold(u64 frame) {
         // at.
         while (cold > floor_frames && free_faces_.empty()) {
             cold = std::max(cold >> 1, floor_frames);
-            sweep(now, cold, 0, next_free_, false);
+            sweep(now, cold, floor_frames, 0, next_free_, false);
         }
         evict_cursor_ = 0;
         out_of_room_ = free_faces_.empty();
@@ -327,7 +381,7 @@ void FaceStore::evict_cold(u64 frame) {
     // store's pressure, so it must not decide what the store looks at when it is under pressure.
     if (pressure_shift() >= 2) {
         // Under a sixteenth free, so the coarse pyramid is spent with everything else.
-        sweep(now, cold, 0, next_free_, false);
+        sweep(now, cold, cold_secondary, 0, next_free_, false);
         evict_cursor_ = 0;
         return;
     }
@@ -340,14 +394,29 @@ void FaceStore::evict_cold(u64 frame) {
     // The ordinary sweep, and the only one that keeps the coarse faces: it runs because a face went
     // cold, and a coarse face going cold is what R9f says means nothing. The two paths above run
     // because the table is out of room, which is a different question with a different answer.
-    sweep(now, cold, first, last, budget_.keep_stand_ins && pressure_shift() == 0);
+    //
+    // Kept at shift 1 as well as at shift 0 now, and that is a consequence of the cap being the
+    // table's spare room: the class grows until the store is at `pressure_from` free, so shift 1 is
+    // the store's ordinary resting state rather than a warning. Spending the pyramid there is what
+    // the measurement of doing this without the change showed — the coarse pyramid went 21,795 live
+    // to 62, the coarse answer to a gathering ray that found nothing went 31.7% to 10.2%, and the
+    // picture at the close camera came out slightly worse for a bucket that had halved.
+    const u32 keep_below = budget_.class_eviction ? 2u : 1u;
+    sweep(now, cold, cold_secondary, first, last,
+          budget_.keep_stand_ins && pressure_shift() < keep_below);
 }
 
-void FaceStore::sweep(u32 now, u32 cold, u32 first, u32 last, bool keep_stand_ins) {
+void FaceStore::sweep(u32 now, u32 cold, u32 cold_secondary, u32 first, u32 last,
+                      bool keep_stand_ins) {
     for (u32 slot = first; slot < last; ++slot) {
         // The cheap test first and the record second, which on the node pool was the difference
         // between 8.6 MB of memory traffic a frame and one megabyte (D273).
-        if (now - last_read_[slot] <= cold) continue;
+        //
+        // Which window depends on who has asked for this face, and that is the ordering rule: a
+        // record only a light ray has ever wanted is spent before one a pixel has read. Reading
+        // `secondary_` here costs the same byte the eviction below already writes.
+        const u32 window = (secondary_[slot] != 0) ? cold_secondary : cold;
+        if (now - last_read_[slot] <= window) continue;
         if (!face_live(faces_[slot])) continue;   // already free
         // ...and the coarse face over it stays, while there is room for it to stay. R9f.
         //
@@ -405,6 +474,7 @@ FaceStoreStats FaceStore::stats() const {
     s.secondary = secondary_live_;
     s.secondary_cap = secondary_cap();
     s.secondary_declined = secondary_declined_;
+    s.secondary_window = cold_secondary_now();
     s.promotions = promotions_;
     s.stand_ins = stand_ins_live_;
     s.stand_in_evictions = stand_in_evictions_;

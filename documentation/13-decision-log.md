@@ -2404,3 +2404,152 @@ inside its budget while moving is now further from true than it was.
 | # | Decision | Kind | Why |
 |---|---|---|---|
 | D568 | **Landed ON by default, with the cost named** | judgement | The win is large, visible and in the case a player spends most of their time in; the cost is one flag away for anyone who would rather have the frames. Both arms are one build, as D407 requires |
+
+## D569 — the bucket this file said was R9c's is mostly the claim rate, and one afternoon of flags said so
+
+**The plan, the ledger and the handover all said the same thing and all three were wrong in the same
+way.** §8 R9c and §8.0's R9 row both read: *what is left is entirely the other bucket — 21.9% of
+gathering rays landing on a surface with no face at all — and that is R9c's and R9g's.* R9c is the
+halo: a margin of faces claimed just off the edge of the screen. That attribution had never been
+measured; it was inferred from the fact that the other three buckets had been explained.
+
+**It is testable with flags that already exist**, which is why this cost an afternoon rather than a
+session. Close camera, 1280×800, `--settle`, frame 900, one build:
+
+| | no-face | landed lit | faces ms | store |
+|---|---|---|---|---|
+| default | 21.8% | 29.9% | 3.538 | 730,551 live |
+| `--secondary-period 16` | 19.3% | 33.5% | 3.545 | 759,928 |
+| `--secondary-share 2` | 20.4% | 30.8% | 3.532 | 745,308 |
+| `--secondary-period 16 --secondary-share 2 --face-pressure-from 32` | **8.7%** | **41.5%** | 3.862 | 1,005,707 |
+
+A halo cannot move a number that three dials about *claim throughput* move by two thirds. Most of
+that bucket is not surfaces nothing ever names — it is surfaces a gathering ray does name, whose
+claim was declined by a cap or evicted before the next ray arrived. R9c is about the *entry* side of
+a pan and is still worth doing; it is not what that measurement was measuring.
+
+**The last row is not a setting**, and it is the reason this did not simply become a default. It
+holds the table at 96% live, which is one step from the refusals that ARE D502's blocky flicker, and
+it takes the coarse pyramid from 21,795 stand-ins to 5,600 — the recovery R9f measured at 31.7% falls
+to 17.9%. The picture improves anyway (mean pixel 143.10 → 145.27, speckle 35.65 → 34.14), which is
+the trap: a probe number and a picture both moved the right way while the store was being driven into
+the state a player reports as flickering squares.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D569 | **Price a stage with the flags before building it** | measurement | D561 overturned this file's stated next step in five minutes by reading one audit line. This is the same again with three dials instead of one, and the general form is that an attribution nobody has measured is a guess however many other possibilities have been eliminated |
+
+## D570 — the off-screen set is bounded by the table's spare room, not by a fixed quarter
+
+R9b capped the off-screen class at a quarter of the face table, and the cap was right about the
+danger and wrong about the quantity. The danger is unchanged and real: that class is bounded by
+nothing the screen knows about, one shared budget lets it fill the table, and a full table is D502's
+picture. But **a quarter is a share of the wrong thing**. What the class may safely hold is whatever
+the on-screen set is not using, and the on-screen set is a different size on every camera — 111,377
+faces in the enclosed room, 497,880 at the steps, and near a million while flying (D504).
+
+So a fixed quarter turned away claims in a room where three quarters of the store sat idle:
+
+| settled, 1280×800, frame 900 | `--secondary-share 4 --no-class-eviction` | default |
+|---|---|---|
+| **enclosed** off-screen set | 250,302 of a cap of 262,144 | **344,578 of 802,305** |
+| ...claims declined by the cap over the run | **222,587** | **0** |
+| **enclosed** mean pixel | 150.139 | **157.414** |
+| **enclosed** speckle, fireflies | 12.825, 0 | **12.168, 0** |
+| **enclosed** faces pass | 2.652 ms | 2.613 |
+| **close** off-screen set | 231,958 of 262,144 | **269,438 of 419,797** |
+| ...declined by the cap | 48,262 | **313** |
+| **close** gathering rays landing on a lit face | 29.9% | **30.9%** |
+| ...on a surface with no face at all | 21.5% | **20.1%** |
+| **close** mean pixel, speckle, fireflies | 143.088, 35.848, 36 | **143.893, 35.250, 54** |
+| **close** faces pass | 3.560 ms | 3.529 |
+| **outdoor** mean pixel, speckle | 161.821, 15.849 | 161.822, 15.833 |
+
+Run-to-run floor on these cameras, from four runs of the control: close mean pixel spread **0.018**,
+speckle 0.20; enclosed mean 0.07, speckle 0.21. So +7.3 of 255 in the enclosed room is two orders of
+magnitude outside it, and the outdoor camera not moving is the right answer rather than a null
+result — outdoors a gathering ray reaches sky and nothing was ever missing.
+
+**The cap and the pressure rule now agree by construction rather than by coincidence.** A class that
+fills this cap has taken the table to exactly `pressure_from` free, which is the frame `pressure_shift`
+starts squeezing on. And flying, where D568 measured this class costing most and buying least, the
+on-screen set is large and the cap collapses without anything having to detect that the camera moved.
+
+`--secondary-share N` is now a hard ceiling ON TOP of that rather than the rule itself, and
+`--secondary-share 4` restores the fixed quarter.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D570 | **The cap is `max_faces − on_screen − reserve`** | correction | A share of the table is a share of the wrong thing; what the class may hold is what the on-screen set is not using. The reserve is the same headroom the pressure rule already keeps, so the two rules are one rule |
+| D570 | **The printed cap moves frame to frame, and the window is printed beside it** | trap 7 | A cap that is no longer a constant cannot be looked up, so `the off-screen set:` now carries both numbers. Either alone cannot tell a class being held back from a class being spent |
+
+## D571 — the order the store gives records up in, which is what makes D570 safe
+
+**Measured first, without the fix, so this is a fault that was observed rather than predicted.** With
+the class free to grow into the table the store spends most of its life one step into the squeeze —
+and at that step the old policy gave up whatever was cold, on one clock, whoever had asked for it.
+The coarse pyramid went **21,795 stand-ins live to 62**, the coarse answer to a gathering ray that
+found nothing went **31.7% to 10.2%**, and the close camera's picture came out *slightly worse*
+(mean 143.10 → 142.44, speckle 35.65 → 36.56) for a no-face bucket that had fallen from 21.8% to
+13.3%. A probe number improved and the picture did not, because the records that paid for it were
+worth more each than the records that replaced them.
+
+There are three kinds of record in this store and they are not worth the same:
+
+- **a face a pixel has read** is what the picture is made of. Losing one is a visible surface with no
+  light of its own, which is the fault D502 was reported as;
+- **a face only a light ray has ever asked for** is one bounce sample, and there is a coarse face over
+  it that answers 31% of the time (D556);
+- **a coarse stand-in** is what a whole room is rebuilt from when the camera comes back to it, at 512
+  fine faces to one. It is **3.0% of the store** and it answers that 31%.
+
+So the store now gives them up in that order. The off-screen class goes first, on a window of its own
+— `min_cold`, twice the request lattice's period, which is also about twice `secondary_period`, so a
+face a gathering ray is still landing on says so inside the window and survives. Then the on-screen
+set's history, on the relaxed window. The pyramid last, and it is held one pressure step longer than
+it was, because shift 1 is now the store's ordinary resting state rather than a warning.
+
+Measured with the ordering in: the pyramid holds **21,791 live and 0 given up** on the close camera
+and 3,822 and 0 enclosed, identical to the control, while the class grows by a third.
+
+`--no-class-eviction` puts every record back on one clock and spends the pyramid at the first step of
+the squeeze. It exists because **an A/B whose control arm can only revert half a change measures half
+of it** — `--secondary-share 4` reverts the cap and this reverts the order, and the whole control arm
+is both.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D571 | **Eviction is class-ordered: off-screen, then history, then stand-ins** | correction | Growing a class into a shared table is only safe if the table knows which records that class may take back. Without it the pyramid pays, and the pyramid is the cheapest and most valuable thing in the store |
+| D571 | **A control arm per rule, not per change** | trap 15 | Two rules landed together, and one flag would have made "the change is neutral" and "the flag reverts half of it" the same reading |
+
+## D572 — what is now the binding constraint, measured and deliberately not taken
+
+With the cap gone the class no longer fills it — close 269,438 of 419,797, enclosed 344,578 of
+802,305. **The rate at which a gathering ray may name the face it landed on is what bounds it now**,
+and that is `secondary_period`, 64 frames. It was set at 64 so the volume matched D508's read-reports
+in the same feedback buffer; nothing since has re-examined it, and until D570 there was no point,
+because the cap ate whatever it produced.
+
+Swept on top of D570, close camera and enclosed, one build:
+
+| period | close no-face | close mean, speckle, fireflies | close faces ms | enclosed mean, speckle, fireflies |
+|---|---|---|---|---|
+| 64 (default) | 20.2% | 143.896, 35.208, 54 | 3.523 | 157.414, 12.131, **0** |
+| 32 | **15.9%** | **144.403, 34.780, 54** | 3.677 | **163.041, 11.387, 18** |
+| 16 | 15.2% | 144.105, 35.215, **108** | 3.923 | 165.803, 11.121, **81** |
+
+Feedback holds in every arm (72,117 of 131,072, none dropped, at period 16), so D431's failure is not
+what stops this. **What stops it is the fireflies**: the enclosed room goes from none to eighteen at
+32 and eighty-one at 16, and a firefly is the one rendering fault a mean cannot see and a player can.
+More off-screen faces admitted at `kFaceSettled` samples each is more noise in the bounce, and the
+answer to that is R5 rather than a dial.
+
+**Not carried, and the numbers are here so nobody re-derives them.** It is one flag —
+`--secondary-period 32` — for anyone who wants the extra 5.6 of 255 in an interior and will take the
+speckle; and it is the strongest case yet for R5, because every arm of that sweep is a trade between
+brightness and noise that a face denoise would not have to make.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D572 | **`secondary_period` stays at 64** | judgement | 32 is brighter and quieter by speckle and worse by fireflies, on a camera where the control has none. A term that trades a mean against outliers wants the filter built before the dial is turned |
+| D572 | **Flying is neutral and says so** | measurement | `_flybench.ps1` at 1440p, two interleaved rounds: faces 7.579 / 7.434 control against 7.067 / 7.791, total GPU 14.558 / 14.416 against 13.856 / 14.582. The arms sit inside each other's spread, which is the expected answer — flying, the on-screen set is what fills the table and the cap collapses on its own. **The pyramid's flying loss is untouched**: 22,036 stand-ins given up over the run in the control and 22,034 with the change, so something other than the ordinary sweep is spending them there, and that is the next thing to find in this pass |

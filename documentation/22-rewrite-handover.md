@@ -171,7 +171,7 @@ written for the person the work is for, so it is the one to keep current.
 | R1 node pool | XL | **done, all of it** — R1e's fifth slice took the rest: `residency.*`, `world_buffers.*`, both orphaned descriptor sets, the tracer's 256 MB face cache and `rebuild_coarse_grids`. Device memory 970 MB → 112, warm start 505 → 340 ms, and an edit stops paying 3.86 ms for grids nothing reads. D521–D525 |
 | R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit. **A ray now reports what it READS and not only where it stopped** (D427), which is what "wanted" was supposed to mean since D247 |
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
-| R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560): a light ray names the one face it landed on, the store holds those in a class with a cap, both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
+| R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
 | R5 face denoise, composite | M | not started |
@@ -1499,6 +1499,82 @@ was measured in) and `--secondary-light-share N`, the divisor of the on-screen s
 rather than 128. And R5, because the argument for this pass being inside its budget while moving is
 further from true than it was.
 
+### Closed: a room's light was capped at a quarter of the store while three quarters of it sat idle
+
+**This is the section that overturned the one below it, and the overturning is the part to read.**
+D569–D572. Everything in this file, in `21-renderer-rewrite.md` §8 R9c and in the §8.0 ledger said
+the next thing to do was R9c, the halo, because *21.9% of gathering rays land on a surface with no
+face in the store at all and that is R9c's and R9g's*. The first half of that is a measurement. The
+second half is an inference from it and nobody had tested the inference.
+
+**It took an afternoon of existing flags, because the dials were already there.** Close camera,
+1280×800, `--settle`, frame 900, one build:
+
+| | rays landing on no face | landing on a lit face |
+|---|---|---|
+| default | 21.8% | 29.9% |
+| `--secondary-period 16` | 19.3% | 33.5% |
+| `--secondary-share 2` | 20.4% | 30.8% |
+| the two together, plus `--face-pressure-from 32` | **8.7%** | **41.5%** |
+
+A halo claims faces just off the edge of the screen. It cannot move a number that three dials about
+**claim throughput** move by two thirds. Most of that bucket is surfaces a gathering ray *does* name,
+whose claim was turned away by a cap or evicted before the next ray got there.
+
+**What landed is the cap** (D570). It was a fixed quarter of the table, and a quarter is a share of
+the wrong thing: what the class may safely hold is whatever the on-screen set is not using, and the
+on-screen set is 111,377 faces in the enclosed room, 497,880 at the steps and near a million while
+flying. So the cap is the table's **spare room** now — everything above the on-screen set, less the
+same headroom the pressure rule already reserves — and the two rules agree by construction rather
+than by coincidence: a class that fills this cap has taken the table to exactly `pressure_from` free,
+which is the frame the squeeze starts on.
+
+| settled, 1280×800, frame 900 | `--secondary-share 4 --no-class-eviction` | default |
+|---|---|---|
+| **enclosed** off-screen set | 250,302 of a cap of 262,144 | **344,578 of 802,305** |
+| ...claims declined by the cap over the run | **222,587** | **0** |
+| **enclosed** mean pixel, speckle, fireflies | 150.139, 12.825, 0 | **157.414, 12.168, 0** |
+| **enclosed** faces pass | 2.652 ms | 2.613 |
+| **close** off-screen set, declined | 231,958 of 262,144, 48,262 | **269,438 of 419,797, 313** |
+| **close** rays landing on a lit face | 29.9% | **30.9%** |
+| **close** mean pixel, speckle, fireflies | 143.088, 35.848, 36 | **143.893, 35.250, 54** |
+| **close** faces pass | 3.560 ms | 3.529 |
+| **outdoor** mean pixel, speckle | 161.821, 15.849 | 161.822, 15.833 |
+
+Run-to-run floor from four control runs: close mean pixel spread **0.018**, enclosed **0.07**. So
++7.3 of 255 in the enclosed room is two orders of magnitude outside it, and outdoor not moving is the
+right answer rather than a null result — outdoors a gathering ray reaches sky and nothing was missing.
+`darkroom.ps1` BLACK clear and with fog, `--validation` clean, all three pool audits clean, 523 tests.
+
+**Three things to know before touching it, and the first is a fault that was measured rather than
+predicted.**
+
+1. **Growing the class is only safe with the EVICTION ORDER beside it** (D571). With the class free
+   to fill the table the store spends most of its life one step into the squeeze, and at that step
+   the old policy gave everything cold up on one clock. Measured without the fix: the coarse pyramid
+   went **21,795 stand-ins to 62**, the coarse answer to a gathering ray that found nothing went
+   **31.7% to 10.2%**, and the close picture came out *slightly worse* for a bucket that had fallen
+   from 21.8% to 13.3%. There are three kinds of record here and they are not worth the same — a face
+   a pixel has read is the picture, a face only a light ray has asked for is one bounce sample, and a
+   coarse stand-in is what a whole room is rebuilt from at 512 fine faces to one. They are now given
+   up in that order.
+2. **The control arm is two flags, because it is two rules.** `--secondary-share 4` restores the
+   fixed quarter and `--no-class-eviction` restores the single clock; either alone measures half the
+   change, which is trap 15 with the flag rather than the harness getting it wrong.
+3. **What binds it now is the claim RATE, and the obvious dial was measured and not turned** (D572).
+   The class no longer fills its cap — 269,438 of 419,797 close, 344,578 of 802,305 enclosed — so
+   `secondary_period` is the constraint. At 32 the enclosed room is another **5.6 of 255** brighter
+   and quieter by speckle (12.13 → 11.39) and goes from **no fireflies to eighteen**; at 16, to
+   eighty-one. Feedback holds in every arm. A term that trades a mean against outliers wants R5 built
+   before the dial is turned, and `--secondary-period 32` is one flag for anyone who disagrees.
+
+**What did not happen.** Flying is neutral — `_flybench.ps1` at 1440p, two interleaved rounds, faces
+7.579 / 7.434 against 7.067 / 7.791 — which is the expected answer, since flying the on-screen set is
+what fills the table and the cap collapses on its own. **And the coarse pyramid still loses about
+22,000 stand-ins over a flight in BOTH arms**, so something other than the ordinary sweep is spending
+them there. That is unexplained, it is not this change's doing, and it is the next thing to find in
+this pass.
+
 ### Where to start now, and the two orders are not the same order
 
 **By the plan, the next stage is R4 — and R4's own prerequisite is R9.** §8 puts R4 directional
@@ -1527,6 +1603,14 @@ that a single audit line could overturn. Size it against D566 rather than agains
 margin holds: a halo face is an off-screen face, and lighting one is priced by a tail. The fold is the
 *accuracy* of what R9f already returns rather than more of it, so it is after that unless a picture
 complains.
+
+> **The paragraph above was wrong for the second time and is left standing on purpose** — see *a
+> room's light was capped at a quarter of the store* above, and D569. "This is R9c's and R9g's" was
+> never measured; it was inferred from having explained the other three buckets. Three run-time dials
+> about claim throughput take that 21.9% to **8.7%**. The first of them is now the default (D570) and
+> the rest is D572's. **R9c is about the entry side of a pan and always was**; what it is *not* is
+> the answer to a settled camera's black bounce, and the general form of the mistake is that an
+> attribution nobody has measured is a guess however many alternatives have been eliminated.
 
 So the plan's sequence is **R9, then R4**, and that is the one to follow unless the user says
 otherwise — it is what makes reflections, refraction and bounce possible at all, which is the half
@@ -2038,6 +2122,11 @@ reading it — R9b's control arm, and the state every figure taken before D561 w
 `--secondary-light-share N` is that class's ray budget as a divisor of the on-screen set's shading
 rate (8 by default; larger is cheaper and slower, and **D566 is why sweeping it downwards buys much
 less than it looks like it should**);
+`--no-class-eviction` puts every record in the face store back on one eviction clock, whoever asked
+for it, and spends the coarse pyramid at the first step of the squeeze — **pair it with
+`--secondary-share 4`**, which restores the off-screen class's fixed quarter, for the whole control
+arm of D570 and D571, because they are two rules and a control arm that reverts one of them measures
+one of them;
 `--no-paste-pool` puts the region paste back on the background sampler's job system, which is
 D513's control arm and the state every paste figure above this line was measured in — pair it with
 `--no-clip-cache` so the ladder actually runs, and watch the `region:` line, which now splits the
@@ -2130,7 +2219,12 @@ set on the card` splits the store into the on-screen and off-screen classes with
 carries — the measurement R9 is judged on, because the risk of that stage is not frame time but a
 store spread too thin. `the off-screen set` says what light rays offered, what was claimed, what the
 cap declined and what a pixel later promoted; **declined is not refused** and the two must never be
-added. `the card is N records ahead of the store` is the one to read before any moving-camera cost
+added. It now also carries **the cap itself and the window that class is given up on**, because since
+D570 neither is a constant anybody can look up: the cap is the table's spare room and moves with the
+size of the on-screen set, and the window is shorter than everything else's the moment the table
+tightens. Read them as a pair — a live count against a cap says whether the class is being held back,
+and the two windows beside each other say whether it is being spent.
+`the card is N records ahead of the store` is the one to read before any moving-camera cost
 figure: the face pass shades what the CARD holds, and an upload that runs out of staging clears
 nothing and sends the whole set again, so the card can hold hundreds of thousands of records the
 store gave up (measured: 434,838 while flying). `the card's own stand-ins` counts the provisional

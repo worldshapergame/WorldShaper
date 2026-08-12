@@ -398,7 +398,7 @@ TEST_CASE("a store under pressure stops growing the off-screen set at all") {
     budget.max_faces = 1024;
     budget.cold_frames = 600;
     budget.claim_period = 1;
-    budget.secondary_share = 4;    // 256 slots, which this never reaches
+    budget.secondary_share = 4;    // a hard ceiling of 256 slots, which this never reaches
     budget.pressure_from = 8;      // the squeeze begins under an eighth free
     store.create(budget);
 
@@ -407,14 +407,129 @@ TEST_CASE("a store under pressure stops growing the off-screen set at all") {
         REQUIRE(store.claim(FaceKey{i, 0, 0, 0, 0}, 1) != kNoFace);
     }
     REQUIRE(store.pressure_shift() > 0);
-    REQUIRE(store.stats().secondary < store.secondary_cap());
+    // Its hard CEILING has room and its cap does not, which is the same sentence twice now that the
+    // cap is the table's spare room: the class stops growing because the table is tight, and the
+    // ceiling is not what says so.
+    REQUIRE(store.stats().secondary < budget.max_faces / budget.secondary_share);
+    REQUIRE(store.secondary_cap() == 0);
 
-    // A light ray asking now is declined although its own cap has room, because the table has not.
+    // A light ray asking now is declined although its own ceiling has room, because the table has not.
     CHECK(store.claim(FaceKey{1, 1, 1, 0, 0}, 1, nullptr, true) == kNoFace);
     CHECK(store.stats().secondary_declined == 1);
     CHECK(store.stats().refusals == 0);
     // ...and a pixel asking at the same moment is served, which is the whole point of the rule.
     CHECK(store.claim(FaceKey{2, 2, 2, 0, 0}, 1) != kNoFace);
+    CHECK(store.validate());
+}
+
+// What the class may hold is what the ON-SCREEN set is not using, and the enclosed room is why: its
+// visible set is 111,377 faces of a million-slot table, so a fixed quarter left three quarters of
+// the store idle while turning away 222,472 claims over a settled run — and a fifth of every
+// gathering ray in the frame read a surface that had no face because of it.
+TEST_CASE("the off-screen set is bounded by the table's spare room, not by a fixed share") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 1024;
+    budget.cold_frames = 600;
+    budget.claim_period = 1;
+    budget.secondary_share = 0;   // no fixed ceiling, which is the default
+    budget.pressure_from = 8;     // an eighth of the table stays free: 128 slots
+    store.create(budget);
+
+    // An empty table: everything but the reserve is available to the class, which is eight times
+    // what the fixed quarter allowed.
+    REQUIRE(store.secondary_cap() == 1024 - 128);
+
+    // A small on-screen set, as an interior has, barely moves it.
+    for (u32 i = 0; i < 64; ++i) REQUIRE(store.claim(FaceKey{i, 0, 0, 0, 0}, 1) != kNoFace);
+    CHECK(store.secondary_cap() == 1024 - 128 - 64);
+    CHECK(store.secondary_cap() > budget.max_faces / 4);
+
+    // A large one — flying, where D568 measured this class costing most and buying least — collapses
+    // it, and nothing had to detect that the camera was moving to make that happen.
+    for (u32 i = 64; i < 800; ++i) REQUIRE(store.claim(FaceKey{i, 0, 0, 0, 0}, 1) != kNoFace);
+    CHECK(store.secondary_cap() == 1024 - 128 - 800);
+    CHECK(store.secondary_cap() < budget.max_faces / 4);
+
+    // And the off-screen faces the class already holds do not count against it twice: they are not
+    // the on-screen set, so claiming one does not shrink the room left for the next.
+    const u32 before = store.secondary_cap();
+    REQUIRE(store.claim(FaceKey{900, 0, 0, 0, 0}, 1, nullptr, true) != kNoFace);
+    CHECK(store.secondary_cap() == before);
+    CHECK(store.validate());
+}
+
+// The ORDER the store gives things up in, which is the half of the change above that makes it safe.
+// Letting the class grow into the table means the store spends most of its life one step into the
+// squeeze, and at that step the old policy gave up whatever was cold — a face a pixel had read and a
+// face only a light ray had ever asked for on the same clock. They are not worth the same: the first
+// is a visible surface with no light of its own, the second is one bounce sample with a coarse face
+// standing over it.
+TEST_CASE("an off-screen face is given up before a face a pixel has read") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 1024;
+    budget.cold_frames = 600;     // both classes get this while the table has room
+    budget.claim_period = 4;      // so the floor is 8 frames and the windows are far apart
+    budget.pressure_from = 8;
+    store.create(budget);
+
+    // One of each, claimed on the same frame and never asked for again.
+    const u32 seen = store.claim(FaceKey{1, 1, 1, 0, 0}, 1);
+    const u32 gathered = store.claim(FaceKey{2, 2, 2, 0, 0}, 1, nullptr, true);
+    REQUIRE(seen != kNoFace);
+    REQUIRE(gathered != kNoFace);
+    // With room to spare the two are on one clock, and neither goes.
+    REQUIRE(store.pressure_shift() == 0);
+    REQUIRE(store.cold_secondary_now() == store.cold_now());
+    for (u64 frame = 2; frame < 60; ++frame) store.evict_cold(frame);
+    CHECK(store.find(FaceKey{1, 1, 1, 0, 0}) != kNoFace);
+    CHECK(store.find(FaceKey{2, 2, 2, 0, 0}) != kNoFace);
+
+    // Fill the table until the squeeze begins, with faces claimed on the current frame so that
+    // nothing but the two above is old enough for any window.
+    for (u32 i = 0; i < 900; ++i) {
+        REQUIRE(store.claim(FaceKey{i, 5, 0, 0, 0}, 60) != kNoFace);
+    }
+    REQUIRE(store.pressure_shift() > 0);
+    CHECK(store.cold_secondary_now() == store.min_cold());
+    CHECK(store.cold_now() > store.min_cold());
+
+    // Now the two part company: the off-screen one is past the floor and goes, the one a pixel read
+    // is not past the relaxed window and stays.
+    for (u64 frame = 60; frame < 120; ++frame) store.evict_cold(frame);
+    CHECK(store.find(FaceKey{2, 2, 2, 0, 0}) == kNoFace);
+    CHECK(store.find(FaceKey{1, 1, 1, 0, 0}) != kNoFace);
+    CHECK(store.stats().secondary == 0);
+    CHECK(store.validate());
+}
+
+// ...and the coarse pyramid is last of the three. It is 3.0% of the store and answers 31.7% of the
+// gathering rays that find nothing (D556), so it is the cheapest record here and the most valuable.
+// Measured without this clause: with the class free to fill the table, the pyramid went 21,795 live
+// to 62 and the coarse answer 31.7% to 10.2%.
+TEST_CASE("the coarse pyramid survives the pressure the off-screen set creates") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 1024;
+    budget.cold_frames = 32;
+    budget.claim_period = 1;
+    budget.pressure_from = 8;
+    store.create(budget);
+
+    const u32 stand_in = store.claim_stand_in(FaceKey{1, 0, 0, 3, 0}, 1);
+    REQUIRE(stand_in != kNoFace);
+    REQUIRE(store.stats().stand_ins == 1);
+
+    // One step into the squeeze, which is where a store with this cap now lives.
+    for (u32 i = 0; i < 900; ++i) {
+        REQUIRE(store.claim(FaceKey{i, 5, 0, 0, 0}, 1) != kNoFace);
+    }
+    REQUIRE(store.pressure_shift() == 1);
+    for (u64 frame = 2; frame < 400; ++frame) store.evict_cold(frame);
+    CHECK(store.stats().stand_ins == 1);
+    CHECK(store.stats().stand_in_evictions == 0);
+    CHECK(store.find(FaceKey{1, 0, 0, 3, 0}) != kNoFace);
     CHECK(store.validate());
 }
 
@@ -512,6 +627,50 @@ TEST_CASE("a coarse stand-in is given up when the table has nothing left") {
     CHECK(store.stats().stand_ins < 16);
     CHECK(store.stats().stand_in_evictions > 0);
     CHECK(store.claim(FaceKey{99, 0, 0, 0, 0}, 400) != kNoFace);
+    CHECK(store.validate());
+}
+
+// ...and the same, for the same reason. `--secondary-share 4` reverts the cap and this reverts the
+// order, and an A/B whose control arm can only revert half a change measures half of it.
+TEST_CASE("--no-class-eviction puts every record back on one clock") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 1024;
+    budget.cold_frames = 600;
+    budget.claim_period = 4;
+    budget.pressure_from = 8;
+    budget.class_eviction = false;
+    store.create(budget);
+
+    const u32 seen = store.claim(FaceKey{1, 1, 1, 0, 0}, 1);
+    const u32 gathered = store.claim(FaceKey{2, 2, 2, 0, 0}, 1, nullptr, true);
+    REQUIRE(seen != kNoFace);
+    REQUIRE(gathered != kNoFace);
+    const u32 stand_in = store.claim_stand_in(FaceKey{3, 0, 0, 3, 0}, 1);
+    REQUIRE(stand_in != kNoFace);
+
+    for (u32 i = 0; i < 900; ++i) {
+        REQUIRE(store.claim(FaceKey{i, 5, 0, 0, 0}, 60) != kNoFace);
+    }
+    REQUIRE(store.pressure_shift() == 1);
+    // One clock for both classes, which is what the change above parts. The two survive together
+    // and go together, and the test is that pair rather than either half: an off-screen face that
+    // outlives the squeeze proves nothing on its own, since it would also do that if nothing were
+    // ever evicted at all.
+    CHECK(store.cold_secondary_now() == store.cold_now());
+    // The three above were claimed on frame 1, so the window runs out at frame 1 + cold_now. Held
+    // in a local: the moment anything is given up the pressure falls and the window jumps back to
+    // the relaxed one, so a loop that re-reads it is a loop about a different quantity each pass.
+    const u64 window = store.cold_now();
+    for (u64 frame = 60; frame <= window; ++frame) store.evict_cold(frame);
+    CHECK(store.find(FaceKey{1, 1, 1, 0, 0}) != kNoFace);
+    CHECK(store.find(FaceKey{2, 2, 2, 0, 0}) != kNoFace);
+    for (u64 frame = window; frame < 400; ++frame) store.evict_cold(frame);
+    CHECK(store.find(FaceKey{1, 1, 1, 0, 0}) == kNoFace);
+    CHECK(store.find(FaceKey{2, 2, 2, 0, 0}) == kNoFace);
+    // ...and the coarse pyramid spent at the first step of the squeeze, which is what it did before.
+    CHECK(store.find(FaceKey{3, 0, 0, 3, 0}) == kNoFace);
+    CHECK(store.stats().stand_in_evictions == 1);
     CHECK(store.validate());
 }
 

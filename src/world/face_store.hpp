@@ -264,7 +264,9 @@ struct FaceStoreBudget {
     // kFacePressureFrom for what each end of it measured.
     u32 pressure_from = kFacePressureFrom;
 
-    // The most of the table the OFF-SCREEN set may hold, as a divisor: 4 means a quarter.
+    // A HARD ceiling on the off-screen set as a divisor of the table: 4 means a quarter. 0 is no
+    // fixed ceiling, which is the default, and the class is then bounded by what the table has
+    // SPARE -- see `FaceStore::secondary_cap`.
     //
     // R9b, and it is the reason R9a can be landed at all. A face claimed by a light ray is claimed
     // because some other face needs to read it, and the set of those is bounded by nothing the
@@ -276,7 +278,24 @@ struct FaceStoreBudget {
     //
     // A cap per class means a class that overruns degrades its own refresh rate and nothing else's.
     // Declining a secondary claim costs a bounce sample; refusing a primary one costs a picture.
-    u32 secondary_share = 4;
+    //
+    // It was a fixed QUARTER, and the fixed part was the fault. What the class may safely hold is
+    // whatever the on-screen set is not using, and that is a different number on every camera: the
+    // enclosed room's visible set is 111,377 faces of a million-slot table, so a quarter left three
+    // quarters of the store idle while the class turned away 222,472 claims over a settled run and a
+    // fifth of every gathering ray in the frame read a surface with no face on it. `--secondary-share
+    // 4` restores the fixed quarter and is the control arm.
+    u32 secondary_share = 0;
+
+    // The store gives its three kinds of record up in an ORDER: the off-screen class first, the
+    // on-screen set's history next, the coarse pyramid last. See `FaceStore::cold_secondary_now`.
+    //
+    // False puts every record back on one clock and spends the pyramid at the first step of the
+    // squeeze, which is the state every figure taken before this was measured in. It is the other
+    // half of the cap being the table's spare room, and it has a flag of its own because the two are
+    // separable and an A/B that can only revert half of a change measures half of it
+    // (`--no-class-eviction`, and `--secondary-share 4` is the first half).
+    bool class_eviction = true;
 
     // A coarse face is given up only under pressure, not merely because it went cold. R9f.
     //
@@ -348,6 +367,11 @@ struct FaceStoreStats {
     u32 secondary_cap = 0;
     u64 secondary_declined = 0;
     u64 promotions = 0;
+    // The window this class is being given up on, beside the one everything else gets. Printed
+    // because the cap is no longer a constant anybody can look up: it is the table's spare room, so
+    // both numbers move frame to frame and a reader with only one of them cannot tell a class that
+    // is being held back from a class that is being spent.
+    u32 secondary_window = 0;
 
     // The coarse pyramid: how much of the store it is, and how much of it was given up anyway.
     //
@@ -461,6 +485,9 @@ public:
     // The window eviction is actually using this frame, after pressure and the floor. Exposed
     // because a policy nobody can read is a policy nobody can tell has gone wrong.
     u32 cold_now() const;
+    // ...and the same for the OFF-SCREEN class, which is the one spent first when the table tightens.
+    // Equal to `cold_now` while there is room; the floor the moment there is not.
+    u32 cold_secondary_now() const;
     u32 min_cold() const;
     // How hard the table is being squeezed: 0 with room to spare, one more per halving of the free
     // space past half. It sets both the window and how much of the table is looked at per frame.
@@ -507,7 +534,13 @@ private:
     // `keep_stand_ins` is false on the paths that run because the table is short of room, where a
     // coarse face is worth no more than any other and holding one back would be refusing a face
     // somebody is looking at in order to keep one nobody is.
-    void sweep(u32 now, u32 cold, u32 first, u32 last, bool keep_stand_ins);
+    //
+    // Two windows, because the store holds three kinds of record and they are not worth the same.
+    // `cold` is what a face a PIXEL has read gets; `cold_secondary` is what a face only a light ray
+    // has ever asked for gets, and under pressure it is much shorter -- that class is the one whose
+    // faces nobody is looking at, so it is the one that can afford to wait. The stand-ins come last
+    // of the three, which is `keep_stand_ins` and R9f.
+    void sweep(u32 now, u32 cold, u32 cold_secondary, u32 first, u32 last, bool keep_stand_ins);
 
     FaceStoreBudget budget_;
     std::vector<GpuFace> faces_;
