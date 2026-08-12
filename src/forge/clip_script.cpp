@@ -806,13 +806,54 @@ void Parser::statement() {
         behaviour.material = static_cast<u32>(script_.material_names.size() + 1);
         (void)tags_;
         const VoxelTypeId type = types_.intern(visual, behaviour);
+        // Whether this NAME is new, decided before the map is written, because that is the only
+        // thing that says whether the tool's palette gains an entry or replaces one.
+        //
+        // It cannot be decided from the type id: `behaviour.material` is the count of names seen so
+        // far, so re-declaring `granite` mints a DIFFERENT id for an identical-looking material and
+        // a de-duplication by id finds nothing to remove.
+        const auto known = materials_.find(name);
+        const bool first_time = known == materials_.end();
+        const VoxelTypeId replaced = first_time ? VoxelTypeId{0} : known->second;
         materials_[name] = type;
         // The name table is indexed by type id, so a report can look one up directly.
         if (script_.material_names.size() <= type) {
             script_.material_names.resize(static_cast<usize>(type) + 1);
         }
         script_.material_names[type] = name;
-        script_.material_types.push_back(type);
+        // The tool's palette, and it must not gain an entry for a material it already has.
+        //
+        // A fragment declares what it needs and includes `_contract.clip` to get it, and
+        // twenty-two of them do — so twenty-two of these ran for every material on the facility and
+        // the palette came out **550 long for 25 materials**. `types_.intern` returns the same id
+        // for an identical record, so the duplicates were not new materials in any sense that
+        // matters; they were the same twenty-five listed twenty-two times.
+        //
+        // What that does to Q and E is not that they stop working — each press does step to a
+        // different material — it is that the list wraps after 25 of 550 and the count printed
+        // beside it is a fiction. The report this was found under was *"changing material with q
+        // and e no longer works"*, and a palette whose reported size is twenty-two times its real
+        // one is the first thing to eliminate before believing anything else about that key.
+        //
+        // A name declared again REPLACES its entry rather than adding one, and it has to be a
+        // replacement rather than a skip: a fragment is allowed to override a material the contract
+        // declared, and the palette should then hold what the fragment said. Position is kept, so
+        // the order a player steps through with Q and E is the order the clip declares them in
+        // however many times the contract is included.
+        //
+        // Linear, because a palette is tens of entries and a second container would be one more
+        // thing to keep in step with the vector it describes.
+        if (first_time) {
+            script_.material_types.push_back(type);
+        } else {
+            const auto at =
+                std::find(script_.material_types.begin(), script_.material_types.end(), replaced);
+            if (at != script_.material_types.end()) {
+                *at = type;
+            } else {
+                script_.material_types.push_back(type);
+            }
+        }
         return;
     }
     if (head == "let") {

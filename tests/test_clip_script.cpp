@@ -395,3 +395,56 @@ solid ball
     REQUIRE(widths.size() > 4);
     CHECK(widths[widths.size() / 2] > widths.front());
 }
+
+TEST_CASE("a material declared twice is one entry in the tool's palette, not two") {
+    // The palette is what Q and E step through in game, and it came out **550 long for the 25
+    // materials the facility declares**: `_contract.clip` holds them all and twenty-two fragments
+    // include it, so every one of those includes pushed the whole list again.
+    //
+    // It cannot be de-duplicated by type id, which is why it was not. `behaviour.material` is the
+    // count of names seen so far, so re-declaring `granite` interns a record that differs in that
+    // one field and mints a NEW id for a material that is identical in every way a player can see.
+    // The name is the identity; the id is not.
+    //
+    // Reported as "changing material with q and e no longer works", which is what a palette
+    // twenty-two times too long feels like from the other side of the screen.
+    const Built b = build(R"(
+metre 32
+bounds 0 0 0  1 1 1
+material stone rgb=120,120,116
+material moss  rgb=60,110,50
+material stone rgb=120,120,116
+material moss  rgb=60,110,50
+let block = box 0 0 0  1 1 1
+paint stone
+solid block
+)");
+    REQUIRE(b.script.errors.empty());
+    REQUIRE(b.script.ok());
+    CHECK(b.script.material_types.size() == 2);
+    // ...and in the order the clip declares them, because that is the order a player steps
+    // through. A replacement that appended would put the second `stone` after `moss`.
+    CHECK(b.script.material_types[0] != b.script.material_types[1]);
+}
+
+TEST_CASE("re-declaring a material replaces what the palette holds for that name") {
+    // A fragment is allowed to override a material the contract declared, and when it does the
+    // palette has to hold the fragment's version rather than the contract's -- so this is a
+    // replacement and not a skip. Painting with the name and stepping to it with E must reach the
+    // same voxel type, or the tool hands you a material the world was not built with.
+    const Built b = build(R"(
+metre 32
+bounds 0 0 0  1 1 1
+material stone rgb=120,120,116
+material stone rgb=200,40,40
+let block = box 0 0 0  1 1 1
+paint stone
+solid block
+)");
+    REQUIRE(b.script.errors.empty());
+    REQUIRE(b.script.ok());
+    REQUIRE(b.script.material_types.size() == 1);
+    // The palette's entry is the LAST declaration, which is the one `paint stone` used.
+    REQUIRE(b.script.material_types[0] < b.script.material_names.size());
+    CHECK(b.script.material_names[b.script.material_types[0]] == "stone");
+}

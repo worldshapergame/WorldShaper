@@ -2976,7 +2976,23 @@ void Application::build_world() {
             WS_LOG_INFO("clip", "slack {:.4f} m worst, {:.4f} m to settle a box, {:.4f} m for the "
                                 "easiest of {} parts",
                         built.slack, built.prune_slack, built.best_part_slack, built.parts);
-            materials_ = script.material_types;
+            // The palette, taken from whichever copy of the script still HAS one.
+            //
+            // **This is what "changing material with Q and E no longer works" was.** Twenty lines
+            // above, a build that runs the sharpening ladder does
+            // `refine_script_ = make_unique<Script>(std::move(script))` — and this line then read
+            // `material_types` out of the moved-from object, which is empty. So `materials_` fell
+            // through to the one-entry fallback below and Q and E cycled a list with nowhere to go.
+            // A palette of ONE and a key that does not work are the same report from the other side
+            // of the screen, which is the sentence the cached path's own comment already carries
+            // (see `palette_from` above) — this is that fault arriving through the second door,
+            // because the cached path never moves the script and the built path always does.
+            //
+            // It bites only on a build that runs the ladder, which is why a cached load has been
+            // fine throughout and nothing in the automated suite caught it: every headless run in
+            // this repository loads a settled world from the cache.
+            const forge::Script& palette_script = refine_script_ ? *refine_script_ : script;
+            materials_ = palette_script.material_types;
             if (materials_.empty()) materials_.push_back(1);
             material_index_ = options_.material % materials_.size();
             chisel_.set_material(materials_[material_index_]);

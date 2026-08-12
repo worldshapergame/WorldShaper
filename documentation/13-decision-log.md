@@ -3570,3 +3570,37 @@ was asked to. What is recorded here is that the *reflection* is owed and what it
 | D592 | **Landed with no recognisable reflection, and said so** | process | The energy split is right and measured; the image is owed. Naming which of the three causes is which is what makes the next step sizeable |
 | D592 | **The bin count is bounded by the RAY budget, not by memory** | measurement | 512 far samples over 256 bins is two apiece. 256 bins were built, measured and reverted |
 | D592 | **A cosine ray cannot fill a grazing bin** | measurement | 0.17 of peak density at 80 degrees, and grazing is where a reflection is visible. This is the finding that decides what R4b costs |
+
+## D593 — "changing material with Q and E no longer works" was two faults, and neither was R4c
+
+**Reported while R4c was being written, so the first suspect was R4c. It was not**: the key handler,
+the key mapping and the palette are all untouched by that change. What it was is two separate faults
+in the palette itself, and the report is what a palette of one and a palette of 550 both feel like
+from the other side of the screen.
+
+**Fault one: the palette was read out of a moved-from script.** A build that runs the sharpening
+ladder does `refine_script_ = make_unique<Script>(std::move(script))`, and twenty lines further down
+`materials_ = script.material_types` read the moved-from object — empty — so the one-entry fallback
+fired and **Q and E cycled a list with nowhere to go**. It bites only on a build that runs the
+ladder; a cached load never moves the script, which is why every headless run in this repository has
+been fine and why nothing in the suite caught it. This is the fault the cached path's own comment
+already describes, arriving through the second door.
+
+**Fault two: 550 entries for 25 materials.** `_contract.clip` declares them and twenty-two fragments
+include it, so every include pushed the whole list again. **It cannot be de-duplicated by type id**,
+which is why nobody had: `behaviour.material` is the count of names seen so far, so re-declaring
+`granite` interns a record differing in that one field and mints a **new id for a material identical
+in every way a player can see**. The NAME is the identity and the id is not. A re-declaration now
+replaces the entry in place rather than appending, because a fragment is allowed to override what
+the contract declared and the palette should then hold the fragment's version, in the position the
+clip declares it.
+
+Both paths now report **25 materials from the clip**, the world's content hash is unchanged at
+`766f2fd63f1a01c4`, and two headless tests cover fault two — 527 tests, 18.67 M assertions.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D593 | **Take the palette from `refine_script_` when it exists** | correctness | The script has been moved by then, and a moved-from vector is empty rather than wrong, so the symptom is a palette of one rather than a crash |
+| D593 | **De-duplicate the palette by NAME, not by type id** | measurement | An identical material interns a different id, because the behaviour record carries a running count. A de-duplication by id finds nothing and looks like it worked |
+| D593 | **A re-declaration replaces in place** | design | A fragment may override the contract, and the order a player steps through must be the order the clip declares |
+| D593 | **The suite could not have caught fault one and can catch fault two** | process | Every headless run loads from the cache, and the cache path is the one that works. The parser half is testable and now is |
