@@ -174,7 +174,7 @@ written for the person the work is for, so it is the one to keep current.
 | R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
-| R5 face denoise, composite | M | not started |
+| R5 face denoise, composite | M | **a done** (D573–D575) — the first thing here that filters ACROSS faces. `open_sky` and the bounce blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 3.14** at the steps and 3.02 → 2.45 enclosed, speckle 35.27 → 28.69 and 12.12 → 9.98, mean pixel unmoved, flying inside its own spread. **b, c, d not started**, and the lamps are the noisiest term indoors and are still unfiltered |
 | R6 post | M | not started |
 | R7 the primary ray | L | not started |
 | R8 infinite detail | XL | not started |
@@ -1499,6 +1499,75 @@ was measured in) and `--secondary-light-share N`, the divisor of the on-screen s
 rather than 128. And R5, because the argument for this pass being inside its budget while moving is
 further from true than it was.
 
+### R5a is in: a face's light is no longer measured alone
+
+**The first thing in this renderer that filters across faces.** Every light term here is a per-face
+Monte Carlo estimate, and until now each face argued with its neighbour by its own standard error —
+which on a flat wall is the only thing there is to see. That is the class the reported *fine grid on
+flat surfaces* belongs to, and D539's eight eliminations found no ninth cause because there was not
+one to find. D573–D575.
+
+**Read this before touching it, because the property it rests on is the data model rather than the
+filter.** A face is keyed by *(node, level, direction)*. A neighbour at the same level and direction,
+one step along one of the two axes the normal is **not** along, is **coplanar and contiguous by
+construction** — a change of plane is a change of key and the lookup simply misses. So there is no
+edge-stopping weight, no normal test and no depth test: what a screen-space a-trous spends most of
+its arithmetic on does not arise here at all. The kernel is a 3×3 tent over those neighbours, three
+voxels wide, which at the leaf is 9.4 cm.
+
+| 1280×800, `--settle`, frame 900, two interleaved rounds | `--no-face-denoise` | default |
+|---|---|---|
+| **close** roughness (mean \|2nd difference\|) | 4.3515 / 4.3426 | **3.1410 / 3.1452** |
+| **close** speckle | 35.273 / 35.020 | **28.686 / 28.354** |
+| **close** mean pixel | 143.922 / 143.905 | 143.984 / 144.023 |
+| **close** faces pass | 3.561 / 3.517 ms | 3.901 / 3.871 |
+| **enclosed** roughness | 3.0165 / 3.0104 | **2.4458 / 2.4495** |
+| **enclosed** speckle | 12.118 / 12.200 | **9.975 / 9.971** |
+| **enclosed** faces pass | 2.635 / 2.628 ms | 2.759 / 2.786 |
+| **outdoor** roughness, speckle | 1.4790, 15.765 | 1.4610, 14.745 |
+| walked out and back (`--cut` twice), roughness and speckle | 3.2157, 13.210 | **2.6859, 10.847** |
+| flying at 1440p, faces pass | 7.184 / 8.024 | 7.413 / 8.165 — inside each other's spread |
+
+The mean pixel moves by 0.02 to 0.10 of 255 on every camera, against a run-to-run floor of 0.018 and
+0.07 — which is what a filter that only takes variance out should do. Gates: 523 tests,
+`darkroom.ps1` BLACK clear and with fog, `--validation` clean, all three pool audits clean.
+
+**Five things to know before touching it.**
+
+1. **It reads words 0–11 and writes words 12–15**, and that is not tidiness. An a-trous step that
+   reads what it writes is applied again on every visit and blurs without bound until a wall is one
+   colour; the usual answer is ping-pong buffers and this is the same answer in one buffer.
+2. **Only the composite reads the filtered words.** A gathering ray reads the RAW bounce, because the
+   bounce chain is already a progressive radiosity solve over many frames and feeding a filtered
+   value back into it is the same unbounded blur arriving through the light transport instead of
+   through the buffer. **The filter is a display of an estimate, never part of the estimator.**
+3. **Which terms, and the two that are deliberately left alone.** The two answers of the one
+   unbounded ray — `open_sky` and the bounce — because they are the slowest estimator here and the
+   bounce is a radiance with no bound to average against. Not the SUN: a shadow edge is a real
+   high-frequency feature. Not the NEAR FIELD, and that was measured rather than assumed —
+   photographed on its own it is the smoothest term in the renderer. **The LAMPS are the noisiest
+   term indoors** (speckle 23.0 of 255 against the near field's 6.0) and are the obvious next tap.
+4. **A metric defined against a neighbourhood cannot judge a change whose purpose is to move the
+   neighbourhood** (D574). The firefly count doubled in the first round and was unchanged in the
+   second, and the reading that settles it is absolute: pixels over 250 go 902 → 892 at the steps,
+   over 254 stay at 391, and **the enclosed camera's brightest pixel FALLS from 235 to 233 while its
+   firefly count doubles**. Nothing got brighter anywhere. Trap 10 living in the harness.
+5. **A roughness figure alone cannot tell a denoiser from a flattener**, so `rough.ps1` reports the
+   edge population beside it, split at 24 of 255. Edges fall 4–6% in COUNT while their mean strength
+   holds — 265,036 at 63.47 → 249,675 at 63.27 at the steps, and indoors the strength goes slightly
+   *up*. What left that population was noise spikes that had crossed the threshold, not silhouettes.
+
+**What it costs is memory and it is the only thing it spends**: the face light record goes from
+twelve words to sixteen, **50,688 → 67,584 KB**.
+
+**What did not land, with its numbers, so nobody re-derives them** (D575). D572 measured
+`--secondary-period 32` as brighter and quieter by speckle and worse by fireflies, and said the
+answer was R5 rather than a dial. With R5a in, the enclosed room reads mean pixel **157.40 → 163.10**
+with speckle **9.97 → 9.44** and roughness **2.4495 → 2.2819** — so the prediction held. It is not
+taken here because at the steps the same arm reads the faces pass **3.871 → 4.105 ms** against a 4.40
+budget standing still, on a pass already at 7–8 ms flying. That wants its own change and its own
+flying measurement.
+
 ### Closed: a room's light was capped at a quarter of the store while three quarters of it sat idle
 
 **This is the section that overturned the one below it, and the overturning is the part to read.**
@@ -2122,6 +2191,10 @@ reading it — R9b's control arm, and the state every figure taken before D561 w
 `--secondary-light-share N` is that class's ray budget as a divisor of the on-screen set's shading
 rate (8 by default; larger is cheaper and slower, and **D566 is why sweeping it downwards buys much
 less than it looks like it should**);
+`--no-face-denoise` reads a face's far field and bounce raw rather than blended with its coplanar
+neighbours', which is R5a's control arm and the state everything above that section was measured in —
+it leaves the WRITE in place and takes the eight neighbour lookups out, so the composite reads the
+same four words in both arms and the A/B prices the filter rather than a branch in the reader;
 `--no-class-eviction` puts every record in the face store back on one eviction clock, whoever asked
 for it, and spends the coarse pyramid at the first step of the squeeze — **pair it with
 `--secondary-share 4`**, which restores the off-screen class's fixed quarter, for the whole control

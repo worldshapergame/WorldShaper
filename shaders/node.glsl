@@ -422,6 +422,12 @@ const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 // somewhere is not "change what an existing field means", which is D553's standing warning.
 const uint kProbeOn = 1u << 0;          // count at all
 const uint kProbeCoarseBounce = 1u << 1;  // a gathering ray may read the coarse face over its hit
+// R5a. Off, `face_denoise` writes this face's own answer into the filtered words instead of its
+// neighbourhood's -- so the composite reads the same words in both arms and the A/B measures the
+// FILTER rather than a branch in the reader. That is deliberate and it is the reason the control arm
+// still pays the write: what is being priced is the eight neighbour lookups, which is the only part
+// of this that costs anything.
+const uint kProbeDenoise = 1u << 2;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -445,6 +451,7 @@ void probe_add(uint at) {
     atomicAdd(light_probe.words[at], 1u);
 }
 bool probe_coarse_bounce() { return (light_probe.words[0] & kProbeCoarseBounce) != 0u; }
+bool probe_denoise() { return (light_probe.words[0] & kProbeDenoise) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the

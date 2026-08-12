@@ -398,6 +398,31 @@ void main() {
             uint sky_counters = face_light.words[face_slot * kFaceLightWords];
             uint sky_samples = sky_counters & 0xFFFFu;          // near-field rays
             uint far_samples = (sky_counters >> 16u) & 0xFFFFu;  // far-field rays
+
+            // R5a: this face's two slowest answers, blended with its coplanar neighbours'.
+            //
+            // Both come from the one unbounded ray, so both carry its sample count and its noise:
+            // one sample every `face_stride` frames after the eager phase, against sixteen bounded
+            // rays a frame for the near field. Nothing in this renderer filtered ACROSS faces until
+            // now, which is the class the fine grid on flat surfaces belongs to (D539's eight
+            // eliminations found no ninth cause because there was not one to find).
+            //
+            // The low sixteen bits are the filtered answer's effective sample count and nought
+            // means "no filtered answer here yet" -- a slot claimed since the light pass last
+            // visited it. That case reads the raw record exactly as it did before this existed,
+            // which is the same discipline every other term here follows: an absent measurement
+            // reads as the picture the renderer already had, never as black.
+            //
+            // The count is what the bounce is believed in proportion to, and it is the other half
+            // of what this stage is for. A face the camera has just revealed carries a handful of
+            // far samples of its own and its converged neighbours carry hundreds, so the filtered
+            // count is high and the answer it is high about is theirs -- which is `face_light_seed`
+            // done sideways rather than down the tree, and it needs no extra rays either.
+            const uint filtered = face_light.words[face_slot * kFaceLightWords + kFaceFilteredSky];
+            const uint filtered_n = filtered & 0xFFFFu;
+            const uint bounce_at = face_slot * kFaceLightWords +
+                                   (filtered_n > 0u ? kFaceFilteredBounce : 9u);
+            const uint bounce_n = filtered_n > 0u ? filtered_n : far_samples;
             if (far_samples > 0u) {
                 // Read as it is stored: a running MEAN with a memory of kBounceMemory samples, not
                 // a sum over `far_samples`. The count still says how far to believe it -- see
@@ -406,9 +431,9 @@ void main() {
                 // early samples are taken. node.glsl's kBounceMemory has the whole argument, and the
                 // fault it fixes is the one a player reported as the faces they stood still in front
                 // of coming out brighter and cleaner than everything around them.
-                bounce = vec3(uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 9u]),
-                              uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 10u]),
-                              uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 11u]));
+                bounce = vec3(uintBitsToFloat(face_light.words[bounce_at]),
+                              uintBitsToFloat(face_light.words[bounce_at + 1u]),
+                              uintBitsToFloat(face_light.words[bounce_at + 2u]));
                 // How far to believe it, and this is not caution — it is the difference between a
                 // measurement and a per-face lottery.
                 //
@@ -424,7 +449,7 @@ void main() {
                 // a discontinuity at the sample count on every face that straddles it, and D387 is
                 // the standing measurement of what a hard per-face decision does: neighbours either
                 // side of it disagree by more than the noise ever did.
-                bounce_confidence = clamp(float(far_samples) / float(kBounceBelieve), 0.0, 1.0);
+                bounce_confidence = clamp(float(bounce_n) / float(kBounceBelieve), 0.0, 1.0);
                 bounce_known = bounce_confidence > 0.0;
             }
             if (sky_samples >= kShadowSettled) {
@@ -432,7 +457,9 @@ void main() {
                 // far faster, so the two are gated separately. A face with contact measured and no
                 // sky ray yet keeps `open_sky` at one, which is what it read before this term
                 // existed -- the near field is already darkening it correctly in the meantime.
-                if (far_samples > 0u) {
+                if (filtered_n > 0u) {
+                    open_sky = float(filtered >> 16u) * (1.0 / 65535.0);
+                } else if (far_samples > 0u) {
                     open_sky = float(face_light.words[face_slot * kFaceLightWords + 4u]) /
                                float(far_samples);
                 }

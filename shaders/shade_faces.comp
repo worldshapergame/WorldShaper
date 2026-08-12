@@ -119,6 +119,154 @@ ivec2 face_axes(uint dir) {
     return ivec2(0, 1);                 // +-z: across is x, down is y
 }
 
+// ---- R5a: a face's light, blended with its coplanar neighbours' ---------------------------------
+//
+// Every light term in this renderer is a per-face Monte Carlo estimate and until now NOTHING
+// filtered across faces. That is the class the reported *fine grid on flat surfaces* belongs to
+// (D539 eliminated eight specific causes and found no ninth), and it is what the ambient term's
+// face-to-face roughness has always been. A per-face estimator with a few hundred samples disagrees
+// with its neighbour by its own standard error, and on a flat wall that disagreement is the only
+// thing there is to see.
+//
+// # Why the neighbours need no edge-stopping weight, which is the whole reason this is cheap
+//
+// An a-trous denoiser over a screen spends most of its arithmetic deciding which neighbours belong
+// to the same surface: normals, depths, mesh ids, and a heuristic per term. Here the question does
+// not arise. A face is keyed by (node, level, direction), so a neighbour at the same level and the
+// same direction, one step along one of the two axes the normal is NOT along, is **coplanar and
+// contiguous by construction** — same plane, same orientation, adjacent. There is no geometric edge
+// to stop at, because a change of plane is a change of key and the lookup simply misses.
+//
+// So the weights are a plain 3x3 tent — 4 for this face, 2 for an edge neighbour, 1 for a corner —
+// times how well measured that neighbour is. The kernel is three voxels wide, which at the leaf is
+// **9.4 cm**; that is far below anything the eye reads as a lighting edge and far above the spacing
+// of the noise.
+//
+// # What is filtered, and what deliberately is not
+//
+// The two answers of the ONE UNBOUNDED RAY: `open_sky` and the bounce. They are the slowest
+// estimator in the renderer — one sample every `face_stride` frames after the eager phase — so they
+// are the noisiest, and the bounce is a radiance with no bound to average against, which is why it
+// needed `kBounceBelieve` in the composite in the first place (D535: "one ray landing on a sunlit
+// sill returns something twenty times what the wall around it returns").
+//
+// The SUN is not filtered and must not be by this: a shadow edge is a real high-frequency feature
+// and it lives in `counters`, which the host mirrors. The NEAR field is not either — measured on
+// this building it is the smoothest term there is (speckle 6.0 of 255 at the enclosed camera against
+// the lamps' 23.0), because it takes sixteen bounded rays a frame rather than one unbounded one.
+//
+// # How a face that has just appeared gets a converged answer
+//
+// The weight of a tap is its spatial weight times its own sample count, capped at `kBounceMin`. A
+// face with four samples standing among converged neighbours therefore contributes a four-hundredth
+// of what they do, and reads very nearly their answer — which is the other half of the report this
+// stage exists for, that a surface the camera has just revealed is visibly coarser than the wall
+// around it for about seventeen seconds. `face_light_seed` already does this DOWN the tree from an
+// ancestor; this is the same idea sideways, and it needs no extra rays either.
+//
+// The effective count written beside the answer is the weighted mean of the taps' counts, not their
+// sum. A sum would be the right combination for independent estimates of ONE quantity; these are
+// estimates of neighbouring quantities, so the mean is the conservative reading and it is what the
+// composite believes the bounce in proportion to.
+//
+// # Two properties this arrangement has by construction rather than by care
+//
+// It reads words 0-11 and writes words 12-15, so it can never filter its own output — an a-trous
+// step that reads what it writes is applied again on every visit and blurs without bound. And with
+// no neighbours at all it writes exactly this face's own values, so a lone face, a face at a corner
+// and a face whose neighbours are at another level are all unchanged rather than darkened.
+//
+// The neighbours' words may be written by another invocation of this same dispatch and nothing
+// orders the two. That is the same race `face_light_seed` above accepts and for the same reason:
+// what it can cost is one visit of staleness on a quantity that moves over hundreds of frames.
+const float kDenoiseCentre = 4.0;
+const float kDenoiseEdge = 2.0;
+const float kDenoiseCorner = 1.0;
+
+// One tap. Adds nothing at all when there is no face there, which is what makes the kernel shrink
+// gracefully at a corner instead of pulling the answer towards nought.
+void face_denoise_tap(ivec3 node, uint level, uint dir, float spatial, inout float weight,
+                      inout float spatial_used, inout float sky, inout vec3 bounce,
+                      inout float counted) {
+    const uint found = node_face_lookup(node, level, dir);
+    if (found == kNoFace || found == kFaceTombstone) return;
+    const uint at = found * kFaceLightWords;
+    if (at + kFaceLightWords - 1u >= face_light.words.length()) return;
+    const uint far_n = (face_light.words[at] >> 16) & 0xFFFFu;
+    if (far_n == 0u) return;
+    const float w = spatial * float(min(far_n, kBounceMin));
+    weight += w;
+    spatial_used += spatial;
+    counted += w;
+    sky += w * (float(face_light.words[at + 4u]) / float(far_n));
+    bounce += w * vec3(uintBitsToFloat(face_light.words[at + 9u]),
+                       uintBitsToFloat(face_light.words[at + 10u]),
+                       uintBitsToFloat(face_light.words[at + 11u]));
+}
+
+void face_denoise(uint light_at, ivec3 node, uint level, uint dir) {
+    const uint far_n = (face_light.words[light_at] >> 16) & 0xFFFFu;
+    // Nothing measured here yet. Leave the filtered count at nought, which is what tells the
+    // composite to read the raw record exactly as it did before this existed — the same discipline
+    // every other term in this pass follows, that an absent measurement reads as the picture the
+    // renderer already had rather than as black.
+    if (far_n == 0u) {
+        face_light.words[light_at + kFaceFilteredSky] = 0u;
+        return;
+    }
+
+    float weight = 0.0;
+    float spatial_used = 0.0;
+    float sky = 0.0;
+    float counted = 0.0;
+    vec3 bounce = vec3(0.0);
+    face_denoise_tap(node, level, dir, kDenoiseCentre, weight, spatial_used, sky, bounce, counted);
+
+    // The two axes the normal is not along, from the one function that answers that question. Three
+    // copies of "which axis is u" is three chances for one of them to be the other.
+    if (probe_denoise()) {
+        const ivec2 axes = face_axes(dir);
+        ivec3 du = ivec3(0);
+        ivec3 dv = ivec3(0);
+        du[axes.x] = 1;
+        dv[axes.y] = 1;
+        face_denoise_tap(node - du, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
+                         counted);
+        face_denoise_tap(node + du, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
+                         counted);
+        face_denoise_tap(node - dv, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
+                         counted);
+        face_denoise_tap(node + dv, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
+                         counted);
+        face_denoise_tap(node - du - dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
+                         bounce, counted);
+        face_denoise_tap(node - du + dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
+                         bounce, counted);
+        face_denoise_tap(node + du - dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
+                         bounce, counted);
+        face_denoise_tap(node + du + dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
+                         bounce, counted);
+    }
+    if (weight <= 0.0 || spatial_used <= 0.0) {
+        face_light.words[light_at + kFaceFilteredSky] = 0u;
+        return;
+    }
+
+    const float inv = 1.0 / weight;
+    const float sky_f = clamp(sky * inv, 0.0, 1.0);
+    const vec3 bounce_f = bounce * inv;
+    // How well measured the answer is: the weighted mean of the taps' own counts. Clamped into
+    // sixteen bits, which is the same width `far_n` itself is stored in.
+    const uint count = min(uint(counted / spatial_used + 0.5), 0xFFFFu);
+    // Nought is the sentinel for "not filtered yet", so a real answer must never write it. A face
+    // with a measurement has at least one sample by construction of the branch above.
+    face_light.words[light_at + kFaceFilteredSky] =
+        max(count, 1u) | (uint(sky_f * 65535.0 + 0.5) << 16);
+    face_light.words[light_at + kFaceFilteredBounce] = floatBitsToUint(bounce_f.r);
+    face_light.words[light_at + kFaceFilteredBounce + 1u] = floatBitsToUint(bounce_f.g);
+    face_light.words[light_at + kFaceFilteredBounce + 2u] = floatBitsToUint(bounce_f.b);
+}
+
 void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
     // The NEAREST ancestor that has something to say, not the one three levels up.
     //
@@ -1298,6 +1446,26 @@ void main() {
             face_light_seed(light_at, ivec3(face.x, face.y, face.z), level, direction);
         }
     }
+
+    // ---- and what this face's neighbours make of the same two questions ------------------------
+    //
+    // R5a, and it is HERE rather than at the end of the pass for a reason that is about the shape of
+    // this function rather than about the filter: the ambient block below returns early in four
+    // places, and a filter placed after any of them would silently stop running for exactly the
+    // faces that had converged -- which is every face on a settled camera, and trap 7's shape in a
+    // denoiser. Above them it runs on every invocation that gets this far, which is every on-screen
+    // face at least once per `face_stride`.
+    //
+    // What that costs is one visit of latency: it filters the record as this face left it last time
+    // rather than as it will leave it in a moment. On a quantity that takes hundreds of frames to
+    // move, that is nothing, and it buys the guarantee that a converged face's filtered answer keeps
+    // being refreshed as its neighbours converge around it.
+    //
+    // It is placed after the reset and seed block deliberately: a slot the store has just handed out
+    // has had its words zeroed and re-seeded from its ancestor by then, so the very first invocation
+    // of a new face writes a filtered answer rather than leaving four words of the previous
+    // occupant's light for the composite to read.
+    face_denoise(light_at, ivec3(face.x, face.y, face.z), level, direction);
 
     // A finished face touches NONE of this, and the flag that says so is the one already in hand.
     //

@@ -247,6 +247,10 @@ inline constexpr u32 kProbeSecondaryStride = 24;
 // it was written for, with no compiler error and no obvious picture.
 inline constexpr u32 kProbeOn = 1u << 0;             // count at all. `--no-light-probe` clears it
 inline constexpr u32 kProbeCoarseBounce = 1u << 1;   // R9f's read half. `--no-coarse-bounce` clears it
+// R5a. Cleared, `face_denoise` writes a face's OWN answer into the filtered words rather than its
+// neighbourhood's, so the composite reads the same four words in both arms and the A/B prices the
+// eight neighbour lookups instead of a branch in the reader. `--no-face-denoise` clears it.
+inline constexpr u32 kProbeDenoise = 1u << 2;
 
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.

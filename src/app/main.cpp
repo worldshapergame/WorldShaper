@@ -326,6 +326,11 @@ struct Options {
     // second's cost.
     bool coarse_keep = true;
     bool coarse_bounce = true;
+    // R5a: a face's far field and bounce are blended with its coplanar neighbours' before the
+    // composite reads them. `--no-face-denoise` is the control arm, and it leaves the write in place
+    // and takes the eight neighbour lookups out, so the two arms differ by the filter rather than by
+    // a branch in the reader.
+    bool face_denoise = true;
     // The store gives its three kinds of record up in an order — the off-screen class first, the
     // on-screen set's history next, the coarse pyramid last. `--no-class-eviction` puts them all
     // back on one clock, and with `--secondary-share 4` it is the full control arm for the class
@@ -679,6 +684,10 @@ Options parse_options(int argc, char** argv) {
             // R9b's control arm: a face nobody is looking at casts nothing, whatever is reading it.
             // This is the state every figure taken before this change was measured in.
             options.secondary_light_share = 0;
+        } else if (arg == "--no-face-denoise") {
+            // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
+            // is the state every figure taken before R5 was measured in.
+            options.face_denoise = false;
         } else if (arg == "--no-class-eviction") {
             // Every cold record on one clock again, whoever asked for it, and the coarse pyramid
             // spent at the first step of the squeeze. Pair it with `--secondary-share 4` for the
@@ -795,6 +804,8 @@ void print_help() {
         "  --no-lamp-edit-scope  an edit reopens the lamp term of every face within sixteen metres\n"
         "                        again, rather than only those it can stand in the light of. The\n"
         "                        control arm for the flicker while building\n"
+        "  --no-face-denoise     a face's far field and bounce are read raw rather than blended\n"
+        "                        with its coplanar neighbours'. R5a's control arm\n"
         "  --no-class-eviction   the store gives every cold record up on one clock again, whoever\n"
         "                        asked for it, and spends the coarse pyramid at the first step of\n"
         "                        the squeeze. Pair with --secondary-share 4 for the whole control\n"
@@ -4961,7 +4972,8 @@ void Application::record_frame(f32 time_seconds) {
         // out of the dispatch and nothing anywhere says a face stopped being lit.
         {
             const u32 dials = (options_.light_probe ? kProbeOn : 0u) |
-                              (options_.coarse_bounce ? kProbeCoarseBounce : 0u);
+                              (options_.coarse_bounce ? kProbeCoarseBounce : 0u) |
+                              (options_.face_denoise ? kProbeDenoise : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),
@@ -5479,15 +5491,17 @@ int Application::play(const Options& options) {
         face_buffers_.set_whole_set_retry(options_.whole_set_retry);
         // Every slot the face pass may write: the store's capacity plus the card's provisional
         // tail. Not the watermark, which grows.
-        // Twelve words a slot: the two ambient sample counts packed in one word, the near-field
+        // Sixteen words a slot: the two ambient sample counts packed in one word, the near-field
         // contact sum, its gradient along each of the face's two axes, the far field's own count of
         // rays that reached open sky, three floats of accumulated lamp irradiance, one word holding
         // the lamp sample count with the emitter-list version those samples were taken under, and
-        // three floats of accumulated BOUNCE radiance over the far field's own count.
-        // kFaceLightWords in shaders/node.glsl is the same twelve, and the shader bounds its writes
-        // against this length because a disagreement here is a write into whatever the allocator
-        // placed next (D332).
-        if (!face_light_.create(device_, 12 * (face_buffers_.provisional_base() +
+        // three floats of accumulated BOUNCE radiance over the far field's own count -- then four
+        // more holding the FILTERED far field and bounce, which R5a writes from this face's
+        // coplanar neighbours and which only the composite reads.
+        // kFaceLightWords in shaders/face_terms.glsl is the same sixteen, and the shader bounds its
+        // writes against this length because a disagreement here is a write into whatever the
+        // allocator placed next (D332).
+        if (!face_light_.create(device_, 16 * (face_buffers_.provisional_base() +
                                                FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;

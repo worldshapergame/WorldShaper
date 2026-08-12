@@ -36,7 +36,28 @@
 //
 // A constant that describes a layout must be declared where the layout is, once. See the identical
 // argument in node.glsl above `face_work_of`, and the one in resolve.comp above the Params block.
-const uint kFaceLightWords = 12u;
+// Twelve accumulated words and four FILTERED ones. The split matters more than the number:
+//
+//   0-11  what this face measured for itself. Sample counts, the near field and its two gradients,
+//         the far field, the lamp sum and its version, and the bounce mean. Every ray this pass
+//         casts lands in one of these, and nothing but this face's own rays ever writes them.
+//   12    the filtered far field, as a float in [0, 1].
+//   13-15 the filtered bounce, as three floats of radiance.
+//
+// The filtered pair is R5a: a face's own estimate blended with its COPLANAR NEIGHBOURS' estimates,
+// written by `face_denoise` in shade_faces.comp. It is a separate four words and not a rewrite of
+// the twelve above for one reason, and it is the reason a-trous is usually done in ping-pong
+// buffers: a filter that reads what it writes is a filter applied again on every visit, so it would
+// blur without bound until a wall was one colour. Reading the raw words and writing these makes that
+// unrepresentable rather than merely avoided.
+//
+// **Only the composite reads them.** A gathering ray reads the RAW bounce, deliberately: the bounce
+// chain is already a progressive radiosity solve over many frames, and feeding a filtered value back
+// into it is the same unbounded blur arriving through the light transport instead of through the
+// buffer. The filter is a display of an estimate, not part of the estimator.
+const uint kFaceLightWords = 16u;
+const uint kFaceFilteredSky = 12u;      // the filtered far field
+const uint kFaceFilteredBounce = 13u;   // ...and the three words of filtered bounce after it
 
 // The two occlusion terms a face carries, combined the one way that does not darken a crease twice.
 //

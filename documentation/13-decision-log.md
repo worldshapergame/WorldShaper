@@ -2553,3 +2553,159 @@ brightness and noise that a face denoise would not have to make.
 |---|---|---|---|
 | D572 | **`secondary_period` stays at 64** | judgement | 32 is brighter and quieter by speckle and worse by fireflies, on a camera where the control has none. A term that trades a mean against outliers wants the filter built before the dial is turned |
 | D572 | **Flying is neutral and says so** | measurement | `_flybench.ps1` at 1440p, two interleaved rounds: faces 7.579 / 7.434 control against 7.067 / 7.791, total GPU 14.558 / 14.416 against 13.856 / 14.582. The arms sit inside each other's spread, which is the expected answer — flying, the on-screen set is what fills the table and the cap collapses on its own. **The pyramid's flying loss is untouched**: 22,036 stand-ins given up over the run in the control and 22,034 with the change, so something other than the ordinary sweep is spending them there, and that is the next thing to find in this pass |
+
+## D573 — R5a: a face's light, blended with its coplanar neighbours', and why it needs no edge test
+
+**Nothing in this renderer filtered across faces.** Every light term is a per-face Monte Carlo
+estimate, and a per-face estimator disagrees with its neighbour by its own standard error — which on
+a flat wall is the only thing there is to see. That is the class the reported *fine grid on flat
+surfaces* belongs to: D539 eliminated eight specific causes and found no ninth, because there was
+not one to find.
+
+**The property that makes this cheap is the face key, and it is worth stating before the numbers.**
+An a-trous denoiser over a screen spends most of its arithmetic deciding which neighbours belong to
+the same surface — normals, depths, mesh ids, a heuristic per term. Here the question does not
+arise. A face is keyed by *(node, level, direction)*, so a neighbour at the same level and direction,
+one step along one of the two axes the normal is **not** along, is **coplanar and contiguous by
+construction**: same plane, same orientation, adjacent. A change of plane is a change of key and the
+lookup simply misses. So the weights are a plain 3×3 tent — 4 for the face, 2 for an edge neighbour,
+1 for a corner — times how well measured that neighbour is, and there is no edge-stopping term at
+all. The kernel is three voxels wide, which at the leaf is **9.4 cm**.
+
+**What is filtered is the two answers of the one unbounded ray**: `open_sky` and the bounce. They are
+the slowest estimator here — one sample every `face_stride` frames after the eager phase — and the
+bounce is a radiance with no bound to average against, which is why it needed `kBounceBelieve` in the
+first place (D535). The **sun is not** and must not be: a shadow edge is a real high-frequency
+feature. The **near field is not** either, and that was measured rather than assumed — photographed
+on its own it is the smoothest term in the renderer (speckle 6.0 of 255 at the enclosed camera
+against the lamps' 23.0), because it takes sixteen bounded rays a frame instead of one unbounded one.
+
+**Measured, two interleaved rounds of one build, `--no-face-denoise` the control arm**, 1280×800,
+`--settle`, frame 900:
+
+| | control | denoised |
+|---|---|---|
+| **close** roughness (mean \|2nd difference\|) | 4.3515 / 4.3426 | **3.1410 / 3.1452** (−28%) |
+| **close** speckle | 35.273 / 35.020 | **28.686 / 28.354** (−19%) |
+| **close** mean pixel | 143.922 / 143.905 | 143.984 / 144.023 |
+| **close** faces pass | 3.561 / 3.517 ms | 3.901 / 3.871 |
+| **enclosed** roughness | 3.0165 / 3.0104 | **2.4458 / 2.4495** (−19%) |
+| **enclosed** speckle | 12.118 / 12.200 | **9.975 / 9.971** (−18%) |
+| **enclosed** mean pixel | 157.401 / 157.408 | 157.497 / 157.395 |
+| **enclosed** faces pass | 2.635 / 2.628 ms | 2.759 / 2.786 |
+| **outdoor** roughness, speckle | 1.4790, 15.765 | 1.4610, 14.745 |
+| walked out and back (`--cut` twice) roughness, speckle | 3.2157, 13.210 | **2.6859, 10.847** |
+
+The mean pixel moves by 0.02 to 0.10 of 255 on every camera, which is what a filter that only takes
+variance out should do — inside the run-to-run floor of 0.018 and 0.07 measured on the same cameras.
+Flying at 1440p, two interleaved rounds: faces **7.184 / 8.024** control against **8.165 / 7.413**,
+inside each other's spread on a pass whose control arm spans 0.84 ms by itself.
+
+**Three properties it has by construction rather than by care**, and the first is the reason a-trous
+is normally done in ping-pong buffers:
+
+1. **It reads words 0–11 and writes words 12–15.** A filter that reads what it writes is applied
+   again on every visit and blurs without bound until a wall is one colour. Making that
+   unrepresentable is cheaper than remembering not to do it, which is the same argument
+   `src/gpu/face_light.*` exists on.
+2. **Only the composite reads the filtered words.** A gathering ray reads the RAW bounce,
+   deliberately: the bounce chain is already a progressive radiosity solve over many frames, and
+   feeding a filtered value back into it is the same unbounded blur arriving through the light
+   transport instead of through the buffer. The filter is a display of an estimate, never part of
+   the estimator.
+3. **With no neighbours it writes the face's own values.** A lone face, a face at a corner and a face
+   whose neighbours are at another level are unchanged rather than darkened, because a tap that finds
+   nothing adds nothing to either the numerator or the weight.
+
+**And the other half of the report it was owed.** A tap's weight is its spatial weight times its own
+sample count, capped at `kBounceMin`, so a face with four far samples standing among converged
+neighbours contributes a four-hundredth of what they do and reads very nearly their answer. That is
+`face_light_seed` done sideways rather than down the tree, it needs no extra rays, and it is why the
+walk-out-and-back row above moves as much as the settled ones. The effective count written beside the
+answer is the weighted **mean** of the taps' counts and not their sum: a sum is the right combination
+for independent estimates of one quantity, and these are estimates of neighbouring quantities.
+
+**The cost in memory is real and is the only thing this change spends:** the face light record goes
+from twelve words to sixteen, **50,688 KB → 67,584 KB**.
+
+**The control arm leaves the WRITE in place and takes the eight lookups out**, so the composite reads
+the same four words in both arms and the A/B prices the filter rather than a branch in the reader.
+`--no-face-denoise`, and the dial lives in the light probe's word 0 because the push block is exactly
+128 bytes full (D559).
+
+Gates: 523 tests, `darkroom.ps1` BLACK clear and with fog, `--validation` clean, all three pool
+audits clean, `GPU mirror matches` on both stores.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D573 | **Filter per FACE, not per pixel** | design | §6's whole claim is that lighting stops scaling with resolution. There are 476,085 on-screen faces behind 1,024,000 pixels at 800p and behind 3,686,400 at 4K, so a read-time filter in the composite would have put the one new cost in the one place this rewrite exists to empty |
+| D573 | **No edge-stopping weight** | design | The face key already answers it: a coplanar contiguous neighbour is a key that exists and anything else is a key that misses. That is the whole saving, and it is a property of the data model rather than of the filter |
+| D573 | **Read raw, write filtered** | correctness | Not a precaution — a self-reading a-trous step is applied once per visit for the life of the face |
+
+## D574 — a denoiser can double the firefly count without adding a single photon
+
+**The firefly figure went the wrong way and it was the instrument.** `tools\_measure.ps1` counts a
+firefly as a pixel more than four times the median of its eight neighbours. That is the right test
+for *does the eye catch it* and the wrong one for *is this new light*: smooth the surface around an
+outlier and the median falls, so the same pixel starts counting without anything having been added
+to it.
+
+First round: close 45 → 90, enclosed 9 → 18. Second round of the identical pair: close 45 → **27**,
+enclosed 9 → **9**. So it is partly noise in the metric — but the reading that settles it is an
+absolute one, counted over fixed luminances rather than against a neighbourhood:
+
+| | control | denoised |
+|---|---|---|
+| close, pixels over 250 / over 254 | 902 / 391 | 892 / **391** |
+| enclosed, brightest pixel | 235 | **233** |
+| enclosed, pixels over 230 | 2,639 | **2,553** |
+| outdoor, over 250 / over 254 | 79 / 18 | 82 / 16 |
+
+**Nothing got brighter anywhere; the enclosed camera's brightest pixel fell while its firefly count
+doubled.** The general form is trap 10 in the measuring harness rather than in a debug view: a metric
+defined against a *local* baseline moves when the baseline moves, and a change whose whole purpose is
+to move that baseline cannot be judged by it alone.
+
+**The same reading answers the other risk, which is a filter that improves a roughness figure by
+flattening the picture.** `rough.ps1` now splits the second differences at 24 of 255 and reports both
+populations, because they must move in opposite directions for the change to be worth having:
+
+| | control | denoised |
+|---|---|---|
+| close, edges: count at mean strength | 265,036 at 63.47 | 249,675 at **63.27** |
+| enclosed | 91,252 at 63.74 | 87,882 at **64.00** |
+| outdoor | 107,636 at 61.66 | 105,330 at 59.88 |
+
+The count of "edges" falls 4–6% while their mean strength holds — so what left that population was
+noise spikes that had crossed the threshold, not silhouettes. Had real geometry been blurred the mean
+strength would have fallen with the count, and indoors it goes slightly *up*.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D574 | **A relative metric needs an absolute one beside it** | trap 10 | Speckle and fireflies are both defined against a neighbourhood. A denoiser changes the neighbourhood, so on its own that pair cannot separate "an outlier appeared" from "its background got smoother" |
+| D574 | **Roughness is reported with the edge population beside it** | trap 7 | One number cannot tell a filter that removed noise from a filter that removed the picture. Two populations moving in opposite directions can |
+
+## D575 — R5 has moved D572's trade, measured and not taken in this change
+
+D572 measured `--secondary-period 32` — a gathering ray naming the face it landed on twice as often —
+as brighter and quieter by speckle and **worse by fireflies**, taking the enclosed room from none to
+eighteen, and said in as many words that *the answer to that is R5 rather than a dial*. With R5a in,
+the same arm reads:
+
+| enclosed, settled, frame 900 | period 64 | period 32 |
+|---|---|---|
+| mean pixel | 157.40 | **163.10** |
+| speckle | 9.97 | **9.44** |
+| roughness | 2.4495 | **2.2819** |
+| fireflies | 9 | 18 |
+| faces pass | 2.786 ms | 2.793 |
+
+So speckle and roughness now improve *with* the extra brightness rather than against it, which is
+what R5 was predicted to buy. **Not taken here, and the reason is the other camera**: at the steps
+the same arm reads faces **3.871 → 4.105 ms** against a 4.40 ms budget standing still, on a pass that
+is already at 7–8 ms flying. That wants its own change and its own flying measurement, and putting it
+in this commit would mean neither of the two rules had a measurement of its own.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D575 | **One rule, one measurement, even when the second is one character** | judgement | The prediction R5 was landed on has come true and the numbers are here so nobody re-derives them. What is left to check is the flying cost, which is where this pass has no headroom at all |

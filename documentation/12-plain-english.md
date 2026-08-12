@@ -1664,3 +1664,77 @@ if you want to try it — tell me and I will show you both.
 22,000 coarse stand-ins are still being thrown away over a flight, in both the old and the new
 version — so something other than the ordinary give-up rule is spending them there. This change did
 not cause it and did not fix it. It is the next thing I want to find in this pass.
+
+## Each surface used to work out its own lighting alone. Now it asks its neighbours
+
+**This is the smoothing pass I have been promising for several sections, and it is the fix for the
+fine grid you reported on flat walls.**
+
+Every kind of light in this game — sun, sky, bounced light, lamps — is worked out separately on each
+voxel face by firing rays and averaging what they find. That is what makes it cheap and what makes it
+scale. It also means **every face's answer is slightly wrong in its own private way**, and on a flat
+wall, where all the faces should agree, that disagreement is the only thing there is to look at. Your
+words for it were "subtle horizontal lines on everything", then "it seems to be a grid". I spent a
+whole session eliminating eight specific causes and found no ninth, because there wasn't one — this
+was the cause, and it needed a filter rather than a bug fix.
+
+**Now each face blends its answer with the eight faces around it**, weighted by how well measured
+each of them is.
+
+**The piece I am pleased with is why it costs almost nothing.** A normal smoothing pass over a screen
+spends most of its work deciding which neighbouring pixels are even on the same surface — is that the
+same wall, or is it the floor behind it? Here that question cannot come up. A face is identified by
+which voxel it is on, which direction it faces and how big it is; so a face one step sideways at the
+same size facing the same way is *guaranteed* to be on the same flat plane, right next to it. If it
+isn't, there is simply nothing there to find. The engine's own way of naming faces does the hard part
+for free.
+
+**What it looks like.** Stand at the steps, or in the domed room, and look at a large flat surface:
+
+- face-to-face roughness — the number that measures exactly this kind of stepping — falls **4.35 →
+  3.14 of 255** at the steps and 3.02 → 2.45 in the room;
+- the general speckle falls **35.3 → 28.7** and **12.1 → 10.0**;
+- the overall brightness moves by **0.02 to 0.10 of 255**, which is nothing — the picture gets
+  smoother without getting lighter or darker, which is what a smoothing pass should do and is the
+  main thing I checked;
+- walk out of a room and back and it is better there too: roughness 3.22 → 2.69, speckle 13.2 → 10.8.
+  A face that has just been revealed borrows its neighbours' well-measured answer instead of starting
+  from its own two or three rays.
+
+**What it costs.** Standing still, about a third of a millisecond on the lighting pass at the steps
+and an eighth of one in the room. **While flying it is free** — the two versions land inside each
+other's normal wobble. And 16.5 MB of graphics memory, because each face now stores four extra
+numbers.
+
+**Two things I deliberately did not smooth.** The **sun's shadows**, because a shadow edge is
+supposed to be sharp and smearing it would be a real loss. And the **near-field shading** — the soft
+darkening in creases and corners — because I photographed each kind of light on its own first and
+that one is already the smoothest thing in the renderer. That photograph also told me what to do
+next: **the lamps are by far the noisiest indoors** and they are not smoothed yet.
+
+### Two ways this could have looked like a win and not been one, and how I checked
+
+**First: the stray-bright-dot count went UP, and it was the ruler, not the picture.** That count is
+defined as "a pixel more than four times as bright as its neighbours". Smooth the neighbours and the
+bar drops, so the same dot starts counting without a single photon being added. I checked it against
+fixed brightness levels instead, which cannot move for that reason: pixels over 250 of 255 went 902 →
+892, pixels over 254 stayed at exactly 391, and **in the domed room the single brightest pixel in the
+frame got dimmer, 235 → 233, while the dot count doubled**. Nothing got brighter anywhere.
+
+**Second: a smoothing pass can always improve a smoothness score by destroying the picture.** So I
+measured the sharp edges separately from the flat areas. The number of sharp edges falls 4–6% while
+their average sharpness holds steady — and indoors it goes slightly *up*. What disappeared was noise
+spikes that had been counting as edges, not the real ones. If I had been smearing the building, the
+edges would have got weaker as well as fewer, and they did not.
+
+### And the thing I said last time I would come back to
+
+Last section I measured a switch that makes interiors brighter and said no to it because it took the
+domed room from no stray dots to eighteen — and that the smoothing pass was the real answer. That has
+now come true: with the smoothing in, the same switch makes the room brighter *and* smoother
+(brightness 157.4 → 163.1, speckle 9.97 → 9.44, roughness 2.45 → 2.28).
+
+I have still not turned it on, for one reason: at the steps it takes the lighting pass to 4.11 ms
+against a 4.40 budget while standing still, and that pass is already at 7–8 ms while flying. It needs
+its own measurement of the flying case before I change a default that affects every frame. That is a
+short piece of work and it is the next thing I would do unless you want something else first.
