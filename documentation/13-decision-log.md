@@ -3604,3 +3604,71 @@ Both paths now report **25 materials from the clip**, the world's content hash i
 | D593 | **De-duplicate the palette by NAME, not by type id** | measurement | An identical material interns a different id, because the behaviour record carries a running count. A de-duplication by id finds nothing and looks like it worked |
 | D593 | **A re-declaration replaces in place** | design | A fragment may override the contract, and the order a player steps through must be the order the clip declares |
 | D593 | **The suite could not have caught fault one and can catch fault two** | process | Every headless run loads from the cache, and the cache path is the one that works. The parser half is testable and now is |
+
+## D594 — R4b: the ray a lobe casts for itself, and three tunings that were each a measurement
+
+**The user asked for this directly after D592 named it.** R4c's bins were filled by the far ray,
+which is cosine-weighted about the normal, and a reflection is read at a grazing angle where that
+density is a sixth of its peak. So the bins a reflection comes out of were the emptiest a face had.
+
+**A face that holds a lobe now casts its own ray**: it picks one bin round-robin, draws a half
+vector from that bin's own kernel, reflects the bin's direction about it, and marches unbounded.
+That is Karis's split-sum prefilter with the view direction taken as the BIN rather than as the
+normal, and taking it as the bin is the whole of what puts samples where a reflection is read.
+
+**What it is worth in the picture**, against `--no-lobe-ray`, which is the same pool, the same bins
+and the same energy split with only the march removed: **3.913 of 255 over 103,874 pixels at the
+great door and 2.090 over 46,690 at the close camera**. The bronze reads as deep metal with panel
+structure and gilt bosses where it was a flat wash, and the window glass gains a sky-coloured sheen.
+
+**Measured, 1280×800 quality 7, settled at frame 2000 over 1000 frames:**
+
+| | with the ray | `--no-lobe-ray` | `--no-face-materials` |
+|---|---|---|---|
+| close, faces pass | **4.229 ms** | 4.218 | 3.879 |
+| close, resolve | 0.784 | 0.795 | 0.765 |
+| flying 1440p, faces pass | **9.318** | 7.825 | 8.320 / 7.491 |
+
+**It costs nothing measurable standing still and 1.5 ms flying**, on a pass that is over its 4.40 ms
+budget in the moving case either way. 527 tests, 18.67 M assertions.
+
+**Three tunings, and each of them was a measurement rather than a preference.**
+
+1. **The burst is EIGHT rays a visit, not thirty-two, and that reverses D394 for this term.** D394
+   measured every attempt to meter the ambient burst as making the transient worse, because what
+   that pass spends on an unconverged face is mostly the face and not the ray. **The difference is
+   the ray**: an ambient near ray is bounded at a metre and a lobe ray is unbounded. At thirty-two a
+   visit the flying case read **11.931 ms against 7.825**, casting 270,853 rays a frame — 71.5% of
+   every gathering ray in the picture. At eight it is 9.318. The other half of why D394 does not
+   carry: its population is bounded and converges, so letting it measure hard empties it; a flying
+   camera refreshes the lobe population continuously, so there is no state to get out of and the
+   per-frame rate is the whole cost. What eight costs is that a reflection fades in over about nine
+   seconds rather than two.
+2. **A warm block is only taken by a face worth 1.5× its holder.** Taking a block zeroes its sample
+   count, so its holder starts its burst again — and without a margin two faces of nearly equal
+   worth sharing a set trade one for ever. Measured: **417 blocks changing hands a frame and 883
+   faces still bursting on a settled camera**, with the faces pass 2.2 ms over where it should have
+   been. With the margin, 13 and 249. **This is what the third counter on the audit line is for**,
+   and it is the only thing that separates a pool that is thrashing from a pool that is full.
+3. **Thirty-six bins in a pool of 131,072, not sixty-four in 32,768.** Lowering the worth floor to
+   0.038 admits the glass and the water — which is most of the point, since they are the only
+   near-mirrors in the building — and that takes the population asking to about **44,700** against
+   8,192 sets of four ways. **47% of askers were turned away.** A smaller block buys four times the
+   blocks and eight ways for 38.9 MB, and takes declines to **0.8%**; it also cuts the rays a face
+   needs over its life from 1,536 to 864. The cost is 13.5 degrees of blur instead of 10.2.
+
+**What is still owed, and it is visible in `--debug-mode 23`.** Thirty-six bins at twenty-four
+samples is a per-bin estimate of a RADIANCE, and the lobe on its own is visibly mottled face to
+face. It is frozen rather than fizzing — the burst converges and stops — so it reads as grain on
+the surface and the diffuse and the tone curve absorb most of it. **The tool for it already exists
+and is R5's**: `face_denoise` blends a face's terms with its coplanar neighbours' and this is the
+fourth term that wants it. That is the next thing this stage owes.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D594 | **The lobe ray aims at the BIN, not at the normal** | measurement | It is the whole of what fills the grazing bins. A cosine ray puts a sixth of its density where a reflection is read from |
+| D594 | **Eight rays a visit, against D394's finding for the ambient term** | measurement | 11.9 → 9.3 ms flying. D394's population is bounded and its ray is bounded; neither is true here, and both differences point the same way |
+| D594 | **A margin on the take-over** | measurement | Taking a block resets its burst, so equal-worth faces trading one never converge. 417 hand-overs a frame → 13 |
+| D594 | **Thirty-six bins so the pool can be four times larger** | measurement | Declines 47% → 0.8%, and 864 rays a face instead of 1,536, for 3.3 degrees of extra blur |
+| D594 | **The far ray's splat becomes the control arm** | design | With the ray in it is 128 GGX evaluations to add one badly aimed sample. Keeping it only in the `--no-lobe-ray` arm keeps that arm meaning "the bins as R4c filled them" and takes its cost out of the shipped path |
+| D594 | **The mottle is named and left to R5** | process | It is a per-face estimator with two dozen samples a bin, which is the class `face_denoise` was built for. Inventing a second filter here would be a second thing to be wrong about |

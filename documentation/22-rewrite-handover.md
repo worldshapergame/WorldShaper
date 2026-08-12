@@ -173,7 +173,7 @@ written for the person the work is for, so it is the one to keep current.
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
 | R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
-| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a is done, both halves (D582, D583, D591), and **R4c's storage and energy split are in** (D591, D592). A face resolves what it is made of once; the composite then splits what leaves it by metalness, so the metals stop being Lambertian — bronze, gilt, lead and copper read as metal rather than chalk. The sun comes back through a GGX lobe with no storage; the environment out of **sixteen outgoing bins** in a pool of 65,536 blocks (8.7 MB) that faces HOLD, filled by the gathering ray they were already casting. Costs **nothing measurable** in any arm. **What it does NOT do is draw a reflection you can recognise**, which is the first thing the user said when shown it — see D592 and §5. R4b and R4d not started |
+| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a is done, both halves (D582, D583, D591), **R4c** is in (D591, D592) and so is **R4b's ray** (D594). A face resolves what it is made of once; the composite then splits what leaves it by metalness, so the metals stop being Lambertian — bronze, gilt, lead and copper read as metal rather than chalk. The sun comes back through a GGX lobe with no storage; the environment out of **sixteen outgoing bins** in a pool of 65,536 blocks (8.7 MB) that faces HOLD, filled by the gathering ray they were already casting. A face that holds a lobe then casts its own ray, aimed into the cone each bin gathers from, which is what fills the grazing bins a reflection is read out of — bronze reads as deep metal with panel structure where it was a flat wash, and the glass gains a sky-coloured sheen. Costs **nothing measurable settled** and **1.5 ms flying**. **What is still owed**: the bin count does not follow pixel coverage, and the lobe is visibly mottled face to face at 24 samples a bin, which is R5's `face_denoise` and is the next thing this stage wants. R4d not started |
 | R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
 | R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
@@ -2067,6 +2067,56 @@ a block to every face that knows what it is made of.
    the slot, taken when a way is free, cold at 600 frames, or held by a face worth less — so a
    forgotten block is recovered rather than leaked. A DECLINE is not a black surface; it is a face
    reading its hemispherical mean.
+
+### R4b's ray is in, and the reflection has something in it at last
+
+**Asked for directly, after D592 measured that a cosine-weighted ray cannot fill the bins a
+reflection is read out of.** A face that holds a lobe now casts a ray of its own: it picks one bin
+round-robin, draws a half vector from that bin's own kernel, reflects the bin's direction about it,
+and marches unbounded. Taking the view direction as the BIN rather than as the normal is the whole
+of what puts samples at grazing angles.
+
+**In game:** the great bronze doors read as deep metal with panel structure and gilt bosses where
+they were a flat warm wash, and the window glass gains a sky-coloured sheen. Against `--no-lobe-ray`
+— the same pool, the same bins, the same energy split, only the march removed — that is **3.913 of
+255 over 103,874 pixels at the door** and 2.090 over 46,690 at the close camera.
+
+**What it costs:** nothing measurable standing still (close faces **4.229 ms** against the no-ray
+arm's 4.218 and pre-R4's 3.879) and **1.5 ms flying** (9.318 against 7.825), on a pass that is over
+its 4.40 ms budget in the moving case either way.
+
+**Three tunings, and none of them was a preference. Read all three before changing a constant here.**
+
+1. **The burst is eight rays a visit, not thirty-two, and that REVERSES D394 for this term.** D394
+   measured every attempt to meter the ambient burst as making the transient worse, because what
+   that pass spends on an unconverged face is mostly the face and not the ray. The difference is
+   that an ambient near ray is **bounded at a metre** and a lobe ray is **unbounded**: at
+   thirty-two a visit the flying case read **11.931 ms against 7.825** and cast 270,853 rays a
+   frame, 71.5% of every gathering ray in the picture. And D394's population is bounded and
+   converges, so letting it measure hard empties it — a flying camera refreshes the lobe population
+   continuously, so there is no state to get out of and the per-frame rate is the whole cost.
+2. **A warm block is only taken by a face worth 1.5 times its holder.** A take-over zeroes the
+   block's sample count, so its holder starts its burst again; without a margin two faces of nearly
+   equal worth sharing a set trade one for ever. Measured: **417 blocks changing hands a frame and
+   883 faces still bursting on a settled camera**, with the pass 2.2 ms over where it should have
+   been. With it, 13 and 249. **That is what the third counter on the audit line is for** — a pool
+   that is thrashing and a pool that is full read identically in the first two.
+3. **Thirty-six bins in a pool of 131,072, not sixty-four in 32,768.** The worth floor is 0.038 now
+   so that the glass and the water get lobes, and that takes the population asking to about
+   **44,700** — 47% of askers were turned away by a four-way pool of 32,768. A smaller block buys
+   four times the blocks and eight ways for 38.9 MB, takes declines to **0.8%**, and cuts the rays
+   a face needs over its life from 1,536 to 864. It costs 13.5 degrees of blur instead of 10.2.
+
+**What is still owed, and it is visible in `--debug-mode 23`.** Thirty-six bins at twenty-four
+samples is a per-bin estimate of a radiance, and the lobe on its own is **visibly mottled face to
+face**. It is frozen rather than fizzing, because the burst converges and stops, so it reads as
+grain rather than as noise and the diffuse and the tone curve absorb most of it. The tool for it
+exists: `face_denoise` already blends three of a face's terms with its coplanar neighbours', and
+this is the fourth that wants it. **That is the next thing R4 owes**, and it needs no rays.
+
+And the bin count still does not follow **pixel coverage**, which is D186's own sentence and the
+half of R4b that is not built. A mirror filling the screen gets the same thirty-six bins as one
+across the room.
 
 ### Where to start now, and the two orders are not the same order
 

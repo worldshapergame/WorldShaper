@@ -1050,34 +1050,128 @@ void sky_accumulate(SkySample s, inout uint near_n, inout uint near_sum, inout i
 // bin blurry, which is the honest reading of what sixteen bins can say about a mirror. It is the
 // same trade `face_lobe_bin_alpha` states from the other side, and it is why this term needs no
 // clamp, no outlier test and no belief ramp.
+// One sample into one bin, as a running mean weighted by how much that bin's kernel wanted it.
+//
+// The same forgetting the bounce does, and for the same reason: the room is still filling with
+// light while the early samples are taken, so a mean over everything since the face was claimed is
+// partly a measurement of a darker room. It also keeps the step above what an rgb9e5 mantissa can
+// represent -- an update smaller than a five-hundredth of the value rounds back to where it was,
+// which is D293's fault arriving in a different format.
+void face_lobe_add(uint block, uint bin, float w, vec3 radiance) {
+    if (!(w > 0.0)) return;
+    const uint at = face_lobe_bin_at(block, bin);
+    const uint weight_at = face_lobe_weight_at(block, bin);
+    if (weight_at >= face_lobe.words.length()) return;
+    const float had = min(uintBitsToFloat(face_lobe.words[weight_at]), float(kBounceMemory));
+    const vec3 was = face_unpack_rgb9e5(face_lobe.words[at]);
+    const float now = had + w;
+    face_lobe.words[at] = face_pack_rgb9e5(was + (radiance - was) * (w / now));
+    face_lobe.words[weight_at] = floatBitsToUint(now);
+}
+
 void face_lobe_accumulate(uint block, vec3 dir, vec3 radiance) {
     // The face's own frame, which is the one `face_lobe_at` and the composite both work in.
     const vec3 normal = vec3(g_sky_normal);
     const float alpha = max(face_lobe_bin_alpha(), kFaceAlphaMin);
-    const float memory = float(kBounceMemory);
 
+    // **Normalised across the bins, so one sample is worth one sample.**
+    //
+    // The weights used to be the kernel itself, which is a density and integrates to one over
+    // SOLID ANGLE rather than over sixteen numbers -- so what a cosine sample was worth to a bin
+    // depended on how many bins there were, and it had to be commensurate with the lobe ray below,
+    // which is worth exactly one. Two estimators of one quantity whose weights are in different
+    // units is the shape of fault D420 is about, one array along: whichever is measured in the
+    // larger unit quietly decides the answer.
+    //
+    // Two passes over sixty-four bins, RECOMPUTING the weight rather than keeping it. Sixty-four
+    // floats held across the second loop is sixty-four registers on a pass whose occupancy is what
+    // it is short of, and the arithmetic is a dot product and a divide -- see the note above
+    // `g_sky_corner`, which is this trade measured from the other side.
+    float total = 0.0;
     for (uint bin = 0u; bin < kLobeBins; ++bin) {
         const vec3 towards = face_lobe_direction(face_lobe_centre(bin), normal, g_sky_side,
                                                  g_sky_other);
-        const vec3 half_vector = normalize(towards + dir);
-        const float w = face_ggx_d(max(dot(normal, half_vector), 0.0), alpha);
-        if (w <= 0.0) continue;
-
-        const uint at = face_lobe_bin_at(block, bin);
-        const uint weight_at = face_lobe_weight_at(block, bin);
-        if (weight_at >= face_lobe.words.length()) return;
-
-        // The same forgetting the bounce does, and for the same reason: the room is still filling
-        // with light while the early samples are taken, so a mean over everything since the face
-        // was claimed is partly a measurement of a darker room. It also keeps the step above what
-        // an rgb9e5 mantissa can represent -- an update smaller than a five-hundredth of the value
-        // rounds back to where it was, which is D293's fault arriving in a different format.
-        const float had = min(uintBitsToFloat(face_lobe.words[weight_at]), memory);
-        const vec3 was = face_unpack_rgb9e5(face_lobe.words[at]);
-        const float now = had + w;
-        face_lobe.words[at] = face_pack_rgb9e5(was + (radiance - was) * (w / now));
-        face_lobe.words[weight_at] = floatBitsToUint(now);
+        total += face_ggx_d(max(dot(normal, normalize(towards + dir)), 0.0), alpha);
     }
+    if (!(total > 0.0)) return;
+    const float inv = 1.0 / total;
+    for (uint bin = 0u; bin < kLobeBins; ++bin) {
+        const vec3 towards = face_lobe_direction(face_lobe_centre(bin), normal, g_sky_side,
+                                                 g_sky_other);
+        face_lobe_add(block, bin,
+                      face_ggx_d(max(dot(normal, normalize(towards + dir)), 0.0), alpha) * inv,
+                      radiance);
+    }
+}
+
+// ---- R4b: the ray a lobe casts for itself ------------------------------------------------------
+//
+// **This is the ray D592 said was missing, and it is what makes a reflection possible at all.**
+//
+// The far ray is cosine-weighted about the normal, because that is the distribution the ambient
+// integral and the bounce both need. A reflection is read at a GRAZING angle -- the mirror
+// direction of an eye looking along a wall or across water -- and the cosine density there is 0.17
+// of its peak. So the bins a visible reflection comes out of were the emptiest ones a face had,
+// and no amount of bin count or memory could fix that: it is where the rays go.
+//
+// This ray goes where the bin is. It picks one bin, aims into the cone that bin gathers from, and
+// what it finds is that bin's answer. Round-robin by sample index, so the sixty-four are served
+// evenly rather than by a random walk that leaves gaps for hundreds of frames.
+//
+// # What it costs, and why it stops
+//
+// It is an UNBOUNDED march, which is the expensive kind, and it is spent only on faces that hold a
+// block -- 22,158 of the 416,143 a pixel is reading at the close camera, one in nineteen. A face
+// takes `kLobeBurst` a visit until every bin has `kLobeSamples`, which is about fifty visits, and
+// then casts nothing for the rest of its life. The burst is large for D394's reason: what this pass
+// spends on an unconverged face is mostly the face and not the ray, and three ways of metering a
+// burst were built and all three made the transient worse.
+//
+// # The estimator, which is the standard prefiltered environment and not something new
+//
+// A half vector is drawn from the bin's own kernel about the normal, the bin's direction is
+// reflected about it to get an incoming direction, and the sample is weighted by the cosine at the
+// surface. That is Karis's split-sum prefilter with the view direction taken as the BIN rather than
+// as the normal -- and taking it as the bin instead of as the normal is the whole of what puts
+// samples in the grazing bins.
+void lobe_cast(uint block, uint bin, uint index, float pixel_angle, vec3 corner, vec3 across,
+               vec3 down, float size, vec3 chunk_origin) {
+    const vec3 normal = vec3(g_sky_normal);
+    const vec3 towards = face_lobe_direction(face_lobe_centre(bin), normal, g_sky_side,
+                                             g_sky_other);
+    const vec4 r = node_r4(index, g_sky_rotation);
+    const vec3 half_vector = face_lobe_half_vector(max(face_lobe_bin_alpha(), kFaceAlphaMin),
+                                                   r.zw, normal, g_sky_side, g_sky_other);
+    const vec3 dir = normalize(2.0 * dot(towards, half_vector) * half_vector - towards);
+    const float cosine = dot(dir, normal);
+    // Under the surface. It carries no information about this bin and must not be counted as a
+    // black sample, which is trap 7 in an estimator: "nothing came back" and "I did not look" are
+    // different answers.
+    if (cosine <= 0.0) return;
+
+    const vec2 at = r.xy * 2.0 - 1.0;
+    const vec3 origin =
+        face_point(corner, across, down, g_sky_normal, size, at) - chunk_origin;
+    const NodeHit hit =
+        node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true, kNodeUnbounded);
+
+    probe_add(1u);
+    probe_add(kProbeLobeRays);
+    vec3 radiance = vec3(0.0);
+    if (!hit.hit) {
+        probe_add(2u);
+        radiance = sky_radiance(dir);
+    } else if (hit.unknown) {
+        // Stopped by a cell the world claims and the pool has not built. It is a measurement of the
+        // tree rather than of the light, and counting it as black would put a dark patch in a
+        // reflection that stays there for ever -- so the sample is dropped and the bin comes back
+        // for another. The same rule the ambient burst follows for the same reason.
+        probe_add(7u);
+        return;
+    } else {
+        radiance = bounce_radiance(hit);
+    }
+    face_lobe_add(block, bin, cosine, radiance);
 }
 
 // ---- lamps (R3c) ---------------------------------------------------------------------------
@@ -1853,6 +1947,43 @@ void main() {
     // and the ambient burst above both carry, and a lobe is the slowest accumulator here.
     const uint lobe = provisional_face ? kNoLobe : node_face_lobe(slot, material, node_push.frame);
 
+    // ---- R4b: the rays that lobe casts for itself ---------------------------------------------
+    //
+    // The one thing D592 measured as missing. Everything above fills the bins out of the far ray,
+    // which is cosine-weighted about the normal -- and a reflection is read at a grazing angle,
+    // where that density is a sixth of its peak. These rays go where the bins are.
+    //
+    // Gated on `may_cast` like every other ray in this pass: a face nobody is looking at measures
+    // nothing, and takes its burst on the frame a pixel next reads it. NOT gated on `sun_due`,
+    // because this is a bounded population that converges and stops, and pricing it at the sun's
+    // rate would make it take five times as long to get out of the state that costs (kSkyBurst has
+    // the same argument for the ambient burst, and D394 is the measurement under it).
+    if (lobe != kNoLobe && may_cast && node_push.bounce != 0u && probe_lobe_ray()) {
+        const uint count_at = face_lobe_count_at(lobe);
+        const uint taken = face_lobe.words[count_at];
+        if (taken < kLobeConverged) {
+            probe_add(kProbeLobeBursting);
+            // The face's frame is already set, above the lamps, by the one function that answers
+            // that question -- so the bins are indexed here in exactly the frame the composite
+            // reads them in. Only the ROTATION belongs to this term: it indexes its own sequence
+            // over its own count, and sharing one with the lamps or the ambient burst throws the
+            // stratification of both away (see node_r4).
+            const uint rot = node_hash_mix(slot * 0x9E3779B9u ^ 0x1B873593u);
+            const uint rot2 = node_hash_mix(rot ^ 0xCC9E2D51u);
+            g_sky_rotation = vec4(float(rot & 0xFFFFu), float((rot >> 16) & 0xFFFFu),
+                                  float(rot2 & 0xFFFFu), float((rot2 >> 16) & 0xFFFFu)) / 65536.0;
+            // Round-robin over the bins by sample index, so all sixty-four are served evenly. A
+            // random bin per ray leaves gaps that last hundreds of frames and shows as a reflection
+            // with holes in it that fill in one patch at a time.
+            for (uint i = 0u; i < kLobeBurst; ++i) {
+                const uint index = taken + i;
+                lobe_cast(lobe, index % kLobeBins, index / kLobeBins, pixel_angle, corner, across,
+                          down, size, chunk_origin);
+            }
+            face_lobe.words[count_at] = taken + kLobeBurst;
+        }
+    }
+
     // ---- and what this face's neighbours make of the same two questions ------------------------
     //
     // R5a, and it is HERE rather than at the end of the pass for a reason that is about the shape of
@@ -2209,7 +2340,16 @@ void main() {
         // Gated on the block and not on the material, because the material is what decided the
         // block: a face that asked and was declined has nowhere to put this and reads the
         // hemispherical mean above instead, which is the same lobe with one bin in it.
-        if (lobe != kNoLobe && node_push.bounce != 0u) {
+        // ...and the far ray's own contribution to the bins, which is now the CONTROL ARM and not
+        // the mechanism.
+        //
+        // It was how the bins were filled in R4c, and D592 is the measurement that it cannot carry
+        // a reflection: a cosine-weighted ray puts a sixth of its density where a reflection is
+        // read from. With R4b's ray in, this is a hundred and twenty-eight GGX evaluations per far
+        // ray to add one badly aimed sample to sixty-four bins — so it runs only in the arm where
+        // the ray does not, which keeps `--no-lobe-ray` meaning "the bins as R4c filled them"
+        // rather than "no bins at all", and takes its cost out of the shipped path entirely.
+        if (lobe != kNoLobe && node_push.bounce != 0u && !probe_lobe_ray()) {
             face_lobe_accumulate(lobe, s.dir, s.radiance);
         }
     }

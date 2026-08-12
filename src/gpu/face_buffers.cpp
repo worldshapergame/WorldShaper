@@ -419,6 +419,19 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                             (held + declined) > 0
                                 ? 100.0 * declined / static_cast<f64>(held + declined) : 0.0,
                             probe_words[kProbeLobeTaken]);
+                // R4b's own ray, and the convergence figure that has to be printed beside it.
+                //
+                // Trap 20 is the standing reason: a lobe that has stopped bursting and a lobe that
+                // was never given a ray both cost nothing, and only one of them has an answer. A
+                // timing from this pass with `still bursting` at nought means the term is finished;
+                // the same timing with it at twenty thousand means the burst has not started.
+                WS_LOG_INFO("faces",
+                            "the lobe ray: {} cast this frame of {} gathering rays ({:.1f}%), "
+                            "{} faces still bursting",
+                            probe_words[kProbeLobeRays], cast,
+                            cast > 0 ? 100.0 * probe_words[kProbeLobeRays] / static_cast<f64>(cast)
+                                     : 0.0,
+                            probe_words[kProbeLobeBursting]);
             } else {
                 // Trap 15 once more: a pool nobody is asking about and a pool with nothing in it
                 // print the same nought, and only one of the two is a measurement.

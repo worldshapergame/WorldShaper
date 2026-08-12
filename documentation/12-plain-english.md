@@ -2058,3 +2058,59 @@ asking rather than assuming.
 **If you want to poke at what is there now**: `--debug-mode 23` draws the reflection on its own with
 everything else stripped out, which is the only way to see it at all, and `--debug-mode 22` shows
 which surfaces are storing one — green yes, red asked and there was no room, dark grey not worth it.
+
+## The second ray — and now there is something in the metal
+
+You said to go ahead with it, so I did.
+
+**What was wrong.** A face filled its little map of what it reflects using the rays it was already
+casting to gather light — and those aim mostly straight out from the surface, while a reflection is
+what you see at a glancing angle. So the directions a reflection actually comes out of were the
+emptiest ones a face had. That was the finding from last time, and this is the fix.
+
+**What it does now.** A face that stores a reflection casts a ray of its own, aimed *into* the cone
+it is trying to fill, one direction at a time, until all thirty-six are measured. Then it stops for
+good.
+
+**What you should see.** The great bronze doors read as deep metal with the panels and the gilt
+bosses standing out, where before they were a flat warm wash. The window glass has a pale sky-
+coloured sheen on it. Against the same build with the ray switched off, that is a change on about a
+hundred thousand pixels of the door view.
+
+**What it costs.** Standing still: nothing I can measure — 4.229 ms against 4.218 with the ray off.
+Flying: 1.5 ms, on a pass that is over its budget while flying either way. 527 tests pass.
+
+### Three things I had to get wrong first, and I want to record them because two are interesting
+
+1. **I gave each face a big burst of rays and it was far too expensive while flying** — 11.9 ms
+   against 7.8. The odd part is that I had a measurement from earlier in this project saying the
+   opposite: for the *shadow-and-shading* rays, spreading a burst out made things worse, not better.
+   It turns out that finding does not carry, for two reasons. Those rays stop after a metre; these
+   ones travel until they hit something. And that population converges and empties, whereas flying
+   keeps supplying new faces for ever, so there is no state to get out of — only a rate to pay. Cut
+   to eight rays a visit it costs a quarter as much, and a reflection fades in over about nine
+   seconds instead of two.
+2. **Two faces were stealing the same storage slot from each other for ever.** Taking a slot wipes
+   what is in it, so both kept starting over and neither ever finished — 417 slots changing hands
+   every frame. A slot is only taken now if the new face needs it half again as much. This one was
+   only findable because I had put a counter on it, and I had put a counter on it because a full
+   store and a store fighting with itself look exactly the same from outside.
+3. **Two-thirds of the faces that wanted storage could not get any.** I had let the glass and the
+   water in — they are the only near-mirrors in the building and the whole point — and that
+   quadrupled the demand. Smaller entries let me hold four times as many, so almost everything that
+   asks now gets one. The cost is that a reflection is very slightly blurrier.
+
+### What is still not right
+
+Look at it with `--debug-mode 23`, which strips everything away except the reflection, and you will
+see the metal is **mottled** — each little face has measured its own answer and they disagree
+slightly. It is frozen rather than crawling, so it reads as grain on the surface, and in the normal
+picture the tone curve hides most of it. But it is there.
+
+The fix is one I have already built for three other things in this renderer: let each face compare
+notes with its neighbours. It needs no extra rays at all, and it is what I would do next unless you
+want something else.
+
+The other half still missing is that a mirror filling your screen gets the same thirty-six
+directions as one across the room. It should get hundreds. That is the piece I keep calling "bins
+from coverage", and it is a bigger job.

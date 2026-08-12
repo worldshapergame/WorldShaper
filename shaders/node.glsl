@@ -521,15 +521,23 @@ layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
 //   [26] ...and how many took a block over from another face this frame, which is the number that
 //        says whether the pool is thrashing. A pool that is churning and a pool that is full look
 //        identical in the count above.
-//   [27] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
-//   [28] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
+//   [27] R4b: rays the LOBES cast for themselves this frame, which are unbounded and are the
+//        expensive kind. They are counted in word [1] as well, because they gather in exactly the
+//        sense that word means -- what is here is how many of that total were a lobe's rather than
+//        the ambient term's, so neither rate has to be inferred from the other.
+//   [28] ...and how many faces were still bursting for their lobe, which is the convergence figure
+//        that has to be printed beside any timing of this pass (trap 20).
+//   [29] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
+//   [30] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
 //        arm -- the dispatch is then exactly the screen and this stage does not exist.
-//   [29] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
-const uint kLightProbeWords = 30u;
+//   [31] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
+const uint kLightProbeWords = 32u;
 const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 const uint kProbeLobeHeld = 24u;
 const uint kProbeLobeDeclined = 25u;
 const uint kProbeLobeTaken = 26u;
+const uint kProbeLobeRays = 27u;
+const uint kProbeLobeBursting = 28u;
 
 // The dials, in word 0. A bit each, because the push block is exactly full (128 bytes, and the
 // static_assert on NodePush says so) and a lever that cannot fit in it must live somewhere -- and
@@ -560,6 +568,11 @@ const uint kProbeFold = 1u << 4;
 // storage half: the sun's highlight is arithmetic and stays either way, so the two arms differ by
 // exactly the bins and by nothing else.
 const uint kProbeLobe = 1u << 5;
+// R4b's ray. Off, a lobe is filled only by the far ray that was being cast anyway -- so the bins
+// hold what a cosine-weighted distribution can tell them, which is the state D592 measured and
+// found could not carry a reflection. It is the control arm for the RAY on its own: the bins, the
+// pool and the energy split are all identical in both arms, so what an A/B prices is the march.
+const uint kProbeLobeRay = 1u << 6;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -576,7 +589,7 @@ const uint kProbeLobe = 1u << 5;
 // ordering between them, so a host word inside the zeroed span would be a race whose loser is
 // whichever the driver ran second -- and a stride that reads nought half the time is a class that
 // silently stops casting.
-const uint kProbeSecondaryStride = 27u;
+const uint kProbeSecondaryStride = 29u;
 
 // ---- R9c, the halo: how far past the screen the primary pass claims ---------------------------
 //
@@ -600,8 +613,8 @@ const uint kProbeSecondaryStride = 27u;
 // rays, it moves them EARLIER -- so over a pan the total is unchanged and what changes is how many
 // faces are mid-burst at any instant. The honest risk is therefore the peak rather than the total,
 // and the honest measurement is the faces pass while panning, beside the convergence gate.
-const uint kProbeHaloMargin = 28u;
-const uint kProbeHaloStride = 29u;
+const uint kProbeHaloMargin = 30u;
+const uint kProbeHaloStride = 31u;
 
 uint probe_halo_margin() { return light_probe.words[kProbeHaloMargin]; }
 uint probe_halo_stride() { return max(light_probe.words[kProbeHaloStride], 1u); }
@@ -615,6 +628,7 @@ bool probe_denoise() { return (light_probe.words[0] & kProbeDenoise) != 0u; }
 bool probe_material() { return (light_probe.words[0] & kProbeMaterial) != 0u; }
 bool probe_fold() { return (light_probe.words[0] & kProbeFold) != 0u; }
 bool probe_lobe() { return (light_probe.words[0] & kProbeLobe) != 0u; }
+bool probe_lobe_ray() { return (light_probe.words[0] & kProbeLobeRay) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
@@ -1896,7 +1910,17 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
         // Cold is a stronger claim than worth: a block whose holder has stopped being shaded is
         // holding an answer nobody is going to read, however valuable that answer would have been.
         const uint since = frame - face_lobe.words[header + 1u];
-        const float against = since > kLobeCold ? -1.0 : face_lobe_holder_worth(held);
+        // ...and a WARM block is only taken by a face worth substantially more, which is hysteresis
+        // and not caution.
+        //
+        // **Taking a block resets its sample count, so its holder starts its burst again.** Without
+        // a margin, two faces of nearly equal worth sharing a set trade the same block for ever and
+        // neither ever converges: measured, a settled camera sat at 417 blocks changing hands and
+        // 883 faces still bursting, and the faces pass was 2.2 ms over where it should have been.
+        // That is the state the third counter on the audit line exists to separate from a pool that
+        // is merely full, and it is the only reason it is printed.
+        const float against =
+            since > kLobeCold ? -1.0 : face_lobe_holder_worth(held) * kLobeTakeMargin;
         if (against < best_worth) {
             best = way;
             best_worth = against;
@@ -1918,6 +1942,10 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
         return kNoLobe;
     }
     face_lobe.words[header + 1u] = frame;
+    // ...and the count of rays this lobe has taken, which is what decides whether it still bursts.
+    // Zeroing it is what makes a taken-over block a new lobe rather than a converged one holding
+    // somebody else's answer.
+    face_lobe.words[face_lobe_count_at(block)] = 0u;
     // Whatever the last holder measured is about a different surface pointing a different way, and
     // it must not be averaged into this one. Zeroed rather than seeded: there is no ancestor to
     // inherit a lobe from -- a coarse face has no material and so never holds a block -- and a

@@ -203,15 +203,40 @@ float face_ggx_vis(float n_dot_v, float n_dot_l, float alpha) {
 //
 // **Sixteen is a constant here and it is R4b's job to make it a function.** D186 says the bin count
 // comes from roughness and from how many pixels the face covered, and neither is read here: what
-// this landing fixes is that a face has a direction-dependent answer at all. What sixteen costs is
-// stated where it can be checked rather than left to be discovered — a patch is 2*PI/16 steradians,
-// which is a cone of 20.4 degrees half-angle, so a reflection is blurred to 20.4 degrees however
-// polished the surface is. Copper at 24 degrees and lead at 25.4 on this building are rougher than
-// that and are drawn correctly; bronze at 10.7 and gilt at 3.6 are drawn softer than they are. That is the plan's
-// own stated honest limit ("a reflection is soft where the surface is polished") arriving at a
-// number, and R4b is what lifts it where the pixels earn it.
-const uint kLobeSide = 4u;
+// this landing fixes is that a face has a direction-dependent answer at all.
+//
+// **Sixty-four, and it was sixteen for one landing** (D591). Sixteen is a cone of 20.4 degrees
+// half-angle and no image survives that; sixty-four is 10.2, which is finer than copper at 24
+// degrees and lead at 25.4, about right for bronze at 10.7, and still four times too coarse for
+// gilt at 3.6. **What decided the number is not memory, it is rays** — D592 measured 256 bins as
+// two samples apiece out of a budget of five hundred, which is noise rather than resolution. It is
+// affordable at sixty-four only because a face that holds a lobe now casts a ray OF ITS OWN aimed
+// into the cone each bin gathers from, which is R4b's half of this stage.
+const uint kLobeSide = 6u;
 const uint kLobeBins = kLobeSide * kLobeSide;
+
+// How many samples a bin wants before the face stops casting for it, and how many rays a visit it
+// spends getting there.
+//
+// **The burst is SMALL, and that is the opposite of what D394 concluded for the ambient term.**
+//
+// D394 measured every attempt to meter the ambient burst as making the transient worse, because
+// what that pass spends on an unconverged face is mostly the face and not the ray: ninety thousand
+// faces at thirty-two rays and two hundred and forty thousand at two cost about the same. That
+// argument does not carry here and the difference is the RAY, not the face. An ambient near ray is
+// bounded at a metre; a lobe ray is unbounded, which is the expensive kind, and at thirty-two a
+// visit it read **11.9 ms flying against 7.8** — 270,853 rays a frame, seventy-one per cent of
+// every gathering ray in the picture.
+//
+// The other half of why it does not carry: D394's population is bounded and converges, so letting
+// it measure hard empties it. A flying camera refreshes the lobe population continuously, so there
+// is no state to get out of and the per-frame rate is the whole cost.
+//
+// What eight costs is that a reflection fades in over about nine seconds rather than two.
+const uint kLobeSamples = 24u;             // a bin, so 864 rays over a face's life
+const uint kLobeBurst = 8u;                // a visit, so 108 visits — about nine seconds — to
+                                           // converge at the sun's stride
+const uint kLobeConverged = kLobeBins * kLobeSamples;
 
 // A direction in the face's own frame (z along the normal, z >= 0) to a point on the unit square.
 vec2 face_lobe_encode(vec3 d) {
@@ -284,11 +309,24 @@ float face_lobe_bin_alpha() {
 // and a second copy of an index is a second chance to be wrong about a stride (D332 and the whole
 // reason kFaceLightWords is in this file).
 //
-// Sixty-five thousand five hundred and thirty-six blocks against the 35,950 faces on this building
-// that carry any metal at all. Sized from the census R4a was built to produce rather than from a
-// guess, with room to be opened to glass and polished stone by lowering the floor below.
-const uint kLobeBlocks = 65536u;
-const uint kLobeWays = 4u;   // how many blocks of the pool one face may try
+// Sixty-five thousand five hundred and thirty-six blocks, eight ways, and **both numbers were
+// measured rather than chosen**.
+//
+// The first sizing was 32,768 blocks four ways, against the census's 22,158 metal faces at the
+// close camera. It was wrong for a reason the census could not have shown: lowering the worth floor
+// to 0.038 admits the glass and the water, which is most of the point, and that takes the
+// population asking to about **44,700**. The audit line said so in one run — 47% of askers turned
+// away and 271 blocks changing hands a frame — and the consequence is not merely that some faces go
+// without. **A block that keeps changing hands has its sample count zeroed with it**, so its holder
+// bursts again, and a settled camera sat at 449 faces still bursting and a faces pass 2.1 ms over
+// where it should have been. A pool that thrashes costs more than a pool that is simply full, and
+// only the third counter on that line can tell the two apart.
+//
+// Eight ways rather than four for the other half of the same measurement: a four-way set with
+// two-thirds occupancy turns away a face whose set happens to be full while the pool has room, and
+// doubling the ways costs one more cache line on a probe the composite runs per metal pixel.
+const uint kLobeBlocks = 131072u;
+const uint kLobeWays = 8u;   // how many blocks of the pool one face may try
 const uint kLobeBlockWords = kLobeBins * 2u;
 const uint kNoLobe = 0xFFFFFFFFu;
 
@@ -298,14 +336,24 @@ const uint kNoLobe = 0xFFFFFFFFu;
 // shading pass visits it, which is one frame in `face_stride`.
 const uint kLobeCold = 600u;
 
+// How much more a face has to be worth before it takes a WARM block off another face. A margin and
+// not a comparison, because taking a block resets the count on it and sends its holder back to the
+// start of its burst — so two faces of nearly equal worth sharing a set would trade one for ever
+// and neither would ever converge. See the take-over in `node_face_lobe`.
+const float kLobeTakeMargin = 1.5;
+
 // And how much a face has to be worth before it asks at all. See `face_lobe_worth`.
 //
-// This admits every metal on the facility -- copper is the weakest at 0.375 -- and leaves out
-// limestone at 0.023, marble at 0.036, and glass and water at 0.040. It is a CAPACITY dial and not
-// a material one: it says how far down the pool's room reaches, which is the question
-// `face_pressure` answers about slots, and R4b replaces it with the honest one -- how many pixels
-// the face covers. `--lobe-floor N`, in hundredths, sweeps it; 100 is the arm where nobody asks.
-const float kLobeWorthFloor = 0.05;
+// This admits every metal on the facility -- copper is the weakest at 0.375 -- **and the glass and
+// the water at 0.040**, which are the only near-mirrors in the building and are the surfaces a
+// reflection is most visible on. It leaves out marble at 0.036 and limestone at 0.023.
+//
+// It was 0.050 for one landing, which shut the glass and the water out by four thousandths, and
+// that is most of why the first pictures had nothing in them anybody could see (D592). It is a
+// CAPACITY dial and not a material one: it says how far down the pool's room reaches, which is the
+// question `face_pressure` answers about slots. `--lobe-floor N` is the worth itself, so a figure
+// from the census can be typed straight in; 1 is the arm where nobody asks.
+const float kLobeWorthFloor = 0.038;
 
 // Which four blocks a slot may hold. Set-aligned, so the four ways are adjacent and their headers
 // are four adjacent pairs -- one cache line for the probe the composite runs per metal pixel.
@@ -335,9 +383,16 @@ uint face_lobe_set(uint slot) {
 // need the whole 512 KB of headers filled before the first frame -- a pass, a barrier and an
 // ordering to get right -- to say what zero says for free, and every other card-owned array here
 // already relies on the allocator's zero meaning exactly what it looks like.
+//
+// FOUR words a block and not two, since R4b: the third is how many rays this lobe has taken, which
+// is what stops it casting, and the fourth is spare. A count derived from the bins instead would be
+// sixty-four loads to answer a question asked on every visit of every lobe face — the same
+// arithmetic `kFaceAmbientDone` exists in `photons` to avoid, one array along.
 const uint kLobeSlotBits = 21u;             // 2,097,152, against a store of 1,081,344 slots
 const uint kLobeSlotMask = (1u << kLobeSlotBits) - 1u;
-uint face_lobe_header(uint block) { return block * 2u; }
+const uint kLobeHeaderWords = 4u;
+uint face_lobe_header(uint block) { return block * kLobeHeaderWords; }
+uint face_lobe_count_at(uint block) { return block * kLobeHeaderWords + 2u; }
 uint face_lobe_holder(uint slot, float worth) {
     return ((slot + 1u) & kLobeSlotMask) |
            (uint(clamp(worth, 0.0, 1.0) * 255.0 + 0.5) << kLobeSlotBits);
@@ -351,13 +406,31 @@ float face_lobe_holder_worth(uint held) {
 // ...and the bins are behind every header, kLobeBlockWords a block: the packed means as one run,
 // then the weight sums behind them, so four bilinear taps are four words inside 64 bytes.
 uint face_lobe_bin_at(uint block, uint bin) {
-    return kLobeBlocks * 2u + block * kLobeBlockWords + bin;
+    return kLobeBlocks * kLobeHeaderWords + block * kLobeBlockWords + bin;
 }
 uint face_lobe_weight_at(uint block, uint bin) {
-    return kLobeBlocks * 2u + block * kLobeBlockWords + kLobeBins + bin;
+    return kLobeBlocks * kLobeHeaderWords + block * kLobeBlockWords + kLobeBins + bin;
 }
+
+// ---- R4b: a ray aimed into the cone one bin gathers from ---------------------------------------
+//
+// The half vector of a GGX lobe of width `alpha` about the normal, from two uniform numbers. The
+// standard importance sample, and the reason it is here rather than in the pass that casts is that
+// the pass that READS a bin has to agree about what shape a bin is: the kernel this draws from and
+// the kernel `face_lobe_accumulate` splats through are one width, and a bin whose samples come from
+// a narrower cone than the one it is read with is a bin biased towards its own centre.
+vec3 face_lobe_half_vector(float alpha, vec2 at, vec3 normal, vec3 side, vec3 other) {
+    const float phi = at.x * 6.28318530718;
+    const float a2 = alpha * alpha;
+    // cos(theta) of the GGX normal distribution, inverted analytically.
+    const float cos_theta = sqrt(clamp((1.0 - at.y) / (1.0 + (a2 - 1.0) * at.y), 0.0, 1.0));
+    const float sin_theta = sqrt(max(1.0 - cos_theta * cos_theta, 0.0));
+    return normalize(side * (sin_theta * cos(phi)) + other * (sin_theta * sin(phi)) +
+                     normal * cos_theta);
+}
+
 // How many words the whole pool is, which is what the host allocates.
-uint face_lobe_pool_words() { return kLobeBlocks * (2u + kLobeBlockWords); }
+uint face_lobe_pool_words() { return kLobeBlocks * (kLobeHeaderWords + kLobeBlockWords); }
 
 // How much this face's lobe is worth storing bins for, in [0, 1].
 //
