@@ -399,10 +399,16 @@ void main() {
             uint sky_samples = sky_counters & 0xFFFFu;          // near-field rays
             uint far_samples = (sky_counters >> 16u) & 0xFFFFu;  // far-field rays
             if (far_samples > 0u) {
+                // Read as it is stored: a running MEAN with a memory of kBounceMemory samples, not
+                // a sum over `far_samples`. The count still says how far to believe it -- see
+                // kBounceBelieve below -- but it is no longer what divides it, because the quantity
+                // being averaged is the light in the room and the room is still filling while the
+                // early samples are taken. node.glsl's kBounceMemory has the whole argument, and the
+                // fault it fixes is the one a player reported as the faces they stood still in front
+                // of coming out brighter and cleaner than everything around them.
                 bounce = vec3(uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 9u]),
                               uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 10u]),
-                              uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 11u])) /
-                         float(far_samples);
+                              uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 11u]));
                 // How far to believe it, and this is not caution — it is the difference between a
                 // measurement and a per-face lottery.
                 //

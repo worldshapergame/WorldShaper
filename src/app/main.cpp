@@ -277,10 +277,22 @@ struct Options {
     // the control arm for the bounce and is not a way back to the old picture: with it off, an
     // interior is lit by the sun, the sky and the lamps it can actually see, and by nothing else.
     bool bounce = true;
-    // The least far samples a face takes before its bounce may stop. 0 keeps kBounceMin (128).
+    // The least far samples a face takes before its bounce may stop. 0 keeps kBounceMin (512).
     // The trade is unbounded rays against a per-face mottle in every interior, and it is a run-time
     // figure because a trade nobody can sweep at run time is a trade somebody guesses at.
     u32 bounce_min = 0;
+    // How many samples the bounce REMEMBERS. 0 keeps kBounceMemory (128).
+    //
+    // The bounce is the one term in this renderer that measures something still in motion — the
+    // other faces, whose own light climbs from black as they take their own samples — so a mean over
+    // a face's whole history is a mean of the room's fill-up rather than of the room. That made the
+    // picture a function of where the camera had been standing, which is what a player reported as
+    // the surfaces they had stood still in front of being brighter and cleaner than everything
+    // around them. See kBounceMemory in shaders/node.glsl.
+    //
+    // The control arm is a memory larger than the far count can reach, which is the cumulative mean
+    // exactly rather than an approximation of it: `--bounce-memory 4096`.
+    u32 bounce_memory = 0;
     // Wall-clock deadline for a scripted run, in seconds. A frame count cannot bound a run whose
     // frames are the thing that got slow, so every scripted run has one whether it asked or not:
     // this is filled in from kDefaultMaxSeconds after parsing when a screenshot, a tick audit, a
@@ -609,6 +621,8 @@ Options parse_options(int argc, char** argv) {
             options.bounce = false;   // R9's control arm: kIndirectFloor everywhere again
         } else if (arg == "--bounce-min" && i + 1 < argc) {
             options.bounce_min = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--bounce-memory" && i + 1 < argc) {
+            options.bounce_memory = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--face-pressure-from" && i + 1 < argc) {
             options.face_pressure_from = static_cast<u32>(std::atoi(argv[++i]));
         } else if (arg == "--whole-set-retry") {
@@ -1501,17 +1515,18 @@ private:
         u32 bounce;
         // The least far samples a face takes before its bounce may stop; 0 keeps kBounceMin.
         u32 bounce_min;
-        // Alignment, and it is declared rather than left to happen.
+        // How many samples the bounce remembers; 0 keeps kBounceMemory. See that constant in
+        // shaders/node.glsl for why the one term that measures other faces may not use a cumulative
+        // mean, and Options::bounce_memory above for what a player saw when it did.
         //
-        // A `vec4` in a shader's push block is aligned to sixteen bytes; a `f32[4]` in a C++ struct
-        // is aligned to four. So the block below started at 112 on the card and at 108 here, the
-        // shader declared 128 bytes against a range of 124, and every field from `sun_colour` on
-        // was read four bytes early — which is params.glsl's D168 fault arriving in the push block
-        // instead. `--validation` named it in one line and nothing else would have: on a machine
-        // without the layers it is a wrong sun colour, not an error. The same pad is declared in
-        // shaders/node.glsl so the two structures are visibly the same shape rather than
-        // accidentally the same size.
-        u32 pad_before_sun_colour;
+        // These four bytes were `pad_before_sun_colour`, and the alignment argument that put a pad
+        // here is unchanged and still load-bearing. A `vec4` in a shader's push block is aligned to
+        // sixteen bytes; a `f32[4]` in a C++ struct is aligned to four. So `sun_colour` below started
+        // at 112 on the card and at 108 here, the shader declared 128 bytes against a range of 124,
+        // and every field from it on was read four bytes early — params.glsl's D168 fault arriving in
+        // the push block, named by `--validation` in one line and by nothing else. A u32 is exactly
+        // what the pad was, so the alignment it was there for cannot be lost by using it.
+        u32 bounce_memory;
         // The sun's colour at the reference hour, so the face pass evaluates the same sky the
         // composite draws. The same four floats `TracePush::sun_colour` carries, from the same
         // place, because a gathering ray that escapes reads the sky and two plausible skies is one
@@ -3795,6 +3810,7 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.secondary_period = options_.secondary_period;
     push.bounce = options_.bounce ? 1u : 0u;
     push.bounce_min = options_.bounce_min;
+    push.bounce_memory = options_.bounce_memory;
     // The same three numbers make_trace_push hands the composite, and named here rather than
     // copied there so the two cannot drift: a gathering ray that escapes reads the sky, and the
     // picture is lit by that same sky, so a difference between them would be indirect light with a

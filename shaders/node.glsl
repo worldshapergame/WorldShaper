@@ -156,10 +156,17 @@ layout(push_constant) uniform NodeConstants {
     // The least far samples a face takes before its bounce may stop, or 0 for kBounceMin. The trade
     // is unbounded rays against a per-face mottle in every interior; see kBounceMin.
     uint bounce_min;
-    // Declared, not inferred: a vec4 here is aligned to sixteen bytes and its counterpart in the
-    // host struct is aligned to four, so without this the two blocks are the same fields at
-    // different offsets. See NodePush in src/app/main.cpp, where `--validation` caught it.
-    uint pad_before_sun_colour;
+    // How many samples the bounce remembers, or 0 for the cumulative mean this replaced, which is
+    // the control arm. See kBounceMemory.
+    //
+    // It sits in the four bytes that used to be `pad_before_sun_colour`, and that is deliberate
+    // rather than thrifty: a vec4 here is aligned to sixteen bytes and its counterpart in the host
+    // struct is aligned to four, so a padding word has to be declared or the two blocks are the same
+    // fields at different offsets (`--validation` caught that once and nothing else would have).
+    // Spending the pad on a u32 keeps the alignment true BY CONSTRUCTION -- a field of the same size
+    // cannot move what follows it -- rather than by a second thing to remember. See NodePush in
+    // src/app/main.cpp.
+    uint bounce_memory;
     // The sun's colour at the reference hour, which is the ONE thing pt_sky.glsl needs that the
     // marcher did not already carry. With it and `sun` above, the face pass evaluates exactly the
     // sky the composite draws rather than a second plausible one -- which matters because a
@@ -355,18 +362,27 @@ const uint kFaceSeenWindow = 4u;
 //       divided by a density, and it has no bound this record could scale itself against.
 //   [8] the lamp SAMPLE COUNT in the low sixteen bits, and in the high sixteen the LIGHT-LIST
 //       VERSION those samples were taken under. See kLampConverged.
-//   [9][10][11] the BOUNCE -- the running SUM of the radiance the far rays found when they landed
-//       on a surface rather than reaching sky, one float a channel, over count [0].hi. A float sum
-//       and not a fixed-point mean for the same reason the lamps are: this is radiance, it has no
-//       bound in [0,1] to scale itself against, and D293 is the standing measurement of what a
-//       narrow running mean does to a quantity that has to converge.
+//   [9][10][11] the BOUNCE -- the running MEAN of the radiance the far rays found when they landed
+//       on a surface rather than reaching sky, one float a channel, with a memory of
+//       `kBounceMemory` samples. A float and not fixed point for the same reason the lamps are:
+//       this is radiance, it has no bound in [0,1] to scale itself against.
+//
+//       A MEAN and not a sum, and the memory is the whole of why. Everything else in this record
+//       measures something that does not move -- geometry, or a sun that has not -- so a cumulative
+//       mean is the right estimator for it and the count may run away as far as it likes. The
+//       bounce measures the OTHER FACES, and their light climbs from black as they take their own
+//       samples: it is a progressive radiosity solve, and a cumulative mean of a solve in progress
+//       converges to the average of the path rather than to where the path is going. See
+//       kBounceMemory.
 //
 // The bounce shares the FAR field's count on purpose. It is the same ray: one unbounded,
 // cosine-weighted sample of the hemisphere, whose answer is the sky when it escapes and a surface's
 // outgoing radiance when it does not. Splitting the count would allow the two to disagree about how
 // many samples one ray produced, which is the shape of fault D316's provisional table exists to make
-// unrepresentable. What the composite reads is `sky_radiance(normal) * open_sky + bounce_sum/far_n`,
-// and those two terms are the two halves of one integral rather than two effects added together.
+// unrepresentable. What the composite reads is `sky_radiance(normal) * open_sky + bounce`, and those
+// two terms are the two halves of one integral rather than two effects added together -- the count
+// divides the first and bounds the memory of the second, which is one count answering one question
+// about one ray in the two ways the two halves need it.
 //
 // Indoors the far field saturates -- every ray hits something, so sky visibility is nought on every
 // surface in the room and carries no shape at all. Measured: 1,619 of 1,671 surface pixels in the
@@ -608,7 +624,78 @@ const uint kSkyFarConverged = 256u;
 // UNBOUNDED rays, which are the expensive ray in this pass — one a visit on the sun's schedule until
 // this is reached, against thirty-two before. It is the one number in R9 that buys picture with
 // frames, and `--bounce-min N` sweeps it rather than leaving it to be guessed at.
-const uint kBounceMin = 128u;
+//
+// It was 128 and it is four memories now, because of what a face STOPPING means once the mean below
+// has a memory: whatever it holds at that moment is what it holds for the life of the face. Three
+// turnovers leave 5% of the fill-up in it ((1 - 1/N)^3N = 0.05) and the fourth is the memory it
+// spends filling before it starts forgetting at all.
+//
+// **Nothing about the RATE changes.** This is the same one unbounded ray every `face_stride` frames
+// the face was already casting; what moves is when it stops. So no frame casts more rays than it did
+// -- a static camera simply takes longer to fall silent, and that is the whole cost of this number.
+//
+// It buys the sky's own term as well, which was not the reason for it and is the larger half of what
+// it measured. `open_sky` is `far_open / far_n` and four times the samples is half the noise in it:
+// on the close camera at full convergence, speckle **47.63 before against 45.53** -- so the picture
+// this leaves is quieter than the one it replaces, not merely less biased.
+const uint kBounceMin = 512u;
+
+// How many samples the bounce remembers, which is what makes it a measurement of the room rather
+// than of the camera's history. **This is the fix for a fault a player reported in exactly these
+// words: "when i stay still for a while and then move back the voxel faces where i stood still are
+// way betterly rendered than the rest and are often brighter".**
+//
+// # Why a cumulative mean cannot be right here and is right everywhere else in this record
+//
+// The sun, the near field and the far field measure things that do not move, so every sample they
+// take is a sample of the same quantity and averaging all of them is exactly correct. The bounce
+// does not: `bounce_radiance` reads what the face a ray landed on is giving off AT THAT MOMENT, and
+// that face is itself climbing from black towards its own answer. The room fills with light over
+// seconds -- a progressive radiosity solve, iterated one ray at a time -- and a cumulative mean of a
+// signal that is still climbing converges to the AVERAGE OF THE CLIMB, not to the top of it.
+//
+// Two things follow and both are what the player saw:
+//
+//   - the time constant of a cumulative mean grows with the sample count, so how bright a face is
+//     depends on how long the camera has been pointed at it. Measured at the close camera, mean
+//     pixel over the whole frame: 131.30 at 150 frames, 131.80 at 300, 132.61 at 900, 132.71 at
+//     2,700. A patch the camera dwelt on sits at the end of that curve and everything around it sits
+//     where its own dwell left it, with a hard seam between them;
+//   - a face that reaches kBounceMin sets kFaceAmbientDone and is silent for the rest of its life,
+//     so where it happened to be on that curve is where it stays, for ever.
+//
+// # Why this costs nothing, in noise or in rays
+//
+// It is the same one ray a visit, the same record, the same three words:
+// `mean += (sample - mean) / min(far_n, N)`. What changes is which samples it is a mean OF -- the
+// most recent ones rather than all of them. A mean with a memory of N has the variance of a simple
+// mean of 2N - 1 samples, so the noise is a number that can be chosen rather than one that has to be
+// accepted, and it was chosen against kBounceMin: 128 is a 255-sample mean, which is what the old
+// estimator held after 255 samples of dwelling.
+//
+// # The sweep, because both halves of this are a trade and neither was guessed at
+//
+// Close camera, 1280x800, `--settle`, frame 2,700, every face converged and silent in every arm.
+// The mean pixel is the whole frame's and the unbiased value is what the shortest memory converges
+// to, since a memory of 32 has no fill-up left in it at all:
+//
+//   memory   min   speckle   mean pixel   short of unbiased
+//   -------------------------------------------------------
+//   (none)   128    47.63      132.708      -0.85     <- what this replaces
+//   32       256    54.00      133.553       0.00
+//   64       256    49.42      133.440      -0.11
+//   96       384    47.08      133.460      -0.09
+//   128      512    45.53      133.504      -0.05     <- this
+//
+// So the dwell bias goes from 0.85 of 255 to 0.05 and the picture gets QUIETER by 4.4%. The noise
+// does not come from the memory: it comes from `kBounceMin` beside it, because the far ray answers
+// the sky as well and four times the samples is half the noise in `open_sky`. Reading either number
+// on its own gets the trade backwards -- memory 32 at min 256 is the noisiest arm in the table.
+//
+// `--bounce-memory N` sweeps it, 0 means this constant, and the CONTROL ARM is a memory larger than
+// `far_n` can ever reach, which is the cumulative mean exactly rather than near it:
+// `--bounce-memory 4096 --bounce-min 128` is the row at the top.
+const uint kBounceMemory = 128u;
 
 
 // ...and most faces stop long before it, because **a fraction's error depends on the fraction**,

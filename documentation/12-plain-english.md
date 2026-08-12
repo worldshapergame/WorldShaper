@@ -1397,3 +1397,58 @@ throws away *all* its progress and starts the whole list again next frame. So th
 lighting hundreds of thousands of surfaces we abandoned long ago, and that is what the lighting pass
 is actually spending its time on while you fly. Fixing that is now the biggest single number on the
 list for movement, and it has nothing to do with lighting at all.
+
+## "Where I stood still looks better and brighter than everything else"
+
+You are right, and it was the light bouncing off surfaces — the thing that went in two changes ago.
+
+**What was happening.** Every surface works out how much light is bouncing onto it by firing rays
+into the room and asking whatever they land on how bright it is. But *that* surface is doing the same
+thing, and when a room first appears everything in it starts black and brightens over the next
+half-minute as the light goes round and round. So the answer a surface gets depends on **when** it
+asked.
+
+The mistake was in how it kept the answer. It averaged **every ray it had ever fired, for ever**. So
+a surface that had been asking for ten seconds carried ten seconds of the room being too dark in its
+average, and a surface that had been asking for a minute carried a minute of it. Two things follow,
+and they are exactly what you saw:
+
+- the longer you stand looking at something, the brighter it correctly becomes — and everything you
+  have not been looking at is still somewhere earlier on that climb;
+- once a surface decides it has enough rays, it stops firing and **keeps whatever average it had, for
+  the rest of that surface's life**. So the difference does not go away on its own.
+
+I can show you the size of it without a screenshot. Standing perfectly still at one camera in a
+settled world, doing nothing, the average brightness of the whole frame goes **131.3 → 131.8 → 132.6
+→ 132.7** at 2.5, 5, 15 and 45 seconds. Nothing in the world changed. That climb *is* the bug: it is
+your dwell time being painted into the picture.
+
+**The fix.** A surface now remembers its **last 128 rays** instead of all of them. That is one line,
+it uses the same memory, the same number of rays, and the same three numbers in the record — but it
+means every surface is showing you the room *as it is now* rather than an average of how it got here.
+And because a surface that stops has frozen whatever it holds, it now has to fire four times as many
+rays before it is allowed to stop, so it stops on the settled answer instead of a half-lit one.
+
+**What you will see.** Indoors, where all of this lives:
+
+- the room is **3.6 of 255 brighter** — that is light that was always there and was being averaged
+  away;
+- it is also **18% less speckly**, which I did not expect and is the better half of the result: those
+  extra rays also sharpen how much sky each surface can see;
+- outdoors nothing changes at all, and that is the proof the diagnosis was right. Outdoors a ray
+  escapes to the sky on its first try, so there was never a fill-up to average over.
+
+**What it costs.** Nothing while you are moving — I measured the flight twice each way and the two
+versions sit inside each other's spread, and it cannot cost anything there because no surface lives
+long enough to reach the point where this changes. Nothing in the first ten seconds of standing
+still. What it does cost is that when you stand still, the lighting goes completely quiet after about
+forty seconds instead of ten, so between those two points the lighting pass costs 1.4 ms instead of
+0.6 ms. Its budget is 4.4 ms, so there is plenty of room, but I would rather tell you than have you
+find it.
+
+**Half of what you said is still open, and it is a different thing.** "Better rendered" is also just
+sample count: a surface you have only just turned towards has fired **46 shadow rays against 203**, so
+its shadow really is coarser for about fifteen seconds before it catches up exactly. That is waiting,
+not a wrong answer, and the stage that fixes waiting is the denoiser — the one that lets neighbouring
+surfaces share what they have measured instead of each one finding out for itself. It is next in the
+plan.

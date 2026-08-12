@@ -1146,6 +1146,101 @@ across faces**, which is R5's charter. The one clue with nothing behind it yet i
 converged while the room was still filling keep a darker answer than their neighbours until something
 evicts them. That is testable and it is the thread to pull first.
 
+**That thread was pulled and it was a real fault** — D547–D552, written up below as *the light
+remembers where you have been standing*. It was not `kFaceAmbientDone` on its own: the freeze is what
+makes it permanent, and what makes it WRONG is that the bounce was a cumulative mean of a quantity
+still in motion. Fixing it took the enclosed room's speckle from **20.701 to 16.970** and its mean
+pixel from 122.785 to 126.412, so it is very likely a share of the grid as well — but the grid has not
+been re-measured since, and nobody should assume it went with it.
+
+### Closed: the light remembers where you have been standing
+
+Reported from playing: *"when i stay still for a while and then move back the voxel faces where i
+stood still are way betterly rendered than the rest and are often brighter"*. **Two halves, one cause
+for the brightness half, and it is closed** (D547–D552). The other half is a sample count and is
+R5's; it is at the bottom of this section, named, so it is not mistaken for this one later.
+
+**The repro is `--cut`, which is the one instrument that can put two dwell histories on one camera:**
+
+```powershell
+.\build\bin\WorldShaper.exe --screenshot dwell.png --screenshot-frame 900 --settle `
+  --width 1280 --height 800 --cam "0,2,-20,90,0" --quality 7 --no-vsync --no-update-check `
+  --no-auto-quality
+.\build\bin\WorldShaper.exe --screenshot arrive.png --screenshot-frame 900 --settle `
+  --width 1280 --height 800 --cam "0,2,-20,-90,0" --cut "600,0,2,-20,90,0" --quality 7 `
+  --no-vsync --no-update-check --no-auto-quality
+```
+
+Same camera, same settled world, same content hash, same frame number — and the two pictures were
+**5.461 of 255 apart over 260,752 pixels of 1,024,000, against a run-to-run floor of 2.868 over
+79,519**, with the arrival the darker. Standing still and doing nothing at all, the whole frame's mean
+pixel climbed **131.290 → 131.794 → 132.608 → 132.697** at 150, 300, 900 and 2,700 measured frames.
+
+**The cause.** `bounce_radiance` reads what the face a ray landed on is giving off *at that moment*,
+and that face is itself climbing from black as it takes its own samples — a progressive radiosity
+solve, iterated one ray at a time. The estimator over it was `sum / far_n`, **a cumulative mean of a
+quantity that is still in motion**, so it converged to the average of the climb rather than to the top
+of it, with a time constant that grows with the sample count. Then `kFaceAmbientDone` froze it. Every
+other term in the record measures something that does not move, which is why the same estimator is
+right for all of them and wrong only here.
+
+**The fix is three words of the record it already had and one `min`**: the bounce is a mean with a
+memory of `kBounceMemory` = 128 samples, `mean += (sample - mean) / min(far_n, N)`, and `kBounceMin`
+is four memories so that three turnovers have happened before a face may fall silent on what it holds.
+Nothing about the ray RATE changes — it is the same one unbounded ray every `face_stride` frames — so
+no frame casts more rays than it did.
+
+| 1280×800, `--settle`, frame 2,700, every face silent | before | after |
+|---|---|---|
+| **enclosed** speckle | 20.701 | **16.970** |
+| **enclosed** mean pixel | 122.785 | **126.412** |
+| outdoor speckle | 16.752 | 15.351 |
+| outdoor mean pixel | 161.590 | 161.649 |
+| close camera, dwell bias against unbiased | −0.85 of 255 | **−0.05** |
+| close camera speckle | 47.63 | **45.53** |
+| flying at 1440p, faces pass, two rounds each | 6.691 / 7.349 | 7.258 / 6.529 |
+| static, frames 1,350–2,700, faces pass | **0.607** | **1.427** |
+
+**Five things to know before touching it**, and the first is the one that decides everything else:
+
+0. **Changing what a word means makes every rule written about it suspect** (D553). Four places write
+   the bounce words. Three are obvious; the fourth is the edit reset, which scaled them by
+   `seed / far_n` with a comment explaining that it had to *because they are a sum* — correct when it
+   was written, and after this change it divides a MEAN by four and reads as the room going dark
+   whenever the player chisels. There was no compiler error and there would have been no obvious
+   picture, because an edit already reopens half the terms in the room. The gate is that an edited
+   room is not darker: enclosed camera under `--chisel 60,16`, mean pixel **127.341 against 127.177
+   before and 126.368 unedited**.
+
+1. **Read `kBounceMemory` and `kBounceMin` together or the trade comes out backwards.** Memory 32 at
+   min 256 is the *noisiest* arm in the sweep (speckle 54.00) and memory 128 at min 512 is the
+   quietest (45.53) — because most of the noise was never the memory. The far ray answers the sky as
+   well, and four times the samples is half the error in `open_sky`. The full five-row sweep is in
+   D550–D552.
+2. **The one real cost is the tail, and it is the case the player was in.** A face that has stopped
+   costs nothing, and this makes a face stop after about forty seconds of standing still instead of
+   ten: over frames 1,350–2,700 the faces pass reads **1.427 ms against 0.607** and total GPU 4.427
+   against 3.506. Both are far inside the 4.40 ms budget and neither is a moving frame. **The moving
+   case is provably untouched** rather than luckily so — no face lives long enough while flying to
+   reach even 128 far samples.
+3. **The reclaim is known and deliberately not built.** A face only needs the extra turnovers while
+   the light it is sampling is still moving, and `bounce_radiance` can already see whether the face it
+   landed on has finished, in a record it has already loaded. That would let a face stop at 128 once
+   its own sources are silent. It is unbuilt because the case that costs is an interior, where every
+   ray lands on another face that is also waiting, so the wavefront has to start somewhere and nothing
+   has measured where.
+4. **`--debug-mode 19` shows a seam that is not this fault.** After a turn, the part of the facade the
+   camera had been pointed at is solid green and the newly revealed part is grey, which looks exactly
+   like the report. That seam closes by itself in two seconds; the brightness did not close at all.
+   Read the mean pixel against dwell time first.
+
+**The other half of the report is open and is R5's.** A face the camera has just revealed carries
+**46 sun samples against 203**, so its shadow is genuinely coarser for about seventeen seconds — the
+sun's counters halve at `kFaceWindow` rather than growing for ever, so it does catch up exactly, and
+the wait is bounded and the same everywhere. Extending an eager phase to shorten it is known-bad by
+measurement (D536 did it for the far ray: 2.2 → 4.6 ms flying, over budget). Filtering across
+neighbouring faces is what actually pays here, and that is R5.
+
 ### R9a is in: the face set is no longer only what the camera can see
 
 **Three sub-steps landed and the picture did not move, deliberately** (D526–D532). The ambient far
@@ -1704,7 +1799,10 @@ fitted, which is D544's control arm and the state every figure above it was meas
 `--no-bounce` is the bounce control arm — and it is **not** a way back to the picture before R9, since
 the ambient floor that stood in for that light is deleted rather than switched off: with it, an
 interior is lit by the sun, the sky and the lamps it can see, and by nothing else. `--bounce-min N` is
-how many far samples a face takes before its bounce may stop;
+how many far samples a face takes before its bounce may stop (512), and `--bounce-memory N` is how
+many of them it REMEMBERS (128) — **the control arm for D550 is `--bounce-memory 4096 --bounce-min
+128`, both together**, because a memory larger than `far_n` can reach is the cumulative mean exactly
+and the two numbers are one trade;
 `--no-secondary-faces` stops a light ray naming the face it landed on, which is R9a's control arm and
 the state everything above that section was measured in, `--secondary-period N` is the window in
 frames a face may name one in (a power of two; 64 is the default) and `--secondary-share N` is the

@@ -219,11 +219,13 @@ void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
     // arriving through the fourth door. The mean transfers across the change of scale for the reason
     // it does for the lamps: light arriving from across a room is very nearly the same over a face
     // and over the ones that share its ancestor.
+    // Copied rather than rescaled, because it is a MEAN: the ancestor's answer is what this face
+    // should start from, and the count beside it is how far to believe it. The lamps a few lines
+    // below are still a sum and are still scaled, which is why the two look different here. See
+    // kBounceMemory.
     if (far_worth) {
-        const float scale = float(far_seed) / float(anc_far);
         for (uint w = 9u; w < 12u; ++w) {
-            face_light.words[light_at + w] =
-                floatBitsToUint(uintBitsToFloat(face_light.words[anc_at + w]) * scale);
+            face_light.words[light_at + w] = face_light.words[anc_at + w];
         }
     }
 
@@ -367,11 +369,12 @@ vec3 bounce_radiance(NodeHit hit) {
     // spread over frames, and it converges for the same reason radiosity does -- every step is
     // multiplied by an albedo under one. What it costs is nothing at all, because the number is in
     // the record already being read.
+    // Read as it is stored: a running MEAN with a memory, not a sum over `far_n`. See kBounceMemory.
     vec3 bounce = vec3(0.0);
     if (far_n > 0u) {
         bounce = vec3(uintBitsToFloat(face_light.words[at + 9u]),
                       uintBitsToFloat(face_light.words[at + 10u]),
-                      uintBitsToFloat(face_light.words[at + 11u])) / float(far_n);
+                      uintBitsToFloat(face_light.words[at + 11u]));
     }
 
     const vec3 direct = face_direct_irradiance(sun_radiance(), lambert, sky_radiance(normal),
@@ -1139,16 +1142,17 @@ void main() {
         if (far_n > seed) {
             face_light.words[light_at + 4u] =
                 (face_light.words[light_at + 4u] * seed + far_n / 2u) / far_n;
-            // ...and the bounce with it, because it is a SUM over that same count. Scaling one and
-            // not the other divides the old sum by the new count and reads as a face that has
-            // suddenly become several times brighter — on every edit, in the term that lights the
-            // whole interior. Keeping the mean and dropping the confidence is the same rule
-            // kFaceEditSeed sets out for the sun and the lamps.
-            const float scale = float(seed) / float(far_n);
-            for (uint w = 9u; w < 12u; ++w) {
-                face_light.words[light_at + w] =
-                    floatBitsToUint(uintBitsToFloat(face_light.words[light_at + w]) * scale);
-            }
+            // ...and the bounce is LEFT ALONE, because it is a mean and not a sum.
+            //
+            // The rule is the one kFaceEditSeed states for the sun and the lamps — keep the mean,
+            // drop the confidence — and which of the two words a term is stored in decides what that
+            // sentence means in code. `far_open` above is a count out of `far_n`, so keeping its mean
+            // is scaling it. Words 9 to 11 already ARE the mean (kBounceMemory), so keeping it is
+            // touching nothing, and scaling them here would divide the answer by `far_n / seed` and
+            // read as a face going several times DARKER on every edit, in the term that lights the
+            // whole interior. That line was correct while the bounce was a sum, and the shape of the
+            // fault is that a rule written about a quantity outlives the representation it was
+            // written for.
             far_n = seed;
         }
         face_light.words[light_at] = (near_n & 0xFFFFu) | ((far_n & 0xFFFFu) << 16);
@@ -1338,7 +1342,16 @@ void main() {
                                : (node_push.bounce_min != 0u ? node_push.bounce_min : kBounceMin);
     const bool far_settled = far_n >= max(kSkyFarMin, bounce_floor) &&
                              float(far_n) * kSkyFarEpsSq >= far_p * (1.0 - far_p);
-    const bool far_done = far_settled || far_n >= kSkyFarConverged;
+    // ...and the cap the far field terminates on whatever it decides, which is the LARGER of the
+    // sky's own and the bounce's floor.
+    //
+    // It used to be `kSkyFarConverged` flat, and that was right while the floor under it was 128:
+    // the sky gave up at 256 and the bounce asked for less than that, so the cap bound only the face
+    // that never made up its mind. With the floor at kBounceMin it binds every face, and a cap below
+    // the floor is a floor that does not exist -- the face stops at 256 samples however many the
+    // bounce was asking for, silently, and the only symptom is a term that stops short of its own
+    // constant. `--no-bounce` leaves `bounce_floor` at nought and this at exactly what it was.
+    const bool far_done = far_settled || far_n >= max(kSkyFarConverged, bounce_floor);
 
     // Nothing this face could do on a frame the sun is not due, which is five frames in six -- so
     // say so in the record and let those frames stop at the top.
@@ -1443,9 +1456,9 @@ void main() {
     int grad_u = int(face_light.words[light_at + 2u]);
     int grad_w = int(face_light.words[light_at + 3u]);
     uint far_open = face_light.words[light_at + 4u];
-    vec3 bounce_sum = vec3(uintBitsToFloat(face_light.words[light_at + 9u]),
-                           uintBitsToFloat(face_light.words[light_at + 10u]),
-                           uintBitsToFloat(face_light.words[light_at + 11u]));
+    vec3 bounce_mean = vec3(uintBitsToFloat(face_light.words[light_at + 9u]),
+                            uintBitsToFloat(face_light.words[light_at + 10u]),
+                            uintBitsToFloat(face_light.words[light_at + 11u]));
     bool measured_ignorance = false;
 
     // The bounded burst, and it is a loop the far ray is deliberately NOT part of.
@@ -1493,10 +1506,20 @@ void main() {
         sky_accumulate(s, near_n, near_sum, grad_u, grad_w);
         far_n += 1u;
         far_open += s.sky ? 1u : 0u;
-        // The same ray's other answer. Summed over the far count, which is why the bounce has no
-        // count of its own: one ray, two questions, and a second count could only ever be a way for
-        // them to disagree about how many samples were taken.
-        bounce_sum += s.radiance;
+        // The same ray's other answer, folded into a mean that FORGETS. One ray, two questions, one
+        // count -- and the count is used differently by each because the two questions are different
+        // shapes: how much sky this face can see is a constant, so `far_open` is divided by the whole
+        // of it; what the room is giving off is still climbing while every other face measures its
+        // own, so the bounce averages only the most recent `kBounceMemory` of it.
+        //
+        // Written as an incremental mean rather than as a sum and a divide because a sum has nowhere
+        // to put the forgetting: the update below is what makes the memory finite, and it is one
+        // multiply-add. `min` rather than a branch. `bounce_memory` of 0 means the constant, as
+        // `bounce_min` beside it does; the CONTROL ARM is a memory larger than `far_n` can ever
+        // reach, which is the cumulative mean exactly rather than an approximation of it --
+        // `--bounce-memory 4096`.
+        const uint memory = node_push.bounce_memory != 0u ? node_push.bounce_memory : kBounceMemory;
+        bounce_mean += (s.radiance - bounce_mean) / float(min(far_n, memory));
     }
 
     // A burst that was stopped by geometry the pool has not built has not measured this face; it
@@ -1516,7 +1539,7 @@ void main() {
     face_light.words[light_at + 2u] = uint(grad_u);
     face_light.words[light_at + 3u] = uint(grad_w);
     face_light.words[light_at + 4u] = far_open;
-    face_light.words[light_at + 9u] = floatBitsToUint(bounce_sum.r);
-    face_light.words[light_at + 10u] = floatBitsToUint(bounce_sum.g);
-    face_light.words[light_at + 11u] = floatBitsToUint(bounce_sum.b);
+    face_light.words[light_at + 9u] = floatBitsToUint(bounce_mean.r);
+    face_light.words[light_at + 10u] = floatBitsToUint(bounce_mean.g);
+    face_light.words[light_at + 11u] = floatBitsToUint(bounce_mean.b);
 }

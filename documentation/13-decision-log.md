@@ -1972,3 +1972,126 @@ now, and marks each run clean *inside* the loop that walks `runs()`. That is saf
 `runs()` hands back a snapshot vector rather than a view, and the test named *"clearing every staged
 run drains a set the same as clear()"* is what pins it. If `runs()` is ever made lazy, that loop
 becomes a walk over a container being mutated underneath it.
+
+## D547 — the light remembers where you have been standing
+
+*Reported from playing, in these words: "when i stay still for a while and then move back the voxel
+faces where i stood still are way betterly rendered than the rest and are often brighter". Both
+halves are real, they have one cause, and it is the only term in this renderer that measures
+something still in motion.*
+
+**Photograph the dwell before theorising about the seam.** The instrument is `--cut`, which jumps the
+camera once at a measured frame, so one arm can arrive at a view the other has been staring at:
+
+```powershell
+.\build\bin\WorldShaper.exe --screenshot dwell.png --screenshot-frame 900 --settle `
+  --width 1280 --height 800 --cam "0,2,-20,90,0" --quality 7 --no-vsync --no-update-check `
+  --no-auto-quality
+.\build\bin\WorldShaper.exe --screenshot arrive.png --screenshot-frame 900 --settle `
+  --width 1280 --height 800 --cam "0,2,-20,-90,0" --cut "600,0,2,-20,90,0" --quality 7 `
+  --no-vsync --no-update-check --no-auto-quality
+```
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D547 | **The picture is a function of how long the camera has been pointed at it, and the number says so** | measurement | Close camera, `--settle`, one build, whole-frame mean pixel by how many measured frames the camera had been standing there: **131.290 at 150, 131.794 at 300, 132.608 at 900, 132.697 at 2,700**. Nothing in the world is changing across that — it is the same camera looking at the same settled scene, content hash unmoved. Arriving 300 frames before the shot instead of dwelling the whole run reads **5.461 of 255 over 260,752 pixels of 1,024,000, against a run-to-run floor of 2.868 over 79,519** — and the arrival is the DARKER of the two, which is the direction the player named |
+| D548 | **It is the bounce, and `--no-bounce` proves it rather than an argument doing so** | measurement | The same pair with the bounce off: **2.172 over 46,198 against a floor of 1.480 over 31,278**. So the excess over the floor goes from **2.59 of 255 and 181,233 pixels to 0.69 and 14,920** — the bounce carries about three quarters of the whole dwell dependence. It carries most of the noise too: the run-to-run floor itself halves with the term off. Two flags of one build, per D407 |
+| D549 | **A cumulative mean cannot measure a room that is still filling** | cause | `bounce_radiance` reads what the face a ray landed on is giving off **at that moment**, and that face is itself climbing from black as it takes its own samples: this is a progressive radiosity solve, iterated one ray at a time. The estimator over it was `sum / far_n`, a mean over the face's whole history — so it converges to the **average of the climb** rather than to the top of it, and its time constant grows with the sample count, which is exactly "how long have you been looking at me". Then `kFaceAmbientDone` freezes whatever it holds for the life of the face. Every other term in the record measures something that does not move — geometry, or a sun that has not — so a cumulative mean is right for all of them and wrong only here |
+
+**Why the obvious reading of this is wrong, and it is worth not repeating.** The seam looks like a
+convergence-latency problem, and `--debug-mode 19` after a 35-degree turn shows exactly that: the two
+thirds of the facade the camera had been pointed at is solid green — converged and silent — and the
+third it has just revealed is grey. That picture is true and it is not the fault. It closes in two
+seconds by itself; the brightness does not close at all. **Read the mean pixel against dwell time
+before reading any convergence view**, because the two faults draw the same picture and only one of
+them goes away on its own.
+
+## D550 — a bounce that remembers the last N samples instead of all of them
+
+*The fix for D549. It is three words of the record it already had and one `min`.*
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D550 | **The bounce is a mean with a memory** | change | `mean += (sample - mean) / min(far_n, kBounceMemory)`, stored where the sum used to be, so the record does not grow and the two readers lose a divide rather than gaining one. A mean with a memory of N has the variance of a simple mean of 2N - 1 samples, so the noise becomes a number that is chosen rather than one that is accepted — and past N samples the estimator tracks the room's CURRENT light with a bounded lag whatever the face's age. `--bounce-memory N` sweeps it; the control arm is a memory larger than `far_n` can reach, which is the cumulative mean exactly rather than near it |
+| D551 | **`kBounceMin` is four memories, because a face that stops has frozen whatever it holds** | change | 128 to 512. Three turnovers leave 5% of the fill-up in the mean and the fourth is the memory it spends filling before it forgets anything at all. **Nothing about the RATE changes** — it is the same one unbounded ray every `face_stride` frames the face was already casting — so no frame casts more rays than it did; a static camera simply falls silent later. Read the two numbers together and not one at a time: memory 32 at min 256 is the NOISIEST arm in the sweep below, because most of the noise came from the far COUNT and not from the memory |
+| D552 | **A cap below the floor is a floor that does not exist** | trap | `far_done` terminated on `far_n >= kSkyFarConverged`, which is 256. Invisible while the bounce asked for 128, and it binds every face the moment the bounce asks for more: the face would stop at 256 samples however many the constant said, silently, with the only symptom a term stopping short of its own setting. It is `max(kSkyFarConverged, bounce_floor)` now, and `--no-bounce` leaves the floor at nought and the cap at exactly what it was. Trap 7's shape living in a comparison rather than in an answer |
+
+**The sweep, because both numbers are a trade and neither was guessed at.** Close camera, 1280x800,
+`--settle`, frame 2,700 — every face converged and silent in every arm, so this compares the frozen
+answers rather than a race between them. The unbiased value is what the shortest memory converges to,
+since a memory of 32 has no fill-up left in it at all:
+
+| memory | kBounceMin | speckle | mean pixel | short of unbiased |
+|---|---|---|---|---|
+| none, cumulative | 128 | 47.63 | 132.708 | **-0.85** |
+| 32 | 256 | 54.00 | 133.553 | 0.00 |
+| 64 | 256 | 49.42 | 133.440 | -0.11 |
+| 96 | 384 | 47.08 | 133.460 | -0.09 |
+| **128** | **512** | **45.53** | **133.504** | **-0.05** |
+
+So the dwell bias goes from 0.85 of 255 to 0.05 **and the picture gets quieter by 4.4%**. The second
+half is not a bonus, it is where the noise always was: the far ray answers the sky as well, and four
+times the samples is half the error in `open_sky`.
+
+**Measured on the two cameras the fault lives between**, 1280x800, `--settle`, frame 2,700, two flags
+of one build:
+
+| | speckle | mean pixel | before against after | that arm's own floor |
+|---|---|---|---|---|
+| **enclosed** | **20.701 to 16.970** | **122.785 to 126.412** | 5.086 over 236,117 px | 2.842 over 49,860 |
+| outdoor | 16.752 to 15.351 | 161.590 to 161.649 | 0.586 over 13,716 px | 0.450 over 8,221 |
+
+That signature is the diagnosis restated: **the enclosed room, where every bounce lands on a wall,
+gets 18% less speckle and 3.6 of 255 more light — and the outdoor view does not move**, because
+outdoors the far ray reaches sky on the first sample and there is no fill-up to average over.
+
+**And the dwell dependence itself, measured with the room already lit before the camera arrives** —
+close camera, cut at measured frame 3,000, shot at 4,200, so the arrival has twenty seconds:
+
+| | before | after |
+|---|---|---|
+| run-to-run floor | 2.755 over 69,065 px | **2.284 over 47,788** |
+| arriving against dwelling | 3.336 over 99,398 px | **3.173 over 88,589** |
+
+**What it costs, and there is one number and it is not nothing.** Flying at 1440p, two interleaved
+rounds of each arm: faces **6.691 / 7.349 before against 7.258 / 6.529 after**, total GPU 13.719 /
+14.298 against 14.088 / 13.372 — inside each other's spread, and provably rather than luckily: no
+face lives long enough while flying to reach even 128 far samples, let alone 512. A static camera's
+first 900 frames are equal too (faces 1.926 against 1.932). The cost is entirely in the tail:
+
+| close camera, frames 1,350-2,700 | before | after |
+|---|---|---|
+| faces pass | 0.607 ms | **1.427 ms** |
+| total GPU | 3.506 ms | 4.427 ms |
+
+A face that has stopped costs nothing, and this makes a face stop after about forty seconds of
+standing still instead of ten. **Both are far inside the pass's 4.40 ms budget and neither is a moving
+frame**, which is the case the budget is written for — but it is a real cost and it should not be
+discovered later. **The cheap way to reclaim it is known and deliberately not built here**: a face
+only needs the extra turnovers while the light it is sampling is still moving, and `bounce_radiance`
+can already see whether the face it landed on has finished, in a record it has already loaded. That
+would let a face stop at 128 once its own sources are silent. It is not built because the case that
+costs is an interior, where every ray lands on another face that is also waiting — so the wavefront
+has to start somewhere, and nothing has measured where.
+
+**What this does NOT fix, and it is the other half of what the player described.** "Way betterly
+rendered" is also a sample count: a face the camera has just revealed carries **46 sun samples against
+203**, and the sun's counters halve at `kFaceWindow` rather than growing for ever, so a fresh face
+catches up in about seventeen seconds and then matches exactly. That is latency, it is bounded, it is
+the same everywhere, and it is R5's — filtering across neighbouring faces is what lets every term here
+converge on fewer samples. What is closed is that the answer a face converges TO no longer depends on
+when it was claimed.
+
+**Gates**: 515 tests, 18.67 M assertions; `tools\darkroom.ps1` BLACK clear and with fog;
+`--validation` clean; `GPU mirror matches`, *leaf for leaf*, *mask for mask*.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D553 | **Changing what a word MEANS makes every rule written about it suspect, and one of them was wrong** | trap | Four places touch the bounce words and three of them were obvious: the composite, the gathering ray and the accumulate. The fourth was the edit reset, which scaled words 9-11 by `seed / far_n` with a comment explaining that it had to, *"because it is a SUM over that same count"* — true when it was written, and after this change it divides a MEAN by four on every edit and reads as the room going dark whenever the player chisels. It was found by reading every writer of those words rather than by a picture, and the picture would have been slow to accuse it: an edit already reopens half the terms in the room. The general form is worth more than the fix — **a rule written about a quantity outlives the representation it was written for**, so the sweep after a representation change is over the rules and not over the compiler errors, of which there were none. The gate is that an edited room is not darker: enclosed camera under `--chisel 60,16`, mean pixel **127.341 after against 127.177 before and 126.368 unedited**, with speckle 21.80 against 21.95 |
+
+**The four writers, so the next change to this record has the list**: `face_light_seed` (copies the
+ancestor's mean, and does NOT scale it — the lamps beside it are still a sum and are still scaled,
+which is why the two blocks look different), the far-ray accumulate, the edit reset, and the
+`edit_min.w == 2` path's counterpart in `face_work_of`. The readers are `resolve.comp` and
+`bounce_radiance`. `kFaceLightWords` in `shaders/face_terms.glsl` is the one place the layout is
+declared, and D534 is what happens when it is not.
