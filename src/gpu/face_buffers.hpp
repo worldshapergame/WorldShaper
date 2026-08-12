@@ -65,8 +65,13 @@ public:
     // counters for the frame that has just been drawn. It is read in the FIRST submit here, not the
     // second, because the second is gated on the mirror having matched and on the store fitting in
     // the staging ring -- and a counter about what rays found has nothing to do with either. D529.
+    // `material` is what each face has worked out that it is MADE of (R4a). Read back beside the
+    // records for the same reason `seen` is -- the two have to describe one instant -- and counted
+    // rather than pictured, because how much of a store is specular at all is the number that sizes
+    // every part of R4 and the one thing a screenshot of a debug view cannot give.
     bool audit(const FaceStore& store, VkBuffer seen = VK_NULL_HANDLE, u32 frame = 0,
-               u32 seen_window = 0, VkBuffer probe = VK_NULL_HANDLE);
+               u32 seen_window = 0, VkBuffer probe = VK_NULL_HANDLE,
+               VkBuffer material = VK_NULL_HANDLE);
 
     VkBuffer faces() const { return faces_.buffer; }
     VkBuffer entries() const { return entries_.buffer; }

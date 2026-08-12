@@ -3016,3 +3016,98 @@ trade a player should be able to move.
 |---|---|---|---|
 | D581 | **64×, measured against the window room** | judgement | The ceiling has to clear the darkest scene that is genuinely lit. One stop of margin over 33.3× is what that leaves |
 | D581 | **A new `tone` vector in the parameter block, not `motion.w`** | D553 | `motion.w` described an accumulator R3d deleted and was free. Changing what a word means makes every rule written about it suspect, and a spare field costs sixteen bytes once |
+
+## D582 — R4a: a face learns what the surface under it is made of
+
+**The user chose the next stage: directional faces, not the halo.** R4 is the half of *"everything
+is per voxel face based — even reflections and those things"* the rewrite has not delivered, and
+this is its first sub-step. Nothing reflects yet; what lands is the fact a reflection needs, in the
+one place that had no way to ask for it.
+
+**Why the light pass could not simply look it up.** A face is *(node, level, direction)* and nothing
+else. The store has never known what the surface under a face is made of and neither has
+`shade_faces.comp`: `bounce_face_light` reads the **folded average colour the marcher carries**, and
+the comment there says exactly why — *"cannot reach the interned tables from the face pass, which
+does not have them bound"*. An albedo is all a Lambertian face has ever needed. A lobe needs
+roughness and metalness, which live in the visual record and nowhere else.
+
+So the two interned tables are bound to the node set (22 and 23), and a face resolves its own
+material **once** and keeps it: `node_voxel_type_at` descends to the face's own brick with the same
+two functions the inner walk uses, and the answer goes in a card-owned word a slot.
+
+**Card-owned, and `GpuFace::bins` — the field the plan reserved for this — stays nought.** The host
+sends whole records for the slots the store marks dirty, so anything the card works out and keeps in
+that record is sent the host's copy over the top of it. That is D295 and D528, and the reason
+`bins` cannot hold it is that the host has no way to fill it either: the claim path has a key and no
+world lookup, and adding one would put a chunk-map probe on the hottest path in the store.
+
+**Three states and not two, and the third one is the whole of D583.**
+
+**Measured, two flags of one build, interleaved** (`--no-face-materials` is the control arm):
+
+| | control | asking |
+|---|---|---|
+| close camera, settled, faces pass | 4.013 / 4.037 ms | **4.061 / 3.994** |
+| ...total GPU | 7.006 / 7.023 | 7.054 / 7.031 |
+| flying at 1440p, faces pass | 7.867 / 7.433 | **7.387 / 7.032** |
+| ...total GPU | 15.097 / 14.793 | 14.780 / 13.877 |
+| sun samples a face, flying | 18 / 19 | 18 / 19 |
+| faces a pixel is reading, flying | 213,922 / 213,884 | 213,982 / 213,903 |
+
+The arms interleave everywhere. The last two rows are there because trap 20 says a timing alone
+cannot tell a pass that got faster from a pass that stopped doing its job, and this change could not
+have made anything cheaper — so equal convergence is what says the two arms did the same work.
+
+**What the census says, which is the number that sizes the rest of R4.** The store is not a uniform
+population and the faces a pixel is reading are not the store:
+
+| | carry a material | roughness quarters (0–63 / 64–127 / 128–191 / 192–255) | some metal |
+|---|---|---|---|
+| enclosed, whole store | 372,854 | 455 / 43,776 / 292,118 / 36,505 | 25,352 |
+| enclosed, what a pixel reads | 111,373 | 0 / 21,184 / 87,079 / 3,110 | **14,130** |
+| close, what a pixel reads | 416,143 | 9,293 / 34,123 / 229,273 / 143,454 | **22,158** |
+| flying at 1440p, what a pixel reads | 214,983 | 7,813 / 13,870 / 63,586 / 129,714 | **7,479** |
+
+So a directional payload has to serve tens of thousands of faces on screen and not hundreds — that
+is R4a's allocator sized against a measurement rather than against a guess.
+
+**Reported as a distribution and never as a count past a cutoff**, because the plan forbids a
+roughness threshold anywhere in this stage and an instrument that picks one is how a cutoff ends up
+in the shader six weeks later. Materials in this game are continuous and per voxel: a clip writes
+`rough=64 metal=225` as free numbers, `sample.cpp` then nudges them per voxel from a hash, and there
+is no material enum anywhere in the engine to branch on.
+
+**One limit, stated because it will be noticed before it is fixed.** Only a **level 0** face has a
+material — a coarse face stands over as many as 512 voxels which need not agree, so it answers NONE.
+Near the camera every face is level 0 (the close camera reads 416,143 of 416,143), and a distant
+building is drawn from coarse faces and will stay matte until the fold that R9f owes exists.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D582 | **A card-owned word a slot, not `GpuFace::bins`** | D295, D528 | The record has two owners and the host sends whole records for dirty slots. It is the fourth array with exactly this guarantee, after the face light and the three stamps |
+| D582 | **The card asks, rather than the host telling it** | measurement | The host's claim path has a key and no world lookup; adding one puts a chunk-map probe on the store's hottest path. A descent costs one face one visit, once |
+| D582 | **Resolved lazily on a frame the face was working anyway** | D406 | A converged face must touch nothing, and "nothing" includes the load that finds out. The call sits below the idle return, so a silent face never reaches it |
+| D582 | **A run-time control arm for a change with no picture** | D407 | The two arms draw the identical frame by construction, so a timing is the only evidence — and a timing needs two flags of one build |
+| D582 | **Bound the two interned tables to the node set** | R1e | A Vulkan layout's bindings need not be contiguous and adding two is three literals. R4d needs the index of refraction and the absorption out of the same record |
+
+## D583 — trap 10 in my own instrument, caught before it printed a number
+
+**A coarse face was going to be recorded as KNOWN with a roughness of nought**, which is the encoding
+for a perfect mirror. Every coarse face in the store would then have read as polished chrome — in
+the census, and as bright green in the debug view — and at the outdoor camera nearly every visible
+face is coarse.
+
+It was caught by running the view at that camera before believing the number, which is the only
+reason it is a decision entry rather than a fault. The word has three states now: nought is *has not
+looked*, bit 30 is *looked, and there is no one material to have*, bit 31 is *looked, and here it
+is*. Nought must stay non-sticky for trap 7's reason — a face over a brick the pool has not built
+has to ask again when the brick arrives, and a face over polished granite must not.
+
+Debug view 21 draws the third state **cyan**, apart from the blue of *has not looked* and the
+green–red ramp of a material, and the census counts the three apart. `--no-face-materials` prints
+*not asked this run* rather than a row of noughts, which is trap 15 in the same instrument.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D583 | **Three states in the word, not two** | trap 10 | "No material" and "a mirror" were the same bits and would have been the same colour. D310 is the same fault: a debug view where two answers share a colour produces the wrong number, and it is the number you went there to get |
+| D583 | **Check a new view at the camera it will look worst on** | trap 8 | The enclosed and close cameras are all level 0 and would never have shown it. The outdoor camera is almost all coarse faces, and it showed it in one screenshot |

@@ -261,6 +261,11 @@ inline constexpr u32 kProbeCoarseBounce = 1u << 1;   // R9f's read half. `--no-c
 // neighbourhood's, so the composite reads the same four words in both arms and the A/B prices the
 // eight neighbour lookups instead of a branch in the reader. `--no-face-denoise` clears it.
 inline constexpr u32 kProbeDenoise = 1u << 2;
+// R4a. Cleared, no face asks what it is made of and neither the descent nor the load that finds out
+// happens at all -- the renderer as it was before R4. `--no-face-materials` clears it, and the
+// census in the audit reads this bit so that "nothing is specular here" and "nobody looked" cannot
+// print the same line (trap 15).
+inline constexpr u32 kProbeMaterial = 1u << 3;
 
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.

@@ -173,7 +173,7 @@ written for the person the work is for, so it is the one to keep current.
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
 | R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
-| R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
+| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a's material half is in (D582, D583). A face resolves what the surface under it is made of, once, out of the interned tables the light pass had never had bound; it costs nothing measurable and no pixel moves. What it buys is the two numbers a lobe is: **of the faces a pixel is reading, 14,130 of 111,373 carry metal enclosed and 22,158 of 416,143 close**. R4b–R4d not started |
 | R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
 | R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
@@ -1811,6 +1811,75 @@ what fills the table and the cap collapses on its own. **And the coarse pyramid 
 them there. That is unexplained, it is not this change's doing, and it is the next thing to find in
 this pass.
 
+### R4a is in: a face knows what it is made of, and nothing looks different yet
+
+**The user was asked nothing and said it anyway: *"its not halo, its directional faces"*.** So R9c
+is not next; R4 is, and this is its first sub-step. D582, D583.
+
+**What was in the way, and it is not what the plan's one-line description says.** A face is
+*(node, level, direction)* and nothing else. The store has never known what the surface under a face
+is made of and neither has the light pass — `bounce_face_light` reads the **folded average colour
+the marcher carries** and its comment says why: this pass has no binding for the interned tables. An
+albedo is the whole of what a Lambertian face needs. A lobe is roughness and metalness, and those
+live in the visual record and nowhere else, so the first thing R4 costs is getting two bytes to a
+place that could not ask for them.
+
+The two tables are bound to the node set now, and a face descends to its own brick **once** and
+keeps the answer in a card-owned word a slot. It is the fourth array with that exact guarantee after
+the face light and the three stamps, and it is not `GpuFace::bins` — the field the plan reserved for
+this — because that field is on the **host's** side of a record with two owners (D295, D528), and
+because the host could not fill it either: the claim path has a key and no world lookup.
+
+| two flags of one build, interleaved | `--no-face-materials` | asking |
+|---|---|---|
+| close camera, settled, faces pass | 4.013 / 4.037 ms | 4.061 / 3.994 |
+| flying at 1440p, faces pass | 7.867 / 7.433 | 7.387 / 7.032 |
+| sun samples a face, flying | 18 / 19 | 18 / 19 |
+| faces a pixel is reading, flying | 213,922 / 213,884 | 213,982 / 213,903 |
+
+The arms interleave. The last two rows are there because of trap 20 — a timing alone cannot tell a
+pass that got faster from a pass that stopped doing its job — and this change could not have made
+anything cheaper, so equal convergence is what says both arms did the same work.
+
+**The census is the part to keep, because it sizes everything after it.** `what the faces are made
+of` and the line under it are printed at every screenshot, and the store is emphatically not the
+population that matters:
+
+| | carry a material | roughness quarters | some metal |
+|---|---|---|---|
+| enclosed, whole store | 372,854 | 455 / 43,776 / 292,118 / 36,505 | 25,352 |
+| enclosed, what a pixel reads | 111,373 | 0 / 21,184 / 87,079 / 3,110 | **14,130** |
+| close, what a pixel reads | 416,143 | 9,293 / 34,123 / 229,273 / 143,454 | **22,158** |
+| flying at 1440p, what a pixel reads | 214,983 | 7,813 / 13,870 / 63,586 / 129,714 | **7,479** |
+
+**Three things to know before touching it.**
+
+1. **Materials in this game are continuous and per voxel, and nothing in R4 may branch on a material
+   identity.** A clip writes `rough=64 metal=225` as free numbers and `sample.cpp` nudges them per
+   voxel from a hash of where the voxel is; there is no material enum in the engine to switch on.
+   That is why the census reports a **distribution** rather than a count past a cutoff — an
+   instrument that picks a threshold is how a threshold reaches the shader six weeks later, and the
+   plan forbids one anywhere in this stage.
+2. **A coarse face has no material and says so, in a third state.** Encoding it as *known, roughness
+   nought* was the first shape of the word and roughness nought is a **mirror**: every coarse face
+   in the store would have read as polished chrome, in the census and as bright green in view 21,
+   and at the outdoor camera nearly every visible face is coarse. Caught by running the new view at
+   the camera it would look worst on before believing any number from it (D583). Near the camera
+   this costs nothing — the close camera reads 416,143 level 0 of 416,143 — and a **distant** dome
+   will stay matte until R9f's fold exists.
+3. **Nought in that word must never become sticky.** A face over a brick the pool has not built
+   resolves to nought and asks again next visit; a face over polished granite must not. Trap 7, in
+   a new array.
+
+**What is next, and it is the one a player will see**: R4c, the outgoing bins — a face measures what
+it reflects along each of a set of directions, out of the same machinery the bounce already uses,
+and the composite reads the bin the eye is looking down. **In game:** the bronze doors, the gilt
+paterae, the copper dome and the window glass stop being coloured chalk and start behaving like
+metal and glass — they will show the portico and the sky in them, and what they show will change as
+you walk past. **What would mean it went wrong:** the reflection swims or crawls as you move rather
+than sitting still on the surface; a metal surface goes black; or the faces pass, which is already
+at 3.9–4.1 ms of a 4.40 ms budget standing still and 7–8 ms flying, moves outside that.
+
 ### Where to start now, and the two orders are not the same order
 
 **By the plan, the next stage is R4 — and R4's own prerequisite is R9.** §8 puts R4 directional
@@ -1847,6 +1916,11 @@ complains.
 > the rest is D572's. **R9c is about the entry side of a pan and always was**; what it is *not* is
 > the answer to a settled camera's black bounce, and the general form of the mistake is that an
 > attribution nobody has measured is a guess however many alternatives have been eliminated.
+
+> **The user said otherwise, which the sentence below invites**: *"its not halo, its directional
+> faces."* R4 is the stage in progress and R9c is not next. It is not blocked either — R9a, R9b,
+> R9e and R9f between them already put measured light on off-screen faces, which is exactly what a
+> reflection ray needs to land on. See *R4a is in* above.
 
 So the plan's sequence is **R9, then R4**, and that is the one to follow unless the user says
 otherwise — it is what makes reflections, refraction and bounce possible at all, which is the half
@@ -2367,6 +2441,9 @@ lit (D581);
 of the rewrite, which is R6's control arm and the state every picture figure above that section was
 measured in — it works by having the host zero both of the meter's slots every frame, so the shader
 takes its own "nothing has been measured" branch and no flag reaches it;
+`--no-face-materials` stops a face working out what the surface under it is made of, which is R4a's
+control arm — and the two arms draw the **identical picture** by construction, since nothing shades
+with it yet, so it exists because a timing is the only evidence a stage like this can have (D407);
 `--no-face-denoise` reads a face's far field and bounce raw rather than blended with its coplanar
 neighbours', which is R5a's control arm and the state everything above that section was measured in —
 it leaves the WRITE in place and takes the eight neighbour lookups out, so the composite reads the
@@ -2447,7 +2524,12 @@ to reach for when the face pass costs more than it should, because a converged f
 unconverged one are the same picture in every other view. **`20` is the lamp term on its own**, tone
 mapped because a lamp's contribution spans orders of magnitude between standing under a sconce and
 standing across a hall from one; magenta no face, blue no samples yet, green no geometry, and black
-is a legitimate answer rather than a failure. The node pool's
+is a legitimate answer rather than a failure. **`21` is what each FACE is made of** (R4a) — red is
+metalness and green is smoothness, so limestone reads near black, gilt and bronze read orange and
+glass reads bright green; magenta no face, blue a face that has not looked yet, **cyan a coarse face,
+which has looked and has no one material to have**, green at a third no geometry. It draws what the
+*face* knows and not what the pixel knows, which is the only way to tell that the material reached
+the light pass at all. The node pool's
 GPU mirror is checked automatically at the screenshot and logs either
 `GPU mirror matches` or the first differing byte.
 

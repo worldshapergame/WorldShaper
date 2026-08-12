@@ -1928,3 +1928,53 @@ than one window — which should go dark.
 
 `--exposure-max N` moves it if 64 is not where you want the line: smaller lets more of the dark stay
 dark, larger recovers more of it.
+
+## Reflections: the first piece, which you cannot see yet
+
+You said directional faces, not the halo, so that is what I started. It is the half of what you asked
+for at the very beginning — *"everything is per voxel face based, even reflections and those
+things"* — that the rewrite has not done at all.
+
+**Where it stands today: nothing in the game reflects anything.** Every surface is treated as though
+it were chalk. The bronze doors, the gilded rosettes on them, the copper dome, the glass in the
+windows and the water are all drawn as flat coloured paint, and they always have been in this
+renderer — the old path tracer had reflections and it is deleted.
+
+**What landed is the thing that was in the way, and it is duller than it sounds.** A face in this
+engine knows *where* it is and *which way it points*, and that is all it has ever known. The lighting
+pass could not find out what the surface under it was **made of** — it has never had access to the
+table that holds that. It did not matter while everything was chalk: to light chalk you need a
+colour, and it had one. To draw a reflection you need two more numbers, how rough the surface is and
+how metallic, and it could not reach them.
+
+Now each face works that out once, the first time it does any work, and remembers it. It costs
+nothing I can measure — I ran it against itself with the feature switched off, four runs alternating,
+and the two are inside each other's spread on both the standing-still case and the flying one.
+
+**You can look at it if you want**, with `--debug-mode 21`: red is metal, green is smooth, so the
+front doors and the rosettes light up orange and the window glass goes bright green while the
+limestone stays black. That view is the only way to check the fact actually reached the lighting
+pass, which is why it exists before anything uses it.
+
+**One thing worth knowing, because you will spot it eventually.** This works for surfaces near you.
+Far away the renderer draws one face for a block of many voxels, and a block of many voxels has no
+single roughness — so a distant dome will still look like chalk after the next step, and making it
+not do that is a separate piece of work I have not started.
+
+**And the answer to your question: yes, it is fully open-ended.** Roughness and metalness are plain
+numbers on each voxel, anything from 0 to 255, set in the clip file per material — and the sampler
+already nudges them slightly per voxel so that no two voxels of "the same" stone are identical. There
+is no built-in list of materials anywhere in the engine, and nothing I am building looks up a
+material by name or picks from a set. Everything reads those numbers as quantities: how wide a
+reflection is, how tinted it is, whether the surface has one worth storing at all. I have written
+that into the plan as a rule for the rest of this stage, because the easy mistake here is to write
+"if the surface is shiny do this, otherwise do that", and the moment anybody does that your dial
+stops being a dial. (What does *not* exist yet is a way to set those numbers from inside the game —
+today they come from the clip file. Say the word if you want that and I will add it.)
+
+**What is next, and this is the one you will see.** Each face measures what it reflects, in a small
+set of directions, and the picture reads whichever direction your eye is looking down. Then the
+doors, the dome, the gilding and the glass stop being paint: they show the portico and the sky, and
+what they show changes as you walk past. If it goes wrong you will see the reflection *swim* or
+crawl as you move instead of sitting still on the surface, or a metal surface going black — tell me
+either of those and I will know where to look.

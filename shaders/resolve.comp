@@ -59,6 +59,14 @@ layout(std430, binding = 8) readonly buffer FaceLight { uint words[]; } face_lig
 // block is declared once "so a shader can never again drift out of step with the buffer it is
 // reading"; this is the same lesson, in the same file, about the buffer beside it.
 #include "face_terms.glsl"
+// What each face is made of, worked out by the light pass and kept there (R4a). One word a slot,
+// card-owned, and the layout is documented once beside the binding in shaders/node.glsl -- these
+// three accessors are the second copy of nothing, they are the same shifts spelled where the reader
+// is. The word being NOUGHT means the face has not looked yet, which is a state this pass has to be
+// able to draw apart from "looked, and it is stone".
+layout(std430, binding = 10) readonly buffer FaceMaterial { uint words[]; } face_material;
+const uint kFaceMaterialKnown = 1u << 31;
+const uint kFaceMaterialNone = 1u << 30;
 // Must match kSkyConverged in shaders/node.glsl. Read by debug view 19 only -- the shaded path
 // never asks whether a face has finished, it asks what the face says.
 const uint kSkyConverged = 2048u;
@@ -919,6 +927,45 @@ void main() {
                                   uintBitsToFloat(face_light.words[slot * kFaceLightWords + 7u])) /
                              float(lamp_n);
                     colour = pow(tonemap_aces(e * (1.0 / kPi)), vec3(1.0 / 2.2));
+                }
+            }
+        }
+    } else if (push.resolution.z == 21u) {
+        // What each FACE thinks it is made of, which is R4's first question and had no answer.
+        //
+        // Not what the pixel is made of -- this pass has had that since it existed, straight out of
+        // the visibility buffer, and drawing it would say nothing about whether the light pass can
+        // see it. The whole of R4a is that the material reaches the FACE, on a set that had no
+        // binding for the interned tables, and the two are only the same picture when it works.
+        // That is trap 1: five traversal changes were once measured against an image that could
+        // not have moved, because nothing read the buffer they wrote.
+        //
+        // RED is metalness and GREEN is smoothness, so limestone reads near black, gilt and bronze
+        // read orange, and glass and water read bright green. MAGENTA is a pixel with no face at
+        // all, BLUE a face that has not looked yet -- which on a settled camera should be nobody,
+        // and over a region the pool is still building is everybody -- and CYAN a COARSE face,
+        // which has looked and has no one material to have. GREEN at a third is no geometry, the
+        // same as view 20.
+        //
+        // Cyan is not a nicety. A coarse face is most of a distant view, and drawing it as
+        // roughness nought would paint the whole far field the same green a mirror gets: two
+        // different answers in one colour, which is trap 10 and is how the first histogram of R9d
+        // came out absurd.
+        colour = vec3(0.0, 0.35, 0.0);
+        if (hit) {
+            uint slot = imageLoad(in_face, pixel).x;
+            if (slot >= faces.items.length() || slot >= face_material.words.length()) {
+                colour = vec3(1.0, 0.0, 1.0);
+            } else {
+                uint word = face_material.words[slot];
+                if ((word & kFaceMaterialNone) != 0u) {
+                    colour = vec3(0.0, 0.75, 0.85);
+                } else if ((word & kFaceMaterialKnown) == 0u) {
+                    colour = vec3(0.0, 0.3, 1.0);
+                } else {
+                    float rough = float(word & 0xFFu) / 255.0;
+                    float metal = float((word >> 8u) & 0xFFu) / 255.0;
+                    colour = vec3(metal, 1.0 - rough, 0.0);
                 }
             }
         }

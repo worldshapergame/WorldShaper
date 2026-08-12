@@ -224,7 +224,7 @@ void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store, u32 frame_index)
 }
 
 bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 seen_window,
-                        VkBuffer probe) {
+                        VkBuffer probe, VkBuffer material) {
     if (device_ == nullptr) return false;
 
     // Nothing may still be owed to the card, or this compares a host that has moved on against a
@@ -411,6 +411,15 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
         }
     }
 
+    // Whether R4a's arm is on, taken from the dial the card was actually handed rather than from an
+    // option the host believes it passed. It is read here because the census that needs it runs in
+    // the second submit, and a switched-off instrument reading nought and a store with nothing in it
+    // reading nought are the same line otherwise (trap 15).
+    const bool materials_on =
+        probe_bytes > 0 &&
+        (reinterpret_cast<const u32*>(static_cast<const u8*>(staging_.mapped) + probe_offset)[0] &
+         kProbeMaterial) != 0;
+
     bool matched = compare;
     for (const Range& range : ranges) {
         if (!compare) break;
@@ -465,6 +474,17 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                 seen_copy.dstOffset = face_bytes;
                 seen_copy.size = seen_bytes;
                 vkCmdCopyBuffer(face_cmd, seen, staging_.buffer, 1, &seen_copy);
+            }
+            // ...and what each of them is made of, in the same submit and for the same reason.
+            const u64 material_bytes = static_cast<u64>(watermark) * sizeof(u32);
+            const bool material_fits =
+                seen_fits && material != VK_NULL_HANDLE &&
+                face_bytes + seen_bytes + material_bytes <= staging_.size;
+            if (material_fits) {
+                VkBufferCopy material_copy{};
+                material_copy.dstOffset = face_bytes + seen_bytes;
+                material_copy.size = material_bytes;
+                vkCmdCopyBuffer(face_cmd, material, staging_.buffer, 1, &material_copy);
             }
             WS_VK(vkEndCommandBuffer(face_cmd));
             VkCommandBufferSubmitInfo face_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -717,6 +737,85 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                     }
                     WS_LOG_INFO("faces", "shadowed by ignorance, by level  {}", levels);
                 }
+            }
+
+            // ---- what the store is MADE of (R4a) -------------------------------------------
+            //
+            // The number that sizes every part of R4, and the one a picture cannot give. A
+            // directional payload is allocated only where it is read, so what has to be known
+            // before any of it is built is how much of a real store is specular at all -- and
+            // whether the faces a PIXEL is looking at are a different population from the store as
+            // a whole, which they will be, because gilt and bronze are on the parts of a building
+            // that face you.
+            //
+            // Reported as a distribution and not as a count past a threshold, deliberately. There
+            // is no roughness threshold anywhere in this stage and there is not going to be one:
+            // bins come from roughness and coverage as continuous quantities, and an instrument
+            // that picks a cutoff is how a cutoff ends up in the shader six weeks later because
+            // "that is the number we have always reported".
+            if (!materials_on) {
+                WS_LOG_INFO("faces",
+                            "what the faces are made of: not asked this run "
+                            "(--no-face-materials), so nothing here knows");
+            } else if (material_fits) {
+                const u32* made_of = reinterpret_cast<const u32*>(
+                    static_cast<const u8*>(staging_.mapped) + face_bytes + seen_bytes);
+                constexpr u32 kKnown = 1u << 31;
+                constexpr u32 kNone = 1u << 30;
+                u32 known = 0;
+                u32 waiting = 0;
+                u32 coarse = 0;
+                u32 metal = 0;
+                u32 seen_known = 0;
+                u32 seen_metal = 0;
+                u64 rough_sum = 0;
+                // Quarters of the roughness range, which is the honest way to show a quantity that
+                // is going to be read continuously: [0,64) is a mirror, [192,255] is matte stone.
+                u32 quarters[4]{};
+                u32 seen_quarters[4]{};
+                for (u32 slot = 0; slot < watermark; ++slot) {
+                    if (!face_live(card[slot])) continue;
+                    const u32 word = made_of[slot];
+                    const bool on_screen =
+                        stamps != nullptr && (frame - stamps[slot]) <= seen_window;
+                    // A coarse face has looked and has no material to have, and it is counted apart
+                    // from both of the others: as "waiting" it would read as the pool being behind,
+                    // and as "known" it would need a roughness, which it has not got.
+                    if ((word & kNone) != 0) {
+                        ++coarse;
+                        continue;
+                    }
+                    if ((word & kKnown) == 0) {
+                        ++waiting;
+                        continue;
+                    }
+                    ++known;
+                    const u32 rough = word & 0xFFu;
+                    rough_sum += rough;
+                    ++quarters[rough >> 6];
+                    if (((word >> 8) & 0xFFu) > 0) ++metal;
+                    if (on_screen) {
+                        ++seen_known;
+                        ++seen_quarters[rough >> 6];
+                        if (((word >> 8) & 0xFFu) > 0) ++seen_metal;
+                    }
+                }
+                WS_LOG_INFO("faces",
+                            "what the faces are made of: {} carry a material, {} are coarse and "
+                            "cannot, {} have not looked yet; of those that carry one, roughness "
+                            "quarters {} / {} / {} / {} (mean {:.0f}) and {} carry some metal",
+                            known, coarse, waiting, quarters[0], quarters[1], quarters[2],
+                            quarters[3], known > 0 ? static_cast<f64>(rough_sum) / known : 0.0,
+                            metal);
+                WS_LOG_INFO("faces",
+                            "...and of the {} a pixel is reading, roughness quarters {} / {} / {} / "
+                            "{} and {} carry some metal",
+                            seen_known, seen_quarters[0], seen_quarters[1], seen_quarters[2],
+                            seen_quarters[3], seen_metal);
+            } else if (material != VK_NULL_HANDLE) {
+                // Said out loud rather than left as an absent line, because a census that could not
+                // run and a store with nothing specular in it are the same silence (trap 15).
+                WS_LOG_INFO("faces", "what the faces are made of: not read back (staging is full)");
             }
 
             // ...and the card's OWN faces, which are the most expensive face in the store and which

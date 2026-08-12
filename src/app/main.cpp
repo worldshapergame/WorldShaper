@@ -331,6 +331,12 @@ struct Options {
     // and takes the eight neighbour lookups out, so the two arms differ by the filter rather than by
     // a branch in the reader.
     bool face_denoise = true;
+    // R4a: a face works out what the surface under it is MADE of and keeps the answer.
+    // `--no-face-materials` is the control arm and no face ever asks, which is the renderer exactly
+    // as it was before R4. It has to exist because the picture is identical in both arms by
+    // construction -- nothing shades with this yet -- so the only evidence about what it costs is a
+    // timing, and a timing wants two flags of one build rather than two builds (D407).
+    bool face_materials = true;
     // R6a's light meter. False zeroes both of the meter's slots every frame, which is the shader's
     // own "nothing has been measured" path and applies the constant `kPreviewExposure` this pass
     // used before the meter existed -- so `--no-auto-exposure` is the picture every figure in the
@@ -716,6 +722,10 @@ Options parse_options(int argc, char** argv) {
             // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
             // is the state every figure taken before R5 was measured in.
             options.face_denoise = false;
+        } else if (arg == "--no-face-materials") {
+            // R4a's control arm: no face asks what it is made of, so the descent, the two table
+            // reads and the load that finds out all go. The picture is the same in both arms.
+            options.face_materials = false;
         } else if (arg == "--no-class-eviction") {
             // Every cold record on one clock again, whoever asked for it, and the coarse pyramid
             // spent at the first step of the squeeze. Pair it with `--secondary-share 4` for the
@@ -839,6 +849,8 @@ void print_help() {
         "                        room with almost no light in it until it reads as lit\n"
         "  --no-face-denoise     a face's far field and bounce are read raw rather than blended\n"
         "                        with its coplanar neighbours'. R5a's control arm\n"
+        "  --no-face-materials   no face works out what the surface under it is made of. R4a's\n"
+        "                        control arm, and the picture is identical in both\n"
         "  --no-class-eviction   the store gives every cold record up on one clock again, whoever\n"
         "                        asked for it, and spends the coarse pyramid at the first step of\n"
         "                        the squeeze. Pair with --secondary-share 4 for the whole control\n"
@@ -1734,6 +1746,11 @@ private:
     // the same guarantee as the two above: one word a slot, device local, written and read by the
     // card and by nothing else. See `face_read` in shaders/node.glsl.
     FaceLight face_read_;
+    // One word a slot: what the surface under that face is MADE of -- its roughness, its metalness
+    // and its flags, resolved by the light pass out of the interned tables and kept. R4a, and see
+    // `face_material` in shaders/node.glsl for why it is the card that asks and why it cannot live
+    // in `GpuFace::bins`, which is the field the plan reserved for it.
+    FaceLight face_material_;
     // The gathering ray's counters, and the dials it reads. Not per slot -- see kLightProbeWords in
     // shaders/node.glsl. It borrows FaceLight because what that class provides is exactly what this
     // wants: a device-local word array, zeroed at creation, that the host can fill and copy back.
@@ -5021,7 +5038,8 @@ void Application::record_frame(f32 time_seconds) {
         {
             const u32 dials = (options_.light_probe ? kProbeOn : 0u) |
                               (options_.coarse_bounce ? kProbeCoarseBounce : 0u) |
-                              (options_.face_denoise ? kProbeDenoise : 0u);
+                              (options_.face_denoise ? kProbeDenoise : 0u) |
+                              (options_.face_materials ? kProbeMaterial : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),
@@ -5467,7 +5485,7 @@ int Application::play(const Options& options) {
     // have to care which pass included them.
     // Nine now: 6 is the face store and 7 is the face-slot image, which together are how the
     // picture stops lighting itself per pixel and starts reading light off the surface.
-    VkDescriptorSetLayoutBinding resolve_bindings[11]{};
+    VkDescriptorSetLayoutBinding resolve_bindings[12]{};
     for (u32 i = 0; i < 6; ++i) {
         resolve_bindings[i].binding = i;
         // 0-1 images, 2-3 the type and visual tables, 4 the parameter block, 5 the
@@ -5500,10 +5518,14 @@ int Application::play(const Options& options) {
     resolve_bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     resolve_bindings[10].descriptorCount = 1;
     resolve_bindings[10].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_bindings[11].binding = 10;   // what each face is made of (R4a)
+    resolve_bindings[11].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resolve_bindings[11].descriptorCount = 1;
+    resolve_bindings[11].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo resolve_layout_info{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    resolve_layout_info.bindingCount = 11;
+    resolve_layout_info.bindingCount = 12;
     resolve_layout_info.pBindings = resolve_bindings;
     WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &resolve_layout_info, nullptr,
                                       &resolve_layout_));
@@ -5660,6 +5682,17 @@ int Application::play(const Options& options) {
             WS_LOG_FATAL("app", "could not create the face read buffer");
             return 1;
         }
+        // And one word a slot for what that face is MADE of, over the same range again. It is the
+        // one thing about a face that comes from neither the store nor the light: the store knows
+        // where a face is and the light pass knows what arrives there, and until R4 nothing at all
+        // knew whether the surface was stone or gilt. See `face_material` in shaders/node.glsl.
+        if (!face_material_.create(device_,
+                                   face_buffers_.provisional_base() +
+                                       FaceBuffers::provisional_count(),
+                                   "face material")) {
+            WS_LOG_FATAL("app", "could not create the face material buffer");
+            return 1;
+        }
         // And the gathering ray's own counters, which are not per slot at all: one word a QUESTION,
         // over the whole dispatch. See kLightProbeWords in shaders/node.glsl for the word map and
         // for why word 0 is the host's and the rest are the card's.
@@ -5720,8 +5753,13 @@ int Application::play(const Options& options) {
         // Twenty-one: 20 is the face GATHERED stamp, which is to a gathering ray's reads what 15 is
         // to a pixel's. It is what makes the off-screen set worth having: without it every face in
         // that class held nought samples for its whole life. R9b.
-        VkDescriptorSetLayoutBinding node_bindings[21]{};
-        for (u32 i = 0; i < 21; ++i) {
+        // Twenty-four: 21 is what each face is MADE of, and 22 and 23 are the two interned tables it
+        // is worked out from -- the same two buffers the composite has always had at its own
+        // bindings 2 and 3. Until R4 no pass on this set had any reason to read them, which is why
+        // the light pass reads the marcher's folded average colour for an albedo and has never been
+        // able to ask about a roughness at all.
+        VkDescriptorSetLayoutBinding node_bindings[24]{};
+        for (u32 i = 0; i < 24; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -5732,7 +5770,7 @@ int Application::play(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 21;
+        node_layout_info.bindingCount = 24;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -5743,25 +5781,27 @@ int Application::play(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[17]{
+        const VkBuffer node_pool_buffers[20]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
             face_light_.buffer(),      light_buffer_.buffer,    face_seen_.buffer(),
             face_work_.buffer,         node_seen_.buffer(),     face_read_.buffer(),
-            light_probe_.buffer(),     face_gathered_.buffer(),
+            light_probe_.buffer(),     face_gathered_.buffer(), face_material_.buffer(),
+            type_tables_.types(),      type_tables_.visuals(),
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[17]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20};
-        VkDescriptorBufferInfo node_infos[17]{};
-        // Eighteen writes for seventeen buffers and one uniform block, and the COUNT a few lines
+        const u32 node_bindings_for[20]{2,  3,  4,  5,  6,  7,  9,  10, 12, 13,
+                                        14, 15, 16, 17, 18, 19, 20, 21, 22, 23};
+        VkDescriptorBufferInfo node_infos[20]{};
+        // Twenty-one writes for twenty buffers and one uniform block, and the COUNT a few lines
         // below is the thing to change with them. Adding a descriptor here and leaving that literal
         // alone writes every binding but the new one, silently, and `--validation` is the only thing
         // that says so -- which is D518 exactly, in the other direction.
-        VkWriteDescriptorSet node_writes[18]{};
-        for (u32 i = 0; i < 17; ++i) {
+        VkWriteDescriptorSet node_writes[21]{};
+        for (u32 i = 0; i < 20; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -5776,13 +5816,13 @@ int Application::play(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[17].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[17].dstSet = node_set_;
-        node_writes[17].dstBinding = 8;
-        node_writes[17].descriptorCount = 1;
-        node_writes[17].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[17].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 18, node_writes, 0, nullptr);
+        node_writes[20].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[20].dstSet = node_set_;
+        node_writes[20].dstBinding = 8;
+        node_writes[20].descriptorCount = 1;
+        node_writes[20].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[20].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 21, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -5899,9 +5939,12 @@ int Application::play(const Options& options) {
     // Five now: the face light joins them, so the composite can read how much sky a surface can
     // actually see instead of deciding it from which way the surface points (R10a).
     // Six now: the light meter's two slots join them (R6a).
+    // Seven now: what each face is made of, which this pass reads for debug view 21 today and for
+    // the specular lobe when R4c lands (R4a).
     const VkBuffer resolve_buffers[]{type_tables_.types(), type_tables_.visuals(),
                                      clip_buffer_.buffer, face_buffers_.faces(),
-                                     face_light_.buffer(), frame_stats_.buffer};
+                                     face_light_.buffer(), frame_stats_.buffer,
+                                     face_material_.buffer()};
 
     // The parameter block, bound to the composite and to the cloud pass with a dynamic offset
     // chosen per frame.
@@ -5920,12 +5963,13 @@ int Application::play(const Options& options) {
     }
     vkUpdateDescriptorSets(device_.handle(), 2, params_writes, 0, nullptr);
 
-    constexpr u32 kResolveBuffers = 6;   // types, visuals, clip cells, faces, face light, the meter
+    // types, visuals, clip cells, faces, face light, the meter, the face material
+    constexpr u32 kResolveBuffers = 7;
     VkDescriptorBufferInfo buffer_infos[kResolveBuffers]{};
     VkWriteDescriptorSet buffer_writes[kResolveBuffers]{};
-    // Resolve's storage buffers are bindings 2, 3, 5, 6, 8 and 9 -- 4 is the parameter block and
+    // Resolve's storage buffers are bindings 2, 3, 5, 6, 8, 9 and 10 -- 4 is the parameter block and
     // 7 is an image. Spelled out for the same reason the node set's mapping is.
-    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8, 9};
+    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8, 9, 10};
     for (u32 i = 0; i < kResolveBuffers; ++i) {
         buffer_infos[i].buffer = resolve_buffers[i];
         buffer_infos[i].offset = 0;
@@ -6624,7 +6668,7 @@ int Application::play(const Options& options) {
                 // The live gate, not the default, so the audit describes the run that was made.
                 face_buffers_.audit(face_store_, face_seen_.buffer(),
                                     static_cast<u32>(frame_counter_), options_.face_gate,
-                                    light_probe_.buffer());
+                                    light_probe_.buffer(), face_material_.buffer());
                 const FaceStoreStats face_stats = face_store_.stats();
                 WS_LOG_INFO("frame",
                             "faces: {} live of {}, {} seen this frame, {} claims {} already there, "
@@ -6869,6 +6913,7 @@ int Application::play(const Options& options) {
     face_gathered_.destroy();
     node_seen_.destroy();
     face_read_.destroy();
+    face_material_.destroy();
     light_probe_.destroy();
     face_worklist_.destroy();
     destroy_buffer(device_, face_work_);

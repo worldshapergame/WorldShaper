@@ -369,6 +369,60 @@ layout(std430, binding = 18) buffer FaceRead { uint frames[]; } face_read;
 // the card accumulated.
 layout(std430, binding = 20) buffer FaceGathered { uint frames[]; } face_gathered;
 
+// ---- what a face is MADE of (R4a) --------------------------------------------------------------
+//
+// One word a face slot, card-owned exactly as the three stamps above it are, and for the same
+// reason: the host sends whole `GpuFace` records for the slots the store marks dirty, so anything
+// the card works out for itself and keeps in that record is sent the host's copy over the top of
+// it. That is D295 and D528, and `GpuFace::bins` -- the field the plan reserved for this -- stays
+// nought precisely because it is on the host's side of that line.
+//
+// # Why the card has to work this out rather than be told
+//
+// A face is (node, level, direction) and nothing else. The store has never known what the surface
+// under it is made of and neither has the light pass: `bounce_face_light` reads the folded average
+// colour the MARCHER carries, and the comment there says why -- this pass has no binding for the
+// interned tables. An albedo is all a Lambertian face ever needed.
+//
+// A lobe needs more. How wide a reflection is, and whether a surface has one at all, is roughness
+// and metalness, and those live in the visual record and nowhere else. So the two tables are bound
+// here now (22 and 23) and a face resolves its own material ONCE, on a frame it was already doing
+// something, and keeps the answer. What that costs is one descent per face per lifetime, down the
+// same tree the ray it is about to cast is going to walk anyway.
+//
+// # The word
+//
+//   0-7    roughness, as the visual record stores it
+//   8-15   metalness, likewise
+//   16-23  VisualFlags
+//   30     NONE -- this face has looked and there is no one material to be had
+//   31     KNOWN -- this face has looked and bytes 0-2 are it
+//
+// Three states and not two, and the third is the one trap 7 and trap 10 are both about. Nought is
+// "has not looked", which a face over a brick the pool has not built must keep answering until the
+// brick arrives. KNOWN is a material. NONE is a COARSE face -- a node standing over as many as 512
+// voxels which need not agree about anything, so it has a folded colour and no roughness, and
+// inventing one for it is exactly the fold R9f has not built.
+//
+// Encoding NONE as "known, roughness nought" was the first shape of this and it is wrong in the way
+// that costs: roughness nought is a mirror, so every coarse face in the store would read as polished
+// chrome in the census and in the debug view. Two different answers sharing one colour is what
+// produced a wrong number nobody questioned in D310.
+layout(std430, binding = 21) buffer FaceMaterial { uint words[]; } face_material;
+
+// The two interned tables, which until R4 no pass on this set had any reason to read. The composite
+// has had them at its own bindings 2 and 3 since before the face store existed; these are the same
+// two buffers, and there is exactly one copy of each on the card.
+layout(std430, binding = 22) readonly buffer Types { uvec2 items[]; } types;
+layout(std430, binding = 23) readonly buffer Visuals { uvec4 items[]; } visuals;
+
+const uint kFaceMaterialKnown = 1u << 31;
+const uint kFaceMaterialNone = 1u << 30;
+
+uint face_material_rough(uint word) { return word & 0xFFu; }
+uint face_material_metal(uint word) { return (word >> 8u) & 0xFFu; }
+uint face_material_flags(uint word) { return (word >> 16u) & 0xFFu; }
+
 // ---- what a gathering ray found, counted ------------------------------------------------------
 //
 // The light pass has three audit lines about what it has FINISHED (`ambient on the card`, `lamps on
@@ -428,6 +482,14 @@ const uint kProbeCoarseBounce = 1u << 1;  // a gathering ray may read the coarse
 // still pays the write: what is being priced is the eight neighbour lookups, which is the only part
 // of this that costs anything.
 const uint kProbeDenoise = 1u << 2;
+// R4a. Off, no face ever asks what it is made of -- so the descent, the two table reads and the
+// scattered load that finds out are all gone, and the arm is the renderer exactly as it was before
+// this stage. It exists because that cost is the only cost R4a has, it is a load per working face
+// per visit of the kind D406 measured at 0.38 ms, and a stage whose whole content is a fact reaching
+// a buffer has otherwise no way at all to be priced: the picture is identical in both arms by
+// construction, so a timing is the only evidence there is and a timing needs two arms of ONE build
+// (D407).
+const uint kProbeMaterial = 1u << 3;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -452,6 +514,7 @@ void probe_add(uint at) {
 }
 bool probe_coarse_bounce() { return (light_probe.words[0] & kProbeCoarseBounce) != 0u; }
 bool probe_denoise() { return (light_probe.words[0] & kProbeDenoise) != 0u; }
+bool probe_material() { return (light_probe.words[0] & kProbeMaterial) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
@@ -1597,6 +1660,75 @@ uint leaf_voxel_type(uint leaf, ivec3 local) {
     uint packed = leaf_read_byte(base + palette_bytes + index / per_byte);
     uint slot_index = (packed >> ((index % per_byte) * bits)) & ((1u << bits) - 1u);
     return payload.words[(base >> 2u) + slot_index];
+}
+
+// ---- what one voxel is made of, asked away from a march (R4a) ---------------------------------
+//
+// The marcher hands back a type id for the voxel a ray STOPPED on, and that is the only way this
+// pass has ever had of asking. A face has to ask about itself, on a frame no ray of its own is
+// necessarily being cast, so it descends to its own brick and reads the type out of it: the same
+// two functions the inner walk uses, without the walk.
+//
+// Nought for "the pool cannot answer", which covers three different things on purpose -- the brick
+// is not built, the node at the leaf level is a shell, or the voxel is not solid. All three mean
+// *ask again later*, and none of them means matte. Air is type nought too and is the same answer
+// for the same reason: a face over nothing has nothing to be made of.
+uint node_voxel_type_at(ivec3 voxel) {
+    Found found = node_locate(voxel, kLeafLevel);
+    if (found.state != kFoundHere) return 0u;
+    if ((node_flags_of(nodes.items[found.slot].packed) & kNodeLeaf) == 0u) return 0u;
+    uint leaf = nodes.items[found.slot].children;
+    if (leaf == kNoNode) return 0u;
+    // Arithmetic shift, so this is the positive remainder either side of the origin -- the same
+    // convention node_locate itself uses one line above.
+    ivec3 inner = voxel - ((voxel >> 3) << 3);
+    if (!leaf_voxel_solid(leaf, inner)) return 0u;
+    return leaf_voxel_type(leaf, inner);
+}
+
+// What THIS face is made of, resolved once and kept. See the FaceMaterial binding for the word.
+//
+// The read is the common case by a wide margin -- a face looks once and every visit after that is
+// one load of a word the shading pass is about to touch anyway -- so the branch is arranged for it.
+uint node_face_material(uint slot, ivec3 node, uint level) {
+    if (!probe_material()) return 0u;
+    if (slot >= face_material.words.length()) return 0u;
+    const uint held = face_material.words[slot];
+    if ((held & (kFaceMaterialKnown | kFaceMaterialNone)) != 0u) return held;
+
+    // A coarse face has looked and there is nothing to find. See the binding for why that is its
+    // own answer rather than a roughness of nought.
+    uint word = kFaceMaterialNone;
+    if (level == 0u) {
+        const uint type_id = node_voxel_type_at(node);
+        // Not known, and it must not be recorded as known: the brick arrives later and this face
+        // has to look again. Trap 7 -- "nothing here" and "I could not find out" are different
+        // answers and the second one is not allowed to be sticky.
+        if (type_id == 0u) return 0u;
+        // Clamped, because an out-of-range index into an SSBO is not a wrong number, it is whatever
+        // the driver decides out of bounds means -- and this renderer has already lost a device to
+        // exactly that (see material_of in shaders/pt_material.glsl).
+        const uint type_at = min(type_id, uint(types.items.length()) - 1u);
+        const uint visual_at = min(types.items[type_at].x, uint(visuals.items.length()) - 1u);
+        const uvec4 visual = visuals.items[visual_at];
+        word = kFaceMaterialKnown;
+        // VisualRecord's second word is roughness, metallic, ior, emissive, one byte each, so the
+        // low half of it IS this word's low half. See src/world/voxel_type.hpp, which is the
+        // authority, and pt_material.glsl, which unpacks the same bytes for the deleted tracer.
+        word |= visual.y & 0xFFFFu;
+        word |= ((visual.w >> 16u) & 0xFFu) << 16u;
+    }
+    face_material.words[slot] = word;
+    return word;
+}
+
+// A slot the store has just handed out, or a face the world has changed under, has to look again.
+//
+// The array is never uploaded, so a claim cannot clear it the way it clears `counters` -- which is
+// the same sentence `face_light`'s reset block already carries, and this is called from beside it.
+void node_face_material_forget(uint slot) {
+    if (slot >= face_material.words.length()) return;
+    face_material.words[slot] = 0u;
 }
 
 // ---- reporting ------------------------------------------------------------------------------------

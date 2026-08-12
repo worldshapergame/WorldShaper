@@ -1490,6 +1490,11 @@ void main() {
         // crease in the room white for the frames it took to measure them again -- on every edit.
         // Both keep their mean and drop to kFaceEditSeed, which the next burst outvotes at once.
         const uint seed = node_push.edit_seed;
+        // ...and what the face is MADE of, which is a third reach again: a material can only have
+        // changed where the geometry did, so the near box governs it and the shadow's sixteen
+        // metres do not. A voxel repainted under a face keeps its slot and its key, so nothing
+        // else here would ever notice. R4a.
+        if (near_edit_contact) node_face_material_forget(slot);
         uint near_n = face_light.words[light_at] & 0xFFFFu;
         uint far_n = (face_light.words[light_at] >> 16) & 0xFFFFu;
         if (near_edit_contact && near_n > seed) {
@@ -1562,6 +1567,9 @@ void main() {
     } else if (samples == 0u) {
         for (uint w = 0u; w < kFaceLightWords; ++w) face_light.words[light_at + w] = 0u;
         faces.items[slot].photons &= ~kFaceLampIdle;
+        // ...and the same sentence about the same hazard, one array along: what this slot is MADE
+        // of was worked out by whatever face held it before, and nothing uploads over that either.
+        node_face_material_forget(slot);
         // ...and then start from the coarse face standing over this one rather than from nothing,
         // which is what makes a newly revealed surface right on the frame it appears. Not for a
         // stand-in itself -- it IS the coarse face, and the one three levels above it is six levels
@@ -1570,6 +1578,20 @@ void main() {
             face_light_seed(light_at, ivec3(face.x, face.y, face.z), level, direction);
         }
     }
+
+    // ---- what this face is made of (R4a) ------------------------------------------------------
+    //
+    // Resolved once per face and kept, so this is one load on every visit after the first. See the
+    // FaceMaterial binding in node.glsl for the word and for why the card has to ask rather than be
+    // told, and note that a face over a brick the pool has not built resolves to nought and asks
+    // again next visit rather than recording itself as matte.
+    //
+    // Nothing in THIS pass reads it yet: the reflection that will is R4c, and what reads it today
+    // is the composite's debug view 21, which is the only way to tell a face that has looked and
+    // found stone from a face that has not looked. Trap 1 is the reason it has a reader at all
+    // before it has a consumer -- a pass whose output nothing reads is a pass talking to nothing,
+    // and five traversal changes were once measured against a picture that could not have moved.
+    node_face_material(slot, ivec3(face.x, face.y, face.z), level);
 
     // ---- and what this face's neighbours make of the same two questions ------------------------
     //
