@@ -882,28 +882,35 @@ void main() {
                     vec3 other;
                     face_lobe_frame(normal, side, other);
                     vec3 found;
-                    // ---- which direction a bin is indexed by, and it is OPEN ------------------
+                    // ---- indexed by the direction the EYE IS IN, not by the mirror of it -----
                     //
-                    // **Reported, and not settled**: *"something red on the right doesnt reflect on
-                    // the right of the material but on its left"*. That is a real observation and
-                    // it names exactly the failure `face_lobe_frame`'s comment warns about — a
-                    // reflection mirrored about the normal looks very nearly right, and it is the
-                    // hardest kind of wrong to see.
+                    // **Reported before it was found, and then proved by a controlled test**:
+                    // *"something red on the right doesnt reflect on the right of the material but
+                    // on its left"*. A bright slab was placed beside the great bronze door, once on
+                    // each side, and photographed: with the slab on the RIGHT the door brightened
+                    // on the LEFT, and with it on the left the door brightened on the right. The
+                    // reflection was mirrored.
                     //
-                    // Reading `face_lobe_at(view, ...)` instead is the change that follows from the
-                    // arithmetic: `lobe_cast` already aims at the mirror of the bin's own
-                    // direction, so mirroring again here would be a second half-turn of the
-                    // hemi-octahedral square. **It was tried and it is not carried**, because it
-                    // sent the gilt paterae on the frieze from gold to grey — the bins it then
-                    // reads are dark, and that is a measurement that contradicts the derivation.
+                    // A bin holds what an eye at that bin's direction SEES — `lobe_cast` already
+                    // aims at the mirror of the bin, which is where the one mirroring belongs.
+                    // Indexing the read with `reflect(dir, normal)` mirrored a second time, and a
+                    // second mirroring about the normal is the map (dx, dy) -> (-dx, -dy): the
+                    // hemi-octahedral square turned a half turn, which is a reflection flipped left
+                    // for right AND top for bottom. It is invisible head on, because a direction
+                    // and its mirror coincide at the normal, and it grows with the angle — so the
+                    // one view where a reflection is worth looking at is the one where it is most
+                    // wrong.
                     //
-                    // So one of the two is right and the argument does not decide which. What
-                    // decides it is a CONTROLLED test and not more reasoning: put an unmistakable
-                    // colour on one known side of a polished face, with `--edit`, and photograph
-                    // which side of the reflection it lands on. Until somebody does that, this
-                    // stays as the arm that draws gold as gold. See D597.
-                    if (lobe_radiance(block, face_lobe_at(reflect(dir, normal), normal, side, other),
-                                      found)) {
+                    // **This was reverted once, and the reason it was reverted is worth keeping.**
+                    // Fixing it makes the gilt paterae on the frieze DARKER, which read as a
+                    // regression and was treated as one. It is not: they are under the portico
+                    // soffit, the direction they correctly reflect is the dark ceiling, and the
+                    // gold they had been showing was the sunlit floor arriving through the mirrored
+                    // lookup. A wrong reflection that flatters a surface is still wrong, and only
+                    // the controlled test could tell the two apart — `face_lobe_frame`'s comment
+                    // says a fault of this shape "looks very nearly right", and it looked BETTER
+                    // than right, which is worse. D598.
+                    if (lobe_radiance(block, face_lobe_at(view, normal, side, other), found)) {
                         reflected = found;
                     }
                 }
@@ -1219,12 +1226,10 @@ void main() {
                         else if (face == 4u) face_normal = vec3(0, 0, 1);
                         else face_normal = vec3(0, 0, -1);
                         face_lobe_frame(face_normal, side, other);
-                        // The same direction the shaded path reads with -- see the open question
-                        // recorded there about which of the two it should be.
+                        // The direction the eye is in, exactly as the shaded path reads it -- see
+                        // the note there and D598 for the test that settled which of the two.
                         const bool measured = lobe_radiance(
-                            block,
-                            face_lobe_at(reflect(dir, face_normal), face_normal, side, other),
-                            found);
+                            block, face_lobe_at(-dir, face_normal, side, other), found);
                         colour = measured ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.9, 0.0);
                     }
                 }

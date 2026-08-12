@@ -3827,3 +3827,51 @@ and nothing done to a reflection makes that read as water. R4d.
 | D597 | **Hemispherical-average Fresnel out of the diffuse, view-angle Fresnel into the specular** | correctness | Two averages of one quantity. The view-angle one on the diffuse blackens every glancing surface, which is where a reflection is seen |
 | D597 | **Visible-normal sampling for the lobe ray** | correctness | The plain sample cannot fill a grazing bin at all, and grazing bins are the whole point of the ray |
 | D597 | **"Too subtle" is named as the bin count and not fixed** | measurement | 3.6 degrees of material against 13.5 degrees of bin. It is R4b's coverage rule and not a constant |
+
+## D598 — the reflection WAS mirrored, and the reason it took two attempts is that the fault flattered the picture
+
+**Reported: *"something red on the right doesnt reflect on the right of the material but on its
+left"*. It is true, it is now fixed, and the interesting part is that D597 had the right change in
+hand, tried it, and reverted it.**
+
+**The controlled test, which is what settled it and should have been run first.** A near-white slab
+(`--edit ... ,4`, marble_hot) placed beside the great bronze door, once on each side, photographed
+with `--debug-mode 23` so nothing but the lobe is in the frame:
+
+| slab | before | after |
+|---|---|---|
+| on the RIGHT (+x) | door brightens on the **left** | door brightens on the **right** |
+| on the LEFT (−x) | door brightens on the **right** | door brightens on the **left** |
+
+Three runs a side, one flag, one build. The before column is the fault and the after column is the
+fix, and neither is a judgement about how the picture looks.
+
+**The fault.** A bin holds what an eye at that bin's direction sees, because `lobe_cast` already
+aims at the mirror of the bin — that is where the one mirroring belongs. Indexing the read with
+`reflect(dir, normal)` mirrored a second time, and a second mirroring about the normal is the map
+(dx, dy) → (−dx, −dy): the hemi-octahedral square turned a half turn, so a reflection came out
+flipped left for right **and** top for bottom. It is invisible head on, because a direction and its
+mirror coincide at the normal, and it grows with the angle — worst exactly where a reflection is
+worth looking at.
+
+**Why D597 reverted the correct change, and this is the part worth carrying.** Fixing it makes the
+gilt paterae on the frieze **darker**, and that read as a regression. It is not one. They sit under
+the portico soffit; the direction they correctly reflect is the dark ceiling, and the gold they had
+been showing was the sunlit floor arriving through the mirrored lookup. **A wrong reflection that
+flatters a surface is still wrong**, and nothing but a controlled test can tell those apart —
+`face_lobe_frame`'s own comment says a fault of this shape "looks very nearly right", and this one
+looked *better* than right, which is worse, because it recruits your judgement to defend it.
+
+The general rule, and it is the one this session cost the most to learn: **when a derivation and a
+picture disagree, the picture is not evidence until it is a controlled pair.** D597 treated one
+uncontrolled screenshot as a measurement and reverted a correct fix on it.
+
+527 tests, 18.67 M assertions. Close camera 4.369 ms against 4.368, resolve 0.736 against 0.761 —
+the fix is one expression and costs nothing.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D598 | **Index the bin by the eye's direction, not by its mirror** | measurement | The one mirroring belongs in `lobe_cast`, which already does it. Doing it again is a half turn of the square |
+| D598 | **A slab placed on each side, one flag of one build** | process | The only thing that can settle an orientation. It found the fault and then proved the fix, with the same two runs |
+| D598 | **The gilt getting darker is the fix and not a regression** | correctness | Under a soffit the correct reflection is the dark ceiling. The gold was the floor arriving through the flip |
+| D598 | **A picture that is not a controlled pair is not evidence** | process | D597 reverted a correct change on one screenshot, because the fault made the surface prettier |
