@@ -1970,6 +1970,22 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
 // Called from beside `node_face_material_forget` and for the same reason: this array is never
 // uploaded, so a claim cannot clear it. Without it a re-used slot would find its own number in a
 // header, decide the block was its own, and read the previous occupant's reflection.
+// Which block a slot is holding, without claiming one. The same probe `node_face_lobe` opens with
+// and the same one `resolve.comp` runs per metal pixel -- three copies of a walk over eight
+// adjacent headers, and it is three because each of them is in a shader with a different descriptor
+// set. The arithmetic they share is in face_terms.glsl, which is where a stride belongs (D332).
+uint node_face_lobe_find(uint slot) {
+    if (slot >= kLobeSlotMask) return kNoLobe;
+    const uint base = face_lobe_set(slot);
+    for (uint way = 0u; way < kLobeWays; ++way) {
+        const uint header = face_lobe_header(base + way);
+        if (header + 1u >= face_lobe.words.length()) return kNoLobe;
+        const uint held = face_lobe.words[header];
+        if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) return base + way;
+    }
+    return kNoLobe;
+}
+
 void node_face_lobe_forget(uint slot) {
     if (slot >= kLobeSlotMask) return;
     const uint base = face_lobe_set(slot);

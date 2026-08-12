@@ -393,6 +393,11 @@ const uint kLobeSlotMask = (1u << kLobeSlotBits) - 1u;
 const uint kLobeHeaderWords = 4u;
 uint face_lobe_header(uint block) { return block * kLobeHeaderWords; }
 uint face_lobe_count_at(uint block) { return block * kLobeHeaderWords + 2u; }
+// ...and the fourth word, which says whether this lobe has been blended with its neighbours' yet.
+// One bit, because the blend runs ONCE — see `face_lobe_denoise` in shade_faces.comp for why a
+// filter that reads the array it writes may run once and must not run twice.
+uint face_lobe_state_at(uint block) { return block * kLobeHeaderWords + 3u; }
+const uint kLobeFiltered = 1u;
 uint face_lobe_holder(uint slot, float worth) {
     return ((slot + 1u) & kLobeSlotMask) |
            (uint(clamp(worth, 0.0, 1.0) * 255.0 + 0.5) << kLobeSlotBits);

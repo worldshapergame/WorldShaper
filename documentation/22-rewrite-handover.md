@@ -2107,12 +2107,14 @@ its 4.40 ms budget in the moving case either way.
    four times the blocks and eight ways for 38.9 MB, takes declines to **0.8%**, and cuts the rays
    a face needs over its life from 1,536 to 864. It costs 13.5 degrees of blur instead of 10.2.
 
-**What is still owed, and it is visible in `--debug-mode 23`.** Thirty-six bins at twenty-four
-samples is a per-bin estimate of a radiance, and the lobe on its own is **visibly mottled face to
-face**. It is frozen rather than fizzing, because the burst converges and stops, so it reads as
-grain rather than as noise and the diffuse and the tone curve absorb most of it. The tool for it
-exists: `face_denoise` already blends three of a face's terms with its coplanar neighbours', and
-this is the fourth that wants it. **That is the next thing R4 owes**, and it needs no rays.
+**The mottling that was owed here is closed** (D595). Thirty-six bins at twenty-four samples is a
+per-bin estimate of a radiance, so the lobe on its own was visibly grainy face to face. It is the
+fourth term to want `face_denoise`'s idea and it needed no rays: a lobe is blended with its coplanar
+neighbours' bin against the same bin, **once**, on the visit after it converges and marked in the
+block's header — because there is no room for a second copy of thirty-six bins and the only thing
+that bounds a filter reading what it writes is that it runs once. Measured on the lobe alone with
+`--debug-mode 23`, the speckle at the great door goes **21.73 → 14.75**, and it costs 4.292 ms
+against 4.229 settled and 9.865 against 9.318 flying.
 
 And the bin count still does not follow **pixel coverage**, which is D186's own sentence and the
 half of R4b that is not built. A mirror filling the screen gets the same thirty-six bins as one

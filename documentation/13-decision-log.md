@@ -3672,3 +3672,52 @@ fourth term that wants it. That is the next thing this stage owes.
 | D594 | **Thirty-six bins so the pool can be four times larger** | measurement | Declines 47% → 0.8%, and 864 rays a face instead of 1,536, for 3.3 degrees of extra blur |
 | D594 | **The far ray's splat becomes the control arm** | design | With the ray in it is 128 GGX evaluations to add one badly aimed sample. Keeping it only in the `--no-lobe-ray` arm keeps that arm meaning "the bins as R4c filled them" and takes its cost out of the shipped path |
 | D594 | **The mottle is named and left to R5** | process | It is a per-face estimator with two dozen samples a bin, which is the class `face_denoise` was built for. Inventing a second filter here would be a second thing to be wrong about |
+
+## D595 — R5: a lobe compares notes with the faces around it, once
+
+**Reported off `--debug-mode 23` and named in D594 before it was fixed: the metal is mottled face to
+face.** Thirty-six bins at twenty-four samples is a per-bin estimate of a RADIANCE, so each face's
+answer disagrees with its neighbour's by its own standard error, and on a flat bronze door that
+disagreement is the only thing there is to see.
+
+This is the fourth term to want `face_denoise`'s idea and **it needs no rays**. A neighbour at the
+same level and the same direction, one step along either axis the normal is not along, is coplanar
+and contiguous by construction, so there is no edge to stop at and no normal, depth or mesh test to
+pay for — a change of plane is a change of key and the lookup simply misses.
+
+**Bin against the SAME bin, plainly, with no agreement test.** The three terms `face_denoise`
+already blends are single numbers, and blending them across a real lighting discontinuity is a bias,
+which is why each neighbour is weighed by how much it agrees. A lobe has no such hazard: bin j of
+two coplanar neighbours is what one cone looks like from two points a voxel apart, and the only way
+those differ materially is parallax at a metre's range. So the kernel is the plain 3×3 tent, and
+each tap is weighted by how far along that neighbour's own burst is.
+
+**Once, and that is the whole of what keeps it bounded.** Every other filter here reads one set of
+words and writes another, because a filter that reads what it writes is applied again on every visit
+and blurs without bound. There is no room for a second copy — another thirty-six bins a block is
+another 38.9 MB — so this runs **exactly once per lobe, on the visit after it converges**, marked in
+the block's own header. A neighbour that converges later reads a blend of blends, which is about one
+and a half applications over a patch rather than an unbounded number, and nothing runs it again. An
+edit forgets the block and the whole thing is measured and blended again from nothing.
+
+**Measured on the lobe ON ITS OWN**, which is what `--debug-mode 23` is for — the speckle metric at
+the great door: **21.73 → 14.75, a third less**. The shaded picture moves 3.339 of 255 over 86,959
+pixels, but that figure is against `--no-face-denoise`, which takes R5a away with it, so it is not
+attributable to this alone; the speckle figure is, because that view draws nothing else.
+
+**Cost:** close camera settled over 1000 frames, faces pass **4.292 ms against 4.229** before this —
+inside the spread, because the blend runs once per lobe lifetime. Flying, **9.865 against 9.318**,
+which is the transient: a moving camera converges lobes continuously so the once-per-lobe cost is
+paid continuously. 527 tests, 18.67 M assertions.
+
+**The eight neighbours are resolved into blocks ONCE and then the bins are walked**, rather than
+probing per bin. Eight face lookups and eight block probes against thirty-six times that is the
+difference between this costing nothing and costing more than the rays it is cleaning up after.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D595 | **Blend bin against the same bin, with no agreement test** | design | Two coplanar neighbours' bin j is one cone seen from a voxel apart. The hazard `face_denoise` weighs against — a real discontinuity across a flat plane — has no analogue in a direction |
+| D595 | **Once per lobe, marked in the header** | design | No room for a second copy, so the only thing that bounds a filter reading what it writes is that it runs once |
+| D595 | **On the visit AFTER convergence** | correctness | So the bins being blended are the ones the face finished with. One visit of latency on a quantity that has stopped moving |
+| D595 | **Under `--no-face-denoise` with the rest** | process | It is the same idea about the same geometry; two dials for one question is two things to get out of step |
+| D595 | **Resolve the neighbours once, then walk the bins** | measurement | Thirty-six times eight probes would cost more than the rays this cleans up after |

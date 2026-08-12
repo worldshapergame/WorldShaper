@@ -1174,6 +1174,94 @@ void lobe_cast(uint block, uint bin, uint index, float pixel_angle, vec3 corner,
     face_lobe_add(block, bin, cosine, radiance);
 }
 
+// ---- R5: a lobe blended with the lobes of the faces around it ----------------------------------
+//
+// **Reported by looking at `--debug-mode 23`: the metal is mottled face to face.** Thirty-six bins
+// at twenty-four samples is a per-bin estimate of a RADIANCE, so each face's answer disagrees with
+// its neighbour's by its own standard error — and on a flat bronze door that disagreement is the
+// only thing there is to see. It is frozen rather than crawling, because the burst converges and
+// stops, so it reads as grain rather than as noise; that makes it less urgent and no less wrong.
+//
+// This is the fourth term to want `face_denoise`'s idea and it needs no rays. A neighbour at the
+// same level and the same direction, one step along one of the two axes the normal is NOT along, is
+// **coplanar and contiguous by construction** — same plane, same orientation, adjacent — so there
+// is no edge to stop at and no normal, depth or mesh test to pay for. A change of plane is a change
+// of key and the lookup simply misses.
+//
+// # Why bin by bin rather than as one filter, and why it is free of the edge test the others need
+//
+// The three terms `face_denoise` blends are single numbers, and blending them across a real
+// lighting discontinuity — the edge of a shadow, the last voxel a sconce reaches — is a bias, which
+// is why it weighs a neighbour by how much it AGREES. A lobe has no such hazard: bin j of two
+// coplanar neighbours is what the same cone looks like from two points a voxel apart, and the only
+// way those differ materially is parallax at a metre's range, which is what a reflection of
+// something very close would be. So this blends bin against the SAME bin, plainly.
+//
+// # Once, and that is the whole of what keeps it bounded
+//
+// Every other filter in this renderer reads one set of words and writes another, because a filter
+// that reads what it writes is applied again on every visit and blurs without bound until a wall is
+// one colour. There is no room for a second copy here — a second thirty-six bins a block is another
+// 38.9 MB — so this runs **exactly once per lobe, on the visit it converges**, marked in the
+// block's own header. A neighbour that converges later reads a blend of blends, which is about one
+// and a half applications over a patch rather than an unbounded number, and it stops there because
+// nothing runs it again. An edit forgets the block, so the whole thing is measured and blended
+// again from nothing, which is the same discipline the rest of the record follows.
+void face_lobe_denoise(uint block, ivec3 node, uint level, uint dir) {
+    const ivec2 axes = face_axes(dir);
+    ivec3 du = ivec3(0);
+    ivec3 dv = ivec3(0);
+    du[axes.x] = 1;
+    dv[axes.y] = 1;
+
+    // The eight neighbours resolved ONCE into blocks, rather than per bin. Eight face lookups and
+    // eight probes against thirty-six times that, which is the difference between this costing
+    // nothing and costing more than the rays it is cleaning up after.
+    uint at[8];
+    float trust[8];
+    // NOT `const`: `du` and `dv` come from the face's direction at run time, and a const array in
+    // GLSL wants a constant initialiser.
+    ivec3 steps[8] = ivec3[8](-du, du, -dv, dv, -du - dv, -du + dv, du - dv, du + dv);
+    float spatial[8] =
+        float[8](kDenoiseEdge, kDenoiseEdge, kDenoiseEdge, kDenoiseEdge,
+                 kDenoiseCorner, kDenoiseCorner, kDenoiseCorner, kDenoiseCorner);
+    for (uint i = 0u; i < 8u; ++i) {
+        at[i] = kNoLobe;
+        trust[i] = 0.0;
+        const uint found = node_face_lookup(node + steps[i], level, dir);
+        if (found == kNoFace || found == kFaceTombstone || found >= faces.items.length()) continue;
+        const uint block_at = node_face_lobe_find(found);
+        if (block_at == kNoLobe) continue;
+        // Weighted by how far along the neighbour's own burst is, capped at converged. A face two
+        // visits into its measurement is noise, and noise averaged nine ways is noise one scale
+        // coarser -- which is D387's measurement and the same reason `face_light_seed` refuses a
+        // thin ancestor.
+        const float count = float(min(face_lobe.words[face_lobe_count_at(block_at)],
+                                      kLobeConverged));
+        if (count <= 0.0) continue;
+        at[i] = block_at;
+        trust[i] = spatial[i] * (count / float(kLobeConverged));
+    }
+
+    for (uint bin = 0u; bin < kLobeBins; ++bin) {
+        const uint mine = face_lobe_bin_at(block, bin);
+        float weight = kDenoiseCentre;
+        vec3 blended = face_unpack_rgb9e5(face_lobe.words[mine]) * kDenoiseCentre;
+        for (uint i = 0u; i < 8u; ++i) {
+            if (at[i] == kNoLobe) continue;
+            // A bin the neighbour has not reached yet adds nothing at all, which is what makes the
+            // kernel shrink gracefully instead of pulling the answer towards nought. Its weight is
+            // stored beside it and is nought exactly when no ray has landed in it.
+            const uint neighbour = face_lobe_weight_at(at[i], bin);
+            if (!(uintBitsToFloat(face_lobe.words[neighbour]) > 0.0)) continue;
+            weight += trust[i];
+            blended += trust[i] * face_unpack_rgb9e5(face_lobe.words[face_lobe_bin_at(at[i], bin)]);
+        }
+        if (weight > 0.0) face_lobe.words[mine] = face_pack_rgb9e5(blended / weight);
+    }
+    face_lobe.words[face_lobe_state_at(block)] |= kLobeFiltered;
+}
+
 // ---- lamps (R3c) ---------------------------------------------------------------------------
 //
 // Next-event estimation, moved off the pixel and onto the face. The path tracer aims at the sun and
@@ -1981,6 +2069,18 @@ void main() {
                           down, size, chunk_origin);
             }
             face_lobe.words[count_at] = taken + kLobeBurst;
+        } else if (probe_denoise() &&
+                   (face_lobe.words[face_lobe_state_at(lobe)] & kLobeFiltered) == 0u) {
+            // ---- R5: and on the one visit after it finishes, it compares notes ----------------
+            //
+            // On the visit AFTER the burst rather than on the last visit of it, so that the bins
+            // being blended are the ones this face finished with. It is one visit of latency on a
+            // quantity that has stopped moving.
+            //
+            // Under `--no-face-denoise` with the rest of the cross-face filter, because it is the
+            // same idea about the same geometry and a dial that switched one on and the other off
+            // would be two names for one question.
+            face_lobe_denoise(lobe, ivec3(face.x, face.y, face.z), level, direction);
         }
     }
 

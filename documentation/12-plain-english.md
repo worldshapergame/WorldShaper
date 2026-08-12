@@ -2114,3 +2114,29 @@ want something else.
 The other half still missing is that a mirror filling your screen gets the same thirty-six
 directions as one across the room. It should get hundreds. That is the piece I keep calling "bins
 from coverage", and it is a bigger job.
+
+## And the grain on the metal is gone
+
+The last thing I showed you had the reflection working and the metal visibly **mottled** — each
+little face had measured its own answer with a couple of dozen rays and they all disagreed slightly.
+This is that, fixed, and it cost no rays at all.
+
+**What it does.** Each face now compares its reflection with the eight faces around it before it
+settles. It only compares with faces on the *same flat surface facing the same way* — which the
+engine can tell instantly, because a face is identified by where it is and which way it points, so a
+neighbour on a different plane simply isn't found. Nothing has to be worked out about edges or
+corners; they take care of themselves.
+
+**It happens exactly once, when a face finishes measuring.** That matters more than it sounds. A
+smoothing pass that keeps running on its own output smears a bit further every time until a whole
+wall is one colour — so it runs once, the face marks itself done, and nothing runs it again. If you
+chisel near it, the face throws the whole thing away and measures and smooths again from nothing.
+
+**What it's worth**, measured on the reflection with everything else stripped away
+(`--debug-mode 23`): the graininess at the great door drops by a third. Standing still it costs
+nothing I can measure — 4.292 ms against 4.229. Flying it costs half a millisecond, because a moving
+camera keeps finishing new faces. 527 tests pass.
+
+**What's left**, and it's the same one as last time: a mirror filling your screen gets the same
+thirty-six directions as one across the room. It should get hundreds. That's the "directions from
+how much of the screen it covers" piece, and it's the biggest remaining part of this stage.
