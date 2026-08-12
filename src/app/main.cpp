@@ -5959,10 +5959,12 @@ int Application::play(const Options& options) {
         // three floats of accumulated BOUNCE radiance over the far field's own count -- then seven
         // more holding the FILTERED far field, bounce and lamp, which R5a writes from this face's
         // coplanar neighbours and which only the composite reads.
-        // kFaceLightWords in shaders/face_terms.glsl is the same nineteen, and the shader bounds its
+        // ...and one more holding WHICH WAY the lamps are, as an octahedral direction, so a polished
+// surface can draw a highlight of a sconce rather than only be lit by it (kFaceLampDir).
+// kFaceLightWords in shaders/face_terms.glsl is the same twenty, and the shader bounds its
         // writes against this length because a disagreement here is a write into whatever the
         // allocator placed next (D332).
-        if (!face_light_.create(device_, 19 * (face_buffers_.provisional_base() +
+        if (!face_light_.create(device_, 20 * (face_buffers_.provisional_base() +
                                                FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;

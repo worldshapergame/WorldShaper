@@ -1400,8 +1400,9 @@ bool lamp_path_crosses_edit(vec3 from) {
 // it would deliver, corrected by the density that chose it, and multiplied by whether the ray got
 // there. `unknown` says the ray was stopped by a cell the world claims and the pool has not built,
 // which is a measurement of the tree rather than of the light -- see the hold in main().
-vec3 lamp_cast(uint index, out bool unknown) {
+vec3 lamp_cast(uint index, out bool unknown, out vec3 to_lamp) {
     unknown = false;
+    to_lamp = vec3(0.0);
     if (node_push.light_count == 0u) return vec3(0.0);
 
     // Where on the face, and which way inside the cone, from one four-dimensional stratified
@@ -1465,6 +1466,10 @@ vec3 lamp_cast(uint index, out bool unknown) {
 
     const float cos_surface = dot(dir, normal);
     if (cos_surface <= 0.0) return vec3(0.0);
+    // Which way this sample went, for the dominant direction the specular highlight is drawn along.
+    // Handed back rather than accumulated here, because a sample that is then occluded delivers
+    // nothing and must not pull the mean towards a fitting this face cannot see.
+    to_lamp = dir;
 
     // The resampling correction: the kept candidate stands in for every one the draw saw, so its
     // density is scaled by the total weight against its own. The uniform density over the whole
@@ -2207,11 +2212,26 @@ void main() {
             g_lamp_state = node_hash_mix((slot ^ node_push.frame) * 0x9E3779B9u + lamp_n);
 
             bool ignorance = false;
+            uint lamp_dir = face_light.words[light_at + kFaceLampDir];
             for (uint i = 0u; i < lamp_burst; ++i) {
                 bool unknown = false;
-                lamp_sum += lamp_cast(lamp_n + i, unknown);
+                vec3 to_lamp = vec3(0.0);
+                const vec3 delivered = lamp_cast(lamp_n + i, unknown, to_lamp);
+                lamp_sum += delivered;
                 ignorance = ignorance || unknown;
+
+                // ...and which way it came from, as a running mean weighted by what it delivered.
+                // The weight is the luminance the record already carries, so this accumulates
+                // nothing of its own -- see kFaceLampDir.
+                const float brought = lamp_luminance(delivered);
+                if (brought > 0.0) {
+                    const vec3 had = face_oct_known(lamp_dir) ? face_oct_unpack(lamp_dir) : to_lamp;
+                    const float held = max(lamp_luminance(lamp_sum) - brought, 0.0);
+                    lamp_dir = face_oct_pack(
+                        normalize(mix(had, to_lamp, brought / max(held + brought, 1e-6))));
+                }
             }
+            face_light.words[light_at + kFaceLampDir] = lamp_dir;
             lamp_n += lamp_burst;
             if (ignorance) lamp_n = min(lamp_n, kLampConverged - 1u);
 

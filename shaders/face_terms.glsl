@@ -63,10 +63,59 @@
 // chain is already a progressive radiosity solve over many frames, and feeding a filtered value back
 // into it is the same unbounded blur arriving through the light transport instead of through the
 // buffer. The filter is a display of an estimate, not part of the estimator.
-const uint kFaceLightWords = 19u;
+//   19    R4b: which WAY the lamps are, as one octahedral direction in sixteen bits. See
+//         kFaceLampDir.
+const uint kFaceLightWords = 20u;
 const uint kFaceFilteredSky = 12u;      // the filtered far field
 const uint kFaceFilteredBounce = 13u;   // ...and the three words of filtered bounce after it
 const uint kFaceFilteredLamp = 16u;     // ...and the three of filtered lamp irradiance after that
+
+// ---- which way the lamps are, which is what a polished surface needs and did not have ---------
+//
+// **The sconces were not in the lobe at all.** A face's lamp term is an IRRADIANCE — radiance times
+// the cosine, integrated over every fitting the estimator drew — and an integral has no direction
+// left in it. So the diffuse half of a metal knew the lamps were there and the specular half did
+// not, and a gilt patera two feet from a lit sconce showed no highlight of it whatever.
+//
+// That is most of what "it does not reflect like polished gold" is. A polished metal in a dim room
+// is DARK, with a few small brilliant images of whatever is actually emitting — and those images
+// are what the eye reads as polish. The wide environment reflection this stage spent three
+// sub-steps on is the other, quieter half.
+//
+// One word, and it costs nothing to fill: `lamp_cast` already has the direction it aimed down, and
+// this is a running mean of it weighted by what each sample delivered. The luminance to weight by
+// is the lamp sum the record already holds, so nothing new is accumulated either.
+//
+// **And it is SHARP where the bins are not.** The highlight is evaluated per pixel against the
+// material's own roughness, exactly as the sun's is, so gilt at 3.6 degrees gets a 3.6 degree
+// highlight rather than the 13.5 the bins quantise everything else to. That is the whole reason
+// this reaches "polished" where four times the bins did not (D599): a point source needs a
+// direction, not a resolution.
+const uint kFaceLampDir = 19u;
+
+// A unit vector in sixteen bits, octahedral. About a degree, which is far inside the narrowest
+// highlight this renderer can draw.
+vec2 face_oct_wrap(vec2 v) {
+    return (vec2(1.0) - abs(v.yx)) *
+           vec2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+}
+uint face_oct_pack(vec3 n) {
+    n /= max(abs(n.x) + abs(n.y) + abs(n.z), 1e-6);
+    const vec2 e = (n.z >= 0.0 ? n.xy : face_oct_wrap(n.xy)) * 0.5 + 0.5;
+    const uvec2 q = uvec2(clamp(e * 255.0 + 0.5, vec2(0.0), vec2(255.0)));
+    // Never nought, because nought is the sentinel for "no direction recorded yet" and a legal
+    // direction must not be able to spell it. Trap 7, in sixteen bits.
+    return (q.x | (q.y << 8)) | 0x10000u;
+}
+bool face_oct_known(uint packed) { return (packed & 0x10000u) != 0u; }
+vec3 face_oct_unpack(uint packed) {
+    vec2 f = vec2(float(packed & 0xFFu), float((packed >> 8) & 0xFFu)) * (1.0 / 255.0) * 2.0 - 1.0;
+    vec3 n = vec3(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    const float t = max(-n.z, 0.0);
+    n.x += n.x >= 0.0 ? -t : t;
+    n.y += n.y >= 0.0 ? -t : t;
+    return normalize(n);
+}
 
 // The two occlusion terms a face carries, combined the one way that does not darken a crease twice.
 //

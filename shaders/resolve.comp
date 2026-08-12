@@ -633,6 +633,9 @@ void main() {
         // face reading no lamp is merely a surface not yet lit by a lamp, and the stand-in three
         // levels above it (kLampSeedMin) is what covers the frames in between.
         vec3 lamp = vec3(0.0);
+        // Hoisted out of the block below because the LOBE reads it too: a polished surface draws a
+        // highlight of a fitting, not only a diffuse lit by one. See kFaceLampDir.
+        uint lamp_n = 0u;
         if (face_slot < faces.items.length()) {
             uint sky_counters = face_light.words[face_slot * kFaceLightWords];
             uint sky_samples = sky_counters & 0xFFFFu;          // near-field rays
@@ -673,7 +676,7 @@ void main() {
             // nought there and takes its first far ray and its first lamp burst together, so the two
             // are never separately absent -- and a scene with no emitters gives every tap a lamp
             // mean of nought, which is the answer rather than a fallback.
-            uint lamp_n = face_light.words[face_slot * kFaceLightWords + 8u] & 0xFFFFu;
+            lamp_n = face_light.words[face_slot * kFaceLightWords + 8u] & 0xFFFFu;
             if (filtered_n > 0u) {
                 lamp = vec3(
                     uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
@@ -867,7 +870,33 @@ void main() {
             const uint metal = (material >> 8u) & 0xFFu;
             lobe_share = bounce_confidence;
             if (lobe_share > 0.0) {
-                const vec3 view = -dir;
+                // ---- ONE DIRECTION FOR THE WHOLE FACE, and that is a rule rather than a saving --
+                //
+                // **Reported from playing: the reflective floor was drawn with a gradient across
+                // every voxel face, and a face has to be one colour.**
+                //
+                // The lobe was being evaluated per PIXEL — the direction back to the eye differs a
+                // little across a 3 cm face, so the bin it reads, the bilinear blend between bins
+                // and the Fresnel all differed a little too, and what that draws is a smooth ramp
+                // over each face with a step at every face boundary. It is the one thing a flat
+                // voxel face must not do, and it is also the one term in this pass that was
+                // ignoring §1: light is worked out ON THE FACE, and a pixel READS it.
+                //
+                // So the direction is taken from the face's own centre to the eye. Every pixel on
+                // the face computes the same one, the face comes out flat, and it is cheaper —
+                // the arithmetic no longer depends on where in the face the pixel is.
+                //
+                // The AMBIENT term below still varies within a face on purpose (R10c fits a linear
+                // gradient to the near field from moments its own samples already carry). The two
+                // are not the same claim: that gradient is a MEASUREMENT of how occlusion varies
+                // across the voxel, and this was an artefact of evaluating a per-face quantity at a
+                // per-pixel point.
+                const Face lobe_face = faces.items[face_slot];
+                const float lobe_extent = float(1u << (lobe_face.packed & 0xFFu));
+                const vec3 lobe_centre =
+                    vec3(ivec3(lobe_face.x, lobe_face.y, lobe_face.z)) * lobe_extent +
+                    vec3(lobe_extent * 0.5) - vec3(push.camera_chunk.xyz * kChunkEdge);
+                const vec3 view = normalize(push.origin.xyz - lobe_centre);
                 const vec3 f0 = face_f0_of(albedo, metal);
                 const float alpha = face_alpha_of(rough);
                 const float n_dot_v = max(dot(normal, view), 1e-4);
@@ -920,6 +949,34 @@ void main() {
                 specular = face_lobe_environment(f0, n_dot_v, reflected);
                 specular += face_lobe_sun(f0, normal, view, trace.sun.xyz, alpha, sun_visible) *
                             sun_radiance();
+
+                // ---- and the LAMPS through the same lobe, which is what polish looks like ----
+                //
+                // A polished metal in a dim room is dark with a few small brilliant images of
+                // whatever is emitting, and those images are what the eye reads as polish. Until
+                // now the sconces reached a metal's diffuse and never its specular, because the
+                // face stores their IRRADIANCE and an integral has no direction left in it.
+                // `kFaceLampDir` is the direction, kept beside it for one word.
+                //
+                // Evaluated against the MATERIAL's roughness and not the bins', exactly as the
+                // sun's highlight is — so gilt gets a 3.6 degree highlight where the stored
+                // environment is quantised to 13.5. A point source needs a direction, not a
+                // resolution, which is why this reaches "polished" where four times the bins could
+                // not (D599).
+                //
+                // The stored irradiance already carries the cosine at the surface, so dividing by
+                // it recovers the normal-incidence figure `face_lobe_sun` expects — the same
+                // quantity `sun_radiance()` is on the line above. Floored, because a fitting almost
+                // edge-on to the face would otherwise divide by nearly nought and put a firefly
+                // exactly where the term is least justified.
+                const uint lamp_dir_word =
+                    face_light.words[face_slot * kFaceLightWords + kFaceLampDir];
+                if (lamp_n > 0u && face_oct_known(lamp_dir_word)) {
+                    const vec3 to_lamp = face_oct_unpack(lamp_dir_word);
+                    const float lamp_cos = max(dot(normal, to_lamp), 0.15);
+                    specular += face_lobe_sun(f0, normal, view, to_lamp, alpha, 1.0) *
+                                (lamp / lamp_cos);
+                }
                 specular *= lobe_share;
                 g_lobe_specular = specular;
 

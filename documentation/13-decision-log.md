@@ -3927,3 +3927,56 @@ Default arm unchanged: close camera **4.342 ms against 4.369**, 527 tests, 18.67
 | D599 | **The class follows roughness, which neighbours agree about** | D387 | A hard per-face decision on a smooth quantity is a discontinuity per face, and the blend cannot pair unlike sizes |
 | D599 | **A big block is four consecutive small ones** | design | 144 bins is exactly four blocks of 72 words, so there is no second pool, no second buffer and no host change |
 | D599 | **Off by default, built and priced** | measurement | Four times the bins is four times the rays for the same noise. Speckled at 8 samples a bin and still speckled at 24 |
+
+## D600 — what "polished" actually was: the lamps were never in the lobe, and a face was not one colour
+
+**Two reports, and the first is what R4b's expensive class could not buy at four times the rays.**
+
+### The sconces reached a metal's diffuse and never its specular
+
+A face's lamp term is an IRRADIANCE — radiance times the cosine, integrated over every fitting the
+estimator drew — and **an integral has no direction left in it**. So a gilt patera two feet from a
+lit sconce was *lit* by it and showed no *image* of it whatever. That is most of what "it does not
+reflect like real polished gold" is: a polished metal in a dim room is dark, with a few small
+brilliant images of whatever is emitting, and those images are what the eye reads as polish. The
+wide environment reflection this stage spent three sub-steps on is the other, quieter half.
+
+**One word a face** (`kFaceLampDir`, an octahedral direction in sixteen bits) and it costs no rays
+at all: `lamp_cast` already has the direction it aimed down, and this is a running mean of it
+weighted by what each sample delivered — with the weight taken from the lamp sum the record already
+holds, so nothing new is accumulated either. The record goes 19 words to 20, **+4.2 MB**.
+
+**And it is SHARP where the bins are not**, which is the whole reason it succeeds where D599 failed.
+The highlight is evaluated per pixel against the MATERIAL's roughness, exactly as the sun's is, so
+gilt at 3.6 degrees gets a 3.6 degree highlight rather than the 13.5 the bins quantise everything
+else to. **A point source needs a direction, not a resolution** — and a direction is one word where
+the resolution was four times the rays and still speckled.
+
+### A face was being drawn with a gradient across it
+
+**Reported from playing, with a photograph: the reflective floor was ramped across every voxel
+face.** The lobe was evaluated per PIXEL — the direction back to the eye differs a little across a
+3 cm face, so the bin it read, the bilinear blend between bins and the Fresnel all differed a
+little, and what that draws is a smooth ramp over each face with a step at every boundary.
+
+It is the one thing a flat voxel face must not do, and it was also the only term in the composite
+ignoring §1: **light is worked out ON the face and a pixel READS it.** The direction is taken from
+the face's own centre now. Every pixel on a face computes the same one, the face comes out flat,
+and it is cheaper — the arithmetic no longer depends on where in the face the pixel is.
+
+**The ambient term still varies within a face on purpose and that is not the same claim.** R10c fits
+a linear gradient to the near field from moments its own samples already carry; that is a
+MEASUREMENT of how occlusion varies across the voxel. This was an artefact of evaluating a per-face
+quantity at a per-pixel point.
+
+**Measured, settled at frame 2000 over 1000 frames:** close camera faces **4.331 ms against 4.342**,
+resolve **0.771 against 0.752**, enclosed 0.976 against 0.980 — all inside spread. 527 tests,
+18.67 M assertions, `--validation` clean.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D600 | **Store which way the lamps are, one octahedral word** | correctness | An irradiance has no direction in it, so the specular half of a metal could not see the fitting the diffuse half was lit by |
+| D600 | **The lamp highlight uses the MATERIAL's roughness, not the bins'** | measurement | A point source needs a direction and not a resolution. One word does what four times the bins could not (D599) |
+| D600 | **The weight comes from the lamp sum already stored** | design | A running mean of direction needs a running total, and the record has one. Nothing new accumulates |
+| D600 | **One view direction for the whole face** | §1 | A face is flat. Evaluating a per-face quantity at a per-pixel point ramps it, and it was the only term in the composite still doing so |
+| D600 | **R10c's gradient stays** | distinction | That one is a measurement of how occlusion varies across the voxel, not an artefact of where the pixel is |
