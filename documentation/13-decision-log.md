@@ -3144,3 +3144,60 @@ or it has to say out loud that it is not one.
 |---|---|---|---|
 | D584 | **R9c stays unbuilt and unranked until the pan is measured** | D569 | Two of its three justifications have been overturned by measurement and the third has never been taken. `--fly 0,0,0,N` costs one run |
 | D584 | **The retraction goes above the claim, not below it** | process | Three notes under one sentence still read as a sentence with footnotes. What a reader acts on is the first assertion they meet |
+
+## D585 — the pan, measured at last, and R9c has a premise for the first time
+
+**D584 said the entry side of a pan had never been measured and named the run that would do it.**
+This is that run. The premise turns out to be **real, large, and a different fault from the one the
+plan describes**.
+
+**Getting the experiment to hold still took three attempts, and they are worth more than the
+result.** The question is whether geometry swinging into view is worse than the same geometry when
+it was not just revealed. That needs the *same pixels* compared, which needs the same pose, and:
+
+1. **Two pan rates do not arrive at the same pose.** 30°/s and 90°/s for 400 frames end 400° apart,
+   so the first attempt compared two different views.
+2. **A panning run and a static run at the computed end yaw do not either.** The camera moves during
+   the SETTLE phase, so the end pose depends on which frame the world settled on. Measured: the two
+   pictures were 8.09 of 255 apart and **54% of pixels were landing on a different face**, which
+   `--debug-mode 11` said in one run. That 8.09 was pure misalignment and measured nothing.
+3. **What works is `--cut`**, which fires at a MEASURED frame and resets the fly state, so the pose
+   at the screenshot is `cut_yaw + rate × frames since the cut` whatever the settle frame was. Two
+   arms then arrive at ONE pose **from opposite directions**: cut to 90−195 and pan +30, against cut
+   to 90+195 and pan −30. Same pose, same frame, same world; the only difference is which edge of
+   the screen was leading.
+
+**The result, ambient convergence by vertical band (`--debug-mode 19`, `tools\bands.ps1`):**
+
+| band, left to right | turning towards the right | turning towards the left |
+|---|---|---|
+| 0 | 91.9 | **17.5** |
+| 1 | 90.7 | **40.4** |
+| 2 | 97.3 | 79.1 |
+| 3 | 145.5 | 137.7 |
+| 4 | 137.0 | 145.1 |
+| 5 | 78.6 | 97.5 |
+| 6 | **40.4** | 90.4 |
+| 7 | **14.0** | 88.8 |
+
+**The profile mirrors exactly when the turn reverses**, which is what makes this a measurement of
+the turn rather than of the content: band 7 reads 14.0 when it is the leading edge and 88.8 when it
+is the trailing one, on identical pixels. In samples that is about **112 against 707** — the leading
+edge of a pan carries a sixth of the ambient measurement the same surface has when it was not just
+revealed — and the deficit reaches about the outer third of the frame.
+
+**Nothing is missing, and that half of R9c's description is wrong.** The full-sun fallback is
+**0 pixels of 605,945** at every band, panning or still. R3e claims a stand-in in the pass that
+discovers it and R9d reads the coarse face three levels up, and between them a pixel always has an
+answer. R9c is about the QUALITY of that answer for a few dozen frames, never its absence.
+
+**And it is visible.** The same view arrived at from opposite directions, exposure pinned:
+**35.88 of 255 over 701,186 pixels, against a same-arm floor of 4.60 over 188,628.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D585 | **`--cut` is how a pan is pinned, not arithmetic on the settle frame** | trap 8 | The camera moves while the world builds, so the end pose depends on a frame count nobody controls. The face-key view says in one run whether two shots are the same view: 54% differing is a shift, 14% is a detail level |
+| D585 | **Read the light meter before comparing two arrivals** | D577 | The first pinned comparison read 41.83 of 255 and the meter had chosen **4.355× in one arm and 5.545× in the other** — a 27% exposure difference with nothing to do with the leading edge. `--no-auto-exposure` is the control, and D577's own note 1 says to read that line first |
+| D585 | **A band is not a share of the frame** | measurement | Every instrument here reports a debug view as a share of the whole picture, which is right for a cut and wrong for a pan: a deficit down one edge is a rounding error in a whole-frame share and is the entire fault |
+| D585 | **Black gets its own column in `bands.ps1`** | trap 10 | The first version folded black into the grey mean, and view 19 paints SKY black while view 16 paints a fully SHADOWED face black. A band four fifths sky reported a convergence of 1.96 of 255 and read as a hole in the leading edge. Trap 10 inside a tool written to check for trap 10 |
+| D585 | **R9c is worth building, and the gate is band 7 at 14.0 → 88.8** | measurement | Not the 21.9% bucket, which D569 already explained away, and not the fallback, which is nought everywhere. The mirror pair is the only figure here with the content controlled for |
