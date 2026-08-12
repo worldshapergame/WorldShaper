@@ -2402,10 +2402,20 @@ const uint kNoFaceLevel = 0xFFFFFFFFu;
 // How far a ray gets through one voxel of a transmissive material, as a tint.
 //
 // `opacity` is what the clip author wrote and what `face_medium` carries; the colour is the voxel's
-// own, because a pane of green glass makes what passes through it green. There is no Beer-Lambert
-// over the path here and there deliberately is not yet: the exact voxel distance is R4d's own
-// sub-step and the `absorb` bytes it needs are not on the face. What this is is the first half --
-// light stops being blocked outright by a window.
+// own, because a pane of green glass makes what passes through it green.
+//
+// **PER METRE, and that is not a detail -- it is the difference between a window and a wall.**
+// The first version of this applied the material's opacity once per VOXEL, and a voxel is 3 cm: a
+// four-voxel pane of `opacity=64` glass then transmitted 0.75^4 = 0.32 and the daylit hall went
+// dark again, with the light meter pinned at its ceiling. What the clip author writes is a property
+// of the MATERIAL and not of the sampling grid -- `absorb` in the same record is documented "per
+// metre" for exactly this reason -- so the figure is taken over a metre and rooted down to the
+// voxel. A pane is then nearly clear however finely it is sampled, which is what a pane is, and
+// three voxels of water dim more than one, which is what water does.
+//
+// It is not Beer-Lambert over the exact path yet: this is a product over the voxels crossed, which
+// is the same thing for a ray along an axis and drifts from it on a diagonal. The `absorb` bytes
+// and the exact distance are R4d's own sub-step.
 vec3 node_medium_through(uint type_id) {
     const uint type_at = min(type_id, uint(types.items.length()) - 1u);
     const uint visual_at = min(types.items[type_at].x, uint(visuals.items.length()) - 1u);
@@ -2416,7 +2426,8 @@ vec3 node_medium_through(uint type_id) {
                            float((visual.x >> 16u) & 0xFFu)) * (1.0 / 255.0);
     // Mixed towards white rather than multiplied outright: a pane a quarter opaque should tint what
     // passes by a quarter, not paint it its own colour. At opacity nought it is clear glass.
-    return mix(vec3(1.0), tint, opacity) * (1.0 - opacity);
+    const vec3 metre = mix(vec3(1.0), tint, opacity) * (1.0 - opacity);
+    return pow(max(metre, vec3(1e-4)), vec3(1.0 / kVoxelsPerMetreF));
 }
 
 // Coverage along one face direction, out of the six bytes a node carries.

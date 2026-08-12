@@ -4086,3 +4086,37 @@ both the pane and what is behind it, and it is where R4d goes next.
 | D602 | **Asked at the leaf only** | D132 | A coarse node stands over 512 voxels that need not agree about being glass, which is why `face_material` answers NONE above level 0 |
 | D602 | **Bounded by what survives, not by a layer count** | correctness | A ray down the length of a pane would multiply a hundred times; below two per cent the medium has taken everything and the ray has its answer |
 | D602 | **No Beer-Lambert yet, and said so** | process | The exact voxel path and the absorb bytes are a sub-step of their own. What this is is light no longer being blocked outright |
+
+## D603 — the tint the marcher accumulated and nothing read, and the metre it was measured over
+
+**Two faults in D602, one commit old, and both are the same class as things this log already warns
+about.**
+
+**`result.through` was computed and nothing read it.** The marcher accumulated what each pane let
+past and every reader threw it away — so coloured glass tinted nothing and a thick pane dimmed
+nothing. **Trap 1 in a change of my own**: a pass whose output nothing reads is a pass talking to
+nothing. The gathering ray's radiance and the lamp ray's are multiplied by it now, which is the whole
+reason it exists.
+
+**And the attenuation was PER VOXEL where the number is per material.** A voxel is 3 cm. Applying
+`opacity=64` glass once per voxel gives 0.749 apiece, so a four-voxel pane transmitted **0.32** and
+the daylit hall went dark again with the light meter pinned at its ceiling — a fault the meter
+caught before the eye did. What a clip author writes is a property of the MATERIAL, not of the
+sampling grid; `absorb` in the same record is documented *"per metre"* for exactly this reason. The
+figure is taken over a metre and rooted down to the voxel, so a pane is nearly clear however finely
+it is sampled and three voxels of water dim more than one.
+
+**Measured, one flag of one build, settled, a camera in a wing hall:**
+
+| | mean of 255 | pixels past 8 | the light meter |
+|---|---|---|---|
+| light through glass, against blocked | **94.138** | **1,020,158 of 1,024,000** | −8.63 stops against −10.00 |
+
+Close camera faces **5.077 ms against 4.575**, visibility **1.836 against 1.817** — unmoved, because
+the primary ray never asks. 527 tests, 18.67 M assertions.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D603 | **The gathered and lamp radiance carry the tint** | trap 1 | It was accumulated and discarded for a commit, which is the fault this log opens by warning about |
+| D603 | **Attenuation is per METRE, rooted to the voxel** | measurement | Per voxel, a four-voxel pane transmits a third and a daylit room goes black. Opacity is a property of the material and not of the grid |
+| D603 | **The light meter caught it** | process | Pinned at its ceiling on a room that had just been lit. A number that is at its limit is saying something even when the picture is only "dark" |

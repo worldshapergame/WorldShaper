@@ -958,6 +958,14 @@ SkySample sky_cast(uint index, float max_t) {
         } else {
             s.radiance = bounce_radiance(hit);
         }
+        // ...and what the glass this ray crossed let past (R4d). One for a ray that crossed
+        // nothing, which is nearly every ray, and coloured otherwise -- a green pane makes the
+        // daylight through it green, and that is the whole of what a tint is for.
+        //
+        // **This line is the reason `through` exists at all**, and it was missing for one commit:
+        // the marcher accumulated it and nothing read it, which is trap 1 in a change of my own --
+        // a pass whose output nothing reads is a pass talking to nothing.
+        s.radiance *= hit.through;
     }
 
     // The face this ray landed on, named to the host so the store holds it. R9a.
@@ -1494,7 +1502,9 @@ vec3 lamp_cast(uint index, out bool unknown, out vec3 to_lamp) {
         unknown = hit.unknown;
         return vec3(0.0);
     }
-    return chosen_radiance * (cos_surface * inv_pdf);
+    // ...times whatever glass stood between this face and the fitting, which is one for nearly
+    // every sample and is what makes a lamp behind a window dimmer than one in the room (R4d).
+    return chosen_radiance * (cos_surface * inv_pdf) * hit.through;
 }
 
 void main() {
