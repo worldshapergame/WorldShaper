@@ -3721,3 +3721,45 @@ difference between this costing nothing and costing more than the rays it is cle
 | D595 | **On the visit AFTER convergence** | correctness | So the bins being blended are the ones the face finished with. One visit of latency on a quantity that has stopped moving |
 | D595 | **Under `--no-face-denoise` with the rest** | process | It is the same idea about the same geometry; two dials for one question is two things to get out of step |
 | D595 | **Resolve the neighbours once, then walk the bins** | measurement | Thirty-six times eight probes would cost more than the rays this cleans up after |
+
+## D596 — the water still shows nothing, and most of the reason is the scene rather than the renderer
+
+**Reported: *"i still couldnt see reflections even in water"*. Chased with the instruments rather
+than reasoned about, and the answer is in four parts.**
+
+**The machinery is working, and `--debug-mode 22` says so at the basin**: the whole water surface is
+bright green — every face holds a block and has measured into it. `--debug-mode 23` then shows the
+term it delivers, and it is very nearly black. So the fault is on the READ side or in the physics,
+not in the storage or the rays. That is the first thing this pair of views was built to separate and
+it did it in one shot.
+
+**One real fault, fixed: the Fresnel share was not coming out of the diffuse.** R4c recorded skipping
+that as "a 4% effect for dielectrics" and it was wrong, because four per cent is the HEAD-ON figure
+and the whole point of a reflection is that it is seen at a glancing angle. Looking along a pool at
+nine degrees, a water surface turns away **45%** of what falls on it — and all of that was still
+reaching the diffuse underneath, so a basin was a strong blue Lambertian surface with a correct
+reflection buried under it. `turned_away` in resolve.comp takes it out now. **It changed the basin
+very little**, which is the honest result and points at the next part.
+
+**What it did not fix, and this is the scene rather than the renderer.** At the angles a player can
+actually stand at beside this basin — fifteen to twenty-five degrees down — Fresnel is 6–16%, and
+what the water can see at that angle is the podium wall a metre and a half behind it, which is pale
+limestone in shade. A 10% reflection of a dim flat wall is not visible against water's own albedo.
+**The clip's author had already worked this out and wrote it into `site.clip`**: *"a ray leaving this
+water at the shallow angle where a dielectric reflects strongly has 1.9 m of court to climb in
+before it meets a 1.8 m podium wall, so everything the water can show at a useful Fresnel angle is
+below the podium's top. To mirror a colonnade a basin has to stand a long way in front of it."*
+
+**And the part that is neither: water is drawn OPAQUE.** `material water ... opacity=110 ior=1.33`
+is a transmissive surface, and the renderer has no transmission — R4d is not built. So a basin is
+painted as an opaque blue Lambertian slab where it should be mostly clear, showing the marble pan
+through it with a surface reflection on top. **No amount of reflection makes that read as water**,
+and that is the honest reason the basins do not look like basins. It is R4d's, it is the next
+sub-step in the plan, and it is a bigger piece than either of the two before it.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D596 | **Take the Fresnel share out of the diffuse** | correctness | 4% is the head-on figure and 45% is the grazing one, and grazing is the only angle a reflection is seen at. R4c's stated simplification was wrong about which number mattered |
+| D596 | **The gathering ray does not apply it and cannot** | stated limit | It has no outgoing direction, so it has no angle to take a Fresnel at. The two readers still agree about metalness and differ about grazing, which over-counts what a glancing surface gives the room |
+| D596 | **Views 22 and 23 separated storage from physics in one shot** | process | Green everywhere and a black term is "the bins are full and the read is small", which is a different session's work from "nothing is being measured" |
+| D596 | **The basin's geometry is recorded, not argued with** | process | The clip's author measured what this water can reflect and wrote it down. A renderer change cannot make a pool mirror a colonnade that is behind a wall |

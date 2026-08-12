@@ -856,6 +856,9 @@ void main() {
         const vec3 albedo = colour;
         vec3 specular = vec3(0.0);
         float lobe_share = 0.0;
+        // How much of what arrives is turned away by the surface before it ever reaches the
+        // diffuse under it. See the assignment below.
+        vec3 turned_away = vec3(0.0);
         uint material = 0u;
         if (face_slot < face_material.words.length()) material = face_material.words[face_slot];
         if ((material & kFaceMaterialKnown) != 0u) {
@@ -889,6 +892,28 @@ void main() {
                             sun_radiance();
                 specular *= lobe_share;
                 g_lobe_specular = specular;
+
+                // ---- and what the lobe takes, the diffuse does not get --------------------
+                //
+                // **This is what stood between the water and a visible reflection.** Fresnel says
+                // a dielectric turns away four per cent of what falls on it head on and very
+                // nearly all of it at a glancing angle: looking along a pool at nine degrees, 45%
+                // of what arrives never reaches the water at all. R4c took that share for the
+                // lobe and left the diffuse whole, so a basin was a strong blue Lambertian surface
+                // with a reflection added on top — the reflection was there, measured and correct,
+                // and it was under a layer of blue that physically should not have been there.
+                //
+                // It matters far more for a dielectric than for a metal, which is why R4c
+                // recorded skipping it as a four-per-cent simplification and was wrong: four per
+                // cent is the head-on figure, and the whole point of a reflection is that you see
+                // it at a glancing angle. A metal has almost no diffuse to lose either way.
+                //
+                // The gathering ray does NOT apply this, and cannot: it has no outgoing direction,
+                // so it has no angle to take a Fresnel at. It keeps `face_diffuse_share` alone, so
+                // the two readers still agree about metalness and differ about grazing —
+                // over-counting what a glancing surface gives the room, on the term that is
+                // already the smallest thing in it. That is R4d's to close, with the transmission.
+                turned_away = face_fresnel(f0, n_dot_v) * lobe_share;
             }
         }
 
@@ -896,6 +921,7 @@ void main() {
         // by the same ramp, so the two halves of the energy split arrive together — a frame in
         // which the diffuse had been reduced and the specular had not is a frame with a hole in it.
         colour = albedo * mix(1.0, face_diffuse_share((material >> 8u) & 0xFFu), lobe_share) *
+                     (vec3(1.0) - turned_away) *
                      ((sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) *
                           (1.0 / kPi) +
                       bounce * bounce_confidence) +
