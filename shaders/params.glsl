@@ -51,3 +51,10 @@
     // Weather. See shaders/pt_clouds.glsl.
     vec4 sky_cloud;       // x coverage 0 clear to 1 overcast, y time in seconds, zw spare
     vec4 sky_wind;        // xy the low deck's wind in metres a second, zw how far it slid this frame
+
+    // The tone stage's dials. x: the ceiling the light meter may not expose past, as a multiplier,
+    // 0 meaning the shader's own default. It is what decides whether a dark room is allowed to be
+    // dark -- see kExposureMaxDefault in shaders/resolve.comp. y: how far above its neighbours a
+    // face's light has to be before the denoise leaves it out, 0 meaning the shader's own default --
+    // see kDenoiseOutlier in shaders/shade_faces.comp. zw spare.
+    vec4 tone;

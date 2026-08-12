@@ -2886,3 +2886,133 @@ case `exposure_range.clip` exists to test.
 |---|---|---|---|
 | D578 | **+1.3 stops, in a constant of its own** | judgement | Measured from what the three facility cameras need to stay put, so the change is the meter's behaviour and not a brightness edit. Anybody who wants a different look changes one number that says it is a look |
 | D578 | **Every figure above this line is still comparable, and every figure after it is not** | measurement | The facility moves by 2–6% rather than 35%, so this is not the wholesale re-baselining the handover warned it would be — but it is a change to every picture and `--no-auto-exposure` is what reaches the old ones |
+
+## D579 — R5a smeared every lit face into the eight around it, and the report was the diagnosis
+
+**Reported from playing**: *"speckles that show for a very brief second when looking at new places or
+turning your camera, especially on dark places"*, then, unprompted, *"the speckles I think have the
+size of 3×3 voxel faces"* and *"where the central pixel is properly coloured"*. That is not a
+symptom, it is a description of `face_denoise`'s kernel — a 3×3 tent over coplanar neighbours — and
+it named the fault in two sentences.
+
+**What D573 got right and what it over-generalised.** It argued that a coplanar neighbour needs no
+plane test, no normal test and no depth test, because a face is keyed by *(node, level, direction)*
+and a change of plane is a change of key that simply misses. All of that stands. What does not follow
+is that it needs **no test at all**: a flat plane carries real lighting discontinuities across it —
+the edge of a shadow, the line where an alcove stops shading, the last voxel a sconce reaches — and
+blending across one of those is a bias rather than a denoise. So every lit face lent light to the
+eight faces around it, which in a dark room is the whole signal. The lit face itself stays right,
+because its own answer dominates its own average; the ring around it is what moves. A correct centre
+in a wrong ring.
+
+**The measurement that shows it, and it is not the one that was reached for first.** `rough.ps1`
+reports two populations either side of 24 of 255, and D574 built it precisely because a roughness
+figure alone cannot tell a denoiser from a flattener. The edge population says it plainly:
+
+| enclosed, settled, 1280×800 | no filter | filter as reported | with the agreement test |
+|---|---|---|---|
+| **edges: count at mean strength** | 91,707 at 62.93 | **79,781 at 66.12** | **87,883 at 63.64** |
+| roughness | 3.0340 | 1.7480 | 1.8622 |
+| speckle | 12.210 | 8.097 | 8.921 |
+| fireflies | 0 | 9 | **0** |
+| faces pass | 2.632 ms | 2.808 | 2.809 |
+| close: edges | 263,815 at 64.00 | 244,945 at 63.76 | 250,280 at 64.49 |
+| close: roughness, speckle | 4.3284, 33.627 | 2.9688, 26.321 | 3.0730, 27.963 |
+| close: faces pass | 3.617 ms | 3.995 | 3.877 |
+
+**13% of the enclosed camera's lighting edges were being destroyed and 4.2% are now** — and what is
+left of the denoise is 90% of the roughness win and 80% of the speckle win. That trade is the whole
+of this change and it is visible in one row.
+
+**The rule, and why it has to be scaled by what the face already knows.** Each neighbour is weighted
+by how much it agrees with this face, and the strength of that test rises with how well this face
+knows its own answer (`far_n / kBounceBelieve`, the same count the composite believes the bounce in
+proportion to, so nothing new is stored):
+
+- a face with almost no samples does not trust itself, accepts its neighbours whole, and reads very
+  nearly their answer. **That is the borrowing R5a exists for and it is untouched** — it is what
+  makes a newly revealed surface stop being coarser than the wall around it;
+- a face that has measured itself for hundreds of samples trusts itself, and a neighbour four times
+  brighter is a neighbour on the other side of something rather than the same wall measured better.
+
+Without the scaling the two halves fight: an unconditional edge test forbids borrowing, which is
+most of what R5a bought, and no edge test smears. The agreement term is a plain ratio of luminances
+with a floor, not the exponential of a variance estimate a screen-space denoiser would use, because
+there is no variance estimate here and inventing one would be a second thing to be wrong about.
+
+**One thing was built first and taken out.** A trimmed mean — find the brightest tap, drop it if it
+is more than four times the mean of the others — reasoning that one bad face was contaminating nine.
+It measured as nothing, and the reason is that the case is the reverse: the extreme tap is usually
+the *correct* one, a genuinely lit face beside dark ones, and what needed excluding was the
+disagreement rather than the extreme. Two mechanisms for one question is also what D571 warns about.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D579 | **Agreement weight, scaled by the centre's own confidence** | correction | The geometric argument for no edge test was sound and did not extend to values. Scaling by confidence is what lets the same rule both borrow and refuse |
+| D579 | **`--denoise-edge 0` is the control arm and reads as what it means** | trap 15 | The dial's sentinel is negative, not nought, so the arm is spelled `0` rather than `1`. A dial whose control arm is one greater than it says is a wrong measurement waiting to happen |
+
+## D580 — the transient this was reported from cannot be measured, and that is the finding
+
+**Three runs of ONE arm, `--cut` from the outdoor camera into the room, photographed at cut+6:**
+mean pixel **69.990 / 82.286 / 84.888**, fireflies **1836 / 2268 / 2007**. With the light meter held
+fixed as well (`--no-auto-exposure`), two runs of each of two arms gave 61.647 / 65.155 against
+55.161 / 56.288 — the arms sitting well inside each other's spread.
+
+**So no arm comparison is possible at that frame**, and three tables of transient figures were
+produced and thrown away before that was checked. Trap 9 with a moving target: the reproducibility
+that `--settle` buys is reproducibility of the *settled* state, and a measurement taken six frames
+into a rebuild is against a store, a streaming queue and a meter that are all mid-flight.
+
+Two things follow, and the second is the useful one.
+
+**What was used instead** is the settled edge population above. The artefact is light where there
+should be none, which is a destroyed edge, and a destroyed edge is measurable on a settled camera
+even though it is only *visible* during the transient — because settled is when neighbouring faces
+disagree least. A mechanism can be measured where a symptom cannot.
+
+**And the acceptance test is the player**, which is how D510's blocky flicker was closed: somebody
+went looking for it in a build with the change in and could not find it. That is stated here rather
+than implied, because this change ships on an argument plus a proxy measurement, and the next person
+should know which parts of it were verified and which were reasoned.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D580 | **Check the spread of a transient before comparing anything in it** | trap 9 | `--settle` makes the settled state reproducible and says nothing about frame six of a rebuild. Everything measured there varied by more than any change being tested |
+| D580 | **Measure the mechanism when the symptom will not hold still** | measurement | A smeared edge is visible in the transient and present in the settled frame. The settled frame is where it can be counted |
+
+## D581 — an exposure ceiling, so that a room with no light in it reads as one
+
+**Asked for directly: "add an auto exposure floor so that at some point darkness is pitch black".**
+A light meter has no opinion about absolute brightness — it makes every scene average to the same
+grey — so without a ceiling there is no such thing as a dark room. Measured before this existed: a
+sealed unlit corner of `clips/many_lamps.clip` wound the meter to **429×** and read a mean pixel of
+**35.6** with 30,104 pixels over 200, which is a lit-looking picture of a room with no light in it.
+
+That is D541–D543's deleted light floor arriving through a different door. Those two constants were
+removed on the rule that **a surface which receives nothing is black**; an exposure with no ceiling
+puts the floor back above the whole picture instead of under each surface, and no amount of black
+paint reaches it.
+
+**The number is measured against the one scene that legitimately needs a large exposure.**
+`clips/exposure_range.clip` — a room lit through a single window — is taken to **33.3×** and reads
+correctly there, so the ceiling has to be above that. Everything past it is a room with less light in
+it than one window, which is a room that should go dark. **64×**, six stops over the facility's own
+2.9–3.7× and one stop over the window room:
+
+| | ceiling 4096 (what R6a shipped with) | ceiling 64 |
+|---|---|---|
+| the dark corner: the meter chose | 435.995× | **63.999×** |
+| ...mean pixel | 35.603 | **10.239** |
+| ...pixels over 200 | 30,104 | **1,020** — the sconces themselves |
+| the window room: the meter chose | 33.550× | 33.340× |
+| ...mean pixel | 149.379 | **149.329** — untouched |
+
+The old value was 4096 and it was the tracer's: a guard against a frame with nothing in it sending
+the exposure to infinity and then to NaN, rather than a decision about darkness. `--exposure-max N`
+sweeps it, because larger recovers more of the dark and smaller crushes more of it, and that is a
+trade a player should be able to move.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D581 | **64×, measured against the window room** | judgement | The ceiling has to clear the darkest scene that is genuinely lit. One stop of margin over 33.3× is what that leaves |
+| D581 | **A new `tone` vector in the parameter block, not `motion.w`** | D553 | `motion.w` described an accumulator R3d deleted and was free. Changing what a word means makes every rule written about it suspect, and a spare field costs sixteen bytes once |

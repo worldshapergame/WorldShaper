@@ -1499,6 +1499,86 @@ was measured in) and `--secondary-light-share N`, the divisor of the on-screen s
 rather than 128. And R5, because the argument for this pass being inside its budget while moving is
 further from true than it was.
 
+### Closed: R5a smeared every lit face into the eight around it — and the report was the diagnosis
+
+**Reported from playing:** *"speckles that show for a very brief second when looking at new places or
+turning your camera, especially on dark places"*, then, unprompted, *"the speckles I think have the
+size of 3x3 voxel faces"* and *"where the central pixel is properly coloured"*. That is a description
+of `face_denoise`'s kernel, and it named the fault in two sentences. D579–D581.
+
+**What D573 got right and what it over-generalised.** A coplanar neighbour needs no plane test, no
+normal test and no depth test — a change of plane is a change of face key and the lookup simply
+misses. That stands. What does not follow is that it needs **no test at all**: a flat plane carries
+real lighting discontinuities across it — a shadow edge, the line where an alcove stops shading, the
+last voxel a sconce reaches — and blending across one is a bias rather than a denoise. So every lit
+face lent light to the eight around it. The lit face itself stays right, because its own answer
+dominates its own average; the ring is what moves.
+
+**Each neighbour is now weighted by how much it AGREES with this face, and the strength of that test
+rises with how well this face knows its own answer** (`far_n / kBounceBelieve`, which is already
+stored). A face with almost no samples accepts its neighbours whole — that is R5a's borrowing and it
+is untouched — and a face that has measured itself for hundreds of samples refuses a neighbour four
+times brighter. Without the scaling the two halves fight: an unconditional edge test forbids
+borrowing, and no edge test smears.
+
+| enclosed, settled, 1280x800 | no filter | filter as reported | with the agreement test |
+|---|---|---|---|
+| **edges: count at mean strength** | 91,707 at 62.93 | **79,781 at 66.12** | **87,883 at 63.64** |
+| roughness | 3.0340 | 1.7480 | 1.8622 |
+| speckle | 12.210 | 8.097 | 8.921 |
+| fireflies | 0 | 9 | **0** |
+| faces pass | 2.632 ms | 2.808 | 2.809 |
+| close: roughness, speckle | 4.3284, 33.627 | 2.9688, 26.321 | 3.0730, 27.963 |
+| close: faces pass | 3.617 ms | 3.995 | 3.877 |
+
+**13% of the enclosed camera's lighting edges were being destroyed and 4.2% are now**, for 90% of the
+roughness win and 80% of the speckle win kept. Flying, two interleaved rounds: faces 7.459 / 7.634
+against 7.316 / 7.350. `--denoise-edge 0` is the control arm and restores the smearing filter exactly;
+`--denoise-edge N` sweeps the sharpness.
+
+**Two things to know, and the first is the reason this shipped on an argument.**
+
+1. **The transient it was reported from cannot be measured** (D580). Three runs of ONE arm,
+   `--cut` from outdoors into the room at cut+6: mean pixel **69.990 / 82.286 / 84.888**, fireflies
+   1836 / 2268 / 2007. With the meter held fixed too, the two arms sat well inside each other's
+   spread. **Three tables of transient figures were produced and thrown away before that was
+   checked.** `--settle` makes the SETTLED state reproducible and says nothing about frame six of a
+   rebuild. What was used instead is the settled edge population above: the artefact is light where
+   there should be none, which is a destroyed edge, and a destroyed edge is countable on a settled
+   camera even though it is only *visible* during the transient. **A mechanism can be measured where
+   a symptom cannot** — and the acceptance test is a player going to look for it and not finding it,
+   which is how D510 was closed.
+2. **A trimmed mean was built first and taken out.** Find the brightest tap, drop it if it is more
+   than four times the mean of the others, on the theory that one bad face was contaminating nine. It
+   measured as nothing, because the case is the reverse: the extreme tap is usually the *correct* one,
+   a genuinely lit face beside dark ones, and what needed excluding was the disagreement rather than
+   the extreme.
+
+### Closed: the light meter had no ceiling, so no room could be dark
+
+**Asked for directly: "add an auto exposure floor so that at some point darkness is pitch black".** A
+meter has no opinion about absolute brightness — it makes every scene average to the same grey — so
+without a ceiling there is no such thing as a dark room. A sealed unlit corner of
+`clips/many_lamps.clip` wound it to **429x** and read a mean pixel of 35.6 with 30,104 pixels over
+200: a lit-looking picture of a room with no light in it. That is D541–D543's deleted light floor
+arriving through a different door, and it sits above the whole picture rather than under each
+surface, so no amount of black paint reaches it.
+
+**The number is measured against the one scene that legitimately needs a large exposure**:
+`clips/exposure_range.clip`, a room lit through one window, which the meter takes to 33.3x and reads
+correctly there. Everything past that is a room with less light in it than one window.
+
+| | ceiling 4096 (what R6a shipped with) | ceiling 64 |
+|---|---|---|
+| the dark corner: the meter chose | 435.995x | **63.999x** |
+| ...mean pixel | 35.603 | **10.239** |
+| ...pixels over 200 | 30,104 | **1,020** — the sconces themselves |
+| the window room: mean pixel | 149.379 | **149.329** — untouched |
+
+4096 was the tracer's and was a guard against NaN rather than a decision. `--exposure-max N` sweeps
+it. The dial lives in a new `tone` vector in the parameter block rather than in `motion.w`, which was
+free since R3d deleted the accumulator it described — D553 is why not.
+
 ### Closed: the brightness dial had no writer, and two test scenes could not be used because of it
 
 **`resolve.comp`'s `kPreviewExposure` was the constant 3.2 and nothing had written it since R3d
@@ -2278,6 +2358,11 @@ reading it — R9b's control arm, and the state every figure taken before D561 w
 `--secondary-light-share N` is that class's ray budget as a divisor of the on-screen set's shading
 rate (8 by default; larger is cheaper and slower, and **D566 is why sweeping it downwards buys much
 less than it looks like it should**);
+`--denoise-edge N` is how hard R5a's filter weighs a neighbour against what a face already holds, and
+**0 is the control arm** — no agreement test at all, which is the filter that smeared each lit face
+into the eight around it (D579); `--exposure-max N` is how far the light meter may lift a dark scene,
+where a large value restores R6a's original 4096 and is the state a room with no light in it read as
+lit (D581);
 `--no-auto-exposure` restores the fixed brightness multiplier of 3.2 this pass applied for the whole
 of the rewrite, which is R6's control arm and the state every picture figure above that section was
 measured in — it works by having the host zero both of the meter's slots every frame, so the shader

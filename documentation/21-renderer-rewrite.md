@@ -1601,10 +1601,16 @@ makes the whole thing free, and R10g is what makes it survive eviction.
   answers of the one unbounded ray, and the slowest estimator here — are blended with its **coplanar
   neighbours'** in a 3×3 tent, weighted by how well measured each is.
 
-  **There is no edge-stopping term and that is the whole saving.** A neighbour at the same level and
-  direction, one step along an axis the normal is not along, is coplanar and contiguous *by
+  **No plane test, no normal test, no depth test, and that is the saving.** A neighbour at the same
+  level and direction, one step along an axis the normal is not along, is coplanar and contiguous *by
   construction*; a change of plane is a change of key and the lookup misses. What a screen-space
   denoiser spends most of its arithmetic on does not arise. The kernel is three voxels, 9.4 cm.
+
+  **It does need a test on the VALUE, and shipping without one was the fault D579 fixes**: a flat
+  plane carries real lighting discontinuities across it, so every lit face was lending light to the
+  eight around it — 13% of the enclosed camera's lighting edges destroyed, reported from playing as
+  3×3 speckles with a correct centre. A neighbour is weighted by how much it agrees with this face,
+  scaled by how well this face knows its own answer, so borrowing and refusing are one rule.
 
   **Three terms**, chosen from a photograph of every term on its own taken before any of this was
   built rather than from an argument: `open_sky`, the bounce and the **lamps**. The sun is

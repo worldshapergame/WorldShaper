@@ -1856,3 +1856,75 @@ I said the face light record was "the largest allocation in the renderer". It is
 placement that finished several sessions ago, and it is allocated on every launch. I have flagged it
 as its own piece of work rather than pulling it into this one, because removing it has to be measured
 (the whole reason it exists is that memory placement was suspected of changing frame times).
+
+## The speckles were mine, and you diagnosed them
+
+**"3×3 voxel faces, where the central pixel is properly coloured" is not a symptom — it is a
+description of the smoothing kernel I added two changes ago.** It told me exactly where to look, and
+it was right.
+
+**What I got wrong.** I argued that this smoothing needed no test for whether a neighbouring face
+"belongs" — because two faces on the same flat plane, side by side, facing the same way, are
+*guaranteed* to be the same surface. That part is true and it is still the reason this is cheap. What
+does not follow, and what I wrote down as though it did, is that it needed **no test at all**. A flat
+wall can carry a real edge across it: where a shadow stops, where an alcove stops shading it, where
+the last of a lamp's light reaches. Blending across one of those is not smoothing, it is smearing.
+
+So every lit face was lending light to the eight faces around it. The lit face itself still looked
+right, because its own answer dominates its own average — which is exactly the correct centre you
+saw. The ring around it is what moved. In a bright room you would never notice; in a dark one that
+borrowed light is the only thing there is to see, and on newly revealed geometry every face is
+disagreeing with its neighbours at once, which is why it appears when you turn and then goes.
+
+**The fix**, and the balance in it is the whole point: a neighbour now counts in proportion to how
+much it *agrees* with the face doing the smoothing — and how hard that test bites depends on how well
+that face knows its own answer. A face that has just appeared and has almost no measurements of its
+own still takes its neighbours whole, which is the thing that stops new surfaces looking coarse. A
+face that has measured itself for hundreds of samples refuses a neighbour four times brighter,
+because that is a neighbour on the other side of something.
+
+**The measurement.** I count sharp edges separately from flat areas, which I built for exactly this
+question two changes ago:
+
+| domed room | no smoothing | smoothing as you saw it | with the agreement test |
+|---|---|---|---|
+| sharp edges surviving | 91,707 | **79,781** | **87,883** |
+| roughness | 3.03 | 1.75 | 1.86 |
+| speckle | 12.21 | 8.10 | 8.92 |
+| stray bright dots | 0 | 9 | **0** |
+
+**13% of the room's real lighting edges were being destroyed; 4.2% are now** — and I keep 90% of the
+smoothing. It costs nothing while flying and nothing standing still.
+
+**One thing I have to be straight about: I could not measure the thing you actually saw.** The
+transient is not reproducible — three runs of the *same* build, same camera, same frame, gave mean
+brightness 70.0, 82.3 and 84.9. Anything I "measured" there was noise, and I threw away three tables
+of figures once I checked. So this change rests on the mechanism being provably wrong and provably
+fixed on a settled picture, not on a photograph of the moment you described. **You are the test.** If
+it is still there, tell me and `--denoise-edge 0` puts the old behaviour back for comparison, or
+`--no-face-denoise` turns the whole thing off.
+
+## And a ceiling on the exposure, so darkness can be dark
+
+You asked for a floor so that at some point darkness is pitch black. A light meter has no opinion
+about absolute brightness — it makes *every* scene average to the same grey — so without a limit
+there is no such thing as a dark room. A sealed unlit corner of the sconce hall was winding the
+meter to **429×** and reading as a lit room with nothing lighting it.
+
+That is the same fault I removed two sessions ago when I deleted the two constants that added a
+little light to every surface — except that an exposure with no ceiling puts the floor *above* the
+whole picture instead of under each surface, so no amount of black paint reaches it.
+
+The limit is **64×**, and it is measured rather than picked: the room-with-a-window scene genuinely
+needs 33×, so the ceiling has to clear that, and anything past it is a room with less light in it
+than one window — which should go dark.
+
+| | before | after |
+|---|---|---|
+| the dark corner: what the meter chose | 436× | **64×** |
+| ...average pixel | 35.6 | **10.2** |
+| ...pixels brighter than 200 | 30,104 | **1,020** (the sconces themselves) |
+| the window room: average pixel | 149.4 | **149.3** — untouched |
+
+`--exposure-max N` moves it if 64 is not where you want the line: smaller lets more of the dark stay
+dark, larger recovers more of it.

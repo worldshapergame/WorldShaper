@@ -190,15 +190,88 @@ const float kDenoiseCentre = 4.0;
 const float kDenoiseEdge = 2.0;
 const float kDenoiseCorner = 1.0;
 
+// ---- and the one tap that must not be allowed to speak for the other eight ---------------------
+//
+// **Reported from playing, and reported precisely enough to be a diagnosis: "the speckles have the
+// size of 3x3 voxel faces, where the central pixel is properly coloured".** That is this kernel.
+//
+// The failure is what a mean does with a heavy tail. A bounce sample is a RADIANCE with no bound to
+// average against — D535's own example is a ray landing on a sunlit sill returning twenty times what
+// the wall around it returns — and `kBounceMemory`'s incremental mean starts AT the first sample, so
+// a face with one far ray holds that ray. On settled geometry that face is one voxel of wrongness
+// nobody sees, and the sample-count weighting below buries it: a one-sample face contributes
+// 2/6000ths of a converged neighbour's answer.
+//
+// The case it does not bury is the one a player is in when they turn round. A newly revealed patch is
+// ALL new: every tap holds one or two samples, so every weight is comparable, and one wild value gets
+// a whole ninth of each of its eight neighbours. Its own face averages the outlier away and comes out
+// right — which is exactly the reported shape, a correct centre inside a wrong ring. Before this
+// filter existed that face was a single wrong voxel; the filter turned one bad face into nine.
+//
+// **The comment above this one was right about geometry and wrong to generalise from it.** A
+// coplanar neighbour needs no plane test, no normal test and no depth test — that much stands. It
+// does not follow that it needs no test at all, because a flat plane can carry a real lighting
+// discontinuity across it: the edge of a shadow, the line where an alcove stops shading, the last
+// voxel a sconce reaches. Blending across one of those is not denoising, it is a bias, and in a dark
+// room the bias is the whole signal.
+//
+// So each neighbour is weighted by how much it AGREES with this face, and the strength of that test
+// rises with how well this face knows its own answer:
+//
+//   - a face with almost no samples does not trust itself, accepts its neighbours whole, and reads
+//     very nearly their answer. That is the borrowing this stage exists for and it is untouched;
+//   - a face that has measured itself for hundreds of samples trusts itself, and a neighbour four
+//     times brighter is a neighbour on the other side of something rather than the same wall
+//     measured better. It contributes almost nothing.
+//
+// Without that scaling the two halves fight: an unconditional edge test forbids a new face from
+// borrowing (which is most of what R5a bought), and no edge test at all smears every lit face into
+// a ring of eight that should have been dark (which is what was reported).
+//
+// The agreement term is a plain ratio of luminances, one when they match and falling towards nought
+// as they diverge, with a floor so that black beside black is agreement rather than a division. It
+// is not the exponential of a variance estimate that a screen-space denoiser would use, because
+// there is no variance estimate here and inventing one would be a second thing to be wrong about.
+//
+// `--denoise-edge N` sweeps the sharpness and **0 is the control arm**, which is the filter exactly
+// as it was when the 3x3 was reported. A trade nobody can sweep is one somebody guesses at, and this
+// one has a real cost on the other side: test too hard and neighbouring faces stop helping each
+// other at all, which is R5a switched off by the back door.
+const float kDenoiseEdgeSharp = 2.0;
+// Negative is the sentinel for "the shader's own figure" rather than nought, so that `0` reads as
+// what it says -- no edge test at all -- instead of as "unset". A dial whose control arm is spelled
+// one greater than it means is a wrong measurement waiting to happen.
+float denoise_edge_sharp() { return push.tone.y >= 0.0 ? push.tone.y : kDenoiseEdgeSharp; }
+
+float denoise_luminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+// How much a tap agrees with the face doing the filtering, in [0, 1]. `known` is how far this face
+// trusts its own answer, and at nought this returns one for everything.
+float denoise_agree(vec3 value, vec3 centre, float known) {
+    const float sharp = denoise_edge_sharp();
+    if (known <= 0.0 || sharp <= 0.0) return 1.0;
+    const float a = denoise_luminance(value);
+    const float b = denoise_luminance(centre);
+    // A floor rather than an epsilon: two faces that are both nearly black agree, and without it
+    // the ratio of two tiny numbers is noise deciding the weight.
+    const float floor_lum = 1e-3;
+    const float ratio = (min(a, b) + floor_lum) / (max(a, b) + floor_lum);
+    return mix(1.0, pow(ratio, sharp), clamp(known, 0.0, 1.0));
+}
+
 // One tap. Adds nothing at all when there is no face there, which is what makes the kernel shrink
 // gracefully at a corner instead of pulling the answer towards nought.
 // Two weight sums and not one, because the two estimators have their own sample counts and they run
 // out at different times. A face whose far field has finished and whose lamp term was reopened by a
 // light-list version bump has hundreds of one and eight of the other, and a shared weight would let
 // whichever is further along decide how much of the other to take from that neighbour.
+// `centre_*` are what this face holds and `known` is how far it trusts that. The centre tap passes
+// `known = 0`, which makes every agreement term one and leaves it weighing exactly what it always
+// did.
 void face_denoise_tap(ivec3 node, uint level, uint dir, float spatial, inout float weight,
                       inout float spatial_used, inout float sky, inout vec3 bounce,
-                      inout float counted, inout float lamp_weight, inout vec3 lamp) {
+                      inout float counted, inout float lamp_weight, inout vec3 lamp,
+                      vec3 centre_bounce, vec3 centre_lamp, float known) {
     const uint found = node_face_lookup(node, level, dir);
     if (found == kNoFace || found == kFaceTombstone) return;
     const uint at = found * kFaceLightWords;
@@ -208,23 +281,29 @@ void face_denoise_tap(ivec3 node, uint level, uint dir, float spatial, inout flo
     // sky a lamp's answer is not a fraction in [0, 1] and has no bound to scale against.
     const uint lamp_n = face_light.words[at + 8u] & 0xFFFFu;
     if (lamp_n > 0u) {
-        const float lw = spatial * float(min(lamp_n, kLampConverged));
+        const vec3 value = vec3(uintBitsToFloat(face_light.words[at + 5u]),
+                                uintBitsToFloat(face_light.words[at + 6u]),
+                                uintBitsToFloat(face_light.words[at + 7u])) / float(lamp_n);
+        const float lw = spatial * float(min(lamp_n, kLampConverged)) *
+                         denoise_agree(value, centre_lamp, known);
         lamp_weight += lw;
-        lamp += (lw / float(lamp_n)) * vec3(uintBitsToFloat(face_light.words[at + 5u]),
-                                            uintBitsToFloat(face_light.words[at + 6u]),
-                                            uintBitsToFloat(face_light.words[at + 7u]));
+        lamp += lw * value;
     }
 
     const uint far_n = (face_light.words[at] >> 16) & 0xFFFFu;
     if (far_n == 0u) return;
-    const float w = spatial * float(min(far_n, kBounceMin));
+    const vec3 value = vec3(uintBitsToFloat(face_light.words[at + 9u]),
+                            uintBitsToFloat(face_light.words[at + 10u]),
+                            uintBitsToFloat(face_light.words[at + 11u]));
+    // The far field rides the bounce's agreement, because they are one ray's two answers and a
+    // neighbour that is not measuring this face's light is not measuring its sky either.
+    const float w = spatial * float(min(far_n, kBounceMin)) *
+                    denoise_agree(value, centre_bounce, known);
     weight += w;
     spatial_used += spatial;
     counted += w;
     sky += w * (float(face_light.words[at + 4u]) / float(far_n));
-    bounce += w * vec3(uintBitsToFloat(face_light.words[at + 9u]),
-                       uintBitsToFloat(face_light.words[at + 10u]),
-                       uintBitsToFloat(face_light.words[at + 11u]));
+    bounce += w * value;
 }
 
 void face_denoise(uint light_at, ivec3 node, uint level, uint dir) {
@@ -245,8 +324,16 @@ void face_denoise(uint light_at, ivec3 node, uint level, uint dir) {
     float lamp_weight = 0.0;
     vec3 bounce = vec3(0.0);
     vec3 lamp = vec3(0.0);
+    // This face first and on its own terms, because what it holds is what the eight around it are
+    // then weighed against. `known` is nought here, so the centre weighs exactly what it always did.
     face_denoise_tap(node, level, dir, kDenoiseCentre, weight, spatial_used, sky, bounce, counted,
-                     lamp_weight, lamp);
+                     lamp_weight, lamp, vec3(0.0), vec3(0.0), 0.0);
+    const vec3 centre_bounce = weight > 0.0 ? bounce / weight : vec3(0.0);
+    const vec3 centre_lamp = lamp_weight > 0.0 ? lamp / lamp_weight : vec3(0.0);
+    // How far this face trusts its own answer, and it is the same count the composite believes the
+    // bounce in proportion to (`kBounceBelieve` = 32). A face at nought samples takes its neighbours
+    // whole; a face past thirty-two weighs them against itself. Nothing new is stored to know it.
+    const float known = clamp(float(far_n) / 32.0, 0.0, 1.0);
 
     // The two axes the normal is not along, from the one function that answers that question. Three
     // copies of "which axis is u" is three chances for one of them to be the other.
@@ -257,36 +344,39 @@ void face_denoise(uint light_at, ivec3 node, uint level, uint dir) {
         du[axes.x] = 1;
         dv[axes.y] = 1;
         face_denoise_tap(node - du, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
-                         counted, lamp_weight, lamp);
+                         counted, lamp_weight, lamp, centre_bounce, centre_lamp, known);
         face_denoise_tap(node + du, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
-                         counted, lamp_weight, lamp);
+                         counted, lamp_weight, lamp, centre_bounce, centre_lamp, known);
         face_denoise_tap(node - dv, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
-                         counted, lamp_weight, lamp);
+                         counted, lamp_weight, lamp, centre_bounce, centre_lamp, known);
         face_denoise_tap(node + dv, level, dir, kDenoiseEdge, weight, spatial_used, sky, bounce,
-                         counted, lamp_weight, lamp);
+                         counted, lamp_weight, lamp, centre_bounce, centre_lamp, known);
         face_denoise_tap(node - du - dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
-                         bounce, counted, lamp_weight, lamp);
+                         bounce, counted, lamp_weight, lamp, centre_bounce, centre_lamp, known);
         face_denoise_tap(node - du + dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
-                         bounce, counted, lamp_weight, lamp);
+                         bounce, counted, lamp_weight, lamp, centre_bounce, centre_lamp, known);
         face_denoise_tap(node + du - dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
-                         bounce, counted, lamp_weight, lamp);
+                         bounce, counted, lamp_weight, lamp, centre_bounce, centre_lamp, known);
         face_denoise_tap(node + du + dv, level, dir, kDenoiseCorner, weight, spatial_used, sky,
-                         bounce, counted, lamp_weight, lamp);
+                         bounce, counted, lamp_weight, lamp, centre_bounce, centre_lamp, known);
     }
     if (weight <= 0.0 || spatial_used <= 0.0) {
         face_light.words[light_at + kFaceFilteredSky] = 0u;
         return;
     }
 
-    // The lamps, written as a mean. Nought weight is a scene with no emitters reaching this
-    // neighbourhood at all, and nought is the right answer there rather than a fallback -- the raw
-    // record says the same thing.
+    // The lamps, written as a mean with their most extreme tap trimmed. Nought weight is a scene
+    // with no emitters reaching this neighbourhood at all, and nought is the right answer there
+    // rather than a fallback -- the raw record says the same thing.
     const vec3 lamp_f = lamp_weight > 0.0 ? lamp / lamp_weight : vec3(0.0);
     face_light.words[light_at + kFaceFilteredLamp] = floatBitsToUint(lamp_f.r);
     face_light.words[light_at + kFaceFilteredLamp + 1u] = floatBitsToUint(lamp_f.g);
     face_light.words[light_at + kFaceFilteredLamp + 2u] = floatBitsToUint(lamp_f.b);
 
     const float inv = 1.0 / weight;
+    // `open_sky` is a fraction in [0, 1] and is combined plainly: it has no tail to trim, because
+    // there is no value a tap could hold that is four times what its neighbours hold and still
+    // inside the range.
     const float sky_f = clamp(sky * inv, 0.0, 1.0);
     const vec3 bounce_f = bounce * inv;
     // How well measured the answer is: the weighted mean of the taps' own counts. Clamped into

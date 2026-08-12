@@ -336,6 +336,17 @@ struct Options {
     // used before the meter existed -- so `--no-auto-exposure` is the picture every figure in the
     // decision log above R6 was measured against, exactly, and not an approximation of it.
     bool auto_exposure = true;
+    // The ceiling the meter may not expose past, as a multiplier. 0 keeps the shader's own figure.
+    //
+    // A light meter makes every scene average to the same grey, so without a ceiling there is no
+    // such thing as a dark room: a sealed unlit corner measured **429x** and read as a lit-looking
+    // picture of a room with no light in it. That is D541-D543's deleted light floor arriving
+    // through the exposure rather than through the light. `--exposure-max N`.
+    f32 exposure_max = 0.0f;
+    // How hard R5a's filter weighs a neighbour against what this face already holds. Negative keeps
+    // the shader's own figure and **0 is the control arm**: no agreement test at all, which is the
+    // filter exactly as it was when the 3x3 speckle was reported. `--denoise-edge N`.
+    f32 denoise_edge = -1.0f;
     // The store gives its three kinds of record up in an order — the off-screen class first, the
     // on-screen set's history next, the coarse pyramid last. `--no-class-eviction` puts them all
     // back on one clock, and with `--secondary-share 4` it is the full control arm for the class
@@ -689,6 +700,15 @@ Options parse_options(int argc, char** argv) {
             // R9b's control arm: a face nobody is looking at casts nothing, whatever is reading it.
             // This is the state every figure taken before this change was measured in.
             options.secondary_light_share = 0;
+        } else if (arg == "--denoise-edge" && i + 1 < argc) {
+            // R5a's agreement test. 0 is the control arm and restores the filter that smeared each
+            // lit face into a ring of eight that should have stayed dark.
+            options.denoise_edge = static_cast<f32>(std::atof(argv[++i]));
+        } else if (arg == "--exposure-max" && i + 1 < argc) {
+            // How far the meter may lift a dark scene. Larger recovers more of the dark and lets a
+            // room with no light in it read as lit; smaller crushes more of it. Measured against
+            // `clips/exposure_range.clip`, which legitimately needs 33x.
+            options.exposure_max = static_cast<f32>(std::atof(argv[++i]));
         } else if (arg == "--no-auto-exposure") {
             // R6a's control arm: the fixed 3.2 this pass applied for the whole of the rewrite.
             options.auto_exposure = false;
@@ -814,6 +834,9 @@ void print_help() {
         "                        control arm for the flicker while building\n"
         "  --no-auto-exposure    the fixed brightness multiplier of 3.2 this pass applied before\n"
         "                        the light meter existed. R6a's control arm\n"
+        "  --exposure-max N      how far the light meter may lift a dark scene, as a multiplier\n"
+        "                        (default 64). Smaller lets darkness stay dark; larger lifts a\n"
+        "                        room with almost no light in it until it reads as lit\n"
         "  --no-face-denoise     a face's far field and bounce are read raw rather than blended\n"
         "                        with its coplanar neighbours'. R5a's control arm\n"
         "  --no-class-eviction   the store gives every cold record up on one clock again, whoever\n"
@@ -4509,6 +4532,17 @@ void Application::record_frame(f32 time_seconds) {
         prev_cloud_time_ = game_now;
         params.sky_wind[2] = game_step;
         params.sky_wind[3] = 0.0f;
+
+        // The ceiling the light meter may not expose past, which is what decides whether a dark
+        // room is allowed to be dark. Nought hands the shader its own default; see
+        // kExposureMaxDefault in shaders/resolve.comp for the number and what it was measured
+        // against.
+        params.tone[0] = options_.exposure_max;
+        // ...and how hard R5a's filter weighs a neighbour against what a face already holds.
+        // Negative hands the shader its own figure. See kDenoiseEdgeSharp in shade_faces.comp.
+        params.tone[1] = options_.denoise_edge;
+        params.tone[2] = 0.0f;
+        params.tone[3] = 0.0f;
 
         // And remember this frame's camera for the next one. After the fill, so a frame always
         // blurs against the frame before it rather than against itself.

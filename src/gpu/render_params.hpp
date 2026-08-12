@@ -161,6 +161,16 @@ struct RenderParams {
     // The low deck's wind, in metres a second. Higher decks are derived from it: faster with
     // altitude and veered, which is both true and what makes a sky read as deep.
     f32 sky_wind[4];
+
+    // The tone stage's dials. x is the ceiling the light meter may not expose past, as a
+    // multiplier, with 0 meaning the shader's own default -- it is what decides whether a dark room
+    // is allowed to be dark, and `--exposure-max N` sweeps it. See kExposureMaxDefault in
+    // shaders/resolve.comp. yzw spare.
+    //
+    // Appended rather than folded into an existing vector, and `motion.w` was the obvious candidate
+    // because the accumulator it described went with R3d. D553 is why not: changing what a word
+    // means makes every rule written about it suspect, and a spare field costs sixteen bytes once.
+    f32 tone[4];
 };
 // Written out rather than accumulated as a sum of historical deltas, which is what this was and
 // which nobody could check: 41 vectors of 16 bytes, in the order shaders/params.glsl declares
@@ -170,8 +180,8 @@ struct RenderParams {
 // The count: origin, forward, right, up, camera_chunk, bounds_min, bounds_max, resolution, lens,
 // tint_visible, tint_occluded, tool_colour (12), box_min and box_max at 16 each (32), marks_min,
 // marks_max (2), clip_slot and clip_coarse at 16 each (32), edit_min, edit_max (2), prev_origin,
-// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind (7) -- 87 in all.
-static_assert(sizeof(RenderParams) == 87 * 16, "RenderParams must match the GLSL block");
+// prev_forward, prev_right, prev_up, motion, sky_cloud, sky_wind, tone (8) -- 88 in all.
+static_assert(sizeof(RenderParams) == 88 * 16, "RenderParams must match the GLSL block");
 
 // One entry per chunk the marcher wanted and could not find. Written by the shader,
 // read back by the streamer two frames later.
