@@ -1452,3 +1452,70 @@ its shadow really is coarser for about fifteen seconds before it catches up exac
 not a wrong answer, and the stage that fixes waiting is the denoiser — the one that lets neighbouring
 surfaces share what they have measured instead of each one finding out for itself. It is next in the
 plan.
+
+## The light of a room was the first thing thrown away when you left it
+
+This one is the change I would most like you to go and look for, because it is about walking, not
+about standing still.
+
+**The setup, in one paragraph.** Every surface in the building has its own record of the light that
+reaches it. There are a *lot* of those — about seven hundred thousand of them from one camera — so
+the game also keeps a **coarse** record for every 8×8 patch: one of those stands in for 512 of the
+fine ones. The coarse one is what a surface reads while its own record is still being worked out, and
+it is what every new fine record starts from. It is claimed the first time the game notices a new
+surface, and after that nothing ever asks for it again — because everything under it now has its own
+answer.
+
+**And that is the bug.** The game gives up any record "nobody has asked for in ten seconds". Nothing
+ever asks for a coarse one. So the coarse records were the **first** thing thrown away, always, while
+every fine record under them was still perfectly alive. Then you walk away, the fine ones go too, and
+when you come back the room has nothing at all to rebuild itself from: no fine light, and no coarse
+light either.
+
+I did not have to argue this from theory. The game now prints how many coarse records it is holding,
+and standing at the steps of the facility it read **zero of seven hundred and eleven thousand** —
+having thrown away every single one of the 21,796 it had ever made.
+
+**What it fell back on instead is the expensive thing.** When a surface has no light record at all,
+the graphics card invents a temporary one for that frame — and a temporary one cannot remember
+anything, so it fires a fresh ray every frame and throws the answer away. One ray per patch per frame
+is exactly the blocky, flickering light you have reported more than once.
+
+**The fix is one sentence: a coarse record is only given up when the table is actually short of
+room**, never merely for being old. The whole coarse set is about 3% of the store, and it is what
+everything else is built from, so it is the cheapest thing in there to keep.
+
+**And the second half:** when a light ray lands on a surface whose record is missing, it used to
+count that surface as **black** — as though a lit wall were emitting nothing. It now reads the coarse
+record over it. That is a real answer measured at 25 cm instead of a guess at 3 cm, and it is a great
+deal better than black.
+
+**What you should see.**
+
+- **Walk out of a room and back in.** Three frames after you look back, the number of those expensive
+  temporary records goes from **3,137 to 99**, and the picture is measurably less speckly (34.4 → 19.6
+  on the scale I have been quoting you, with the "fireflies" — single bright wrong pixels — going
+  1,494 → 387). In plain terms: the room comes back lit instead of coming back blotchy.
+- **Standing at the steps, the building is brighter and cleaner.** Average brightness **133.5 →
+  140.0** and speckle **45.5 → 38.5**. That brightness is not invented: it is light that rays were
+  finding and then reporting as black.
+- **Indoors it is a smaller version of the same** (126.4 → 127.6, and four times fewer fireflies), and
+  **outdoors nothing changes at all** — 0.2 of 255, which is nothing. That is the proof the diagnosis
+  was right: outdoors a ray escapes to the sky and never needs anybody's record.
+
+**What it costs.** Nothing I can measure. The 21-camera measurement grid moved **+0.17%** in total,
+which is far inside the noise, and the speckle across the whole grid went **down 6.9%**. Flying, the
+two versions sit inside each other's spread.
+
+**And a mistake I made on the way, because it is the useful part.** My first version quietly made the
+light converge four times more slowly, and every timing said it was free. The sun's ray budget is
+shared out among the surfaces that want one, and I had just added 21,799 coarse records to that queue
+— records that never want a ray at all. So every real surface got fewer. The clock said 1.55 ms
+against 1.56 ms and the *convergence* said 107,582 surfaces finished against 475,632. This is the
+third time that exact mistake has been made in this project, so the rule is now written down twice: a
+number that got faster with nothing to show for it has usually just stopped doing some of its work.
+
+**What is still missing, honestly.** The game can now count what its light rays land on, and about a
+third of them still land on something with no record at all — surfaces off to the side of the screen,
+or behind you. That is the next piece of work in this stage, and I now have a number for it instead of
+an opinion.

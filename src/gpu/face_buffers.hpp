@@ -61,8 +61,12 @@ public:
     // cost in this pass has to be read against -- the same argument as the ambient and lamp lines
     // below, which exist because a face that has finished and a face that is still paying look
     // identical in every picture. Pass VK_NULL_HANDLE to skip it.
+    // `probe` is the light probe (kLightProbeWords in shaders/node.glsl): the gathering ray's own
+    // counters for the frame that has just been drawn. It is read in the FIRST submit here, not the
+    // second, because the second is gated on the mirror having matched and on the store fitting in
+    // the staging ring -- and a counter about what rays found has nothing to do with either. D529.
     bool audit(const FaceStore& store, VkBuffer seen = VK_NULL_HANDLE, u32 frame = 0,
-               u32 seen_window = 0);
+               u32 seen_window = 0, VkBuffer probe = VK_NULL_HANDLE);
 
     VkBuffer faces() const { return faces_.buffer; }
     VkBuffer entries() const { return entries_.buffer; }

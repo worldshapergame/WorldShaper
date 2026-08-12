@@ -288,7 +288,8 @@ bool g_sky_report_face;
 // whose miss means "I stopped looking" rather than "there is nothing there".
 bool g_sky_gather;
 
-// What the surface a gathering ray landed on is giving off. R9's whole point in one function.
+// What the surface a gathering ray landed on is giving off. R9's whole point, in three functions
+// because R9f gave it a second place to look.
 //
 // The ray has already stopped on a face, and that face is keyed exactly as the store keys it — the
 // marcher produced both keys with the same arithmetic in the same place, so the lookup cannot be
@@ -297,34 +298,36 @@ bool g_sky_gather;
 // the whole of the mechanism, and it is why this is affordable: the answer was computed once, on the
 // surface, by the pass this ray is running in, and reading it costs one hash probe.
 //
-// Three cases return nought, and each is a rule rather than a guard:
+// `bounce_face_ready` is whether a record has an answer, `bounce_face_light` is that answer read for
+// a given hit, and `bounce_radiance` below is the search: the surface's own face, then the coarse
+// faces standing over it, then nought.
 //
-//   the face is not in the store  -- it has not been claimed yet, or the cap declined it. R9a is
-//                                    what makes this case rarer over time; until it does, an
-//                                    unlit surface is the honest answer and it errs dark. It never
-//                                    errs BRIGHT, which is the direction that reads as a bug;
-//   it has no samples             -- nothing has been measured there yet, so there is nothing to
-//                                    report. A face with no samples reads as fully sunlit in the
-//                                    composite's fallback, and carrying that into a bounce would
-//                                    light a room out of a placeholder;
-//   the level is coarse           -- allowed, deliberately. A stand-in three levels up covers this
-//                                    surface and has usually converged first, and light arriving
-//                                    from a wall across the room does not need that wall at voxel
-//                                    resolution. §8 R9's second risk is the other end of this: a
-//                                    fold read too coarsely is flat rather than noisy, so the
-//                                    footprint the ray already carries decides the level, exactly
-//                                    as it does for the primary ray.
-vec3 bounce_radiance(NodeHit hit) {
-    const uint slot = node_face_lookup(hit.face_node, hit.face_level, hit.face_dir);
-    if (slot == kNoFace || slot == kFaceTombstone) return vec3(0.0);
-    if (slot >= faces.items.length()) return vec3(0.0);
+// Whether a slot has an answer worth reading, which is two questions and both are rules.
+//
+// It has to BE a face -- the store may not have claimed one here, or the off-screen cap may have
+// declined it -- and it has to have measured something. A face with no samples reads as fully
+// sunlit in the composite's fallback, and carrying that into a bounce would light a room out of a
+// placeholder.
+bool bounce_face_ready(uint slot) {
+    if (slot == kNoFace || slot == kFaceTombstone) return false;
+    if (slot >= faces.items.length()) return false;
+    if (face_samples_of(faces.items[slot].counters) < kFaceSettled) return false;
+    const uint at = slot * kFaceLightWords;
+    return at + kFaceLightWords - 1u < face_light.words.length();
+}
 
+// What one face is giving off, read for a ray that landed on `hit`.
+//
+// The SLOT and the HIT are separate arguments on purpose, and that separation is R9f. The terms --
+// sun visibility, sky, near field, lamps, bounce -- come from whichever record has them, which may
+// be the coarse face standing over this surface rather than the surface's own. The albedo and the
+// normal come from the hit, which is the surface actually struck. So a stand-in lends its
+// measurement of the LIGHT and never its idea of what is there, which is the same division R9d
+// already draws for the composite: the coarse face is a measurement of a place, not of a material.
+vec3 bounce_face_light(uint slot, NodeHit hit) {
     const uint counters = faces.items[slot].counters;
     const uint samples = face_samples_of(counters);
-    if (samples < kFaceSettled) return vec3(0.0);
-
     const uint at = slot * kFaceLightWords;
-    if (at + kFaceLightWords - 1u >= face_light.words.length()) return vec3(0.0);
 
     // The albedo, from the folded colour the marcher carries. Not the interned table's exact voxel
     // colour, which this pass has no binding for -- see the level-0 branch of node_march, where the
@@ -382,6 +385,51 @@ vec3 bounce_radiance(NodeHit hit) {
     return face_outgoing_radiance(albedo, direct, bounce, kPi);
 }
 
+vec3 bounce_radiance(NodeHit hit) {
+    const uint slot = node_face_lookup(hit.face_node, hit.face_level, hit.face_dir);
+    if (bounce_face_ready(slot)) {
+        probe_add(3u);
+        return bounce_face_light(slot, hit);
+    }
+
+    // The surface's own face has nothing to say. R9f: read the coarse one standing over it.
+    //
+    // # Why this is not the same as giving up
+    //
+    // Before this, a gathering ray that landed on a face the store had not claimed, or had given up,
+    // returned NOUGHT -- and nought is black. That errs dark, which is the direction this renderer
+    // is required to err in, and it is why the rule was left alone through R9a. What R9f changes is
+    // that there is usually an answer available: the coarse face over this surface is claimed by the
+    // same report that claims the fine one, is settled long before its children are found because
+    // five hundred and twelve share it, and is now KEPT after they are given up. A room the camera
+    // has walked away from has no fine faces left in the store and has its whole coarse pyramid.
+    //
+    // # Why the coarseness is bounded by the ray and not by a constant
+    //
+    // The walk starts at the level the MARCHER stopped at, which the ray's own footprint chose, so
+    // "three levels up" is three levels up from whatever detail this ray was entitled to. A surface
+    // an arm's length away is read at 25 cm and one across the valley at whatever its footprint was
+    // already at -- which is §8 R9's second risk answered by construction rather than by a rule:
+    // "the fold must never be read at a level coarser than the distance justifies".
+    //
+    // # What it costs when there is nothing
+    //
+    // Three hash probes on a ray that found nothing, which is the case that was already free. The
+    // probes stop at the first ancestor with an answer, and indoors that is nearly always the first.
+    const uint missing = (slot == kNoFace || slot == kFaceTombstone ||
+                          slot >= faces.items.length()) ? 4u : 5u;
+    for (int step = 1; step <= kFaceAncestorStep; ++step) {
+        const uint at_level = hit.face_level + uint(step);
+        const uint anc = node_face_lookup(hit.face_node >> step, at_level, hit.face_dir);
+        if (!bounce_face_ready(anc)) continue;
+        probe_add(missing);
+        probe_add(6u);
+        return probe_coarse_bounce() ? bounce_face_light(anc, hit) : vec3(0.0);
+    }
+    probe_add(missing);
+    return vec3(0.0);
+}
+
 // What one ambient ray found.
 struct SkySample {
     vec2 at;         // where on the face it left from, over the sampled span in [-1, 1]
@@ -436,8 +484,28 @@ SkySample sky_cast(uint index, float max_t) {
     // face short of convergence through `measured_ignorance`, because ignorance is a fact about the
     // tree and not about the light.
     s.radiance = vec3(0.0);
-    if (g_sky_gather && !s.unknown) {
-        s.radiance = hit.hit ? bounce_radiance(hit) : sky_radiance(dir);
+    if (g_sky_gather) {
+        probe_add(1u);
+        if (s.unknown) {
+            // Stopped by a cell the world claims and the pool has not built. It gets nothing, and
+            // whether it SHOULD is the rest of R9f and is deliberately not decided here -- what is
+            // added is the count and the level it happened at, which is what that decision wants
+            // and what R10's open item has never had.
+            //
+            // Not "could a coarse face have answered", which is the number that would price the
+            // change, and the reason is a fact about the marcher worth more than the number:
+            // **an ignorance stop carries no face key at all**. `node_face_hit` is called at the
+            // leaf hit and nowhere else, so `face_level` is kNoFaceLevel here and there is nothing
+            // to walk up from. Any rule that reads light where the pool has not built has to change
+            // the marcher first, and that is a bigger change than this one.
+            probe_add(7u);
+            probe_add(kLightProbeLevels + uint(clamp(hit.level, 0, 14)));
+        } else if (!hit.hit) {
+            probe_add(2u);
+            s.radiance = sky_radiance(dir);
+        } else {
+            s.radiance = bounce_radiance(hit);
+        }
     }
 
     // The face this ray landed on, named to the host so the store holds it. R9a.

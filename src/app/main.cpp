@@ -293,6 +293,24 @@ struct Options {
     // The control arm is a memory larger than the far count can reach, which is the cumulative mean
     // exactly rather than an approximation of it: `--bounce-memory 4096`.
     u32 bounce_memory = 0;
+
+    // R9f, in two halves, with a control arm each because they are two rules and either could be
+    // the one that pays.
+    //
+    //   `coarse_keep`   the store gives up a coarse stand-in only under pressure, so the coarse
+    //                   pyramid outlives the fine faces under it. `--no-coarse-keep`.
+    //   `coarse_bounce` a gathering ray that lands on a surface with no light of its own reads the
+    //                   coarse face standing over it rather than nothing. `--no-coarse-bounce`.
+    //
+    // The first is what makes walking out of a room and back find it lit; the second is what makes
+    // light arrive from the half of the room the store has given up on. Neither is worth anything
+    // without a face to read, which is why the first is the one to switch off when measuring the
+    // second's cost.
+    bool coarse_keep = true;
+    bool coarse_bounce = true;
+    // The gathering ray's own counters, printed at the screenshot audit. See kLightProbeWords in
+    // shaders/node.glsl for the word map. `--no-light-probe` is the arm that costs nothing.
+    bool light_probe = true;
     // Wall-clock deadline for a scripted run, in seconds. A frame count cannot bound a run whose
     // frames are the thing that got slow, so every scripted run has one whether it asked or not:
     // this is filled in from kDefaultMaxSeconds after parsing when a screenshot, a tick audit, a
@@ -330,9 +348,18 @@ struct Options {
     // a whole screen at once. A cut is the worst case and it is also the ordinary one ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â turning
     // round in a doorway is a cut as far as the face store is concerned.
     //
+    // REPEATABLE, and the second cut is a different measurement from the first. One cut asks what
+    // ARRIVING somewhere costs. Two ask what LEAVING costs: stand at A, cut to B for longer than the
+    // face store's cold window, cut back to A, and diff against a run that never left. That is
+    // "walking out of a room and back", which is R9f's own gate wording, and one cut cannot express
+    // it -- which is why the case a player reported as the world relighting itself had never been
+    // measured.
+    //
     // Counted in MEASURED frames, so with --settle it fires after the world has stopped building
-    // and the only thing missing from the new view is the thing under test.
-    std::string cut;
+    // and the only thing missing from the new view is the thing under test. Each cut carries its own
+    // absolute frame rather than a delay since the last one, so the flags read in the order they
+    // happen and a run's cuts can be reordered without rewriting their numbers.
+    std::vector<std::string> cuts;
 
     // Scripted chisel, for checking the tool without a person holding the mouse.
     // --edit "x0,y0,z0,x1,y1,z1,material" applies one edit through the history at startup;
@@ -416,7 +443,7 @@ struct Options {
     bool scripted() const {
         return no_title || cycle > 0 || !title_shot.empty() || !screenshot.empty() || settle ||
                !camera.empty() || !fly.empty() ||
-               !orbit.empty() || !cut.empty() || chisel_every > 0 || ticks > 0 ||
+               !orbit.empty() || !cuts.empty() || chisel_every > 0 || ticks > 0 ||
                !crash_test.empty() || benchmark || !edit.empty() ||
                !preview.empty() || !clip.empty() || !clip_file.empty() || max_seconds > 0.0;
     }
@@ -503,7 +530,7 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--fly") {
             if (i + 1 < argc) options.fly = argv[++i];
         } else if (arg == "--cut") {
-            if (i + 1 < argc) options.cut = argv[++i];
+            if (i + 1 < argc) options.cuts.push_back(argv[++i]);
         } else if (arg == "--edit") {
             if (i + 1 < argc) options.edit = argv[++i];
         } else if (arg == "--preview") {
@@ -617,6 +644,20 @@ Options parse_options(int argc, char** argv) {
             options.secondary_period = 0;   // R9a's control arm
         } else if (arg == "--secondary-share" && i + 1 < argc) {
             options.secondary_share = static_cast<u32>(std::atoi(argv[++i]));
+        } else if (arg == "--no-coarse-keep") {
+            // R9f's first control arm: the store gives a coarse stand-in up on the same clock as
+            // any other face, which is what it did before. Two flags of one build, as D407
+            // requires -- and this pair has to be separable from the one below, because they are
+            // two rules that happen to arrive together: one is about what the store KEEPS and one
+            // about what a gathering ray READS.
+            options.coarse_keep = false;
+        } else if (arg == "--no-coarse-bounce") {
+            options.coarse_bounce = false;   // R9f's second control arm
+        } else if (arg == "--no-light-probe") {
+            // The instrument itself, off. It is on by default because a counter nobody switches on
+            // is a counter nobody reads (D510), and switchable because an instrument whose cost is
+            // unmeasured is trap 20 waiting to happen.
+            options.light_probe = false;
         } else if (arg == "--no-bounce") {
             options.bounce = false;   // R9's control arm: kIndirectFloor everywhere again
         } else if (arg == "--bounce-min" && i + 1 < argc) {
@@ -714,6 +755,13 @@ void print_help() {
         "  --no-lamp-edit-scope  an edit reopens the lamp term of every face within sixteen metres\n"
         "                        again, rather than only those it can stand in the light of. The\n"
         "                        control arm for the flicker while building\n"
+        "  --no-coarse-keep      the store gives a coarse stand-in up on the same clock as any\n"
+        "                        other face, so the light of a room is gone ten seconds after you\n"
+        "                        leave it. R9f's first control arm\n"
+        "  --no-coarse-bounce    a gathering ray that lands on a surface with no light of its own\n"
+        "                        reads nothing rather than the coarse face over it. The second\n"
+        "  --no-light-probe      stop counting what gathering rays land on. The counters are\n"
+        "                        printed at every screenshot and this is what costs nothing\n"
         "  --max-seconds N       wall-clock deadline for a scripted run. Every run that ends by\n"
         "                        itself has one (default 180 s): it reports where it got to\n"
         "                        rather than running until somebody closes it. 0 for none\n"
@@ -723,9 +771,10 @@ void print_help() {
         "  --benchmark           measure this machine again and save the result\n"
         "  --fly vx,vy,vz,vyaw   move the camera every frame (m/s, deg/s), so a screenshot\n"
         "                        is of the moving picture rather than a settled one\n"
-        "  --cut f,x,y,z,yaw,pitch  jump the camera once, at measured frame f. The worst case\n"
-        "                        for anything that has to catch up with the view, and what\n"
-        "                        turning round in a doorway looks like to the face store\n"
+        "  --cut f,x,y,z,yaw,pitch  jump the camera at measured frame f. The worst case for\n"
+        "                        anything that has to catch up with the view, and what turning\n"
+        "                        round in a doorway looks like to the face store. REPEATABLE:\n"
+        "                        two cuts are leaving somewhere and coming back to it\n"
         "  --crash-test KIND     prove crash reporting works: read, write, check, throw,\n"
         "                        divzero, frame (faults in-game), report (no crash)\n"
         "  --clip x0,..,z1,dx,dy,dz,copies,turn   scripted clipboard ghost\n"
@@ -1342,10 +1391,19 @@ private:
     f64 orbit_angle_ = 0.0;
     bool orbiting_ = false;
 
-    // --cut: where the camera jumps to, and at which measured frame. See Options::cut.
-    f64 cut_pose_[5]{};
-    u64 cut_at_ = 0;
-    bool cut_pending_ = false;
+    // --cut: where the camera jumps to, and at which measured frame. See Options::cuts.
+    //
+    // A list, in the order they were given, with `next_cut_` the one still owed. Kept in order
+    // rather than sorted by frame, because a cut whose frame is behind the one before it is a
+    // typo the run should report rather than silently reorder -- and a harness that writes the
+    // frames in the wrong order has produced a measurement of something nobody asked for, which
+    // is trap 15's shape.
+    struct Cut {
+        f64 pose[5]{};
+        u64 at = 0;
+    };
+    std::vector<Cut> cuts_;
+    usize next_cut_ = 0;
     f64 fly_velocity_[4]{};                             // vx, vy, vz, vyaw
     // Shell thickness in voxels for anything the tools place. 0 is solid. Shared by the
     // chisel and the clipboard, because it is a property of how you are building rather than
@@ -1575,6 +1633,10 @@ private:
     // the same guarantee as the two above: one word a slot, device local, written and read by the
     // card and by nothing else. See `face_read` in shaders/node.glsl.
     FaceLight face_read_;
+    // The gathering ray's counters, and the dials it reads. Not per slot -- see kLightProbeWords in
+    // shaders/node.glsl. It borrows FaceLight because what that class provides is exactly what this
+    // wants: a device-local word array, zeroed at creation, that the host can fill and copy back.
+    FaceLight light_probe_;
     // The compacted dispatch: three words of VkDispatchIndirectCommand, a count, then the slots
     // that owe work. Written by `face_worklist.comp` and read by the shading pass, both on the
     // card; the host only ever zeroes the header. See face_worklist.comp for why it exists.
@@ -3256,12 +3318,21 @@ void Application::stream(f64 seconds) {
                 // store has not seen has no repeat reports to hang the claim off. What the repeats
                 // would buy is keeping a stand-in warm past its cold window while its children stay
                 // live, and a stand-in whose children are all live is a stand-in nothing reads.
+                //
+                // ...and it is claimed as a STAND-IN rather than as an ordinary face, which is the
+                // one fact the store cannot derive for itself and the whole of what lets it keep
+                // the coarse pyramid after the fine faces are gone (R9f). The paragraph above ends
+                // by dismissing "keeping a stand-in warm past its cold window while its children
+                // stay live" as buying nothing, and that was right about the mechanism and wrong
+                // about the case: a stand-in whose children are all live is indeed read by nobody,
+                // and the moment the camera leaves, the children go and the stand-in is what the
+                // room has to be rebuilt from. See FaceStore::claim_stand_in.
                 const u32 coarse_level = level + kFaceAncestorStep;
                 if (first_time && coarse_level <= kMaxNodeLevel) {
-                    face_store_.claim(FaceKey{entry.x >> kFaceAncestorStep,
-                                              entry.y >> kFaceAncestorStep,
-                                              entry.z >> kFaceAncestorStep, coarse_level, face},
-                                      frame_counter_);
+                    face_store_.claim_stand_in(
+                        FaceKey{entry.x >> kFaceAncestorStep, entry.y >> kFaceAncestorStep,
+                                entry.z >> kFaceAncestorStep, coarse_level, face},
+                        frame_counter_);
                 }
                 continue;
             }
@@ -3781,8 +3852,24 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     // visible face in one arm, and it reads on the pass table as the change having made the light
     // CHEAPER. D527 is the same fault by a different route, and the general form of it is that a
     // budget divided by the wrong population is a silent quality setting.
+    //
+    // ...and the COARSE PYRAMID comes out of it too, for the same reason and after making the same
+    // mistake a third time (R9f). A stand-in kept past its cold window is a face no pixel is
+    // reading, so `may_cast` is false and it casts nothing at all -- and 21,799 of them on the close
+    // camera took the stride from 5 to 6. What that cost is invisible in every timing: the faces
+    // pass read 1.553 ms against 1.564, and the convergence beside it read **107,582 of 497,656
+    // faces finished against 475,632 of 476,230**, because the far ray needs kBounceMin samples at
+    // one per stride frames and 512x6 is past where the run was measured. A budget divided by the
+    // wrong population is a silent quality setting, and this is the third door into that sentence.
+    //
+    // A stand-in a pixel IS reading does cast, and it is not subtracted back: that is the transient
+    // state where its fine children are missing, and a face standing in for five hundred and twelve
+    // others while they are found should be refreshed often rather than rationed. The error is at
+    // most this class's share, it is in the direction of more rays rather than fewer, and it is
+    // bounded by the pyramid being a few per cent of the store.
     const FaceStoreStats set = face_store_.stats();
-    const u32 live = std::max(set.faces > set.secondary ? set.faces - set.secondary : set.faces, 1u);
+    const u32 quiet = set.secondary + set.stand_ins;
+    const u32 live = std::max(set.faces > quiet ? set.faces - quiet : set.faces, 1u);
     push.face_stride = std::max(1u, (live + kFacesPerFrame - 1) / kFacesPerFrame);
 
     // Where the card may claim faces of its own, and R3e is the whole of why it may.
@@ -4819,6 +4906,28 @@ void Application::record_frame(f32 time_seconds) {
         }
 
         if (face_count > 0 || provisional_count > 0) {
+            // The probe: the host's dials in word 0, then the card's counters cleared behind them.
+            //
+            // Two commands rather than one fill, and that is the ownership rule made structural
+            // rather than remembered (D528). The dials are written every frame rather than once,
+            // because a buffer written at creation is a buffer whose value nobody can find when
+            // they go looking for why an instrument is silent.
+            const u32 dials = (options_.light_probe ? kProbeOn : 0u) |
+                              (options_.coarse_bounce ? kProbeCoarseBounce : 0u);
+            vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
+            vkCmdFillBuffer(cmd, light_probe_.buffer(), sizeof(u32),
+                            (kLightProbeWords - 1) * sizeof(u32), 0u);
+            VkMemoryBarrier2 probe_barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            probe_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            probe_barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            probe_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            probe_barrier.dstAccessMask =
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+            VkDependencyInfo probe_dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            probe_dependency.memoryBarrierCount = 1;
+            probe_dependency.pMemoryBarriers = &probe_barrier;
+            vkCmdPipelineBarrier2(cmd, &probe_dependency);
+
             profiler_.begin_pass(cmd, "faces", 4.4);
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.pipeline());
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, shade_faces_.layout(), 0,
@@ -5249,6 +5358,7 @@ int Application::play(const Options& options) {
         face_budget.pressure = options_.face_pressure;
         if (options_.face_pressure_from > 0) face_budget.pressure_from = options_.face_pressure_from;
         if (options_.secondary_share > 0) face_budget.secondary_share = options_.secondary_share;
+        face_budget.keep_stand_ins = options_.coarse_keep;
         face_budget_max_ = face_budget.max_faces;
         face_store_.create(face_budget);
         if (!face_buffers_.create(device_, face_budget)) {
@@ -5284,6 +5394,13 @@ int Application::play(const Options& options) {
                                face_buffers_.provisional_base() + FaceBuffers::provisional_count(),
                                "face read")) {
             WS_LOG_FATAL("app", "could not create the face read buffer");
+            return 1;
+        }
+        // And the gathering ray's own counters, which are not per slot at all: one word a QUESTION,
+        // over the whole dispatch. See kLightProbeWords in shaders/node.glsl for the word map and
+        // for why word 0 is the host's and the rest are the card's.
+        if (!light_probe_.create(device_, kLightProbeWords, "light probe")) {
+            WS_LOG_FATAL("app", "could not create the light probe buffer");
             return 1;
         }
         // And one word a NODE slot, for the same job on the other array: which nodes the light has
@@ -5333,8 +5450,11 @@ int Application::play(const Options& options) {
         // Eighteen: 17 is the node SEEN stamp, which is to the light's reads what 15 is to the
         // pixel's -- a card-owned word a slot that turns one entry per ray into one per node per
         // window. D430.
-        VkDescriptorSetLayoutBinding node_bindings[19]{};
-        for (u32 i = 0; i < 19; ++i) {
+        // Nineteen: 18 is the face READ stamp, the same thing again for the store (D508).
+        // Twenty: 19 is the light probe -- the gathering ray's own counters, and the dials that
+        // could not fit in a push block that is exactly 128 bytes full. R9f.
+        VkDescriptorSetLayoutBinding node_bindings[20]{};
+        for (u32 i = 0; i < 20; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
                 (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -5345,7 +5465,7 @@ int Application::play(const Options& options) {
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 19;
+        node_layout_info.bindingCount = 20;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -5356,20 +5476,25 @@ int Application::play(const Options& options) {
         node_alloc.pSetLayouts = &node_layout_;
         WS_VK(vkAllocateDescriptorSets(device_.handle(), &node_alloc, &node_set_));
 
-        const VkBuffer node_pool_buffers[15]{
+        const VkBuffer node_pool_buffers[16]{
             node_buffers_.entries(), node_buffers_.nodes(),     node_buffers_.leaves(),
             node_buffers_.occupancy(), node_buffers_.payload(), feedback_.buffer(),
             face_buffers_.faces(), face_buffers_.entries(),    face_buffers_.provisional(),
             face_light_.buffer(),      light_buffer_.buffer,    face_seen_.buffer(),
             face_work_.buffer,         node_seen_.buffer(),     face_read_.buffer(),
+            light_probe_.buffer(),
         };
         // Spelled out rather than derived. The mapping had grown a chain of conditionals with two
         // holes in it -- 8 is the parameter block and 11 is an image -- and a third hole would have
         // made it unreadable in the one place where being wrong is silent.
-        const u32 node_bindings_for[15]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16, 17, 18};
-        VkDescriptorBufferInfo node_infos[15]{};
-        VkWriteDescriptorSet node_writes[16]{};
-        for (u32 i = 0; i < 15; ++i) {
+        const u32 node_bindings_for[16]{2, 3, 4, 5, 6, 7, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19};
+        VkDescriptorBufferInfo node_infos[16]{};
+        // Seventeen writes for sixteen buffers and one uniform block, and the COUNT a few lines
+        // below is the thing to change with them. Adding a descriptor here and leaving that literal
+        // alone writes every binding but the new one, silently, and `--validation` is the only thing
+        // that says so -- which is D518 exactly, in the other direction.
+        VkWriteDescriptorSet node_writes[17]{};
+        for (u32 i = 0; i < 16; ++i) {
             node_infos[i].buffer = node_pool_buffers[i];
             node_infos[i].offset = 0;
             node_infos[i].range = VK_WHOLE_SIZE;
@@ -5384,13 +5509,13 @@ int Application::play(const Options& options) {
         node_params.buffer = params_buffer_.buffer;
         node_params.offset = 0;
         node_params.range = sizeof(RenderParams);
-        node_writes[15].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        node_writes[15].dstSet = node_set_;
-        node_writes[15].dstBinding = 8;
-        node_writes[15].descriptorCount = 1;
-        node_writes[15].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-        node_writes[15].pBufferInfo = &node_params;
-        vkUpdateDescriptorSets(device_.handle(), 16, node_writes, 0, nullptr);
+        node_writes[16].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_writes[16].dstSet = node_set_;
+        node_writes[16].dstBinding = 8;
+        node_writes[16].descriptorCount = 1;
+        node_writes[16].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        node_writes[16].pBufferInfo = &node_params;
+        vkUpdateDescriptorSets(device_.handle(), 17, node_writes, 0, nullptr);
 
         // And the two output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
@@ -5579,12 +5704,24 @@ int Application::play(const Options& options) {
         for (u32 i = 0; i < 4; ++i) orbit_[i] = values[i];
         orbiting_ = true;
     }
-    if (!options_.cut.empty()) {
+    for (const std::string& spec : options_.cuts) {
+        if (spec.empty()) continue;
         f64 values[6] = {30.0, 0.0, 0.0, 0.0, 90.0, 0.0};
-        parse_reals(options_.cut, values, 6);
-        cut_at_ = static_cast<u64>(values[0] < 0.0 ? 0.0 : values[0]);
-        for (u32 i = 0; i < 5; ++i) cut_pose_[i] = values[i + 1];
-        cut_pending_ = true;
+        parse_reals(spec, values, 6);
+        Cut cut;
+        cut.at = static_cast<u64>(values[0] < 0.0 ? 0.0 : values[0]);
+        for (u32 i = 0; i < 5; ++i) cut.pose[i] = values[i + 1];
+        // A cut that cannot fire because the one before it is later is a run that measures the
+        // wrong thing and says nothing. Two arms of an A/B would both look clean, which is
+        // exactly trap 15, so it is reported here rather than discovered from a picture.
+        if (!cuts_.empty() && cut.at <= cuts_.back().at) {
+            WS_LOG_WARN("frame",
+                        "--cut at measured frame {} is not after the cut before it at {}; the "
+                        "cuts fire in the order they were given, so this one will fire on the "
+                        "same frame and the camera will end up at the LAST of them",
+                        cut.at, cuts_.back().at);
+        }
+        cuts_.push_back(cut);
     }
     if (!options_.fly.empty()) {
         const char* cursor = options_.fly.c_str();
@@ -5889,13 +6026,19 @@ int Application::play(const Options& options) {
         // stopped building ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so what the new view is missing is faces and nothing else. Without
         // that gate the cut fires during the load and measures streaming again, which is the
         // confusion this instrument exists to end.
-        if (cut_pending_ && (!options_.settle || settled_seen_) &&
-            frame_counter_ - settle_frame_ >= cut_at_) {
-            camera_.set_position_metres(cut_pose_[0], cut_pose_[1], cut_pose_[2]);
-            camera_.set_look(cut_pose_[3], cut_pose_[4]);
-            for (u32 i = 0; i < 5; ++i) fly_state_[i] = cut_pose_[i];
-            cut_pending_ = false;
-            WS_LOG_INFO("frame", "camera cut at measured frame {}", cut_at_);
+        while (next_cut_ < cuts_.size() && (!options_.settle || settled_seen_) &&
+               frame_counter_ - settle_frame_ >= cuts_[next_cut_].at) {
+            const Cut& cut = cuts_[next_cut_];
+            camera_.set_position_metres(cut.pose[0], cut.pose[1], cut.pose[2]);
+            camera_.set_look(cut.pose[3], cut.pose[4]);
+            for (u32 i = 0; i < 5; ++i) fly_state_[i] = cut.pose[i];
+            ++next_cut_;
+            // Which cut this was, not merely that one happened: a two-cut run whose second cut
+            // never fired -- because the run ended first, or because its frame was behind the
+            // first -- draws the picture of a camera that never came back, and that reads exactly
+            // like the fault being measured.
+            WS_LOG_INFO("frame", "camera cut {} of {} at measured frame {}, to {:.1f},{:.1f},{:.1f}",
+                        next_cut_, cuts_.size(), cut.at, cut.pose[0], cut.pose[1], cut.pose[2]);
         }
         update_tools(game, chisel_has_wheel, clipboard_has_wheel, (dt > 0.1) ? 0.1 : dt);
 
@@ -6212,7 +6355,8 @@ int Application::play(const Options& options) {
                 }
                 // The live gate, not the default, so the audit describes the run that was made.
                 face_buffers_.audit(face_store_, face_seen_.buffer(),
-                                    static_cast<u32>(frame_counter_), options_.face_gate);
+                                    static_cast<u32>(frame_counter_), options_.face_gate,
+                                    light_probe_.buffer());
                 const FaceStoreStats face_stats = face_store_.stats();
                 WS_LOG_INFO("frame",
                             "faces: {} live of {}, {} seen this frame, {} claims {} already there, "
@@ -6265,6 +6409,20 @@ int Application::play(const Options& options) {
                             face_stats.secondary, face_stats.secondary_cap,
                             faces_secondary_offered_, faces_secondary_claimed_,
                             face_stats.secondary_declined, face_stats.promotions);
+                // R9f from the host's side, and the two numbers have to be read as a pair. A live
+                // count alone says what the rule costs and nothing about whether it is working; an
+                // eviction count alone cannot tell "the rule is holding them" from "there were none
+                // to hold". On a settled camera with the rule on, the second is nought and the first
+                // is not -- and with `--no-coarse-keep` the second is most of the first.
+                WS_LOG_INFO("frame",
+                            "the coarse pyramid: {} stand-ins live of {} faces ({:.1f}%), {} given "
+                            "up over the run; the store {} keeping them past their cold window",
+                            face_stats.stand_ins, face_stats.faces,
+                            face_stats.faces > 0
+                                ? 100.0 * face_stats.stand_ins / static_cast<f64>(face_stats.faces)
+                                : 0.0,
+                            face_stats.stand_in_evictions,
+                            options_.coarse_keep ? "IS" : "is NOT");
                 // And what the scripted chisel did, if it was asked for. A run that changed no
                 // voxels is a run that measured the flight and not the edit, and the two figures
                 // look identical from the pass table alone.
@@ -6403,6 +6561,7 @@ int Application::play(const Options& options) {
     face_seen_.destroy();
     node_seen_.destroy();
     face_read_.destroy();
+    light_probe_.destroy();
     face_worklist_.destroy();
     destroy_buffer(device_, face_work_);
     node_buffers_.destroy();

@@ -333,6 +333,64 @@ layout(std430, binding = 17) buffer NodeSeen { uint frames[]; } node_seen;
 // into a buffer that holds 131,072.
 layout(std430, binding = 18) buffer FaceRead { uint frames[]; } face_read;
 
+// ---- what a gathering ray found, counted ------------------------------------------------------
+//
+// The light pass has three audit lines about what it has FINISHED (`ambient on the card`, `lamps on
+// the card`, `faces sun on the card`) and none at all about what its rays are LANDING on. So the
+// one question R9 is about -- how often a ray that gathers light finds a surface with no light on
+// it -- had no number anywhere, and the only way to ask it was to look at a picture and guess.
+//
+// One word a question, over the whole dispatch, cleared by the host every frame and read back at the
+// screenshot audit. It is not per face and not per slot: the quantity wanted is a RATE over the
+// frame, and a rate is exactly what a per-face record cannot hold (trap 17 -- one number covering
+// three things, and here it is the reverse: three hundred thousand records covering no number).
+//
+// # Ownership, which this buffer has two of and must not confuse
+//
+// Word 0 is the HOST's: the dials, written with vkCmdUpdateBuffer every frame and never touched
+// here. Words 1 and up are the CARD's: counters, cleared by the host's fill and then written only
+// by atomicAdd from this pass. The two are written by separate commands rather than by one fill, so
+// "the host owns this word" is a property of the code rather than a rule somebody has to remember
+// -- which is D528's whole lesson, arriving in an instrument for once instead of in a record.
+layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
+
+// The word map. Twenty-four words, and it lives here because the pass that writes it and the audit
+// that prints it are in different languages and only one of them can be the authority.
+//
+//   [0]  the DIALS, host-written. See kProbeOn below.
+//   [1]  gathering rays cast: the unbounded ambient ray, on the frames it is cast and asks what it
+//        found. The denominator for everything under it.
+//   [2]  ...that reached open sky, which is the one case that was always answerable.
+//   [3]  ...that landed on a surface whose OWN face had light to give.
+//   [4]  ...that landed on a surface with no face in the store at all.
+//   [5]  ...that landed on a face that is in the store and has measured nothing yet.
+//   [6]  ...of [4] and [5], how many the coarse face standing over them could answer. This is the
+//        number R9f is worth, measurable before R9f exists, which is why it is here.
+//   [7]  ...that were stopped by a cell the world claims and the pool has not built.
+//   [8]  unused, and it is left named rather than removed: it was to be "of [7], how many a coarse
+//        face could answer", and it cannot be measured from here. An ignorance stop carries NO face
+//        key -- `node_face_hit` runs at the leaf hit and nowhere else -- so there is nothing to walk
+//        up from. That is a fact about the marcher and it is the gate on any rule that would read
+//        light where the pool has not built.
+//   [9..23] where [7] happened, by LEVEL. R10's open item -- 6% of surface held short of
+//        convergence by unbuilt geometry -- has never had this and cannot be reasoned about
+//        without it: a ray stopped by an unbuilt brick has lost 25 cm of sky and one stopped by a
+//        shed 512 m subtree has lost a quarter of the county.
+const uint kLightProbeWords = 24u;
+const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
+
+// The dials, in word 0. A bit each, because the push block is exactly full (128 bytes, and the
+// static_assert on NodePush says so) and a lever that cannot fit in it must live somewhere -- and
+// somewhere is not "change what an existing field means", which is D553's standing warning.
+const uint kProbeOn = 1u << 0;          // count at all
+const uint kProbeCoarseBounce = 1u << 1;  // a gathering ray may read the coarse face over its hit
+
+void probe_add(uint at) {
+    if ((light_probe.words[0] & kProbeOn) == 0u) return;
+    atomicAdd(light_probe.words[at], 1u);
+}
+bool probe_coarse_bounce() { return (light_probe.words[0] & kProbeCoarseBounce) != 0u; }
+
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
 // live value is `node_push.seen_window`, so `--face-gate` can widen it to the whole run and give
 // an exact same-commit control for this change (D407: two builds of this pass cannot be compared

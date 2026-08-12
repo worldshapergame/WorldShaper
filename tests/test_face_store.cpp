@@ -470,6 +470,90 @@ TEST_CASE("giving up an off-screen face gives its place in the cap back") {
     CHECK(store.validate());
 }
 
+// R9f, and the case is the one a player is in rather than an abstract property: walk out of a room
+// and the fine faces in it go cold, because nothing is claiming them and nothing is reading them.
+// The coarse face standing over them is claimed only when a fine face under it is NEW, so it is the
+// COLDEST record in the store on a settled camera -- and it is the one everything else is rebuilt
+// from when the camera comes back. Giving it up with its children is what makes a room relight from
+// black.
+TEST_CASE("a coarse stand-in outlives the fine faces under it") {
+    FaceStore store = make_store(1024, 4);
+    const FaceKey fine{8, 0, 0, 0, 0};
+    const FaceKey coarse{1, 0, 0, 3, 0};   // the same place, three levels up
+    const u32 fine_slot = store.claim(fine, 1);
+    const u32 coarse_slot = store.claim_stand_in(coarse, 1);
+    REQUIRE(fine_slot != kNoFace);
+    REQUIRE(coarse_slot != kNoFace);
+    REQUIRE(store.stats().stand_ins == 1);
+
+    for (u64 frame = 2; frame < 40; ++frame) store.evict_cold(frame);
+
+    CHECK(store.find(fine) == kNoFace);
+    CHECK(store.find(coarse) == coarse_slot);
+    CHECK(store.stats().stand_ins == 1);
+    CHECK(store.stats().stand_in_evictions == 0);
+    CHECK(store.validate());
+}
+
+// ...and it is kept because there is ROOM to keep it, never because it outranks a face somebody is
+// looking at. A stand-in held through a full table would be the store refusing a visible surface in
+// order to keep a coarse one, which is D502's picture arriving through a new door.
+TEST_CASE("a coarse stand-in is given up when the table has nothing left") {
+    FaceStore store = make_store(16, 600);
+    for (u32 i = 0; i < 16; ++i) {
+        REQUIRE(store.claim_stand_in(FaceKey{i, 0, 0, 3, 0}, 1) != kNoFace);
+    }
+    REQUIRE(store.stats().stand_ins == 16);
+
+    // Nothing is read again, and the table is full: the emergency sweep must reach them.
+    REQUIRE(store.claim(FaceKey{99, 0, 0, 0, 0}, 1) == kNoFace);
+    for (u64 frame = 2; frame < 400; ++frame) store.evict_cold(frame);
+
+    CHECK(store.stats().stand_ins < 16);
+    CHECK(store.stats().stand_in_evictions > 0);
+    CHECK(store.claim(FaceKey{99, 0, 0, 0, 0}, 400) != kNoFace);
+    CHECK(store.validate());
+}
+
+// The control arm has to actually restore the old behaviour, or an A/B is one build measured twice.
+// Trap 15: two arms that agree because the flag does nothing look exactly like a change that costs
+// nothing.
+TEST_CASE("--no-coarse-keep gives a stand-in up on the same clock as any other face") {
+    FaceStore store;
+    FaceStoreBudget budget;
+    budget.max_faces = 1024;
+    budget.cold_frames = 4;
+    budget.claim_period = 1;
+    budget.keep_stand_ins = false;
+    store.create(budget);
+
+    const FaceKey coarse{1, 0, 0, 3, 0};
+    REQUIRE(store.claim_stand_in(coarse, 1) != kNoFace);
+    for (u64 frame = 2; frame < 40; ++frame) store.evict_cold(frame);
+
+    CHECK(store.find(coarse) == kNoFace);
+    CHECK(store.stats().stand_ins == 0);
+    CHECK(store.stats().stand_in_evictions == 1);
+    CHECK(store.validate());
+}
+
+// A face the marcher already had, later named as somebody's stand-in, is a stand-in from then on --
+// and the count has to follow, because the count is what the sweep skips on. Marking it twice would
+// leak the counter upward and quietly stop the store giving anything up at all.
+TEST_CASE("naming a face as a stand-in twice counts it once") {
+    FaceStore store = make_store(1024, 600);
+    const FaceKey key{2, 2, 2, 3, 1};
+    const u32 first = store.claim(key, 1);
+    REQUIRE(first != kNoFace);
+    CHECK(store.stats().stand_ins == 0);
+
+    CHECK(store.claim_stand_in(key, 2) == first);
+    CHECK(store.claim_stand_in(key, 3) == first);
+    CHECK(store.stats().stand_ins == 1);
+    CHECK(store.is_stand_in(first));
+    CHECK(store.validate());
+}
+
 TEST_CASE("a reclaimed slot carries nothing of the face before it") {
     FaceStore store = make_store(1024, 4);
     const u32 first = store.claim(FaceKey{3, 3, 3, 3, 0}, 1);

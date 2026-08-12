@@ -49,7 +49,16 @@ param(
     # photograph nobody takes; this measures the game.
     [string]$Fly = "",
     # How far a number may move before it is called a regression rather than noise.
-    [double]$Tolerance = 0.03
+    [double]$Tolerance = 0.03,
+    # Extra arguments handed to every run, which is how the two arms of an A/B are one build.
+    #
+    # D407 is the standing reason and it applies to the grid exactly as it does to _flybench.ps1,
+    # which has had this since D413: two builds measured an hour apart are not an A/B, because the
+    # machine drifts about ten per cent over a long session and the face pass is a function of a
+    # convergence state that is not reproducible between batches. Two flags of one build are.
+    #
+    #   -Extra "--no-coarse-keep --no-coarse-bounce"    R9f's control arm
+    [string]$Extra = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,6 +108,11 @@ function Invoke-Run([string]$mode, [string]$view, [string]$size) {
     }
     if ($Clip -ne "") { $runArgs += @("--clip-file", $Clip) }
     if ($Fly -ne "") { $runArgs += @("--fly", $Fly) }
+    # Split rather than passed whole: one string containing spaces arrives at the exe as a single
+    # argument, which it does not recognise -- and an unknown argument is WARNED about and ignored,
+    # so both arms would run the same way and agree perfectly. Trap 15 through the harness, which is
+    # what the note over $Extra is about.
+    if ($Extra -ne "") { $runArgs += @($Extra -split "\s+" | Where-Object { $_ -ne "" }) }
 
     # Deliberately not letting a stderr line become a terminating error. Windows PowerShell wraps
     # each stderr line from a native program in an ErrorRecord, so with ErrorActionPreference at

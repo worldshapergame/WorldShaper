@@ -19,6 +19,7 @@ void FaceStore::create(const FaceStoreBudget& budget) {
     faces_.assign(budget_.max_faces, GpuFace{});
     last_read_.assign(budget_.max_faces, 0);
     secondary_.assign(budget_.max_faces, 0);
+    stand_in_.assign(budget_.max_faces, 0);
     // Twice the face count, so the table is at most half full and a probe stays short. Open
     // addressing degrades sharply past that, and the table is four bytes an entry against
     // thirty-two for the record it points at, so the headroom is cheap.
@@ -41,6 +42,8 @@ void FaceStore::create(const FaceStoreBudget& budget) {
     secondary_live_ = 0;
     secondary_declined_ = 0;
     promotions_ = 0;
+    stand_ins_live_ = 0;
+    stand_in_evictions_ = 0;
 }
 
 usize FaceStore::bucket_of(const FaceKey& key) const {
@@ -173,6 +176,24 @@ u32 FaceStore::claim(const FaceKey& key, u64 frame, bool* was_new, bool secondar
     return kNoFace;
 }
 
+u32 FaceStore::claim_stand_in(const FaceKey& key, u64 frame) {
+    // The ordinary claim, and then the one fact only the caller knows. A stand-in is never
+    // secondary: it exists because a PIXEL asked for the face under it.
+    const u32 slot = claim(key, frame);
+    if (slot == kNoFace) return kNoFace;
+    // Marked whether or not this call is what created it. A coarse face the marcher happened to
+    // stop on first, and which a fine face's report then names as its stand-in, is a stand-in from
+    // that moment on -- what the flag records is that something is reading this face on behalf of
+    // its children, and that is true however the record got here.
+    //
+    // No dirty mark: the card's copy of this record has not changed. See `is_stand_in`.
+    if (stand_in_[slot] == 0) {
+        stand_in_[slot] = 1;
+        ++stand_ins_live_;
+    }
+    return slot;
+}
+
 u32 FaceStore::min_cold() const {
     // Twice the lattice's period, not once. Once is the average wait for a face that covers many
     // pixels; a face covering a single pixel waits the whole period, and the phase walk is not
@@ -267,7 +288,10 @@ void FaceStore::evict_cold(u64 frame) {
         // which is fine while the window has room above the floor and skips the sweep entirely once
         // pressure has already taken it down to the floor -- a table that is full, has faces older
         // than the floor in it, and gives up none of them.
-        sweep(now, cold, 0, next_free_);
+        // The coarse pyramid goes too, here. This path runs because the table has nothing left to
+        // give a face a pixel is asking for, and R9f's rule is that a stand-in outlives its
+        // children while there is ROOM for it to -- not that it outranks a visible surface.
+        sweep(now, cold, 0, next_free_, false);
         // Down to the floor and no further, and the floor is now the lattice's period rather than
         // 32. The old loop tested `cold > kFaceMinCold` BEFORE halving, so the window it actually
         // reached was 18 -- under a third of the 64 frames the lattice takes to come back, so the
@@ -275,7 +299,7 @@ void FaceStore::evict_cold(u64 frame) {
         // at.
         while (cold > floor_frames && free_faces_.empty()) {
             cold = std::max(cold >> 1, floor_frames);
-            sweep(now, cold, 0, next_free_);
+            sweep(now, cold, 0, next_free_, false);
         }
         evict_cursor_ = 0;
         out_of_room_ = free_faces_.empty();
@@ -302,7 +326,8 @@ void FaceStore::evict_cold(u64 frame) {
     // and nought evictions until the cursor wrapped. Where the cursor is is not a fact about the
     // store's pressure, so it must not decide what the store looks at when it is under pressure.
     if (pressure_shift() >= 2) {
-        sweep(now, cold, 0, next_free_);
+        // Under a sixteenth free, so the coarse pyramid is spent with everything else.
+        sweep(now, cold, 0, next_free_, false);
         evict_cursor_ = 0;
         return;
     }
@@ -312,15 +337,28 @@ void FaceStore::evict_cold(u64 frame) {
     const u32 first = evict_cursor_;
     const u32 last = (first + slice < next_free_) ? first + slice : next_free_;
     evict_cursor_ = last;
-    sweep(now, cold, first, last);
+    // The ordinary sweep, and the only one that keeps the coarse faces: it runs because a face went
+    // cold, and a coarse face going cold is what R9f says means nothing. The two paths above run
+    // because the table is out of room, which is a different question with a different answer.
+    sweep(now, cold, first, last, budget_.keep_stand_ins && pressure_shift() == 0);
 }
 
-void FaceStore::sweep(u32 now, u32 cold, u32 first, u32 last) {
+void FaceStore::sweep(u32 now, u32 cold, u32 first, u32 last, bool keep_stand_ins) {
     for (u32 slot = first; slot < last; ++slot) {
         // The cheap test first and the record second, which on the node pool was the difference
         // between 8.6 MB of memory traffic a frame and one megabyte (D273).
         if (now - last_read_[slot] <= cold) continue;
         if (!face_live(faces_[slot])) continue;   // already free
+        // ...and the coarse face over it stays, while there is room for it to stay. R9f.
+        //
+        // A stand-in is stamped only when a fine face under it is CLAIMED, so on a settled camera
+        // it is never stamped again and goes cold with every one of its children still live -- and
+        // then the children go, and what the camera comes back to has nothing to seed a new face
+        // from and nothing for the composite to read. The whole coarse pyramid is a fraction of the
+        // table and it is what everything else is read from, so the cheapest thing the store can do
+        // with it is not throw it away. `keep_stand_ins` is false wherever this runs BECAUSE the
+        // table is short of room, where holding one back would mean refusing a face a pixel wants.
+        if (keep_stand_ins && stand_in_[slot] != 0) continue;
 
         const FaceKey key{faces_[slot].x, faces_[slot].y, faces_[slot].z,
                           face_level(faces_[slot]), face_direction(faces_[slot])};
@@ -341,6 +379,11 @@ void FaceStore::sweep(u32 now, u32 cold, u32 first, u32 last) {
         }
         if (secondary_[slot] != 0 && secondary_live_ > 0) --secondary_live_;
         secondary_[slot] = 0;
+        if (stand_in_[slot] != 0) {
+            if (stand_ins_live_ > 0) --stand_ins_live_;
+            ++stand_in_evictions_;
+        }
+        stand_in_[slot] = 0;
         faces_[slot] = GpuFace{};
         dirty_faces_.mark(slot);
         last_read_[slot] = now;
@@ -363,6 +406,8 @@ FaceStoreStats FaceStore::stats() const {
     s.secondary_cap = secondary_cap();
     s.secondary_declined = secondary_declined_;
     s.promotions = promotions_;
+    s.stand_ins = stand_ins_live_;
+    s.stand_in_evictions = stand_in_evictions_;
     return s;
 }
 
@@ -375,10 +420,12 @@ bool FaceStore::validate() const {
         if (slot >= next_free_) return false;
     }
     u32 secondary = 0;
+    u32 stand_ins = 0;
     for (u32 slot = 0; slot < next_free_; ++slot) {
         const GpuFace& face = faces_[slot];
         if (!face_live(face)) continue;
         if (is_secondary(slot)) ++secondary;
+        if (is_stand_in(slot)) ++stand_ins;
         const FaceKey key{face.x, face.y, face.z, face_level(face), face_direction(face)};
         if (find(key) != slot) return false;
     }
@@ -386,7 +433,10 @@ bool FaceStore::validate() const {
     // maintained incrementally rather than derived, so it is the one that can drift -- a decrement
     // missed on one of eviction, promotion or the mis-sized-table path would let the off-screen cap
     // creep upwards for the rest of the run with nothing to say so.
-    return secondary == secondary_live_;
+    //
+    // The coarse count has the same shape and one worse consequence: it decides what the sweep
+    // SKIPS, so a count that drifted up would be a store quietly refusing to give anything up.
+    return secondary == secondary_live_ && stand_ins == stand_ins_live_;
 }
 
 }  // namespace ws

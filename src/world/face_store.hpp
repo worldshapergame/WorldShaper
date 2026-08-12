@@ -277,6 +277,13 @@ struct FaceStoreBudget {
     // A cap per class means a class that overruns degrades its own refresh rate and nothing else's.
     // Declining a secondary claim costs a bounce sample; refusing a primary one costs a picture.
     u32 secondary_share = 4;
+
+    // A coarse face is given up only under pressure, not merely because it went cold. R9f.
+    //
+    // False restores the old policy and is the control arm (`--no-coarse-keep`), which is the state
+    // every figure taken before R9f was measured in. See `FaceStore::claim_stand_in` for what the
+    // rule is and `sweep` for where it bites.
+    bool keep_stand_ins = true;
 };
 
 // How many frames one full eviction sweep is spread over. Eight slices costs eight frames of
@@ -341,6 +348,15 @@ struct FaceStoreStats {
     u32 secondary_cap = 0;
     u64 secondary_declined = 0;
     u64 promotions = 0;
+
+    // The coarse pyramid: how much of the store it is, and how much of it was given up anyway.
+    //
+    // Both numbers, because either alone is trap 7. A live count says how much the rule costs and
+    // says nothing about whether it is working; an eviction count of nought could equally mean the
+    // rule is holding them or that there were none to hold. The pair reads as one sentence, and on
+    // a settled camera with the rule on the second must be nought while the first is not.
+    u32 stand_ins = 0;
+    u64 stand_in_evictions = 0;
 };
 
 // The store itself.
@@ -367,6 +383,43 @@ public:
     // A secondary claim for a face that is already here never demotes it: the class only ever moves
     // towards primary, because a pixel wanting a face outranks a ray wanting it.
     u32 claim(const FaceKey& key, u64 frame, bool* was_new = nullptr, bool secondary = false);
+
+    // The coarse face standing over a fine one, claimed by the same report that claimed the fine
+    // one and kept after the fine ones are gone. R9f.
+    //
+    // # Why it is a claim of its own rather than a flag on the one above
+    //
+    // A stand-in is claimed from a key nobody reported -- an ancestor key is a shift of its
+    // descendant's, so it is derived on the host rather than sent (see the claim site in main.cpp).
+    // Naming that call is what lets the store hold the one fact nothing else here can derive:
+    // WHICH faces are the coarse ones. It cannot be read back off the record, because a face at
+    // level three is a stand-in over voxel faces in one part of the frame and an ordinary face the
+    // marcher stopped at in another, and only the caller knows which it just asked for.
+    //
+    // # What being one buys, and it is the whole of R9f's first half
+    //
+    // `last_read_` is stamped by a CLAIM, and a stand-in is claimed only when a fine face under it
+    // is NEW -- so a settled camera never touches its stand-ins again, and after `cold_frames` the
+    // store gives up every one of them while their children are still live. Walk away for ten
+    // seconds and the children go too, and what comes back has nothing to seed from and nothing for
+    // the composite to read: the room is relit from black through the card's provisional stand-in,
+    // which takes one fresh ray a frame and is the blocky picture D502 is about.
+    //
+    // The coarse pyramid is small -- 512 fine faces to one, so a fraction of the table -- and it is
+    // what every fine face is seeded from and what every gathering ray falls back to. So it is kept
+    // while the store has room, and given up with everything else the moment it does not. See
+    // `sweep`, and `FaceStoreBudget::keep_stand_ins` for the control arm.
+    u32 claim_stand_in(const FaceKey& key, u64 frame);
+
+    // Whether a slot is one. HOST-ONLY, in an array beside the records rather than in a flag of
+    // `packed`, and the reason is the one `is_secondary` sets out at length: `packed` is mirrored,
+    // the uploader sends whole records for dirty slots, and the record has two owners -- so a
+    // host-side flag change on a live record sends the host's zeroed counters over the light the
+    // card accumulated. D528 is that fault costing 29,882 faces their light with the picture, the
+    // mirror and every audit still reading right.
+    bool is_stand_in(u32 slot) const {
+        return slot < stand_in_.size() && stand_in_[slot] != 0;
+    }
 
     // A pixel read this face, so it belongs to the on-screen set whatever put it here.
     //
@@ -451,13 +504,17 @@ public:
 
 private:
     usize bucket_of(const FaceKey& key) const;
-    void sweep(u32 now, u32 cold, u32 first, u32 last);
+    // `keep_stand_ins` is false on the paths that run because the table is short of room, where a
+    // coarse face is worth no more than any other and holding one back would be refusing a face
+    // somebody is looking at in order to keep one nobody is.
+    void sweep(u32 now, u32 cold, u32 first, u32 last, bool keep_stand_ins);
 
     FaceStoreBudget budget_;
     std::vector<GpuFace> faces_;
     std::vector<u32> entries_;        // open-addressed, slot per bucket, kNoFace when empty
     std::vector<u32> last_read_;      // CPU-side, parallel to faces_, as the node pool's is
     std::vector<u8> secondary_;       // CPU-side too, and see `is_secondary` for why it must be
+    std::vector<u8> stand_in_;        // ...and the same again, for the same reason
     std::vector<u32> free_faces_;
     u32 next_free_ = 0;
     u32 evict_cursor_ = 0;     // where the rolling eviction sweep is
@@ -476,6 +533,8 @@ private:
     u32 secondary_live_ = 0;
     u64 secondary_declined_ = 0;
     u64 promotions_ = 0;
+    u32 stand_ins_live_ = 0;
+    u64 stand_in_evictions_ = 0;
 };
 
 }  // namespace ws

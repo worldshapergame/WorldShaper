@@ -222,6 +222,24 @@ inline constexpr i32 kFeedbackFaceRead = 0x100000;
 // kFeedbackSecondary in shaders/node.glsl.
 inline constexpr i32 kFeedbackSecondary = 0x200000;
 
+// The gathering ray's counters: one word a question, over the whole dispatch, cleared every frame
+// and read back at the screenshot audit. Must match kLightProbeWords in shaders/node.glsl, which
+// carries the word map -- the shader is the authority because it is the only writer.
+inline constexpr u32 kLightProbeWords = 24;
+// Where the by-level histogram of "stopped by a cell the pool has not built" starts in it. Must
+// match kLightProbeLevels in shaders/node.glsl.
+inline constexpr u32 kLightProbeLevels = 9;
+
+// The dials in word 0 of that buffer, host-written and card-read.
+//
+// They live in a buffer rather than in the push block because that block is exactly 128 bytes full
+// -- the static_assert on NodePush in main.cpp says so, and 128 is what Vulkan guarantees, which is
+// what the Steam Deck gives. The alternative was to change what an existing field means, and D553
+// is the standing measurement of what that costs: a rule written about a word outlives the meaning
+// it was written for, with no compiler error and no obvious picture.
+inline constexpr u32 kProbeOn = 1u << 0;             // count at all. `--no-light-probe` clears it
+inline constexpr u32 kProbeCoarseBounce = 1u << 1;   // R9f's read half. `--no-coarse-bounce` clears it
+
 // Entries per frame. Beyond this the frame's report is truncated, which costs nothing:
 // the renderer asks again next frame until it gets served.
 // One report per sampled pixel worst case, and sampling is one pixel in 64 — so this has

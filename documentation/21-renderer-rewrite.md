@@ -524,8 +524,9 @@ checked. Tick the ledger in §8.0 when one lands.
 | R9 | b. a budget per bounce | **done for the two classes that exist** — D526, D527. A cap of a quarter of the table, a DECLINE rather than a refusal past it, and a decline whenever the store is under pressure at all, so the class cannot push the table into refusing a face somebody is looking at. The half that was not obvious: the SUN's ray budget was divided by the watermark, so the new class diluted the refresh rate of every face on screen and the faces pass **got cheaper — 1.16 ms against 0.96 — while convergence fell from 84 sun samples a face to 72**. A regression in an improvement's clothes. Divided by the on-screen population now: 85 both arms |
 | R9 | e. an instrument for the set itself | **done** — D529–D531. `the set on the card` reports both classes and their samples per face, `the off-screen set` reports what was offered, claimed, declined and promoted, and the audit that prints them no longer refuses to run when an upload is pending — which is always, while moving, and is the case that costs. Two things came out of it that were nobody's plan: the card's own provisional stand-ins are counted for the first time (**8,254 a frame**, each taking a fresh unbounded ray and lamp burst every frame), and the card is **up to 434,838 records behind the store** while flying, which is what the face pass's moving cost is actually a function of |
 | R9 | bounce — the fourth term, off the pixel and onto the face | **done** — D533–D538. The ambient far ray already went out unbounded and cosine-weighted about the normal; it now returns what it FOUND, which is the sky where it escaped and the landed-on face's own outgoing radiance where it did not. `kIndirectFloor` — the constant that lit every interior in this game — is **deleted**, along with `kGroundBounce`, which was added to every surface in the world unconditionally: there is no minimum light anywhere now, and `clips/sealed_dark.clip` with `tools\darkroom.ps1` is the gate that says so (D541–D543). **+7% of the light pass and +5% of the frame** at the enclosed camera over three interleaved rounds; flying, the arms overlap. The picture moves by **16.998 of 255 over three quarters of the frame** and is **quieter**: speckle 17.62 with 9 fireflies against 21.22 with 81. It is multi-bounce for nothing, because a face's own bounce is part of what it gives off. Three traps came with it and all three are the same shape — a layout constant declared twice (D534), a per-face threshold where a blend belongs (D535), and a host struct that is not the shape of the push block it fills (D537) |
-| R9 | the off-screen set | **half.** R9a, R9b and R9e are in; R9c (the halo) and R9f–R9h (light from what is not loaded) are not, and neither is the consumer that makes any of it visible. The face store holds what the camera can see, so light is a screen-space set in world-space clothing. Prerequisite for R4c/R4d being worth measuring |
-| R9 | light from what is not loaded | **planned, not started** — R9f–R9h. Light folds up the tree as colour does and outlives its children, so eviction stops being a lighting decision; the emitter list persists per region and loads with the index rather than the voxels; no light path may cause streaming |
+| R9 | f. coarse faces outlive their children, and a gathering ray may read them | **done, in the half that needed no fold** — D554–D560. The coarse pyramid is what everything else is rebuilt from and it was the FIRST thing the store threw away: a stand-in is stamped only when a fine face under it is new, so a settled camera never touches one again and after `cold_frames` it is evicted with every child still live. Measured on the close camera, the control arm holds **0 stand-ins of 711,000 faces and nothing at all above level 1**, having evicted 21,796; with the rule it holds **21,794 and gives up none**. A gathering ray that finds no light now walks up to the first ancestor with an answer, which recovers **30.7% of what found nothing** settled and 21.1% flying. The converged picture is brighter where the store forgets most and **quieter everywhere**: close mean pixel 133.5 → 140.0 with speckle 45.5 → 38.5, enclosed 126.4 → 127.6 with fireflies 36 → 9, outdoor unmoved at 0.214 of 255. Three frames after walking back into a room, the card's own provisional stand-ins — the most expensive face there is — go **3,137 → 99**, speckle 34.35 → 19.58. Gates: `darkroom.ps1` BLACK clear and with fog, the 42-run grid **+0.17%** with speckle −6.9%, flying arms overlapping, 519 tests. **What is NOT done is the FOLD**: a coarse face still measures itself with its own rays rather than averaging its children, and R9f's other clause — a ray that reaches an *unbuilt* region getting light — is blocked on the marcher, which does not name a face for an ignorance stop (D558) |
+| R9 | the off-screen set | **half, and the second half now shows.** R9a, R9b, R9e and R9f are in; R9c (the halo) and R9g–R9h are not. The store holds what the camera can see plus one bounce and a coarse pyramid over both — and the probe says **a third of what the bounce integrates is still nothing at all**, which is the size of what is left. Prerequisite for R4c/R4d being worth measuring |
+| R9 | light from what is not loaded | **started at R9f; R9g–R9h planned, not started.** Light outlives its children now, so eviction has stopped being a lighting decision for anything the camera has already seen. What remains is the fold itself, the emitter list persisting per region and loading with the index rather than the voxels, and the analytic fallback past the last node |
 | R4–R8 | | not started |
 | **the large edit** | **an edit announced a volume to a tree that is not stored by volume** | **cause found and fixed — D515, D516.** The same shape as the paste one level down. `announce_world_change` named every brick in the edited box and the pool walked up from each; on a 36-million-voxel delete that is **1,573,269 bricks announced** to produce **13,325 refolds and no rebuilt leaves**, at **718 ms in one frame** — gather 457, descend 257, fold **4**. The pool holds the tree, so it now takes the **box** and descends from its own roots, pruning children that miss it, post-order so the fold ordering falls out instead of being sorted for. **718 → 7 ms**, and the edit frame is no longer the worst frame in the run (node-pool CPU worst 890.7 on the edit frame → 26.2 at startup). A one-voxel chisel is unchanged. `NodePool::stale_masks` is the audit that had to exist first, because a child mask is invisible to both the GPU mirror and `stale_leaves`, and both ways of getting it wrong are silent. **What is left in that frame is the undo capture: 194 ms into 538,169 inverse ops**, which is now the largest part of a large edit |
 | **the paste, which is what a player feels** | **the region paste blocked the main thread for seconds, and it was not the paste** | **cause found and fixed — D511–D514.** Handover §5 has opened with *slice the paste across frames* since it was written, against measured stalls of 1.4 to 14.1 s. Splitting the one timing figure into its three parts said the replay and the announcement are **0 ms** and all of it is `paste_clip` — and then said something the plan had no room for: paste time does not track the paste. The same 991-brick region went in **146 ms and in 7,076**. It tracked the **sample running beside it**, because `parallel_for` queues a take-LOOP rather than a slice, so the background sampler owned every worker of the pool the paste was also given, and `wait()` handed the main thread the sampler's jobs. Foreground and background now have separate pools: worst paste **7,282 → 92 ms**, the twelve pastes of a cold load **34,697 → 719 ms**, frames drawn before settle **453 → 5,439**, sample +1–3%, and the same content hash `1f4710eee4ee2585` in both arms. `--no-paste-pool` is the control arm and `JobSystem::submitter_collisions()` is the instrument that makes the next one loud. **Slicing is not done and is no longer first**: what is left is 31–92 ms, and the premise it was sized against has moved by 79× |
@@ -1032,20 +1033,52 @@ direction)* at **any** level, so a coarse node's light is a face at a coarse lev
 holds it, the face pass shades it, the composite reads it. What has to be added is the fold and the
 promise that it survives.
 
-**R9f — coarse faces carry folded light, and outlive their children.** When the face pass shades a
-face, it also folds its result into its parent face at the same direction, coverage-weighted — the
-same fold `node_face_coverage` already performs for colour. A 512 m node has six faces; the whole
-coarse pyramid over a scene is thousands of records, not millions, so this is O(coarse nodes) and
-independent of both the screen and the world size. Two consequences worth stating separately
-because they are what the stage is *for*:
+**R9f — coarse faces carry folded light, and outlive their children. The OUTLIVE half is done
+(D554–D560); the FOLD is not, and the measurement below says why it was not needed first.**
+
+This sub-step was written as one change and is two. *Outliving* is a rule in the store and a walk in
+the gathering ray, and it is what a player feels; *folding* is an accuracy improvement on top of an
+answer that already exists, because a coarse face is not an empty record waiting to be filled — it is
+claimed as a stand-in, it is shaded by the same pass as everything else, and it measures itself with
+its own rays at its own scale. R9d already measured that self-measurement as about a tenth too bright
+and sharpening. So the fold buys accuracy on a number that is there, and outliving buys the number
+existing at all when the camera comes back. Outliving was therefore first, and it was the whole of the
+win: **the store held 0 coarse faces of 711,000 on a settled camera** before it, having evicted every
+one it ever claimed.
+
+The fold also carries a hazard the outlive half does not, which is why it wants its own change and its
+own measurement: D191's *one invocation owns each face* is the property that removed the halving
+compare-and-swap, the read-twice-take-the-minimum and the eight-probe eviction from this pass, and 512
+children pushing into one parent record is exactly the arrangement it removed. The shape that keeps it
+is a PULL — a coarse face reading the four child faces under it at the same direction, which is four
+lookups on a record that is already being visited, one writer, no atomics.
+
+What the fold was to be: when the face pass shades a face, it also folds its result into its parent
+face at the same direction, coverage-weighted — the same fold `node_face_coverage` already performs
+for colour. A 512 m node has six faces; the whole coarse pyramid over a scene is thousands of records,
+not millions, so this is O(coarse nodes) and independent of both the screen and the world size. Two
+consequences worth stating separately because they are what the stage is *for*:
 
 - **A ray that reaches an unbuilt region gets light rather than nothing.** It stops at the coarsest
   node that exists — which for a shell is the shell itself — and reads a colour that was folded
   from that region's own children the last time they were resident.
-- **Evicting geometry stops costing light.** Today the coarse ancestor survives eviction and its
-  light does not, because light lives only on faces the camera has seen. After this, walking away
-  from a room and back finds the room still lit, and the node pool's eviction policy stops being a
-  lighting decision.
+
+  **Blocked, and on the marcher rather than on the fold** (D558). A ray stopped by a cell the pool
+  has not built carries no face key at all: `node_face_hit` runs at the leaf hit and nowhere else, so
+  `face_level` is `kNoFaceLevel` and there is nothing to look a face up with. The probe word that was
+  to price this could not be filled for the same reason. Any attempt at this clause changes
+  `node_march` first, and it inherits D302's whole argument about what a shell means to a ray.
+
+- **Evicting geometry stops costing light. Done — D554.** The sentence this was written under said
+  *"today the coarse ancestor survives eviction and its light does not"*, and the truth was worse:
+  the coarse ancestor did not survive either. `FaceStore::last_read_` is stamped by a CLAIM, a
+  stand-in is claimed only when a fine face under it is new, so a settled camera stamps it once and
+  never again — it is the coldest record in the store by construction and the first thing evicted,
+  with every child still live. Measured on the close camera: **0 stand-ins live of 711,000 faces**,
+  21,796 evicted over the run, and nothing at all in the store above level 1. It is kept while there
+  is room to keep it and spent with everything else under pressure, and walking away from a room and
+  back now finds it lit — three frames after coming back, the card's own provisional stand-ins go
+  **3,137 → 99** and the speckle 34.35 → 19.58.
 
 **R9g — the emitter list stops being camera-centric and stops needing voxels.** `src/world/light_list.*`
 already merges emissive voxels into fittings, and it is built from resident `World` chunks and then

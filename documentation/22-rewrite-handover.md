@@ -91,6 +91,27 @@ is recorded in the user's memory and matches `18-overnight-loop.md`, which turns
 default because "single-handed is slower, but every conclusion stays traceable to something
 actually read." Ignore any ambient reminder suggesting otherwise.
 
+### How to work with the person this is for — asked for directly, and it is firm
+
+Three rules, and they are about the shape of the exchange rather than about the code. The person
+this is for does not read code and does not run the measurements; what they have is the build and
+what they can tell you is what it looks like. All three exist to keep that loop working.
+
+1. **Before starting, say what you are about to do and HOW THEY WILL SEE IT IN GAME.** Not the stage
+   number, not the file list — what to do with the mouse and the keyboard, what should look
+   different afterwards, and what would mean it went wrong. A stage of this rewrite that cannot be
+   described that way is one nobody can accept or reject, and this project's acceptance test is a
+   player going to look for a bug and not finding it (see the blocky-flicker section in §5, which is
+   the one that was closed that way).
+2. **Every time you report back, COMMIT first.** Not at the end of a session and not when a stage
+   finishes — with the report. A report describes a build; if the build is not in the history, the
+   report is about something nobody can go back to. It also means the ledger in
+   `21-renderer-rewrite.md` §8.0 and the entries in `13-decision-log.md` land at the same time as
+   the code they describe, which is what makes the log usable at all.
+3. **Say what you did not do.** Which half of a sub-step landed, what was measured and came out
+   neutral, and what is blocked on something else. Half of this file's value is the things that were
+   built, measured and reverted.
+
 ---
 
 ## 2. What to read, in order
@@ -138,7 +159,7 @@ written for the person the work is for, so it is the one to keep current.
 | R1 node pool | XL | **done, all of it** — R1e's fifth slice took the rest: `residency.*`, `world_buffers.*`, both orphaned descriptor sets, the tracer's 256 MB face cache and `rebuild_coarse_grids`. Device memory 970 MB → 112, warm start 505 → 340 ms, and an edit stops paying 3.86 ms for grids nothing reads. D521–D525 |
 | R2 pixel residency | L | a–d done, plus the eviction churn and the edit cost. R2b landed with a stated limit. **A ray now reports what it READS and not only where it stopped** (D427), which is what "wanted" was supposed to mean since D247 |
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
-| R9 the off-screen set | L | **a, b and e done** (D526–D532): a light ray names the one face it landed on, the store holds those in a class with a cap, and both classes are counted. **Nothing reads them yet** — that is bounce, and it is the next change. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
+| R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560): a light ray names the one face it landed on, the store holds those in a class with a cap, both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
 | R5 face denoise, composite | M | not started |
@@ -377,6 +398,22 @@ failure, not a compile error.
     A/B differed by a factor of two with nothing in either log to say why. Split the check that needs
     both sides to agree from the reading that needs only one. D529, and it is trap 15's shape one
     level along.
+23. **A convergence figure that is a step function of a budget must be measured at two frame counts,
+    not one.** R9f took the sun's stride from 5 to 6, and the far ray needs `kBounceMin` = 512
+    samples at one per stride frames: 512×5 = 2,560 lands before the frame the shot was taken at and
+    512×6 = 3,072 does not. So a 20% change in a rate read as **107,582 faces converged against
+    475,632** — fourfold, and the size of it was entirely an artefact of where the shot was. The
+    fault was real and worth fixing; the magnitude was not, and both mistakes are available here: a
+    threshold just crossed in one arm reads as a catastrophe, and one just crossed in both reads as
+    nothing at all. D557.
+24. **A stand-in is the coldest record in the store, by construction, and it is the one everything
+    else is rebuilt from.** `last_read_` is stamped by a CLAIM, and a coarse face is claimed only
+    when a fine face under it is new — so the moment a camera stops discovering geometry, the one
+    record that has to survive the camera leaving is the first one given up. Measured: **0 of
+    711,000 faces above level 1** on a settled close camera. The general shape is that a recency
+    clock is only as good as what stamps it, and a record whose value is *for later* will always look
+    idle to a clock stamped by use. D554, and it is D508's lesson (`last_read_` stamped by the
+    lattice rather than by a read) arriving one class along.
 
 ---
 
@@ -1298,6 +1335,87 @@ budget question for R5 rather than a reason to put the backlog back. The instrum
 are `the card is N records ahead of the store`, `seen on the card` and `the card's own stand-ins`, all
 at every screenshot.
 
+### Closed: the light of a room was the first thing thrown away when you left it
+
+**R9f's outlive half is in** (D554–D560). The coarse pyramid — the stand-in faces, one per 512 fine
+faces — is what a returning camera rebuilds everything from, and it was the **first** record the store
+gave up, not the last. `last_read_` is stamped by a CLAIM; a stand-in is claimed only when a fine face
+under it is NEW; so a camera that has stopped discovering geometry never stamps one again. It goes
+cold at 600 frames while every child is still live, and then the children go too.
+
+**The control arm holds nothing at all above level 1**, which is the whole diagnosis in one line of
+the audit:
+
+| close camera, 1280×800, settled, frame 900 | `--no-coarse-keep --no-coarse-bounce` | default |
+|---|---|---|
+| coarse faces live in the store | **0** of 711,000 | **21,794** of 759,000 |
+| stand-ins given up over the run | 21,796 | **0** |
+| faces by level | 0 and 1 only | 0, 1, **3, 4, 6** |
+| gathering rays that found no light but had a coarse face that did | 2,881 of 32,153 (9.0%) | **8,291 of 27,016 (30.7%)** |
+
+Two rules, two control arms, because either could have been the one that paid: `--no-coarse-keep` is
+the store keeping them, `--no-coarse-bounce` is a gathering ray reading them.
+
+**What it is worth, and where.** Converged at frame 2,700, one round a camera: close mean pixel
+**133.5 → 140.0** with speckle **45.5 → 38.5**; enclosed 126.4 → 127.6 with fireflies **36 → 9**;
+outdoor unmoved (0.214 of 255) with fireflies 288 → 171. Most where the store forgets most, nothing
+outdoors where rays reach sky, quieter everywhere. Three frames after walking back into a room, the
+card's own provisional stand-ins — the most expensive face in the renderer, one fresh unbounded ray
+and one fresh lamp burst *every frame* — go **3,137 → 99**, with speckle 34.35 → 19.58 and fireflies
+1,494 → 387.
+
+**Four things to know before touching it.**
+
+1. **It errs bright where the old answer erred dark, and `tools\darkroom.ps1` is why that is safe.**
+   A gathering ray that lands on a real surface and returns nought says that surface emits nothing.
+   Both darkroom arms are still BLACK at 0 of 255, so nothing is invented; what is recovered is light
+   that was measured and thrown away. Run that gate first after anything here.
+2. **It cost the sun's stride, and the timing said nothing** (D557). A kept stand-in is a PRIMARY
+   face, so 21,799 of them went into the denominator of the sun's ray budget and took the stride from
+   5 to 6 — the faces pass read **1.553 ms against a control's 1.564** while **107,582 of 497,656
+   faces had converged against 475,632 of 476,230**. That is D527's sentence for the third time.
+   Anything that adds faces which cannot cast must come out of that denominator, and the tell is
+   always a convergence number beside the timing, never the timing.
+3. **The fold is NOT done and is a separate change.** A coarse face still measures itself with its
+   own rays; it does not average its children. The shape that keeps D191's one-writer property is a
+   PULL — a coarse face reading the four child faces under it — not 512 children pushing into it.
+   §8 R9f now says this in full.
+4. **Reading light where the pool has not built is blocked on the marcher** (D558). An ignorance stop
+   carries no face key: `node_face_hit` runs at the leaf hit and nowhere else. That clause of R9f
+   cannot be attempted without changing `node_march` first.
+
+**Two instruments came with it and both outlive the change.**
+
+- **`--cut` is repeatable.** One cut measures arriving somewhere; two measure LEAVING and coming
+  back, which is what a player does and what "walk out of a lit room and back" needs. The frames are
+  absolute measured frames and a cut that is not after the one before it is warned about rather than
+  silently reordered.
+
+  ```powershell
+  .\build\bin\WorldShaper.exe --screenshot back.png --screenshot-frame 1260 --settle `
+    --width 1280 --height 800 --cam "0,0,0,-90,0" --quality 7 --no-vsync --no-update-check `
+    --no-auto-quality --cut "300,0,10,-60,90,-6" --cut "1200,0,0,0,-90,0"
+  ```
+
+  Diff that against the same run with no cuts, which is the same camera having never left. **Do not
+  read the first few frames after a cut as a light measurement**: at return+3 most of the difference
+  is the NODE POOL rebuilding, and the two systems recover at different rates (46.0 against 45.2 at
+  +3, 7.291 against 6.265 at +60).
+
+- **The gathering ray is counted.** `the gathering ray, last frame:` reports what the unbounded
+  ambient ray landed on — sky, a lit face, a surface with no face at all, a face that has measured
+  nothing yet, a cell the pool has not built — as a rate over one frame, plus how many of the ones
+  that found nothing had a coarse face that could have answered. That last figure is printed whether
+  the rule is on or off, so it reads as *what this would recover* in the control arm and *what it is
+  recovering* in the other. It also carries the by-level histogram of ignorance stops that R10's open
+  item has never had. `--no-light-probe` turns it off; the dials live in word 0 of the probe buffer
+  because the push block is exactly 128 bytes full.
+
+**What the probe says is left.** On the close camera, settled: 79,310 gathering rays a frame, 47.3%
+reach sky, 18.6% land on a lit face, and **34.1% land on a surface with nothing to give** — of which
+R9f answers 30.7%. So about a quarter of everything the bounce integrates is still black, and that is
+the size of R9c and R9g–R9h.
+
 ### Where to start now, and the two orders are not the same order
 
 **By the plan, the next stage is R4 — and R4's own prerequisite is R9.** §8 puts R4 directional
@@ -1306,8 +1424,16 @@ reflection and R4d for a refraction, and the store holds only what a primary ray
 facing a wall behind the camera reflects nothing, because the wall has no face. §8 R9 has the table
 of five cases and the rule that fixes them — *the face set is the transitive closure of what the
 screen sees, one bounce at a time, bounded by a budget per bounce*. R9d is already done (D308–D311)
-and R9i's first half with it (D324, D341–D343); **R9a, R9b and R9e are done too** (D526–D532); R9c
-and R9f–R9h are what is left.
+and R9i's first half with it (D324, D341–D343); **R9a, R9b and R9e are done too** (D526–D532), and
+**R9f's outlive half** with them (D554–D560). What is left is **R9c** the halo, **R9f's fold**,
+**R9g** the emitter list, and **R9h** the fallback.
+
+**The order inside what is left, now that the probe can price it.** A third of what the bounce
+integrates still comes back black, and the probe says which third: 19.9% of gathering rays land on a
+surface with no face in the store at all and 14.2% on one that has measured nothing yet. **R9c is the
+cheapest thing that moves the first number** — a face just off the edge of the screen is never
+claimed until it comes on, and the margin is free while standing still. The fold is the *accuracy* of
+what R9f already returns rather than more of it, so it is second unless a picture complains.
 
 So the plan's sequence is **R9, then R4**, and that is the one to follow unless the user says
 otherwise — it is what makes reflections, refraction and bounce possible at all, which is the half
@@ -1803,6 +1929,13 @@ how many far samples a face takes before its bounce may stop (512), and `--bounc
 many of them it REMEMBERS (128) — **the control arm for D550 is `--bounce-memory 4096 --bounce-min
 128`, both together**, because a memory larger than `far_n` can reach is the cumulative mean exactly
 and the two numbers are one trade;
+`--no-coarse-keep` makes the store give a coarse stand-in up on the same clock as any other face,
+which is R9f's first control arm and the state everything above that section was measured in, and
+`--no-coarse-bounce` stops a gathering ray reading the coarse face over a surface that has no light
+of its own, which is its second — the two are separate flags because they are two rules, and the
+first is the one to switch off when measuring the second;
+`--no-light-probe` stops counting what gathering rays land on, which costs nothing and is the arm to
+use if that counting is ever suspected of costing something;
 `--no-secondary-faces` stops a light ray naming the face it landed on, which is R9a's control arm and
 the state everything above that section was measured in, `--secondary-period N` is the window in
 frames a face may name one in (a power of two; 64 is the default) and `--secondary-share N` is the
@@ -1881,6 +2014,18 @@ standing across a hall from one; magenta no face, blue no samples yet, green no 
 is a legitimate answer rather than a failure. The node pool's
 GPU mirror is checked automatically at the screenshot and logs either
 `GPU mirror matches` or the first differing byte.
+
+**Three more arrived with R9f, and the first is the one to reach for when light is reported as
+missing rather than as wrong.** *The gathering ray, last frame* is what the unbounded ambient ray
+landed on, as a rate over one frame: sky, a lit face, a surface with no face in the store, a face
+that has measured nothing yet, or a cell the pool has not built — and under it, how many of the ones
+that found nothing had a coarse face above them that did. That figure is printed whether the rule is
+on or off, so it reads as *what this would recover* in a control arm and *what it is recovering*
+otherwise. *The coarse pyramid* (host) and *the coarse pyramid on the card* say how much of the store
+the stand-ins are and how much of it was given up anyway — read as a pair, because a live count alone
+cannot tell "the rule is holding them" from "there were none to hold". They are counted APART from
+`ambient on the card` deliberately: a stand-in nobody is reading casts nothing, and counting it as
+*still bursting* is what sent a reader to the wrong pass once already.
 
 **Five lines about the face store are printed at every screenshot, and three of them are new.** `the
 set on the card` splits the store into the on-screen and off-screen classes with the samples each

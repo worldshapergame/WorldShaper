@@ -5,6 +5,9 @@
 #include <cstring>
 
 #include "core/log.hpp"
+// For kLightProbeWords and the dial bits, which are declared once beside the other constants this
+// file and the shaders have to agree about.
+#include "gpu/render_params.hpp"
 
 namespace ws {
 
@@ -220,7 +223,8 @@ void FaceBuffers::upload(VkCommandBuffer cmd, FaceStore& store, u32 frame_index)
     vkCmdPipelineBarrier2(cmd, &dependency);
 }
 
-bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 seen_window) {
+bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 seen_window,
+                        VkBuffer probe) {
     if (device_ == nullptr) return false;
 
     // Nothing may still be owed to the card, or this compares a host that has moved on against a
@@ -279,6 +283,18 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
         range.offset = cursor;
         cursor += range.bytes;
     }
+    // The light probe rides in the same submit, and it rides in THIS one rather than in the second
+    // one below, which is the whole point of where it is.
+    //
+    // The second submit is nested inside "the mirror matched" and "the store's records fit in the
+    // staging ring", and neither has anything to do with a counter about what rays found. An
+    // instrument that goes quiet when a different instrument is unhappy is D529 exactly: the audit
+    // that could not run and the audit with nothing to report were one picture, and the numbers
+    // went missing from the only case that costs.
+    const u64 probe_offset = cursor;
+    const u64 probe_bytes =
+        probe != VK_NULL_HANDLE ? static_cast<u64>(kLightProbeWords) * sizeof(u32) : 0;
+    cursor += probe_bytes;
     // The WHOLE ring rather than one frame's region of it: this has stalled the device before it
     // got here, so no frame in flight owns any of it, and measuring against the per-frame capacity
     // would silently halve the store this check can cover. Trap 10 in the instrument -- a check
@@ -312,6 +328,12 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
         copy.size = range.bytes;
         vkCmdCopyBuffer(cmd, range.source, staging_.buffer, 1, &copy);
     }
+    if (probe_bytes > 0) {
+        VkBufferCopy probe_copy{};
+        probe_copy.dstOffset = probe_offset;
+        probe_copy.size = probe_bytes;
+        vkCmdCopyBuffer(cmd, probe, staging_.buffer, 1, &probe_copy);
+    }
     WS_VK(vkEndCommandBuffer(cmd));
 
     VkCommandBufferSubmitInfo cmd_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
@@ -321,6 +343,63 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
     submit.pCommandBufferInfos = &cmd_info;
     WS_VK(vkQueueSubmit2(device_->graphics_queue(), 1, &submit, VK_NULL_HANDLE));
     device_->wait_idle();
+
+    // What the gathering ray found this frame, before anything else, because it is the one reading
+    // here that depends on nothing else having gone right.
+    //
+    // Per FRAME, not over the run: the buffer is cleared before every face dispatch, so these are
+    // the rays the last frame cast. That is what makes it comparable between two arms -- a lifetime
+    // total is dominated by the convergence transient at the start of a run, which is the state
+    // `--settle` exists to keep out of every other figure in this file.
+    if (probe_bytes > 0) {
+        const u32* probe_words =
+            reinterpret_cast<const u32*>(static_cast<const u8*>(staging_.mapped) + probe_offset);
+        const u32 cast = probe_words[1];
+        const u32 sky = probe_words[2];
+        const u32 lit = probe_words[3];
+        const u32 no_face = probe_words[4];
+        const u32 no_light = probe_words[5];
+        const u32 coarse = probe_words[6];
+        const u32 unbuilt = probe_words[7];
+        if ((probe_words[0] & kProbeOn) == 0) {
+            // Said out loud, because nought counters and a switched-off instrument are the same
+            // reading and only one of them is a result (trap 15).
+            WS_LOG_INFO("faces", "the gathering ray: not counted this run (--no-light-probe)");
+        } else {
+            const f64 of_cast = cast > 0 ? 100.0 / static_cast<f64>(cast) : 0.0;
+            WS_LOG_INFO("faces",
+                        "the gathering ray, last frame: {} cast -- {} reached sky ({:.1f}%), {} "
+                        "landed on a lit face ({:.1f}%), {} on a surface with no face ({:.1f}%), "
+                        "{} on a face with nothing measured yet ({:.1f}%), {} on a cell the pool "
+                        "has not built ({:.1f}%)",
+                        cast, sky, sky * of_cast, lit, lit * of_cast, no_face, no_face * of_cast,
+                        no_light, no_light * of_cast, unbuilt, unbuilt * of_cast);
+            // The number R9f is worth, and it is printed whether the rule is on or off -- with it
+            // off this is what the change WOULD recover, and with it on it is what it IS
+            // recovering. One number, two readings, and the run says which by naming the dial.
+            WS_LOG_INFO("faces",
+                        "...of the {} that found no light, {} had a coarse face over them that did "
+                        "({:.1f}%), and the ray {} reading it",
+                        no_face + no_light, coarse,
+                        (no_face + no_light) > 0
+                            ? 100.0 * coarse / static_cast<f64>(no_face + no_light) : 0.0,
+                        (probe_words[0] & kProbeCoarseBounce) != 0 ? "IS" : "is NOT");
+            if (unbuilt > 0) {
+                std::string levels;
+                for (u32 level = 0; level < 15; ++level) {
+                    const u32 at = probe_words[kLightProbeLevels + level];
+                    if (at == 0) continue;
+                    if (!levels.empty()) levels += "  ";
+                    levels += std::to_string(level) + ":" + std::to_string(at);
+                }
+                // R10's open item has never had this. A ray stopped by an unbuilt brick has lost
+                // 25 cm of sky; one stopped by a shed 512 m subtree has lost a quarter of the
+                // county, and a single count cannot tell those apart.
+                WS_LOG_INFO("faces", "gathering rays stopped by unbuilt geometry, by level  {}",
+                            levels);
+            }
+        }
+    }
 
     bool matched = compare;
     for (const Range& range : ranges) {
@@ -453,6 +532,10 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             u32 secondary_live = 0;
             u32 secondary_done = 0;
             u32 secondary_seen = 0;
+            // The coarse pyramid, counted apart from both for the reason the loop below sets out.
+            u32 stand_in_live = 0;
+            u32 stand_in_seen = 0;
+            u32 stand_in_done = 0;
             u64 secondary_samples = 0;
             u64 primary_samples = 0;
             u32 primary_live = 0;
@@ -476,6 +559,19 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
                     if ((card[slot].photons & kFaceAmbientDone) != 0) ++secondary_done;
                     secondary_samples += face_samples(card[slot]);
                     if (stamps != nullptr && (frame - stamps[slot]) <= seen_window) ++secondary_seen;
+                    continue;
+                }
+                // ...and the coarse pyramid is the same distinction one class along (R9f). A
+                // stand-in is a PRIMARY face -- a pixel asked for the fine face under it -- and
+                // while no pixel is reading it, `may_cast` is false and it casts nothing at all. So
+                // counting it here read as 21,783 faces "still bursting" that were costing not one
+                // ray, which is the sentence the secondary block above is written for, arriving one
+                // class along. A counter that gives one number to two states sends the next reader
+                // to the wrong pass, and this line is read before every cost figure in this file.
+                if (store.is_stand_in(slot)) {
+                    ++stand_in_live;
+                    if (stamps != nullptr && (frame - stamps[slot]) <= seen_window) ++stand_in_seen;
+                    if ((card[slot].photons & kFaceAmbientDone) != 0) ++stand_in_done;
                     continue;
                 }
                 ++primary_live;
@@ -507,6 +603,15 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             // its timing on that scene is not about this term.
             WS_LOG_INFO("faces", "lamps on the card: {} of {} live faces cast no more rays at all",
                         lamp_idle, ambient_live);
+            // The coarse pyramid on the card. `seen` is the number that matters: a stand-in a pixel
+            // is reading is standing in for fine faces that are missing, which is the state R9d and
+            // R9f both exist for, and one nobody is reading is holding an answer for when somebody
+            // comes back. Neither is a face that owes rays, which is why they are out of the line
+            // above.
+            WS_LOG_INFO("faces",
+                        "the coarse pyramid on the card: {} stand-ins, {} of them read by a pixel "
+                        "in the last {} frames, {} have finished their ambient term",
+                        stand_in_live, stand_in_seen, seen_window + 1, stand_in_done);
             // The one that says whether the pass is working on the picture or on the store's
             // memory of it. Everything outside `seen` is costing nothing now and is why: light
             // stops at the edge of what a pixel read, and residency does not.
@@ -526,14 +631,15 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             // prefix, so the gap did not shrink at all: measured flying at 1440p, 982,507 live on
             // the card against 548,601 in the store, and every one of those is a face the worklist
             // may still pack and the shading pass may still pay for.
-            const i64 behind = static_cast<i64>(ambient_live) + static_cast<i64>(secondary_live) -
+            const i64 behind = static_cast<i64>(ambient_live) + static_cast<i64>(secondary_live) +
+                               static_cast<i64>(stand_in_live) -
                                static_cast<i64>(store.stats().faces);
             WS_LOG_INFO("faces",
                         "the card is {} records ahead of the store ({} live there, {} here); the "
                         "upload ran out of staging on {} frames, and a frame that runs out sends "
                         "what fits and carries the rest over",
-                        behind, ambient_live + secondary_live, store.stats().faces,
-                        stats_.exhausted_frames);
+                        behind, ambient_live + secondary_live + stand_in_live,
+                        store.stats().faces, stats_.exhausted_frames);
             // R9e, and it is printed whether or not the off-screen set has anything in it: nought
             // secondary faces on a run with the rule ON is itself the result, and a line that only
             // appears when something happened cannot say that nothing did.

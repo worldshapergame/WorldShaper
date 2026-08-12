@@ -2095,3 +2095,169 @@ which is why the two blocks look different), the far-ray accumulate, the edit re
 `edit_min.w == 2` path's counterpart in `face_work_of`. The readers are `resolve.comp` and
 `bounce_radiance`. `kFaceLightWords` in `shaders/face_terms.glsl` is the one place the layout is
 declared, and D534 is what happens when it is not.
+
+## D554 — the coarse face keeps the light, and a gathering ray may read it
+
+*R9f's first half, and the first thing in R9 that a player will see rather than measure. The store
+keeps the coarse pyramid after the fine faces under it are gone, and a ray that lands on a surface
+with nothing to say reads the coarse face standing over it instead of returning black.*
+
+**What was wrong, and it was written down in the code that caused it.** A stand-in is claimed only
+when a fine face under it is NEW (`claim_stand_in`, from the feedback report in `main.cpp`), and
+`FaceStore::last_read_` is stamped by a claim and by nothing else. So on a camera that has stopped
+discovering geometry — which is every camera a few seconds after it stops moving — a stand-in is
+never stamped again and is the COLDEST record in the store. After `cold_frames` it is evicted while
+every one of its children is still live. The comment at that claim site had already reasoned about
+keeping one warm and dismissed it: *"a stand-in whose children are all live is a stand-in nothing
+reads"*. That is true, and it is about the wrong moment. The moment that matters is the one after:
+the camera leaves, the children go cold too, and what the room has to be rebuilt from is the thing
+that was thrown away first.
+
+**Measured, close camera, 1280x800, `--settle`, frame 900, two interleaved rounds of one build, same
+content hash `766f2fd63f1a01c4` in every run:**
+
+| | control (`--no-coarse-keep --no-coarse-bounce`) | R9f |
+|---|---|---|
+| coarse faces live in the store | **0** and **37** of ~711,000 | **21,794** and **21,788** |
+| stand-ins given up over the run | 21,796 / 21,785 | **0** / **0** |
+| faces by level | 0 and 1 only | 0, 1, **3, 4, 6** |
+| gathering rays that found no light and had a coarse face that did | 2,881 of 32,153 (9.0%) | **8,291 of 27,016 (30.7%)** |
+| faces pass | 1.792 / 1.947 ms | 1.756 / 1.547 ms |
+
+The control arm holds **nothing at all above level 1**. Every stand-in the run ever claimed was
+evicted, and the level histogram is the proof that needs no theory behind it.
+
+**What the player sees, which needed an instrument that did not exist.** `--cut` is now REPEATABLE,
+because one cut asks what ARRIVING somewhere costs and two ask what LEAVING costs: stand at A, cut to
+B for longer than the store's cold window, cut back to A, and diff against a run that never left.
+That is R9f's own gate wording — *walking out of a lit room and back finds it lit* — and one cut
+cannot express it, which is why the case a player reported as the world relighting itself had never
+been measured. Enclosed camera, away at frame 300, back at 1,200:
+
+| three frames after coming back | control | R9f |
+|---|---|---|
+| the card's own provisional stand-ins claimed that frame | **3,137** | **99** |
+| speckle | 34.35 | **19.58** |
+| fireflies | 1,494 | **387** |
+
+A provisional stand-in is the most expensive face in the renderer: it re-claims itself every frame,
+so it can never accumulate, and it takes a fresh unbounded ray and a fresh lamp burst every frame it
+is needed (D316–D318, and D502 is the picture it draws). Thirty-two times fewer of them is the
+blockiness going, and the speckle figure beside it is the same fact as a number.
+
+**The mean difference at that instant does NOT improve (46.0 against 45.2), and the reason is worth
+recording rather than hiding**: three frames after a 900-frame absence the NODE POOL is still
+rebuilding, so most of that difference is geometry drawn from coarse nodes and has nothing to do with
+light. By return+60 the geometry is back and the difference is 7.291 → **6.265**. Two systems recover
+at different rates and only one of them is this change's — which is also the warning for the next
+person measuring a reveal: a picture taken in the first few frames after a cut is a photograph of
+residency, whatever it was pointed at.
+
+**The converged picture moves, permanently, and that is the point rather than a side effect.** Frame
+2,700, every face silent in both arms, close camera: mean pixel **133.508 → 140.043**, speckle
+**45.549 → 38.504**, the two pictures 7.431 of 255 apart over 333,886 pixels against a run-to-run
+floor of 2.85. A gathering ray that lands on a real surface and returns nought is saying that surface
+emits nothing, which is simply false; it now reads that surface's own measured light at 25 cm instead
+of at 3 cm. The speckle falling is the second half of the argument: a term that was a random mixture
+of "the light there" and "black because the store forgot" is noisy by construction.
+
+**It errs bright where the old answer erred dark, so the gate that exists for exactly that was run
+first**: `tools\darkroom.ps1` and `-Fog` are both **BLACK, brightest channel 0 of 255, every pixel**.
+No light is invented where there is none; what is recovered is light that was measured and thrown
+away.
+
+**Where it does most and least, converged, one round each:**
+
+| frame 2,700 | control mean pixel | R9f | picture apart | speckle | fireflies |
+|---|---|---|---|---|---|
+| close | 133.508 | **140.043** | 7.431 over 333,886 | 45.5 → **38.5** | 81 → 81 |
+| enclosed | 126.428 | **127.574** | 3.276 over 72,140 | 17.0 → **16.1** | 36 → **9** |
+| outdoor | 161.598 | 161.713 | 0.214 over 6,565 | 16.4 → **16.2** | 288 → **171** |
+
+Most where the store forgets most, nothing outdoors where the rays reach sky, and quieter in all
+three. **Gate: the 42-run grid moves +0.17%** — 149.4 → 149.7 ms over 21 rows a side, same content
+hash on every row — with speckle **216.5 → 201.5, −6.9%** and fireflies 1,711 → 1,325. Two rows
+flagged over 3% and both are noise, shown by re-running them (trap 9): close/deck reads 4.483 / 4.679
+/ 4.527 in the control against 4.725 / 4.564 / 4.504, and the arms interleave inside each other's
+spread. Flying at 1440p the arms overlap: faces **6.31–6.69 against 6.54–6.91 ms**, with the sun
+stride and the sun samples per face identical, which is the check D527 says to make before reading
+either number.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D554 | **A coarse stand-in is evicted only under pressure, never merely for going cold** | rule | It is the coldest record in the store by construction and the one everything else is rebuilt from. The pyramid is 2.9% of the store on the close camera and 9.1% outdoors, it is bounded by the world's surface at 25 cm rather than by the screen, and under pressure it is spent with everything else — a stand-in held through a full table would be the store refusing a face a pixel wants in order to keep one nobody is looking at, which is D502's picture through a new door |
+| D555 | **A gathering ray that finds no light walks UP, and stops at the first ancestor with an answer** | rule | Three hash probes on a ray that had already found nothing. The walk starts at the level the marcher stopped at, which the ray's own footprint chose, so "three levels up" is bounded by the distance rather than by a constant — which is §8 R9's second risk (*a fold read too coarsely is flat rather than noisy*) answered by construction instead of by a rule somebody has to remember. The albedo and the normal still come from the HIT: a stand-in lends its measurement of the light and never its idea of what is there |
+| D556 | **The stand-in flag is a host-side array, not a bit of `packed`** | trap | The third time this exact decision has had to be made (D295, D528). `packed` is mirrored and the uploader sends whole records for dirty slots, so a host-side flag change on a live record sends the host's zeroed counters over the light the card accumulated. D528 measured that at 29,882 faces losing their light per flight, with the picture, the mirror and every audit still reading right |
+
+## D557 — the third door into "a budget divided by the wrong population is a silent quality setting"
+
+**This change looked free and was not, and the number that said so is on no pass table.** The sun's
+stride is its ray budget divided among the faces that want one. A kept stand-in is a PRIMARY face — a
+pixel asked for the fine face under it — so 21,799 of them went into that denominator, and the stride
+went from 5 to 6 on the close camera. What that cost, at frame 2,700:
+
+| | control | R9f before the fix | after |
+|---|---|---|---|
+| faces that have finished their ambient term | 475,632 of 476,230 | **107,582 of 497,656** | 475,855 of 475,855 |
+| faces pass | 1.564 ms | **1.553 ms** | 1.425 ms |
+
+**The timing was the same to a hundredth while a quarter as much had converged**, which is D527's
+sentence exactly and the third route into it — D527 was the off-screen set, its successor was the
+watermark counting evicted slots, and this is the coarse pyramid. The far ray needs `kBounceMin` = 512
+samples at one per stride frames, so 512x5 = 2,560 lands before frame 2,700 and 512x6 = 3,072 does
+not: a threshold sitting exactly where the measurement was taken, which is why the effect was fourfold
+rather than the 20% the stride change looks like. **A convergence figure that is a step function of a
+budget is one to measure at two frame counts, not one.**
+
+The fix is to subtract the pyramid, as D527 subtracted the off-screen class, on the same argument: a
+stand-in nobody is reading has `may_cast` false and casts nothing at all, so it has no business in a
+budget for rays. A stand-in a pixel IS reading is not subtracted back, deliberately — that is the
+transient where its fine children are missing, and a face standing in for five hundred and twelve
+others while they are found should be refreshed often rather than rationed.
+
+**And the audit line had the same fault**: those 21,783 faces read as *still bursting* while costing
+not one ray, because they were counted in `ambient_live`. They have a line of their own now (*the
+coarse pyramid on the card*), which is the argument the secondary block already carried, one class
+along: a counter that gives one number to two states sends the next reader to the wrong pass.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D557 | **Any face that cannot cast comes out of the stride's denominator** | rule | Three separate populations have now been wrongly included in it. The general form is the one to keep: the sun's stride is a silent quality setting, and the only defence is to print a convergence figure beside every timing — `ambient on the card`, `sun samples each` and the stride itself are all on the audit for this reason |
+| D558 | **An ignorance stop carries no face key, so nothing can walk up from it** | finding | `node_face_hit` runs at the leaf hit and nowhere else, so a ray stopped by a cell the pool has not built has `face_level == kNoFaceLevel`. R9f's other clause — *a ray that reaches an unbuilt region gets light rather than nothing* — therefore needs the marcher changed before it can be attempted, and that is a bigger change than this one. Recorded because the probe word for it was written, could not be filled, and is left named rather than removed |
+
+## D559 — the gathering ray's own counters, and what they say
+
+**The light pass had three audit lines about what it has FINISHED and none about what its rays are
+LANDING on**, so the one question R9 exists to answer had no number and could only be guessed at from
+a picture. `kLightProbeWords` in `shaders/node.glsl` is one word a question over the whole dispatch,
+cleared before every face dispatch and read back at the screenshot audit — so it is a rate over the
+frame rather than a lifetime total dominated by the startup transient, which is the same reason every
+other figure in this project is taken under `--settle`.
+
+The dials for it live in word 0 of that same buffer rather than in the push block, because `NodePush`
+is exactly 128 bytes full and 128 is what Vulkan guarantees, which is what the Steam Deck gives.
+Changing what an existing field means was the alternative, and D553 is the standing measurement of
+what that costs. Word 0 is written with `vkCmdUpdateBuffer` and the counters are cleared with a
+separate `vkCmdFillBuffer`, so "the host owns this word and the card owns the rest" is a property of
+the code rather than a rule somebody has to remember (D528).
+
+What it says on the close camera, settled, with the rule on: **79,310 gathering rays a frame, 47.3%
+reaching sky, 18.6% landing on a lit face, 19.9% on a surface with no face in the store at all, 14.2%
+on a face that has measured nothing yet** — and 30.7% of that last third answerable by the coarse face
+above them. Flying at 1440p the same line reads 21.1%, because the pyramid is being built as fast as
+the camera reveals it. **A third of what the bounce integrates is still nothing at all**, and that is
+the size of what R9c and R9f–R9h have left to recover.
+
+It also carries the histogram R10's open item has never had: *gathering rays stopped by unbuilt
+geometry, by level*. On this building it is a handful a frame, all of them at level 3.
+
+**Its own cost is measured rather than assumed**, because an instrument whose cost is unknown is
+trap 20 waiting to happen: flying at 1440p, two interleaved rounds of `--no-light-probe` against the
+default read **6.383 / 6.245 ms against 6.329 / 6.327** on the faces pass, which is the arms inside
+each other's spread. One atomic on a handful of words per unbounded ray is nothing beside the march
+that produced it.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D559 | **The probe is read in the audit's FIRST submit, not its second** | trap | The second is nested inside "the mirror matched" and "the store fits in the staging ring", and a counter about what rays found has nothing to do with either. D529 is that fault: the audit that could not run and the audit with nothing to report were one picture, and the numbers went missing from the one case that costs |
+| D560 | **`--cut` is repeatable** | instrument | One cut measures arriving; two measure leaving and coming back, which is what a player does and what R9f's gate is written about. A cut whose frame is not after the one before it is WARNED about rather than silently reordered, because a harness that writes them in the wrong order has measured something nobody asked for and both arms would look clean — trap 15. Writing the harness for it walked straight into trap 4 as well: a local `$a` in a script with a `[string]$A` parameter is the same variable, and every character of the joined string arrived as its own argument |
