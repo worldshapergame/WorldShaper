@@ -151,15 +151,157 @@ vec3 tonemap_aces(vec3 colour) {
     return clamp(from_working * (a / b), 0.0, 1.0);
 }
 
-// Fixed rather than measured. The tracer's frame_exposure() reads the frame statistics buffer it
-// fills itself, which this pass has no binding for and no business writing.
+// ---- the light meter (R6a) ----------------------------------------------------------------------
+//
+// This was `const float kPreviewExposure = 3.2` for the whole of the rewrite, with a comment saying
+// the tracer's `frame_exposure()` read a buffer this pass had no binding for. R3d deleted the tracer
+// and R1e deleted the buffer, so since then there has been **no writer at all** — and a constant
+// exposure is why `clips/many_lamps.clip`, a sealed hall lit by thirty-six sconces and nothing else,
+// comes out blown pure white while the same distribution drew correctly on the tracer.
+//
+// The arithmetic is `pt_post.glsl`'s, which §9 kept for exactly this. What is new is where it runs
+// and what it measures: the composite's own pre-exposure radiance, whole workgroups only.
+//
+// # Two slots, and the reason is a gradient across the picture rather than a wrong number
+//
+// Slot 0 is this frame, zeroed by the host before the dispatch and added to with atomics. Slot 1 is
+// the frame before it: finished, and written by nobody while it is read. Every invocation reads slot
+// 1, so every invocation computes the SAME exposure. Read slot 0 — the one being added to — and each
+// invocation would see however much of the frame happened to have run by the time it looked, so the
+// same scene would expose differently across the image and differently again on another card. That
+// reads as a shading bug, not as an exposure one.
+struct FrameStatsEntry {
+    uint log_luminance;
+    uint groups;
+    uint exposure;
+    uint focus;
+};
+layout(std430, binding = 9) buffer FrameStats { FrameStatsEntry slots[]; } stats;
+
+// The fixed-point conventions, and they must match gpu/render_params.hpp exactly. A shader and a
+// header disagreeing about a scale factor does not fail, it exposes wrongly.
+const float kLogLuminanceBias = 16.0;
+const float kLogLuminanceUnit = 256.0;
+const float kExposureUnit = 65536.0;
+
+// The window of the light meter, in stops either side of one. Narrower than the [-16, +16] the fixed
+// point can hold, and deliberately: a log average is dragged by its darkest pixels as hard as by its
+// brightest, and this building has corners that are genuinely thirty stops down — unlit, unreachable,
+// and not what anybody is looking at. Pinned at -10 they still say "this frame is dark" without being
+// allowed to say it thirty times over.
+const float kMeterFloor = -10.0;
+const float kMeterCeiling = 12.0;
+
+// What the log-average of the frame is exposed to. 0.18 is the photographic middle grey; the ACES
+// curve lands it near 0.10 linear, which is 0.35 after gamma.
+const float kMiddleGrey = 0.18;
+
+// ...and the compensation on top of it, in stops. A separate constant from `kMiddleGrey` on purpose:
+// that one is a physical convention and means something, and this one is a LOOK and does not.
+// Folding a taste decision into a named standard is how a standard stops being checkable.
+//
+// It is not a taste decision that was guessed at, though. Metering this building to middle grey
+// alone chose **1.214x enclosed, 1.485x at the steps and 1.177x outdoors**, against the 3.2 this
+// pass applied as a constant — so the constant sat about one and a third stops above a middle-grey
+// meter, and every picture anybody has looked at, and every figure in the decision log, is at that
+// level. A log average is dragged hard by its darkest pixels and this building is mostly shadowed
+// stone, which is the whole of why: the meter is right about the average and the average is not what
+// the eye is looking at.
+//
+// 1.3 stops is the mean of what those three cameras would need to stay exactly where they are. What
+// is left after it is the meter doing its job rather than a level shift: the enclosed room lands a
+// little under where it was, the steps a little over, and a scene at a completely different light
+// level — `clips/many_lamps.clip`, a sealed hall lit by thirty-six sconces, which came out blown
+// pure white — lands somewhere readable for the first time.
+const float kExposureBias = 1.3;
+
+// How far towards the new measurement one frame moves. Per frame and not per second, because this
+// pass is given a frame counter and no clock: at 60 Hz, 0.033 is a time constant of half a second,
+// so walking from a lit street into a doorway takes about a second to settle. That is roughly what an
+// eye does and well short of what a camera does.
+const float kAdaptRate = 0.033;
+
+// The bounds the exposure is allowed inside. A frame with nothing in it must not send this to
+// infinity and then to NaN, and a frame that is genuinely all sky must not be pulled so far down that
+// the next one takes a visible age to come back.
+const float kExposureMin = 0.0039;   // -8 stops
+const float kExposureMax = 4096.0;   // +12 stops
+
+float meter_luminance(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+
+// What the meter falls back to, and it is the constant this pass used to apply unconditionally. Kept
+// rather than deleted, because it is the answer for the frame before any measurement exists — and
+// because it makes the control arm exact: `--no-auto-exposure` has the host zero BOTH slots every
+// frame, so `groups` is always nought here, this constant is always what is applied, and the arm
+// restores precisely the picture every figure in the decision log above R6 was measured against.
+// No flag reaches this shader at all, which is one fewer thing that can disagree with the host.
 const float kPreviewExposure = 3.2;
 
-vec3 to_display(vec3 radiance) {
+float frame_exposure() {
+    uint sum = stats.slots[1].log_luminance;
+    uint groups = stats.slots[1].groups;
+    uint previous = stats.slots[1].exposure;
+
+    // No measurement at all: the very first frame, before anything has been drawn. Whatever was in
+    // use stays in use, and if nothing was, this is the constant that used to be here — so the frame
+    // before the meter has anything to say is the picture this renderer has always drawn.
+    if (groups == 0u) {
+        return (previous == 0u) ? kPreviewExposure : float(previous) / kExposureUnit;
+    }
+
+    float mean = float(sum) / float(groups);
+    float average_stops = mean / kLogLuminanceUnit - kLogLuminanceBias;
+    float target = clamp(kMiddleGrey * exp2(kExposureBias - average_stops), kExposureMin,
+                         kExposureMax);
+
+    // A measurement but no previous exposure is the first frame with anything to go on, and it
+    // snaps. Easing away from a number that never meant anything shows up as the picture fading in.
+    if (previous == 0u) return target;
+
+    // In STOPS, not in multipliers. Adaptation is logarithmic — two stops down from bright is the
+    // same amount of adjusting as two stops up from dark — and blending the multipliers linearly
+    // makes coming out of a dark room take several times longer than going into one.
+    float from = log2(clamp(float(previous) / kExposureUnit, kExposureMin, kExposureMax));
+    return exp2(mix(from, log2(target), kAdaptRate));
+}
+
+vec3 to_display(vec3 radiance, float exposure) {
     // GAMMA, and leaving it out is most of why the first attempt came out nearly black. The
     // swapchain is UNORM and expects an encoded value; a linear one written straight in reads about
     // a third as bright.
-    return pow(tonemap_aces(radiance * kPreviewExposure), vec3(1.0 / 2.2));
+    return pow(tonemap_aces(radiance * exposure), vec3(1.0 / 2.2));
+}
+
+// What this pixel tells the NEXT frame, measured before exposure.
+//
+// Metering the exposed image would be a loop chasing a fixed post-exposure grey: it settles in the
+// same place and takes the long way round, oscillating on the way.
+//
+// Whole workgroups only. A group hanging off the edge of the frame contributes fewer than sixty-four
+// pixels and would still count as one group, so the mean would come out low by however much of the
+// last row is missing. Dropping those groups costs the meter the outermost seven pixels and no
+// accuracy at all.
+//
+// A sixty-fourth per pixel rather than a reduction in shared memory, because a barrier reached from
+// divergent control flow is undefined and hangs on some hardware. An atomic does not care. Rounded
+// rather than truncated: truncation loses up to a whole unit every time and always downwards, which
+// is a systematic eighth of a stop.
+void meter_pixel(vec3 radiance, float exposure) {
+    uvec2 group_first = gl_WorkGroupID.xy * gl_WorkGroupSize.xy;
+    if (group_first.x + gl_WorkGroupSize.x > push.resolution.x ||
+        group_first.y + gl_WorkGroupSize.y > push.resolution.y) {
+        return;
+    }
+    float stops = clamp(log2(max(meter_luminance(radiance), 1e-8)), kMeterFloor, kMeterCeiling);
+    float value = (stops + kLogLuminanceBias) * kLogLuminanceUnit;
+    atomicAdd(stats.slots[0].log_luminance, uint(value / 64.0 + 0.5));
+    if (gl_LocalInvocationIndex == 0u) atomicAdd(stats.slots[0].groups, 1u);
+    // The exposure this frame settled on, so the next has something to move away from rather than
+    // snapping to each new measurement. Every invocation computed the same number, so which one
+    // writes it is arbitrary.
+    if (gl_GlobalInvocationID.x == 0u && gl_GlobalInvocationID.y == 0u) {
+        stats.slots[0].exposure = uint(clamp(exposure, kExposureMin, kExposureMax) * kExposureUnit);
+    }
 }
 
 // How much of the sky's radiance a fully open surface receives. A scale on a measured visibility,
@@ -642,7 +784,11 @@ void main() {
             }
         }
 
-        colour = to_display(colour);
+        // R6a. The meter reads the frame BEFORE this one and is fed the radiance before it is
+        // exposed, so the two are one round trip apart and neither is chasing its own answer.
+        const float exposure = frame_exposure();
+        meter_pixel(colour, exposure);
+        colour = to_display(colour, exposure);
     }
 
     if (push.resolution.z == 1u) {

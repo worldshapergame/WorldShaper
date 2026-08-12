@@ -1786,3 +1786,73 @@ that camera now has about 8% of headroom left standing still. And 29.6 MB of gra
 whole smoothing pass, which is now the biggest single thing the renderer allocates. Both of those are
 worth knowing before I add anything else to that pass, and I have written them down where the next
 piece of work will trip over them.
+
+## The brightness dial had nobody turning it
+
+**The game now sets its own exposure, the way an eye or a camera does. Two test scenes that were
+unusable are usable.**
+
+There is one number that decides how bright the final picture is. It has been **3.2, fixed, forever**
+— and it was supposed to be temporary. The old path tracer measured the frame and set it properly;
+when I deleted the tracer (and then the buffer it measured into) that measurement went with it and
+nobody noticed, because the facility happens to look about right at 3.2.
+
+Two test scenes were not so lucky, and both were written specifically to test this:
+
+- **the sealed hall lit by thirty-six sconces** — I have mentioned this one several times as "comes
+  out blown white". It was: the average pixel was **248.9 of 255**, and **99.9% of the frame** was
+  brighter than 200. It is now **150.6**, with nothing at all fully blown;
+- **a room with one window in it** — the opposite failure. The sky through the window took all the
+  range and the room went black: average pixel **35.8 of 255**. It is now **149.3**. That clip's own
+  notes predicted exactly that would happen, years before anything could fix it.
+
+The meter chose a multiplier of **0.187×** for the first and **33.2×** for the second. Same renderer,
+same code, a factor of 177 between them — which is what having a meter means.
+
+### The part I want you to check, because it is a taste decision
+
+Measuring the facility "properly" — to photographic middle grey, the textbook answer — takes it from
+where you have been looking at it (around 144–162) down to **98–100 on every camera**. That is
+technically correct and it looks wrong: a light meter averages, and this building is mostly shadowed
+stone, so the average is far below what your eye is actually looking at. Every photograph of a snowy
+field has the same problem.
+
+So there are two numbers, not one: the meter measures, and a separate **+1.3 stops of compensation**
+says what to do about it. I picked 1.3 by measuring what each of the three cameras would need to stay
+exactly where it is (1.40, 1.11 and 1.44) and taking the middle. The result:
+
+| | before | after |
+|---|---|---|
+| domed room | 157.4 | 153.6 |
+| the steps | 144.1 | 152.1 |
+| outdoors | 161.9 | 155.5 |
+
+So the building shifts by 2–6% — the steps come up, the other two come down slightly, and all three
+now sit within two shades of each other, which is the meter levelling them. **If that reads as
+"everything went slightly flat" to you, the fix is one number and I will change it.** The two
+constants are separate precisely so that adjusting the look cannot quietly corrupt the measurement.
+
+### The things I checked because they are what would go wrong
+
+- **It does not pump.** An auto-exposure that hunts is far worse than a fixed one. Standing still,
+  two consecutive frames chose 2.991× and 2.991× — identical to three decimal places.
+- **It adapts at about the speed of an eye.** Cutting from outdoors into the room moves it from
+  2.899× to 4.014× within five frames and settles over about half a second.
+- **A pitch-black sealed room is still pure black**, with and without fog. Exposure multiplies, so
+  nought stays nought however far the dial winds up — and in that room it winds up to **460×**, which
+  means anything the renderer was inventing would now be 460 times more obvious. It is still nought.
+- **It costs nothing measurable**: the final pass reads 0.820 / 0.728 / 0.555 ms against 0.819 /
+  0.729 / 0.559 before.
+- **The picture is printed as a number now**, at every screenshot: what multiplier it chose and how
+  bright the frame was. A brightness dial nobody could read is what caused this in the first place.
+
+`--no-auto-exposure` puts the fixed 3.2 back exactly, so every screenshot I have ever sent you is
+still reachable.
+
+### One correction to what I told you last time
+
+I said the face light record was "the largest allocation in the renderer". It is not — there is a
+950 MB buffer in there labelled **TEMPORARY PROBE**, left over from an experiment about memory
+placement that finished several sessions ago, and it is allocated on every launch. I have flagged it
+as its own piece of work rather than pulling it into this one, because removing it has to be measured
+(the whole reason it exists is that memory placement was suspected of changing frame times).

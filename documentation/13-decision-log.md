@@ -2779,3 +2779,110 @@ should be measured against that rather than against the flying figure.
 | D576 | **The lamps are filtered, the sun and the near field are not** | measurement | Chosen from a photograph of each term on its own, taken before any of R5 existed. The lamps read 23.0 of 255 at the enclosed camera and the near field 6.0; the sun carries a real hard edge and must keep it |
 | D576 | **One filtered count answers for all three terms** | design | A face's first visit writes nought there and takes its first far ray and its first lamp burst together, so the two are never separately absent; and a scene with no emitters gives every tap a lamp mean of nought, which is the answer rather than a fallback |
 | D576 | **Two weight sums, not one** | correctness | A face whose far field has finished and whose lamp term was reopened by a light-list version bump holds hundreds of one and eight of the other. One shared weight would let whichever estimator is further along decide how much of the other to take from that neighbour |
+
+## D577 — R6a: the exposure has a writer again, and the two scenes it was needed for
+
+**`kPreviewExposure` was the constant 3.2 with nothing writing it since R3d deleted the tracer and
+R1e deleted the frame-statistics buffer under it.** Its own comment said so — *"the tracer's
+frame_exposure() reads the frame statistics buffer it fills itself, which this pass has no binding
+for and no business writing"* — and it has been quoted in this file, in the plan and in the handover
+as an open item ever since. This is the buffer back, with a writer, in the composite.
+
+**The arithmetic is `pt_post.glsl`'s**, which §9 kept for exactly this: a log-average of the frame's
+pre-exposure luminance over whole workgroups, exposed to middle grey, eased in STOPS at 0.033 a
+frame — half a second at 60 Hz. What is new is where it runs and what it measures.
+
+**Two slots, and the reason is a gradient across the picture rather than a wrong number.** Slot 0 is
+the frame being drawn, zeroed by the host before the dispatch and added to with atomics; slot 1 is the
+frame before it, complete and written by nobody while it is read. Every invocation reads slot 1, so
+every invocation computes the SAME exposure. Reading slot 0 would give each invocation however much
+of the frame happened to have run by the time it looked — the same scene exposing differently across
+the image and differently again on another card, which reads as a shading bug rather than an exposure
+one.
+
+**The two scenes this was needed for, and both of them are clips somebody wrote for this and then
+could not use:**
+
+| 1280×800, `--settle` | fixed 3.2 | metered |
+|---|---|---|
+| `clips/many_lamps.clip` — sealed hall, thirty-six sconces, mean pixel | **248.873** | **150.598** |
+| ...pixels over 200 of 1,024,000 | **1,022,963** | 65,322 |
+| ...fully blown, over 254 | **72,736** | **0** |
+| `clips/exposure_range.clip` — a room with one window, mean pixel | **35.754** | **149.312** |
+| ...brightest pixel | 244 | 255 |
+| the multiplier the meter chose | — | **0.187×** and **33.178×** |
+
+The second clip's own header predicted its result before the meter existed: *"the sky clips to white,
+and the room — which is where the light actually has to be judged — comes out black."* It read 35.8 of
+255. The first is D409's open item, which has been quoted in three documents as *comes out blown
+white*: 99.9% of that frame was over 200.
+
+**And the facility barely moves, which is the point rather than a coincidence** — see D578 for the
+constant that makes it so:
+
+| settled, two rounds each | fixed 3.2 | metered | the meter chose |
+|---|---|---|---|
+| enclosed mean pixel | 157.385 / 157.471 | 153.636 / 153.654 | 2.993× |
+| close | 144.075 / 144.063 | 152.061 / 152.056 | 3.655× |
+| outdoor | 161.856 / 161.844 | 155.503 / 155.488 | 2.898× |
+| enclosed speckle | 7.876 / 7.881 | 7.993 / 8.103 | |
+| close speckle | 27.731 / 27.570 | 26.422 / 26.379 | |
+| resolve pass | 0.819 / 0.729 / 0.559 ms | 0.820 / 0.728 / 0.555 | |
+
+**It does not pump**, which is the one thing a player would notice and the one thing a settled grid
+would hide: two consecutive frames of a static camera read **2.991× and 2.991×**, to the digit.
+Arriving somewhere new, `--cut` from the outdoor camera into the room takes it 2.899× → 4.014× by
+cut+5, which is the half-second ease doing what it is for.
+
+**The control arm is exact and no flag reaches the shader.** `--no-auto-exposure` has the host zero
+BOTH slots every frame, so `groups` is always nought in the slot the shader reads — which is the
+shader's own "nothing has been measured" path, and it applies `kPreviewExposure`. So the arm restores
+the constant 3.2 precisely, by construction rather than by a second code path, and every figure in
+this file above R6 is still reachable.
+
+**The instrument, because a constant nobody can argue with is what this stage exists to replace.**
+`the light meter: N.NNNx, on a frame whose log-average is S stops over G workgroups` at every
+screenshot, read back through thirty-two bytes copied after the composite. An exposure with no
+printed number would have been the same fault with an extra buffer.
+
+**And `--validation` earned its keep on the first run.** `create_device_buffer` grants TRANSFER_DST
+and not TRANSFER_SRC — every other device buffer here is written from staging and never read by a
+copy — and the slot rotation is a copy of this buffer into itself. The copy ran, the picture looked
+right, and the only thing that said otherwise was the validation layer. Trap 1's shape one door
+along: the pass's output was connected and its usage flags were not.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D577 | **The meter lives in the composite, not in a pass of its own** | design | It needs the pre-exposure radiance, which exists in exactly one place for exactly one instruction's worth of time. A pass of its own would have to store the whole frame in high dynamic range to re-read it |
+| D577 | **The control arm is the host zeroing both slots** | trap 15 | A flag in the shader is a second code path that can drift from the first. Zeroing the slot the shader reads drives it down its own untaken branch, so the arm IS the old constant rather than a reimplementation of it |
+| D577 | **`darkroom.ps1` still passes and is now a stronger gate** | correctness | Exposure is multiplicative, so a sealed black room stays at nought however far the meter winds up — and it winds up to 460× there, so anything the renderer invented would be 460 times more visible than it was |
+
+## D578 — the meter measures, the compensation is the look, and they are separate constants
+
+Metering this building to middle grey alone chose **1.214× enclosed, 1.485× at the steps and 1.177×
+outdoors** — against the 3.2 the constant applied. So every picture anybody has looked at, and every
+figure in this file, sits about **one and a third stops above a middle-grey meter**, and switching to
+one unmodified took the facility from 144–162 down to 98–100 on every camera.
+
+**That is the meter being right about the average and the average not being what the eye is looking
+at.** A log average is dragged by its darkest pixels as hard as by its brightest, and this building
+is mostly shadowed stone: `kMeterFloor` at -10 stops already stops the genuinely unlit corners saying
+it thirty times over, and what is left is still a scene whose average is far below its subject.
+
+So `kExposureBias` is **+1.3 stops**, and it is a second constant rather than a larger `kMiddleGrey`.
+0.18 is a physical convention and means something; this is a look and does not, and folding a taste
+decision into a named standard is how a standard stops being checkable. 1.3 is the mean of what the
+three cameras would each need to stay exactly where they are — 1.40, 1.11 and 1.44 stops — so what is
+left after it is the meter doing its job rather than a level shift: the enclosed room lands 2.4%
+under where it was, the steps 5.5% over, the outdoor camera 3.9% under, and the two clips above go
+from unusable to readable.
+
+**The alternative that was considered and not taken** is raising `kMeterFloor` so the darks drag
+less. It would have moved the same number by making the measurement worse rather than by naming the
+adjustment, and it would have changed how the meter responds to a genuinely dark scene — which is the
+case `exposure_range.clip` exists to test.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D578 | **+1.3 stops, in a constant of its own** | judgement | Measured from what the three facility cameras need to stay put, so the change is the meter's behaviour and not a brightness edit. Anybody who wants a different look changes one number that says it is a look |
+| D578 | **Every figure above this line is still comparable, and every figure after it is not** | measurement | The facility moves by 2–6% rather than 35%, so this is not the wholesale re-baselining the handover warned it would be — but it is a change to every picture and `--no-auto-exposure` is what reaches the old ones |

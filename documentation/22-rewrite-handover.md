@@ -175,7 +175,7 @@ written for the person the work is for, so it is the one to keep current.
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
 | R4 directional faces | L | not started — **R9 first**, or a reflection is of an empty set |
 | R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
-| R6 post | M | not started |
+| R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
 | R8 infinite detail | XL | not started |
 
@@ -1499,6 +1499,74 @@ was measured in) and `--secondary-light-share N`, the divisor of the on-screen s
 rather than 128. And R5, because the argument for this pass being inside its budget while moving is
 further from true than it was.
 
+### Closed: the brightness dial had no writer, and two test scenes could not be used because of it
+
+**`resolve.comp`'s `kPreviewExposure` was the constant 3.2 and nothing had written it since R3d
+deleted the tracer and R1e deleted the frame-statistics buffer under it.** It is quoted as an open
+item in this file, in the plan and in the decision log; this closes it. D577, D578.
+
+**The two cases it broke are both clips somebody wrote to test exposure and then could not use:**
+
+| 1280×800, `--settle` | fixed 3.2 | metered |
+|---|---|---|
+| `clips/many_lamps.clip`, mean pixel | **248.873** | **150.598** |
+| ...pixels over 200 of 1,024,000 | **1,022,963** | 65,322 |
+| ...fully blown, over 254 | **72,736** | **0** |
+| `clips/exposure_range.clip`, mean pixel | **35.754** | **149.312** |
+| the multiplier the meter chose | — | **0.187×** and **33.178×** |
+
+`exposure_range.clip`'s own header predicted its own result before any meter existed — *"the sky
+clips to white, and the room, which is where the light actually has to be judged, comes out black"* —
+and it read 35.8 of 255.
+
+**The facility moves by 2–6% and not by 35%, and that is a decision rather than luck** (D578).
+Metering this building to middle grey alone chooses **1.214× enclosed, 1.485× at the steps and
+1.177× outdoors** against the constant's 3.2, so every picture anybody has looked at sits about one
+and a third stops above a middle-grey meter — a log average is dragged by its darkest pixels and this
+building is mostly shadowed stone. `kExposureBias` is +1.3 stops and is a **separate constant** from
+`kMiddleGrey`: the meter is a measurement and the compensation is a look, and folding a taste
+decision into a named physical standard is how a standard stops being checkable.
+
+| settled, two rounds each | fixed 3.2 | metered | the meter chose |
+|---|---|---|---|
+| enclosed mean pixel | 157.385 / 157.471 | 153.636 / 153.654 | 2.993× |
+| close | 144.075 / 144.063 | 152.061 / 152.056 | 3.655× |
+| outdoor | 161.856 / 161.844 | 155.503 / 155.488 | 2.898× |
+| resolve pass | 0.819 / 0.729 / 0.559 ms | 0.820 / 0.728 / 0.555 | |
+
+**Five things to know before touching it.**
+
+1. **It does not pump, and that is the one thing a settled grid cannot see.** Two consecutive frames
+   of a static camera read **2.991× and 2.991×**, to the digit. Arriving somewhere new,
+   `--cut` from the outdoor camera into the room takes it 2.899× → 4.014× by cut+5, which is the
+   half-second ease. **If light is ever reported as breathing or pulsing, read the meter line at two
+   frame numbers before anything else.**
+2. **Two slots, and the reason is a gradient across the picture rather than a wrong number.** Slot 0
+   is the frame being drawn and is added to with atomics; slot 1 is the frame before it, complete and
+   written by nobody while it is read. Every invocation reads slot 1 so every invocation computes the
+   same exposure. Reading slot 0 gives each invocation however much of the frame had run when it
+   looked — the same scene exposing differently across the image and differently again on another
+   card, which reads as a shading bug.
+3. **The control arm is exact and no flag reaches the shader.** `--no-auto-exposure` has the host
+   zero BOTH slots every frame, which drives the shader down its own "nothing has been measured"
+   branch and applies `kPreviewExposure`. The arm IS the old constant rather than a second code path
+   that can drift from it.
+4. **`darkroom.ps1` still passes and is a stronger gate now.** Exposure is multiplicative, so a
+   sealed black room stays at nought however far the meter winds up — and it winds up to **460×**
+   there, so anything the renderer invented would be 460 times more visible than it was.
+5. **`--validation` earned its keep on the first run.** `create_device_buffer` grants TRANSFER_DST
+   and not TRANSFER_SRC, and the slot rotation is a copy of this buffer into itself. The copy ran,
+   the picture looked right, and the layer was the only thing that said otherwise.
+
+**The instrument is `the light meter:` at every screenshot** — the multiplier, the frame's own
+log-average in stops, and the workgroup count. An exposure with no printed number would have been
+the same fault as the constant with an extra buffer in it.
+
+**What this makes incomparable.** Every picture figure taken before this line is at the fixed 3.2 and
+every one after it is metered. The facility moves 2–6%, so it is not the wholesale re-baselining this
+file warned it would be, and `--no-auto-exposure` is what reaches the old ones. **`tools\baseline.ps1`
+has not been re-run.**
+
 ### R5a is in: a face's light is no longer measured alone
 
 **The first thing in this renderer that filters across faces.** Every light term here is a per-face
@@ -2210,6 +2278,10 @@ reading it — R9b's control arm, and the state every figure taken before D561 w
 `--secondary-light-share N` is that class's ray budget as a divisor of the on-screen set's shading
 rate (8 by default; larger is cheaper and slower, and **D566 is why sweeping it downwards buys much
 less than it looks like it should**);
+`--no-auto-exposure` restores the fixed brightness multiplier of 3.2 this pass applied for the whole
+of the rewrite, which is R6's control arm and the state every picture figure above that section was
+measured in — it works by having the host zero both of the meter's slots every frame, so the shader
+takes its own "nothing has been measured" branch and no flag reaches it;
 `--no-face-denoise` reads a face's far field and bounce raw rather than blended with its coplanar
 neighbours', which is R5a's control arm and the state everything above that section was measured in —
 it leaves the WRITE in place and takes the eight neighbour lookups out, so the composite reads the

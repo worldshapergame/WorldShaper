@@ -331,6 +331,11 @@ struct Options {
     // and takes the eight neighbour lookups out, so the two arms differ by the filter rather than by
     // a branch in the reader.
     bool face_denoise = true;
+    // R6a's light meter. False zeroes both of the meter's slots every frame, which is the shader's
+    // own "nothing has been measured" path and applies the constant `kPreviewExposure` this pass
+    // used before the meter existed -- so `--no-auto-exposure` is the picture every figure in the
+    // decision log above R6 was measured against, exactly, and not an approximation of it.
+    bool auto_exposure = true;
     // The store gives its three kinds of record up in an order — the off-screen class first, the
     // on-screen set's history next, the coarse pyramid last. `--no-class-eviction` puts them all
     // back on one clock, and with `--secondary-share 4` it is the full control arm for the class
@@ -684,6 +689,9 @@ Options parse_options(int argc, char** argv) {
             // R9b's control arm: a face nobody is looking at casts nothing, whatever is reading it.
             // This is the state every figure taken before this change was measured in.
             options.secondary_light_share = 0;
+        } else if (arg == "--no-auto-exposure") {
+            // R6a's control arm: the fixed 3.2 this pass applied for the whole of the rewrite.
+            options.auto_exposure = false;
         } else if (arg == "--no-face-denoise") {
             // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
             // is the state every figure taken before R5 was measured in.
@@ -804,6 +812,8 @@ void print_help() {
         "  --no-lamp-edit-scope  an edit reopens the lamp term of every face within sixteen metres\n"
         "                        again, rather than only those it can stand in the light of. The\n"
         "                        control arm for the flicker while building\n"
+        "  --no-auto-exposure    the fixed brightness multiplier of 3.2 this pass applied before\n"
+        "                        the light meter existed. R6a's control arm\n"
         "  --no-face-denoise     a face's far field and bounce are read raw rather than blended\n"
         "                        with its coplanar neighbours'. R5a's control arm\n"
         "  --no-class-eviction   the store gives every cold record up on one clock again, whoever\n"
@@ -1555,6 +1565,10 @@ private:
     // a ghost that fills the screen is read once per pixel and reading that over the bus
     // would make the preview cost more than the world behind it.
     GpuBuffer clip_buffer_;
+    // The light meter's two slots (R6a). Device local, thirty-two bytes, never read back by the
+    // host -- it rotates and zeroes them and the composite does the rest.
+    GpuBuffer frame_stats_;
+    GpuBuffer frame_stats_readback_;
     // The tracer's world-space face cache -- a quarter of a gigabyte of it -- is gone with R1e.
     // It had been read by nothing since R3d and was kept only because its binding number was one
     // the shared layout agreed about, which is exactly what trimming that layout released.
@@ -5101,6 +5115,46 @@ void Application::record_frame(f32 time_seconds) {
         static_cast<u32>(swapchain_.frame_index()) * static_cast<u32>(params_stride_);
     dispatch_clouds(cmd, trace, render_extent, trace_offset);
 
+    // ---- the light meter's two slots, rotated (R6a) --------------------------------------------
+    //
+    // Slot 0 is what the frame about to be drawn will add to; slot 1 is what the frame before it
+    // finished as, and is what every invocation reads so that they all compute the same exposure.
+    // So: copy 0 into 1, then zero 0. Both are transfers, and they must be ordered against each
+    // other and against the composite that reads one and writes the other.
+    //
+    // With the meter off, BOTH slots are zeroed instead. That leaves `groups` at nought in the
+    // slot the shader reads, which is the shader's own "nothing has been measured" path, and it
+    // applies `kPreviewExposure` -- exactly the constant this pass used before R6a existed. The
+    // control arm is therefore the old picture by construction rather than by a second code path.
+    {
+        const VkDeviceSize slot = sizeof(FrameStatistics);
+        if (options_.auto_exposure) {
+            const VkBufferCopy rotate{0, slot, slot};
+            vkCmdCopyBuffer(cmd, frame_stats_.buffer, frame_stats_.buffer, 1, &rotate);
+            VkMemoryBarrier2 copied{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            copied.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+            copied.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            copied.dstStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+            copied.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            VkDependencyInfo after_copy{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            after_copy.memoryBarrierCount = 1;
+            after_copy.pMemoryBarriers = &copied;
+            vkCmdPipelineBarrier2(cmd, &after_copy);
+            vkCmdFillBuffer(cmd, frame_stats_.buffer, 0, slot, 0);
+        } else {
+            vkCmdFillBuffer(cmd, frame_stats_.buffer, 0, VK_WHOLE_SIZE, 0);
+        }
+        VkMemoryBarrier2 cleared{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        cleared.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
+        cleared.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        cleared.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        cleared.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+        VkDependencyInfo after_clear{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        after_clear.memoryBarrierCount = 1;
+        after_clear.pMemoryBarriers = &cleared;
+        vkCmdPipelineBarrier2(cmd, &after_clear);
+    }
+
     profiler_.begin_pass(cmd, "resolve", 0.8);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, resolve_.pipeline());
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, resolve_.layout(), 0, 1,
@@ -5115,6 +5169,23 @@ void Application::record_frame(f32 time_seconds) {
     // Hand this frame's "what I could not find" list back to the CPU. Without this the
     // shader's report is written and then thrown away, and streaming never learns
     // anything ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is exactly what happened until it was noticed.
+    // ...and the light meter's answer, so a log line can say what it settled on. Thirty-two bytes
+    // after the composite has written them; nothing waits on it and it is read whenever the host
+    // next looks.
+    {
+        VkMemoryBarrier2 metered{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        metered.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        metered.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+        metered.dstStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        metered.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        VkDependencyInfo after_meter{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        after_meter.memoryBarrierCount = 1;
+        after_meter.pMemoryBarriers = &metered;
+        vkCmdPipelineBarrier2(cmd, &after_meter);
+        const VkBufferCopy back{0, 0, kFrameStatsSlots * sizeof(FrameStatistics)};
+        vkCmdCopyBuffer(cmd, frame_stats_.buffer, frame_stats_readback_.buffer, 1, &back);
+    }
+
     feedback_.end_frame(cmd, swapchain_.frame_index());
 
     // ---- present ------------------------------------------------------------------
@@ -5304,12 +5375,32 @@ int Application::play(const Options& options) {
                                            "render params",
                                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
-    // The tracer's world-space face cache -- 128 to 256 MB of it, sized from VRAM -- and the
-    // frame-statistics buffer are both gone (R1e). Nothing has read either since R3d deleted
-    // the per-pixel light path; they were allocated and bound every run because their binding
-    // numbers belonged to a layout the cloud pass shared. Trimming that layout is what made
-    // them removable. R6's exposure meter will want a frame-statistics buffer again, with a
-    // writer this time -- see kPreviewExposure in shaders/resolve.comp.
+    // The tracer's world-space face cache -- 128 to 256 MB of it, sized from VRAM -- is gone
+    // (R1e), and so was the frame-statistics buffer beside it. This is that buffer back, with a
+    // writer this time: R6a's light meter, in `shaders/resolve.comp`.
+    //
+    // Two slots of sixteen bytes. Slot 0 is the frame being drawn, zeroed just before the composite
+    // and added to with atomics; slot 1 is the frame before it, complete and written by nobody
+    // while it is read. One slot cannot do both jobs -- a shader reading the words it is also
+    // adding to sees however much of the frame happened to have run, so the same scene would expose
+    // differently across the picture and differently again on another card.
+    //
+    // TRANSFER_SRC as well as the STORAGE this needs, because the rotation is a copy of this buffer
+    // into itself and `create_device_buffer` grants only TRANSFER_DST -- every other device buffer
+    // here is written from staging and never read by a copy. `--validation` is the only thing that
+    // says so: the copy ran and the picture looked right.
+    frame_stats_ = create_device_buffer(
+        device_, kFrameStatsSlots * sizeof(FrameStatistics),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "frame statistics");
+    // ...and thirty-two bytes the host can read it back through, copied at the end of every frame.
+    //
+    // An exposure that nobody can read is a constant nobody can argue with: the whole reason this
+    // stage exists is that `kPreviewExposure` was 3.2 with no writer and no way to tell from a
+    // picture whether that was right. A meter with no printed number would be the same fault with
+    // an extra buffer, so `frame:` carries what it settled on and what the frame's log-average
+    // luminance was. Two frames stale, which for a log line is exact enough.
+    frame_stats_readback_ = create_staging_buffer(
+        device_, kFrameStatsSlots * sizeof(FrameStatistics), "frame statistics readback");
 
     // TEMPORARY PROBE: put back the device memory the chunk buffers used to hold, to find out
     // whether the frame-time difference is placement rather than code.
@@ -5342,7 +5433,7 @@ int Application::play(const Options& options) {
     // have to care which pass included them.
     // Nine now: 6 is the face store and 7 is the face-slot image, which together are how the
     // picture stops lighting itself per pixel and starts reading light off the surface.
-    VkDescriptorSetLayoutBinding resolve_bindings[10]{};
+    VkDescriptorSetLayoutBinding resolve_bindings[11]{};
     for (u32 i = 0; i < 6; ++i) {
         resolve_bindings[i].binding = i;
         // 0-1 images, 2-3 the type and visual tables, 4 the parameter block, 5 the
@@ -5371,10 +5462,14 @@ int Application::play(const Options& options) {
     resolve_bindings[9].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     resolve_bindings[9].descriptorCount = 1;
     resolve_bindings[9].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_bindings[10].binding = 9;   // the light meter's two slots (R6a)
+    resolve_bindings[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    resolve_bindings[10].descriptorCount = 1;
+    resolve_bindings[10].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo resolve_layout_info{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    resolve_layout_info.bindingCount = 10;
+    resolve_layout_info.bindingCount = 11;
     resolve_layout_info.pBindings = resolve_bindings;
     WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &resolve_layout_info, nullptr,
                                       &resolve_layout_));
@@ -5769,9 +5864,10 @@ int Application::play(const Options& options) {
     // than working it out per pixel.
     // Five now: the face light joins them, so the composite can read how much sky a surface can
     // actually see instead of deciding it from which way the surface points (R10a).
+    // Six now: the light meter's two slots join them (R6a).
     const VkBuffer resolve_buffers[]{type_tables_.types(), type_tables_.visuals(),
                                      clip_buffer_.buffer, face_buffers_.faces(),
-                                     face_light_.buffer()};
+                                     face_light_.buffer(), frame_stats_.buffer};
 
     // The parameter block, bound to the composite and to the cloud pass with a dynamic offset
     // chosen per frame.
@@ -5790,12 +5886,12 @@ int Application::play(const Options& options) {
     }
     vkUpdateDescriptorSets(device_.handle(), 2, params_writes, 0, nullptr);
 
-    constexpr u32 kResolveBuffers = 5;   // types, visuals, clip cells, the face store, face light
+    constexpr u32 kResolveBuffers = 6;   // types, visuals, clip cells, faces, face light, the meter
     VkDescriptorBufferInfo buffer_infos[kResolveBuffers]{};
     VkWriteDescriptorSet buffer_writes[kResolveBuffers]{};
-    // Resolve's storage buffers are bindings 2, 3, 5, 6 and 8 -- 4 is the parameter block and
+    // Resolve's storage buffers are bindings 2, 3, 5, 6, 8 and 9 -- 4 is the parameter block and
     // 7 is an image. Spelled out for the same reason the node set's mapping is.
-    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8};
+    const u32 resolve_bindings_for[kResolveBuffers]{2, 3, 5, 6, 8, 9};
     for (u32 i = 0; i < kResolveBuffers; ++i) {
         buffer_infos[i].buffer = resolve_buffers[i];
         buffer_infos[i].offset = 0;
@@ -6574,6 +6670,30 @@ int Application::play(const Options& options) {
                                 : 0.0,
                             face_stats.stand_in_evictions,
                             options_.coarse_keep ? "IS" : "is NOT");
+                // R6a's light meter, said out loud. The whole reason this stage exists is that the
+                // exposure was a constant of 3.2 with no writer, and nothing in a picture can tell
+                // a wrong constant from a right one -- so the number it settled on and the frame's
+                // own log-average are printed rather than inferred. Read the two together: the
+                // average is what the scene IS and the multiplier is what was done about it.
+                if (frame_stats_readback_.mapped != nullptr) {
+                    const FrameStatistics& done = static_cast<const FrameStatistics*>(
+                        frame_stats_readback_.mapped)[1];
+                    if (!options_.auto_exposure) {
+                        WS_LOG_INFO("frame",
+                                    "the light meter: OFF (--no-auto-exposure), a fixed 3.200x");
+                    } else if (done.groups == 0) {
+                        WS_LOG_INFO("frame", "the light meter: nothing measured yet");
+                    } else {
+                        const f64 stops =
+                            static_cast<f64>(done.log_luminance) / done.groups /
+                                kLogLuminanceUnit - kLogLuminanceBias;
+                        WS_LOG_INFO("frame",
+                                    "the light meter: {:.3f}x, on a frame whose log-average is "
+                                    "{:.2f} stops over {} workgroups",
+                                    static_cast<f64>(done.exposure) / kExposureUnit, stops,
+                                    done.groups);
+                    }
+                }
                 // And what the scripted chisel did, if it was asked for. A run that changed no
                 // voxels is a run that measured the flight and not the edit, and the two figures
                 // look identical from the pass table alone.
@@ -6697,6 +6817,8 @@ int Application::play(const Options& options) {
     destroy_buffer(device_, params_buffer_);
     destroy_buffer(device_, ballast_);
     destroy_buffer(device_, clip_buffer_);
+    destroy_buffer(device_, frame_stats_);
+    destroy_buffer(device_, frame_stats_readback_);
     destroy_buffer(device_, clip_staging_);
     destroy_buffer(device_, light_buffer_);
     visibility_.destroy();
