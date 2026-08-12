@@ -111,6 +111,18 @@ what they can tell you is what it looks like. All three exist to keep that loop 
 3. **Say what you did not do.** Which half of a sub-step landed, what was measured and came out
    neutral, and what is blocked on something else. Half of this file's value is the things that were
    built, measured and reverted.
+4. **End every report with the NEXT step and what it will look like in game.** The same test as rule
+   1, applied one step ahead: name what is next and say what they should expect to see when it
+   lands, in the same terms — what to do, what should change, what would mean it failed. That is
+   what makes it possible to say *"do that one first"* or *"that is not what bothers me"* before a
+   session is spent on it, and this rewrite has more than one stage that was built in the right
+   order by the plan and the wrong order by what a player actually feels (§5's opening two sections
+   are both that mistake). If the next step genuinely cannot be seen — an instrument, a refactor,
+   a measurement — say that plainly instead of inventing a symptom for it; "you will see nothing,
+   and here is what it buys the step after" is an answer they can act on.
+
+**All four are one rule wearing four hats:** the person this is for can only judge the build, so
+every exchange has to be anchored to what the build will do — before, during, after, and next.
 
 ---
 
