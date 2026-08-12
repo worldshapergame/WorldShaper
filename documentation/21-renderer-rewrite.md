@@ -1027,6 +1027,14 @@ dial was not turned.
 **So R9c is about what it always said it was about — the ENTRY side of a pan — and it is not the
 answer to a settled camera's black bounce.** Size it against that rather than against the 21.9%.
 
+**And read what is left of it honestly, because three of the four things people mean by "the halo"
+have already shipped under other names.** The exit side is the paragraph below and exists. Arriving
+lit is R9d and is closed. The bucket it was justified by is D569's and is mostly gone. What is left
+is one unmeasured claim — that a PAN reveals geometry whose faces were claimed only after they came
+on screen — and **no measurement of that exists anywhere in this project**. `--fly 0,0,0,N` is a
+pure yaw at N degrees a second and would price it in one run. Nobody has taken it. Until somebody
+does, putting R9c next is the same unmeasured attribution D569 is the standing warning about.
+
 Faces do not leave the store the moment they leave the screen: they leave when they go cold, and
 `cold_frames` is already 600. That is most of what is wanted from reprojection and it exists. What is
 missing is the *entry* side — a face just off the edge of the screen is never claimed until it comes

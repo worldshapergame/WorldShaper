@@ -3111,3 +3111,36 @@ green–red ramp of a material, and the census counts the three apart. `--no-fac
 |---|---|---|---|
 | D583 | **Three states in the word, not two** | trap 10 | "No material" and "a mirror" were the same bits and would have been the same colour. D310 is the same fault: a debug view where two answers share a colour produces the wrong number, and it is the number you went there to get |
 | D583 | **Check a new view at the camera it will look worst on** | trap 8 | The enclosed and close cameras are all level 0 and would never have shown it. The outdoor camera is almost all coarse faces, and it showed it in one screenshot |
+
+## D584 — "R9c is next" was written three times and measured none of them
+
+**Asked by the user, who had not written any of it: *"why did you think R9c was the next thing, it
+has already been done i think"*.** The code has no halo — the only widened frustum in the tree is
+`kExploreMargin`, which pads the ray CLIP BOX for streaming and has nothing to do with claiming a
+face. So R9c is not built. But the question was substantially right, and the answer is the useful
+part: **three of the four things anybody means by "the halo" have shipped under other names.**
+
+- **The exit side exists**, and §8 R9c says so itself: a face stays in the store for `cold_frames`
+  after it leaves the screen, which is *"most of what is wanted from reprojection"*.
+- **Arriving lit exists.** R9d (D308–D311) has a face with nothing of its own read the coarse face
+  three levels above it, which is why newly revealed geometry no longer flashes. That is the
+  symptom a player would report as the halo problem, and it has been closed since R3.
+- **The measurement it was justified by is gone.** D569: 21.9% of gathering rays landing on no face
+  reads 8.7% under three dials that already existed, and D570 made the first of them the default.
+- **What is genuinely left is the entry side of a PAN, and there is no measurement of it anywhere
+  in this project.** No figure says how much of a turning frame is drawn from faces claimed after
+  they came on screen. `--fly 0,0,0,N` is a pure yaw and prices it in one run; nobody has taken it.
+
+**The general fault, which is why this is an entry rather than a correction.** D569 already records
+"an attribution nobody has measured is a guess however many alternatives have been eliminated" — and
+the sentence it was correcting was left in place with the correction appended under it, twice. A
+reader coming to the file cold reads the assertion first and the retraction second, and a session
+picked it up and acted on it. **A conclusion that has been overturned should not survive as the
+headline of the paragraph it was overturned in.** The three notes are now stacked under it and the
+ledger row says the same, but the honest fix is that a plan's "what is next" has to be a measurement
+or it has to say out loud that it is not one.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D584 | **R9c stays unbuilt and unranked until the pan is measured** | D569 | Two of its three justifications have been overturned by measurement and the third has never been taken. `--fly 0,0,0,N` costs one run |
+| D584 | **The retraction goes above the claim, not below it** | process | Three notes under one sentence still read as a sentence with footnotes. What a reader acts on is the first assertion they meet |

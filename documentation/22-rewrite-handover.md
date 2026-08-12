@@ -1909,6 +1909,9 @@ margin holds: a halo face is an off-screen face, and lighting one is priced by a
 *accuracy* of what R9f already returns rather than more of it, so it is after that unless a picture
 complains.
 
+*(Read the two notes under this before acting on that sentence. It has now been wrong three times,
+and the third time it was a reader who had not written any of it who noticed.)*
+
 > **The paragraph above was wrong for the second time and is left standing on purpose** — see *a
 > room's light was capped at a quarter of the store* above, and D569. "This is R9c's and R9g's" was
 > never measured; it was inferred from having explained the other three buckets. Three run-time dials
@@ -1921,6 +1924,27 @@ complains.
 > faces."* R4 is the stage in progress and R9c is not next. It is not blocked either — R9a, R9b,
 > R9e and R9f between them already put measured light on off-screen faces, which is exactly what a
 > reflection ray needs to land on. See *R4a is in* above.
+>
+> **Then they asked why R9c was ever being called next, since it looked done — and most of it is.**
+> The code has no halo in it: the only widened frustum anywhere is `kExploreMargin`, which pads the
+> ray CLIP BOX for streaming and has nothing to do with claiming a face. But three of the four
+> things somebody means by "the halo" have shipped under other names, and the fourth has never been
+> measured:
+>
+> - **the EXIT side is built and this plan says so in its own words** — a face stays in the store
+>   for `cold_frames` after it leaves the screen, and §8 R9c reads *"that is most of what is wanted
+>   from reprojection and it exists"*;
+> - **arriving lit is built** — R9d (D308–D311) has a face with nothing of its own read the coarse
+>   face three levels above it, so newly revealed geometry is lit on the frame it appears rather
+>   than flashing. That is the symptom a player would call "the halo problem", and it is closed;
+> - **the bucket R9c was justified by is mostly gone** — 21.9% of gathering rays landing on no face
+>   at all reads **8.7%** under three dials that already existed (D569), and the first is the
+>   default (D570);
+> - **what is genuinely left is the entry side of a PAN, and nobody has measured it.** No number
+>   anywhere in this file says how much of a turning frame is drawn from faces that were claimed
+>   after they came on screen. `--fly 0,0,0,N` is a pure yaw and would answer it in one run. Until
+>   that exists, "R9c is next" is an attribution nobody has measured — which is the mistake the
+>   note above this one is about, arriving a third time.
 
 So the plan's sequence is **R9, then R4**, and that is the one to follow unless the user says
 otherwise — it is what makes reflections, refraction and bounce possible at all, which is the half
