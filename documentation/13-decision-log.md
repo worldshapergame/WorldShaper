@@ -4773,3 +4773,91 @@ measurement *and* the pass that acts on it.
 | D610 | **The blind panel behind the figure is porphyry** | consistency | A white figure on a white panel spends its whole silhouette on nothing; rotunda.clip already argues this for its urns |
 | D610 | **The shelf copy of a shipped clip announces its drift** | correctness | Three stale copies of one building, found one report at a time, none of them visible from inside the game |
 | D610 | **The outer portico sconce is left where it is** | deferred | It stands in the side door's opening; moving it is an elevation decision for the file that draws the elevation |
+
+## D611 — the renderer loads by pixels, and the thing that makes its voxels never did
+
+**Reported:** *"the entire rewritten renderer was meant to also make the game have no loading time,
+instead i got a very short 9 million voxel loading time, and when it loads, it loads with very low
+detail and i gotta wait for it to load and it loads in chunks, this contradicts the entire point of
+pixel screen based loading."*
+
+Nothing here is fixed yet. What is recorded is the reproduction, the mechanism, the three things
+that are *not* it, and why the answer is a stage the plan already named.
+
+### Reproduced, on the path a player actually takes
+
+`--world worlds/facility.wsworld`, warm shaders, 1280×800, the enclosed camera, no usable cache —
+which is the ordinary state, because a cache is only written at the ladder's fixed point and the
+late regions cost seconds of sampling apiece:
+
+```
+clip     coarse build: sampling at metre 8 and scaling 4x on paste
+clip     18 regions to sharpen, biggest on screen first
+clip     parse 18 ms, sample 2381 ms (2363352 voxels asked, 8596115 settled in bulk),
+         paste 257 ms, compact 690 ms
+world    built in 3371 ms: 68 chunks, 125378816 solid voxels
+load     everything ready  [t+3615 ms]
+clip     region: sampled 2694 ms ... 17 left
+clip     region: sampled 1511 ms ... 16 left
+   ... 7406 ms, 5513 ms ...
+frame    scene: 100 chunks, 8 of 18 regions sharpened
+```
+
+Eight boxes of eighteen by frame 900. Each is sampled whole at metre 32 and pasted in one go, which
+is the "chunks" in the report, and the two rungs are 8 and 32 with nothing between them, which is
+the hard step between blocky and sharp.
+
+### The mechanism, in one line
+
+**Everything to the right of `World` was rewritten and is pixel-driven. Everything to the left of it
+is what it was before the rewrite started.** `forge::sample` is called over a fixed box list at one
+of two fixed resolutions; neither number is a function of pixels, and the box list is planned before
+the first frame exists.
+
+### Three things it is NOT, each already measured
+
+| eliminated | evidence |
+|---|---|
+| the marcher, residency, the face store | pixel-driven and working — R1h, R2, D427, D508 |
+| the paste stalling a frame | closed at D511–D514; a region paste is 24–92 ms and blocks nothing |
+| the renderer needing a warm cache to be fast | `clips/facility.clip` with its 608 MB cache loads in **804 ms** to `no ladder, the world is at the detail the clip asked for` |
+
+That last row is also the second half of the fault: the good path is an **eager 608 MB load of the
+whole world**. It has no chunks popping in because it has already paid for every voxel, seen or not.
+
+### Why R8c, and why it could not have been done before now
+
+§8.0's `the cold load, measured` row said it in as many words, before R1e existed: *half a second
+with a sharp first frame means nothing is sampled up front at all, which is R8c — `forge/field.cpp`
+already answers at any resolution — with R1e removing the addressing that keeps a chunk world
+necessary.* **R1e landed 2026-08-11** (D521–D525). The blocker named there is paid.
+
+And the machinery R8c needs is all built and proven, by the ladder itself: `forge::sample` takes a
+box in metres and a `voxels_per_metre`; the ladder already calls it per box off the main thread;
+`paste_clip(..., coarse)` already inflates a coarse sample into real voxels; `NodePool::request` is
+already the single route by which anything is ever built, and it already carries the level. What
+changes is **who chooses the box and the resolution** — a node the marcher asked for, at
+`256 / 2^level` voxels per metre, which is 32 at the level-3 leaf and 4 at a two-metre node. Because
+a node's level is already its pixel footprint, resolution becomes a function of pixel coverage by
+construction rather than by a second rule that can disagree with the first.
+
+### Two hazards, sized before any code
+
+**A camera-dependent world breaks every measurement in this repository.** Trap 8 and trap 19: the
+harness compares runs by content hash and `--settle`. A world that samples only what was asked for
+has a content hash that depends on where the camera stood. `--settle` already means "refinement has
+nothing left it can do from here" and generalises; `baseline.ps1`'s gate does not, and a weaker
+version of this broke it silently once (D524).
+
+**A clip-backed world stops being a voxel dump.** It becomes a clip plus the edits made to it —
+R8d's *derived nodes are evictable, carved ones persist*, which is the whole difference between
+infinite detail and infinite storage. `save_refined_world`, `world_cache.*` and `CachedRegion` are
+written against the eighteen-box ladder and all three are in the change.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D611 | **The report is about the world SOURCE, not the marcher** | diagnosis | Four sessions have answered the marching half of a making-half report; trap 14 and the cold-load memory both say so |
+| D611 | **R8c is the open work, and R1e unblocked it** | plan | §8.0 named it before R1e; R1e landed 2026-08-11, so the prerequisite is paid |
+| D611 | **Resolution comes from the node's LEVEL, not a second rule** | design | A level is already a pixel footprint; a parallel rule is a rule that can disagree with the first |
+| D611 | **The eager cached path is half the fault, not the fix** | diagnosis | 804 ms with no pops, because it has already paid for every voxel whether or not one is seen |
+| D611 | **Nothing is fixed by this entry** | honesty | It records a reproduction and a plan; the ledger must not read as though the stage landed |

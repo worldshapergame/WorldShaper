@@ -477,6 +477,93 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+### OPEN, and it is the largest thing left: the WORLD SOURCE was never rewritten
+
+**Reported, and every word of it is reproducible:** *"the entire rewritten renderer was meant to also
+make the game have no loading time, instead i got a very short 9 million voxel loading time, and when
+it loads, it loads with very low detail and i gotta wait for it to load and it loads in chunks, this
+contradicts the entire point of pixel screen based loading."* D611.
+
+**The renderer is pixel-driven and the thing that makes its voxels is not.** That sentence is the
+whole diagnosis and it is worth reading twice, because four sessions have been spent answering the
+marching half of a report about the *making* half — this file's own trap 14, and the
+[cold-load memory](../documentation/13-decision-log.md) records two more.
+
+The chain a clip takes to the screen is:
+
+```
+clips/*.clip  →  forge::sample(box, voxels_per_metre)  →  voxels  →  World  →  NodePool  →  rays
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                          ^^^^^^^^^^^^^^^^^
+                 fixed box list, two fixed resolutions                     pixel-driven, works
+```
+
+Everything right of `World` was rewritten and does what was asked. Everything left of it is what it
+was before the rewrite started: **a whole-building sample at a fixed coarse resolution, then the same
+building sampled again at the authored resolution in a fixed list of eighteen boxes.** Neither
+number has anything to do with pixels, and the box list is planned before the first frame is drawn.
+
+**Reproduced, shelf world `facility.wsworld`, warm shaders, 1280×800, no usable cache** — which is
+the state a player is in, because the cache is only written at the ladder's fixed point:
+
+| what the player sees | what it is | measured |
+|---|---|---|
+| a loading bar counting voxels | the whole building sampled at **metre 8** and inflated 4× on paste | `sample 2381 ms`, 2,363,352 asked + 8,596,115 settled in bulk; the bar's own total is the coarse grid |
+| ...and then it is playable | | **ready at t+3,615 ms** |
+| the building is blocky | `--clip-coarse 4` is a quarter of the authored 32 voxels/m | `coarse build: sampling at metre 8 and scaling 4x on paste` |
+| detail arrives in chunks | **eighteen** pre-planned boxes, each sampled whole at metre 32 and pasted in one go | `18 regions to sharpen, biggest on screen first`; per region 624–7,406 ms of sampling, **8 of 18 done by frame 900** |
+| ...and each is a hard step | two rungs, 8 → 32, with nothing between | — |
+
+**Three things that are NOT the cause, each already measured, so nobody spends a session on them
+again.** The marcher, residency and the face store are all pixel-driven and working (R1h, R2, D427).
+The hiccups are closed (D511–D514): a region paste is 24–92 ms and blocks nothing. And the
+*cached* path proves the ladder is the whole of the symptom — `clips/facility.clip` with its
+608 MB cache complete loads in **804 ms** to `no ladder, the world is at the detail the clip asked
+for`. Which is also the second half of the fault: that path is a **608 MB eager load of the whole
+world**, so even when nothing pops in, nothing about it is pixel-driven either.
+
+**The plan already named the answer and its blocker is gone.** §8.0 of `21-renderer-rewrite.md`, in
+the `the cold load, measured` row, written before R1e: *"half a second with a sharp first frame means
+nothing is sampled up front at all, which is **R8c** (`forge/field.cpp` already answers at any
+resolution) with R1e removing the addressing that keeps a chunk world necessary."* **R1e landed on
+2026-08-11** (D521–D525). The prerequisite is paid; R8c is now the open work, and it is what the
+third of the user's three original asks actually requires.
+
+**What R8c is, concretely, and why every piece of it already exists.** `forge::sample` takes a box in
+metres and a `voxels_per_metre` and answers — that is its whole signature, and the ladder already
+calls it per box off the main thread and pastes the result with `paste_clip(..., coarse)`, which
+inflates a coarse sample into real voxels. The node pool already knows which node a ray wanted and at
+which level, and `request(key, source)` is the one route by which anything is ever built. So the
+change is not new machinery, it is **who chooses the box and the resolution**:
+
+- today: a list of eighteen boxes planned at load, each at the authored resolution;
+- R8c: the box is **a node the marcher asked for** and the resolution is **the one that node's level
+  implies** — 256/2^level voxels per metre, which is 32 at the level-3 leaf and 4 at a two-metre
+  node. A node's level is already a function of its pixel footprint, so resolution becomes a function
+  of pixel coverage by construction rather than by a second rule that could disagree.
+
+**The order to build it in, and the first two are visible on their own:**
+
+1. **the unit stops being a region** — subdivide adaptively from the clip's bounds instead of
+   planning eighteen boxes, so what arrives is small and near-first. The player stops seeing chunks;
+2. **the resolution follows the level** rather than being one of two constants, which removes the
+   hard 8 → 32 step and is where "no detail steps anywhere" is finally true of the world as well as
+   of the marcher;
+3. **nothing is sampled up front** — the first box is on demand too, so there is no loading bar at
+   all. Keep a very coarse whole-building rung under it if frame one should be a silhouette rather
+   than an empty room; §8.0 measures that rung at **130 ms of sampling at `--clip-coarse 32`**.
+
+**Two hazards to size before starting, both real.**
+
+- **Every measurement in this repository is against a content hash and `--settle`** (trap 8, trap
+  19). A world that only samples what a camera asked for has a *camera-dependent* content hash by
+  construction. `--settle` already means "refinement has nothing left it can do from here" and
+  generalises, but `baseline.ps1`'s gate does not, and it has been silently broken by a weaker
+  version of this once already (D524).
+- **What is saved.** A clip-backed world stops being a 608 MB voxel dump and becomes a clip plus the
+  edits made to it. That is R8d's *derived nodes are evictable; carved ones persist*, and it is the
+  whole difference between infinite detail and infinite storage — but `save_refined_world`,
+  `world_cache.*` and `CachedRegion` are all written against the eighteen-box ladder today.
+
 ### Closed: the paste, which is what a player actually felt
 
 **Both halves of this are now done, and the second one was not what this section spent two sessions
