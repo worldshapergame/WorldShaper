@@ -6,7 +6,17 @@ comes next.
 
 ---
 
-## 1. BLOCKER — every fitting inside a room is deleted again by the manifest
+## 1. ~~BLOCKER~~ FIXED 2026-08-13 (D608) - every fitting inside a room was deleted by the manifest
+
+**Done.** `clips/facility.clip` now reads `let furnished = union { hollowed part_fittings }` and
+displaces `furnished`, with `part_fittings` out of `inside`. Measured with the manifest stashed for
+the control arm: +128,770 voxels, and components (1086), unjoined voxels (2480), the eight floating
+pieces and walkability (25.5%) all unchanged. The eight hall sconces are alight and the halls are
+lit for the first time. The account below is kept as written, because it is the diagnosis.
+
+---
+
+## 1. BLOCKER (as originally written) — every fitting inside a room is deleted again by the manifest
 
 **Where:** `clips/facility.clip`, the `hollowed` difference.
 

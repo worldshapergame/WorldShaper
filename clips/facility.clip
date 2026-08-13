@@ -75,7 +75,7 @@ let shell = union {
 }
 
 let inside = union {
-    part_vestibule part_rotunda part_halls part_stair part_fittings part_surface
+    part_vestibule part_rotunda part_halls part_stair part_surface
 }
 
 let built = union { shell inside }
@@ -89,12 +89,37 @@ let hollowed = difference {
     void_doors void_windows void_vestibule void_rotunda void_halls void_stair
 }
 
+# AND THE FURNITURE AFTER THE ROOMS, which is what the paragraph above always claimed happened.
+#
+# It did not. `part_fittings` was in `inside`, `inside` is in `built`, and every room's void is
+# subtracted from `built` — so every sconce, bench and statue standing in a room was cut away by
+# the room it stands in. A room's void is correctly written as *the air of that room less that
+# room's own stone*, which is what stops another fragment leaving a wall in somebody's room; but a
+# fitting is BY DEFINITION a thing standing in somebody's air, and it went with it.
+#
+# What survived was the 0.09 m of backplate buried in the wall: a flat dark rectangle with no
+# bracket, no bowl and no flame. Reported from playing as *"i cant tell what they are"*, which is
+# the exact right reaction to the back of a lamp. The benches, buried the same 0.09 and projecting
+# 0.45 into the room, went altogether, and so did both hall statues.
+#
+# It also took the light with it. halls.clip builds two rooms with no window in either and says in
+# its own header that everything past the first bay arrives from a sconce or from nothing; the
+# eight sconces are that "or from nothing", and with their bowls and flames cut off the halls were
+# lit by nothing at all. The whole emissive load of the building indoors was one deleted union.
+#
+# fittings.clip diagnosed this from inside its own file, measured it, wrote the fix out in
+# clips/facility/requests/fittings.md and could not make it, because the line is here. This is that
+# line. It cannot open a seam: part_fittings removes no matter, exposes no void of its own, and
+# overlaps its hosts by 0.05 everywhere. The grain still runs over it, because `all` displaces what
+# comes out of here and not what went in.
+let furnished = union { hollowed part_fittings }
+
 # --- surface --------------------------------------------------------------------------------------
 #
 # Twelve millimetres of grain over everything, which is under half a voxel at full detail, so it
 # moves no wall — and is the difference between a face that reads as carved stone and one that
 # reads as a drawing of carved stone.
-let all = displace { hollowed grain_fine } amount=0.012
+let all = displace { furnished grain_fine } amount=0.012
 
 
 variation colour=0.030 rough=0.070 seed=17

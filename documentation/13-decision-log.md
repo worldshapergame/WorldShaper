@@ -4412,3 +4412,74 @@ fixed until the picture changes.**
 | D607 | **No automatic migration of pre-D494 copies** | deferred | Telling a stale dump from a working copy is a heuristic, and one that deletes player files should not ride on this change |
 | D607 | **A test pins the include order** | correctness | Beside-wins, shipped-fallback and neither-is-an-error had no test at all, and it is what a world is assembled out of |
 | D607 | **Keep looking after the first real cause** | process | Two of the three faults were genuine and neither was why the picture had not changed |
+
+## D608 — the halls were furnished all along; the manifest cut the furniture out again
+
+**Reported from playing, with a photograph:** *"are you sure this is how the things on the walls of
+the halls should look like, both the golden like thing on the right and the stone like one on the
+left, i cant tell what they are"*.
+
+They were **the back of a bronze wall sconce** and **the buried foot of a marble statue**. Not
+recognisable, because the front of each had been cut off.
+
+`clips/facility.clip` assembled `inside = union { … part_fittings … }`, `built = union { shell
+inside }`, and then subtracted every room's void from `built`. A room's void is correctly written as
+*the air of that room less that room's own stone* — that is what stops one fragment leaving a wall
+standing in another's room. But **a fitting is by definition a thing standing in somebody's air**,
+and it went with the air. What survived of each sconce was the 0.09 m of backplate buried in the
+wall: a flat dark rectangle with no bracket, no bowl and no flame. Both hall statues and all eight
+benches were gone entirely.
+
+The comment directly above that difference already said the voids come last *"so nothing put in
+afterwards can be eaten by a room being carved"*. That was the intention. The code did not do it,
+because `inside` — which held `part_fittings` — is inside `built`. **A comment describing an
+invariant the code does not enforce is worse than no comment: it is where you stop looking.**
+
+`fittings.clip` had diagnosed this from inside its own file, measured it at metre 10, written the
+one-line fix out in `clips/facility/requests/fittings.md`, and could not make it, because the line
+is in the manifest. This is that line:
+
+```
+let furnished = union { hollowed part_fittings }
+let all = displace { furnished grain_fine } amount=0.012
+```
+
+with `part_fittings` taken out of `inside`.
+
+**It also took the light with it.** `halls.clip` builds two rooms with no window in either and says
+in its own header that everything past the first bay arrives from a sconce or from nothing. The
+eight sconces are that "or from nothing" — and with their bowls and flames cut away, the halls were
+lit by nothing at all. That is why the room in the photograph is flat and grey and why every render
+of a hall in this repository is nearly black. **The whole indoor emissive load of the building was
+one deleted union**, and every measurement of indoor lighting taken before this line was measuring a
+room with no lights in it.
+
+**Measured, same binary, manifest stashed for the control arm:**
+
+| | before | after |
+|---|---|---|
+| solid voxels | 127,186,145 | 127,314,915 |
+| components | 1086 | 1086 |
+| voxels not joined to the largest | 2480 | 2480 |
+| the eight floating pieces | same eight, same coordinates | same eight, same coordinates |
+| walkable | 25.5% of 853,176 columns, worst rise 0.75 m | identical |
+
+So it adds 128,770 voxels of furniture, opens no seam, sheds no crumb and changes nothing about how
+the building stands up — which is what `part_fittings` removing no matter and exposing no void of
+its own predicts, now confirmed rather than argued.
+
+### The reusable half
+
+**A part that is cut away leaves something behind, and what it leaves is a lie.** A sconce reduced
+to its buried backplate does not read as an error; it reads as a dark panel somebody meant to put
+there. Nothing failed, nothing was logged, the fitting measured whole in isolation and `--clip-part
+part_fittings` reported all 27 pieces perfect. The only witness was a player saying *I cannot tell
+what that is* — so **an object that cannot be named from inside the game is a bug report**, and it
+should be treated as one before it is explained away as style.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D608 | **Fittings are unioned after the voids, not inside `built`** | correctness | A room's void is the room's air, and a fitting stands in that air; anything in `built` is eaten by it |
+| D608 | **The control arm is the manifest stashed, same binary** | measurement | Components, floating voxels and walkability had to be shown unchanged, not argued to be |
+| D608 | **A comment claiming an ordering the code does not have is a defect** | process | "The voids come last so nothing put in afterwards can be eaten" was already written above the line that ate it |
+| D608 | **An object a player cannot name is a bug report** | process | This one was visible in every hall render for weeks and read as intended design |
