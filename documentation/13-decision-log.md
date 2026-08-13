@@ -5929,3 +5929,87 @@ made later by `split_refine_node` are never tested against the cache at all. Nin
 paid-for boxes come back and mark nothing. The cached load then re-sharpens 23,324 nodes, 11.7 s of
 them, reproducing voxels the cache already loaded. **The region list is currently used for nothing
 but whether it is empty.** Fixing that is worth more than anything else on the ladder.
+
+## D626 — the cached world froze at sixteen voxels a metre, and the log line said the opposite
+
+**In the game**: the second and every later launch of a clip-backed world loaded a building that was
+permanently blockier than the clip asked for, and no amount of re-launching ever improved it. It now
+sharpens a little more on each launch until it reaches the clip's own detail and stays there.
+
+**What was written down before this, and was wrong.** D625 closed with *"a cached load re-sharpens
+23,324 nodes, 11.7 s, reproducing voxels it had already loaded"*, and the handover repeated it. That
+is a real fault — `already_sharp` in `resume_refinement` asked whether a **saved box contains a seed
+node**, and since R11c a saved box is the *smallest* node in the tree, so it contains nothing and no
+seed is ever marked done. But it can only be reached from a camera that drives some leaf all the way
+to the authored resolution, and the default camera does not. Measured on this camera the pre-change
+cached load is **3.83 s** and does not re-sharpen anything at all:
+
+    [info ] frame    scene: 74 chunks, 125396992 solid voxels, no ladder,
+                    the world is at the detail the clip asked for, content 4f6ac8651fc45587
+
+**The commoner fault, which is the one this fixes.** `save_refined_world` wrote only leaves with
+`applied_per_metre >= refine_authored_`. Where no leaf reaches authored detail that filter writes an
+**empty** list — and `world_cache.hpp` defines an empty `regions` as *"this world was not built
+through the coarse-then-sharpen ladder"*, which is what a clip built in one pass at its authored
+detail looks like. So the loader had nothing to resume, correctly concluded there was nothing to do,
+and printed a line asserting the world was at the clip's detail while it sat at sixteen voxels a
+metre. **Trap 7 again, in the format itself**: "nobody sharpened anything" and "there was never
+anything to sharpen" were the same empty list and mean opposite things.
+
+**A third fault, latent, that the same change closes.** The old resume set every node's
+`applied_per_metre` to `refine_coarse_per_metre_`. A sample is pasted as a REPLACE over its whole
+box, so a resuming run that believed a 32/m leaf was at 8/m could paste a 16/m answer on top of it —
+the building getting *blockier* the more it is loaded. The "never coarsen" guarantee only holds if
+the applied detail survives the file.
+
+**The fix.** `CachedRegion` becomes the ladder's whole leaf set and carries what identifies a leaf
+rather than what it looks like: `key[3]`, `level`, the corners, `applied_per_metre`, `done`.
+`resume_refinement` reconstructs `refine_regions_` by calling `refine_node_of(NodeKey{...})` on each
+saved key — a pure function of *this* run's clip bounds, so a file from another build cannot inject a
+box the tree does not own — and restores the applied detail exactly. Containment is gone. Format
+**4 → 5**, so every existing `.world` is rejected and rebuilt, and the first run after any build of
+this code is necessarily cold. `save_refined_world` logs a per-level histogram of what it wrote.
+
+**Rejected, with the reason, because it is the tempting shortcut**: reconstructing *ancestors* and
+giving each `applied_per_metre = min` over its subtree. That breaks the invariant that
+`applied_per_metre` is uniform over a node, and the picker would then sample a heterogeneous ancestor
+coarsely and REPLACE-paste it over sharper descendants. Leaves, exactly, or nothing.
+
+**Measured**, one build each arm, 1280×800, quality 7, `--settle`, `--cam "0,10,-60,90,-6"`:
+
+| arm | wall | ladder cost | content | what the log says |
+|---|---|---|---|---|
+| old, cold | 10.51 s | 4,668 ms, 7,772 nodes | `4f6ac8651fc45587` | 16,302 of 19,414 sharpened |
+| old, cached | **3.83 s** | none | `4f6ac8651fc45587` | *no ladder* — writes an empty list, resumes nothing |
+| old, cached again | 3.81 s | none | `4f6ac8651fc45587` | identical, and identical for ever |
+| new, cold | 10.50 s | 4,715 ms | `4f6ac8651fc45587` | writes 19,414 leaves, 0 at authored |
+| new, cached | 13.54 s | 12,432 ms, sample 7,327 | `b41559abbd025759` | splits to level 3; 73,454 leaves |
+| new, cached ×2 | 6.36 s | 3,977 ms, sample 62 | `fa627ed48d5d488c` | 34,873 of 73,454 restored |
+| new, cached ×3 | 5.87 s | 4,776 ms, **0 nodes** | `fa627ed48d5d488c` | 35,797 of 74,630 restored |
+| new, cached ×4 | 5.81 s | 4,788 ms, **0 nodes** | `fa627ed48d5d488c` | byte-identical to ×3 — the fixed point |
+
+The cold arm's hash is unchanged, which is the correctness gate: this changes what is *written* and
+what is *resumed*, not how a clip is sampled. The cached arm converges in three launches and then
+reproduces itself exactly. Solid voxels 125,396,992 → 125,362,512 — sharpening *removes* matter,
+because a coarse sample over-fills at the surface. Level-3 leaves at the fixed point: **0 → 62,752**.
+Screenshots read side by side (`renders/d626_old3.png`, `renders/d626_warm4.png`): the facade's
+window mouldings and the side-wing balustrades resolve in the new one and are stepped in the old.
+`Measure-ImageDiff` between them is 72,981 pixels over threshold, but it is **not** a clean number
+here — the two runs settle at different frames and the clouds are animated, so most of that count is
+sky. The ladder census and the voxel count are the evidence; the diff is not.
+
+**So this is a quality fix that costs 1.98 s of steady-state load on this camera, and it is
+committed anyway** — the alternative is a cache that is fast because it is finished and wrong. It is
+also the fastest arm that is *correct*: the old build has no correct cached arm at all.
+
+**Where the 2 s went, measured, because it is recoverable.** Of the new 5.81 s, **4,788 ms is ladder
+cost that delivers 0 nodes**: 300 wakes, 149 sweeps, 22.4 M entries examined, 123,975 occlusion rays,
+**619 ms of it on the main thread**. 13,409 of the 74,630 leaves are permanently occluded from this
+camera, so `done == refine_regions_.size()` is never true and the teardown in `deliver_refinement`
+never fires; the ladder spends 240 frames rediscovering that there is nothing it can pick. A
+stand-down on *"a whole sweep produced no candidate"*, re-armed when the camera moves, should return
+most of it. **Not done here, and not guessed at: the number above is the size of the prize.**
+
+**Tests.** `test_world_cache.cpp`'s round-trip helper now builds two leaves that differ in level (4
+and 7) as well as in position, with negative coordinates, and asserts `key[0..2]`, `level` and
+`applied_per_metre` survive the trip. 537 cases, 18,670,541 assertions, passing.

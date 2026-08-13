@@ -542,25 +542,34 @@ after any build of this code is necessarily cold), and the cached world's conten
 step 1: `refine_stipple_` is now populated on both paths, so R11d does not have to keep the coarse
 build alive merely to keep the verdict.
 
-**Found, and not fixed (the fourth place).** The resume log was given the ratio it was missing:
+**Closed (D626), and it was two faults rather than the one that was written down here.** The cache
+now records the ladder's **whole leaf set** — key, level, corners, `applied_per_metre`, `done` —
+and `resume_refinement` rebuilds `refine_regions_` from those keys through `refine_node_of` instead
+of seeding at level 8 and asking which saved box contains a seed. Format **4 → 5**.
 
-    cached world has 0 of 120 nodes sharpened from 19680 saved boxes
+The fault this section described is real: `already_sharp` tested **seed** nodes for containment in a
+saved box, and since R11c a saved box is *smaller* than a seed, so no seed was ever marked done and
+`cached world has 0 of 120 nodes sharpened from 19680 saved boxes`. But it only bites when some leaf
+reached the authored resolution. **The commoner one is worse.** `save_refined_world` wrote only
+leaves with `applied_per_metre >= refine_authored_`, and from the default camera **no leaf ever
+reaches that**, so the file was written with an **empty** region list — which `world_cache.hpp`
+documents as *"this world was not built through the ladder"*, i.e. a one-pass authored world with
+nothing to do. The loader duly did nothing, for ever. Measured on the default camera, the old build's
+cached load is **3.83 s** and prints `no ladder, the world is at the detail the clip asked for` over
+a building permanently stuck at sixteen voxels a metre. It was not slow. It was finished and wrong.
 
-`already_sharp` in `resume_refinement` tests **seed** nodes for containment in a saved box, and since
-R11c a saved box is *smaller* than a seed — so a box can never contain one, no seed is marked done,
-and children made later by `split_refine_node` are never tested against the cache at all. Nineteen
-thousand paid-for boxes come back and mark nothing; the cached load then re-sharpens 23,324 nodes,
-**11.7 s**, reproducing voxels the cache had already loaded into the world. The region list is used
-for nothing but whether it is empty.
+**Do not quote the 11.7 s figure above for this camera** — it was measured on a camera that does
+reach authored detail, and repeating it here sent one session looking for time that was not being
+spent. See D626 for the eight-arm table.
 
-This is not one of the three, and it is bigger than two of them *for the common case*: the three
-above are the cold load, and this is every load after it. It is also close to R11f's business —
-`CachedRegion` records no detail level, which is the same missing field both need. **Suggested
-reading before touching it**: `save_refined_world`'s `applied_per_metre >= refine_authored_` filter
-is what makes the saved boxes sub-seed-sized, so the fix is either to test nodes at every level
-against the box list rather than only seeds, or to record the level on the box and let a seed inherit
-"already at metre N" from its children's boxes. Do not guess which; measure the box-size histogram
-first.
+**What it cost, honestly.** The steady-state cached load goes **3.83 s → 5.81 s** on this camera, and
+in exchange the fixed point is the authored 32 voxels a metre (62,752 level-3 leaves against none)
+and reproduces byte-identically run over run. **The 2 s is recoverable and is the next small thing**:
+of the new 5.81 s, **4,788 ms is ladder cost delivering 0 nodes** — 13,409 leaves are permanently
+occluded from this camera so `done == refine_regions_.size()` never becomes true, and the ladder
+sweeps 149 times over 22.4 M entries, 619 ms of it on the **main thread**, discovering it has nothing
+to pick. A *"a whole sweep found no candidate → stand down until the camera moves"* teardown gives
+that back and turns D626 into a strict win.
 
 ---
 
@@ -578,10 +587,12 @@ land. **R11d is therefore not "delete the coarse build"; it is about what is dra
 D621's stand-in path (`node.glsl`, the `kFoundWanted` branch) is what draws it and is the thing to
 reason about, and trap 7 is the rule it must not break.
 
-**Also read** the fourth of those four: `CachedRegion` has nowhere to record which detail a box
-holds, so only boxes sharp at the authored resolution are cached. If R11d wants coarse work
-remembered, that field is what to add — and it is R11f's business, which is the sub-step that can
-lose somebody's building.
+**Also read** the fourth of those four — though **D626 has since done what it asked for**:
+`CachedRegion` now carries `key`, `level` and `applied_per_metre`, and the cache holds the ladder's
+whole leaf set rather than only the boxes at authored detail, so coarse work IS remembered across
+runs and a resuming node comes back knowing the detail it actually holds. That matters to R11d
+directly: with the up-front build gone, a cached load's only floor is what the file says each leaf
+holds, and before D626 that was reset to `--clip-coarse` for every node.
 
 **What a player sees.** No loading bar at all. The world builds around them from nothing rather than
 starting as a blocky whole building. **What would mean it failed:** spawning into an empty room that
@@ -992,9 +1003,13 @@ coarse behind walls, **worst paste 12 ms**.
 3. **The split loop follows the winner down.** Re-picking from the whole list after each split lands
    on some other unsplit node, still large and still keen, so the list is cut finer everywhere and
    nothing is ever sampled.
-4. **Only boxes sharp at the authored resolution are written to the cache**, because `CachedRegion`
-   has nowhere to record which detail a box holds, and a coarse box read back as finished is a
-   world that never comes good. If R11d wants coarse work remembered, that field is what to add.
+4. ~~**Only boxes sharp at the authored resolution are written to the cache**, because
+   `CachedRegion` has nowhere to record which detail a box holds.~~ **Fixed — D626.** Every leaf is
+   written with its key, level and `applied_per_metre`, and the resuming run rebuilds the octree from
+   the keys. Writing only the authored-detail boxes did not merely lose coarse work: from a camera
+   where no leaf reaches authored detail it wrote an *empty* list, which the format defines as "not
+   built through the ladder at all", and the world froze at sixteen voxels a metre for every launch
+   thereafter.
 
 **The fly-in gate is still owed**: 60 m to 1 m at the facade with no consecutive-frame spike. What
 is proved is the world, not the walk.
@@ -1050,7 +1065,8 @@ Not the paste. D511–D514, and item 2 below.
 Two fixes, in the order they paid:
 
 1. ~~**Write the cache when sharpening settles**, not only when it completes.~~ **Done** — D241–D246.
-   The cache is written at the fixed point carrying a `CachedRegion` per box saying which are sharp,
+   The cache is written at the fixed point carrying a `CachedRegion` per leaf saying how sharp it got
+   (since D626 that is the whole leaf set with its keys and detail; it was once only the sharp boxes),
    and a later run from another camera carries on from it. Default camera, `--settle`: first run
    133.3 s, every run after 6.6 s; two runs from different cameras finish the building and every run
    after that loads a complete world in five to seven seconds. **Read D243 and D244 before comparing

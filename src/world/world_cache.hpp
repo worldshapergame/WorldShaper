@@ -55,7 +55,7 @@ class PropertyRegistry;
 class TagRegistry;
 class World;
 
-// One box of a clip that is sharpened on its own, and whether it has been.
+// One leaf of the ladder that sharpens a clip: which node it is, and how sharp it got.
 //
 // A clip is built coarse and then re-sampled box by box at full detail, nearest and most visible
 // first. A box behind a wall is skipped for as long as the camera stands where it does, so a run
@@ -64,12 +64,27 @@ class World;
 // would be indistinguishable from a finished one, every later launch would load the blocky
 // version and find nothing left to do, and the building would never come good again.
 //
-// The boxes are in the clip's own metres and are checked against the grid the reading run plans
-// for itself. They are not the authority on where the boxes are; they only say which of them
-// somebody has already paid for.
+// The list is the ladder's WHOLE leaf set, coarse leaves included, and not just the ones somebody
+// has paid for. That is the difference between resuming a run and guessing at one. The ladder is
+// an octree that splits where the camera wants detail, so its leaves are of every size at once,
+// and the only thing that describes such a set is the set itself. It used to hold the sharp boxes
+// alone and the reading run tried to recognise them by containment, which since R11c could not
+// work at all: a sharp box is the SMALLEST node in the tree, and a smaller box contains nothing.
+//
+// `key`/`level` are the node's own key in the octree the renderer marches, so the reading run
+// rebuilds the tree exactly. The corners are written beside them for a reader that wants to know
+// where a leaf is without knowing the clip's bounds; the run that resumes recomputes them from the
+// key instead, because a box out of a file is a claim and the bounds are the authority.
 struct CachedRegion {
+    i64 key[3]{};
+    u32 level = 0;
     f64 low[3]{};
     f64 high[3]{};
+    // Voxels per metre this leaf was last sampled at. Without it a resuming run has to assume the
+    // coarsest, which does not merely waste the work of sharpening it again -- a sample is pasted
+    // as a REPLACE over its whole box, so assuming coarse lets a sixteen-per-metre answer land on
+    // top of a thirty-two-per-metre one and the building gets blockier the more it is loaded.
+    i32 applied_per_metre = 0;
     bool done = false;
 };
 

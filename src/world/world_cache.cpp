@@ -25,7 +25,11 @@ constexpr u32 kMagic = 0x57534357u;   // "WSCW"
 // 4 — the stipple verdict, without which a resumed world cannot despeckle anything it sharpens.
 // Not read compatibly from a version 3 file: the missing verdict is exactly the fault being fixed,
 // so a file that does not have one is rebuilt rather than loaded and quietly left speckled.
-constexpr u32 kVersion = 4u;
+// 5 — the ladder's whole leaf set, each leaf with its octree key and the detail it was sampled at,
+// so a resuming run rebuilds the tree rather than trying to recognise it by containment. Again not
+// read compatibly: a version 4 file holds only the finest boxes and no keys, which is the fault
+// being fixed, and a file that cannot say what its coarse leaves are is worth less than a rebuild.
+constexpr u32 kVersion = 5u;
 
 // A brick, exactly as it is held. No canonical form, no re-encode: the whole reason this file
 // exists is that it can be read faster than the world can be rebuilt, and a normalisation pass
@@ -246,8 +250,11 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
     // half-built world worth keeping instead of a trap.
     put_pod(out, static_cast<u32>(cache.regions.size()));
     for (const CachedRegion& region : cache.regions) {
+        for (i64 v : region.key) put_pod(out, v);
+        put_pod(out, region.level);
         for (f64 v : region.low) put_pod(out, v);
         for (f64 v : region.high) put_pod(out, v);
+        put_pod(out, region.applied_per_metre);
         put_pod(out, static_cast<u8>(region.done ? 1u : 0u));
     }
 
@@ -451,8 +458,11 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
     cache.regions.reserve(region_count);
     for (u32 i = 0; i < region_count && in.ok; ++i) {
         CachedRegion region;
+        for (i64& v : region.key) v = in.pod<i64>();
+        region.level = in.pod<u32>();
         for (f64& v : region.low) v = in.pod<f64>();
         for (f64& v : region.high) v = in.pod<f64>();
+        region.applied_per_metre = in.pod<i32>();
         region.done = in.pod<u8>() != 0u;
         cache.regions.push_back(region);
     }

@@ -80,19 +80,31 @@ struct Scratch {
     }
 };
 
+// Two neighbouring leaves of the ladder, as the sharpening run would hand them over: a key each,
+// because that is what the reading run rebuilds its tree from, and the detail each was sampled at.
+// The two differ in level as well as in position, because the ladder's leaves are of every size at
+// once and a list that only ever held one size would not catch a format that drops the level.
 std::vector<CachedRegion> two_regions(bool first_done, bool second_done) {
     CachedRegion a;
+    a.key[0] = -3;
+    a.key[1] = 0;
+    a.key[2] = 5;
+    a.level = 4;
     a.low[0] = -16.0;
     a.low[1] = 0.0;
     a.low[2] = -16.0;
     a.high[0] = 0.0;
     a.high[1] = 12.0;
     a.high[2] = 16.0;
+    a.applied_per_metre = 32;
     a.done = first_done;
 
     CachedRegion b = a;
+    b.key[0] = 11;
+    b.level = 7;
     b.low[0] = 0.0;
     b.high[0] = 16.0;
+    b.applied_per_metre = 8;
     b.done = second_done;
     return {a, b};
 }
@@ -166,6 +178,23 @@ TEST_CASE("a half-sharpened world says which regions it is missing") {
     CHECK(in.regions[0].high[1] == doctest::Approx(12.0));
     CHECK(in.regions[1].low[0] == doctest::Approx(0.0));
     CHECK(in.regions[1].high[0] == doctest::Approx(16.0));
+
+    // The key is the leaf's identity and the reading run rebuilds its whole tree from it, so a
+    // format that wrote the corners but lost the key would still pass every check above and leave
+    // the resuming run with nothing to rebuild from. Negative coordinates on purpose: the keys are
+    // signed and a narrowing to unsigned would put this leaf on the other side of the world.
+    CHECK(in.regions[0].key[0] == -3);
+    CHECK(in.regions[0].key[1] == 0);
+    CHECK(in.regions[0].key[2] == 5);
+    CHECK(in.regions[0].level == 4u);
+    CHECK(in.regions[1].key[0] == 11);
+    CHECK(in.regions[1].level == 7u);
+
+    // And the detail each was sampled at. Losing this is not a lost optimisation but lost quality:
+    // a sample is pasted as a REPLACE over the whole leaf, so a run that reads 32 back as the
+    // coarse rung will let a coarser answer land on top of sharper geometry.
+    CHECK(in.regions[0].applied_per_metre == 32);
+    CHECK(in.regions[1].applied_per_metre == 8);
 }
 
 // The corners survive exactly, not nearly. They are compared corner for corner against the grid a

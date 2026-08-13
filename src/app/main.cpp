@@ -3153,32 +3153,55 @@ void Application::save_refined_world() {
     cache.world = &world_;
     cache.ledger = &ledger_;
     cache.materials = materials_;
-    // Only the sharpened ones, because that is now what the list MEANS: the boxes somebody has
-    // already paid for, read back by containment rather than by position (see resume_refinement).
-    // The unsharpened ones are not information -- the reading run works out its own grid from where
-    // its own camera is standing.
+    // EVERY leaf, coarse ones included, and each one saying what detail it is at. D626.
+    //
+    // It used to write only the boxes sharp at the clip's own resolution, on the argument that a
+    // coarse box is not information -- the reading run would work out its own grid from where its
+    // own camera stands. That was true of R11b's fixed grid and is false of R11c's octree. The
+    // ladder descends by SPLITTING, so a leaf sharp at the authored detail is the smallest node in
+    // the tree, and the reader recognised saved boxes by asking which of its own nodes one
+    // CONTAINS. A quarter-metre box contains no eight-metre seed. Nineteen thousand six hundred
+    // paid-for boxes came back and marked nothing done.
+    //
+    // The coarse leaves are the information. They are the shape of the tree the last run left, and
+    // a tree is not recoverable from a subset of its leaves at one depth. So the file holds the
+    // leaf set: every node's key, its detail, and its flag. What that costs is about sixty bytes a
+    // leaf against a world of hundreds of megabytes; what it buys is on the read side.
     //
     // Never empty: this function returns above unless at least one more box has been sharpened
     // than the file already knew about, and an empty list means something else entirely to the
     // reader (a world built in one pass, with no ladder behind it).
-    cache.regions.reserve(done);
+    usize per_level[kRefineCoarsest + 1] = {};
+    usize authored_leaves = 0;
+    cache.regions.reserve(refine_regions_.size());
     for (const RefineNode& box : refine_regions_) {
-        // Only what is sharp at the clip's OWN resolution. Since R11c a node is refined at the
-        // detail its level implies, so most of the list is coarse answers that a later run
-        // standing somewhere else would want to improve on -- writing those would tell that run
-        // the volume is finished when it is merely started, and the file has nowhere to record
-        // which of the two it means.
-        if (!box.done || box.applied_per_metre < refine_authored_) continue;
         CachedRegion out;
+        out.key[0] = box.key.x;
+        out.key[1] = box.key.y;
+        out.key[2] = box.key.z;
+        out.level = box.key.level;
         out.low[0] = box.low.x;
         out.low[1] = box.low.y;
         out.low[2] = box.low.z;
         out.high[0] = box.high.x;
         out.high[1] = box.high.y;
         out.high[2] = box.high.z;
+        out.applied_per_metre = box.applied_per_metre;
         out.done = box.done;
         cache.regions.push_back(out);
+        ++per_level[std::min<u32>(box.key.level, kRefineCoarsest)];
+        if (box.done && box.applied_per_metre >= refine_authored_) ++authored_leaves;
     }
+    // The spread by level, because it is the evidence for the paragraph above and it is cheap: one
+    // line at the fixed point saying how much of the tree the old filter was throwing away.
+    std::string spread;
+    for (u32 level = 0; level <= kRefineCoarsest; ++level) {
+        if (per_level[level] == 0) continue;
+        if (!spread.empty()) spread += ", ";
+        spread += std::to_string(per_level[level]) + " at level " + std::to_string(level);
+    }
+    WS_LOG_INFO("clip", "caching the ladder's {} leaves, {} of them at the clip's own detail: {}",
+                cache.regions.size(), authored_leaves, spread);
     // Which materials the despeckler may touch, carried with the world because a run that resumes
     // from this file cannot work it out again: the verdict is taken over the WHOLE clip in one
     // sample, and a resuming run never has the whole clip -- it has this world and a list of boxes.
@@ -3596,34 +3619,58 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
                     refine_cache_path_.empty() ? cache_path : refine_cache_path_);
     }
 
-    // What the file holds is now the boxes that WERE sharpened rather than flags against a fixed
-    // grid, so a node is already sharp when a saved box contains it -- a containment test rather
-    // than a comparison of corners.
+    // The tree the last run left, rebuilt from its own keys. D626.
     //
-    // That is what makes R11b's grid possible at all. The old list had to be a pure function of
-    // the clip's bounds, because the flags were positional: box seven meant whatever this build's
-    // seventh box was, and a build that cut the grid differently read somebody else's flags. A
-    // node grid that follows the camera has no such stable index by construction. It also means a
-    // cache written by any camera is usable by any other, and that an old file still reads: its
-    // sharpened boxes are boxes, and they contain whatever they contain.
-    const auto already_sharp = [&](const RefineNode& node) {
-        for (const CachedRegion& from : cache.regions) {
-            if (!from.done) continue;
-            if (from.low[0] <= node.low.x && from.high[0] >= node.high.x &&
-                from.low[1] <= node.low.y && from.high[1] >= node.high.y &&
-                from.low[2] <= node.low.z && from.high[2] >= node.high.z) {
-                return true;
-            }
+    // The seeds laid down above are the fallback, not the answer. What was here instead was a
+    // containment test -- is this seed inside a box somebody has already paid for? -- and since
+    // R11c that test cannot ever say yes: a paid-for box is the finest node in the tree, an eighth
+    // of a seed's span in each direction, and a small box contains no large one. It returned false
+    // for all one hundred and twenty seeds against nineteen thousand six hundred saved boxes, so
+    // the ladder started from nothing and re-sharpened the entire building on top of the geometry
+    // the loader had just read off the disk. Eleven and a half seconds of a seventeen-second load.
+    //
+    // Rebuilding from keys needs no test. `refine_node_of` is a pure function of the key and the
+    // clip's bounds, and the bounds come from this run's own script -- so a leaf comes back at
+    // exactly the corners it had, without the file being trusted about where anything is. A leaf
+    // whose key falls outside the bounds is dropped, which is what happens to a file whose clip has
+    // been moved rather than edited.
+    const i32 authored = (refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre;
+    std::vector<RefineNode> restored;
+    restored.reserve(cache.regions.size());
+    for (const CachedRegion& from : cache.regions) {
+        RefineNode node;
+        if (!refine_node_of(NodeKey{from.key[0], from.key[1], from.key[2], from.level}, node)) {
+            continue;
         }
-        return false;
-    };
-    for (RefineNode& node : refine_regions_) {
-        if (!already_sharp(node)) continue;
-        node.done = true;
-        // Sharp means sharp at the clip's own resolution: only boxes refined that finely are
-        // written (see save_refined_world), so a coarse node over one of them must never be
-        // sampled and blown up across it. R11c.
-        node.applied_per_metre = (refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre;
+        node.applied_per_metre =
+            from.applied_per_metre > 0 ? from.applied_per_metre : refine_coarse_per_metre_;
+        // The flag is NOT carried over as it stands, and that is the whole quality argument.
+        //
+        // Within a run `done` means "sampled; never pick this again", at whatever detail it was
+        // sampled at, and that is sound because the camera has not moved. Across runs the camera
+        // HAS moved. A wall the last run saw edge-on from forty metres and settled for at four
+        // voxels a metre is the wall this run is standing in front of, and carrying its flag over
+        // would freeze the building at whatever the first camera happened to want -- the file says
+        // the world converges across runs, and it would stop converging on the second load.
+        //
+        // A leaf already at the clip's authored detail is the exception, and it is the one that
+        // matters: nothing can improve on it, so it is finished for every camera there will ever
+        // be. That is where the saved time comes from. Everything coarser comes back live, with
+        // its true detail rather than the coarse rung -- and because the picker only samples a node
+        // at a resolution better than the one it is already at, nothing coarse can now land on top
+        // of something sharp.
+        node.done = from.done && from.applied_per_metre >= authored;
+        restored.push_back(node);
+    }
+    if (!restored.empty()) {
+        refine_regions_ = std::move(restored);
+    } else {
+        // Every saved key fell outside this run's bounds. The seeds stand, and the run rebuilds --
+        // said out loud because a silent full rebuild off a file that read fine is exactly the kind
+        // of thing that gets measured as "the cache does nothing".
+        WS_LOG_WARN("clip", "the cached world's {} leaves are all outside this clip's bounds; "
+                            "starting the ladder from scratch",
+                    cache.regions.size());
     }
 
     usize done = 0;
@@ -3642,15 +3689,19 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
         WS_LOG_INFO("clip", "the cached world is fully sharpened");
         return;
     }
-    // The saved-box count is in here as well, because the interesting number is the RATIO. The
-    // containment test above runs over the seeds only, and since R11c a saved box is smaller than a
-    // seed, so a box can never contain one: thousands of paid-for boxes can come back and mark zero
-    // seeds done. When those two numbers are "0 of 120 sharpened, from 3000 saved boxes" the file
-    // is being used for nothing but its emptiness.
+    // The saved-leaf count stays in the line, because the interesting number is the RATIO and it is
+    // what caught D626: when the two read "0 of 120 sharpened, from 19680 saved boxes" the file was
+    // being used for nothing but its emptiness, and the load re-sharpened a building it had just
+    // finished reading. Rebuilt from keys the leaf count is now the tree, so the first two numbers
+    // should be a fraction of the third rather than unrelated to it.
+    //
+    // The coarse count is beside them because "not done" is not a failure here: those leaves came
+    // back at their true detail and only need the rungs above what they already have.
+    const usize left_to_sharpen = refine_regions_.size() - done;
     WS_LOG_INFO("clip",
-                "cached world has {} of {} nodes sharpened from {} saved boxes; carrying on from "
-                "here",
-                done, refine_regions_.size(), cache.regions.size());
+                "cached world has {} of {} leaves at the clip's own detail, {} still to sharpen, "
+                "from {} saved; carrying on from here",
+                done, refine_regions_.size(), left_to_sharpen, cache.regions.size());
 }
 
 void Application::build_world() {
