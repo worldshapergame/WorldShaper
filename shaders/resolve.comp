@@ -49,6 +49,10 @@ struct Face {
 };
 layout(std430, binding = 6) readonly buffer Faces { Face items[]; } faces;
 layout(binding = 7, r32ui) uniform readonly uimage2D in_face;
+// And the surface the primary ray reached AFTER the glass let it past, where there was glass (R4d).
+// Zero everywhere else. visibility.comp writes it and documents the wire format at the store; this
+// pass is the only reader, and it unpacks it once, in main, beside the near surface.
+layout(binding = 14, rgba32ui) uniform readonly uimage2D in_behind;
 // The card's own light, which the host never touches. See src/gpu/face_light.hpp.
 layout(std430, binding = 8) readonly buffer FaceLight { uint words[]; } face_light;
 // The stride comes from shaders/face_terms.glsl, which both this pass and the pass that writes the
@@ -473,6 +477,585 @@ bool lobe_radiance(uint block, uint bins, uint side, vec2 at, out vec3 radiance)
 
 #include "preview.glsl"
 
+// Everything one surface does with the light that reached it, from the visibility word that names
+// it and the face slot that holds its measurements.
+//
+// This was the body of main's `if (hit)` branch until R4d, and it is a function now for one
+// reason: a pixel that landed on glass has TWO surfaces to shade -- the pane, and whatever the
+// second march found behind it. The alternative was to wrap five hundred lines in a loop over the
+// two layers, which would have indented every one of them and pushed a dozen long comments past
+// this file's hundred-column wrap. Extracting instead makes the lines SHORTER, and the diff is a
+// move rather than a rewrite.
+//
+// `lets_past` is how much of what is behind this surface arrives through it, per channel, and it
+// is zero for everything opaque. Only the DIFFUSE term is scaled by what is left of it: a pane's
+// reflection and a lamp's emission happen AT the face and are not attenuated by the body of it.
+//
+// The two reach values come back out through parameters rather than through file-scope variables
+// because the caller now has two of each to reconcile, and a shared variable would silently keep
+// whichever of the two surfaces happened to be shaded last.
+vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_past,
+                   out float media_sun_reach, out float media_sky_reach) {
+    media_sun_reach = 1.0;
+    media_sky_reach = 1.0;
+    uint face = packed.x & 0xFFu;
+    uint level = (packed.x >> 8u) & 0xFFu;
+
+    vec3 colour;
+    // What this surface gives off itself, which is not light it received and is therefore not
+    // shaded, occluded or divided by pi. A lamp that lights the room and does not itself glow reads
+    // as a grey block with a halo round it, which is the one thing about lamps a player notices
+    // before any of the shading.
+    //
+    // A material read, not a light calculation: no ray, no accumulation, nothing per pixel that
+    // scales with the window -- the same lookup the albedo on the line above already is. Emission
+    // is a property of the voxel, so it is available wherever the voxel is, and it is available at
+    // level 0 only for the same reason the albedo is: a coarse node carries a folded colour and no
+    // material. R9f's fold is where a distant fitting's glow will come from.
+    vec3 emission = vec3(0.0);
+    if (level == 0u) {
+        // Clamped, because an out-of-range index into an SSBO is not a wrong colour -- it is
+        // whatever the driver decides out-of-bounds means, and this pass has already cost one
+        // device loss to exactly that (see material_of in pt_material.glsl).
+        uint type_id = min(packed.y, uint(types.items.length()) - 1u);
+        uint visual_id = min(types.items[type_id].x, uint(visuals.items.length()) - 1u);
+        uvec4 visual = visuals.items[visual_id];
+        colour = unpack_rgb(visual.x);
+        // The same unpacking as material_of: the scale is byte 3 of word 1 and the tint is
+        // RGB565 in the low half of word 3, squared and scaled by 64 so a torch and a furnace
+        // are not one step apart on a linear ramp. Two places computing this differently would
+        // light the scene one way and draw the lamp another.
+        float emissive = float((visual.y >> 24u) & 0xFFu) / 255.0;
+        if (emissive > 0.0) {
+            uint tint = visual.w & 0xFFFFu;
+            emission = vec3(float((tint >> 11u) & 0x1Fu) / 31.0,
+                            float((tint >> 5u) & 0x3Fu) / 63.0,
+                            float(tint & 0x1Fu) / 31.0) * (emissive * emissive * 64.0);
+        }
+    } else {
+        colour = unpack_rgb(packed.z);
+    }
+
+    vec3 normal = vec3(0.0);
+    if (face == 0u) normal = vec3(1, 0, 0);
+    else if (face == 1u) normal = vec3(-1, 0, 0);
+    else if (face == 2u) normal = vec3(0, 1, 0);
+    else if (face == 3u) normal = vec3(0, -1, 0);
+    else if (face == 4u) normal = vec3(0, 0, 1);
+    else normal = vec3(0, 0, -1);
+
+    // Sun and sky, in RADIANCE, rather than a tint between 0.55 and 1.0.
+    //
+    // That tint is why this pass looked grey however it was tone mapped. Its darkest face was
+    // barely half the brightness of its brightest, so there was no contrast in the frame for a
+    // curve to work with -- a building lit that way is a flat grey cutout of a building. The
+    // fault was never the tone mapping; it was that there was nothing to map.
+    //
+    // Two terms, which is the least that reads as light: the sun, hard and directional, and the
+    // sky, which is broad and comes mostly from above. A north wall now sits at a fraction of a
+    // south one instead of at nine tenths of it.
+    float lambert = max(dot(normal, trace.sun.xyz), 0.0);
+
+    // The sun's visibility, from the face rather than from a ray traced here.
+    //
+    // The real-time path has never had a shadow: every surface facing the sun was lit by it,
+    // whatever stood in the way. This is where that changes, and it costs one buffer read.
+    //
+    // Bounded against the buffer as well as against kNoFace. The slot came from an image the
+    // marcher wrote on some earlier frame, and the store it indexes can be rebuilt smaller
+    // between then and now; an unchecked index into an SSBO is not a wrong colour, it is
+    // whatever the driver decides out-of-bounds means.
+    float sun_visible = 1.0;
+    if (face_slot < faces.items.length()) {
+        uint counters = faces.items[face_slot].counters;
+        uint samples = counters & 0xFFFFu;
+        if (samples >= kShadowSettled) {
+            sun_visible = float((counters >> 16u) & 0xFFFFu) / float(samples);
+        }
+    }
+    lambert *= sun_visible;
+
+    // How much sky this surface can actually see, measured on the face (R10a).
+    //
+    // What was here decided it from which way the surface points and from nothing else:
+    //
+    //     kSkyAmbient * (0.5 + 0.5 * normal.y) + kGroundBounce
+    //
+    // A wall at the back of a corridor, a floor under a ceiling, the whole inside of the
+    // building -- every one of them received the entire dome. That is why the interior read as
+    // a model of a room rather than as a room even once the sun cast real shadows, and it is
+    // the single largest thing left wrong with the picture. The occlusion was never missing
+    // because it was hard; it was missing because visibility used to mean a per-pixel gather,
+    // which this renderer does not do.
+    //
+    // The face pass now measures it with one cosine-weighted hemisphere ray per face per
+    // frame, so this is a lookup. The orientation term is gone rather than kept alongside:
+    // it was standing in for exactly this quantity, and multiplying by both would darken every
+    // crease twice -- the failure that looks like a taste problem rather than like a bug.
+    //
+    // One before any rays have landed, so a face nobody has shaded yet is lit as it was
+    // before this stage existed. A new surface fades into its occlusion rather than flashing
+    // dark, which is the same discipline the sun's own fallback follows.
+    float open_sky = 1.0;
+    float unoccluded = 1.0;
+    // What this surface has measured arriving from other surfaces, as radiance (R9).
+    //
+    // A mean rather than a sum, over the far field's own count, because it is the same ray: one
+    // unbounded cosine-weighted sample of the hemisphere, whose answer is the sky when it
+    // escapes and a surface's outgoing light when it does not. `bounce_known` is what says
+    // whether the measurement exists at all, and it is the whole of what decides between this
+    // and `kIndirectFloor` below — a face with no far rays yet has not found the room dark, it
+    // has not looked.
+    vec3 bounce = vec3(0.0);
+    bool bounce_known = false;
+    float bounce_confidence = 0.0;
+    // What the lamps deliver here, measured on the face by shade_faces.comp (R3c).
+    //
+    // IRRADIANCE, already carrying the cosine and already divided by the density that chose
+    // each fitting, so it goes into the same bracket as the sun and the sky and is divided by
+    // pi with them. Nothing is traced here, nothing is looped over, and a hall with a thousand
+    // sconces costs this pass exactly what a hall with one costs -- which is the whole of why
+    // lamps moved onto the face.
+    //
+    // Nought before any samples, and that direction is deliberate. An unsampled face reading
+    // full sun is the sun's worst answer because the sun is bright everywhere; an unsampled
+    // face reading no lamp is merely a surface not yet lit by a lamp, and the stand-in three
+    // levels above it (kLampSeedMin) is what covers the frames in between.
+    vec3 lamp = vec3(0.0);
+    // Hoisted out of the block below because the LOBE reads it too: a polished surface draws a
+    // highlight of a fitting, not only a diffuse lit by one. See kFaceLampDir.
+    uint lamp_n = 0u;
+    if (face_slot < faces.items.length()) {
+        uint sky_counters = face_light.words[face_slot * kFaceLightWords];
+        uint sky_samples = sky_counters & 0xFFFFu;          // near-field rays
+        uint far_samples = (sky_counters >> 16u) & 0xFFFFu;  // far-field rays
+
+        // R5a: the three noisiest things a face measures, blended with its coplanar neighbours'.
+        //
+        // Which three came from photographing every term on its own rather than from an
+        // argument: at the enclosed camera the LAMPS read a speckle of 23.0 of 255 against the
+        // near field's 6.0, and at the close camera the far field reads 90.3 against 36.6. The
+        // far field and the bounce are the one unbounded ray's two answers, so both carry its
+        // count -- one sample every `face_stride` frames after the eager phase. The lamp is one
+        // fitting per face per frame drawn in proportion to what it would deliver, so a face's
+        // estimate is a few hundred samples of a distribution over every emitter in the
+        // building. Nothing in this renderer filtered ACROSS faces until now, which is the class
+        // the fine grid on flat surfaces belongs to (D539's eight eliminations found no ninth
+        // cause because there was not one to find).
+        //
+        // The low sixteen bits are the filtered answer's effective sample count and nought
+        // means "no filtered answer here yet" -- a slot claimed since the light pass last
+        // visited it. That case reads the raw record exactly as it did before this existed,
+        // which is the same discipline every other term here follows: an absent measurement
+        // reads as the picture the renderer already had, never as black.
+        //
+        // The count is what the bounce is believed in proportion to, and it is the other half
+        // of what this stage is for. A face the camera has just revealed carries a handful of
+        // far samples of its own and its converged neighbours carry hundreds, so the filtered
+        // count is high and the answer it is high about is theirs -- which is `face_light_seed`
+        // done sideways rather than down the tree, and it needs no extra rays either.
+        const uint filtered = face_light.words[face_slot * kFaceLightWords + kFaceFilteredSky];
+        const uint filtered_n = filtered & 0xFFFFu;
+        const uint bounce_at = face_slot * kFaceLightWords +
+                               (filtered_n > 0u ? kFaceFilteredBounce : 9u);
+        const uint bounce_n = filtered_n > 0u ? filtered_n : far_samples;
+
+        // The lamps, which are stored as a MEAN once filtered and as a sum over their own count
+        // before that. One count answers for all three terms: the first visit of a face writes
+        // nought there and takes its first far ray and its first lamp burst together, so the two
+        // are never separately absent -- and a scene with no emitters gives every tap a lamp
+        // mean of nought, which is the answer rather than a fallback.
+        lamp_n = face_light.words[face_slot * kFaceLightWords + 8u] & 0xFFFFu;
+        if (filtered_n > 0u) {
+            lamp = vec3(
+                uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
+                                                 kFaceFilteredLamp]),
+                uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
+                                                 kFaceFilteredLamp + 1u]),
+                uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
+                                                 kFaceFilteredLamp + 2u]));
+        } else if (lamp_n > 0u) {
+            lamp = vec3(uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 5u]),
+                        uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 6u]),
+                        uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 7u])) /
+                   float(lamp_n);
+        }
+        if (far_samples > 0u) {
+            // Read as it is stored: a running MEAN with a memory of kBounceMemory samples, not
+            // a sum over `far_samples`. The count still says how far to believe it -- see
+            // kBounceBelieve below -- but it is no longer what divides it, because the quantity
+            // being averaged is the light in the room and the room is still filling while the
+            // early samples are taken. node.glsl's kBounceMemory has the whole argument, and the
+            // fault it fixes is the one a player reported as the faces they stood still in front
+            // of coming out brighter and cleaner than everything around them.
+            bounce = vec3(uintBitsToFloat(face_light.words[bounce_at]),
+                          uintBitsToFloat(face_light.words[bounce_at + 1u]),
+                          uintBitsToFloat(face_light.words[bounce_at + 2u]));
+            // How far to believe it, and this is not caution — it is the difference between a
+            // measurement and a per-face lottery.
+            //
+            // A bounce sample is a RADIANCE, so it has no bound to average itself against: one
+            // ray landing on a sunlit sill returns something twenty times what the wall around
+            // it returns, and a mean of ten such samples is mostly the luck of which ten. The
+            // first version of this believed the mean the moment a single ray existed, and the
+            // enclosed camera came out as salt and pepper over a black building — every face
+            // disagreeing with its neighbour, which is exactly what a per-face estimator with
+            // ten samples looks like when nothing smooths it.
+            //
+            // So confidence rises with the samples, and it rises SMOOTHLY. A threshold would put
+            // a discontinuity at the sample count on every face that straddles it, and D387 is
+            // the standing measurement of what a hard per-face decision does: neighbours either
+            // side of it disagree by more than the noise ever did.
+            bounce_confidence = clamp(float(bounce_n) / float(kBounceBelieve), 0.0, 1.0);
+            bounce_known = bounce_confidence > 0.0;
+        }
+        if (sky_samples >= kShadowSettled) {
+            // The far field has its own count and its own ray, and the near field converges
+            // far faster, so the two are gated separately. A face with contact measured and no
+            // sky ray yet keeps `open_sky` at one, which is what it read before this term
+            // existed -- the near field is already darkening it correctly in the meantime.
+            if (filtered_n > 0u) {
+                open_sky = float(filtered >> 16u) * (1.0 / 65535.0);
+            } else if (far_samples > 0u) {
+                open_sky = float(face_light.words[face_slot * kFaceLightWords + 4u]) /
+                           float(far_samples);
+            }
+            // And the near field, which is the term that actually carries shape. Indoors the
+            // far field is nought on every surface in the room -- measured, 1,619 of 1,671
+            // pixels in the lowest tenth -- so on its own it shifts the whole interior by a
+            // constant and changes nothing anybody can see. This is how close the nearest
+            // thing is, and it varies across every crease and alcove in the building.
+            float inv = 1.0 / (float(sky_samples) * 255.0);
+            float mean = float(face_light.words[face_slot * kFaceLightWords + 1u]) * inv;
+
+            // And where on the face THIS pixel is, so the occlusion varies under the voxel
+            // instead of being flat across it.
+            //
+            // Without this a face is one number however close you stand, and AO gets blockier
+            // the nearer you get -- the exact failure D298 fixed for shadows, arriving again
+            // through a different door. The coefficients are first moments of the same samples
+            // the mean is made of, so this costs two multiply-adds and no extra fetch: the
+            // record is the one already being read.
+            Face f = faces.items[face_slot];
+            float extent = float(1u << (f.packed & 0xFFu));
+            vec3 fcorner = vec3(ivec3(f.x, f.y, f.z)) * extent -
+                           vec3(push.camera_chunk.xyz * kChunkEdge);
+            vec3 offset = (push.origin.xyz + dir * t) - (fcorner + vec3(extent * 0.5));
+
+            // The same two axes shade_faces.comp spreads its samples along, chosen the same
+            // way from the same normal, or the gradient is read against the wrong axis.
+            vec3 across = abs(normal.x) != 0.0 ? vec3(0, 1, 0) : vec3(1, 0, 0);
+            vec3 down = abs(normal.z) != 0.0 ? vec3(0, 1, 0) : vec3(0, 0, 1);
+            // Against a quarter of the face, because the samples span half of it. Clamped
+            // because a pixel near the rim is outside the sampled span, and a linear fit
+            // extrapolated a little is what darkens an edge that meets a wall.
+            float inv_half = 4.0 / extent;
+            float fu = clamp(dot(offset, across) * inv_half, -1.0, 1.0);
+            float fw = clamp(dot(offset, down) * inv_half, -1.0, 1.0);
+
+            // Legendre P1 on [-1,1] has <P1 P1> = 1/3, so the coefficient is three times the
+            // first moment. Nothing here solves anything: the basis is orthogonal under the
+            // sampling distribution, which is the whole reason this is affordable.
+            float cu = float(int(face_light.words[face_slot * kFaceLightWords + 2u])) * inv;
+            float cw = float(int(face_light.words[face_slot * kFaceLightWords + 3u])) * inv;
+
+            // Believe a gradient only as far as it stands clear of its own error.
+            //
+            // A first moment is much noisier than the mean it rides on. The mean of N samples
+            // has a standard error of sqrt(0.25/N); a moment against u, which runs over
+            // [-1, 1] with an average of nought, has about sqrt(1/3N) and is then multiplied
+            // by three -- some three and a half times the mean's error, and it lands as a TILT
+            // across the face rather than as a level. On a flat wall, where the true gradient
+            // is nought, that tilt is pure invention: each face leans a different way and
+            // neighbours disagree at their shared edge. Measured by turning the term off, it
+            // was **71%** of all the roughness left in the picture (3.752 of 255 against
+            // 1.076).
+            //
+            // So each coefficient is shrunk by how much of it survives its own variance --
+            // the positive part of one minus the noise power over the signal power, which is
+            // the standard estimator for exactly this question. A flat wall measures a
+            // gradient the size of its error and keeps none of it. A crease measures one far
+            // larger and keeps nearly all of it. Nothing here knows which it is looking at,
+            // which is the same property the fit itself has.
+            // Smoothly, and that is not a detail. The positive-part form -- one minus noise
+            // over signal, floored at nought -- was tried first and made the picture three
+            // times rougher than leaving the gradient alone: it is a threshold, so two
+            // neighbouring faces whose coefficients straddle it keep wildly different amounts
+            // and disagree at their shared edge by more than the noise ever did. A hard
+            // decision taken per face is a new discontinuity per face. This form is continuous
+            // in the coefficient, so a face near the threshold is near its neighbour.
+            float noise_power = 1.0 / (3.0 * float(sky_samples));
+            float keep_u = (cu * cu) / (cu * cu + noise_power);
+            float keep_w = (cw * cw) / (cw * cw + noise_power);
+            float occluded = mean + 3.0 * (cu * keep_u * fu + cw * keep_w * fw);
+            unoccluded = 1.0 - clamp(occluded, 0.0, 1.0);
+        }
+    }
+    // How much sky this surface receives, and there is nothing under it.
+    //
+    // `kSkyAmbient` used to stand in for two different things at once — light arriving from the
+    // dome, and light bounced off something else in the room — which is why taking the second
+    // away by multiplying the whole constant by measured sky visibility sent the enclosed camera
+    // to near black: correct about the sky, wrong about the room. The second thing is measured
+    // now (R9's bounce, added below), so this is the sky and only the sky, and where a face can
+    // see none of it this is nought.
+    //
+    // Multiplied, not averaged, and each appears exactly once. The far field says how much of the
+    // dome is there to be seen; the near field says how much of what is left is shut out by
+    // whatever is within a metre. Applying either twice double-darkens every crease, and that
+    // failure looks like a taste problem rather than like a bug.
+    float sees_sky = face_sky_visibility(open_sky, unoccluded) * kSkyAmbient;
+    // ...and the same two numbers for the air in front of this surface, which is the whole of
+    // what stops fog glowing in a room the sun and the sky cannot reach.
+    media_sun_reach = sun_visible;
+    media_sky_reach = face_sky_visibility(open_sky, unoccluded);
+    // Over PI, and leaving it out is what blew the building white while the sky stayed dark.
+    //
+    // A Lambertian surface lit by an irradiance E reflects albedo * E / PI as RADIANCE. Dropping
+    // the divide makes every lit surface three times brighter than it should be relative to the
+    // sky, which is already radiance and needs no such conversion. The exposure then has to be
+    // pulled down to stop the walls saturating, and pulling it down is what left the sky navy.
+    // The two are the same fault seen twice.
+    // ...and the bounce, which is a RADIANCE MEAN and so is added after the divide rather than
+    // inside it: the irradiance it stands for is PI times it, and the two PIs cancel. See
+    // face_outgoing_radiance in face_terms.glsl, which is the same arithmetic and is what the
+    // gathering ray reads a surface with — one function, two callers, so the light this frame is
+    // drawn with and the light the next bounce is computed from cannot drift apart.
+
+    // ---- R4c: the lobe, which is what stops a metal reading as coloured chalk -------------
+    //
+    // Everything above this line treats the surface as Lambertian. The two bytes R4a put on the
+    // face say how much of that is true: a metal reflects nothing diffusely and everything in a
+    // lobe, and the split between the two is `metalness` read as a quantity.
+    //
+    // Three things happen, and the third is what a player sees first:
+    //
+    //   the DIFFUSE loses the metal's share, so bronze stops being brown chalk;
+    //   the ENVIRONMENT comes back along the mirror direction, out of the bins the face
+    //   measured with the rays it was already casting -- or, where a face holds no block, out
+    //   of the hemispherical mean it stores anyway, which is the same lobe with one bin in it;
+    //   the SUN comes back through the same lobe, which needs no storage at all because the
+    //   face has already measured what fraction of the disc it can see. That is the highlight
+    //   that slides across a door as you walk past it.
+    //
+    // # It is mixed in by how far the environment behind it is measured, and that is not caution
+    //
+    // A face that has taken no gathering rays has not found its surroundings dark, it has not
+    // looked -- the same sentence `bounce_known` above already carries. Reducing its diffuse on
+    // the strength of a material it has and an environment it has not would draw a black door
+    // for the second it takes to converge, which is R9d's flash arriving through a fifth door.
+    // So the whole of R4c ramps in on `bounce_confidence`, and a face with nothing measured is
+    // drawn exactly as this pass drew it before the stage existed.
+    const vec3 albedo = colour;
+    vec3 specular = vec3(0.0);
+    float lobe_share = 0.0;
+    // How much of what arrives is turned away by the surface before it ever reaches the
+    // diffuse under it. See the assignment below.
+    vec3 turned_away = vec3(0.0);
+    uint material = 0u;
+    if (face_slot < face_material.words.length()) material = face_material.words[face_slot];
+    if ((material & kFaceMaterialKnown) != 0u) {
+        const uint rough = material & 0xFFu;
+        const uint metal = (material >> 8u) & 0xFFu;
+        lobe_share = bounce_confidence;
+        if (lobe_share > 0.0) {
+            // ---- ONE DIRECTION FOR THE WHOLE FACE, and that is a rule rather than a saving --
+            //
+            // **Reported from playing: the reflective floor was drawn with a gradient across
+            // every voxel face, and a face has to be one colour.**
+            //
+            // The lobe was being evaluated per PIXEL — the direction back to the eye differs a
+            // little across a 3 cm face, so the bin it reads, the bilinear blend between bins
+            // and the Fresnel all differed a little too, and what that draws is a smooth ramp
+            // over each face with a step at every face boundary. It is the one thing a flat
+            // voxel face must not do, and it is also the one term in this pass that was
+            // ignoring §1: light is worked out ON THE FACE, and a pixel READS it.
+            //
+            // So the direction is taken from the face's own centre to the eye. Every pixel on
+            // the face computes the same one, the face comes out flat, and it is cheaper —
+            // the arithmetic no longer depends on where in the face the pixel is.
+            //
+            // The AMBIENT term below still varies within a face on purpose (R10c fits a linear
+            // gradient to the near field from moments its own samples already carry). The two
+            // are not the same claim: that gradient is a MEASUREMENT of how occlusion varies
+            // across the voxel, and this was an artefact of evaluating a per-face quantity at a
+            // per-pixel point.
+            const Face lobe_face = faces.items[face_slot];
+            const float lobe_extent = float(1u << (lobe_face.packed & 0xFFu));
+            const vec3 lobe_centre =
+                vec3(ivec3(lobe_face.x, lobe_face.y, lobe_face.z)) * lobe_extent +
+                vec3(lobe_extent * 0.5) - vec3(push.camera_chunk.xyz * kChunkEdge);
+            const vec3 view = normalize(push.origin.xyz - lobe_centre);
+            const vec3 f0 = face_f0_of(albedo, metal);
+            const float alpha = face_alpha_of(rough);
+            const float n_dot_v = max(dot(normal, view), 1e-4);
+
+            // The environment, along the direction the eye is looking down. The bins if this
+            // face holds a block and the hemispherical mean if it does not, and the second is
+            // not a fallback in the sense of being worse than nothing -- it is what a fully
+            // rough surface's lobe genuinely is.
+            vec3 reflected = bounce;
+            const uint block = lobe_block_of(face_slot);
+            if (block != kNoLobe) {
+                vec3 side;
+                vec3 other;
+                face_lobe_frame(normal, side, other);
+                vec3 found;
+                // ---- indexed by the direction the EYE IS IN, not by the mirror of it -----
+                //
+                // **Reported before it was found, and then proved by a controlled test**:
+                // *"something red on the right doesnt reflect on the right of the material but
+                // on its left"*. A bright slab was placed beside the great bronze door, once on
+                // each side, and photographed: with the slab on the RIGHT the door brightened
+                // on the LEFT, and with it on the left the door brightened on the right. The
+                // reflection was mirrored.
+                //
+                // A bin holds what an eye at that bin's direction SEES — `lobe_cast` already
+                // aims at the mirror of the bin, which is where the one mirroring belongs.
+                // Indexing the read with `reflect(dir, normal)` mirrored a second time, and a
+                // second mirroring about the normal is the map (dx, dy) -> (-dx, -dy): the
+                // hemi-octahedral square turned a half turn, which is a reflection flipped left
+                // for right AND top for bottom. It is invisible head on, because a direction
+                // and its mirror coincide at the normal, and it grows with the angle — so the
+                // one view where a reflection is worth looking at is the one where it is most
+                // wrong.
+                //
+                // **This was reverted once, and the reason it was reverted is worth keeping.**
+                // Fixing it makes the gilt paterae on the frieze DARKER, which read as a
+                // regression and was treated as one. It is not: they are under the portico
+                // soffit, the direction they correctly reflect is the dark ceiling, and the
+                // gold they had been showing was the sunlit floor arriving through the mirrored
+                // lookup. A wrong reflection that flatters a surface is still wrong, and only
+                // the controlled test could tell the two apart — `face_lobe_frame`'s comment
+                // says a fault of this shape "looks very nearly right", and it looked BETTER
+                // than right, which is worse. D598.
+                const uint state = face_lobe.words[face_lobe_state_at(block)];
+                if (lobe_radiance(block, face_lobe_bins_of(state), face_lobe_side_of(state),
+                                  face_lobe_at(view, normal, side, other), found)) {
+                    reflected = found;
+                }
+            }
+            specular = face_lobe_environment(f0, n_dot_v, reflected);
+            specular += face_lobe_sun(f0, normal, view, trace.sun.xyz, alpha, sun_visible) *
+                        sun_radiance();
+
+            // ---- and the LAMPS through the same lobe, which is what polish looks like ----
+            //
+            // A polished metal in a dim room is dark with a few small brilliant images of
+            // whatever is emitting, and those images are what the eye reads as polish. Until
+            // now the sconces reached a metal's diffuse and never its specular, because the
+            // face stores their IRRADIANCE and an integral has no direction left in it.
+            // `kFaceLampDir` is the direction, kept beside it for one word.
+            //
+            // Evaluated against the MATERIAL's roughness and not the bins', exactly as the
+            // sun's highlight is — so gilt gets a 3.6 degree highlight where the stored
+            // environment is quantised to 13.5. A point source needs a direction, not a
+            // resolution, which is why this reaches "polished" where four times the bins could
+            // not (D599).
+            //
+            // The stored irradiance already carries the cosine at the surface, so dividing by
+            // it recovers the normal-incidence figure `face_lobe_sun` expects — the same
+            // quantity `sun_radiance()` is on the line above. Floored, because a fitting almost
+            // edge-on to the face would otherwise divide by nearly nought and put a firefly
+            // exactly where the term is least justified.
+            const uint lamp_dir_word =
+                face_light.words[face_slot * kFaceLightWords + kFaceLampDir];
+            if (lamp_n > 0u && face_oct_known(lamp_dir_word)) {
+                const vec3 to_lamp = face_oct_unpack(lamp_dir_word);
+                const float lamp_cos = max(dot(normal, to_lamp), 0.15);
+                specular += face_lobe_sun(f0, normal, view, to_lamp, alpha, 1.0) *
+                            (lamp / lamp_cos);
+            }
+            specular *= lobe_share;
+            g_lobe_specular = specular;
+
+            // ---- and what the lobe takes, the diffuse does not get --------------------
+            //
+            // **This is what stood between the water and a visible reflection.** Fresnel says
+            // a dielectric turns away four per cent of what falls on it head on and very
+            // nearly all of it at a glancing angle: looking along a pool at nine degrees, 45%
+            // of what arrives never reaches the water at all. R4c took that share for the
+            // lobe and left the diffuse whole, so a basin was a strong blue Lambertian surface
+            // with a reflection added on top — the reflection was there, measured and correct,
+            // and it was under a layer of blue that physically should not have been there.
+            //
+            // It matters far more for a dielectric than for a metal, which is why R4c
+            // recorded skipping it as a four-per-cent simplification and was wrong: four per
+            // cent is the head-on figure, and the whole point of a reflection is that you see
+            // it at a glancing angle. A metal has almost no diffuse to lose either way.
+            //
+            // # The HEMISPHERICAL AVERAGE and not the view angle, and the first version was
+            // the view angle
+            //
+            // Taking Schlick at `n_dot_v` and subtracting it from the diffuse is the obvious
+            // reading of "what the lobe takes, the diffuse does not get", and it is wrong twice
+            // over. It sent the gilt paterae on the frieze **grey**: they are seen from below at
+            // a glancing angle, where that Fresnel approaches one, so almost the whole diffuse
+            // went — and what should have replaced it is a mirror-sharp reflection that
+            // thirty-six bins cannot resolve, so nothing came back and the gold went out.
+            //
+            // The physics says the same thing the picture did. What reaches the diffuse under a
+            // surface is what was not turned away **on the way IN**, integrated over the whole
+            // incident hemisphere, and that is a property of the material rather than of where
+            // the eye happens to be. The average of Schlick over the hemisphere is
+            // F0 + (1 - F0)/21, which is about nine per cent for a dielectric and nearly all of
+            // it for a metal — where `face_diffuse_share` has already taken the diffuse away in
+            // any case.
+            //
+            // The view-angle Fresnel is still exactly right for the SPECULAR above, which is
+            // what leaves along one direction. One quantity, two averages, and using the wrong
+            // one of the two is a surface that goes dark exactly where a reflection should
+            // appear.
+            //
+            // The gathering ray does not apply this, and now it barely needs to: what it misses
+            // is nine per cent of a dielectric's diffuse rather than a view-dependent share.
+            turned_away = mix(f0, vec3(1.0), 1.0 / 21.0) * lobe_share;
+        }
+    }
+
+    // The diffuse albedo, which is the whole of it for stone and none of it for a mirror. Mixed
+    // by the same ramp, so the two halves of the energy split arrive together — a frame in
+    // which the diffuse had been reduced and the specular had not is a frame with a hole in it.
+    //
+    // R4d scales this term, and only this term, by what the surface did NOT let past. A pane that
+    // transmits 99% of what is behind it must contribute 1% of its own body colour, or the window
+    // draws as the exterior plus a full-strength sheet of grey. The specular below and the
+    // emission after it are deliberately left alone: a reflection happens AT the face and a lamp's
+    // own glow is emitted BY it, so neither is attenuated by the thickness of the thing itself.
+    colour = albedo * (vec3(1.0) - lets_past) *
+                 mix(1.0, face_diffuse_share((material >> 8u) & 0xFFu), lobe_share) *
+                 (vec3(1.0) - turned_away) *
+                 ((sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) *
+                      (1.0 / kPi) +
+                  bounce * bounce_confidence) +
+             specular;
+
+    // And what the surface gives off, added AFTER the albedo multiply because emission is not
+    // reflected light: a lamp's own face is bright whether or not anything is shining on it.
+    colour += emission;
+
+    // The distance fade that used to be here is gone. It mixed towards the sky by a hand-picked
+    // curve over four thousand voxels, which is aerial perspective done by eye -- and the air
+    // below does it from the medium's own extinction, over the distance the ray actually
+    // travelled. Keeping both would apply it twice.
+
+    // The visibility buffer carries the node's coverage â€” what fraction of it is
+    // matter â€” and it is deliberately NOT used as an alpha here.
+    //
+    // That was tried and it is wrong. Coverage is a *volumetric fill fraction*, not a
+    // screen-space one. A brick on the surface of the ground is about an eighth full
+    // and completely opaque when you look at it; blending by fill made distant crates
+    // and window frames dither into the sky. The two quantities only coincide for a
+    // node seen edge-on.
+    //
+    // Correct edge anti-aliasing needs either an opacity per face direction, or the
+    // ray to continue past a partial hit and composite what is behind. The second
+    // falls out naturally once shading is deferred to the face cache in Stage 7, so
+    // the data stays in the buffer waiting for it.
+
+    return colour;
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     if (pixel.x >= int(push.resolution.x) || pixel.y >= int(push.resolution.y)) return;
@@ -511,9 +1094,9 @@ void main() {
     bool hit = packed.x != 0xFFFFFFFFu;
     // How much of the sun and of the sky reach the far end of this ray, for the air along it.
     //
-    // One each and both default to fully open, which is right for a ray that reached the sky: there
-    // is nothing between that air and either source. Where the ray ends on a surface they are that
-    // surface's own measured visibilities, so fog in a sealed room scatters nothing. See apply_media.
+    // One each, both defaulting to fully open, which is right for a ray that reached the sky: there
+    // is nothing between that air and either source. Where the ray ends on a surface they become
+    // that surface's own measured visibilities, so fog in a sealed room scatters nothing.
     float media_sun_reach = 1.0;
     float media_sky_reach = 1.0;
     float t = uintBitsToFloat(packed.w);
@@ -521,552 +1104,72 @@ void main() {
     uint level = (packed.x >> 8u) & 0xFFu;
     uint steps = hit ? ((packed.x >> 16u) & 0xFFu) : packed.z;
 
+    // The face this pixel landed on. Read here rather than inside the shading, which used to read
+    // it itself, because R4d shades up to two surfaces from this point and each brings its own.
+    uint face_slot = imageLoad(in_face, pixel).x;
+
+    // How far the air along this ray runs, and how far the cloud slab is tested against. Both are
+    // the near surface until a see-through pixel below moves them out to the far one.
+    float air_t = hit ? t : 0.0;
+    float cloud_t = hit ? t : push.lens.y;
+
     vec3 colour;
-    // What this surface gives off itself, which is not light it received and is therefore not
-    // shaded, occluded or divided by pi. A lamp that lights the room and does not itself glow reads
-    // as a grey block with a halo round it, which is the one thing about lamps a player notices
-    // before any of the shading.
-    //
-    // A material read, not a light calculation: no ray, no accumulation, nothing per pixel that
-    // scales with the window -- the same lookup the albedo on the line above already is. Emission
-    // is a property of the voxel, so it is available wherever the voxel is, and it is available at
-    // level 0 only for the same reason the albedo is: a coarse node carries a folded colour and no
-    // material. R9f's fold is where a distant fitting's glow will come from.
-    vec3 emission = vec3(0.0);
     if (hit) {
-        if (level == 0u) {
-            // Clamped, because an out-of-range index into an SSBO is not a wrong colour -- it is
-            // whatever the driver decides out-of-bounds means, and this pass has already cost one
-            // device loss to exactly that (see material_of in pt_material.glsl).
-            uint type_id = min(packed.y, uint(types.items.length()) - 1u);
-            uint visual_id = min(types.items[type_id].x, uint(visuals.items.length()) - 1u);
-            uvec4 visual = visuals.items[visual_id];
-            colour = unpack_rgb(visual.x);
-            // The same unpacking as material_of: the scale is byte 3 of word 1 and the tint is
-            // RGB565 in the low half of word 3, squared and scaled by 64 so a torch and a furnace
-            // are not one step apart on a linear ramp. Two places computing this differently would
-            // light the scene one way and draw the lamp another.
-            float emissive = float((visual.y >> 24u) & 0xFFu) / 255.0;
-            if (emissive > 0.0) {
-                uint tint = visual.w & 0xFFFFu;
-                emission = vec3(float((tint >> 11u) & 0x1Fu) / 31.0,
-                                float((tint >> 5u) & 0x3Fu) / 63.0,
-                                float(tint & 0x1Fu) / 31.0) * (emissive * emissive * 64.0);
+        // ---- R4d: what is behind the glass ---------------------------------------------------
+        //
+        // visibility.comp marched a second time, from the same eye along the same ray, with
+        // see-through on, and packed the surface that second march found into this image. Bit 17
+        // says there is one at all -- asked as a flag rather than inferred from a non-zero
+        // transmission, because a pane whose tint quantises to zero in all three channels and no
+        // pane at all are different things that would otherwise look identical here.
+        //
+        // What comes back is the whole path's attenuation, so the two halves are exactly
+        // complementary: the pane's diffuse is scaled by (1 - through) inside shade_surface and
+        // what is behind it by `through` here. Without that scale a window would draw at full pane
+        // brightness PLUS the whole exterior. See visibility.comp for the wire format.
+        uvec4 behind = imageLoad(in_behind, pixel);
+        vec3 through = vec3(0.0);
+        vec3 far_colour = vec3(0.0);
+        float far_sun = 1.0;
+        float far_sky = 1.0;
+        if (((behind.z >> 17u) & 1u) != 0u) {
+            through = vec3(float((behind.y >> 24u) & 0xFFu), float(behind.z & 0xFFu),
+                           float((behind.z >> 8u) & 0xFFu)) *
+                      (1.0 / 255.0);
+            const bool far_hit = ((behind.z >> 16u) & 1u) != 0u;
+            const float far_t = uintBitsToFloat(behind.w);
+            if (far_hit) {
+                const uint far_level = (behind.x >> 27u) & 0x1Fu;
+                const uint payload = behind.y & 0xFFFFFFu;
+                const uint far_named = behind.x & 0xFFFFFFu;
+                // Rebuilt into the shape shade_surface reads: direction and level in .x, and the
+                // one payload into .y or .z depending on which of the two it is -- a level-0 hit
+                // carries a type id and a coarse one carries a folded colour, never both, which is
+                // why one field can serve for either. The steps and coverage bytes are left zero
+                // because nothing inside the function reads them.
+                const uvec4 far_packed = uvec4(((behind.x >> 24u) & 7u) | (far_level << 8u),
+                                               far_level == 0u ? payload : 0u,
+                                               far_level == 0u ? 0u : payload, behind.w);
+                far_colour = shade_surface(dir, far_packed,
+                                           far_named == 0xFFFFFFu ? kNoFace : far_named, far_t,
+                                           vec3(0.0), far_sun, far_sky);
+            } else {
+                far_colour = sky_colour(dir);
             }
-        } else {
-            colour = unpack_rgb(packed.z);
+            // The air now runs to whatever the ray really ended on rather than stopping at the pane.
+            air_t = far_hit ? far_t : 0.0;
+            cloud_t = far_hit ? far_t : push.lens.y;
         }
 
-        vec3 normal = vec3(0.0);
-        if (face == 0u) normal = vec3(1, 0, 0);
-        else if (face == 1u) normal = vec3(-1, 0, 0);
-        else if (face == 2u) normal = vec3(0, 1, 0);
-        else if (face == 3u) normal = vec3(0, -1, 0);
-        else if (face == 4u) normal = vec3(0, 0, 1);
-        else normal = vec3(0, 0, -1);
-
-        // Sun and sky, in RADIANCE, rather than a tint between 0.55 and 1.0.
-        //
-        // That tint is why this pass looked grey however it was tone mapped. Its darkest face was
-        // barely half the brightness of its brightest, so there was no contrast in the frame for a
-        // curve to work with -- a building lit that way is a flat grey cutout of a building. The
-        // fault was never the tone mapping; it was that there was nothing to map.
-        //
-        // Two terms, which is the least that reads as light: the sun, hard and directional, and the
-        // sky, which is broad and comes mostly from above. A north wall now sits at a fraction of a
-        // south one instead of at nine tenths of it.
-        float lambert = max(dot(normal, trace.sun.xyz), 0.0);
-
-        // The sun's visibility, from the face rather than from a ray traced here.
-        //
-        // The real-time path has never had a shadow: every surface facing the sun was lit by it,
-        // whatever stood in the way. This is where that changes, and it costs one buffer read.
-        //
-        // Bounded against the buffer as well as against kNoFace. The slot came from an image the
-        // marcher wrote on some earlier frame, and the store it indexes can be rebuilt smaller
-        // between then and now; an unchecked index into an SSBO is not a wrong colour, it is
-        // whatever the driver decides out-of-bounds means.
-        float sun_visible = 1.0;
-        uint face_slot = imageLoad(in_face, pixel).x;
-        if (face_slot < faces.items.length()) {
-            uint counters = faces.items[face_slot].counters;
-            uint samples = counters & 0xFFFFu;
-            if (samples >= kShadowSettled) {
-                sun_visible = float((counters >> 16u) & 0xFFFFu) / float(samples);
-            }
-        }
-        lambert *= sun_visible;
-
-        // How much sky this surface can actually see, measured on the face (R10a).
-        //
-        // What was here decided it from which way the surface points and from nothing else:
-        //
-        //     kSkyAmbient * (0.5 + 0.5 * normal.y) + kGroundBounce
-        //
-        // A wall at the back of a corridor, a floor under a ceiling, the whole inside of the
-        // building -- every one of them received the entire dome. That is why the interior read as
-        // a model of a room rather than as a room even once the sun cast real shadows, and it is
-        // the single largest thing left wrong with the picture. The occlusion was never missing
-        // because it was hard; it was missing because visibility used to mean a per-pixel gather,
-        // which this renderer does not do.
-        //
-        // The face pass now measures it with one cosine-weighted hemisphere ray per face per
-        // frame, so this is a lookup. The orientation term is gone rather than kept alongside:
-        // it was standing in for exactly this quantity, and multiplying by both would darken every
-        // crease twice -- the failure that looks like a taste problem rather than like a bug.
-        //
-        // One before any rays have landed, so a face nobody has shaded yet is lit as it was
-        // before this stage existed. A new surface fades into its occlusion rather than flashing
-        // dark, which is the same discipline the sun's own fallback follows.
-        float open_sky = 1.0;
-        float unoccluded = 1.0;
-        // What this surface has measured arriving from other surfaces, as radiance (R9).
-        //
-        // A mean rather than a sum, over the far field's own count, because it is the same ray: one
-        // unbounded cosine-weighted sample of the hemisphere, whose answer is the sky when it
-        // escapes and a surface's outgoing light when it does not. `bounce_known` is what says
-        // whether the measurement exists at all, and it is the whole of what decides between this
-        // and `kIndirectFloor` below — a face with no far rays yet has not found the room dark, it
-        // has not looked.
-        vec3 bounce = vec3(0.0);
-        bool bounce_known = false;
-        float bounce_confidence = 0.0;
-        // What the lamps deliver here, measured on the face by shade_faces.comp (R3c).
-        //
-        // IRRADIANCE, already carrying the cosine and already divided by the density that chose
-        // each fitting, so it goes into the same bracket as the sun and the sky and is divided by
-        // pi with them. Nothing is traced here, nothing is looped over, and a hall with a thousand
-        // sconces costs this pass exactly what a hall with one costs -- which is the whole of why
-        // lamps moved onto the face.
-        //
-        // Nought before any samples, and that direction is deliberate. An unsampled face reading
-        // full sun is the sun's worst answer because the sun is bright everywhere; an unsampled
-        // face reading no lamp is merely a surface not yet lit by a lamp, and the stand-in three
-        // levels above it (kLampSeedMin) is what covers the frames in between.
-        vec3 lamp = vec3(0.0);
-        // Hoisted out of the block below because the LOBE reads it too: a polished surface draws a
-        // highlight of a fitting, not only a diffuse lit by one. See kFaceLampDir.
-        uint lamp_n = 0u;
-        if (face_slot < faces.items.length()) {
-            uint sky_counters = face_light.words[face_slot * kFaceLightWords];
-            uint sky_samples = sky_counters & 0xFFFFu;          // near-field rays
-            uint far_samples = (sky_counters >> 16u) & 0xFFFFu;  // far-field rays
-
-            // R5a: the three noisiest things a face measures, blended with its coplanar neighbours'.
-            //
-            // Which three came from photographing every term on its own rather than from an
-            // argument: at the enclosed camera the LAMPS read a speckle of 23.0 of 255 against the
-            // near field's 6.0, and at the close camera the far field reads 90.3 against 36.6. The
-            // far field and the bounce are the one unbounded ray's two answers, so both carry its
-            // count -- one sample every `face_stride` frames after the eager phase. The lamp is one
-            // fitting per face per frame drawn in proportion to what it would deliver, so a face's
-            // estimate is a few hundred samples of a distribution over every emitter in the
-            // building. Nothing in this renderer filtered ACROSS faces until now, which is the class
-            // the fine grid on flat surfaces belongs to (D539's eight eliminations found no ninth
-            // cause because there was not one to find).
-            //
-            // The low sixteen bits are the filtered answer's effective sample count and nought
-            // means "no filtered answer here yet" -- a slot claimed since the light pass last
-            // visited it. That case reads the raw record exactly as it did before this existed,
-            // which is the same discipline every other term here follows: an absent measurement
-            // reads as the picture the renderer already had, never as black.
-            //
-            // The count is what the bounce is believed in proportion to, and it is the other half
-            // of what this stage is for. A face the camera has just revealed carries a handful of
-            // far samples of its own and its converged neighbours carry hundreds, so the filtered
-            // count is high and the answer it is high about is theirs -- which is `face_light_seed`
-            // done sideways rather than down the tree, and it needs no extra rays either.
-            const uint filtered = face_light.words[face_slot * kFaceLightWords + kFaceFilteredSky];
-            const uint filtered_n = filtered & 0xFFFFu;
-            const uint bounce_at = face_slot * kFaceLightWords +
-                                   (filtered_n > 0u ? kFaceFilteredBounce : 9u);
-            const uint bounce_n = filtered_n > 0u ? filtered_n : far_samples;
-
-            // The lamps, which are stored as a MEAN once filtered and as a sum over their own count
-            // before that. One count answers for all three terms: the first visit of a face writes
-            // nought there and takes its first far ray and its first lamp burst together, so the two
-            // are never separately absent -- and a scene with no emitters gives every tap a lamp
-            // mean of nought, which is the answer rather than a fallback.
-            lamp_n = face_light.words[face_slot * kFaceLightWords + 8u] & 0xFFFFu;
-            if (filtered_n > 0u) {
-                lamp = vec3(
-                    uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
-                                                     kFaceFilteredLamp]),
-                    uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
-                                                     kFaceFilteredLamp + 1u]),
-                    uintBitsToFloat(face_light.words[face_slot * kFaceLightWords +
-                                                     kFaceFilteredLamp + 2u]));
-            } else if (lamp_n > 0u) {
-                lamp = vec3(uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 5u]),
-                            uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 6u]),
-                            uintBitsToFloat(face_light.words[face_slot * kFaceLightWords + 7u])) /
-                       float(lamp_n);
-            }
-            if (far_samples > 0u) {
-                // Read as it is stored: a running MEAN with a memory of kBounceMemory samples, not
-                // a sum over `far_samples`. The count still says how far to believe it -- see
-                // kBounceBelieve below -- but it is no longer what divides it, because the quantity
-                // being averaged is the light in the room and the room is still filling while the
-                // early samples are taken. node.glsl's kBounceMemory has the whole argument, and the
-                // fault it fixes is the one a player reported as the faces they stood still in front
-                // of coming out brighter and cleaner than everything around them.
-                bounce = vec3(uintBitsToFloat(face_light.words[bounce_at]),
-                              uintBitsToFloat(face_light.words[bounce_at + 1u]),
-                              uintBitsToFloat(face_light.words[bounce_at + 2u]));
-                // How far to believe it, and this is not caution — it is the difference between a
-                // measurement and a per-face lottery.
-                //
-                // A bounce sample is a RADIANCE, so it has no bound to average itself against: one
-                // ray landing on a sunlit sill returns something twenty times what the wall around
-                // it returns, and a mean of ten such samples is mostly the luck of which ten. The
-                // first version of this believed the mean the moment a single ray existed, and the
-                // enclosed camera came out as salt and pepper over a black building — every face
-                // disagreeing with its neighbour, which is exactly what a per-face estimator with
-                // ten samples looks like when nothing smooths it.
-                //
-                // So confidence rises with the samples, and it rises SMOOTHLY. A threshold would put
-                // a discontinuity at the sample count on every face that straddles it, and D387 is
-                // the standing measurement of what a hard per-face decision does: neighbours either
-                // side of it disagree by more than the noise ever did.
-                bounce_confidence = clamp(float(bounce_n) / float(kBounceBelieve), 0.0, 1.0);
-                bounce_known = bounce_confidence > 0.0;
-            }
-            if (sky_samples >= kShadowSettled) {
-                // The far field has its own count and its own ray, and the near field converges
-                // far faster, so the two are gated separately. A face with contact measured and no
-                // sky ray yet keeps `open_sky` at one, which is what it read before this term
-                // existed -- the near field is already darkening it correctly in the meantime.
-                if (filtered_n > 0u) {
-                    open_sky = float(filtered >> 16u) * (1.0 / 65535.0);
-                } else if (far_samples > 0u) {
-                    open_sky = float(face_light.words[face_slot * kFaceLightWords + 4u]) /
-                               float(far_samples);
-                }
-                // And the near field, which is the term that actually carries shape. Indoors the
-                // far field is nought on every surface in the room -- measured, 1,619 of 1,671
-                // pixels in the lowest tenth -- so on its own it shifts the whole interior by a
-                // constant and changes nothing anybody can see. This is how close the nearest
-                // thing is, and it varies across every crease and alcove in the building.
-                float inv = 1.0 / (float(sky_samples) * 255.0);
-                float mean = float(face_light.words[face_slot * kFaceLightWords + 1u]) * inv;
-
-                // And where on the face THIS pixel is, so the occlusion varies under the voxel
-                // instead of being flat across it.
-                //
-                // Without this a face is one number however close you stand, and AO gets blockier
-                // the nearer you get -- the exact failure D298 fixed for shadows, arriving again
-                // through a different door. The coefficients are first moments of the same samples
-                // the mean is made of, so this costs two multiply-adds and no extra fetch: the
-                // record is the one already being read.
-                Face f = faces.items[face_slot];
-                float extent = float(1u << (f.packed & 0xFFu));
-                vec3 fcorner = vec3(ivec3(f.x, f.y, f.z)) * extent -
-                               vec3(push.camera_chunk.xyz * kChunkEdge);
-                vec3 offset = (push.origin.xyz + dir * t) - (fcorner + vec3(extent * 0.5));
-
-                // The same two axes shade_faces.comp spreads its samples along, chosen the same
-                // way from the same normal, or the gradient is read against the wrong axis.
-                vec3 across = abs(normal.x) != 0.0 ? vec3(0, 1, 0) : vec3(1, 0, 0);
-                vec3 down = abs(normal.z) != 0.0 ? vec3(0, 1, 0) : vec3(0, 0, 1);
-                // Against a quarter of the face, because the samples span half of it. Clamped
-                // because a pixel near the rim is outside the sampled span, and a linear fit
-                // extrapolated a little is what darkens an edge that meets a wall.
-                float inv_half = 4.0 / extent;
-                float fu = clamp(dot(offset, across) * inv_half, -1.0, 1.0);
-                float fw = clamp(dot(offset, down) * inv_half, -1.0, 1.0);
-
-                // Legendre P1 on [-1,1] has <P1 P1> = 1/3, so the coefficient is three times the
-                // first moment. Nothing here solves anything: the basis is orthogonal under the
-                // sampling distribution, which is the whole reason this is affordable.
-                float cu = float(int(face_light.words[face_slot * kFaceLightWords + 2u])) * inv;
-                float cw = float(int(face_light.words[face_slot * kFaceLightWords + 3u])) * inv;
-
-                // Believe a gradient only as far as it stands clear of its own error.
-                //
-                // A first moment is much noisier than the mean it rides on. The mean of N samples
-                // has a standard error of sqrt(0.25/N); a moment against u, which runs over
-                // [-1, 1] with an average of nought, has about sqrt(1/3N) and is then multiplied
-                // by three -- some three and a half times the mean's error, and it lands as a TILT
-                // across the face rather than as a level. On a flat wall, where the true gradient
-                // is nought, that tilt is pure invention: each face leans a different way and
-                // neighbours disagree at their shared edge. Measured by turning the term off, it
-                // was **71%** of all the roughness left in the picture (3.752 of 255 against
-                // 1.076).
-                //
-                // So each coefficient is shrunk by how much of it survives its own variance --
-                // the positive part of one minus the noise power over the signal power, which is
-                // the standard estimator for exactly this question. A flat wall measures a
-                // gradient the size of its error and keeps none of it. A crease measures one far
-                // larger and keeps nearly all of it. Nothing here knows which it is looking at,
-                // which is the same property the fit itself has.
-                // Smoothly, and that is not a detail. The positive-part form -- one minus noise
-                // over signal, floored at nought -- was tried first and made the picture three
-                // times rougher than leaving the gradient alone: it is a threshold, so two
-                // neighbouring faces whose coefficients straddle it keep wildly different amounts
-                // and disagree at their shared edge by more than the noise ever did. A hard
-                // decision taken per face is a new discontinuity per face. This form is continuous
-                // in the coefficient, so a face near the threshold is near its neighbour.
-                float noise_power = 1.0 / (3.0 * float(sky_samples));
-                float keep_u = (cu * cu) / (cu * cu + noise_power);
-                float keep_w = (cw * cw) / (cw * cw + noise_power);
-                float occluded = mean + 3.0 * (cu * keep_u * fu + cw * keep_w * fw);
-                unoccluded = 1.0 - clamp(occluded, 0.0, 1.0);
-            }
-        }
-        // How much sky this surface receives, and there is nothing under it.
-        //
-        // `kSkyAmbient` used to stand in for two different things at once — light arriving from the
-        // dome, and light bounced off something else in the room — which is why taking the second
-        // away by multiplying the whole constant by measured sky visibility sent the enclosed camera
-        // to near black: correct about the sky, wrong about the room. The second thing is measured
-        // now (R9's bounce, added below), so this is the sky and only the sky, and where a face can
-        // see none of it this is nought.
-        //
-        // Multiplied, not averaged, and each appears exactly once. The far field says how much of the
-        // dome is there to be seen; the near field says how much of what is left is shut out by
-        // whatever is within a metre. Applying either twice double-darkens every crease, and that
-        // failure looks like a taste problem rather than like a bug.
-        float sees_sky = face_sky_visibility(open_sky, unoccluded) * kSkyAmbient;
-        // ...and the same two numbers for the air in front of this surface, which is the whole of
-        // what stops fog glowing in a room the sun and the sky cannot reach.
-        media_sun_reach = sun_visible;
-        media_sky_reach = face_sky_visibility(open_sky, unoccluded);
-        // Over PI, and leaving it out is what blew the building white while the sky stayed dark.
-        //
-        // A Lambertian surface lit by an irradiance E reflects albedo * E / PI as RADIANCE. Dropping
-        // the divide makes every lit surface three times brighter than it should be relative to the
-        // sky, which is already radiance and needs no such conversion. The exposure then has to be
-        // pulled down to stop the walls saturating, and pulling it down is what left the sky navy.
-        // The two are the same fault seen twice.
-        // ...and the bounce, which is a RADIANCE MEAN and so is added after the divide rather than
-        // inside it: the irradiance it stands for is PI times it, and the two PIs cancel. See
-        // face_outgoing_radiance in face_terms.glsl, which is the same arithmetic and is what the
-        // gathering ray reads a surface with — one function, two callers, so the light this frame is
-        // drawn with and the light the next bounce is computed from cannot drift apart.
-
-        // ---- R4c: the lobe, which is what stops a metal reading as coloured chalk -------------
-        //
-        // Everything above this line treats the surface as Lambertian. The two bytes R4a put on the
-        // face say how much of that is true: a metal reflects nothing diffusely and everything in a
-        // lobe, and the split between the two is `metalness` read as a quantity.
-        //
-        // Three things happen, and the third is what a player sees first:
-        //
-        //   the DIFFUSE loses the metal's share, so bronze stops being brown chalk;
-        //   the ENVIRONMENT comes back along the mirror direction, out of the bins the face
-        //   measured with the rays it was already casting -- or, where a face holds no block, out
-        //   of the hemispherical mean it stores anyway, which is the same lobe with one bin in it;
-        //   the SUN comes back through the same lobe, which needs no storage at all because the
-        //   face has already measured what fraction of the disc it can see. That is the highlight
-        //   that slides across a door as you walk past it.
-        //
-        // # It is mixed in by how far the environment behind it is measured, and that is not caution
-        //
-        // A face that has taken no gathering rays has not found its surroundings dark, it has not
-        // looked -- the same sentence `bounce_known` above already carries. Reducing its diffuse on
-        // the strength of a material it has and an environment it has not would draw a black door
-        // for the second it takes to converge, which is R9d's flash arriving through a fifth door.
-        // So the whole of R4c ramps in on `bounce_confidence`, and a face with nothing measured is
-        // drawn exactly as this pass drew it before the stage existed.
-        const vec3 albedo = colour;
-        vec3 specular = vec3(0.0);
-        float lobe_share = 0.0;
-        // How much of what arrives is turned away by the surface before it ever reaches the
-        // diffuse under it. See the assignment below.
-        vec3 turned_away = vec3(0.0);
-        uint material = 0u;
-        if (face_slot < face_material.words.length()) material = face_material.words[face_slot];
-        if ((material & kFaceMaterialKnown) != 0u) {
-            const uint rough = material & 0xFFu;
-            const uint metal = (material >> 8u) & 0xFFu;
-            lobe_share = bounce_confidence;
-            if (lobe_share > 0.0) {
-                // ---- ONE DIRECTION FOR THE WHOLE FACE, and that is a rule rather than a saving --
-                //
-                // **Reported from playing: the reflective floor was drawn with a gradient across
-                // every voxel face, and a face has to be one colour.**
-                //
-                // The lobe was being evaluated per PIXEL — the direction back to the eye differs a
-                // little across a 3 cm face, so the bin it reads, the bilinear blend between bins
-                // and the Fresnel all differed a little too, and what that draws is a smooth ramp
-                // over each face with a step at every face boundary. It is the one thing a flat
-                // voxel face must not do, and it is also the one term in this pass that was
-                // ignoring §1: light is worked out ON THE FACE, and a pixel READS it.
-                //
-                // So the direction is taken from the face's own centre to the eye. Every pixel on
-                // the face computes the same one, the face comes out flat, and it is cheaper —
-                // the arithmetic no longer depends on where in the face the pixel is.
-                //
-                // The AMBIENT term below still varies within a face on purpose (R10c fits a linear
-                // gradient to the near field from moments its own samples already carry). The two
-                // are not the same claim: that gradient is a MEASUREMENT of how occlusion varies
-                // across the voxel, and this was an artefact of evaluating a per-face quantity at a
-                // per-pixel point.
-                const Face lobe_face = faces.items[face_slot];
-                const float lobe_extent = float(1u << (lobe_face.packed & 0xFFu));
-                const vec3 lobe_centre =
-                    vec3(ivec3(lobe_face.x, lobe_face.y, lobe_face.z)) * lobe_extent +
-                    vec3(lobe_extent * 0.5) - vec3(push.camera_chunk.xyz * kChunkEdge);
-                const vec3 view = normalize(push.origin.xyz - lobe_centre);
-                const vec3 f0 = face_f0_of(albedo, metal);
-                const float alpha = face_alpha_of(rough);
-                const float n_dot_v = max(dot(normal, view), 1e-4);
-
-                // The environment, along the direction the eye is looking down. The bins if this
-                // face holds a block and the hemispherical mean if it does not, and the second is
-                // not a fallback in the sense of being worse than nothing -- it is what a fully
-                // rough surface's lobe genuinely is.
-                vec3 reflected = bounce;
-                const uint block = lobe_block_of(face_slot);
-                if (block != kNoLobe) {
-                    vec3 side;
-                    vec3 other;
-                    face_lobe_frame(normal, side, other);
-                    vec3 found;
-                    // ---- indexed by the direction the EYE IS IN, not by the mirror of it -----
-                    //
-                    // **Reported before it was found, and then proved by a controlled test**:
-                    // *"something red on the right doesnt reflect on the right of the material but
-                    // on its left"*. A bright slab was placed beside the great bronze door, once on
-                    // each side, and photographed: with the slab on the RIGHT the door brightened
-                    // on the LEFT, and with it on the left the door brightened on the right. The
-                    // reflection was mirrored.
-                    //
-                    // A bin holds what an eye at that bin's direction SEES — `lobe_cast` already
-                    // aims at the mirror of the bin, which is where the one mirroring belongs.
-                    // Indexing the read with `reflect(dir, normal)` mirrored a second time, and a
-                    // second mirroring about the normal is the map (dx, dy) -> (-dx, -dy): the
-                    // hemi-octahedral square turned a half turn, which is a reflection flipped left
-                    // for right AND top for bottom. It is invisible head on, because a direction
-                    // and its mirror coincide at the normal, and it grows with the angle — so the
-                    // one view where a reflection is worth looking at is the one where it is most
-                    // wrong.
-                    //
-                    // **This was reverted once, and the reason it was reverted is worth keeping.**
-                    // Fixing it makes the gilt paterae on the frieze DARKER, which read as a
-                    // regression and was treated as one. It is not: they are under the portico
-                    // soffit, the direction they correctly reflect is the dark ceiling, and the
-                    // gold they had been showing was the sunlit floor arriving through the mirrored
-                    // lookup. A wrong reflection that flatters a surface is still wrong, and only
-                    // the controlled test could tell the two apart — `face_lobe_frame`'s comment
-                    // says a fault of this shape "looks very nearly right", and it looked BETTER
-                    // than right, which is worse. D598.
-                    const uint state = face_lobe.words[face_lobe_state_at(block)];
-                    if (lobe_radiance(block, face_lobe_bins_of(state), face_lobe_side_of(state),
-                                      face_lobe_at(view, normal, side, other), found)) {
-                        reflected = found;
-                    }
-                }
-                specular = face_lobe_environment(f0, n_dot_v, reflected);
-                specular += face_lobe_sun(f0, normal, view, trace.sun.xyz, alpha, sun_visible) *
-                            sun_radiance();
-
-                // ---- and the LAMPS through the same lobe, which is what polish looks like ----
-                //
-                // A polished metal in a dim room is dark with a few small brilliant images of
-                // whatever is emitting, and those images are what the eye reads as polish. Until
-                // now the sconces reached a metal's diffuse and never its specular, because the
-                // face stores their IRRADIANCE and an integral has no direction left in it.
-                // `kFaceLampDir` is the direction, kept beside it for one word.
-                //
-                // Evaluated against the MATERIAL's roughness and not the bins', exactly as the
-                // sun's highlight is — so gilt gets a 3.6 degree highlight where the stored
-                // environment is quantised to 13.5. A point source needs a direction, not a
-                // resolution, which is why this reaches "polished" where four times the bins could
-                // not (D599).
-                //
-                // The stored irradiance already carries the cosine at the surface, so dividing by
-                // it recovers the normal-incidence figure `face_lobe_sun` expects — the same
-                // quantity `sun_radiance()` is on the line above. Floored, because a fitting almost
-                // edge-on to the face would otherwise divide by nearly nought and put a firefly
-                // exactly where the term is least justified.
-                const uint lamp_dir_word =
-                    face_light.words[face_slot * kFaceLightWords + kFaceLampDir];
-                if (lamp_n > 0u && face_oct_known(lamp_dir_word)) {
-                    const vec3 to_lamp = face_oct_unpack(lamp_dir_word);
-                    const float lamp_cos = max(dot(normal, to_lamp), 0.15);
-                    specular += face_lobe_sun(f0, normal, view, to_lamp, alpha, 1.0) *
-                                (lamp / lamp_cos);
-                }
-                specular *= lobe_share;
-                g_lobe_specular = specular;
-
-                // ---- and what the lobe takes, the diffuse does not get --------------------
-                //
-                // **This is what stood between the water and a visible reflection.** Fresnel says
-                // a dielectric turns away four per cent of what falls on it head on and very
-                // nearly all of it at a glancing angle: looking along a pool at nine degrees, 45%
-                // of what arrives never reaches the water at all. R4c took that share for the
-                // lobe and left the diffuse whole, so a basin was a strong blue Lambertian surface
-                // with a reflection added on top — the reflection was there, measured and correct,
-                // and it was under a layer of blue that physically should not have been there.
-                //
-                // It matters far more for a dielectric than for a metal, which is why R4c
-                // recorded skipping it as a four-per-cent simplification and was wrong: four per
-                // cent is the head-on figure, and the whole point of a reflection is that you see
-                // it at a glancing angle. A metal has almost no diffuse to lose either way.
-                //
-                // # The HEMISPHERICAL AVERAGE and not the view angle, and the first version was
-                // the view angle
-                //
-                // Taking Schlick at `n_dot_v` and subtracting it from the diffuse is the obvious
-                // reading of "what the lobe takes, the diffuse does not get", and it is wrong twice
-                // over. It sent the gilt paterae on the frieze **grey**: they are seen from below at
-                // a glancing angle, where that Fresnel approaches one, so almost the whole diffuse
-                // went — and what should have replaced it is a mirror-sharp reflection that
-                // thirty-six bins cannot resolve, so nothing came back and the gold went out.
-                //
-                // The physics says the same thing the picture did. What reaches the diffuse under a
-                // surface is what was not turned away **on the way IN**, integrated over the whole
-                // incident hemisphere, and that is a property of the material rather than of where
-                // the eye happens to be. The average of Schlick over the hemisphere is
-                // F0 + (1 - F0)/21, which is about nine per cent for a dielectric and nearly all of
-                // it for a metal — where `face_diffuse_share` has already taken the diffuse away in
-                // any case.
-                //
-                // The view-angle Fresnel is still exactly right for the SPECULAR above, which is
-                // what leaves along one direction. One quantity, two averages, and using the wrong
-                // one of the two is a surface that goes dark exactly where a reflection should
-                // appear.
-                //
-                // The gathering ray does not apply this, and now it barely needs to: what it misses
-                // is nine per cent of a dielectric's diffuse rather than a view-dependent share.
-                turned_away = mix(f0, vec3(1.0), 1.0 / 21.0) * lobe_share;
-            }
-        }
-
-        // The diffuse albedo, which is the whole of it for stone and none of it for a mirror. Mixed
-        // by the same ramp, so the two halves of the energy split arrive together — a frame in
-        // which the diffuse had been reduced and the specular had not is a frame with a hole in it.
-        colour = albedo * mix(1.0, face_diffuse_share((material >> 8u) & 0xFFu), lobe_share) *
-                     (vec3(1.0) - turned_away) *
-                     ((sun_radiance() * lambert + sky_radiance(normal) * sees_sky + lamp) *
-                          (1.0 / kPi) +
-                      bounce * bounce_confidence) +
-                 specular;
-
-        // And what the surface gives off, added AFTER the albedo multiply because emission is not
-        // reflected light: a lamp's own face is bright whether or not anything is shining on it.
-        colour += emission;
-
-        // The distance fade that used to be here is gone. It mixed towards the sky by a hand-picked
-        // curve over four thousand voxels, which is aerial perspective done by eye -- and the air
-        // below does it from the medium's own extinction, over the distance the ray actually
-        // travelled. Keeping both would apply it twice.
-
-        // The visibility buffer carries the node's coverage â€” what fraction of it is
-        // matter â€” and it is deliberately NOT used as an alpha here.
-        //
-        // That was tried and it is wrong. Coverage is a *volumetric fill fraction*, not a
-        // screen-space one. A brick on the surface of the ground is about an eighth full
-        // and completely opaque when you look at it; blending by fill made distant crates
-        // and window frames dither into the sky. The two quantities only coincide for a
-        // node seen edge-on.
-        //
-        // Correct edge anti-aliasing needs either an opacity per face direction, or the
-        // ray to continue past a partial hit and composite what is behind. The second
-        // falls out naturally once shading is deferred to the face cache in Stage 7, so
-        // the data stays in the buffer waiting for it.
+        // The pane SECOND, so that where the two surfaces both write something shared it is the
+        // near one that survives: g_lobe_specular is read by a debug view after this, and the two
+        // reach values are blended below by how much of this pixel is really the far side.
+        colour = shade_surface(dir, packed, face_slot, t, through, media_sun_reach,
+                               media_sky_reach) +
+                 through * far_colour;
+        const float lets = (through.r + through.g + through.b) * (1.0 / 3.0);
+        media_sun_reach = mix(media_sun_reach, far_sun, lets);
+        media_sky_reach = mix(media_sky_reach, far_sky, lets);
     } else {
         colour = sky_colour(dir);
     }
@@ -1077,8 +1180,7 @@ void main() {
     // whatever the ray reached; cloud second, because the deck is in front of the air for anything
     // beyond it; the preview last, because it is a tool overlay and belongs in front of the world.
     if (push.resolution.z == 0u) {
-        colour = apply_media(colour, push.origin.xyz, dir, hit ? t : 0.0,
-                             media_sun_reach, media_sky_reach);
+        colour = apply_media(colour, push.origin.xyz, dir, air_t, media_sun_reach, media_sky_reach);
 
         // Cloud, from the full-resolution history the cloud pass keeps. Gated by the same slab
         // arithmetic the tracer uses, so a near wall is never painted over by a deck behind it.
@@ -1094,7 +1196,7 @@ void main() {
                 begins_m = max(min(to_base, to_roof), 0.0);
                 crossed = max(to_base, to_roof) > 0.0;
             }
-            float reached_m = (hit ? t : push.lens.y) / kVoxelsPerMetre;
+            float reached_m = cloud_t / kVoxelsPerMetre;
             if (crossed && reached_m > begins_m) {
                 vec4 cloud = imageLoad(in_cloud[push.motion.z > 0.5 ? 1 : 0], pixel);
                 colour = cloud.rgb + cloud.a * colour;

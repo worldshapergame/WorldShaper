@@ -29,7 +29,9 @@ build.bat
 ```
 
 `build.bat clean` throws the build directory away first. `test.bat` runs the unit tests, a
-headless world audit and a headless streaming audit. `run.bat` starts the game.
+headless world audit and a node pool audit — one small screenshot, taken only so that the
+three checks which run inside every frame get a frame to run inside. `run.bat` starts the
+game.
 
 ## Controls
 

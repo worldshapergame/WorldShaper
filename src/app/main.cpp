@@ -421,9 +421,14 @@ struct Options {
     bool light_probe = true;
     // Wall-clock deadline for a scripted run, in seconds. A frame count cannot bound a run whose
     // frames are the thing that got slow, so every scripted run has one whether it asked or not:
-    // this is filled in from kDefaultMaxSeconds after parsing when a screenshot, a tick audit, a
-    // stream audit or a benchmark was asked for. `--max-seconds 0` is the way to say "no deadline",
-    // and it has to be said out loud.
+    // this is filled in from kDefaultMaxSeconds after parsing when a screenshot, a tick audit or a
+    // benchmark was asked for. `--max-seconds 0` is the way to say "no deadline", and it has to be
+    // said out loud.
+    //
+    // Note what that sentence does NOT cover: a run that asked for no scripted mode at all, which
+    // is the game, which is supposed to stay open. So a scripted run whose mode was misspelt is a
+    // game window with no deadline, and it will sit there for ever. That is exactly how `test.bat`
+    // spent months not running its third stage (D605).
     //
     // It is not a safety net, it is the reporting path. A build that makes the renderer ten times
     // slower is exactly the one whose measurement matters most, and it is the one that used to
@@ -1659,6 +1664,12 @@ private:
     // Which face store slot each pixel's surface lives in. One word a pixel, resolved by the
     // marcher where the key is already known and read by the composite.
     GpuImage face_image_;
+    // R4d. What the primary ray reached AFTER passing through transmissive matter — the world
+    // behind a window, packed the way the visibility buffer packs the surface in front of it. Four
+    // words a pixel, written only where the ray met glass and zero everywhere else, which is how
+    // the composite knows whether there is a second layer to blend at all. See shaders/
+    // visibility.comp for the packing and shaders/resolve.comp for what it does with it.
+    GpuImage behind_image_;
     GpuImage render_target_;
     GpuImage depth_target_;
     VkDescriptorSetLayout resolve_layout_ = VK_NULL_HANDLE;
@@ -1936,6 +1947,10 @@ bool Application::create_render_target(u32 width, u32 height) {
     visibility_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_UINT,
                                              "visibility");
     face_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32_UINT, "face slots");
+    // R4d's second layer. Same format as the visibility buffer because it carries the same kind of
+    // answer about a different surface: what the ray reached once the glass let it past.
+    behind_image_ = create_storage_image(device_, width, height, VK_FORMAT_R32G32B32A32_UINT,
+                                         "behind glass");
     render_target_ = create_storage_image(device_, width, height, VK_FORMAT_R8G8B8A8_UNORM,
                                           "render_target");
     depth_target_ = create_storage_image(device_, width, height, VK_FORMAT_R32_SFLOAT,
@@ -1972,6 +1987,9 @@ bool Application::create_render_target(u32 width, u32 height) {
     VkDescriptorImageInfo face_info{};
     face_info.imageView = face_image_.view;
     face_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorImageInfo behind_info{};
+    behind_info.imageView = behind_image_.view;
+    behind_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     VkDescriptorImageInfo cloud_info[2]{};
     cloud_info[0].imageView = cloud_image_.view;
@@ -1979,9 +1997,9 @@ bool Application::create_render_target(u32 width, u32 height) {
     cloud_info[1].imageView = cloud_image_prev_.view;
     cloud_info[1].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    // Six, not eleven: the chunk marcher's set is gone with R1e and the cloud pass does not
+    // Seven, not eleven: the chunk marcher's set is gone with R1e and the cloud pass does not
     // write a colour image, so what is left is the composite's pair, the cloud pair each way,
-    // and the face-slot image.
+    // and the face-slot and behind-glass images.
     //
     // They were once missing, and the failure was silent in the worst way. The node pipeline ran,
     // did all its work, and stored its result into an unwritten descriptor - so the visibility
@@ -1996,7 +2014,7 @@ bool Application::create_render_target(u32 width, u32 height) {
     //
     // `write_count` below is a literal beside the array, which is the shape D518 caught: removing
     // a write means renumbering everything after it AND the count, and only `--validation` says so.
-    VkWriteDescriptorSet writes[9]{};
+    VkWriteDescriptorSet writes[11]{};
     for (VkWriteDescriptorSet& write : writes) {
         write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         write.descriptorCount = 1;
@@ -2040,18 +2058,25 @@ bool Application::create_render_target(u32 width, u32 height) {
     writes[5].dstSet = resolve_set_;
     writes[5].dstBinding = 7;
     writes[5].pImageInfo = &face_info;
-    u32 write_count = 6;
+    // R4d's second layer, to the composite for the same reason and on the same terms.
+    writes[6].dstSet = resolve_set_;
+    writes[6].dstBinding = 14;
+    writes[6].pImageInfo = &behind_info;
+    u32 write_count = 7;
     if (node_set_ != VK_NULL_HANDLE) {
-        writes[6].dstSet = node_set_;
-        writes[6].dstBinding = 0;
-        writes[6].pImageInfo = &vis_info;
         writes[7].dstSet = node_set_;
-        writes[7].dstBinding = 1;
-        writes[7].pImageInfo = &depth_info;
+        writes[7].dstBinding = 0;
+        writes[7].pImageInfo = &vis_info;
         writes[8].dstSet = node_set_;
-        writes[8].dstBinding = 11;
-        writes[8].pImageInfo = &face_info;
-        write_count = 9;
+        writes[8].dstBinding = 1;
+        writes[8].pImageInfo = &depth_info;
+        writes[9].dstSet = node_set_;
+        writes[9].dstBinding = 11;
+        writes[9].pImageInfo = &face_info;
+        writes[10].dstSet = node_set_;
+        writes[10].dstBinding = 26;
+        writes[10].pImageInfo = &behind_info;
+        write_count = 11;
     }
     vkUpdateDescriptorSets(device_.handle(), write_count, writes, 0, nullptr);
     return true;
@@ -2060,6 +2085,7 @@ bool Application::create_render_target(u32 width, u32 height) {
 void Application::destroy_render_target() {
     if (visibility_image_.valid()) destroy_image(device_, visibility_image_);
     if (face_image_.valid()) destroy_image(device_, face_image_);
+    if (behind_image_.valid()) destroy_image(device_, behind_image_);
     if (render_target_.valid()) destroy_image(device_, render_target_);
     if (depth_target_.valid()) destroy_image(device_, depth_target_);
     // The cloud history and its march buffer, created here with the rest and until now not
@@ -4683,18 +4709,24 @@ void Application::record_frame(f32 time_seconds) {
                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT);
     }
 
-    // The face slots, which are not in that loop, because only one of the two marchers writes
-    // them. Discard-and-rewrite is right for an image every frame overwrites in full; this one is
-    // overwritten in full only while the node pool is marching. Toggle to the chunk grid, or open
-    // the path tracer, and the composite would be reading a face index the driver was free to
-    // invent. So: transitioned once, and then CLEARED on the frames nothing fills it, which says
-    // "no face here" in the one value the composite already knows how to ignore.
+    // The face slots and the behind-glass layer, which are not in that loop, because only one of
+    // the two marchers writes them. Discard-and-rewrite is right for an image every frame
+    // overwrites in full; these two are overwritten in full only while the node pool is marching.
+    // Toggle to the chunk grid, or open the path tracer, and the composite would be reading a face
+    // index the driver was free to invent. So: transitioned once, and then CLEARED on the frames
+    // nothing fills them, which says "no face here" and "nothing behind here" in the two values the
+    // composite already knows how to ignore.
+    //
+    // The two travel together because the same shader writes both in the same invocation: what is
+    // true of one's lifetime is true of the other's.
     constexpr bool node_writes_faces = true;
     if (!face_ready_) {
-        image_barrier(cmd, face_image_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                      VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-                      VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                      VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+        for (const GpuImage* image : {&face_image_, &behind_image_}) {
+            image_barrier(cmd, image->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                          VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                          VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+        }
         face_ready_ = true;
         face_cleared_ = false;
     }
@@ -4706,6 +4738,10 @@ void Application::record_frame(f32 time_seconds) {
         clear.uint32[0] = 0xFFFFFFFFu;   // kNoFace, as shaders/node.glsl defines it
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdClearColorImage(cmd, face_image_.image, VK_IMAGE_LAYOUT_GENERAL, &clear, 1, &range);
+        // And all-zero for the behind layer, which is how "no second surface" is spelled.
+        VkClearColorValue behind_clear{};
+        vkCmdClearColorImage(cmd, behind_image_.image, VK_IMAGE_LAYOUT_GENERAL, &behind_clear, 1,
+                             &range);
         VkMemoryBarrier2 face_clear{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
         face_clear.srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT;
         face_clear.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
@@ -5804,7 +5840,7 @@ int Application::play(const Options& options) {
     // have to care which pass included them.
     // Nine now: 6 is the face store and 7 is the face-slot image, which together are how the
     // picture stops lighting itself per pixel and starts reading light off the surface.
-    VkDescriptorSetLayoutBinding resolve_bindings[14]{};
+    VkDescriptorSetLayoutBinding resolve_bindings[15]{};
     for (u32 i = 0; i < 6; ++i) {
         resolve_bindings[i].binding = i;
         // 0-1 images, 2-3 the type and visual tables, 4 the parameter block, 5 the
@@ -5849,16 +5885,25 @@ int Application::play(const Options& options) {
     resolve_bindings[13].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     resolve_bindings[13].descriptorCount = 1;
     resolve_bindings[13].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    resolve_bindings[14].binding = 14;   // ...and what the ray reached BEHIND it (R4d)
+    resolve_bindings[14].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    resolve_bindings[14].descriptorCount = 1;
+    resolve_bindings[14].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     VkDescriptorSetLayoutCreateInfo resolve_layout_info{
         VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    resolve_layout_info.bindingCount = 14;
+    resolve_layout_info.bindingCount = 15;
     resolve_layout_info.pBindings = resolve_bindings;
     WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &resolve_layout_info, nullptr,
                                       &resolve_layout_));
 
     const VkDescriptorPoolSize pool_sizes[]{
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 8},
+        // Storage images, counted rather than guessed, because the old figure of 8 was already
+        // short of what the three sets ask for and had survived only on a driver's willingness to
+        // hand out more than the pool promised. Resolve takes six (the visibility image in, the
+        // colour out, the face slots, two clouds, and R4d's behind-glass layer), the cloud pass
+        // three, the node pool four (visibility, depth, face slots, behind glass) — thirteen.
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 24},
         // The two sets left here bind the type tables, the clip, the face store and its light.
         // Counted generously: running out of pool is a failure at start-up with a message
         // nobody connects to the binding they just added.
@@ -6108,19 +6153,21 @@ int Application::play(const Options& options) {
         // bindings 2 and 3. Until R4 no pass on this set had any reason to read them, which is why
         // the light pass reads the marcher's folded average colour for an albedo and has never been
         // able to ask about a roughness at all.
-        VkDescriptorSetLayoutBinding node_bindings[26]{};
-        for (u32 i = 0; i < 26; ++i) {
+        // Twenty-five: 26 is the third image this set writes -- what the primary ray reached once
+        // transmissive matter let it past. R4d.
+        VkDescriptorSetLayoutBinding node_bindings[27]{};
+        for (u32 i = 0; i < 27; ++i) {
             node_bindings[i].binding = i;
             node_bindings[i].descriptorType =
-                (i < 2 || i == 11) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
-                : (i == 8)         ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                                   : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                (i < 2 || i == 11 || i == 26) ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                : (i == 8)                    ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                              : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             node_bindings[i].descriptorCount = 1;
             node_bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         }
         VkDescriptorSetLayoutCreateInfo node_layout_info{
             VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        node_layout_info.bindingCount = 26;
+        node_layout_info.bindingCount = 27;
         node_layout_info.pBindings = node_bindings;
         WS_VK(vkCreateDescriptorSetLayout(device_.handle(), &node_layout_info, nullptr,
                                           &node_layout_));
@@ -6175,7 +6222,7 @@ int Application::play(const Options& options) {
         node_writes[22].pBufferInfo = &node_params;
         vkUpdateDescriptorSets(device_.handle(), 23, node_writes, 0, nullptr);
 
-        // And the two output images, which the render target owns. It was created before this
+        // And the output images, which the render target owns. It was created before this
         // set existed, so its own binding pass skipped them.
         VkDescriptorImageInfo node_vis{};
         node_vis.imageView = visibility_image_.view;
@@ -6183,7 +6230,7 @@ int Application::play(const Options& options) {
         VkDescriptorImageInfo node_depth{};
         node_depth.imageView = depth_target_.view;
         node_depth.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        VkWriteDescriptorSet node_images[3]{};
+        VkWriteDescriptorSet node_images[4]{};
         for (u32 i = 0; i < 2; ++i) {
             node_images[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             node_images[i].dstSet = node_set_;
@@ -6202,7 +6249,16 @@ int Application::play(const Options& options) {
         node_images[2].descriptorCount = 1;
         node_images[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         node_images[2].pImageInfo = &node_face;
-        vkUpdateDescriptorSets(device_.handle(), 3, node_images, 0, nullptr);
+        VkDescriptorImageInfo node_behind{};
+        node_behind.imageView = behind_image_.view;
+        node_behind.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        node_images[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        node_images[3].dstSet = node_set_;
+        node_images[3].dstBinding = 26;
+        node_images[3].descriptorCount = 1;
+        node_images[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        node_images[3].pImageInfo = &node_behind;
+        vkUpdateDescriptorSets(device_.handle(), 4, node_images, 0, nullptr);
 
         const std::filesystem::path node_spirv = shaders / "visibility.comp.spv";
         const std::filesystem::path node_source =

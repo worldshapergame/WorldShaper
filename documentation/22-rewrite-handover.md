@@ -173,7 +173,7 @@ written for the person the work is for, so it is the one to keep current.
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
 | R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
-| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a is done, both halves (D582, D583, D591), **R4c** is in (D591, D592) and so is **R4b's ray** (D594). A face resolves what it is made of once; the composite then splits what leaves it by metalness, so the metals stop being Lambertian — bronze, gilt, lead and copper read as metal rather than chalk. The sun comes back through a GGX lobe with no storage; the environment out of **sixteen outgoing bins** in a pool of 65,536 blocks (8.7 MB) that faces HOLD, filled by the gathering ray they were already casting. A face that holds a lobe then casts its own ray, aimed into the cone each bin gathers from, which is what fills the grazing bins a reflection is read out of — bronze reads as deep metal with panel structure where it was a flat wash, and the glass gains a sky-coloured sheen. Costs **nothing measurable settled** and **1.5 ms flying**. **What is still owed**: the bin count does not follow pixel coverage, and the lobe is visibly mottled face to face at 24 samples a bin, which is R5's `face_denoise` and is the next thing this stage wants. R4d not started |
+| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a is done, both halves (D582, D583, D591), **R4c** is in (D591, D592) and so is **R4b's ray** (D594). A face resolves what it is made of once; the composite then splits what leaves it by metalness, so the metals stop being Lambertian — bronze, gilt, lead and copper read as metal rather than chalk. The sun comes back through a GGX lobe with no storage; the environment out of **sixteen outgoing bins** in a pool of 65,536 blocks (8.7 MB) that faces HOLD, filled by the gathering ray they were already casting. A face that holds a lobe then casts its own ray, aimed into the cone each bin gathers from, which is what fills the grazing bins a reflection is read out of — bronze reads as deep metal with panel structure where it was a flat wash, and the glass gains a sky-coloured sheen. Costs **nothing measurable settled** and **1.5 ms flying**. **What is still owed**: the bin count does not follow pixel coverage, and the lobe is visibly mottled face to face at 24 samples a bin, which is R5's `face_denoise` and is the next thing this stage wants. **R4d is HALF in — transmission, not refraction** (D601–D604): a face resolves what it lets past and stores it, the sun and sky rays stop being blocked by a pane and are tinted per METRE rather than per voxel, and the primary ray marches on behind the glass so a window is fifteen glazed lights with the bars across them instead of one milky panel. **+0.246 ms (+4.8%) at a camera facing a window**, nothing measurable outdoors or enclosed. **Refraction itself is not started**: `ior` is carried and read by no ray, nothing is displaced, there is no Beer-Lambert over the true path and no dispersion |
 | R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
 | R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
@@ -2120,6 +2120,62 @@ And the bin count still does not follow **pixel coverage**, which is D186's own 
 half of R4b that is not built. A mirror filling the screen gets the same thirty-six bins as one
 across the room.
 
+### R4d is in: light passes through a window, and so does the eye
+
+**Two commits, and the first one on its own looked finished and was not.** D602 gave the marcher a
+`see_through` flag and turned it on for the shadow, ambient, gathering and lamp rays: a window stopped
+blocking the sun, and a wing hall that had been drawn **black** by the lamp term alone became daylit —
+95.577 of 255 over 1,018,413 pixels of 1,024,000, the largest single number this stage has produced.
+D603 then found two faults in it one commit old: the tint the marcher accumulated was **read by
+nothing**, so coloured glass tinted nothing; and the attenuation was applied **per voxel** where the
+number is a property of the material, so a four-voxel pane transmitted 0.32 and the hall went dark
+again with the light meter pinned at its ceiling. Opacity is taken over a **metre** now and rooted
+down to the voxel, the same as `absorb` in the same record and for the same reason.
+
+**D604 is the other half: the primary ray.** The flag stayed OFF for it deliberately — a face is
+claimed where a pixel lands, so a window the primary ray passed straight through would have no face,
+no sun, no lamps and none of R4c's lobe. The pane was still drawn as a flat milky panel. What that
+needed was the visibility buffer carrying **two** surfaces, and it now does: one extra `node_march`
+per glass pixel with `see_through` TRUE, into a new `rgba32ui` image on binding 26 that
+`visibility.comp` writes and `resolve.comp` alone reads. `out_face` stayed r32ui — widening it would
+charge every pixel in the frame for the few per cent with glass in front of them.
+
+**Both surfaces go down the same shading path.** `resolve.comp`'s 533-line surface shading was lifted
+out of `main` into `shade_surface` and is called twice, the far layer first so the near pane wins the
+shared lobe state. Faking the far layer instead gives a window you can see through onto a world lit
+differently from the one beside it, which reads worse than the panel did. The composite is
+`(1−T)·diffuse + specular + emission + T·behind` — **only the diffuse term is attenuated**, because a
+reflection happens at the face and a lamp's glow is emitted by it.
+
+**In game:** the window that was one frosted panel is fifteen separate lights in a five-by-three
+grid, with the wooden glazing bars and transoms reading across them, daylight through the panes and a
+second window at the right edge showing through as well.
+
+**What it costs**, both arms at the same world hash, settled, 1280×800 quality 7:
+
+| camera | before | after | mean of 255 | pixels past 8 |
+|---|---|---|---|---|
+| **window** `13.5,3.6,5.0,90,0` | **5.147 ms** | **5.393 ms** (+4.8%) | 19.85 | 707,823 of 1,024,000 |
+| outdoor | 4.240 | 4.172 (noise) | 0.16 | 2,549 |
+| enclosed | 6.603 | 6.603 | 2.42 | 33,949 |
+
+All of it lands in the visibility pass, 0.737 → 0.966 ms, and it is **charged per glass pixel**: the
+two cameras with almost no pane on screen cannot tell the arms apart. That camera is not in
+`tools\_grid.ps1` — none of the seven canonical views has a pane close enough to judge, so it is
+written down in D604.
+
+**Two traps this stage cost, both in the measuring and not in the code.** `--no-see-through` is **not
+a control arm**: it disables the light rays' transmission too, so the room comes back black and cheap
+for reasons that have nothing to do with the change. Stash the three files, rebuild, measure, pop.
+And the **clip cache advances between runs** — it went 9 of 18, 17 of 18, 18 of 18 across one session
+with three different `content` hashes, and two runs at different hashes are not comparable at all.
+
+**What R4d still owes:** there is no Beer-Lambert over the true path length, only opacity per metre
+rooted to the voxel, and the `absorb` bytes are unread. Refraction bends nothing — `ior=1.5` is
+carried by the material and used by no ray, so a pane displaces nothing behind it. And if `through`
+falls below the marcher's 0.02 continuation threshold inside the glass, the second march stops on a
+deeper glass voxel; that layer is then weighted at most 0.02, so the error is bounded at two per cent.
+
 ### Where to start now, and the two orders are not the same order
 
 **By the plan, the next stage is R4 — and R4's own prerequisite is R9.** §8 puts R4 directional
@@ -2637,8 +2693,18 @@ networking, which the renderer never sees.
 
 ## 7. Commands
 
+**`.\test.bat` was not running its third stage, and now is (D605).** That stage invoked
+`--stream-frames 300`, which R1e deleted; an unknown argument is only a warning and the wall-clock
+deadline only binds a run that asked for a scripted mode, so it opened the game and sat on the title
+screen for ever while the batch still printed `All tests passed`. It is very likely why the overnight
+loop was killed at sixty minutes twice. It now takes one 640×400 screenshot, which is how the node
+pool's three audits are reached, and requires all four of their phrases to appear. **If you add an
+audit that logs rather than returns, add its phrase to the `call :require` list in `test.bat` or it
+is not a test.**
+
 ```powershell
 .\build.bat                          # build; NEVER pipe this to Out-Null while measuring
+.\test.bat                           # build, 527 tests, the world audit, the node pool audit
 .\build\bin\ws_tests.exe             # the whole suite - not a name filter, which silently skips
 .\tools\darkroom.ps1 [-Fog]          # a sealed room must be BLACK: brightest channel 0 of 255
 .\tools\baseline.ps1 -Out docs.csv   # the fixed grid; -Compare <csv> to diff a previous run

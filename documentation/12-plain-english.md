@@ -2205,3 +2205,45 @@ find something. The pass that draws what you see does not move at all, because i
 **Still owed**: the glass does not tint or dim what passes by distance yet — a thick pane and a thin
 one let the same amount through — and looking *at* a window still shows a pale panel rather than the
 room behind it. That second one is the bigger piece and it is where this goes next.
+
+## And now you can see through the window
+
+Both of those are done, and the second one is the one you will notice.
+
+**The tint first, because it was a smaller and more embarrassing bug.** Every glass and every liquid
+in the game carries a colour it tints light with. Nothing read it. Green bottle glass and clear
+window glass dimmed the sun by the same grey amount, and the colour sat in the material table being
+ignored. It is read now — and it is applied **per metre travelled**, not per voxel crossed, which is
+not the same thing at all. A voxel is a tenth of a metre here, so tinting once per voxel made every
+pane ten times too dark; and worse, it meant the same window would tint differently depending on
+which detail level the ray happened to cross it at. Distance is a real quantity, so it gets measured
+in a real unit.
+
+**Then the eye.** Until now the ray from your eye stopped dead on glass, which is why a window read
+as a flat milky panel — the pane's own surface light and nothing behind it. It now does what the
+light rays already did: it works out the pane, and then carries on behind it and works out whatever
+it lands on next, and blends the two by how much the glass lets past.
+
+Standing in front of one of the tall windows, before and after: it was one pale rectangle. It is now
+**fifteen separate lights in a five-by-three grid, with the tan wooden glazing bars and the transom
+across them**, daylight coming through the panes, and the second window at the right-hand edge
+showing through as well. **707,823 pixels of 1,024,000 changed.**
+
+**What it costs, measured, same world, three cameras:**
+
+| what you are looking at | before | after | difference |
+|---|---|---|---|
+| straight at a window | 5.147 ms | 5.393 ms | **+0.246 ms, +4.8%** |
+| outdoors over the roofs | 4.240 ms | 4.172 ms | none — inside the noise |
+| enclosed room, no glass in shot | 6.603 ms | 6.603 ms | **none at all** |
+
+The whole of it is charged to the pass that traces your eye, and only on the pixels that actually
+contain glass; every other pixel takes the same path it always did. The enclosed room is the
+interesting row — the picture there **did** change, on 33,949 pixels, because daylight now reaches
+in through a window that is off the edge of the screen, and it changed for free.
+
+**Still owed, and this is now the whole of what is left in this stage**: the glass does not *bend*
+light. A window is a perfectly flat sheet you see straight through, a lens does nothing, water does
+not distort what is under it, and there is no rainbow-splitting through a prism. Every material
+already carries the number that says how much it bends light and no ray reads it yet. That is
+refraction, it is the last piece of this stage, and it is a bigger job than everything above.

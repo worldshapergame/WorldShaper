@@ -4120,3 +4120,148 @@ the primary ray never asks. 527 tests, 18.67 M assertions.
 | D603 | **The gathered and lamp radiance carry the tint** | trap 1 | It was accumulated and discarded for a commit, which is the fault this log opens by warning about |
 | D603 | **Attenuation is per METRE, rooted to the voxel** | measurement | Per voxel, a four-voxel pane transmits a third and a daylit room goes black. Opacity is a property of the material and not of the grid |
 | D603 | **The light meter caught it** | process | Pinned at its ceiling on a room that had just been lit. A number that is at its limit is saying something even when the picture is only "dark" |
+
+## D604 — R4d finishes: you can see through a window
+
+**The other half of D602.** Light had stopped being blocked by glass; the pane itself was still drawn
+as a flat milky panel, because the primary ray stops on the first surface it meets and a pixel gets
+exactly one face. This is the half D602 said needed the visibility buffer to carry two surfaces.
+
+**A glass pixel has TWO surfaces and they are shaded the same way.** The pane has a face — its own
+light, its own lamps, its R4c reflection lobe — and behind it is another surface that has all of
+those too. The temptation is to shade the near one properly and fake the far one; that gives a window
+you can see through onto a world lit differently from the one beside it, which reads worse than the
+milky panel did. So the second march runs in `visibility.comp`, one extra `node_march` with
+`see_through` TRUE, and the result goes down the same shading path as the first.
+
+**A second image, not a wider one.** `out_face` stayed r32ui; the far layer goes into a new
+`rgba32ui` image on binding 26, written by `visibility.comp` and read by `resolve.comp` and by
+nothing else. Widening `out_face` would have paid for the second surface on every pixel in the frame
+to serve the few per cent that have glass in front of them; a separate image costs the same memory
+but the marcher writes an all-zero `uvec4` and moves on. **The wire format lives in one comment in
+`visibility.comp`** and the reader says so, because a packed word with two owners is D518 waiting to
+happen:
+
+| word | bits | |
+|---|---|---|
+| `x` | 0–23 | far face slot, `0xFFFFFF` for none |
+| | 24–26 | which of the six faces |
+| | 27–31 | node level |
+| `y` | 0–23 | `type_id` when level 0, folded `colour` when above it |
+| | 24–31 | `through.r` |
+| `z` | 0–7, 8–15 | `through.g`, `through.b` |
+| | 16 | the far ray landed on something rather than sky |
+| | 17 | **a second layer exists** |
+| `w` | | far `t` as float bits, or the far plane on a miss |
+
+**One payload field for two things that are never both wanted.** `type_id` needs 21 bits
+(`kMaxTables = 2097152`), which does not fit beside a folded colour — but `type_id` is only read at
+level 0 and the folded colour only above it, so one 24-bit field carries whichever applies and the
+level says which. **Bit 17 is not redundant with a non-zero `through`**: the tint is quantised to
+eight bits a channel, so glass clear enough to round to zero would silently lose its whole far layer.
+Presence is a flag, never an inference.
+
+**Bit 17 is separate from bit 16 for the same reason.** "There is a second layer" and "the second
+layer is a surface rather than sky" are different questions, and the sky answer is the common one —
+it is what a window is usually for.
+
+**`resolve.comp`'s 533-line surface shading became a function.** `shade_surface` takes the packed
+word, the face slot, `t` and what the pane in front lets past, and returns the colour. It is the same
+code de-indented, not rewritten: the alternative was wrapping five hundred lines in a two-iteration
+loop, which changes every line of the diff to hide a change to nine. **The far layer is shaded
+FIRST** so the near pane writes the shared lobe state last and wins it.
+
+**Only the diffuse term is scaled by what gets through.** `colour = (1−T)·diffuse + specular +
+emission + T·behind`. A reflection happens AT the face and a lamp's glow is emitted BY it — neither
+is behind the glass, so neither is attenuated by it. Scaling all three is the obvious composite and
+it makes a window's reflection fade as the pane gets clearer, which is backwards.
+
+**Measured, both arms at `content 766f2fd63f1a01c4` (74 chunks, 127,198,381 solid voxels, 18 of 18),
+1280×800, quality 7, `--settle`, 30-frame GPU means, RTX 5060 Ti:**
+
+| camera | before | after | | mean of 255 | pixels past 8 |
+|---|---|---|---|---|---|
+| **window** `13.5,3.6,5.0,90,0` | **5.147 ms** | **5.393 ms** | **+0.246 (+4.8%)** | **19.85** | **707,823 of 1,024,000** |
+| outdoor | 4.240 | 4.172 | −0.068 (noise) | 0.16 | 2,549 |
+| enclosed | 6.603 | 6.603 | 0.000 | 2.42 | 33,949 |
+
+The whole cost is in the visibility pass, **0.737 → 0.966 ms**; resolve moves 0.833 → 0.852 and the
+faces pass does not move at all. **It is charged per glass pixel** — the outdoor and enclosed cameras
+have almost none on screen and cannot tell the difference. Reading the two window frames: before is
+one flat frosted panel with only the outer frame visible; after is fifteen separate lights in a
+five-by-three grid with the wooden glazing bars and transoms reading across them, daylight through
+the panes, and a second window at the right edge also showing through.
+
+**`--no-see-through` is NOT a valid cost control, and this cost half an hour.** The flag disables
+transmission for the shadow, ambient, gathering and lamp rays too (D602), so the room goes **black** —
+log-average −10.00 stops, mean visibility 0.0000, 20,738 fully shadowed faces. It measured 4.260 ms
+against 5.331, which looks like a plausible +1.07 until you notice a black room does far less work in
+the faces pass. The honest control is `git stash push -- <the three files>`, rebuild, measure, pop,
+rebuild.
+
+**And the clip cache moves under a measurement.** Each run writes back the regions it sharpened, so
+the world was `9 of 18`, then `17 of 18`, then `18 of 18` across one session with three different
+`content` hashes, and two runs at different hashes are not comparable at all. Run each arm twice and
+take the second. The window camera `13.5,3.6,5.0,90,0` is recorded here because it is not in
+`tools\_grid.ps1` and none of the seven canonical views has a pane close enough to judge.
+
+**One approximation, left in and known.** If `through` falls below the marcher's 0.02 continuation
+threshold inside the glass itself, the second march stops on a deeper glass voxel rather than on what
+is beyond it — but that layer is then weighted at most 0.02, so the error is bounded by two per cent
+of one pixel.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D604 | **A second image, not a wider `out_face`** | efficiency | Widening charges every pixel in the frame for the few per cent with glass in front of them; a separate image writes one zero word and moves on |
+| D604 | **One 24-bit payload for `type_id` or folded colour** | packing | `kMaxTables` needs 21 bits, which will not fit beside a colour — but the two are never both read, and the level says which |
+| D604 | **Presence is a flag, not an inference** | correctness | The tint is quantised to 8 bits a channel; glass clear enough to round to zero would silently lose its far layer |
+| D604 | **The far layer is shaded FIRST** | correctness | The near pane must write the shared lobe state last, because it is the surface the pixel actually landed on |
+| D604 | **Only the diffuse term is scaled** | correctness | A reflection happens at the face and a lamp's glow is emitted by it; attenuating them makes a reflection fade as the pane gets clearer |
+| D604 | **Extract to a function, do not loop** | process | A two-iteration loop re-indents five hundred lines and hides a nine-line change inside the diff |
+| D604 | **`--no-see-through` is not a control arm** | measurement | It blacks the room out by disabling the light rays too, and a black room is cheaper for reasons that have nothing to do with the change |
+| D604 | **Check `content` before comparing two runs** | measurement | The clip cache sharpens between runs; three hashes in one session, and figures across them mean nothing |
+
+## D605 — the test that had not run since R1e, and printed "All tests passed" anyway
+
+**`test.bat`'s third stage was `WorldShaper.exe --stream-frames 300`, and R1e deleted
+`--stream-frames`** along with chunk residency itself (D521–D525). Three things then lined up to hide
+that. An unknown argument is a warning, not an error (`main.cpp`, the `unknown argument '{}'` line),
+so the run kept going. The wall-clock deadline only binds runs that end by themselves — a screenshot,
+a tick audit, a benchmark — and this was now none of those, so no deadline was set. And what the
+executable does with no scripted mode asked for is **open the game**. So the stage built a 1280×720
+window, initialised Vulkan, reported `shell title ready in 477 ms`, and sat on the title screen for
+ever, at 79% of one core, doing nothing anyone had asked for.
+
+**Found by watching it do it.** The run this iteration was sampled three times over 41 minutes —
+1183 s, 1665 s, 2114 s, 3027 s of CPU, working set flat at 177 MB — which proves it was live rather
+than deadlocked; `Get-CimInstance Win32_Process` then gave the command line, and the command line was
+a flag the documentation records as deleted. After 66 minutes it was killed, and **the batch printed
+`All tests passed.`** — because `if errorlevel 1` on a process somebody else terminated does not fire
+the way you would hope, and nothing else in the stage could fail either way. The journal records the
+overnight loop being killed at 60 minutes on 2026-08-10 and again on 2026-08-13; this is almost
+certainly what it was killed for, twice.
+
+**The replacement is the audit that superseded it.** `documentation/README.md` already said what that
+is: the node pool's three checks run inside a normal frame rather than in a mode of their own, so the
+way to reach them is to take a frame. `test.bat` now takes one screenshot — 640×400, quality 4, frame
+60 — and it costs **12 seconds**, against 300 frames of a mode that no longer existed.
+
+**Two details that are the whole difference between a test and a decoration.** The audits *log*; none
+of them sets an exit code, because they run in the middle of a frame that has every intention of
+continuing. So the pass is asserted as the **presence of all four phrases** — `nodes … GPU mirror
+matches`, `leaf for leaf`, `mask for mask`, `faces … GPU mirror matches` — and not as the absence of a
+failure. That distinction is what makes a crash before the audit, or a deadline that cuts the run off,
+fail loudly instead of quietly: a dead run prints none of the four, and the exact way the old stage
+died is the way the new one now catches.
+
+And it runs with **`--no-clip-cache`**. A screenshot writes back the regions it sharpened, so a test
+run from the repo root would advance the clip cache and move the `content` hash that every renderer
+measurement in this rewrite is compared against (D604). Running the tests must not change what the
+next measurement measures.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D605 | **A screenshot, not a new headless mode** | process | The audits already run in every frame; a mode of their own is a second code path to keep true |
+| D605 | **Assert the phrases are present** | correctness | The audits log and set no exit code, so absence-of-failure passes for a run that never got that far |
+| D605 | **`--no-clip-cache` on the audit run** | measurement | Running the tests must not sharpen the world and move the `content` hash the renderer figures are compared against |
+| D605 | **An unknown argument should probably be fatal** | deferred | A warning is why this hid — making it fatal is a change to how every scripted run behaves, and it deserves its own pass over what is legitimately passed through rather than riding on this one |
