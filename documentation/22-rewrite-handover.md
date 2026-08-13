@@ -693,13 +693,29 @@ scheduling.
 sampling drops 6,361 → 4,509 ms and **the paste goes 140 → 1,607 ms** — D511–D514 from the other
 side, the background pool starving the foreground one.
 
-**And the honest ceiling.** What is left is work rather than waiting, and it is one number: the
-ladder asks the field for **3.8 M voxels** against 139 paint rules at ~8 µs each, about 32
-core-seconds, so five workers are a **6.4 s floor** — 51% of what remains. The two halvings still
-visible are a double-buffered pick (the sampler idles ~40% of elapsed waiting for frames, worth
-~12.4 → ~8 s) and **R11d**'s up-front coarse build (3.6 s). Sub-second means not evaluating a
-139-rule field per voxel on a CPU at all, which is **R12**, and this is the first hard number for
-why R12 exists.
+**The double buffer was then built and REVERTED — read D623 before proposing it again.** It works
+and is worth 9% (ladder 12,421 → 10,961 ms, wall 17.3 → 15.7 s), and it **loses 606 voxels**: the
+pick asks `refine_node_is_a_no_op`, which asks the WORLD whether there is anything to replace, and a
+node picked while a batch is in flight is judged against a world that batch has not been pasted into
+yet — so a node whose matter is about to arrive reads as empty and is marked `done` for good. R11b's
+gate caught it (`1,429,498` against `1,430,104`). **The world is only an honest witness when nothing
+is in flight over it**, and making the skip test consult the queue as well as the world is the price
+of that 9%. Delivering every landed batch rather than one a frame was worth a further 4% and made
+the settled world depend on frame timing (two runs, two hashes) — refused for trap 8/19.
+
+**So the honest ceiling, and the arithmetic of why 100× is not on this road.** The load is 17.1 s:
+about **1.1 s** of startup, **3.7 s** of up-front coarse build (sample 2,754 + paste 257 + compact
+702 — **R11d** removes all of it), and **12.4 s** of ladder, of which **6.3 s is sampling**, 0.8 s
+picking, 0.14 s pasting and ~5 s frame time. A hundredfold would be 0.84 s, which is less than the
+part that is not sampling at all.
+
+And the sampling itself is now a measured constant rather than a mystery. `--clip-file
+clips/facility.clip` prints it: **2.59 µs per shape evaluation** over a **3,744-node field**, with
+**923 nodes (25%) carrying no box** — so no ancestor of one can be culled — and **190 wide unions
+with no hierarchy** against 19 that have one, over 479 leaves. Shape is **76%** of sampling and paint
+24%. That 2.59 µs, and the 25% of the field that cannot be bounded, is where the next large multiple
+lives; it is a field problem, not a ladder problem, and **R12 (the field on the card)** is the stage
+for it. This is the first hard number the plan has for why R12 exists.
 
 #### HALF CLOSED: "huge brick blocks on top of things" — D620 bounded it, D621 closed one half
 
