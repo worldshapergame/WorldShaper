@@ -2335,6 +2335,33 @@ for months: throwing away detail you are not looking at. At the moment the game 
 everything, because throwing something away means paying to make it again. Once the card can make it
 again in a fraction of a millisecond, keeping it stops being worth anything.
 
-**Nothing above is built yet.** What has happened so far is that it was reproduced, measured,
-diagnosed, and written into the plan as steps with targets that fail if it is still true. That is
-the part that was missing.
+### Step 1 is now built, and it found something
+
+Step 1 is the measuring tool, and it does two jobs: it times how long one small piece of the world
+takes to make, at every size a piece can be; and it checks that a piece made **on its own** comes
+out exactly the same as that same piece made as part of the whole building. The second job is the
+one that can fail, and it did.
+
+**At the coarse sizes — the ones used for things far away — the two did not match.** Seventeen
+pieces out of thirty-two came out different depending on whether they had been made alone or as
+part of the building. Neither answer was right. The maker has a rule for keeping things thinner
+than one of its cells: a window bar half a cell wide would otherwise vanish rather than merely
+look thin. But when it decided a whole region was empty and skipped it wholesale, it forgot to
+allow for that rule — so it threw away regions that contained exactly those thin things. At the
+detail the game builds at today the mistake is under three centimetres wide and almost never
+happens; at the coarse sizes the new system will use, it is nearly a metre, and it happens all the
+time. Fixed, and it costs about three per cent.
+
+You will not see any of this in the game, and that is the honest answer: the building comes out
+byte for byte identical at the detail it is made at today. What it buys is that step 2 and step 3
+are now standing on a maker that gives the same answer twice.
+
+The timings, which decide how the rest is built: **one small piece takes about 1.4 milliseconds,
+and a piece with nothing in it still takes 0.2** — and almost all of that 0.2 turns out to be the
+maker re-reading the building's 139 paint rules every single time it is asked anything at all. On
+a test file with four rules the same empty piece takes 0.012. So the thing to fix before anything
+else is that the maker should read the rule book once, not once per question. Nobody knew that
+before this measurement; it is exactly what step 1 exists for.
+
+**Steps 2 to 8 are not built.** The loading bar, the blocky first minute and the chunks are all
+still there.

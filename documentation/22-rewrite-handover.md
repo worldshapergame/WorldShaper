@@ -177,7 +177,9 @@ written for the person the work is for, so it is the one to keep current.
 | R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
 | R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
-| R8 infinite detail | XL | not started |
+| R8 infinite detail | XL | not started. **Re-sized to L**: R8c and R8d moved into R11 (D612) |
+| R11 the world source | XL | **a done** (D613) — the instrument, the mapping from a node to a box and a resolution, and an agreement check that failed and found a fifteen-month-old fault in the sampler's bulk settle. One node at the leaf is **1.389 ms** against 0.213 for an empty one; the fixed cost is the paint rules and not the box. **b–h not started, and b is next.** This is the stage the loading bar is in |
+| R12 the field on the card | L | not started. R11's successor |
 
 **Weighted by those sizes, roughly a fifth to a quarter of the plan is done**, and what is done is
 the foundation rather than the feature: the marcher, its residency, and the instruments that make
@@ -427,6 +429,17 @@ failure, not a compile error.
     idle to a clock stamped by use. D554, and it is D508's lesson (`last_read_` stamped by the
     lattice rather than by a read) arriving one class along.
 
+25. **A suite that only ever asks one resolution says nothing about the others, and it will look
+    like fifteen months of agreement.** `tests/test_sample.cpp` holds a brute-force reference — ask
+    every voxel at its centre, keep a cell a feature thinner than a voxel passes through — and every
+    one of its eleven subcases compares against it **at thirty-two voxels a metre**. R11 asks for
+    eight resolutions, and the first one it asked at outside 32 failed in one line: the sampler
+    settled a box empty over cells the per-voxel rule would have kept, because the box test never
+    allowed for the rescue's own reach. The parameter that was never varied was not obscure — it is
+    the first field of `SampleSettings` — and the whole of the coarse ladder the game already ships
+    (`--clip-coarse 4`, metre 8) ran through the untested half. Ask what your tests hold FIXED, and
+    whether the thing you are about to build varies it. D613.
+
 ---
 
 ## 4b. The bug that was open here — closed, and what it teaches
@@ -548,7 +561,7 @@ the order:
 
 | | what it is | what a player sees |
 |---|---|---|
-| **R11a** | one node, sampled, **timed** — the instrument, and nothing after it may be sized without it | nothing. It is a measurement |
+| **R11a** | ~~one node, sampled, **timed**~~ — **DONE** (D613). `--sample-cost` and `tools/samplecost.ps1`; the numbers are below | nothing. It is a measurement |
 | **R11b** | the unit of refinement is a node, not a region — `plan_refine_regions` and its eighteen boxes go | detail stops arriving as slabs |
 | **R11c** | resolution is `256 / 2^level`, not one of two constants. **This is R8c** | the 8 → 32 jump from blocky to sharp goes |
 | **R11d** | nothing is sampled up front. **The headline** | no loading bar at all |
@@ -560,6 +573,47 @@ the order:
 **Do a before b, and b and c before d.** a is the instrument three later trades are against. d without
 b and c under it is spawning into an empty room that fills with big blocky boxes, which is worse than
 what is being fixed. f is last because it is the one that can lose somebody's building.
+
+#### R11a is done, and here is what it says — start at R11b
+
+`tools\samplecost.ps1` runs it in **18 seconds** and writes `documentation/baselines/r11a-sample-cost.csv`.
+Facility, eight workers, RelWithDebInfo. D613.
+
+| level | node | voxels/m | nodes with matter | one node | empty node | asking one at a time costs |
+|---|---|---|---|---|---|---|
+| 3 | 0.25 m | 32 | 269,337 | **1.389 ms** | 0.213 ms | **21.5×** |
+| 4 | 0.50 m | 16 | 42,062 | 1.857 | 0.418 | 7.9× |
+| 5 | 1.00 m | 8 | 7,558 | 2.402 | 0.531 | 5.1× |
+| 6 | 2.00 m | 4 | 1,464 | 2.462 | 0.349 | 2.7× |
+| 7 | 4.00 m | 2 | 330 | 2.324 | 0.562 | 1.1× |
+| 8 | 8.00 m | 1 | 72 | 2.502 | 0.219 | 1.2× |
+
+**Three things to know before writing a line of R11b.**
+
+1. **The fixed cost of a sample is the PAINT RULES, not the box.** An empty node — arrive, answer
+   "nothing here", leave — is **0.213 ms on the facility's 139 rules and 0.012 ms on a clip with
+   four**. `sample()` re-derives every rule's slack, bounding box and pieces on every call, and a
+   node pays all of it for a quarter-metre answer. On the level-3 reference boxes that setup is
+   **19.3 of the 29.7 predicted seconds**: most of the 21.5× is arriving, not sampling. Hoisting
+   the per-clip half of that setup out of `sample()` is worth more than any batching scheme, and it
+   is a smaller change.
+2. **The job pool is not worth waking for one node**: 1.389 ms threaded against 1.391 serial, at
+   every level, to three digits. Eight voxels a side is eight z slabs.
+3. **Despeckle is a whole-clip judgement and will not survive being asked per node.** 29 of 297
+   nodes come out different when the pass runs on the node rather than on the box around it,
+   because it decides what is a deliberate stipple from a material's share of the clip's whole
+   surface, and a node is 512 cells. Measured and deliberately not fixed — it is R11b's.
+
+**And the fault the gate found, because the shape of it will recur.** The agreement check failed
+before it passed: the same node came out **differently** sampled alone and sampled inside the
+building, at one and two voxels a metre — 17 of 32 nodes at level 8, 108 cells in all. Neither arm
+was right. A box is settled empty in bulk when the field at its centre is further out than anything
+inside it could be near, and "near" for a leaf voxel is not nought: the thin-feature rescue keeps a
+cell whose centre is outside by up to **half a cell diagonal**. The box test never allowed for it.
+At 32 voxels a metre that is 2.7 cm and it almost never bites; at one voxel a metre it is 87 cm.
+**Every test in `test_sample.cpp` ran at 32 voxels a metre**, so fifteen months of agreement with
+the brute-force definition said nothing about the resolutions R11 is built out of. There are now
+subcases at 1, 2, 4, 8 and 16, and a second test that asks a small box and a big one to agree.
 
 **Two hazards to size before starting, both real, and both are sub-steps rather than notes.**
 

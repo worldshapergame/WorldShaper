@@ -7,6 +7,8 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -16,6 +18,7 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 #include "core/arena.hpp"
 #include "core/hash.hpp"
@@ -238,6 +241,21 @@ struct Options {
     // answer is to start above it.
     u32 clip_coarse = 4;
     i32 clip_metre = 0;                     // override the file's resolution, for quick previews
+
+    // R11a's instrument: what one NODE costs to sample, per level, and whether a node sampled on
+    // its own is the same voxels as that node inside a bigger box. Headless, beside `--clip-file`,
+    // and it opens no window. `tools/samplecost.ps1` is what runs it.
+    //
+    // Nothing in this project has ever measured a node-sized sample -- every figure it holds is
+    // whole-building or whole-region -- and three of R11's sub-steps are trades against that
+    // number. The check beside it is the half that can fail: the sampler settles paint rules over
+    // a region, and a rule keyed on a pattern has almost no box to settle against at eight voxels
+    // wide.
+    bool sample_cost = false;
+    std::string sample_cost_levels;   // "first,last"; the whole sampleable range by default
+    u32 sample_cost_nodes = 24;       // nodes with matter timed per reference box
+    u32 sample_cost_boxes = 3;        // reference boxes, when the whole clip will not fit at once
+    std::string sample_cost_csv;      // a row per level, for documentation/baselines/
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
     // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
@@ -559,7 +577,8 @@ struct Options {
                !camera.empty() || !fly.empty() ||
                !orbit.empty() || !cuts.empty() || chisel_every > 0 || ticks > 0 ||
                !crash_test.empty() || benchmark || !edit.empty() ||
-               !preview.empty() || !clip.empty() || !clip_file.empty() || max_seconds > 0.0;
+               !preview.empty() || !clip.empty() || !clip_file.empty() || sample_cost ||
+               max_seconds > 0.0;
     }
 
     // Air that is not empty: --fog "extinction,albedo,g,scale-height,base".
@@ -677,6 +696,16 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.clip_part = argv[++i];
         } else if (arg == "--clip-bounds") {
             if (i + 1 < argc) options.clip_bounds = argv[++i];
+        } else if (arg == "--sample-cost") {
+            options.sample_cost = true;
+        } else if (arg == "--sample-cost-levels") {
+            if (i + 1 < argc) options.sample_cost_levels = argv[++i];
+        } else if (arg == "--sample-cost-nodes") {
+            options.sample_cost_nodes = static_cast<u32>(next_number(24));
+        } else if (arg == "--sample-cost-boxes") {
+            options.sample_cost_boxes = static_cast<u32>(next_number(3));
+        } else if (arg == "--sample-cost-csv") {
+            if (i + 1 < argc) options.sample_cost_csv = argv[++i];
         } else if (arg == "--clip-at") {
             if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
         } else if (arg == "--material") {
@@ -996,6 +1025,14 @@ void print_help() {
         "  --clip-align          report parts that nearly line up but do not\n"
         "  --clip-at x,y,z       where to stamp it, in voxels (default the origin)\n"
         "  --clip-metre N        sample at N voxels per metre instead of the file's\n"
+        "  --sample-cost         what ONE NODE costs to sample, per level, and whether a node\n"
+        "                        sampled alone is the same voxels as that node inside a bigger\n"
+        "                        box. Headless; the facility unless --clip-file says otherwise.\n"
+        "                        R11a, and the number every later trade in R11 is against\n"
+        "  --sample-cost-levels first,last   which levels to walk (3 is a brick, 8 is 8 m)\n"
+        "  --sample-cost-nodes N  nodes with matter timed per reference box (24)\n"
+        "  --sample-cost-boxes N  reference boxes when the whole clip will not fit at once (3)\n"
+        "  --sample-cost-csv F   write a row per level for documentation/baselines/\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
@@ -7761,6 +7798,562 @@ int run_crash_test(const std::string& kind) {
     return 0;
 }
 
+// --------------------------------------------------------------------------------------
+// R11a — what one node costs to sample, and whether a node sampled alone is the same node.
+//
+// # Why this exists before anything else in R11
+//
+// R11 moves the world's SOURCE onto the same rule the renderer already runs on: the thing that is
+// sampled is the node a ray asked for, at the resolution that node's own level implies. Three of
+// its sub-steps are trades against one number -- what one node costs -- and this project has never
+// measured it. Every sampler figure it holds is whole-building or whole-region: 2,381 ms for the
+// facility at metre 8, 624 to 7,406 ms for a twelve-metre box at metre 32. Neither says anything
+// about eight voxels.
+//
+// It matters because the cost of a sample is NOT the cost of its voxels. `plan_refine_regions`
+// has said so since it was written: a four-metre box took about a hundred microseconds a voxel
+// against barely one when the whole clip was sampled in a single call, because a sample allocates
+// a clip, wakes workers and descends from the root of a field that describes an entire building
+// however small the box is. That fixed cost is what decides whether a node is a sensible unit at
+// all, and it is measured here rather than argued about -- an empty node pays the fixed cost and
+// nothing else, so the two are separable by measurement instead of by reasoning.
+//
+// # And the agreement check, which is the half that can fail
+//
+// A small box is not obviously the same question as a big one. The sampler settles paint rules
+// over regions, and a rule keyed on a pattern has almost no box to settle against when the box is
+// eight voxels wide. `--clip-part` already paints differently from the whole building (D609,
+// D610); that is a part restriction rather than a box restriction, and the ladder's eighteen boxes
+// are evidence that box restriction is exact at REGION size. Nobody has told the two apart at
+// brick size. So every node this times is also compared, voxel for voxel and mask for mask,
+// against the same node read out of the biggest box that will fit -- and the tool says which box
+// that was, rather than claiming "the whole building" when it sampled less.
+//
+// Trap 10 applies to the instrument as much as to the engine: a check that cannot fail is not a
+// check. The disagreement count is printed even when it is nought, beside how many nodes were
+// actually compared, so a run that checked nothing cannot read as a run that found nothing.
+// --------------------------------------------------------------------------------------
+
+// One scout voxel per leaf node -- 32 / 8 -- so a scout cell IS a level-3 node and folding the
+// scout up by powers of two counts the nodes at every coarser level with no second sample.
+constexpr i32 kScoutPerMetre = kVoxelsPerMetre >> kLeafLevel;
+
+// How big a reference box may be, in cells. A clip is four bytes of type and one of mask per
+// cell, so forty million is about two hundred megabytes, and the tool holds two of them at once
+// when it is checking what despeckling does. Above this the reference stops being the whole
+// building and becomes the largest ancestor node that fits, which is stated in the output rather
+// than assumed by the reader.
+constexpr u64 kReferenceCells = 40ull * 1000ull * 1000ull;
+
+f64 median_of(std::vector<f64> values) {
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    return values[values.size() / 2];
+}
+
+f64 mean_of(const std::vector<f64>& values) {
+    if (values.empty()) return 0.0;
+    f64 total = 0.0;
+    for (f64 value : values) total += value;
+    return total / static_cast<f64>(values.size());
+}
+
+// What one level came out at. One row of the table and one line of the CSV.
+struct LevelCost {
+    u32 level = 0;
+    i32 per_metre = 0;
+    f64 node_metres = 0.0;
+    u64 nodes_with_matter = 0;    // over the whole building, from the scout
+    usize solid_timed = 0;
+    usize empty_timed = 0;
+    f64 solid_mean = 0.0;
+    f64 solid_median = 0.0;
+    f64 solid_worst = 0.0;
+    f64 solid_serial = 0.0;       // the same nodes with no job system at all
+    f64 empty_mean = 0.0;         // the fixed cost, near enough: nothing to do but arrive
+    u64 asked_mean = 0;
+    u64 settled_mean = 0;
+    usize references = 0;
+    f64 reference_ms = 0.0;       // summed over the reference boxes
+    usize reference_nodes = 0;    // level-L nodes inside them
+    usize reference_solid = 0;
+    f64 reference_edge_m = 0.0;
+    bool reference_is_whole = false;
+    usize checked = 0;
+    usize disagreed = 0;
+    usize despeckle_differed = 0;
+    // WHICH WAY a disagreement went, which a count cannot say and which decides whose fault it
+    // is: matter the box has and the node does not is a node that invents geometry, and matter the
+    // node has and the box does not is a box that skipped past it. The two have opposite cures.
+    u64 cells_only_alone = 0;
+    u64 cells_only_in_box = 0;
+    u64 cells_repainted = 0;   // solid in both, different material
+    u64 cells_masked = 0;      // the inside mask, which decides what a paste asserts
+    u64 cells_compared = 0;
+};
+
+int run_sample_cost(const Options& options, const forge::Script& script, JobSystem& jobs) {
+    const forge::Vec3 clip_low = script.settings.low;
+    const forge::Vec3 clip_high = script.settings.high;
+
+    u32 first_level = kLeafLevel;
+    u32 last_level = forge::kCoarsestSampledLevel;
+    if (!options.sample_cost_levels.empty()) {
+        i64 pair[2]{static_cast<i64>(first_level), static_cast<i64>(last_level)};
+        parse_numbers(options.sample_cost_levels, pair, 2);
+        const i64 coarsest = static_cast<i64>(forge::kCoarsestSampledLevel);
+        first_level = static_cast<u32>(std::clamp<i64>(pair[0], 0, coarsest));
+        last_level = static_cast<u32>(
+            std::clamp<i64>(pair[1], static_cast<i64>(first_level), coarsest));
+    }
+    const usize want_solid = std::max<usize>(1, options.sample_cost_nodes);
+    const usize want_empty = std::max<usize>(1, options.sample_cost_nodes / 3);
+    const usize want_boxes = std::max<usize>(1, options.sample_cost_boxes);
+
+    std::printf("sample cost   %s, %.2f x %.2f x %.2f m, %d rules\n",
+                options.clip_file.empty() ? default_clip_path().c_str()
+                                          : options.clip_file.c_str(),
+                clip_high.x - clip_low.x, clip_high.y - clip_low.y, clip_high.z - clip_low.z,
+                static_cast<int>(script.paint.size()));
+
+    // The scout. One cheap pass over the whole building, and everything that needs to know where
+    // the matter is reads it rather than sampling again.
+    forge::SampleSettings scout_settings = script.settings;
+    scout_settings.voxels_per_metre = kScoutPerMetre;
+    const u64 scout_began = now_ns();
+    const forge::SampleResult scout =
+        forge::sample(script.field, script.solid, script.paint, scout_settings, &jobs);
+    const f64 scout_ms = ns_to_ms(now_ns() - scout_began);
+
+    // Every leaf node that holds anything, in world node coordinates. A scout cell is exactly a
+    // leaf node, so its own voxel coordinate IS the node's, and every coarser level is this list
+    // shifted right.
+    std::vector<std::array<i64, 3>> solid_leaves;
+    for (i32 z = 0; z < scout.clip.size[2]; ++z) {
+        for (i32 y = 0; y < scout.clip.size[1]; ++y) {
+            for (i32 x = 0; x < scout.clip.size[0]; ++x) {
+                if (scout.clip.at(x, y, z) == kAir) continue;
+                solid_leaves.push_back({scout.origin_voxel[0] + x, scout.origin_voxel[1] + y,
+                                        scout.origin_voxel[2] + z});
+            }
+        }
+    }
+    std::printf("scout         %d voxels a metre, %.0f ms, %llu of %llu cells hold matter\n",
+                kScoutPerMetre, scout_ms, static_cast<unsigned long long>(solid_leaves.size()),
+                static_cast<unsigned long long>(scout.clip.cell_count()));
+    if (solid_leaves.empty()) {
+        std::printf("nothing to sample: the scout found no matter anywhere in the clip's box\n");
+        return 1;
+    }
+
+    // The nodes at `level` that hold matter, folded up from the leaves. Sorted, so that picking
+    // "three boxes spread through the building" is the same three on every run -- a cost figure
+    // that moves because the tool chose different nodes is not a cost figure.
+    const auto matter_at = [&](u32 level) {
+        std::vector<NodeKey> keys;
+        std::unordered_set<NodeKey, NodeKeyHash> seen;
+        const u32 shift = (level > kLeafLevel) ? (level - kLeafLevel) : 0;
+        for (const std::array<i64, 3>& leaf : solid_leaves) {
+            const NodeKey key{leaf[0] >> shift, leaf[1] >> shift, leaf[2] >> shift, level};
+            if (seen.insert(key).second) keys.push_back(key);
+        }
+        std::sort(keys.begin(), keys.end(), [](const NodeKey& a, const NodeKey& b) {
+            if (a.z != b.z) return a.z < b.z;
+            if (a.y != b.y) return a.y < b.y;
+            return a.x < b.x;
+        });
+        return keys;
+    };
+
+    std::vector<LevelCost> table;
+    std::string first_disagreement;
+
+    for (u32 level = first_level; level <= last_level; ++level) {
+        LevelCost row;
+        row.level = level;
+        row.per_metre = forge::node_voxels_per_metre(level);
+        row.node_metres = static_cast<f64>(i64{1} << level) / static_cast<f64>(kVoxelsPerMetre);
+        row.nodes_with_matter = static_cast<u64>(matter_at(level).size());
+
+        // The reference boxes: the whole building when it fits at this resolution, and otherwise
+        // the largest ancestor node that does, over parts of the building that hold matter.
+        struct Reference {
+            forge::SampleSettings settings;
+        };
+        std::vector<Reference> references;
+        {
+            u64 whole_cells = 1;
+            for (u32 axis = 0; axis < 3; ++axis) {
+                const f64 span = (axis == 0)   ? (clip_high.x - clip_low.x)
+                                 : (axis == 1) ? (clip_high.y - clip_low.y)
+                                               : (clip_high.z - clip_low.z);
+                whole_cells *= static_cast<u64>(std::max(
+                    1.0, std::ceil(span * static_cast<f64>(row.per_metre))));
+            }
+            if (whole_cells <= kReferenceCells) {
+                // Snapped out to node boundaries, so every node that overlaps the clip is wholly
+                // inside the reference and none of them has to be skipped.
+                Reference whole;
+                whole.settings = script.settings;
+                whole.settings.voxels_per_metre = row.per_metre;
+                const f64 node_m = row.node_metres;
+                const auto down = [&](f64 v) { return std::floor(v / node_m) * node_m; };
+                const auto up = [&](f64 v) { return std::ceil(v / node_m) * node_m; };
+                whole.settings.low = {down(clip_low.x), down(clip_low.y), down(clip_low.z)};
+                whole.settings.high = {up(clip_high.x), up(clip_high.y), up(clip_high.z)};
+                references.push_back(whole);
+                row.reference_is_whole = true;
+                row.reference_edge_m = whole.settings.high.x - whole.settings.low.x;
+            } else {
+                u32 up_levels = 0;
+                while (up_levels + 1u <= 16u) {
+                    const u64 edge = static_cast<u64>(forge::kNodeVoxels) << (up_levels + 1);
+                    if (edge * edge * edge > kReferenceCells) break;
+                    ++up_levels;
+                }
+                const std::vector<NodeKey> parents = matter_at(level + up_levels);
+                for (usize i = 0; i < want_boxes && i < parents.size(); ++i) {
+                    // Spread through the sorted list rather than taken from its front, which
+                    // would be one corner of the site.
+                    const usize at = (parents.size() * (2 * i + 1)) / (2 * want_boxes);
+                    Reference box;
+                    box.settings = forge::node_sample_settings(script.settings, parents[at]);
+                    box.settings.voxels_per_metre = row.per_metre;
+                    references.push_back(box);
+                }
+                row.reference_edge_m =
+                    static_cast<f64>(forge::kNodeVoxels << up_levels) /
+                    static_cast<f64>(row.per_metre);
+            }
+        }
+        row.references = references.size();
+
+        std::vector<f64> solid_ms;
+        std::vector<f64> solid_serial_ms;
+        std::vector<f64> empty_ms;
+        std::vector<f64> empty_serial_ms;
+        u64 asked_total = 0;
+        u64 settled_total = 0;
+
+        for (const Reference& reference : references) {
+            const u64 began = now_ns();
+            const forge::SampleResult whole = forge::sample(script.field, script.solid,
+                                                            script.paint, reference.settings, &jobs);
+            row.reference_ms += ns_to_ms(now_ns() - began);
+            if (whole.clip.empty()) continue;
+
+            // What the same box looks like after the pass the ladder runs on every region it
+            // pastes. Kept beside the raw sample because despeckling is a decision about a
+            // material's share of a WHOLE clip's surface, and a node is five hundred and twelve
+            // cells: whether that survives being asked node by node is R11b's problem and this is
+            // where it becomes visible.
+            forge::SampleResult cleaned;
+            if (options.despeckle) {
+                cleaned = whole;
+                forge::despeckle(cleaned.clip);
+            }
+
+            const i64 across = whole.clip.size[0] / forge::kNodeVoxels;
+            const i64 tall = whole.clip.size[1] / forge::kNodeVoxels;
+            const i64 deep = whole.clip.size[2] / forge::kNodeVoxels;
+            // Shifted rather than divided. Every origin here is a multiple of eight by
+            // construction, so the two agree -- but the facility straddles the origin, and a
+            // division that rounds towards zero on the negative half is exactly the trap
+            // `node_key_of` is written to document.
+            const NodeKey base{whole.origin_voxel[0] >> kLeafLevel,
+                               whole.origin_voxel[1] >> kLeafLevel,
+                               whole.origin_voxel[2] >> kLeafLevel, level};
+
+            std::vector<NodeKey> solid;
+            std::vector<NodeKey> empty;
+            std::vector<VoxelTypeId> block(static_cast<usize>(forge::kNodeVoxels) *
+                                           forge::kNodeVoxels * forge::kNodeVoxels);
+            for (i64 z = 0; z < deep; ++z) {
+                for (i64 y = 0; y < tall; ++y) {
+                    for (i64 x = 0; x < across; ++x) {
+                        const NodeKey key{base.x + x, base.y + y, base.z + z, level};
+                        if (!forge::node_block(whole, key, block.data(), nullptr)) continue;
+                        bool any = false;
+                        for (VoxelTypeId type : block) {
+                            if (type != kAir) { any = true; break; }
+                        }
+                        (any ? solid : empty).push_back(key);
+                    }
+                }
+            }
+            row.reference_nodes += solid.size() + empty.size();
+            row.reference_solid += solid.size();
+
+            // Spread through each list the same way the boxes were, and for the same reason: a
+            // facade node and a node in the middle of a wall cost very different amounts, and a
+            // run that always times the first twenty-four measures one wall.
+            const auto pick = [](const std::vector<NodeKey>& from, usize want) {
+                std::vector<NodeKey> chosen;
+                for (usize i = 0; i < want && i < from.size(); ++i) {
+                    chosen.push_back(from[(from.size() * (2 * i + 1)) / (2 * want)]);
+                }
+                return chosen;
+            };
+
+            std::vector<VoxelTypeId> want_types(block.size());
+            std::vector<u8> want_inside(block.size());
+            std::vector<VoxelTypeId> clean_types(block.size());
+            for (bool solid_pass : {true, false}) {
+                const std::vector<NodeKey> chosen =
+                    pick(solid_pass ? solid : empty, solid_pass ? want_solid : want_empty);
+                for (const NodeKey& key : chosen) {
+                    const forge::SampleSettings one =
+                        forge::node_sample_settings(script.settings, key);
+
+                    const u64 pool_began = now_ns();
+                    forge::SampleResult alone =
+                        forge::sample(script.field, script.solid, script.paint, one, &jobs);
+                    const f64 pool_ms = ns_to_ms(now_ns() - pool_began);
+
+                    // And again with no job system at all. Eight voxels a side is eight z slabs,
+                    // and whether waking a pool for that is worth its own cost is exactly the sort
+                    // of thing R11b would otherwise guess at.
+                    const u64 serial_began = now_ns();
+                    const forge::SampleResult serial =
+                        forge::sample(script.field, script.solid, script.paint, one, nullptr);
+                    const f64 serial_ms = ns_to_ms(now_ns() - serial_began);
+
+                    (solid_pass ? solid_ms : empty_ms).push_back(pool_ms);
+                    (solid_pass ? solid_serial_ms : empty_serial_ms).push_back(serial_ms);
+                    asked_total += alone.voxels_asked;
+                    settled_total += alone.voxels_settled;
+                    (void)serial;
+
+                    // The check. Types and the inside mask both, because a cell that is air the
+                    // clip asserts and a cell that is not the clip's business are different
+                    // answers that paste differently.
+                    if (!forge::node_block(whole, key, want_types.data(), want_inside.data())) {
+                        continue;
+                    }
+                    ++row.checked;
+                    if (alone.clip.size[0] != forge::kNodeVoxels ||
+                        alone.clip.size[1] != forge::kNodeVoxels ||
+                        alone.clip.size[2] != forge::kNodeVoxels) {
+                        ++row.disagreed;
+                        continue;
+                    }
+                    row.cells_compared += want_types.size();
+                    bool same = true;
+                    // Every cell, not the first that differs. A count of nodes says how WIDE a
+                    // fault is and nothing about what it is; the four tallies below say whether
+                    // the small box invents matter or the big one skips it, which is the whole
+                    // question and has opposite cures.
+                    for (usize i = 0; i < want_types.size(); ++i) {
+                        const i32 x = static_cast<i32>(i % forge::kNodeVoxels);
+                        const i32 y = static_cast<i32>((i / forge::kNodeVoxels) %
+                                                       forge::kNodeVoxels);
+                        const i32 z = static_cast<i32>(i / (forge::kNodeVoxels *
+                                                            forge::kNodeVoxels));
+                        const usize at = alone.clip.index(x, y, z);
+                        if (alone.clip.inside[at] != want_inside[i]) ++row.cells_masked;
+                        if (alone.clip.voxels[at] == want_types[i] &&
+                            alone.clip.inside[at] == want_inside[i]) {
+                            continue;
+                        }
+                        if (alone.clip.voxels[at] != want_types[i]) {
+                            if (want_types[i] == kAir) {
+                                ++row.cells_only_alone;
+                            } else if (alone.clip.voxels[at] == kAir) {
+                                ++row.cells_only_in_box;
+                            } else {
+                                ++row.cells_repainted;
+                            }
+                        }
+                        const bool first = same;
+                        same = false;
+                        if (first && first_disagreement.empty()) {
+                            char said[256];
+                            std::snprintf(
+                                said, sizeof(said),
+                                "level %u node (%lld,%lld,%lld) cell (%d,%d,%d): type %u/inside %d "
+                                "alone, %u/%d inside the box",
+                                level, static_cast<long long>(key.x), static_cast<long long>(key.y),
+                                static_cast<long long>(key.z), x, y, z, alone.clip.voxels[at],
+                                static_cast<int>(alone.clip.inside[at]), want_types[i],
+                                static_cast<int>(want_inside[i]));
+                            first_disagreement = said;
+                        }
+                    }
+                    if (!same) ++row.disagreed;
+
+                    if (options.despeckle && !cleaned.clip.empty() &&
+                        forge::node_block(cleaned, key, clean_types.data(), nullptr)) {
+                        forge::SampleResult alone_clean = alone;
+                        forge::despeckle(alone_clean.clip);
+                        for (usize i = 0; i < clean_types.size(); ++i) {
+                            const i32 x = static_cast<i32>(i % forge::kNodeVoxels);
+                            const i32 y = static_cast<i32>((i / forge::kNodeVoxels) %
+                                                           forge::kNodeVoxels);
+                            const i32 z = static_cast<i32>(i / (forge::kNodeVoxels *
+                                                                forge::kNodeVoxels));
+                            if (alone_clean.clip.voxels[alone_clean.clip.index(x, y, z)] ==
+                                clean_types[i]) {
+                                continue;
+                            }
+                            ++row.despeckle_differed;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        row.solid_timed = solid_ms.size();
+        row.empty_timed = empty_ms.size();
+        row.solid_mean = mean_of(solid_ms);
+        row.solid_median = median_of(solid_ms);
+        row.solid_worst = solid_ms.empty() ? 0.0 : *std::max_element(solid_ms.begin(),
+                                                                     solid_ms.end());
+        row.solid_serial = mean_of(solid_serial_ms);
+        row.empty_mean = mean_of(empty_ms);
+        const usize timed = std::max<usize>(1, solid_ms.size() + empty_ms.size());
+        row.asked_mean = asked_total / timed;
+        row.settled_mean = settled_total / timed;
+        table.push_back(row);
+
+        std::printf(
+            "level %u       %.3f m at %d/m: %llu nodes hold matter; one node %.3f ms pool "
+            "(median %.3f, worst %.3f), %.3f serial, empty %.3f; %zu checked, %zu disagreed\n",
+            level, row.node_metres, row.per_metre,
+            static_cast<unsigned long long>(row.nodes_with_matter), row.solid_mean,
+            row.solid_median, row.solid_worst, row.solid_serial, row.empty_mean, row.checked,
+            row.disagreed);
+    }
+
+    // The table, and then the two numbers the stage is actually sized against.
+    std::printf("\n%-6s %8s %6s %14s %9s %9s %9s %9s %11s %11s %9s\n", "level", "node m", "vox/m",
+                "with matter", "one ms", "median", "serial", "empty ms", "box one call",
+                "node by node", "penalty");
+    for (const LevelCost& row : table) {
+        // The comparison, and it is a like-for-like one rather than a per-node average: what the
+        // reference boxes cost in one call, against what THE SAME BOXES would cost asked one node
+        // at a time -- their solid nodes at a solid node's price and their empty ones at an empty
+        // node's. Dividing the reference by all its nodes instead would divide by mostly air and
+        // flatter the small box by an order of magnitude.
+        //
+        // That ratio is the trade R11b makes, and it is the only reason this tool exists.
+        const f64 one_at_a_time =
+            static_cast<f64>(row.reference_solid) * row.solid_mean +
+            static_cast<f64>(row.reference_nodes - row.reference_solid) * row.empty_mean;
+        const f64 penalty = (row.reference_ms > 0.0) ? (one_at_a_time / row.reference_ms) : 0.0;
+        std::printf("%-6u %8.3f %6d %14llu %9.3f %9.3f %9.3f %9.3f %11.1f %11.1f %8.1fx\n",
+                    row.level, row.node_metres, row.per_metre,
+                    static_cast<unsigned long long>(row.nodes_with_matter), row.solid_mean,
+                    row.solid_median, row.solid_serial, row.empty_mean, row.reference_ms,
+                    one_at_a_time, penalty);
+    }
+
+    usize checked = 0;
+    usize disagreed = 0;
+    usize despeckled = 0;
+    for (const LevelCost& row : table) {
+        checked += row.checked;
+        disagreed += row.disagreed;
+        despeckled += row.despeckle_differed;
+    }
+    std::printf("\nreference     ");
+    for (const LevelCost& row : table) {
+        std::printf("%s%u:%.2fm%s", (&row == &table.front()) ? "" : ", ", row.level,
+                    row.reference_edge_m, row.reference_is_whole ? " (the whole clip)" : "");
+    }
+    std::printf("\n");
+    u64 only_alone = 0;
+    u64 only_in_box = 0;
+    u64 repainted = 0;
+    u64 masked = 0;
+    u64 compared = 0;
+    for (const LevelCost& row : table) {
+        only_alone += row.cells_only_alone;
+        only_in_box += row.cells_only_in_box;
+        repainted += row.cells_repainted;
+        masked += row.cells_masked;
+        compared += row.cells_compared;
+    }
+    if (disagreed == 0) {
+        std::printf("agreement     %zu nodes checked over %zu levels, %llu cells, every one "
+                    "identical to the same node inside its reference box, types and mask\n",
+                    checked, table.size(), static_cast<unsigned long long>(compared));
+    } else {
+        std::printf("agreement     %zu of %zu nodes DIFFER from the same node inside their "
+                    "reference box\n"
+                    "  cells       %llu of %llu: %llu matter only the node found, %llu only the "
+                    "box found, %llu painted differently, %llu mask\n"
+                    "  first       %s\n",
+                    disagreed, checked,
+                    static_cast<unsigned long long>(only_alone + only_in_box + repainted),
+                    static_cast<unsigned long long>(compared),
+                    static_cast<unsigned long long>(only_alone),
+                    static_cast<unsigned long long>(only_in_box),
+                    static_cast<unsigned long long>(repainted),
+                    static_cast<unsigned long long>(masked), first_disagreement.c_str());
+        for (const LevelCost& row : table) {
+            if (row.disagreed == 0) continue;
+            std::printf("  level %u     %zu of %zu nodes, %llu cells the node found and the box "
+                        "did not, %llu the other way\n",
+                        row.level, row.disagreed, row.checked,
+                        static_cast<unsigned long long>(row.cells_only_alone),
+                        static_cast<unsigned long long>(row.cells_only_in_box));
+        }
+    }
+    if (options.despeckle) {
+        std::printf("despeckle     %zu of %zu nodes come out different when the pass is run per "
+                    "node rather than per box\n",
+                    despeckled, checked);
+    }
+    for (const LevelCost& row : table) {
+        if (row.level != kLeafLevel) continue;
+        std::printf("node by node  the whole clip at the leaf is %llu nodes x %.3f ms = %.1f "
+                    "core-seconds, against %.3f ms a node inside one box\n",
+                    static_cast<unsigned long long>(row.nodes_with_matter), row.solid_mean,
+                    static_cast<f64>(row.nodes_with_matter) * row.solid_mean / 1000.0,
+                    (row.reference_nodes > 0)
+                        ? row.reference_ms / static_cast<f64>(row.reference_nodes)
+                        : 0.0);
+    }
+
+    if (!options.sample_cost_csv.empty()) {
+        std::FILE* file = std::fopen(options.sample_cost_csv.c_str(), "wb");
+        if (file == nullptr) {
+            WS_LOG_ERROR("clip", "could not write {}", options.sample_cost_csv);
+            return 1;
+        }
+        std::fprintf(file,
+                     "\"level\",\"node_m\",\"per_metre\",\"nodes_with_matter\",\"solid_timed\","
+                     "\"one_ms\",\"median_ms\",\"worst_ms\",\"serial_ms\",\"empty_ms\","
+                     "\"asked\",\"settled\",\"reference_boxes\",\"reference_edge_m\","
+                     "\"reference_ms\",\"reference_nodes\",\"reference_solid\",\"checked\","
+                     "\"disagreed\",\"despeckle_differed\",\"cells_compared\",\"only_alone\","
+                     "\"only_in_box\",\"repainted\"\n");
+        for (const LevelCost& row : table) {
+            std::fprintf(file,
+                         "%u,%.4f,%d,%llu,%zu,%.4f,%.4f,%.4f,%.4f,%.4f,%llu,%llu,%zu,%.4f,%.4f,"
+                         "%zu,%zu,%zu,%zu,%zu,%llu,%llu,%llu,%llu\n",
+                         row.level, row.node_metres, row.per_metre,
+                         static_cast<unsigned long long>(row.nodes_with_matter), row.solid_timed,
+                         row.solid_mean, row.solid_median, row.solid_worst, row.solid_serial,
+                         row.empty_mean, static_cast<unsigned long long>(row.asked_mean),
+                         static_cast<unsigned long long>(row.settled_mean), row.references,
+                         row.reference_edge_m, row.reference_ms, row.reference_nodes,
+                         row.reference_solid, row.checked, row.disagreed, row.despeckle_differed,
+                         static_cast<unsigned long long>(row.cells_compared),
+                         static_cast<unsigned long long>(row.cells_only_alone),
+                         static_cast<unsigned long long>(row.cells_only_in_box),
+                         static_cast<unsigned long long>(row.cells_repainted));
+        }
+        std::fclose(file);
+        std::printf("wrote         %s\n", options.sample_cost_csv.c_str());
+    }
+
+    // A disagreement is a failure, and it has to be one the batch file can see. Everything else
+    // here is a measurement and returns nought however slow the answer was.
+    return (disagreed == 0) ? 0 : 1;
+}
+
 }  // namespace
 
 // Build a clip from its file and say what it is, without opening a window.
@@ -7773,7 +8366,11 @@ int run_clip_tool(const Options& options) {
     VoxelTypeTable types;
     TagRegistry tags;
     const u64 begin = now_ns();
-    forge::Script script = forge::load_clip_script(options.clip_file, types, tags);
+    // The default clip when none was named, which is what `--sample-cost` on its own means: the
+    // facility is the scene every other measurement in this project is against.
+    const std::string clip_path =
+        options.clip_file.empty() ? default_clip_path() : options.clip_file;
+    forge::Script script = forge::load_clip_script(clip_path, types, tags);
     for (const forge::ScriptError& error : script.errors) {
         if (error.line > 0) {
             WS_LOG_ERROR("clip", "line {}: {}", error.line, error.message);
@@ -7813,6 +8410,12 @@ int run_clip_tool(const Options& options) {
     }
 
     JobSystem jobs;
+
+    // R11a, and it returns rather than falling through: the instrument is about what a NODE costs,
+    // and paying for a whole-building sample at the authored resolution first would be minutes
+    // spent measuring the thing this stage exists to stop doing.
+    if (options.sample_cost) return run_sample_cost(options, script, jobs);
+
     const u64 parsed = now_ns();
     // Always counted here. This is the measuring tool; a build it measures should be able to say
     // where it went, and one atomic beside an evaluation is nothing next to the evaluation.
@@ -8207,7 +8810,7 @@ int main(int argc, char** argv) {
         ws::print_help();
         return 0;
     }
-    if (!options.clip_file.empty() && options.screenshot.empty()) {
+    if ((!options.clip_file.empty() || options.sample_cost) && options.screenshot.empty()) {
         return ws::run_clip_tool(options);
     }
     // A modal dialog in an automated run is a hang, so scripted modes get the stderr line

@@ -50,6 +50,21 @@ del "%WS_AUDIT_LOG%" >nul 2>&1
 del "%TEMP%\ws_pool_audit.png" >nul 2>&1
 
 echo.
+echo Running R11a's agreement check on the facility...
+REM A node sampled on its own must be the same voxels as that node inside the box around it, at
+REM every level. ws_tests asks this of a small synthetic clip in a second; this asks it of the
+REM real building, which is where it failed the first time it was asked (D613) -- 139 paint
+REM rules, displaced surfaces and pattern-keyed coats are not things a test field reproduces.
+REM Eighteen seconds, no window, and it sets an exit code of its own.
+"%~dp0build\bin\WorldShaper.exe" --clip-file "%~dp0clips\facility.clip" --sample-cost ^
+    --sample-cost-nodes 8 --sample-cost-boxes 1
+if errorlevel 1 (
+    echo.
+    echo SAMPLE AGREEMENT FAILED: a node sampled alone is not the same node
+    exit /b 1
+)
+
+echo.
 echo All tests passed.
 endlocal
 exit /b 0

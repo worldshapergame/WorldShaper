@@ -406,13 +406,15 @@ VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& 
 //
 // The cost is paid by a shell of cells — those outside the shape but within a cell-diagonal of it —
 // and by nothing else. Interior and open air are untouched.
-bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64 voxel) {
+bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64 voxel,
+                       u64* evaluations) {
     // Which way is out. An SDF's gradient points away from the surface, and central differences over
     // a quarter of a voxel are steady enough for a direction even where the field is not smooth.
     const f64 h = voxel * 0.25;
     Vec3 away{field.eval(root, {p.x + h, p.y, p.z}) - field.eval(root, {p.x - h, p.y, p.z}),
               field.eval(root, {p.x, p.y + h, p.z}) - field.eval(root, {p.x, p.y - h, p.z}),
               field.eval(root, {p.x, p.y, p.z + h}) - field.eval(root, {p.x, p.y, p.z - h})};
+    if (evaluations != nullptr) *evaluations += 6;
     const f64 length = std::sqrt(away.x * away.x + away.y * away.y + away.z * away.z);
     if (length < 1.0e-12) return false;
     away.x /= length;
@@ -423,6 +425,7 @@ bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64
     // some other reason and there is no feature to rescue.
     const f64 reach = outside_by + voxel * 0.05;
     const Vec3 within{p.x - away.x * reach, p.y - away.y * reach, p.z - away.z * reach};
+    if (evaluations != nullptr) ++*evaluations;
     if (field.eval(root, within) > 0.0) return false;
 
     // And a whole voxel further in. Still solid means a wall, and a wall does not need rescuing —
@@ -430,6 +433,7 @@ bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64
     // means the whole feature is thinner than the grid can hold, and it is kept.
     const Vec3 beyond{within.x - away.x * voxel, within.y - away.y * voxel,
                       within.z - away.z * voxel};
+    if (evaluations != nullptr) ++*evaluations;
     return field.eval(root, beyond) > 0.0;
 }
 
@@ -498,6 +502,20 @@ struct Descent {
     f64 centre_shift = 0.5;
     f64 slack = 0.0;
 };
+
+// Half a cell's diagonal, in voxels: the furthest a surface can be from a cell's centre and still
+// pass through that cell. It is the reach of the thin-feature rescue above, and therefore the
+// distance a box has to be clear by before it may be settled as empty in bulk.
+//
+// One constant in one place, and it was not: the rescue's own test carried the number and the box
+// test did not allow for it at all, so a box could be declared empty over cells the per-voxel rule
+// would have kept. At the world's thirty-two voxels a metre that is 2.7 cm and it almost never
+// bites; at ONE voxel a metre, which is what a level-8 node asks for, it is 87 cm and it bites
+// constantly -- and whether it bit depended on how the descent happened to have cut the box up, so
+// the same node came out differently sampled alone and sampled inside the building. R11a's
+// agreement check found it: 17 of 32 nodes at level 8, 87 cells of matter present in one and
+// absent in the other. D613.
+constexpr f64 kHalfCellDiagonal = 0.8660254;
 
 // How far a point is from a box, zero inside it.
 f64 away_from(const Field::Aabb& box, Vec3 p) {
@@ -661,11 +679,21 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
                         (high[2] - low[2] == 1);
     const f64 reach = radius + (single ? d.slack : slack_here(d, middle, radius));
 
+    // How far a BOX has to be clear by before nothing inside it could be rescued as a thin
+    // feature. A single voxel asks that question itself, below; a box that settles in bulk never
+    // asks it at all, so it may only settle when no cell it holds could have been kept.
+    //
+    // Nought for a single voxel, so the per-voxel path is exactly what it was.
+    const f64 rescue = single ? 0.0 : d.voxel * kHalfCellDiagonal;
+
     // Is any of this box part of the clip at all?
     if (!whole_covered && settings.has_bounds) {
         const f64 db = d.field->eval(settings.bounds, middle);
         ++local.shape;
-        if (db > reach) return;              // none of it is; leave the mask clear
+        // Plus the rescue, for the same reason as the shape below: the per-cell branch keeps a
+        // cell whose bounds centre is outside by less than half a diagonal, and a box settled
+        // here never reaches that branch.
+        if (db > reach + rescue) return;     // none of it is; leave the mask clear
         if (db < -reach) whole_covered = true;
         else if (single) whole_covered = db <= 0.0;
         if (single && !whole_covered) return;
@@ -693,10 +721,25 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
     // Asked only of leaf voxels that are outside but within half a cell diagonal — the furthest a
     // surface can be from a centre and still cross the cell. Everything else is untouched, so this
     // costs a shell of cells around the surface and nothing anywhere else.
-    const bool rescued = single && dc > 0.0 && dc < d.voxel * 0.8660254 &&
-                         thin_feature_here(*d.field, d.root, middle, dc, d.voxel);
+    // Timed and counted into the shape's own figures rather than falling between them. Eight
+    // evaluations of the REAL root -- displacement, noise and all -- against one of the undisplaced
+    // shape above, so a cell that reaches this is several times the price of one that does not, and
+    // until D613 nothing said so: this function's whole cost appeared in no number the sampler
+    // reports. Traps 17 and 18, in the oldest code in the file.
+    bool rescued = false;
+    if (single && dc > 0.0 && dc < d.voxel * kHalfCellDiagonal) {
+        const u64 rescue_at = now_ns();
+        rescued = thin_feature_here(*d.field, d.root, middle, dc, d.voxel, &local.shape);
+        local.shape_ns += now_ns() - rescue_at;
+    }
 
-    if (!rescued && (dc > reach || (single && dc > 0.0))) {
+    // `reach + rescue` rather than `reach`, and that is the whole of D613. A box may be settled
+    // empty when the field at its centre is further out than anything inside it could be near --
+    // but "near" for a leaf voxel is not nought, it is half a cell diagonal, because that is how
+    // far a surface can be from a centre and still cross the cell the rescue keeps. Without the
+    // term a box hands back air over cells the per-voxel rule would have kept, and WHICH cells
+    // depends on how the box happened to be cut up.
+    if (!rescued && (dc > reach + rescue || (single && dc > 0.0))) {
         // Empty. The cells still have to be marked as part of the clip: empty *inside the clip*
         // means "this cell is air and stamping should clear whatever is there", where a cell
         // outside the clip is none of its business. Skipping the mark as well as the evaluation
@@ -725,9 +768,9 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
                     const f64 here = d.field->eval(settings.bounds, {px, py, pz});
                     if (here <= 0.0) {
                         clip.inside[row + x] = 1;
-                    } else if (here < d.voxel * 0.8660254 &&
+                    } else if (here < d.voxel * kHalfCellDiagonal &&
                                thin_feature_here(*d.field, settings.bounds, {px, py, pz}, here,
-                                                 d.voxel)) {
+                                                 d.voxel, &local.shape)) {
                         // Half a cell diagonal is the furthest a surface can be from a centre and
                         // still pass through the cell at all, so outside that there is nothing here
                         // to lose and nothing is asked.
@@ -1267,6 +1310,66 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     }
     clip.build_coarse();
     return result;
+}
+
+// --------------------------------------------------------------------------------------
+// One node, as a box and a resolution. The block above these in sample.hpp says why the three of
+// them are one place rather than three callers.
+// --------------------------------------------------------------------------------------
+
+NodeBox node_box(const NodeKey& key) {
+    // Exact in binary at every level this can be asked about: the span is a power of two over
+    // another power of two, so a node's corner is never a rounding away from the voxel grid the
+    // sampler floors against. That matters more than it looks -- `sample` takes the box's corners
+    // to voxels with a floor, and a corner half an epsilon low is a clip one voxel wide of where
+    // its node is, for ever, in a file.
+    const f64 span = static_cast<f64>(i64{1} << key.level) / static_cast<f64>(kVoxelsPerMetre);
+    NodeBox box;
+    box.low = {static_cast<f64>(key.x) * span, static_cast<f64>(key.y) * span,
+               static_cast<f64>(key.z) * span};
+    box.high = {box.low.x + span, box.low.y + span, box.low.z + span};
+    return box;
+}
+
+SampleSettings node_sample_settings(const SampleSettings& base, const NodeKey& key) {
+    const NodeBox box = node_box(key);
+    SampleSettings settings = base;
+    settings.low = box.low;
+    settings.high = box.high;
+    settings.voxels_per_metre = node_voxels_per_metre(key.level);
+    return settings;
+}
+
+bool node_block(const SampleResult& sampled, const NodeKey& key, VoxelTypeId* types, u8* inside) {
+    const i32 per_metre = node_voxels_per_metre(key.level);
+    if (per_metre <= 0 || sampled.clip.empty()) return false;
+
+    // Where this node starts in the sample's own voxel grid. The node spans metres
+    // [c << level, (c+1) << level) / 32 and the sample is at 256 / 2^level voxels a metre, so the
+    // product is c * 8 exactly -- a node lands on an eight-voxel boundary of any sample taken at
+    // its own level, whatever that sample's own origin is, and nothing here has to round.
+    const i64 first[3] = {key.x * kNodeVoxels, key.y * kNodeVoxels, key.z * kNodeVoxels};
+    i64 at[3];
+    for (u32 axis = 0; axis < 3; ++axis) {
+        at[axis] = first[axis] - sampled.origin_voxel[axis];
+        if (at[axis] < 0 || at[axis] + kNodeVoxels > sampled.clip.size[axis]) return false;
+    }
+
+    for (i32 z = 0; z < kNodeVoxels; ++z) {
+        for (i32 y = 0; y < kNodeVoxels; ++y) {
+            for (i32 x = 0; x < kNodeVoxels; ++x) {
+                const usize from = sampled.clip.index(static_cast<i32>(at[0]) + x,
+                                                      static_cast<i32>(at[1]) + y,
+                                                      static_cast<i32>(at[2]) + z);
+                const usize to = static_cast<usize>(x) +
+                                 static_cast<usize>(y) * kNodeVoxels +
+                                 static_cast<usize>(z) * kNodeVoxels * kNodeVoxels;
+                if (types != nullptr) types[to] = sampled.clip.voxels[from];
+                if (inside != nullptr) inside[to] = sampled.clip.inside[from];
+            }
+        }
+    }
+    return true;
 }
 
 }  // namespace forge

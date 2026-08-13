@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <cmath>
 #include <vector>
 
 #include "core/jobs.hpp"
@@ -322,6 +323,219 @@ TEST_CASE("the sampler agrees with asking every voxel, whatever it skips") {
         must_match(sample(f, scatter, paint, settings, &jobs).clip,
                    brute_force(f, scatter, paint, settings), "scattered");
     }
+}
+
+// Every subcase above is at the world's own thirty-two voxels a metre, and until R11 nothing asked
+// the sampler for less except the clip ladder's one coarse rung. R11 asks for eight resolutions:
+// a node at level 8 is one voxel to the metre, where a voxel is larger than most of the building's
+// detail and the thin-feature rule is carrying the whole answer.
+//
+// This is where `--sample-cost` found the sampler disagreeing with ITSELF -- the same node came out
+// differently sampled alone and sampled inside the whole building, at one and two voxels a metre --
+// so the definition has to be asked which of the two is right.
+TEST_CASE("the sampler agrees with asking every voxel when a voxel is bigger than the detail") {
+    Materials m;
+    const VoxelTypeId stone = m.make(120);
+    const VoxelTypeId trim = m.make(200);
+
+    Field f;
+    // Slats a fifth of a metre thick, a plinth, and a scroll: at one voxel to the metre every one
+    // of these is thinner than a voxel, which is the case the coarse rungs of R11 are made of.
+    const u32 slat = f.box({0.05, 0.0, 0.0}, {0.05, 0.9, 0.25}, 0.0);
+    const u32 row = f.repeat(slat, {0.26, 0.0, 0.0}, {5.0, 0.0, 0.0});
+    const u32 plinth = f.box({0, -1.0, 0}, {1.4, 0.15, 1.4}, 0.0);
+    const u32 scroll = f.spiral({0, 1.2, 0}, 0.8, 0.45, 0.05, 2.0, 2);
+    const u32 all = f.unite({row, plinth, scroll});
+    f.build_bounds();
+
+    std::vector<PaintRule> paint;
+    paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+    paint.push_back(PaintRule{plinth, -1e30, 0.0, trim});
+
+    JobSystem jobs;
+    for (i32 per_metre : {1, 2, 4, 8, 16}) {
+        SampleSettings settings;
+        settings.low = {-2.0, -2.0, -2.0};
+        settings.high = {2.0, 2.0, 2.0};
+        settings.voxels_per_metre = per_metre;
+        CAPTURE(per_metre);
+        must_match(sample(f, all, paint, settings, &jobs).clip,
+                   brute_force(f, all, paint, settings), "coarse");
+    }
+}
+
+// And the same question asked of the BOX rather than of the resolution: the sampler settles whole
+// regions from one reading, and how much it can settle depends on how big a box it was handed. Two
+// boxes over the same voxels must still agree, or the world's geometry depends on how large a bite
+// it was sampled in -- which is what R11 is about to make vary from node to node.
+TEST_CASE("a small box and a big one agree about the voxels they share") {
+    Materials m;
+    const VoxelTypeId stone = m.make(120);
+
+    Field f;
+    const u32 slat = f.box({0.05, 0.0, 0.0}, {0.05, 0.9, 0.25}, 0.0);
+    const u32 row = f.repeat(slat, {0.26, 0.0, 0.0}, {5.0, 0.0, 0.0});
+    const u32 ball = f.sphere({0.4, 0.5, 0.3}, 0.35);
+    const u32 all = f.unite({row, ball});
+    f.build_bounds();
+
+    std::vector<PaintRule> paint;
+    paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+
+    JobSystem jobs;
+    for (i32 per_metre : {1, 2, 4, 32}) {
+        SampleSettings big;
+        big.low = {-4.0, -4.0, -4.0};
+        big.high = {4.0, 4.0, 4.0};
+        big.voxels_per_metre = per_metre;
+        const SampleResult whole = sample(f, all, paint, big, &jobs);
+
+        SampleSettings small = big;
+        small.low = {-1.0, -1.0, -1.0};
+        small.high = {1.0, 1.0, 1.0};
+        const SampleResult part = sample(f, all, paint, small, &jobs);
+
+        CAPTURE(per_metre);
+        REQUIRE(!part.clip.empty());
+        for (i32 z = 0; z < part.clip.size[2]; ++z) {
+            for (i32 y = 0; y < part.clip.size[1]; ++y) {
+                for (i32 x = 0; x < part.clip.size[0]; ++x) {
+                    const i32 at[3] = {
+                        static_cast<i32>(part.origin_voxel[0] - whole.origin_voxel[0]) + x,
+                        static_cast<i32>(part.origin_voxel[1] - whole.origin_voxel[1]) + y,
+                        static_cast<i32>(part.origin_voxel[2] - whole.origin_voxel[2]) + z};
+                    INFO("cell (" << x << ", " << y << ", " << z << ")");
+                    CHECK(part.clip.at(x, y, z) == whole.clip.at(at[0], at[1], at[2]));
+                }
+            }
+        }
+    }
+}
+
+// R11a's primitive, checked against the tree it is a mapping onto. Two structures answering one
+// question is this project's most repeated fault (trap 13), and "where is a node and how finely is
+// it asked" is about to be answered by the sampler as well as by the pool.
+TEST_CASE("a node is eight voxels a side at every level, on the pool's own grid") {
+    for (u32 level = kLeafLevel; level <= kCoarsestSampledLevel; ++level) {
+        const i32 per_metre = node_voxels_per_metre(level);
+        REQUIRE(per_metre > 0);
+
+        // Straddling the origin deliberately: the facility does, and a node grid that rounds
+        // towards zero is one node out on half the building.
+        for (i64 at : {i64{-3}, i64{-1}, i64{0}, i64{5}}) {
+            const NodeKey key{at, at + 1, at - 2, level};
+            const NodeBox box = node_box(key);
+
+            // The box is exactly the voxels the pool says the node covers.
+            const f64 per_world = static_cast<f64>(kVoxelsPerMetre);
+            CHECK(box.low.x * per_world == doctest::Approx(static_cast<f64>(key.x << level)));
+            CHECK(box.high.z * per_world ==
+                  doctest::Approx(static_cast<f64>((key.z + 1) << level)));
+            // And a voxel inside it belongs to that node, by the pool's own arithmetic.
+            const i64 inside_voxel = (key.x << level) + ((i64{1} << level) / 2);
+            CHECK(node_key_of(inside_voxel, inside_voxel, inside_voxel, level).x == key.x);
+
+            // Eight voxels a side, whatever the level, which is the whole point of 256 / 2^level.
+            const f64 span = box.high.x - box.low.x;
+            CHECK(span * static_cast<f64>(per_metre) == doctest::Approx(kNodeVoxels));
+        }
+    }
+    // The leaf is the world's own resolution and the coarsest node is a metre a voxel. If either
+    // of these moves, the ladder of levels no longer lands on the voxel grid at all.
+    CHECK(node_voxels_per_metre(kLeafLevel) == kVoxelsPerMetre);
+    CHECK(node_voxels_per_metre(kCoarsestSampledLevel) == 1);
+    CHECK(node_voxels_per_metre(kCoarsestSampledLevel + 1) == 0);
+}
+
+// The R11a gate, in miniature and headless. `--sample-cost` asks it of the facility at every
+// level; this asks it of the shapes most likely to break it, in a second, so a regression is
+// caught by test.bat rather than by somebody running the instrument.
+//
+// What could go wrong is not obvious, which is why it is checked rather than assumed: the sampler
+// settles a paint rule for a whole box from one reading at its centre, and a box eight voxels wide
+// gives it almost nothing to settle against. A rule that comes out differently at that size is a
+// world whose colour depends on how big a bite it was sampled in.
+TEST_CASE("a node sampled alone is the same node sampled inside a bigger box") {
+    Materials m;
+    const VoxelTypeId stone = m.make(120);
+    const VoxelTypeId moss = m.make(60);
+    const VoxelTypeId trim = m.make(200);
+
+    Field f;
+    // A displaced surface, a pattern-keyed coat and a shape with holes in it: the three things the
+    // sampler takes shortcuts on, all inside two metres so every level from the leaf up fits.
+    const u32 block = f.box({0, 0, 0}, {1.0, 0.5, 1.0}, 0.0);
+    const u32 grain = f.fbm(0.18, 3, 0.5, 2.0, 7u);
+    const u32 rough = f.displace(block, grain, 0.06);
+    const u32 hole = f.cylinder({0.3, 0, 0.3}, 0.2, 1.2, 1);
+    const u32 carved = f.subtract({rough, hole});
+    const u32 courses = f.stripes(1, 0.2, 0.15);
+    f.build_bounds();
+
+    std::vector<PaintRule> paint;
+    paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
+    paint.push_back(PaintRule{courses, 0.5, 1e30, trim});
+    paint.push_back(PaintRule{grain, 0.2, 1e30, moss});
+
+    SampleSettings authored;
+    authored.low = {-1.0, -1.0, -1.0};
+    authored.high = {1.0, 1.0, 1.0};
+
+    JobSystem jobs;
+    usize checked = 0;
+    for (u32 level = kLeafLevel; level <= kCoarsestSampledLevel; ++level) {
+        // The bigger box: everything, at this level's resolution, snapped out to this level's own
+        // node boundaries. Without the snap a two-metre box is half a node wide at level 6 and the
+        // nodes over it hang off the side of their own reference, which is a fault in the test
+        // rather than in the sampler -- and it is exactly what the instrument does for the same
+        // reason.
+        SampleSettings whole_settings = authored;
+        whole_settings.voxels_per_metre = node_voxels_per_metre(level);
+        const f64 node_m = static_cast<f64>(i64{1} << level) / static_cast<f64>(kVoxelsPerMetre);
+        whole_settings.low = {std::floor(authored.low.x / node_m) * node_m,
+                              std::floor(authored.low.y / node_m) * node_m,
+                              std::floor(authored.low.z / node_m) * node_m};
+        whole_settings.high = {std::ceil(authored.high.x / node_m) * node_m,
+                               std::ceil(authored.high.y / node_m) * node_m,
+                               std::ceil(authored.high.z / node_m) * node_m};
+        const SampleResult whole = sample(f, carved, paint, whole_settings, &jobs);
+        if (whole.clip.empty()) continue;
+
+        const i64 nodes[3] = {whole.clip.size[0] / kNodeVoxels, whole.clip.size[1] / kNodeVoxels,
+                              whole.clip.size[2] / kNodeVoxels};
+        std::vector<VoxelTypeId> want_types(static_cast<usize>(kNodeVoxels) * kNodeVoxels *
+                                            kNodeVoxels);
+        std::vector<u8> want_inside(want_types.size());
+        for (i64 z = 0; z < nodes[2]; ++z) {
+            for (i64 y = 0; y < nodes[1]; ++y) {
+                for (i64 x = 0; x < nodes[0]; ++x) {
+                    // One node in three at the finest level. Every node there is five hundred and
+                    // twelve separate samples, and this runs on every test.bat; the coarser levels
+                    // are walked entire.
+                    if (level == kLeafLevel && ((x + y + z) % 3) != 0) continue;
+                    const NodeKey key{(whole.origin_voxel[0] >> kLeafLevel) + x,
+                                      (whole.origin_voxel[1] >> kLeafLevel) + y,
+                                      (whole.origin_voxel[2] >> kLeafLevel) + z, level};
+                    REQUIRE(node_block(whole, key, want_types.data(), want_inside.data()));
+
+                    const SampleResult alone =
+                        sample(f, carved, paint, node_sample_settings(authored, key), &jobs);
+                    REQUIRE(alone.clip.size[0] == kNodeVoxels);
+
+                    Clip expected;
+                    expected.size[0] = kNodeVoxels;
+                    expected.size[1] = kNodeVoxels;
+                    expected.size[2] = kNodeVoxels;
+                    expected.voxels = want_types;
+                    expected.inside = want_inside;
+                    must_match(alone.clip, expected, "one node against the box around it");
+                    ++checked;
+                }
+            }
+        }
+    }
+    // Trap 10 in the test rather than in the instrument: a check that ran over nothing passes.
+    CHECK(checked > 100);
 }
 
 TEST_CASE("the sampler gives the same answer with a job system and without") {

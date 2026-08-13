@@ -4931,3 +4931,113 @@ it was discovered there.
 | D612 | **§3 states what it does not cover** | correctness | Its four rules govern fetching, not making, and all four can be kept while the reported fault stands |
 | D612 | **R2b's second half is blocked on R12, and says so now** | plan | Eviction can only give up what it can afford to rebuild; that had never been written down as the blocker |
 | D612 | **Nothing is built by this entry** | honesty | It amends the plan. R11a has not started |
+
+## D613 — R11a: what one node costs, and the sampler disagreeing with itself
+
+**The instrument R11 is not allowed to be sized without.** `--sample-cost`, driven by
+`tools/samplecost.ps1`, samples one node at a time over the facility at every level a node can be
+asked at — `256 / 2^level` voxels a metre, which is 32 at the level-3 leaf and 1 at an eight-metre
+node — times it, and compares that node against **the same node read out of the biggest box that
+will fit**, voxel for voxel and mask for mask.
+
+Everything this project knows about the sampler is whole-building or whole-region: 2,381 ms for the
+facility at metre 8, 624 to 7,406 ms for a twelve-metre box at metre 32. **Nothing anywhere said
+what eight voxels cost**, and R11b, R11c and R11d are all trades against that number.
+
+### What one node costs, facility, 8 workers, RelWithDebInfo
+
+| level | node | voxels/m | nodes with matter | one node, ms | median | empty node | penalty |
+|---|---|---|---|---|---|---|---|
+| 3 | 0.25 m | 32 | 269,337 | **1.389** | 0.692 | 0.213 | **21.5×** |
+| 4 | 0.50 m | 16 | 42,062 | 1.857 | 1.092 | 0.418 | 7.9× |
+| 5 | 1.00 m | 8 | 7,558 | 2.402 | 2.503 | 0.531 | 5.1× |
+| 6 | 2.00 m | 4 | 1,464 | 2.462 | 1.357 | 0.349 | 2.7× |
+| 7 | 4.00 m | 2 | 330 | 2.324 | 1.277 | 0.562 | 1.1× |
+| 8 | 8.00 m | 1 | 72 | 2.502 | 1.229 | 0.219 | 1.2× |
+
+The penalty is like for like: what the reference boxes cost **in one call**, against what the same
+boxes cost **asked one node at a time** — their solid nodes at a solid node's price and their empty
+ones at an empty node's. Dividing a box by all its nodes instead divides by mostly air and flatters
+the small box by an order of magnitude, which is the first version of this table and it was wrong.
+
+Three readings, and the third is the one R11b acts on:
+
+- **The whole facility at the leaf, node by node, is 269,337 × 1.389 ms = 374 core-seconds.** The
+  eighteen-box ladder reaches the same detail in about 133 s of wall clock. R11 does not sample the
+  whole building — that is the point of it — but any sub-step that might is now priced.
+- **The job pool buys nothing at this size.** 1.389 ms with eight workers against 1.391 with none,
+  at every level, to three digits. Eight voxels a side is eight z slabs and the wake-up is the work.
+- **The fixed cost is the PAINT RULES, not the box.** An empty node — nothing to do but arrive and
+  answer "nothing here" — is 0.213 ms on the facility's 139 rules and **0.012 ms on
+  `clips/sampler.clip`'s four**, eighteen times cheaper for the same eight voxels. `sample()` works
+  out every rule's slack, its box and its pieces on every call, and a node pays that in full for an
+  answer about a quarter of a metre. On the level-3 reference boxes that setup is **19.3 of the
+  29.7 predicted seconds** — most of the penalty above is not the sampling, it is the arriving.
+
+### And the agreement check, which failed
+
+At one and two voxels a metre the same node came out **differently** sampled alone and sampled
+inside the whole building: **17 of 32 nodes at level 8**, 1 of 32 at level 7, 108 cells in all — 87
+of them matter the node found and the box did not, 21 the other way. Levels 3 to 6 agreed.
+
+Neither arm was right. `tests/test_sample.cpp` asks the fast sampler to agree with the brute-force
+definition — ask every voxel at its centre, and keep a cell a feature thinner than a voxel passes
+through — and every subcase did that **at thirty-two voxels a metre only**. Asked at two, it failed
+in one line: cell (2,6,3) is air in the sampler and stone in the definition.
+
+**The fault is one term missing from one comparison.** A box is settled empty in bulk when the
+field at its centre is further out than anything inside it could be near: `dc > radius + slack`.
+But "near" for a leaf voxel is not nought — the thin-feature rescue keeps a cell whose centre is
+outside by up to **half a cell diagonal**, because that is how far a surface can be from a centre
+and still cross the cell. The box test never allowed for it, so a box could hand back air over
+cells the per-voxel rule would have kept. At 32 voxels a metre that reach is 2.7 cm and it almost
+never bites; at one voxel a metre it is **87 cm** and it bites constantly — and *which* cells it ate
+depended on how the descent happened to have cut the box up, which is why one node disagreed with
+itself.
+
+Fixed by adding the term: `dc > reach + rescue`, with `rescue` nought for a single voxel so the
+per-voxel path is exactly what it was, and the same term added to the bounds mask's own settle for
+the same reason. `kHalfCellDiagonal` is now one constant in one place rather than a number the
+rescue carried and the box test did not know about.
+
+**What it costs: about 3%, and the first answer was 37%.** A 12 m region at metre 32, three runs of
+the pre-fix build against four of the fixed one: **12,829 ms against 13,267**, with the spreads
+overlapping (12,314–13,431 against 12,978–13,777). The 37% came from **two** samples of a control
+arm that happened to run at 9.5 s while every other run of that binary shape ran at 13. Trap 9,
+walked into with the trap's own words in the file.
+
+**What it changes in the world: nothing at the resolutions the game uses today.** The facility at
+metre 8 is 1,959,046 solid voxels in both arms, and a 12 m region at metre 32 is 20,339,776 in
+both. It changes matter only where the voxel is bigger than the detail — the four-per-metre scout
+gained 103 cells — which is exactly the range R11 is about to start asking for.
+
+### A cost that appeared in no number, found on the way
+
+The fix widened the band of cells that reach `thin_feature_here`, the run got slower, and the shape
+and paint core-milliseconds between them accounted for **8% of it**. The function makes up to eight
+evaluations of the REAL root — displacement, noise and all — and **none of them was counted or
+timed by anything**: not by `evals`, not by `where`, not by the per-rule table. 5.68 M evaluations
+and 27.5 core-seconds of a 13-second sample, invisible since the function was written. It is
+counted now, through an optional out-parameter, and timed into the shape's own figure. Traps 17 and
+18, in the oldest code in `src/forge/`.
+
+### What is NOT done
+
+R11a and nothing else. `plan_refine_regions` still cuts eighteen boxes, the ladder still has two
+rungs, and a cold load still counts voxels at a bar — b, c and d are what change that. The
+despeckle pass is measured and left alone: **29 of 297 nodes come out different when it is run per
+node rather than per box**, because it decides what is a deliberate stipple from a material's share
+of a whole clip's surface and a node is 512 cells. That is R11b's to answer, and it is recorded
+rather than fixed here.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D613 | **The instrument first, and nothing after it sized without it** | method | Every sampler figure this project had was whole-building; three of R11's sub-steps trade against one node |
+| D613 | **A box may not settle empty inside half a cell diagonal of the surface** | correctness | The thin-feature rescue keeps cells that far out, and a settled box never asks it. Two arms of one sampler disagreed by 108 cells |
+| D613 | **`kHalfCellDiagonal` is one constant in one place** | correctness | The rescue carried the number and the box test did not know it existed — D204's rule, in the sampler |
+| D613 | **`thin_feature_here` counts and times its own evaluations** | method | 5.68 M evaluations and 27.5 core-seconds appeared in no figure the sampler reports |
+| D613 | **The agreement check is a gate, not a report** | method | `--sample-cost` returns non-zero on a disagreement, names the first cell, and says which way it went |
+| D613 | **The penalty is measured like for like** | honesty | Reference cost against the same box asked node by node, solid at solid price and empty at empty; per-node averages divide by air |
+| D613 | **The fixed cost is per RULE and is 85% of an empty node** | measurement | 0.213 ms on 139 rules against 0.012 on four. That is the number R11b has to attack, and it is not the voxels |
+| D613 | **The pool is not worth waking for one node** | measurement | 1.389 ms threaded against 1.391 serial, at every level |
+| D613 | **Despeckle per node is recorded, not fixed** | honesty | 29 of 297 nodes differ; it is a whole-clip judgement and R11b owns it |

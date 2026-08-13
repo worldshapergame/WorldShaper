@@ -32,6 +32,7 @@
 #include "core/types.hpp"
 #include "forge/field.hpp"
 #include "game/clip.hpp"
+#include "world/node_pool.hpp"
 #include "world/voxel_type.hpp"
 
 namespace ws {
@@ -105,6 +106,63 @@ struct SampleSettings {
     // millions of them.
     bool count_rule_cost = false;
 };
+
+// --------------------------------------------------------------------------------------
+// A node is the unit the world is sampled in — R11.
+//
+// The renderer has asked for geometry a NODE at a time since R1: `NodePool::request` carries a
+// level, and a level is a pixel footprint (R2a, D190). Everything to the left of `World` went on
+// answering in regions — eighteen fixed boxes at one of two fixed resolutions, all chosen before
+// the first frame is drawn — which is the whole reason a pixel-driven renderer still had a
+// loading bar, a blocky first minute and detail arriving in slabs (D611).
+//
+// What follows is the entire mapping from a node to a sample, and it lives here rather than at
+// each caller for D204's reason: the box a node covers and the resolution it is asked at must be
+// one answer in one place, or the world is derived at a detail its own level disagrees with.
+//
+//   level 3   a brick:                    0.25 m at 32 voxels a metre
+//   level 6   two metres:                 2.00 m at  4
+//   level 8   what used to be a chunk:    8.00 m at  1
+//
+// Note what falls out of `256 / 2^level`: EVERY node is eight voxels a side, at every level. A
+// node is one brick's worth of data whatever its size — which is why one budget covers the whole
+// tree, and why "resolution follows how many pixels a thing covers" needs no second rule to keep
+// it true. It is the same rule the marcher already runs on.
+// --------------------------------------------------------------------------------------
+
+// Eight, at every level, and derived rather than written down.
+inline constexpr i32 kNodeVoxels = 1 << kLeafLevel;
+
+// The coarsest node that can be sampled at all. Below one voxel per metre there is no integer
+// resolution left to ask for, so a node above this is FOLDED from its children — which is what
+// the pool already does with colour and coverage, and is not this file's business.
+constexpr u32 coarsest_sampled_level() {
+    u32 level = 0;
+    for (i32 per_metre = kVoxelsPerMetre << kLeafLevel; per_metre > 1; per_metre >>= 1) ++level;
+    return level;
+}
+inline constexpr u32 kCoarsestSampledLevel = coarsest_sampled_level();
+
+// How finely a node at `level` is asked: 256 / 2^level. Zero above kCoarsestSampledLevel, which
+// is the caller's signal to fold rather than to sample.
+constexpr i32 node_voxels_per_metre(u32 level) {
+    return (level <= kCoarsestSampledLevel) ? ((kVoxelsPerMetre << kLeafLevel) >> level) : 0;
+}
+
+// The box a node covers, in metres. A `NodeKey` holds a node's coordinate at its own level, so it
+// spans world voxels [c << level, (c+1) << level) and this is that, divided by the world's own
+// resolution.
+struct NodeBox {
+    Vec3 low;
+    Vec3 high;
+};
+NodeBox node_box(const NodeKey& key);
+
+// Where to sample one node. Everything that is not the box and the resolution — the bounds shape,
+// centre sampling, whether rule costs are counted — is carried over from `base`, which is the
+// clip's own settings, so a node is sampled the way the whole building is sampled and differs
+// from it in exactly the two things this function sets.
+SampleSettings node_sample_settings(const SampleSettings& base, const NodeKey& key);
 
 // No two voxels alike.
 //
@@ -186,6 +244,17 @@ struct SampleResult {
     std::vector<u64> rule_evaluations;
 };
 
+// The block of voxels a node covers inside a sample of a BIGGER box taken at that node's own
+// resolution — the same node, read out of the box that contains it. False when the node is not
+// wholly inside that sample. Either output may be null, and each holds kNodeVoxels cubed entries.
+//
+// This is here for R11a's agreement check, and that check is not a formality: a small box is not
+// obviously the same question as a big one. The sampler settles paint rules for a region, and a
+// rule keyed on a pattern has almost no box to settle against when the box is eight voxels wide.
+// `--clip-part` already paints differently from the whole building (D609, D610) — that is a part
+// restriction rather than a box restriction, and nobody has told the two apart at this size.
+bool node_block(const SampleResult& sampled, const NodeKey& key, VoxelTypeId* types, u8* inside);
+
 // Fill a clip from a field.
 //
 // `jobs` may be null, in which case it runs on the calling thread. With a job system it splits
@@ -236,7 +305,14 @@ struct VariationReport {
 // not delete it. Exposed because the sampler and its brute-force reference in the tests must apply
 // the SAME rule -- the test compares the two, and a rule implemented in only one of them would make
 // the comparison meaningless rather than strict.
-bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64 voxel);
+//
+// `evaluations`, when given, is increased by how many times the field was asked. It exists because
+// this function's cost appeared in NO number the sampler reports: D613 widened the band of cells
+// that reach it, the run got 37% slower, and the shape and paint core-milliseconds between them
+// accounted for 8% of that. A cost that no instrument covers is this project's most repeated
+// measurement fault (traps 17 and 18) and it does not need a third outing.
+bool thin_feature_here(const Field& field, u32 root, Vec3 p, f64 outside_by, f64 voxel,
+                       u64* evaluations = nullptr);
 
 VariationReport apply_variation(Clip& clip, VoxelTypeTable& types, const Field& field,
                                 const Variation& variation, const SampleSettings& settings,
