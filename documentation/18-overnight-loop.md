@@ -193,6 +193,38 @@ time if the message carried one, otherwise re-asking every ten minutes with the 
 question the preflight uses. When that answers, it **retries the same iteration** from a fresh
 session. Nothing had been committed, so there is nothing half-done to reconcile.
 
+### If it says usage is spent and it is not
+
+**It could, and it cost a whole night.** The check read the entire iteration log
+as one string and matched a list of single words against it — and an iteration's
+log is the full stream-json: every token count, every uuid, every line of every
+file the model read, and every word it wrote. In an 18 MB log from a run that
+never came near a limit:
+
+| pattern | hits | what they actually were |
+| --- | --- | --- |
+| `429` | 138 | a token count (`42996`), a uuid (`6429ebf7…`), a **source line number** (`2429:`) in a file the model had read |
+| `rate.?limit` | 31 | mostly `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed",…}}` — an event that says in as many words that the request was **allowed** |
+| `quota` | 3 | the word "quotations" |
+
+So the loop declared itself out of usage on the strength of an event saying it
+was fine. It now reads **structure and not prose**: a `rate_limit_info` whose
+status is anything but `allowed`, an API error of type `rate_limit_error` or a
+429 status field, or the whole sentence the CLI prints — and only on lines
+carrying a result, an error or a rate-limit event, never in the model's own words
+or in a file it read.
+
+### And it waited an hour without checking
+
+The same scrape took the *reset time* out of that same "allowed" event — the
+boundary of the ordinary five-hour window, which exists whether or not anything
+is limited — and then slept **straight through to it in one slice**. A reset an
+hour away meant a solid hour with no check, and the promise below of trying again
+every ten minutes was quietly not kept in exactly the case where a time had been
+found. The slice is capped at ten minutes now; a reset still ends the wait
+promptly, it just no longer replaces the poll. The reset time is read only from a
+line that has already proved a limit, and one already in the past is ignored.
+
 By default it waits as long as it takes, which is the point of leaving it running. To give up
 after a while instead:
 

@@ -359,35 +359,94 @@ function Test-ClaudeReady($claudePath, $model) {
 # So: recognise it, wait, and pick up the same iteration afterwards. The wait
 # does not burn anything; it sleeps, and every ten minutes it asks the same
 # trivial question the preflight asks. When that answers, the usage is back.
+# It used to read the WHOLE log as one string and match a list of broad words
+# against it, and that was wrong in a way that only shows on a log big enough to
+# contain everything. An iteration's log is the full stream-json: every token
+# count, every uuid, every line of every file the model read, and every word it
+# wrote. In an 18 MB log from a night that never came near a limit:
+#
+#   "429"        138 hits -- a token count (42996), a uuid (6429ebf7...), and a
+#                SOURCE LINE NUMBER (2429:) out of a file the model had read
+#   "rate.?limit" 31 hits -- almost all of them inside
+#                {"type":"rate_limit_event","rate_limit_info":{"status":"allowed",...}},
+#                a routine telemetry event that says in as many words that the
+#                request was ALLOWED
+#   "quota"        3 hits -- inside the word "quotations"
+#
+# So the loop declared itself out of usage on the strength of an event that said
+# it was fine, and went to sleep for the rest of the night. The comment above
+# claimed the cost of a false positive was "ten minutes of sleeping"; it was the
+# whole night, because nothing rechecked in a way that could clear it.
+#
+# The cure is to stop reading prose and read STRUCTURE. Three things say a limit
+# was really hit, and none of them can be spelled by accident:
+#
+#   1. a rate_limit_info whose status is anything other than "allowed";
+#   2. an API error object of type rate_limit_error or a 429 STATUS field;
+#   3. the human sentence the CLI prints, which is unambiguous on its own.
+#
+# And they are looked for only in the lines that carry a result, an error or a
+# rate-limit event -- never in the model's own words or in a file it read, which
+# is where every one of the 172 false hits above came from.
 function Test-UsageExhausted($logPath, $errPath) {
-    $text = ""
-    if (Test-Path $logPath) { $text += (Get-Content $logPath -Raw) }
-    if (Test-Path $errPath) { $text += (Get-Content $errPath -Raw) }
-    if (-not $text) { return @{ hit = $false } }
+    $lines = @()
+    if (Test-Path $logPath) { $lines += (Get-Content $logPath) }
+    if (Test-Path $errPath) { $lines += (Get-Content $errPath) }
+    if ($lines.Count -eq 0) { return @{ hit = $false } }
 
-    # Deliberately broad. The wording of a limit message is not something this
-    # file controls, and the cost of missing one is a night; the cost of a false
-    # positive is ten minutes of sleeping and one tiny question.
-    $patterns = @(
-        "usage limit reached", "usage limit will reset", "out of usage",
-        "rate.?limit", "429", "quota", "insufficient credit",
-        "upgrade to increase your usage", "limit_error", "exceeded your"
-    )
+    # The sentence the CLI prints when a subscription is spent. Matched anywhere,
+    # because it is a whole sentence and cannot turn up by accident -- unlike the
+    # single words that used to be in this list.
+    $said = @("usage limit reached", "usage limit will reset",
+              "upgrade to increase your usage")
+
     $hit = $false
-    foreach ($p in $patterns) { if ($text -imatch $p) { $hit = $true; break } }
-    if (-not $hit) { return @{ hit = $false } }
-
-    # A reset time if one was offered, so the wait is exact rather than a poll.
-    # Epoch seconds or milliseconds; anything else falls through to polling,
-    # which is why nothing here has to be clever.
+    $evidence = ""
     $until = $null
-    $m = [regex]::Match($text, '(?i)reset[^0-9]{0,40}(\d{10,13})')
-    if ($m.Success) {
-        $n = [double]$m.Groups[1].Value
-        if ($n -gt 99999999999) { $n = $n / 1000 }
-        try { $until = [DateTimeOffset]::FromUnixTimeSeconds([long]$n).LocalDateTime } catch { }
+    foreach ($line in $lines) {
+        # Only the lines that can carry a verdict. A line of the model's prose or
+        # a tool result quoting a file is not evidence about usage.
+        $structural = ($line -match '"rate_limit_info"') -or
+                      ($line -match '"type"\s*:\s*"result"') -or
+                      ($line -match '"type"\s*:\s*"error"') -or
+                      ($line -match '"is_error"\s*:\s*true')
+        if (-not $structural) { continue }
+
+        # 1. A rate-limit event that is not "allowed". This is the one that
+        #    matters and the one the old list read backwards.
+        $rl = [regex]::Match($line, '"rate_limit_info"\s*:\s*\{[^}]*"status"\s*:\s*"([^"]+)"')
+        if ($rl.Success -and $rl.Groups[1].Value -ne "allowed") {
+            $hit = $true; $evidence = "rate_limit_info status=" + $rl.Groups[1].Value
+        }
+        # 2. A real API rate-limit error, by type or by HTTP status field.
+        if ($line -match '"(?:type|code)"\s*:\s*"rate_limit_error"' -or
+            $line -match '"status(?:_code)?"\s*:\s*429\b') {
+            $hit = $true; if (-not $evidence) { $evidence = "rate_limit_error" }
+        }
+        # 3. What the CLI says out loud.
+        foreach ($s in $said) {
+            if ($line -imatch [regex]::Escape($s)) {
+                $hit = $true; if (-not $evidence) { $evidence = $s }
+            }
+        }
+
+        # The reset time, taken ONLY from a line that has already proved a limit.
+        # Scraping it from anywhere in the log is how the old code came away with
+        # the boundary of the ordinary five-hour window -- a time that exists
+        # whether or not anything is limited -- and then slept until it.
+        if ($hit -and $null -eq $until) {
+            $m = [regex]::Match($line, '(?i)reset[^0-9]{0,40}(\d{10,13})')
+            if ($m.Success) {
+                $n = [double]$m.Groups[1].Value
+                if ($n -gt 99999999999) { $n = $n / 1000 }
+                try { $until = [DateTimeOffset]::FromUnixTimeSeconds([long]$n).LocalDateTime } catch { }
+            }
+        }
     }
-    return @{ hit = $true; until = $until }
+    if (-not $hit) { return @{ hit = $false } }
+    # A reset already in the past is not a reset; polling handles it.
+    if ($until -and $until -le (Get-Date)) { $until = $null }
+    return @{ hit = $true; until = $until; why = $evidence }
 }
 
 # Sleeps in short slices so that stopping stays instant while it waits. A loop
@@ -410,11 +469,26 @@ function Wait-ForUsage($claudePath, $model, $until, $maxHours, $stopPath, $wrapP
             return @{ resumed = $false; stopped = $false }
         }
 
-        # Until the stated reset if there was one, otherwise ten minutes.
+        # Ten minutes at most, even when a reset time is known.
+        #
+        # This used to sleep straight through to the stated reset in ONE slice --
+        # `$sliceTarget = $left` -- so a reset an hour away meant a solid hour with
+        # no check at all. That is the "it only waits an hour" people see, and the
+        # promise three lines above it, "trying again every ten minutes", was
+        # quietly not kept in exactly the case where a time was found.
+        #
+        # It is worse than a missed opportunity. Usage often comes back before the
+        # advertised reset, and the reset itself was being scraped out of the wrong
+        # event (see Test-UsageExhausted), so the loop could sleep an hour against a
+        # deadline that never meant anything.
+        #
+        # The reset still ends the wait promptly -- the slice is shortened when less
+        # than ten minutes is left -- it just no longer replaces the poll.
         $sliceTarget = 10
         if ($until) {
             $left = [math]::Ceiling(($until - (Get-Date)).TotalMinutes)
-            if ($left -gt 0) { $sliceTarget = $left } else { $sliceTarget = 1; $until = $null }
+            if ($left -le 0) { $until = $null; $sliceTarget = 1 }
+            elseif ($left -lt $sliceTarget) { $sliceTarget = $left }
         }
 
         for ($m = 0; $m -lt $sliceTarget; $m++) {
