@@ -5365,3 +5365,83 @@ R11b's to fix rather than R11d's. Do that before assuming it is the coarse build
 | D618 | **The report is open and D617 did not close it** | honesty | D617 made the lumps brief; they are the up-front coarse build and only R11d removes them |
 | D618 | **The occlusion tolerance is a named suspect** | plan | It fell from twelve metres to a quarter when the unit became a node; 4,096 of 20,020 nodes are refused on it |
 | D618 | **`--refine-all` against a normal settle is the test** | method | One flag separates "not yet" from "never", and neither answer should be assumed |
+
+---
+
+## D619 — the ladder was starved, and that is what the lumps were
+
+D618 named two candidate causes for the "huge brick blocks on top of things" and said the one-flag
+test that separates them had not been run. It has now been run, and it could not have answered
+anything: **both arms were timeouts.** `--settle` was hitting `kSettleGiveUp` at 180 seconds on
+every run, so the test compared two worlds that were still mid-refinement, not two fixed points.
+The constant 181.3–181.6 s wall clock across all four arms should have given it away at the time.
+
+What the ladder was actually doing was found by adding a **census** beside the settle line: a level
+histogram of coarse-against-total, plus, for every node left coarse, which of the picker's three
+tests refused it. The column that matters is **"neither"** — a node that passes every visibility
+test and simply never got into a batch. There is no legitimate reason for that number to be above
+zero at a fixed point, and it was **721**.
+
+### The three tests have different tenures, and that is the bug
+
+- A node with nothing in it, or already at its finest, is marked `done` and never looked at again.
+- A node **behind the camera** is demoted, `keen *= 0.05`.
+- A node **behind something** is refused by an occlusion ray and **not marked at all**, because the
+  camera will move and it will stop being hidden.
+
+The third one is the clog. An unmarked refusal re-enters the shortlist *every frame for the rest of
+the run*, and the nodes behind a wall are big and near — exactly what the rank rewards — so they
+sat permanently at the head of a shortlist of sixty-four while the nodes that could actually be
+sampled were crowded out below the cut. Measured on the enclosed camera: **3,102 of 3,628 leftovers
+refused as occluded, 478 refusable by nothing at all.** The batch of sixteen was delivering **1.22
+nodes**, and exactly **1.00** over the last five hundred batches — the winner of the main sweep,
+which is picked by a separate loop that does not use the shortlist. The ladder was taking one node
+a frame and never reaching its fixed point at all.
+
+D618 was right about *where* — the occlusion test — and wrong about *why*. The tolerance is not too
+tight. The refusal is not remembered.
+
+### Two changes, measured separately
+
+1. **The shortlist goes from 64 to 512, and the facing demotion moves into the cheap sweep** so it
+   ranks the way the main sweep ranks. Three multiplies, no ray, and the loop stops as soon as the
+   batch is full, so D617's one-sweep-no-rays property is untouched.
+2. **`RefineNode::refuse_until`** — an occlusion refusal is remembered for `kRefuseFor = 32` wakes
+   (about half a second) instead of being rediscovered every frame. It expires on a timer rather
+   than being cleared when the camera moves, because a paste can hollow out a wall as easily as a
+   turn can step around it, and a timer covers both without either having to be detected. The main
+   sweep does not consult it: the single best node in the world is still found by testing all of
+   them.
+
+Enclosed camera `0,0,0,-90,0`, 1280×800, quality 7, `--settle`, each arm run twice and the second
+taken:
+
+| | baseline | + shortlist | + refusal memo |
+|---|---|---|---|
+| settle | **timed out, 180 s** | **timed out, 180 s** | **fixed point at frame 3438** |
+| batches / nodes / mean | 5,727 / 6,996 / **1.22** | 6,012 / 11,056 / **1.84** | 1,528 / 23,324 / **15.26** |
+| last 500 batches, mean | 1.00 | 1.00 | **14.02** |
+| nodes sharpened | 10,486 of 12,796 | 15,839 of 19,467 | **32,680 of 40,394** |
+| left coarse, "neither" | **721** | **478** | **0** |
+| solid voxels | 125,489,864 | 125,483,078 | 125,419,666 |
+
+Not one node is now left unrefined for want of throughput, and the solid-voxel count moves 0.06%,
+so nothing was traded away for it. Reading the two screenshots: the urns go from lumpy blobs to a
+defined profile with lid, scrollwork and stepped base; the niche arches from a jagged grey
+staircase to a smooth moulded arch; the door from a muddy brown grid to a panelled face with gold
+studs; and the brick-sized blotches on the walls are gone.
+
+**The GPU figures are not comparable and must not be quoted as a speed-up.** The baseline's
+`30.350 ms` is a mean over 5,849 frames — the whole run, including all the refinement churn —
+because it never settled, so "measuring from here" never fired. The fixed run's `6.801 ms` is over
+the 30 frames after its fixed point. The honest statement is that a settled steady state now exists
+and holds 6.80 ms mean, 6.95 worst, carrying 2.6× the sharpened nodes; there is no settled baseline
+to compare it against, and that absence is the point.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D619 | **The one-flag test of D618 is void** | honesty | Both arms hit the 180 s give-up; it compared two timeouts, not two fixed points |
+| D619 | **The lumps were starvation, not the coarse build** | finding | The batch of sixteen delivered 1.22 nodes and 721 were refusable by nothing at all |
+| D619 | **An occlusion refusal is remembered, not rediscovered** | fix | Unmarked refusals re-enter the shortlist every frame and outrank what can be sampled |
+| D619 | **The census is the instrument for the ladder** | method | "Neither" must be zero at a fixed point; it is the only column that cannot be explained away |
+| D619 | **R11d is deferred and is still owed** | plan | The coarse build is the floor under the first frame; this bug was downstream of it and had to go first |

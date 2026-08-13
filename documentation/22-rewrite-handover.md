@@ -643,27 +643,47 @@ eighteen-box ladder build **byte-identical worlds** with despeckling off (`a1f8b
    differ on `sampler.clip`, 0 of 297 on the facility**. D613's class one step along. What is left
    without the skirt is 46 cells of 152,064 on the facility wearing a neighbour's colour.
 
-#### OPEN: "huge brick blocks on top of things", reported twice
+#### CLOSED: "huge brick blocks on top of things", reported twice -- it was starvation (D619)
 
 Reported with a photograph of an urn standing as a slab of coarse cubes in a niche whose walls were
-already sharp, and reported again after D617. **Read D617 and D618 before touching it.**
+already sharp, and reported again after D617. **Read D619**, and read D617 and D618 only for how the
+diagnosis went wrong, because it did.
 
-The blocks are the up-front coarse build -- eight voxels a metre blown up four times, so anything
-slimmer than 12 cm enters the world fattened into a cube. They are not new (the same frame from the
-pre-R11b build has them); what is new is that everything around them now sharpens fast, so they
-stand out. D617 made them brief -- batching sixteen nodes a wake, ranking by how much a sample
-improves rather than by size on screen, and a 379 ms frame down to 15 -- and **the report came back
-anyway**, which is the honest state of it.
+**This section used to say the blocks were the up-front coarse build and that R11d removed the
+cause. That was wrong.** The blocks were the refinement ladder never getting to those nodes.
 
-**R11d removes the cause.** With nothing sampled up front there is no inflated coarse world to leave
-lumps in the first place.
+The evidence is a **census** printed beside the settle line: a level histogram, plus which of the
+picker's three tests refuses each node left coarse. The column that matters is **"neither"** -- a
+node that passes every visibility test and simply never got into a batch. At a fixed point there is
+no honest reason for it to be above zero. It was **721**.
 
-**But run the one-flag test first**: settle at a camera that shows a lump, then settle again with
-`--refine-all`. That flag turns off the facing and occlusion tests. If the lump survives the first
-and not the second it is not the coarse build at all -- it is the occlusion tolerance, which was
-twelve metres when the unit was a region and is **a quarter of a metre** now, and which refused
-**4,096 nodes of 20,020** on the last settled run. That would be R11b's fault, not R11d's, and
-building R11d on top of it would leave a hole in the world instead of a lump.
+The cause is that the picker's three tests have different tenures. A node with nothing in it, or
+already at its finest, is marked `done` for good. A node behind the camera is demoted. But a node
+**behind something** is refused by an occlusion ray and **not marked at all** -- correctly, because
+the camera will move. So it comes back every frame, and the nodes behind a wall are big and near,
+which is exactly what the rank rewards, so they sat permanently at the head of a shortlist of
+sixty-four and crowded out everything that could actually be sampled. The batch of sixteen was
+delivering **1.22 nodes**, and exactly **1.00** by the end.
+
+Fixed by two changes: the shortlist went 64 -> 512 with the facing demotion folded into the cheap
+sweep, and an occlusion refusal is now **remembered** for `kRefuseFor = 32` wakes instead of being
+rediscovered every frame. Batch mean **1.22 -> 15.26**, nodes sharpened **10,486 -> 32,680**,
+"neither" **721 -> 0**, and the run reaches a fixed point instead of timing out. The urns have lids
+and handles again.
+
+**Two traps this left behind, and both are load-bearing:**
+
+- **`--settle` never settled.** It was hitting `kSettleGiveUp` (180 s) on every run, which is why
+  the wall clock was a suspiciously constant 181.3-181.6 s across four arms. **That voids the
+  one-flag test of D618** -- it compared two timeouts, not two fixed points. Any measurement taken
+  before D619 that relied on `--settle` reaching a fixed point should be re-read with that in mind.
+- **A GPU mean is only comparable to another GPU mean over the same window.** An unsettled run
+  averages the whole 180 s including refinement churn; a settled one averages the frames after its
+  fixed point. `30.350 ms over 5,849 frames` against `6.801 ms over 30 frames` is not a speed-up
+  and must not be quoted as one.
+
+R11d is still owed and is still the headline -- but it is about **what is drawn before the ladder
+gets there**, which is what it always should have been, and not about this bug.
 
 #### R11c is done as well -- start at R11d
 

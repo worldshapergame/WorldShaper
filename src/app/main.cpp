@@ -1522,6 +1522,38 @@ private:
     // of sampling and about eight milliseconds of pasting -- inside R11b's 16 ms gate with room to
     // spare, and twenty times the rate.
     static constexpr usize kRefineBatch = 16;
+    // How many wakes a node refused by the occlusion ray is left out of the batch for.
+    //
+    // A batch of sixteen was still delivering one node a batch, and the reason was not the picker's
+    // arithmetic but its forgetfulness. The three tests have different tenures: a node with nothing
+    // in it, or already at its finest, is marked `done` and never looked at again -- but a node
+    // BEHIND SOMETHING is refused without being marked, because the camera will move and it will
+    // stop being behind something. So it stays in the list, and it is big and near, which is
+    // exactly what the rank rewards, so it sits at the head of the shortlist and is refused again
+    // next frame, and the frame after, for the length of the run. Measured on the enclosed camera:
+    // 3,102 of 3,628 leftovers refused as occluded, 478 refusable by nothing at all -- and those
+    // 478 never got into a batch, because the 3,102 were ranked above them and the shortlist ran
+    // out first. The batch had one member: the winner of the main sweep, which is picked by a
+    // separate loop that does not use the shortlist.
+    //
+    // So the refusal is remembered for a while instead of being rediscovered every frame. Thirty-two
+    // wakes is about half a second: long enough that the clog clears -- a third of a second in, the
+    // shortlist holds the nodes that can be sampled rather than the ones that cannot -- and short
+    // enough that a node revealed by the camera turning waits half a second at worst, which is
+    // under the time the sample and the paste take anyway. It expires on a timer rather than being
+    // cleared when the camera moves, because a paste can hollow out a wall as easily as a turn can
+    // step around it, and a timer covers both without either having to be detected.
+    //
+    // The main sweep does NOT consult this. The single best node in the world is always found by
+    // testing every node; only the fifteen that ride along with it are picked from the shortlist.
+    //
+    // Measured, same camera: the batch went from 1.84 nodes to 15.26, the last five hundred batches
+    // from 1.00 to 14.02, nodes sharpened from 15,839 to 32,680, and the run reached a fixed point
+    // at frame 3438 rather than hitting the 180-second give-up. The census it is judged by is the
+    // "neither" column -- nodes the picker refuses for no reason it can name -- which went 721, then
+    // 478, then zero. Solid voxels moved 0.06%, so nothing was traded away for it.
+    static constexpr u64 kRefuseFor = 32;
+    u64 refine_wake_ = 0;
     struct RefineJob {
         usize at = 0;                       // which node in the list
         forge::SampleSettings settings;
@@ -1576,6 +1608,11 @@ private:
         // It starts at whatever the up-front coarse build laid down, is set to the node's own
         // resolution when it is refined, and is inherited by children when a node splits.
         i32 applied_per_metre = 0;
+        // The wake at which this node may be offered to the batch again after the occlusion ray
+        // refused it. See `kRefuseFor`: a refusal is remembered rather than rediscovered, because
+        // a node the picker refuses is never marked done and would otherwise come back to the head
+        // of the shortlist every frame for the rest of the run.
+        u64 refuse_until = 0;
     };
     std::vector<RefineNode> refine_regions_;
     usize refine_region_ = 0;   // the one being sampled right now
@@ -1631,6 +1668,9 @@ private:
     // splitting, because below it a node would be asked for a detail the clip does not have.
     u32 refine_finest_level() const;
     bool refine_would_improve(const RefineNode& node) const;
+    // What the ladder actually looks like when it stops: a level histogram and, for the nodes it
+    // left coarse, WHICH of the picker's tests is refusing them. Printed beside the settle line.
+    std::string refine_census() const;
     // Pick a half-built world back up: adopt the cache's flags onto the planned grid and leave
     // the ladder standing if anything is still coarse.
     void resume_refinement(forge::Script&& script, const WorldCache& cache,
@@ -2424,6 +2464,10 @@ void Application::start_refinement() {
         return;
     }
 
+    // One wake, one tick. This is what the occlusion refusals in `refine_candidate` are dated
+    // against; see kRefuseFor.
+    ++refine_wake_;
+
     // Nearest first, measured from where the camera is now rather than from where it was when the
     // list was made. Somebody who walks across the building while it sharpens should have the far
     // side come good as they arrive, not have the near side finished behind them.
@@ -2602,22 +2646,54 @@ void Application::start_refinement() {
     // cast for every front runner, all on the main thread. Measured: a **379 ms** frame. So the
     // sweep happens once and keeps a shortlist of the best few by rank -- arithmetic only, no rays
     // -- and the expensive tests are then paid for only by the handful that could still win.
-    constexpr usize kShortlist = kRefineBatch * 4;
+    // Deep enough that the batch still fills when most of the shortlist is refused, and ranked the
+    // same way the main sweep ranks -- facing demotion included.
+    //
+    // Sixty-four entries ranked without the facing demotion looked like a generous margin over a
+    // batch of sixteen and was not one. A node the picker refuses is never marked done, so it comes
+    // back into the shortlist every frame for the rest of the run: the nodes behind the camera and
+    // the nodes behind a wall are big and near, they rank high on size-over-distance alone, and
+    // they sat in the shortlist for ever while the nodes that could actually be sampled were
+    // crowded out below the cut. Measured on the enclosed camera: 5,727 batches delivered 6,996
+    // nodes -- 1.22 a batch against a batch size of sixteen, and exactly 1.00 over the last five
+    // hundred batches, because `best` from the main sweep was the only member that ever survived.
+    // The ladder took one node a frame and never reached its fixed point at all: `--settle` hit its
+    // 180-second give-up on every run, which is also why the one-flag test of D618 compared two
+    // timeouts rather than two fixed points and has to be read as telling us nothing.
+    //
+    // The facing demotion is three multiplies and it costs no ray, so it belongs in the cheap pass
+    // rather than being discovered by the expensive one. Depth is what covers the rest: the loop
+    // below stops as soon as the batch is full, so a deeper shortlist is only walked as far as it
+    // has to be, and D617's one-sweep-no-rays property is untouched.
+    //
+    // This alone took the mean to 1.84 and still ended at 1.00 a batch; it needed `kRefuseFor` as
+    // well before the ladder converged. Together they give 15.26 a batch, 14.02 over the last five
+    // hundred, and a fixed point at frame 3438.
+    constexpr usize kShortlist = kRefineBatch * 32;
     usize short_at[kShortlist];
     f64 short_rank[kShortlist];
     usize short_count = 0;
     for (usize i = 0; i < refine_regions_.size(); ++i) {
         const RefineNode& box = refine_regions_[i];
         if (box.done) continue;
+        if (box.refuse_until > refine_wake_) continue;
         const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
         const f64 dy = std::max({box.low.y - cy, 0.0, cy - box.high.y});
         const f64 dz = std::max({box.low.z - cz, 0.0, cz - box.high.z});
         const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
         const f64 across = std::max({box.high.x - box.low.x, box.high.y - box.low.y,
                                      box.high.z - box.low.z});
-        const f64 rank = (across / std::max(away, 0.5)) *
-                         (static_cast<f64>(refine_resolution(box.key.level)) /
-                          static_cast<f64>(std::max(1, box.applied_per_metre)));
+        f64 rank = (across / std::max(away, 0.5)) *
+                   (static_cast<f64>(refine_resolution(box.key.level)) /
+                    static_cast<f64>(std::max(1, box.applied_per_metre)));
+        const f64 to_x = (box.low.x + box.high.x) * 0.5 - cx;
+        const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
+        const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
+        const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
+        if (reach > 1e-6 && !options_.refine_all &&
+            (to_x * fx + to_y * fy + to_z * fz) / reach < 0.0) {
+            rank *= 0.05;
+        }
         if (short_count == kShortlist && rank <= short_rank[kShortlist - 1]) continue;
         usize at = (short_count < kShortlist) ? short_count++ : kShortlist - 1;
         while (at > 0 && short_rank[at - 1] < rank) {
@@ -3057,19 +3133,32 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
     if (reach > 1e-6 && !options_.refine_all) {
         const f64 v = static_cast<f64>(kVoxelsPerMetre);
         const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
-        if (blocked.hit && blocked.distance < (reach - across) * v) return false;
+        if (blocked.hit && blocked.distance < (reach - across) * v) {
+            // Remembered, not just refused. See kRefuseFor.
+            refine_regions_[at].refuse_until = refine_wake_ + kRefuseFor;
+            return false;
+        }
     }
 
     // HOW MUCH BETTER this sample would make the world, against how big it is on screen. The two
     // are different questions and only the first was being asked.
     //
     // Reported as "huge brick blocks on top of things when they load", with a photograph of an urn
-    // standing as a slab of quarter-metre cubes in a niche whose walls were already sharp. The
-    // blocks are the up-front coarse build -- eight voxels a metre blown up four times, so every
-    // feature slimmer than 12 cm arrives fattened into a lump -- and they are not new. What is new
-    // is that the ladder now sharpens the near walls and floor in seconds, so the lumps are left
-    // standing against surroundings that are already right, where the old ladder left the whole
-    // room blocky for a minute and nothing stood out.
+    // standing as a slab of quarter-metre cubes in a niche whose walls were already sharp.
+    //
+    // This comment used to blame the up-front coarse build, and that was wrong. The measurement
+    // that settled it is the ladder census beside the settle line: on the enclosed camera the
+    // ladder was delivering 1.22 nodes per batch of sixteen, exactly 1.00 by the end, and it never
+    // reached a fixed point at all -- `--settle` was hitting its 180-second give-up every run. The
+    // urn was not blocky because the coarse build made it blocky; it was blocky because the ladder
+    // was starved and never got to it. With the starvation fixed (see `kShortlist` and
+    // `kRefuseFor`) the same camera settles at frame 3438, sharpens 32,680 nodes against 10,486,
+    // and the urn has a lid, handles and a stepped base. The coarse build is still the floor under
+    // the first frame and is R11d's business, not this bug's.
+    //
+    // What is true in the original reading is the ORDER: the ladder sharpens near walls and floor
+    // first, so anything it has not reached yet stands out against surroundings that are already
+    // right. That is what the ratio below is for.
     //
     // Ranking by screen size alone spends the first several thousand samples taking the floor you
     // are standing on from 8 voxels a metre to 32 -- where the coarse answer was already very
@@ -3145,6 +3234,65 @@ bool Application::refine_node_is_a_no_op(const RefineNode& node) const {
         static_cast<i64>(std::ceil(node.high.y * per)) - 1 + refine_at_[1],
         static_cast<i64>(std::ceil(node.high.z * per)) - 1 + refine_at_[2]};
     return !any_matter_in(world_, low, high);
+}
+
+// Why the ladder stopped where it did, in one line.
+//
+// "settled with N regions this camera cannot see" was an assertion, not a measurement: nothing
+// checked that the leftovers really were behind something, and nothing said how BIG they were. A
+// node left coarse at eight metres and a node left coarse at a quarter of a metre are different
+// faults -- the first is a room behind a wall and is correct, the second is a lump on an urn six
+// metres away and is not. The histogram tells them apart, and the refusal tally says which of the
+// picker's two visibility tests is responsible, so the next person does not have to guess between
+// them the way this one did.
+//
+// Const, and it deliberately does not mark anything done: a report that changes what it reports on
+// is worthless. It repeats the arithmetic of `refine_candidate` rather than calling it for exactly
+// that reason.
+std::string Application::refine_census() const {
+    const f64 cx = camera_.metres_x();
+    const f64 cy = camera_.metres_y();
+    const f64 cz = camera_.metres_z();
+    const f64 cp = std::cos(camera_.pitch());
+    const f64 fx = std::cos(camera_.yaw()) * cp;
+    const f64 fy = std::sin(camera_.pitch());
+    const f64 fz = std::sin(camera_.yaw()) * cp;
+
+    usize per_level[forge::kCoarsestSampledLevel + 1] = {};
+    usize coarse_at_level[forge::kCoarsestSampledLevel + 1] = {};
+    usize behind = 0;
+    usize occluded = 0;
+    usize idle = 0;
+    for (const RefineNode& box : refine_regions_) {
+        const u32 level = std::min<u32>(box.key.level, forge::kCoarsestSampledLevel);
+        ++per_level[level];
+        if (box.done) continue;
+        ++coarse_at_level[level];
+
+        const f64 across = std::max({box.high.x - box.low.x, box.high.y - box.low.y,
+                                     box.high.z - box.low.z});
+        const f64 to_x = (box.low.x + box.high.x) * 0.5 - cx;
+        const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
+        const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
+        const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
+        if (reach <= 1e-6) { ++idle; continue; }
+        if ((to_x * fx + to_y * fy + to_z * fz) / reach < 0.0) { ++behind; continue; }
+        const f64 v = static_cast<f64>(kVoxelsPerMetre);
+        const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
+        if (blocked.hit && blocked.distance < (reach - across) * v) { ++occluded; continue; }
+        ++idle;
+    }
+
+    std::string levels;
+    for (u32 level = 0; level <= forge::kCoarsestSampledLevel; ++level) {
+        if (per_level[level] == 0) continue;
+        if (!levels.empty()) levels += " ";
+        levels += "L" + std::to_string(level) + " " + std::to_string(coarse_at_level[level]) + "/" +
+                  std::to_string(per_level[level]);
+    }
+    if (levels.empty()) levels = "no nodes";
+    return levels + "; left coarse: " + std::to_string(behind) + " behind the camera, " +
+           std::to_string(occluded) + " occluded, " + std::to_string(idle) + " neither";
 }
 
 // A cached world is not necessarily a finished one, and this is what tells them apart.
@@ -7578,12 +7726,16 @@ int Application::play(const Options& options) {
                             "NOT comparable with another run; take it with --settle",
                             unrefined);
             } else if (unrefined > 0) {
-                // Settled, and still short. Expected: a region behind a wall is skipped by the
-                // occlusion test in start_refinement and stays coarse while the camera stands
-                // here. Said out loud so the number is not read as a failure.
-                WS_LOG_INFO("frame",
-                            "settled with {} regions this camera cannot see; they stay coarse",
-                            unrefined);
+                // Settled, and still short. The expected reason is that a region behind a wall is
+                // skipped by the occlusion test in start_refinement and stays coarse while the
+                // camera stands here -- but that was only ever an assumption, and a settled run
+                // that leaves a lump on something in plain view looks exactly the same from here.
+                // So the census says which test refused each leftover and at what size, and the
+                // sentence claims no cause of its own.
+                WS_LOG_INFO("frame", "settled with {} regions left coarse", unrefined);
+            }
+            if (!refine_regions_.empty()) {
+                WS_LOG_INFO("frame", "ladder: {}", refine_census());
             }
             // Averages, not the last frame. One frame's GPU time moves several per cent from
             // clock and scheduling alone, so a figure another build has to beat has to be a
