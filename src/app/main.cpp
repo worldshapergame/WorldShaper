@@ -7871,6 +7871,47 @@ int run_clip_tool(const Options& options) {
                         boxed ? "boxed" : "NO BOX", wrote,
                         script.paint[i].facing_axis < 3 ? " +normal" : "");
         }
+
+        // AND THE RULES THAT NEVER FIRED AT ALL, which the table above can never show, because it
+        // is sorted by cost and truncated: a rule that did nothing is at the bottom of a list
+        // whose top is the only part anybody reads.
+        //
+        // This is a defect and not a curiosity. `paint gilt where=rotunda_urns` cost nothing,
+        // painted nothing, and left four urns wearing the base coat in a room built around what
+        // they would reflect -- silently, because a rule that does not fire produces no error, no
+        // warning and no difference anybody can point at without knowing what the urn was meant
+        // to be. measure.hpp has claimed since it was written that the histogram "catches a paint
+        // rule that never fires". It catches it only if somebody knows the answer already. This
+        // says it.
+        //
+        // Zero is not always wrong -- `--clip-part` builds one fragment, so every rule belonging
+        // to the other twenty-one is legitimately idle -- which is why this counts them and names
+        // them rather than failing.
+        {
+            std::vector<usize> idle;
+            for (usize i = 0; i < built.rule_evaluations.size(); ++i) {
+                if (built.rule_evaluations[i] == 0) idle.push_back(i);
+            }
+            if (!idle.empty()) {
+                std::printf("never fired   %zu of %zu rules painted nothing%s\n", idle.size(),
+                            built.rule_evaluations.size(),
+                            options.clip_part.empty()
+                                ? " -- each one is a coat somebody wrote and nothing wears"
+                                : " (one part only, so most of these belong to other fragments)");
+                for (usize n = 0; n < idle.size() && n < 24; ++n) {
+                    const usize i = idle[n];
+                    const u32 type = script.paint[i].type;
+                    const char* name = (type < script.material_names.size() &&
+                                        !script.material_names[type].empty())
+                                           ? script.material_names[type].c_str()
+                                           : "?";
+                    const char* wrote = (i < script.paint_source.size())
+                                            ? script.paint_source[i].c_str()
+                                            : "?";
+                    std::printf("  idle       %-12s %s\n", name, wrote);
+                }
+            }
+        }
     }
 
     // Slices, asked for as `axis,at` or `axis,at,step`. More than one may be given.
@@ -7918,6 +7959,71 @@ int run_clip_tool(const Options& options) {
                     static_cast<unsigned long long>(walk.surfaces), walk.max_rise,
                     static_cast<f64>(walk.max_rise) / static_cast<f64>(per_metre),
                     walk.max_rise_at[0], walk.max_rise_at[1], walk.max_rise_at[2]);
+
+        // WHAT IT IS MADE OF. The header of measure.hpp has advertised this since the file was
+        // written -- "histogram: how much of each material, which catches a paint rule that never
+        // fires" -- and it was computed on every run and printed on none of them. It is the first
+        // thing anybody wants with `--clip-part`: a part that should be one material and comes
+        // back as four has been painted by something that does not belong to it, and until now
+        // finding out which meant reading colours off a screenshot.
+        //
+        // Measured on the BUILT clip and not the varied one, for the same reason the speck audit
+        // is: variation mints a record per voxel, so a histogram taken after it is a list of
+        // nine hundred thousand materials with one voxel each.
+        {
+            const forge::Measurement what =
+                forge::measure(built.clip, script.settings.voxels_per_metre);
+            if (!what.types.empty()) {
+                std::printf("made of       %zu materials\n", what.types.size());
+                for (const forge::TypeShare& share : what.types) {
+                    const char* name = (share.type < script.material_names.size() &&
+                                        !script.material_names[share.type].empty())
+                                           ? script.material_names[share.type].c_str()
+                                           : "?";
+                    std::printf("  %-12s #%-4u %10llu  %6.2f%%\n", name,
+                                static_cast<unsigned>(share.type),
+                                static_cast<unsigned long long>(share.count),
+                                share.fraction * 100.0);
+                }
+            }
+        }
+
+        // And single voxels wearing the wrong material. See paint_specks: run on the BUILT clip
+        // and not the varied one, because variation gives almost every voxel a record of its own
+        // and after it every voxel is alone in its type.
+        const forge::SpeckReport dots = forge::paint_specks(built.clip);
+        std::printf("specks        %llu of %llu surface voxels alone in their material (%.3f%%)\n",
+                    static_cast<unsigned long long>(dots.specks),
+                    static_cast<unsigned long long>(dots.surface),
+                    100.0 * static_cast<f64>(dots.specks) /
+                        static_cast<f64>(std::max<u64>(1, dots.surface)));
+        for (const forge::TypeShare& share : dots.by_type) {
+            const char* name = (share.type < script.material_names.size() &&
+                                !script.material_names[share.type].empty())
+                                   ? script.material_names[share.type].c_str()
+                                   : "?";
+            // A dither is meant to look like this and an accident is not, and the fraction is
+            // what tells them apart -- tens of per cent against a fraction of one. Said on the
+            // line rather than left to be worked out, because the whole value of this number is
+            // that somebody reads it without having been told what to look for.
+            const char* verdict = (share.fraction > 0.05) ? "a stipple, presumably deliberate"
+                                                          : "SCATTERED -- check what is 2 cm away";
+            // The type id as well as the name. Several ids can carry ONE name — a fragment is
+            // allowed to re-declare a material with its own properties — and a report listing
+            // "marble" eight times with eight different counts is a report nobody can act on.
+            std::printf("  %-12s #%-4u %8llu  %6.2f%% of its own surface   %s\n", name,
+                        static_cast<unsigned>(share.type),
+                        static_cast<unsigned long long>(share.count), share.fraction * 100.0,
+                        verdict);
+        }
+        for (const forge::Speck& one : dots.examples) {
+            const char* name = (one.type < script.material_names.size() &&
+                                !script.material_names[one.type].empty())
+                                   ? script.material_names[one.type].c_str()
+                                   : "?";
+            std::printf("  speck      %-12s at (%d,%d,%d)\n", name, one.at[0], one.at[1],
+                        one.at[2]);
+        }
     }
 
     // Alignment: which parts nearly line up with each other, and by how much they miss.

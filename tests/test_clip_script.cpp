@@ -13,6 +13,7 @@
 
 #include "forge/clip_script.hpp"
 #include "forge/measure.hpp"
+#include "game/clip.hpp"
 #include "forge/sample.hpp"
 #include "world/tags.hpp"
 #include "world/voxel_type.hpp"
@@ -522,4 +523,67 @@ TEST_CASE("a part beside the world wins over the one the game ships, and is the 
     }
 
     std::filesystem::remove_all(root, ignored);
+}
+
+TEST_CASE("paint specks: a voxel alone in its material is found, a thin line is not") {
+    // The audit behind D609. A speck is a solid voxel touching air whose six face neighbours are
+    // none of them its own material -- which is what a paint rule bleeding two centimetres onto
+    // its neighbour leaves behind, and what nothing else here can see: the volume is right, the
+    // components are right because a speck is welded to what it sits on, and two voxels out of
+    // forty thousand do not move a histogram.
+    //
+    // Three cases, because the value of the number is entirely in what it does NOT flag.
+    Clip clip;
+    clip.size[0] = clip.size[1] = clip.size[2] = 7;
+    clip.voxels.assign(7 * 7 * 7, kAir);
+    clip.inside.assign(7 * 7 * 7, 1);
+    const VoxelTypeId stone = 11;
+    const VoxelTypeId gilt = 12;
+
+    // A solid slab of one material, THREE voxels deep so there is a genuinely buried layer.
+    // Two was not enough and the test caught it: the underside of a two-deep slab is a face
+    // touching air, so every voxel in it is on the surface and nothing is buried at all.
+    for (i32 z = 1; z <= 5; ++z) {
+        for (i32 x = 1; x <= 5; ++x) {
+            for (i32 y = 1; y <= 3; ++y) clip.voxels[clip.index(x, y, z)] = stone;
+        }
+    }
+    clip.build_coarse();
+    CHECK(paint_specks(clip).specks == 0);
+
+    // One voxel of another material dropped into the top face. Alone on all six sides, touching
+    // air above: exactly the report.
+    clip.voxels[clip.index(3, 3, 3)] = gilt;
+    clip.build_coarse();
+    {
+        const SpeckReport dots = paint_specks(clip);
+        REQUIRE(dots.specks == 1);
+        REQUIRE(dots.by_type.size() == 1);
+        CHECK(dots.by_type[0].type == gilt);
+        REQUIRE(dots.examples.size() == 1);
+        CHECK(dots.examples[0].at[0] == 3);
+        CHECK(dots.examples[0].at[1] == 3);
+        CHECK(dots.examples[0].at[2] == 3);
+    }
+
+    // A ONE-VOXEL-WIDE INLAY LINE of the same material is not a speck and must never be reported
+    // as one: consecutive voxels along it are face neighbours of each other. This is the case
+    // that decides whether the number is usable at all -- the building is full of lines a voxel
+    // and a half across, and an audit that cried about every one of them would be turned off.
+    for (i32 x = 1; x <= 5; ++x) clip.voxels[clip.index(x, 3, 3)] = gilt;
+    clip.build_coarse();
+    {
+        const SpeckReport dots = paint_specks(clip);
+        CHECK(dots.specks == 0);
+    }
+
+    // And a buried voxel of the wrong material is not reported, because nobody can see it. The
+    // fraction printed beside the count would otherwise sit on a denominator no one can look at.
+    for (i32 x = 1; x <= 5; ++x) clip.voxels[clip.index(x, 3, 3)] = stone;
+    clip.voxels[clip.index(3, 2, 3)] = gilt;   // the middle layer, stone on all six faces
+    clip.build_coarse();
+    {
+        const SpeckReport dots = paint_specks(clip);
+        CHECK(dots.specks == 0);
+    }
 }

@@ -462,5 +462,88 @@ std::string report(const Measurement& m, const std::vector<std::string>* names) 
     return out;
 }
 
+SpeckReport paint_specks(const Clip& clip, usize examples_per_type) {
+    SpeckReport out;
+    if (clip.empty()) return out;
+
+    // Counts by material. A map and not a vector indexed by type id: type ids are minted by the
+    // world's table and are not dense, and a clip that uses six of them should not carry an array
+    // as long as the largest one.
+    std::map<VoxelTypeId, u64> surface;
+    std::map<VoxelTypeId, u64> specks;
+    std::map<VoxelTypeId, usize> shown;
+
+    const auto type_at = [&](i32 x, i32 y, i32 z) -> VoxelTypeId {
+        if (x < 0 || y < 0 || z < 0 || x >= clip.size[0] || y >= clip.size[1] ||
+            z >= clip.size[2]) {
+            return kAir;
+        }
+        return clip.at(x, y, z);
+    };
+
+    for (i32 z = 0; z < clip.size[2]; ++z) {
+        for (i32 y = 0; y < clip.size[1]; ++y) {
+            for (i32 x = 0; x < clip.size[0]; ++x) {
+                const VoxelTypeId mine = clip.at(x, y, z);
+                if (mine == kAir) continue;
+
+                const VoxelTypeId around[6]{
+                    type_at(x - 1, y, z), type_at(x + 1, y, z), type_at(x, y - 1, z),
+                    type_at(x, y + 1, z), type_at(x, y, z - 1), type_at(x, y, z + 1),
+                };
+                bool exposed = false;
+                bool kin = false;
+                for (const VoxelTypeId near : around) {
+                    if (near == kAir) {
+                        exposed = true;
+                    } else if (near == mine) {
+                        kin = true;
+                    }
+                }
+                // Buried voxels are not examined at all, rather than examined and found innocent.
+                // What is under the surface is nobody's business and counting it would put the
+                // fraction below on a denominator no one can see.
+                if (!exposed) continue;
+
+                ++out.surface;
+                ++surface[mine];
+                if (kin) continue;
+
+                ++out.specks;
+                ++specks[mine];
+                // A FEW PER MATERIAL, not the first few found.
+                //
+                // Taken in scan order the whole list came back as twelve limestone voxels off one
+                // cornice, because the scan starts at the bottom of the building and limestone is
+                // most of it -- so the one material anybody already knew about crowded out the
+                // twenty-six they did not. The point of a coordinate here is to put a camera on
+                // the fault, and the faults are never all in one material.
+                if (shown[mine] < examples_per_type) {
+                    ++shown[mine];
+                    Speck one;
+                    one.type = mine;
+                    one.at[0] = x;
+                    one.at[1] = y;
+                    one.at[2] = z;
+                    out.examples.push_back(one);
+                }
+            }
+        }
+    }
+
+    for (const auto& entry : specks) {
+        TypeShare share;
+        share.type = entry.first;
+        share.count = entry.second;
+        const auto seen = surface.find(entry.first);
+        const u64 of = (seen == surface.end()) ? 0 : seen->second;
+        share.fraction = (of > 0) ? static_cast<f64>(entry.second) / static_cast<f64>(of) : 0.0;
+        out.by_type.push_back(share);
+    }
+    std::sort(out.by_type.begin(), out.by_type.end(),
+              [](const TypeShare& a, const TypeShare& b) { return a.count > b.count; });
+    return out;
+}
+
 }  // namespace forge
 }  // namespace ws

@@ -4483,3 +4483,116 @@ should be treated as one before it is explained away as style.
 | D608 | **The control arm is the manifest stashed, same binary** | measurement | Components, floating voxels and walkability had to be shown unchanged, not argued to be |
 | D608 | **A comment claiming an ordering the code does not have is a defect** | process | "The voids come last so nothing put in afterwards can be eaten" was already written above the line that ate it |
 | D608 | **An object a player cannot name is a bug report** | process | This one was visible in every hall render for weeks and read as intended design |
+
+## D609 — three numbers the clip report never printed, and what they said about the specks
+
+**Reported from playing, with two photographs:** *"i notice that there are some remnants of metal on
+the lights of the things you just added as well as some remnants of green voxels on the urns inside,
+check that this type of error will never happen again"*.
+
+The second half of that is the interesting half. A single voxel of the wrong material is beneath
+every number the clip report printed:
+
+- **volume** is right — a speck is one voxel in a hundred and twenty-seven million;
+- **components** are right — a speck is welded to what it sits on, so connectivity says nothing;
+- the **histogram** is right to four decimal places, and was never printed anyway;
+- and a screenshot of the building is four orders of magnitude too coarse to hold one.
+
+The only instrument that had ever found one was a person standing next to it. So three things are
+printed now, on every `--clip-file` measurement, and each of them is a class of fault that had no
+witness before.
+
+### 1. `made of` — the histogram, at last
+
+`measure.hpp` has advertised it since it was written — *"histogram: how much of each material, which
+catches a paint rule that never fires"* — and it was computed on every run and printed on none of
+them. Taken on the **built** clip and not the varied one: `variation` mints a record per voxel, so a
+histogram after it is a list of nine hundred thousand materials with one voxel each.
+
+It is the first thing anybody wants from `--clip-part`. A part that should be one material and comes
+back as four has been painted by something that does not belong to it, and finding out which used to
+mean reading colours off a screenshot.
+
+### 2. `never fired` — rules that painted nothing
+
+The cost table above it is sorted by cost and truncated at twelve, so a rule that did nothing sits
+at the bottom of a list whose top is the only part anyone reads. A rule that never fires produces no
+error, no warning, and no difference anybody can point at without already knowing what the surface
+was meant to look like.
+
+The facility: **1 of 138**, a `fissure` weathering coat. One is a good answer and it is worth knowing
+it is one.
+
+### 3. `specks` — a voxel alone in its material
+
+A solid voxel that touches air on at least one face and shares its material with **none** of its six
+face neighbours. Diagonal contact does not count as kin, deliberately: a chain touching only at
+corners reads as scattered dots exactly as a bleed does. A genuine one-voxel-wide inlay line is not
+flagged, because consecutive voxels along it are face neighbours — and that case has a test, because
+it is the one that decides whether the number is usable at all. An audit that cried about every thin
+line in this building would be turned off within a day.
+
+Reported **per material with a fraction of that material's own surface**, which separates the two
+cases without a threshold having to be invented:
+
+| | specks | of its own surface |
+|---|---|---|
+| a weathering dither | thousands | tens of per cent |
+| an accident | a handful | a fraction of one |
+
+The facility: **2486 of 8,288,998 surface voxels (0.030%)**, across 27 material ids. The largest by
+far is limestone at 7.91% of its own surface, which is a stipple and is meant to be.
+
+### And then what it said about the two things reported
+
+**The urns are innocent.** Sampling the box round one urn in the assembled building: porphyry 44.3%
+(the pedestal), gilt 35.9% (the urn), verde 19.8% (the niche lining behind it) — and **zero specks**.
+There is no green voxel on the urn. What is on the urn is the niche, in it: `rotunda.clip` paints
+these gilt at `metal=225 rough=64`, the sharpest specular in the contract, standing inside a verde
+hemisphere, and says in its own words that *"what it reflects is the room, and whether it reflects
+the room is the question"*. It reflects the room. It reads as blotchy because a voxel face carries
+one colour, so two adjacent faces of a near-mirror can show quite different parts of the niche.
+
+That is an inference from the measurement rather than a measurement of its own — what is measured is
+that no foreign material is present.
+
+**The lamps are the grid.** One hall sconce: bronze 294 voxels, of which **3 are specks**, at the
+join where the bronze rim meets the glowing bowl. `fittings.clip` had already fattened that rim once
+for a related failure, from 0.036 to M/8, on the argument that *"a ring that has to close round a
+curve cannot be allowed to break"*. So the obvious move was to fatten it again. Measured at three
+widths, one box, everything else identical:
+
+| rim tube across | bronze voxels | specks |
+|---|---|---|
+| M/8 = 0.0562 (today) | 294 | **3** |
+| M/6.7 = 0.0675 | 308 | **2** |
+| M/5 = 0.0900 | 368 | **3** |
+
+**It is not the width.** Three, two, three — fattening the metal moves the speck and does not remove
+it, and the middle row is noise, not a trend. Two curved surfaces of different materials meeting on a
+32-per-metre grid will leave the occasional voxel of one poking into the other, and no width fixes
+that because the width is not what makes it. So nothing was changed: the rim keeps M/8, and the arm,
+the stay and the volutes keep the dimensions `fittings.clip` spends four paragraphs defending as the
+renderer load they exist to be.
+
+### The reusable half
+
+**"Make sure this never happens again" is a request for an instrument, not a patch.** Two of the
+three things reported here turned out not to be faults at all, and there was no way to know that
+before the instrument existed — the urn looked exactly as wrong as the lamp did, and one of them was
+a feature working. Guessing at either would have had a fifty per cent chance of removing something
+the building is for.
+
+And: **a report that prints only the top of a sorted list can never show you a zero.** The rule that
+did nothing is the one you most need named, and it is the one that sorting by cost hides.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D609 | **Specks are counted per material with a fraction of that material's own surface** | measurement | A dither and a bleed are the same number and opposite fractions; one threshold would have to be invented and would be wrong |
+| D609 | **Face neighbours only — diagonal contact is not kin** | correctness | A chain touching at corners reads as scattered dots, which is the fault; a one-voxel inlay line does not, and has a test |
+| D609 | **Run on the built clip, never the varied one** | correctness | Variation mints a record per voxel, after which every voxel is alone in its type and every voxel is a speck |
+| D609 | **Rules that fired zero times are named, not sorted to the bottom** | measurement | The cost table is truncated, so the one rule that did nothing is the one it cannot show |
+| D609 | **The histogram is printed** | measurement | Computed since the file was written, advertised in its header, never once shown |
+| D609 | **The lamp rim is NOT widened** | correctness | Measured at three widths: 3, 2, 3 specks. It is a curved material boundary on a 3 cm grid, and width is not what makes it |
+| D609 | **Nothing changed on the urns** | correctness | Zero specks in their box; the green is the niche reflected in a near-mirror, which is what the urns are there to test |
+| D609 | **Examples are taken per material, not in scan order** | measurement | The first twelve were all limestone off one cornice, crowding out the twenty-six materials nobody had looked at |

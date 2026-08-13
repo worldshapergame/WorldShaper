@@ -21,6 +21,8 @@
 //   profile       a slice printed as text, for when a number is not enough and a picture is too
 //                 much
 //   histogram     how much of each material, which catches a paint rule that never fires
+//   specks        voxels alone in their material, which catches a paint rule that fires
+//                 where it should not -- see paint_specks
 //
 // # Why exposed faces rather than a triangle count
 //
@@ -172,6 +174,60 @@ struct Walkability {
 // walls stop the flood rather than failing it — the question is what you can reach, not whether
 // the clip contains a cliff.
 Walkability walkability(const Clip& clip, i32 max_step, i32 head_room);
+
+// PAINT SPECKS — a voxel of one material alone on a surface of another.
+//
+// Reported from playing, twice in one sitting: *"remnants of metal on the lights"* and *"remnants
+// of green voxels on the urns"*. Both were single voxels wearing a material that belongs to
+// something 2 cm away, and both are invisible to every number this file already prints. Volume is
+// right. Components are right — a speck is welded to what it sits on, so connectivity says
+// nothing. The histogram is right to four decimal places, because two voxels out of forty
+// thousand do not move a fraction. And a screenshot of the whole building is far too small to
+// show one. The only witness was somebody standing next to it.
+//
+// A speck is a SOLID voxel that
+//   1. touches air on at least one face — a buried voxel is not a stray dot, whatever it is
+//      made of; and
+//   2. shares its material with NONE of its six face neighbours.
+//
+// Diagonal contact does not count as kin, deliberately: a chain of voxels touching only at
+// corners is what a shattered thin feature looks like, and it reads as scattered dots exactly
+// like a bleed does. A genuine one-voxel-wide ring or inlay line is NOT flagged, because
+// consecutive voxels along it are face neighbours of each other.
+//
+// # Reading it: a stipple and an accident look nothing alike
+//
+// Some materials are MEANT to be speckly. A weathering coat keyed on noise — the facility's
+// desert and overgrown coats — paints a dither, and a dither is mostly specks by construction.
+// So this reports a fraction as well as a count, and the two cases separate on it without any
+// threshold having to be invented:
+//
+//   a stipple    thousands of specks, tens of per cent of that material's own surface
+//   an accident  a handful of specks, a fraction of a per cent
+//
+// Which is the whole reason it is per material rather than one number for the clip.
+//
+// Run on the clip BEFORE `variation` is applied. Variation mints a distinct voxel record per
+// voxel — 95% distinct on a small fitting — so after it every voxel is alone in its type and
+// every voxel is a speck. That is not a subtlety this can defend itself against; it is a caller's
+// obligation and it is why the parameter is a Clip and not a SampleResult.
+struct Speck {
+    VoxelTypeId type = 0;
+    i32 at[3]{0, 0, 0};
+};
+
+struct SpeckReport {
+    u64 surface = 0;                  // solid voxels touching air, the population examined
+    u64 specks = 0;
+    // Per material, biggest count first. `count` is specks; `fraction` is of THAT material's
+    // own surface, which is what tells a dither from a mistake.
+    std::vector<TypeShare> by_type;
+    std::vector<Speck> examples;      // a couple per material, for pointing a camera at
+};
+
+// `examples_per_type` coordinates are kept for each material rather than for the clip, so one
+// crowded material cannot fill the list. See the note where they are collected.
+SpeckReport paint_specks(const Clip& clip, usize examples_per_type = 2);
 
 // Where two parts of a shape occupy the same voxels.
 //
