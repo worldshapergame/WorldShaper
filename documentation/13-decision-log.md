@@ -6434,3 +6434,39 @@ The flag stays opt-in on those two, not on the voxel count. The default is untou
 | D632 | **D631's "sixth of a building" is the design, not a fault** | correction | The world grows 19.75 M → 29.62 M voxels when the camera walks the same scene |
 | D632 | **A completeness figure from one camera cannot judge a pixel-driven world** | method | "Stopped early" and "finished what it could see" give identical counters; only movement separates them |
 | D632 | **The real blockers are R11g and the cache, not the occlusion test** | plan | The hash is camera-dependent by construction and the saved world is partial |
+
+## D633 — R11g's gate is already satisfied: a camera-dependent world is still reproducible per camera
+
+D632 named R11g as the blocker for `--no-coarse-paste`: the content hash is camera-dependent by
+construction now, and `baseline.ps1` refuses to compare two rows measured against different worlds.
+The fear was that every row would refuse itself.
+
+**Measured, and it does not.** `--no-coarse-paste --settle`, facility, no cache:
+
+| | content hash | solid voxels |
+|---|---|---|
+| enclosed `0,0,0,-90,0`, run 1 | `70b51a3f94dc44ba` | 19,751,324 |
+| enclosed `0,0,0,-90,0`, run 2 | **`70b51a3f94dc44ba`** | **19,751,324** |
+| close `0,2,-20,90,0` | `42af22ca9c2820a5` | 3,631,394 |
+
+**The same camera reproduces exactly and a different camera does not, which is precisely what the
+gate needs.** `baseline.ps1` finds `$then` by (mode, view, size) and compares hashes within that
+row, so it never compares across cameras and never had to. The camera-dependence is *between* views
+and the harness has no opinion about that.
+
+What R11g was written to fear -- *"a world that only samples what a camera asked for has a
+camera-dependent content hash by construction"* -- is true and turns out to be harmless, because
+`--settle` already means "refinement has nothing left it can do FROM HERE" and that generalises
+exactly as §5 hoped it would. The stand-down (D627) is what makes it a fixed point rather than a
+timeout.
+
+**Two things this does NOT say.** A baseline CSV taken with the coarse paste and one taken without
+are not comparable row for row -- their hashes differ per view, and the gate will say so, correctly.
+And the cache measurement D632 asked for is still not made: a launch from a second camera against a
+cache written by the first.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D633 | **A camera-dependent world is reproducible per camera** | finding | Two runs of one camera give the same hash to the digit; a second camera differs |
+| D633 | **`baseline.ps1`'s gate needed no change** | finding | It matches rows by view and never compares across cameras |
+| D633 | **`--settle` generalises, as §5 hoped** | finding | "Nothing left it can do from here" is a fixed point of the camera, and D627 made it one |
