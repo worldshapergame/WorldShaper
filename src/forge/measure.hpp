@@ -281,6 +281,40 @@ struct StippleVerdict {
 };
 StippleVerdict stipple_verdict(const Clip& clip, f64 stipple_share = 0.05);
 
+// The two counts the verdict is a threshold over, kept separately so they can be SUMMED.
+//
+// R11d wants the up-front whole-clip sample gone, and the verdict is the one thing only that sample
+// can produce (D625: a coarser sample gives a different verdict, not a cheaper one -- 35, 31, 26 and
+// 19 materials at metres 8, 4, 2 and 1). But the verdict is a ratio of two counts per material, and
+// both are additive over disjoint boxes -- so a ladder that samples the building node by node can
+// accumulate them and take the same verdict at the end without ever holding the whole clip.
+//
+// The flaw is real and is why this is measured rather than assumed: `paint_specks` reads outside a
+// clip as AIR, so a voxel on a node's face counts as surface, and counts as a SPECK if its only
+// same-material neighbour is in the node next door. Summing per-node counts therefore over-counts
+// both, and not equally. That is R11b's skirt problem (D615) arriving in the paint statistics, and
+// whether it moves the verdict is a question for `stipple_verdict` on the sum against
+// `stipple_verdict` on the whole clip, material for material.
+struct StippleCounts {
+    struct Pair {
+        u64 surface = 0;   // solid voxels of this material touching air
+        u64 specks = 0;    // ...of those, the ones with no neighbour of their own material
+    };
+    std::map<VoxelTypeId, Pair> by_type;
+    void add(const StippleCounts& other) {
+        for (const auto& [type, pair] : other.by_type) {
+            Pair& mine = by_type[type];
+            mine.surface += pair.surface;
+            mine.specks += pair.specks;
+        }
+    }
+    bool any() const { return !by_type.empty(); }
+};
+
+StippleCounts stipple_counts(const Clip& clip);
+// The same rule `stipple_verdict(clip)` applies, over counts from wherever they came.
+StippleVerdict stipple_verdict(const StippleCounts& counts, f64 stipple_share = 0.05);
+
 // `verdict` null asks the clip in front of it, which is right for a clip that IS the whole thing.
 DespeckleReport despeckle(Clip& clip, f64 stipple_share = 0.05,
                           const StippleVerdict* verdict = nullptr);

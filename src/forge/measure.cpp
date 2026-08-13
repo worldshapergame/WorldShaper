@@ -545,6 +545,38 @@ SpeckReport paint_specks(const Clip& clip, usize examples_per_type) {
     return out;
 }
 
+StippleCounts stipple_counts(const Clip& clip) {
+    StippleCounts out;
+    if (clip.empty()) return out;
+    const SpeckReport found = paint_specks(clip, 0);
+    for (const TypeShare& share : found.by_type) {
+        StippleCounts::Pair& pair = out.by_type[share.type];
+        pair.specks = share.count;
+        // `fraction` is specks over THAT material's own surface, so the denominator comes back out
+        // of it. Rounded to nearest rather than truncated: the fraction is a double built from two
+        // integers and 972/12303 does not come back as 12303 by flooring.
+        pair.surface = (share.fraction > 0.0)
+                           ? static_cast<u64>(static_cast<f64>(share.count) / share.fraction + 0.5)
+                           : 0;
+    }
+    return out;
+}
+
+StippleVerdict stipple_verdict(const StippleCounts& counts, f64 stipple_share) {
+    StippleVerdict out;
+    // The same two tests as below, over counts from wherever they came. See the note there for why
+    // a large SHARE is not enough on its own.
+    constexpr u64 kStippleFloor = 16;
+    for (const auto& [type, pair] : counts.by_type) {
+        const f64 fraction = (pair.surface > 0) ? static_cast<f64>(pair.specks) /
+                                                      static_cast<f64>(pair.surface)
+                                                : 0.0;
+        const bool stipple = fraction >= stipple_share && pair.specks >= kStippleFloor;
+        out.allowed[type] = !stipple;
+    }
+    return out;
+}
+
 StippleVerdict stipple_verdict(const Clip& clip, f64 stipple_share) {
     StippleVerdict out;
     if (clip.empty()) return out;

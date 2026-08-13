@@ -646,12 +646,20 @@ The measurements that already exist and bound the problem:
 **Three candidate answers, in the order they look promising, and each is a measurement rather than
 an argument:**
 
-1. **Accumulate it across the ladder's own nodes.** The verdict is a ratio per material — specks over
-   that material's surface — and both counts are additive across disjoint boxes. Take the verdict
-   when coverage is complete and despeckle from then on. **The known flaw is measurable**: a voxel
-   isolated *within a node* may not be isolated in the whole, which is R11b's skirt problem exactly
-   (D615: a box one voxel larger is a different question; 2 of 96 nodes differ on `sampler.clip`).
-   The arm to run is the accumulated verdict against the metre-8 verdict, material for material.
+1. ~~**Accumulate it across the ladder's own nodes.**~~ **BUILT, MEASURED, REFUTED — D628.** The
+   counts are additive and the idea is sound; the boundary is not. `paint_specks` reads outside the
+   clip it is given as AIR, so every voxel on a node's own face counts as surface and as a speck —
+   and **a leaf node is 512 cells of which 296, 57.8%, are its own boundary**. Summed over 470,142
+   nodes on the facility: **20 materials agree, 11 DIFFER**, and two of the six deliberate dithers
+   (358 and 509) would be **cleaned away**. `sampler.clip` agrees perfectly, 0 differ, which is
+   exactly why it is not the gate for this.
+   **The surviving version is 1b: count against the WORLD after the paste**, where the neighbours
+   outside the node are no longer unknown — the same walk, with the edge reading the world instead
+   of returning air. Two things to know first: the world holds a mixture of resolutions at that
+   moment, and the count moves to the main thread at paste time.
+   **The instrument is built and kept**, and it is the gate: `forge::StippleCounts`,
+   `stipple_verdict(counts, share)`, and a settle-line comparison naming every material that moves
+   and which way. Any route is judged by that line reading **0 DIFFER on the facility**.
 2. **Derive it from the paint rules** rather than from any sample. A dither is authored as a rule
    keyed on noise; whether that is recoverable statically is unknown and nobody has looked.
 3. **Keep one whole-clip sample at the coarsest resolution whose verdict still agrees with metre 8.**

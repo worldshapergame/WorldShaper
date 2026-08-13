@@ -6108,3 +6108,77 @@ its other edge — a count taken from inside the change is not a control.
 | D627 | **Only a camera move expires the memos** | correctness | A refinement paste comes through `announce_world_change` too |
 | D627 | **A stand-down is what owes the cache a save** | fix | 28 writes of 18 MB on a launch that sharpened nothing |
 | D627 | **Reach for the control arm before the third theory** | method | Two wrong causes were argued from a counter taken inside the change |
+
+## D628 — R11d route 1 refuted by measurement: summing the ladder's specks destroys two dithers
+
+R11d cannot delete the up-front whole-clip sample until the stipple verdict comes from somewhere
+else (recorded in the handover, and it is why the step had not started). Route 1 was the promising
+one: the verdict is a ratio per material — specks over that material's own surface — and both counts
+are additive over disjoint boxes, so a ladder sampling node by node could accumulate them and take
+the same verdict at the end without ever holding the whole clip.
+
+**Built, measured, and it is wrong.** `forge::StippleCounts` splits the two counts out of
+`paint_specks` so they can be summed; every ladder node contributes its counts, taken from the RAW
+sample before that node is despeckled, which is exactly where the up-front build takes its own.
+The verdicts are then printed side by side at the settle line — **material for material, not by
+count**, because D625 established that a verdict agreeing on how many materials it saw can still
+disagree about which.
+
+### The facility, every node forced, 470,142 nodes summed against the metre-8 whole-clip verdict
+
+```
+20 materials agree, 11 DIFFER, 20 seen only by the sum, 4 only by the whole clip
+differ  +130 +132 +146 +352 +353 -358 +378 +381 +442 +508 -509
+```
+
+`+` is the sum sparing a material the whole clip would repaint; `-` is the sum **repainting one the
+whole clip spares**, which is a deliberate weathering coat being cleaned away. There are **two of
+them, 358 and 509, out of the six protected materials.** Eleven of thirty-five materials change
+verdict. This is not a rounding difference to be tuned out.
+
+`clips/sampler.clip` agrees perfectly — 3 materials, 0 differ — which is exactly why the small clip
+is not the gate. Its nodes are few and large relative to its features; the facility's are not.
+
+### Why, and the arithmetic says it is not fixable by tuning
+
+`paint_specks` reads outside the clip it is given as AIR. So on every node, a voxel on the node's own
+face counts as *surface* (it touches "air"), and counts as a *speck* if its only same-material
+neighbour is in the node next door. **A leaf node is eight voxels a side: 512 cells, of which the
+boundary shell is 8³ − 6³ = 296 — 57.8% of every node is its own boundary.** Summed over 470,142
+nodes, the invented specks swamp the real ones, and they do not swamp them evenly: a material in
+thin features has almost all of its voxels on some node face, and a material in massive blocks has
+few. That is why the error changes the verdict in both directions.
+
+This is R11b's skirt problem (D615 — a box one voxel larger is a different question) arriving in the
+paint statistics rather than in the geometry.
+
+### What survives, and it is a different route
+
+**Count against the WORLD after the paste, not against the node's own clip.** The boundary is only
+a lie because the neighbours outside the node are unknown to the clip; after the node is pasted they
+are in `World` and can be read. No skirt sample, no over-count, no resampling — the same walk the
+counts already do, with `type_at` reading the world instead of returning air at the edge. It is more
+work than summing a struct and it is the only candidate left standing.
+
+Two things to know before building it: the world at that moment holds a mixture of resolutions, so a
+node's neighbours may be coarser than it is; and the count then has to be taken at paste time on the
+main thread rather than in the sampler, which is where the cost lands.
+
+### What is kept
+
+The instrument, because it is the gate for whatever route is tried next: `forge::StippleCounts`,
+`stipple_counts(clip)`, `stipple_verdict(counts, share)` — one definition of the rule, applied to
+counts from wherever they came — and the settle-line comparison that names the materials and the
+direction each one moved. Any future answer is judged by that line reading **0 DIFFER** on the
+facility.
+
+`stipple_verdict(clip)` is unchanged and still the authority. 537 tests.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D628 | **Summing per-node speck counts is not the whole-clip verdict** | finding | 11 of 35 materials change verdict and two of the six deliberate dithers are destroyed |
+| D628 | **57.8% of a leaf node's cells are on its own boundary** | finding | 8³ − 6³ of 8³, so the invented specks swamp the real ones and not evenly |
+| D628 | **`sampler.clip` is not the gate for this** | method | It agrees perfectly, 0 differ, while the facility disagrees on eleven materials |
+| D628 | **A verdict is compared material for material, never by count** | method | D625's lesson; a matching count can hide a disagreeing verdict |
+| D628 | **The surviving route counts against the WORLD after the paste** | plan | The boundary is only a lie while the neighbours are unknown; after the paste they are not |
+| D628 | **The comparison instrument is kept** | method | It is the gate any future route is judged by: 0 DIFFER on the facility |

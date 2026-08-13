@@ -1670,6 +1670,10 @@ private:
         forge::SampleSettings settings;
         u32 scale = 1;
         std::unique_ptr<forge::SampleResult> result;
+        // Taken from the RAW sample, before this node is despeckled -- which is where the up-front
+        // build takes its own verdict from, so the two are the same question asked of the same
+        // voxels. R11d route 1; see forge::StippleCounts.
+        forge::StippleCounts stipple;
     };
     std::vector<RefineJob> refine_batch_;
     std::unique_ptr<forge::SampleResult> refine_result_;
@@ -1792,6 +1796,11 @@ private:
     forge::Vec3 refine_bounds_high_{0, 0, 0};
     // Which materials are a deliberate dither, decided once over the whole clip.
     forge::StippleVerdict refine_stipple_;
+    // The same verdict, accumulated from the ladder's own nodes instead of from one whole-clip
+    // sample. Instrument only until it is proved: printed beside the metre-8 verdict at the settle
+    // line, material for material, because "how many materials" is not the question -- WHICH ones
+    // is. D625 refused a coarse stand-in on exactly that distinction.
+    forge::StippleCounts refine_stipple_counts_;
     // Whether anybody has decided that, which is NOT the same as the decision being non-empty. An
     // empty verdict switches despeckling off everywhere (forge::despeckle), so "no material is a
     // dither" and "nobody looked" produce identical behaviour and must not produce identical
@@ -2701,6 +2710,10 @@ void Application::refine_worker() {
                 // this node, because what a material's specks are a large enough share of is a
                 // question about the building and five hundred cells cannot answer it
                 // (forge::StippleVerdict).
+                // BEFORE the despeckle, which is the whole point: the up-front build takes its
+                // verdict from the raw sample too, and despeckling changes the very voxels being
+                // counted.
+                job.stipple = forge::stipple_counts(job.result->clip);
                 if (despeckle_) {
                     const forge::DespeckleReport cleaned =
                         forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
@@ -3097,6 +3110,7 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     for (const RefineJob& job : finished) {
         refine_regions_[job.at].done = true;
         refine_regions_[job.at].applied_per_metre = job.settings.voxels_per_metre;
+        refine_stipple_counts_.add(job.stipple);
     }
 
     // Set the NEXT batch sampling before pasting this one, rather than after.
@@ -8241,6 +8255,57 @@ int Application::play(const Options& options) {
                 // So the census says which test refused each leftover and at what size, and the
                 // sentence claims no cause of its own.
                 WS_LOG_INFO("frame", "settled with {} regions left coarse", unrefined);
+            }
+            if (!refine_regions_.empty() && refine_stipple_counts_.any()) {
+                // R11d route 1, and the ONLY question that matters is which materials the two
+                // verdicts protect -- not how many. D625 refused a coarse stand-in because metre 4
+                // saw 31 materials against metre 8's 35 and shared only two of its six protected
+                // ones, so a count that agrees can hide a verdict that does not.
+                const forge::StippleVerdict summed =
+                    forge::stipple_verdict(refine_stipple_counts_, 0.05);
+                usize agree = 0;
+                usize differ = 0;
+                usize only_summed = 0;
+                usize only_whole = 0;
+                std::string wrong;
+                for (const auto& [type, may] : refine_stipple_.allowed) {
+                    const auto found = summed.allowed.find(type);
+                    if (found == summed.allowed.end()) {
+                        ++only_whole;
+                        continue;
+                    }
+                    if (found->second == may) {
+                        ++agree;
+                    } else {
+                        ++differ;
+                        if (!wrong.empty()) wrong += ' ';
+                        // Which way it went: `+` the sum spares a material the whole clip would
+                        // repaint, `-` the sum repaints one the whole clip spares. The second is
+                        // the harmful direction -- it is a weathering coat being cleaned away.
+                        wrong += (found->second ? '-' : '+');
+                        wrong += std::to_string(static_cast<u64>(type));
+                    }
+                }
+                std::string extra;
+                for (const auto& [type, may] : summed.allowed) {
+                    if (refine_stipple_.allowed.find(type) != refine_stipple_.allowed.end()) continue;
+                    ++only_summed;
+                    // A material the coarse whole-clip sample never saw, because the ladder samples
+                    // finer than metre 8 and a thin feature exists in one and not the other. Harmless
+                    // if the sum would DESPECKLE it (`may` true) -- that is what an absent verdict
+                    // does anyway. A material the sum SPARES that the whole clip never knew about is
+                    // a real behaviour change and is marked *.
+                    if (!extra.empty()) extra += ' ';
+                    if (!may) extra += '*';
+                    extra += std::to_string(static_cast<u64>(type));
+                }
+                WS_LOG_INFO("frame",
+                            "stipple verdict, summed over {} nodes against the whole-clip one: "
+                            "{} materials agree, {} DIFFER, {} seen only by the sum, {} only by the "
+                            "whole clip{}{}{}{}",
+                            refine_total_nodes_, agree, differ, only_summed, only_whole,
+                            wrong.empty() ? "" : "; differ ", wrong,
+                            extra.empty() ? "" : "; only the sum saw ", extra);
             }
             if (!refine_regions_.empty()) {
                 WS_LOG_INFO("frame", "ladder: {}", refine_census());
