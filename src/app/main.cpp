@@ -115,6 +115,15 @@ struct Options {
     // The control arm for the batch being sampled one node per worker rather than one node at a
     // time. R11a proved a single node gains nothing from the job system; the batch does.
     bool no_batch_parallel = false;
+    // Where the stipple verdict comes from. TRUE -- the up-front coarse sample -- is what ships,
+    // and `--stipple-from-world` is the opt-in for R11d option 2.
+    //
+    // Option 2 is built, measured and NOT on by default, because it is not free and D630 says why:
+    // cleaning the world costs 19 s of a 19 s load, and the verdict taken from a partially refined
+    // world protects NOTHING at all -- 0 materials against the fully refined world's one and the
+    // metre-8 sample's six. A verdict that depends on how much of the building the camera happened
+    // to sharpen is not a verdict.
+    bool stipple_at_coarse = true;
     // How many nodes the ladder picks and samples per wake. 0 keeps kRefineBatch. This is how the
     // default was chosen and is the control arm for it.
     usize refine_batch = 0;
@@ -727,6 +736,8 @@ Options parse_options(int argc, char** argv) {
             options.no_paste_drop = true;
         } else if (arg == "--no-batch-parallel") {
             options.no_batch_parallel = true;
+        } else if (arg == "--stipple-from-world") {
+            options.stipple_at_coarse = false;
         } else if (arg == "--refine-workers" && i + 1 < argc) {
             options.refine_workers = static_cast<u32>(std::max(1, std::atoi(argv[++i])));
         } else if (arg == "--refine-batch" && i + 1 < argc) {
@@ -1868,6 +1879,10 @@ private:
     void seed_refine_nodes(const forge::Script& script);
     // R11d route 1b: the verdict's counts taken from the world instead of from a whole-clip sample.
     forge::StippleCounts stipple_counts_from_world();
+    // R11d, option 2: take the verdict from the world at the authored resolution and clean the
+    // world with it, once, at the ladder's fixed point. Returns how many voxels were repainted.
+    u64 despeckle_world();
+    bool refine_world_cleaned_ = false;
     bool refine_node_of(const NodeKey& key, RefineNode& out) const;
     u32 split_refine_node(usize at);
     bool refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64 fy, f64 fz,
@@ -3095,6 +3110,28 @@ void Application::pump_refinement() {
         // catching it half-pasted. The stand-down is what makes it once rather than every frame.
         if (refine_save_owed_ && !refine_busy()) {
             refine_save_owed_ = false;
+            // The fixed point, and the only moment the verdict can be asked of a world that is at
+            // the detail it is going to be at. Once: `refine_world_cleaned_` is what makes a camera
+            // that stands down, moves and stands down again not re-clean what is already clean.
+            if (!refine_world_cleaned_ && options_.despeckle && !options_.stipple_at_coarse) {
+                refine_world_cleaned_ = true;
+                const u64 began = now_ns();
+                refine_stipple_ = forge::stipple_verdict(stipple_counts_from_world(), 0.05);
+                refine_stipple_taken_ = true;
+                const u64 judged = now_ns();
+                const u64 repainted = despeckle_world();
+                usize kept = 0;
+                for (const auto& [type, may] : refine_stipple_.allowed) {
+                    (void)type;
+                    if (!may) ++kept;
+                }
+                WS_LOG_INFO("clip",
+                            "the world's own stipple verdict: {} materials seen, {} kept as a "
+                            "deliberate dither; {} lone voxels repainted ({:.0f} ms to judge, "
+                            "{:.0f} ms to clean)",
+                            refine_stipple_.allowed.size(), kept, repainted,
+                            ns_to_ms(judged - began), ns_to_ms(now_ns() - judged));
+            }
             save_refined_world();
         }
         return;
@@ -3446,6 +3483,58 @@ forge::StippleCounts Application::stipple_counts_from_world() {
     }
     for (const forge::StippleCounts& one : per) total.add(one);
     return total;
+}
+
+// Clean the WORLD, chunk by chunk, each with a one-voxel skirt.
+//
+// R11d option 2, chosen by the user after D629. The verdict is a property of the resolution the
+// question is asked at -- metre 8 protects six of the facility's materials and the authored metre 32
+// protects one -- and nothing in the world is ever built at metre 8. So the judge moves to where the
+// voxels are: the verdict comes from the world and the cleaning happens on the world.
+//
+// That also removes despeckling's dependency on the up-front whole-clip sample, which is the one
+// thing that blocked R11d. Nothing else was ever taken from it.
+//
+// The skirt is not a detail. Without it every chunk face is judged against air, which is D628 at a
+// larger grain: a voxel on a chunk boundary would read as isolated because its own material carries
+// on in the chunk next door. The interiors tile the world exactly once, so every voxel is judged
+// once, by its real neighbours.
+//
+// Repainting is colour only -- no voxel is added or removed -- so `set` here cannot create or drop a
+// brick, and the volume, the components and the walkability cannot move. That is `despeckle`'s own
+// guarantee and it is what makes writing straight back into the world safe.
+u64 Application::despeckle_world() {
+    if (!refine_stipple_.any()) return 0;
+    const std::vector<ChunkCoord> coords = world_.sorted_chunk_coords();
+    if (coords.empty()) return 0;
+
+    u64 repainted = 0;
+    for (const ChunkCoord& coord : coords) {
+        const i64 base[3] = {coord.x << 8, coord.y << 8, coord.z << 8};
+        Clip box = capture_clip(world_, base[0] - 1, base[1] - 1, base[2] - 1, base[0] + 256,
+                                base[1] + 256, base[2] + 256);
+        const std::vector<VoxelTypeId> before = box.voxels;
+        const forge::DespeckleReport cleaned = forge::despeckle(box, 0.05, &refine_stipple_, 1);
+        if (cleaned.repainted == 0) continue;
+        // Only what changed, and only inside the skirt. Walking the whole chunk back into the world
+        // would be sixteen million writes to change a few hundred voxels.
+        for (i32 z = 1; z < box.size[2] - 1; ++z) {
+            for (i32 y = 1; y < box.size[1] - 1; ++y) {
+                for (i32 x = 1; x < box.size[0] - 1; ++x) {
+                    const usize at = box.index(x, y, z);
+                    if (box.voxels[at] == before[at]) continue;
+                    world_.set(base[0] + x - 1, base[1] + y - 1, base[2] + z - 1, box.voxels[at]);
+                    ++repainted;
+                }
+            }
+        }
+        // The renderer holds copies of every brick it has built, and a repaint changes what they
+        // look like without changing what is where. D397 is what happens when it is not told.
+        const i64 lo[3] = {base[0], base[1], base[2]};
+        const i64 hi[3] = {base[0] + 255, base[1] + 255, base[2] + 255};
+        announce_world_change(lo, hi);
+    }
+    return repainted;
 }
 
 void Application::seed_refine_nodes(const forge::Script& script) {
@@ -4184,7 +4273,16 @@ void Application::build_world() {
                 });
             // D610. Before variation, which is the only place it can go: variation mints a record
             // per voxel and after it every voxel is alone in its material by construction.
-            if (options_.despeckle) {
+            // THE VERDICT NO LONGER COMES FROM HERE (R11d option 2, D629). It used to be taken
+            // from this whole-clip sample, which is at metre 8 because `--clip-coarse 4` is a
+            // loading optimisation -- and metre 8 protects six of the facility's materials where the
+            // authored metre 32 protects one, on the same building. Nothing in the world is ever
+            // built at metre 8, so the specks being judged were metre-32 voxels and the judge was a
+            // metre-8 verdict. It is now taken from the world at the fixed point instead, which is
+            // also what unblocks R11d: this sample was the only thing despeckling needed it for.
+            //
+            // `--stipple-at-coarse` restores it and is the control arm.
+            if (options_.despeckle && options_.stipple_at_coarse) {
                 // The verdict from THIS sample -- the whole clip in one box -- is kept and handed
                 // to every node the ladder refines afterwards. It is the last time anything looks
                 // at the whole building at once, and what it is being asked is a question only the

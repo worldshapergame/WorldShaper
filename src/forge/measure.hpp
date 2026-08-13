@@ -324,8 +324,11 @@ StippleCounts stipple_counts(const Clip& clip, i32 margin = 0);
 StippleVerdict stipple_verdict(const StippleCounts& counts, f64 stipple_share = 0.05);
 
 // `verdict` null asks the clip in front of it, which is right for a clip that IS the whole thing.
+// `margin` is a shell that supplies NEIGHBOURS and is never itself repainted -- the counterpart of
+// the one on stipple_counts, and it is what lets a world be despeckled chunk by chunk without the
+// seams between the chunks being judged against air. See D628 for what happens without it.
 DespeckleReport despeckle(Clip& clip, f64 stipple_share = 0.05,
-                          const StippleVerdict* verdict = nullptr);
+                          const StippleVerdict* verdict = nullptr, i32 margin = 0);
 
 // Where two parts of a shape occupy the same voxels.
 //

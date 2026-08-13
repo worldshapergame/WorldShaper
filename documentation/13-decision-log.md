@@ -6260,3 +6260,65 @@ that moved and which way. 537 tests.
 | D629 | **The specks being judged are metre-32 and the judge is metre-8** | finding | Shipping since D610; this is the first instrument that could see it |
 | D629 | **R11d cannot have the metre-8 verdict without the up-front sample** | plan | There is no cheaper source because it is not a property of the building |
 | D629 | **Which verdict to keep is the user's call, not a measurement** | honesty | Option 2 changes five weathering coats and has to be looked at |
+
+## D630 — option 2 is built and it is not free: 19 s to clean, and a verdict that depends on the camera
+
+D629 put three routes to the user and they chose option 2: take the stipple verdict at the authored
+resolution rather than at metre 8, which removes despeckling's dependency on the up-front whole-clip
+sample and unblocks R11d outright. It is built. **It ships turned off**, and the reason is two
+measurements rather than an opinion.
+
+### What was built
+
+The judge moves to where the voxels are. `forge::despeckle` gains the same `margin` its counting
+sibling has; `Application::despeckle_world` captures each chunk with a one-voxel skirt, cleans the
+interior, and writes back only what changed. The interiors tile the world exactly once, so every
+voxel is judged once by its real neighbours — D628's boundary fault cannot occur at any grain. The
+verdict and the clean both happen at the ladder's fixed point, once, and the cache carries the
+verdict onward (D625). `--stipple-from-world` is the opt-in.
+
+### Why it is off
+
+**It costs 19 seconds.** Facility, enclosed camera, cold: **19.0 s → 40.3 s**. Judging the world is
+2,074 ms and cleaning it is **19,040 ms** — 68 chunks of 258³, which is 1.17 billion cells walked
+twice. The loop is serial where the counting sibling is parallel, so perhaps 4 s of that is
+recoverable, and 4 s is still a new cost on a 19 s load. "At no expense" was the standing
+requirement and this is an expense.
+
+**And the verdict depends on the camera, which is worse.** From the enclosed camera the ladder
+settles with 32,712 of 40,436 nodes sharpened, and the verdict taken from that world protects
+**nothing at all**:
+
+| verdict taken from | materials seen | protected |
+|---|---|---|
+| the metre-8 whole-clip sample (ships) | 35 | **6** — 27, 358, 392, 455, 509, 554 |
+| the fully refined world (`--refine-all`, D629) | 90 | **1** — 27 |
+| **the world this camera settles on** | 83 | **0** |
+
+Material 27 is protected by the whole building and not by the part of it one camera happens to
+sharpen. A verdict that moves with where the player stood is not a verdict, and it would make the
+appearance of the weathering a function of the route somebody walked.
+
+### And a measurement that was taken and must not be quoted
+
+The two arms' screenshots differ on 444,889 pixels of 1,024,000, mean 9.5. **That figure is not
+about specks.** Cleaning the world announces a change on all 68 chunks, so every face reopens its
+light, and the shot 30 frames later caught a scene mid-reconvergence. Trap 8's shape in a new place:
+the number is real, reproducible, and about something other than what it was gathered for. Comparing
+the two appearances needs a settle after the clean, and that run has not been made.
+
+### What this leaves
+
+R11d's blocker is not removed. The honest statement is now sharper than D629's: **a whole-building
+verdict needs a whole-building measurement, and the only affordable one is the up-front sample.**
+Either that sample stays and R11d saves 959 ms of 3.7 s, or the verdict becomes camera-dependent,
+or the threshold is re-tuned so that the authored resolution protects the same six — and that third
+one now also has to answer why a partial world sees zero.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D630 | **Option 2 is built and off by default** | honesty | 19.0 → 40.3 s, and the verdict protects nothing from a real camera |
+| D630 | **Cleaning the world is 19 s** | finding | 68 chunks of 258³, 1.17 G cells walked twice, serial |
+| D630 | **A partial world protects 0 materials against a whole one's 1** | finding | The verdict would depend on where the player walked |
+| D630 | **The 444,889-pixel difference is unconverged light, not specks** | honesty | The clean reopens 68 chunks of light and the shot was 30 frames later |
+| D630 | **A whole-building verdict needs a whole-building measurement** | plan | Which is the up-front sample, which is what R11d wants to delete |

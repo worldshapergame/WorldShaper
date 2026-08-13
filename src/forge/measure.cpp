@@ -641,7 +641,8 @@ StippleVerdict stipple_verdict(const Clip& clip, f64 stipple_share) {
     return out;
 }
 
-DespeckleReport despeckle(Clip& clip, f64 stipple_share, const StippleVerdict* verdict) {
+DespeckleReport despeckle(Clip& clip, f64 stipple_share, const StippleVerdict* verdict,
+                          i32 margin) {
     DespeckleReport out;
     if (clip.empty()) return out;
 
@@ -668,9 +669,9 @@ DespeckleReport despeckle(Clip& clip, f64 stipple_share, const StippleVerdict* v
     const std::vector<VoxelTypeId> before = clip.voxels;
     std::map<VoxelTypeId, u64> repainted;
 
-    for (i32 z = 0; z < clip.size[2]; ++z) {
-        for (i32 y = 0; y < clip.size[1]; ++y) {
-            for (i32 x = 0; x < clip.size[0]; ++x) {
+    for (i32 z = margin; z < clip.size[2] - margin; ++z) {
+        for (i32 y = margin; y < clip.size[1] - margin; ++y) {
+            for (i32 x = margin; x < clip.size[0] - margin; ++x) {
                 const VoxelTypeId mine = before[clip.index(x, y, z)];
                 if (mine == kAir) continue;
                 const auto may = allowed.find(mine);
