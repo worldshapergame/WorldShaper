@@ -5,7 +5,8 @@
 project is, §1 for what was asked, §3 for what exists, §4 for the traps, and start work at §5.*
 
 *The bug §4b used to open with — a deleted wall's shadow outliving it — is closed (D357–D361).
-§4b now records how, because the shape of it is the useful part. **Start work at §5.***
+§4b now records how, because the shape of it is the useful part. **Start work at §5, at the block
+headed "THE ORDER" — the user chose it on 2026-08-13 and it is three numbered steps.***
 
 ---
 
@@ -509,6 +510,118 @@ before sixty metres does**, because a ray near the camera marches single voxels.
 a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
+
+### THE ORDER, chosen by the user on 2026-08-13: do these three, in this order
+
+The user was shown the measured breakdown of a 17.1 s cold load and asked for the order. They chose
+**1, then 2, then 3**. Everything after this block is the detail behind them and the history that
+produced them; **start here and read the numbered step you are on.**
+
+The 17.1 s these are against, measured (D622, D623), cold facility, enclosed camera, no cache:
+
+| | | |
+|---|---|---|
+| startup, device, shaders | ~1.1 s | not addressed by any of the three |
+| **the up-front coarse build** | **3.7 s** | sample 2,754 + paste 257 + compact 702 ms. **Step 1 removes all of it** |
+| **the ladder** | **12.4 s** | of which **sampling 6,322 ms**, picking 809, pasting 140, and ~5 s of frame time |
+
+**Nothing below is a scheduling change.** D622 took the waiting out — 83.6 s → 17.1 s, 4.9× — and
+D623 established that the last 9% of waiting cannot be taken without losing voxels. What is left is
+work, and these three are the only three places it lives.
+
+---
+
+#### 1. R11d — nothing is sampled up front
+
+**What it is.** The up-front build samples the *whole building* at metre 8 and inflates it 4× on
+paste, before the first frame is drawn. It is the last thing in the chain that is not pixel-driven,
+and it is 3.7 s of a 17.1 s load — 22% — plus the compact sweep that follows it.
+
+**Read before starting**: the four things R11c leaves it, in *"R11c is done as well"* below. The one
+that decides the shape of the work is the first: every node currently knows what the world already
+holds where it is (`applied_per_metre`, seeded from `--clip-coarse`), and **removing the up-front
+build makes that floor nothing** — so the first frame has no world at all until the first nodes
+land. **R11d is therefore not "delete the coarse build"; it is about what is drawn in the meantime.**
+D621's stand-in path (`node.glsl`, the `kFoundWanted` branch) is what draws it and is the thing to
+reason about, and trap 7 is the rule it must not break.
+
+**Also read** the fourth of those four: `CachedRegion` has nowhere to record which detail a box
+holds, so only boxes sharp at the authored resolution are cached. If R11d wants coarse work
+remembered, that field is what to add — and it is R11f's business, which is the sub-step that can
+lose somebody's building.
+
+**What a player sees.** No loading bar at all. The world builds around them from nothing rather than
+starting as a blocky whole building. **What would mean it failed:** spawning into an empty room that
+fills with big blocky boxes — which is worse than what is being fixed, and is exactly why b and c
+had to land first.
+
+**The gate.** `clips/sampler.clip --refine-all --no-despeckle` must still return
+**`a1f8bc6c656343b7`, 1,430,104 voxels**. The facility should lose 3.7 s of wall clock and must keep
+its content hash for a given camera, or `baseline.ps1` stops working (R11g).
+
+---
+
+#### 2. The 923 field nodes that carry no box
+
+**What it is, and it is a measurement rather than a proposal.** `--clip-file clips/facility.clip`
+prints, today:
+
+```
+field   3744 nodes, 923 with no box (25%), 19 hierarchies over 479 leaves, 190 wide unions
+where   shape 485600 core-ms (76%), paint 154790 core-ms (24%), 2.59 us per shape eval
+```
+
+Sampling is **76% shape evaluation** and one shape evaluation is **2.59 µs** — roughly seven
+thousand cycles — on a field of 3,744 nodes. The reason it is that expensive is in the same line:
+**a quarter of the field has no bounding box**, and `Field::build_bounds` gives a node
+`everywhere()` when its op is not one it can bound. An unbounded node makes every ancestor
+unbounded too, so `Field::eval`'s union sort and `eval_accelerated`'s BVH rejection — both of which
+work entirely on boxes — cannot throw that branch away for any point. **190 wide unions have no
+hierarchy at all** against 19 that do (`kAccelerateFrom = 12`).
+
+**Where to start.** Find out *which* ops the 923 are: `build_bounds` is one switch in `field.cpp`
+and the answer is a histogram over `Op` for the nodes that come out `everywhere()`. Bounding even
+the common ones tightens every ancestor. **Do not guess at `kAccelerateFrom`** — the plain union
+path already sorts children by box distance and rejects on the running minimum, so a hierarchy over
+four children may buy nothing; measure it as its own arm.
+
+**The trap this stage is made of.** A bound that is too small is not slow, it is **wrong** — it
+deletes geometry, silently, and the symptom is voxels going missing rather than anything crashing.
+Every bound must be conservative in the same sense `box_may_hold_matter` is: `false` is a promise
+and `true` is "look and see". D613 is the standing example of what an under-tight box costs, and it
+was invisible at 32 voxels a metre and constant at 1.
+
+**What a player sees.** Nothing directly — the world sharpens faster and is identical. **This is an
+instrument-and-gate stage**: the acceptance test is the byte-identical gate plus the `us per shape
+eval` figure, and if the figure does not move, say so and stop.
+
+**Size it before building it.** Unknown until the histogram exists: it could be 2× of the 6.3 s
+sampling half, or it could be nothing if the 923 are all ops that genuinely cannot be bounded.
+**Report the histogram before writing any bounds.**
+
+---
+
+#### 3. R12 — the field on the card
+
+**What it is.** The only route to a sub-second load, and the plan already names it as R11's
+successor (`21-renderer-rewrite.md` §8 R12, and `20-clip-forge.md` §4 for why the field
+transliterates). After R11 the CPU round trip — miss, report, sample, paste, upload — is the last
+thing between a ray and its geometry.
+
+**Why it is third and not first.** It is stage-sized (L), it is the highest-risk piece left, and
+steps 1 and 2 both change the number it would be measured against. It also unblocks R2b's unfinished
+half, stuck since D259.
+
+**The arithmetic that makes it necessary, so nobody re-derives it.** A hundredfold on the 83.6 s
+this all started from is **0.84 s**, which is *less than the part of today's load that is not
+sampling at all* (~1.1 s of startup plus the frame time the ladder spans). Sampling itself is 3.8 M
+voxels asked against 139 paint rules and a 3,744-node shape field, about 32 core-seconds, so five
+workers are a **6.3 s floor**. Steps 1 and 2 attack the 3.7 s and the 2.59 µs respectively; only
+moving the evaluation off the CPU attacks the floor. **Say this to the user in these terms rather
+than promising a multiple** — they asked for 100× twice, and the honest answer is that steps 1 and 2
+are worth roughly 3.7 s and an unknown share of 6.3 s, and step 3 is the rest.
+
+---
 
 ### OPEN, and it is the largest thing left: the WORLD SOURCE was never rewritten
 
