@@ -643,7 +643,21 @@ eighteen-box ladder build **byte-identical worlds** with despeckling off (`a1f8b
    differ on `sampler.clip`, 0 of 297 on the facility**. D613's class one step along. What is left
    without the skirt is 46 cells of 152,064 on the facility wearing a neighbour's colour.
 
-#### CLOSED: "huge brick blocks on top of things", reported twice -- it was starvation (D619)
+#### OPEN, AND IT IS NOT THE LADDER: "huge brick blocks on top of things" (D620)
+
+**Start here, and read D620 first.** The player noticed that the chisel's aim cursor does not detect
+the lumps. That cursor is a CPU raycast against `World`, so **the lumps are not voxels** -- they are
+the render tree drawing a stand-in for a node whose leaf it has not got. §4b's own words for this
+shape are *"the descent said unbuilt-but-occupied, occlusion reads that as opaque"*, and trap 7 is
+the rule it breaks.
+
+Everything below this line, and D617 through D619, is work on the thing that MAKES voxels. None of
+it could have fixed this, and D619's starvation fix was a real fault that is not this one. First
+run: `--debug-mode 3` during a load -- the level a lump is drawn at names the node standing in for
+it -- and read `stale_leaves`, `stale_masks`, `deferred` and `out_of_room_`, none of which has been
+looked at during a load.
+
+#### Was closed and was not: "huge brick blocks on top of things" -- the starvation half (D619)
 
 Reported with a photograph of an urn standing as a slab of coarse cubes in a niche whose walls were
 already sharp, and reported again after D617. **Read D619**, and read D617 and D618 only for how the

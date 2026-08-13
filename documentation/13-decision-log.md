@@ -5478,3 +5478,51 @@ to compare it against, and that absence is the point.
 | D619 | **An occlusion refusal is remembered, not rediscovered** | fix | Unmarked refusals re-enter the shortlist every frame and outrank what can be sampled |
 | D619 | **The census is the instrument for the ladder** | method | "Neither" must be zero at a fixed point; it is the only column that cannot be explained away |
 | D619 | **R11d is deferred and is still owed** | plan | The coarse build is the floor under the first frame; this bug was downstream of it and had to go first |
+## D620 — the lumps are not voxels: the chisel's own ray cannot find them
+
+**One sentence from the player ended four entries of wrong diagnosis**: *"i notice that the circle
+voxel aim thing doesnt detect the lumps"*.
+
+The aim cursor is a **CPU raycast against `World`** (`src/world/raycast.cpp`, the same call the
+chisel and the preview box use). If it passes through a lump, **the lump is not in the world**. It
+is not a coarse voxel, not the up-front build, not a paste, not a node the ladder failed to reach.
+Every one of D617, D618 and D619 was work on the thing that MAKES voxels, and the lumps were never
+made of voxels at all.
+
+They are the **render tree standing in for geometry it has not got**. `NodePool` marks a node
+occupied from what the world has, and a descent that reaches a node whose leaf is missing or stale
+stops there and shades it — a filled cube the size of that node. `22-rewrite-handover.md` §4b says
+exactly this shape in its own words: *"the descent said unbuilt-but-occupied, occlusion reads that
+as opaque"*, and trap 7 is the general rule: **"nothing here" and "I could not fit it" must never be
+the same answer.**
+
+It also explains, at last, the two facts that fitted nothing else:
+
+- **A chisel does not show them.** An edit's invalidation is a box the pool refolds and rebuilds at
+  once (D515: 718 → 7 ms). A refinement paste is thousands of small announcements, and whatever
+  bounds the pool's rebuilding gives out under that rate where one edit never reaches it.
+- **They arrive with new detail rather than before it.** The stand-in appears when the leaf under it
+  is invalidated, which is the moment a paste lands — not while the coarse world sits untouched.
+
+### Where to start, and what NOT to do
+
+**Do not touch the clip ladder.** Three entries of that are already recorded, and the last of them
+(D619) was a real fault worth fixing on its own — it is not this one.
+
+The instruments exist and none of them has been read for this: `NodePool::stale_leaves` (a built
+leaf whose occupancy no longer matches the world), `NodePool::stale_masks` (a child mask the world
+disagrees with, invisible to the GPU mirror because host and card agree about a bit that is wrong in
+both), and the pool's own `deferred` / `out_of_room_` counters, which exist precisely so that "could
+not fit it" is never reported as "nothing there". A settled chisel run prints `deferred 0`, so the
+question is what happens **during** a load, which is where nobody has looked.
+
+**The one screenshot that would confirm it in a run**: `--debug-mode 3` is the detail level each
+pixel is drawn at. If a lump reads as a coarse level while the surface around it reads fine, the
+lump is a stand-in and the level it reads is the level of the node standing in.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D620 | **The lumps are not in `World`** | correctness | The chisel's own CPU raycast passes through them; the world does not contain them |
+| D620 | **It is the render tree, not the ladder** | plan | D617-D619 were all work on what makes voxels; this is what draws them |
+| D620 | **`--debug-mode 3` is the first thing to run** | method | The level a lump is drawn at names the node standing in for it |
+| D620 | **A player's aside was worth four entries of reasoning** | method | "The aim doesn't detect it" is a measurement of where the fault is NOT, and nothing else had bounded that |
