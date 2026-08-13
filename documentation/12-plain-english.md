@@ -2247,3 +2247,94 @@ light. A window is a perfectly flat sheet you see straight through, a lens does 
 not distort what is under it, and there is no rainbow-splitting through a prism. Every material
 already carries the number that says how much it bends light and no ray reads it yet. That is
 refraction, it is the last piece of this stage, and it is a bigger job than everything above.
+
+## "This contradicts the entire point" — and it does. Here's what was actually wrong
+
+You said the rewritten renderer was meant to remove loading, and instead you get a short loading bar
+counting voxels, then a blocky building, then detail arriving in chunks while you wait.
+
+Every word of that is right, and it took one run to reproduce. The reason is a distinction nobody
+had written down, so here it is.
+
+### Drawing the world and making the world are two different programs
+
+When you walk around the facility, two completely separate things are happening.
+
+**Drawing it.** Your screen fires a ray per pixel into the building and works out what it hits and
+how bright it is. This is the part that got rewritten. It genuinely does work the way you asked: a
+thing far away resolves coarsely, a thing near you resolves finely, and the changeover is smooth
+because it is one piece of arithmetic with no steps in it. That part is done and it is good.
+
+**Making it.** The facility is not a file full of cubes. It is a *description* — a few thousand
+lines saying "a portico here, six columns, this profile, this stone" — and something has to turn
+that description into actual voxels before the drawing has anything to draw. That is the part that
+was **never touched**.
+
+And the way it makes them is this: sample the *whole building* at a quarter detail so you can get in
+quickly, then go back over the building in **eighteen big boxes**, sampling each one whole at full
+detail and dropping it in. That is your loading bar, your blocky first minute, and your chunks — in
+that order, and there is nothing pixel-based about any of it. Neither of those two detail levels has
+anything to do with your screen; both are picked before the first frame is drawn.
+
+Measured on your world, from a cold start: **3.6 seconds** before you can move, then eighteen boxes
+at between half a second and seven and a half seconds of work each. By the time the game had drawn
+900 frames, **eight of the eighteen** were done.
+
+### The awkward part: this was already known, twice, and nothing was scheduled
+
+When I went to check whether the fix was in the plan or something I had just made up, I found the
+answer had been written down **twice** and acted on neither time.
+
+The mechanism has been in the plan since the day it was written: *the shape description can already
+answer at any detail level you ask it for* — which is the whole trick. And two days ago, answering
+an earlier version of your complaint, somebody wrote in the same document: *"half a second with a
+sharp first frame means nothing is sampled up front at all."* Correct. Filed. Closed as "measured,
+not a fault."
+
+The reason it never happened is where it was filed. It sat inside the **experimental** section — the
+one about walking right up to a wall and having the voxels keep subdividing under your nose — which
+is the last of eight stages and is switched **off by default**. So somebody could follow the plan
+perfectly, meet every target in it, and still leave you with the loading bar, because the one step
+that removes it was hiding inside an optional experiment at the very end.
+
+That is a fault in how the work was organised rather than in the code, and it is now fixed: it has
+its own stage, in the order, with the ladder named as a thing that gets deleted.
+
+### What is now in the plan, and what each step looks like when you play it
+
+The new stage is "the world source, driven by pixels". Eight steps:
+
+| | what changes | what you will see |
+|---|---|---|
+| 1 | measure what one small piece costs to make, and prove a piece made alone comes out identical to the same piece made as part of the whole building | **nothing** — it is a measurement, and three later decisions are guesses without it |
+| 2 | the unit stops being one of eighteen big boxes and becomes a small piece the screen actually asked for | detail stops arriving in slabs |
+| 3 | how finely a piece is made is decided by how big it is on your screen, instead of by one of two fixed numbers | the jump from blocky to sharp goes away |
+| 4 | **nothing is made before the first frame at all** | no loading bar |
+| 5 | light bouncing around a room may not cause the world to be made — only your eye may | nothing, until it is missing: a dark room would otherwise quietly build the whole building |
+| 6 | a saved world becomes "the description, plus whatever you carved" instead of a dump of every voxel | your world files stop being 600 MB |
+| 7 | the measuring tools keep working when the world depends on where you stood | nothing — it protects every number in these documents |
+| 8 | chiselling something you have only ever seen from far away still cuts properly | you can carve at a distance without getting a blocky hole |
+
+Step 1 first, because the rest are trades against a number nobody has. Then 2 and 3, which you can
+look at and accept or reject on their own. Then 4, which is the headline — but it needs 2 and 3
+underneath it, because "no loading bar" without them means spawning into an empty room that fills
+with big blocky boxes, which is worse than what you have now. Step 6 is last because it is the only
+one that could lose a building you made.
+
+### And the step after that
+
+Right now, even with all of the above, there is still a round trip: your eye asks for something, the
+processor makes it, hands it to the graphics card, and your eye finds it a few frames later. The
+step after is to teach the **graphics card itself** to read the shape description, so it can work
+out what it needs on the spot with nobody in between. The notes on the shape system have said this
+is where it goes since it was written — the descriptions are simple fixed-size records with no
+pointers, which is the shape of thing a graphics card can walk without changing it.
+
+That is what makes it not merely fast but instant, and it also unlocks something that has been stuck
+for months: throwing away detail you are not looking at. At the moment the game keeps almost
+everything, because throwing something away means paying to make it again. Once the card can make it
+again in a fraction of a millisecond, keeping it stops being worth anything.
+
+**Nothing above is built yet.** What has happened so far is that it was reproduced, measured,
+diagnosed, and written into the plan as steps with targets that fail if it is still true. That is
+the part that was missing.
