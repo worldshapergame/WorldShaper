@@ -5384,9 +5384,20 @@ until a node lands on it (R11d's), and the paste itself -- a `Replace` at scale 
 cell up into a filled cube of world voxels, which is exactly the shape of what is described and
 would appear at the moment new detail arrives rather than before it.
 
-**Next session starts here**: photograph two consecutive frames either side of one refinement paste,
-with `--settle` off and a camera watching a node land. That says which of the two it is, and the
-edit path is already excluded.
+**Answered by D619, and by neither of those two suspects.** It was the ladder **starving**: an
+occlusion refusal was not remembered, so nodes behind a wall -- big and near, which is what the rank
+rewards -- sat permanently at the head of a sixty-four-entry shortlist and crowded out everything
+that could be sampled. The batch of sixteen was delivering **1.22 nodes**. So the lumps were nodes
+the ladder never reached, not the coarse build standing and not the paste blowing cells up.
+
+**What this entry got right and wrong is worth keeping.** Right: excluding the edit path in one
+line, from the user's own withdrawal, because a chisel and a refinement paste share everything
+through `announce_world_change` and only one showed cubes. Wrong: taking "the blocks are the coarse
+build" from a photograph that was consistent with it, and then reasoning forward from that instead
+of counting what the ladder was actually doing. **D619's census -- how many nodes are left coarse
+and which test refused each one -- is one line of output and it answered in one run what three
+entries of reasoning did not.** Trap 16 again: when a signal is suspect, count the events that
+produced it.
 
 ---
 
