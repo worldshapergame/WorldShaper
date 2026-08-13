@@ -104,6 +104,11 @@ struct Options {
     // The control arm for the region paste's own pool: put the paste back on the sampler's job
     // system, which is where it was and which is what made it wait for the sample. See D511.
     bool no_paste_pool = false;
+    // The control arm for D620. A refinement paste REPLACES, so it erases the coarse voxels a
+    // node's finer sample supersedes -- and a brick or a chunk emptied that way used to stay
+    // allocated, which is `NodePool::world_has` telling the render tree the world holds matter it
+    // does not. This turns the drop off and restores that, lumps and all.
+    bool no_paste_drop = false;
     std::string clip_part;        // build only this let name, for looking at one piece
 
     // A smaller box to sample, overriding the clip's own.
@@ -705,6 +710,8 @@ Options parse_options(int argc, char** argv) {
             options.no_clip_cache = true;
         } else if (arg == "--no-paste-pool") {
             options.no_paste_pool = true;
+        } else if (arg == "--no-paste-drop") {
+            options.no_paste_drop = true;
         } else if (arg == "--clip-part") {
             if (i + 1 < argc) options.clip_part = argv[++i];
         } else if (arg == "--clip-bounds") {
@@ -1042,6 +1049,10 @@ void print_help() {
         "  --clip-align          report parts that nearly line up but do not\n"
         "  --clip-at x,y,z       where to stamp it, in voxels (default the origin)\n"
         "  --clip-metre N        sample at N voxels per metre instead of the file's\n"
+        "  --no-paste-drop       a refinement paste leaves a brick it emptied allocated, and a\n"
+        "                        chunk it emptied in the world. D620's control arm: every one of\n"
+        "                        those is a cube the renderer draws over geometry that is not\n"
+        "                        there and the chisel's aim cannot find\n"
         "  --sample-cost         what ONE NODE costs to sample, per level, and whether a node\n"
         "                        sampled alone is the same voxels as that node inside a bigger\n"
         "                        box. Headless; the facility unless --clip-file says otherwise.\n"
@@ -1629,6 +1640,12 @@ private:
     // knowing this, so the ladder never spends a sample arriving at a detail already there.
     i32 refine_coarse_per_metre_ = 0;
     bool refine_wants_compact_ = false;
+    // What the ladder's pastes have emptied over the whole run. A Replace paste erases the coarse
+    // voxels a finer sample supersedes, and until D620 nothing unlinked what that left behind, so
+    // these two are how many times this load manufactured a cell the render tree believes in and
+    // the world does not. `--no-paste-drop` is the arm where they stay standing.
+    u64 refine_bricks_emptied_ = 0;
+    u64 refine_chunks_emptied_ = 0;
     // How many boxes the world on disk already has. The cache is written whenever refinement runs
     // out of things it can do and this has moved since, which is once per camera rather than once
     // per box: a six-hundred-megabyte file is not worth rewriting to record one more box, and it
@@ -2128,6 +2145,11 @@ private:
     u32 last_node_evicted_on_screen_ = 0;
     u32 last_node_churned_ = 0;
     u32 last_node_deferred_ = 0;
+    // Wanted, and the pool had nowhere to put it. Printed beside `deferred` because the two are
+    // different facts with the same symptom, and because a pool jammed at its leaf ceiling read
+    // `deferred 0` for the whole of a load. D621.
+    u32 last_node_no_room_ = 0;
+    u32 node_budget_leaves_ = 0;
     f64 stream_ms_ = 0.0;    // reading the feedback buffer and acting on it
     f64 uploads_ms_ = 0.0;   // the face mirror and the type tables
     f64 report_ms_ = 0.0;    // what the overlay is handed
@@ -2818,6 +2840,8 @@ void Application::pump_refinement() {
     // scale one would be a quarter-size building in the corner of its own node.
     const u64 paste_began = now_ns();
     u64 bricks = 0;
+    u64 bricks_emptied = 0;
+    u64 chunks_emptied = 0;
     for (const RefineJob& job : finished) {
         if (job.result == nullptr || job.result->clip.empty()) continue;
         const i64 scale = static_cast<i64>(job.scale);
@@ -2826,8 +2850,11 @@ void Application::pump_refinement() {
                            job.result->origin_voxel[2] * scale + refine_at_[2]};
         const PasteStats stamped =
             paste_clip(world_, ledger_, job.result->clip, lo[0], lo[1], lo[2], PasteMode::Replace,
-                       MatterReason::PlayerPlace, 1, paste_pool, types_.type_count(), job.scale);
+                       MatterReason::PlayerPlace, 1, paste_pool, types_.type_count(), job.scale,
+                       !options_.no_paste_drop);
         bricks += stamped.bricks_written;
+        bricks_emptied += stamped.bricks_emptied;
+        chunks_emptied += stamped.chunks_emptied;
         if (stamped.chunks_left_empty) refine_wants_compact_ = true;
 
         // And the renderer is told. This paste has just rewritten a box of the world at several
@@ -2863,9 +2890,15 @@ void Application::pump_refinement() {
     }
     WS_LOG_INFO("clip",
                 "batch: {} nodes at metre {}-{}, sampled {:.0f} ms ({} voxels asked), pasted "
-                "{:.0f} ms (paste {:.0f} + replay {:.0f}), {} bricks, {} nodes left",
+                "{:.0f} ms (paste {:.0f} + replay {:.0f}), {} bricks, {} emptied ({} chunks), "
+                "{} nodes left",
                 finished.size(), coarsest, finest_seen, refine_sample_ms_, refine_asked_,
-                ns_to_ms(now_ns() - began), paste_ms, replay_ms, bricks, left);
+                ns_to_ms(now_ns() - began), paste_ms, replay_ms, bricks, bricks_emptied,
+                chunks_emptied, left);
+    // The running total, because the count that matters is not how many one batch emptied but how
+    // many are STANDING. One is a rate and the other is the number of lumps.
+    refine_bricks_emptied_ += bricks_emptied;
+    refine_chunks_emptied_ += chunks_emptied;
 
     if (left == 0) {
         // The one walk, now that there is nothing left to empty.
@@ -5215,6 +5248,7 @@ void Application::record_frame(f32 time_seconds) {
         last_node_evicted_on_screen_ = node_batch.evicted_on_screen;
         last_node_churned_ = node_batch.churned;
         last_node_deferred_ = node_batch.deferred;
+        last_node_no_room_ = node_batch.no_room;
         last_node_out_of_memory_ = node_batch.out_of_memory;
         node_buffers_.upload(cmd, node_pool_, swapchain_.frame_index());
         profiler_.add_bytes(node_buffers_.stats().uploaded_this_frame);
@@ -6718,6 +6752,7 @@ int Application::play(const Options& options) {
                 ns_to_ms(now_ns() - t_tables), ns_to_ms(now_ns() - load_began_ns_));
         const u64 t_pool = now_ns();
         node_pool_.create(node_budget, types_);
+        node_budget_leaves_ = node_budget.max_occupancy_leaves;
         const u64 t_node_buffers = now_ns();
         WS_LOG_INFO("load", "node pool {:.0f} ms", ns_to_ms(t_node_buffers - t_pool));
         if (!node_buffers_.create(device_, node_budget)) {
@@ -7720,6 +7755,31 @@ int Application::play(const Options& options) {
             WS_LOG_INFO("frame", "scene: {} chunks, {} solid voxels, {}, content {:016x}",
                         measured_world.chunks, measured_world.solid_voxels, sharpness,
                         world_.content_hash());
+            // The two ways the world can lie to the render tree, counted where they are standing
+            // rather than where they were made. `world_has` asks whether a brick is ALLOCATED and
+            // answers level 8 and above out of the set of chunks that EXIST, so either of these
+            // above nought is a cell the descent calls occupied, `build_leaf` refuses to build,
+            // the marcher draws as a filled cube, occlusion treats as opaque -- and the chisel's
+            // own CPU raycast passes straight through, which is how D620 was found. The paste
+            // that makes them is counted beside it, because a rate and a standing total are
+            // different questions and the fix has to take both to nought.
+            if (measured_world.empty_bricks > 0 || measured_world.empty_chunks > 0) {
+                WS_LOG_WARN("frame",
+                            "the world holds {} allocated bricks with nothing in them and {} "
+                            "chunks with no bricks; every one is a lump the render tree draws and "
+                            "the world does not have",
+                            measured_world.empty_bricks, measured_world.empty_chunks);
+            } else {
+                WS_LOG_INFO("frame", "the world holds no empty bricks and no empty chunks");
+            }
+            if (refine_bricks_emptied_ > 0 || refine_chunks_emptied_ > 0) {
+                WS_LOG_INFO("frame",
+                            "the ladder's pastes emptied {} bricks and {} chunks over this run "
+                            "({})",
+                            refine_bricks_emptied_, refine_chunks_emptied_,
+                            options_.no_paste_drop ? "left standing, --no-paste-drop"
+                                                   : "unlinked as they emptied");
+            }
             if (unrefined > 0 && !options_.settle) {
                 WS_LOG_WARN("frame",
                             "the world was still being sharpened - {} regions left. This figure is "
@@ -7964,12 +8024,12 @@ int Application::play(const Options& options) {
             WS_LOG_INFO("frame",
                         "node pool: {} nodes, {} leaves, {} bytes ({} for the screen); "
                         "built {} evicted {}; "
-                        "requests {} hits {} deferred {}",
+                        "requests {} hits {} deferred {} NO ROOM {} (leaf ceiling {})",
                         node_stats.nodes,
                         node_stats.leaves, node_stats.total_bytes, node_stats.screen_bytes,
                         last_node_built_,
                         last_node_evicted_, node_stats.requests, node_stats.hits,
-                        last_node_deferred_);
+                        last_node_deferred_, last_node_no_room_, node_budget_leaves_);
             // What eviction is actually throwing away.
             //
             // `evicted` alone cannot tell a pool shedding what nobody is looking at -- which is

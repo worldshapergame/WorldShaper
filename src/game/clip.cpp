@@ -565,7 +565,7 @@ struct LedgerDelta {
 
 PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 ox, i64 oy,
                       i64 oz, PasteMode mode, MatterReason reason, u32 player, JobSystem* jobs,
-                      usize type_count, u32 scale) {
+                      usize type_count, u32 scale, bool drop_empty) {
     PasteStats stats;
     if (clip.empty()) return stats;
 
@@ -637,6 +637,7 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
     std::vector<LedgerDelta> deltas(targets.size());
     std::vector<u64> changed(targets.size(), 0);
     std::vector<u64> written(targets.size(), 0);
+    std::vector<u64> emptied(targets.size(), 0);
     std::vector<u8> empty(targets.size(), 0);
 
     // How far the type ids in this clip reach, so the per-worker tally below can be a plain array
@@ -678,6 +679,7 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
             // line between them on every brick costs more than the counting does.
             u64 local_changed = 0;
             u64 local_written = 0;
+            u64 local_emptied = 0;
             const i64 base[3] = {targets[t].coord.x << 8, targets[t].coord.y << 8,
                                  targets[t].coord.z << 8};
             const i64 clo[3] = {std::max(lo[0], base[0]), std::max(lo[1], base[1]),
@@ -791,19 +793,40 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
                         }
                         if (hits == 0) continue;
 
-                        chunk.brick_for_write(static_cast<u32>(bx), static_cast<u32>(by),
-                                              static_cast<u32>(bz))
-                            .assign(want);
+                        Brick& into = chunk.brick_for_write(static_cast<u32>(bx),
+                                                            static_cast<u32>(by),
+                                                            static_cast<u32>(bz));
+                        into.assign(want);
                         local_changed += hits;
                         ++local_written;
                         touched = true;
+
+                        // A Replace paste erases where the clip is empty, so this write can take
+                        // the last voxel out of a brick — and `assign` is a bulk write the chunk
+                        // never sees voxel by voxel, so nothing above unlinks it. Left allocated,
+                        // it is `world_has` claiming matter that is not there, which is a cube the
+                        // marcher draws and can never build (D620). Counted either way, because
+                        // the count is what makes the control arm readable.
+                        if (into.empty()) {
+                            ++local_emptied;
+                            if (drop_empty) {
+                                chunk.drop_brick_if_empty(static_cast<u32>(bx),
+                                                          static_cast<u32>(by),
+                                                          static_cast<u32>(bz));
+                            }
+                        }
                     }
                 }
             }
             changed[t] = local_changed;
             written[t] = local_written;
+            emptied[t] = local_emptied;
             if (touched) chunk.mark_modified();
-            empty[t] = touched ? u8{0} : u8{1};
+            // Whether the CHUNK is empty now, rather than whether this paste happened to write
+            // into it. A paste that clears the last brick out of a chunk it did touch leaves one
+            // exactly as surely as one that creates a chunk and writes nothing, and only the
+            // second was ever noticed.
+            empty[t] = chunk.empty() ? u8{1} : u8{0};
         }
 
         // Fold the batch's air-to-matter counts into the first chunk's delta. Safe without a
@@ -832,7 +855,17 @@ PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 
     for (usize t = 0; t < targets.size(); ++t) {
         stats.voxels_changed += changed[t];
         stats.bricks_written += written[t];
-        if (empty[t] != 0) stats.chunks_left_empty = true;
+        stats.bricks_emptied += emptied[t];
+        if (empty[t] != 0) {
+            stats.chunks_left_empty = true;
+            ++stats.chunks_emptied;
+            // On this thread, after the workers are done: erasing from the world's chunk map is
+            // not something a per-chunk worker may do. It has to happen HERE and not at the
+            // ladder's fixed point, which is where `world_.compact()` was called from -- so for
+            // the whole of a load, which is the entire window the lumps were reported in, the
+            // world held chunks that claim eight metres of occupancy and hold nothing.
+            if (drop_empty) world.drop_chunk_if_empty(targets[t].coord);
+        }
         const LedgerDelta& delta = deltas[t];
         for (usize i = 0; i < delta.keys.size(); ++i) {
             if (delta.keys[i] == 0) continue;

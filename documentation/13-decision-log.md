@@ -5526,3 +5526,111 @@ lump is a stand-in and the level it reads is the level of the node standing in.
 | D620 | **It is the render tree, not the ladder** | plan | D617-D619 were all work on what makes voxels; this is what draws them |
 | D620 | **`--debug-mode 3` is the first thing to run** | method | The level a lump is drawn at names the node standing in for it |
 | D620 | **A player's aside was worth four entries of reasoning** | method | "The aim doesn't detect it" is a measurement of where the fault is NOT, and nothing else had bounded that |
+
+## D621 — the lump was an empty brick nobody unlinked, and it was made by the paste
+
+D620 bounded where the fault is: the chisel's aim ray is a CPU raycast against `World`, it passes
+through the lumps, so **the lumps are not voxels**. This finds the one that survives a settle, and
+it is `world_has` being lied to by the world itself.
+
+### The chain, and every link of it is already written down in this repository
+
+`paste_clip` writes whole bricks through `chunk.brick_for_write(...).assign(want)`. A refinement
+paste is `PasteMode::Replace`, so it **erases** where the clip is empty — which is the whole point:
+a node re-sampled at sixteen or thirty-two voxels a metre has to supersede the coarse voxels
+standing in for it. When that write takes the last voxel out of a brick, the brick stays allocated,
+because `assign` is a bulk write the chunk never sees voxel by voxel.
+
+`Chunk::drop_brick_if_empty`'s own header says what that means and says it first: *"A bulk writer
+that goes through brick_for_write() and fills or assigns the whole brick has to say so, because the
+chunk never sees the individual writes."* `world.hpp` says it again over `any_matter_in`: a brick
+pointer is *"only an honest [question] because `Chunk::set` and `drop_brick_if_empty` unlink a brick
+when its last voxel goes"*. `op.cpp` was taught to say so in D357–D361. **`paste_clip` never was.**
+
+What an empty allocated brick does, in order:
+
+- `NodePool::world_has` answers by brick pointer, so it says the world has matter here;
+- every child mask in the render tree is derived from that answer, so the parent's octant bit is set;
+- `NodePool::build_leaf` decodes the brick, finds no occupancy, and returns `kNoNode` — *"a node with
+  nothing in it is not a node"*, which is correct;
+- so the node stays at level nought for ever, and `node_descend` returns `kFoundWanted` for ever;
+- the marcher draws the ancestor's folded colour over the cell and occlusion treats it as opaque;
+- and `World::get` — which is what the chisel's raycast reads — returns air.
+
+That is D620's sentence exactly: a lump the renderer draws and the aim cannot find. It is
+D357–D361 arriving through the paste door instead of the edit door, and it became visible now
+because R11b made the unit of refinement a **node**: thousands of small Replace pastes, each
+clearing the coarse over-fill at its own boundary, where the eighteen-box ladder made a few dozen.
+
+### Why every audit in the engine read clean while three hundred lumps stood
+
+`NodeBuffers::audit` compares the card against the pool. `stale_leaves` and `stale_masks` compare
+the pool against `world_has`. **`world_has` is the liar**, so all three agree perfectly — the
+settled control arm prints *"the node pool agrees with the world, leaf for leaf"* and *"mask for
+mask"* with 304 lumps standing in front of the camera. The instrument this needed had to ask the
+world a question no existing check asked: `Chunk::empty_bricks`, and `WorldStats::empty_bricks` /
+`empty_chunks` over it, printed beside the scene line.
+
+### Measured, enclosed camera `0,0,0,-90,0`, 1280×800, quality 7, `--settle`, `--no-clip-cache`
+
+`--no-paste-drop` is the control arm and is the behaviour of every build before this one.
+
+| at the fixed point | control | with the drop |
+|---|---|---|
+| allocated bricks holding nothing | **304** | **0** |
+| sun-facing faces shadowed by a cell the pool has not built | **12,517** | **113** |
+| gathering rays stopped by one | **4,968 of 60,332 (8.2%)** | **4 of 60,238 (0.0%)** |
+| pool requests over the run | 320,425,067 | 231,718,626 |
+| nodes still being built at the fixed point | 425 a frame, for ever | **4** |
+| speckle / fireflies | 15.12 / **108** | 8.56 / **0** |
+| pixels differing by more than 8 | — | **206,492 of 1,024,000 (20.2%)** |
+| solid voxels, content hash | 125,419,666, `27a59697104af7c9` | **identical** |
+| ladder census | L3 4386/31568 … 0 neither | **identical** |
+
+The world is the same world — same hash, same voxel count, same census — so nothing was traded for
+it. In the picture the marble goes from pocked with brick-sized grey blotches to clean, the doorway
+loses the black bars either side of it, and the arch soffit loses its speckled shadow.
+
+Two runs of each arm over a 150-frame settled window, because trap 9:
+
+| | control | with the drop |
+|---|---|---|
+| GPU mean | 7.791, 7.924 | **7.618, 7.711** |
+| GPU worst | 10.456, 10.484 | 8.171, 10.035 |
+| CPU node pool | 0.783, 1.036 | **0.239, 0.348** |
+
+The CPU is two thirds off because the phantom request loop is gone; the GPU is flat to slightly
+better. A first 15-frame sample read the other way (+6%) and was noise — one window is not a figure.
+
+### What this does NOT fix, and it is the other half of the report
+
+**The big blocks during a load are a different fault and are still there.** Mid-load screenshots of
+the two arms are the same picture, and at frame 600 the control holds **nought** empty bricks: the
+304 accumulate later, as the ladder finishes. So this closes the lumps that survive a settle and
+never go away, not the ones a player watches while the building loads.
+
+D620 said to read `deferred` and `out_of_room_` during a load, and nobody ever had. Read now, with
+`no_room` counted at the pool's four allocation choke points instead of at one of them:
+
+| frame | leaves held | NO ROOM this frame | deferred | evicted | gathering rays stopped by an unbuilt cell |
+|---|---|---|---|---|---|
+| 300 | **262,144 — the ceiling** | **252** | 0 | 0 | 7.4% |
+| 600 | **262,144 — the ceiling** | **338** | 0 | 0 | 16.8% |
+| 1200 | 33,282 | 0 | 0 | 0 | 0.0% |
+
+The pool is pinned at `max_occupancy_leaves` for the whole of the load, refusing hundreds of builds
+a frame, evicting nothing, and reporting `deferred 0` — and every one of those refusals was being
+counted as `built`, because `refine`'s caller increments `built` whatever `refine` managed to do and
+`out_of_memory` was set in exactly one place, the entry-level shell. **Trap 7 living in the
+instrument**: "I could not fit it" arriving as "here you are". The load's peak leaf demand is eight
+times the settled demand and why has not been diagnosed.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D621 | **A paste unlinks a brick it emptied and a chunk it emptied, as it happens** | fix | `assign` is a bulk write the chunk cannot see; `drop_brick_if_empty`'s header has said so since D357 |
+| D621 | **`WorldStats::empty_bricks` / `empty_chunks` are printed beside the scene** | method | Every existing audit compares two readers of `world_has`, and `world_has` was the liar |
+| D621 | **A chunk emptied by a paste goes at the paste, not at the ladder's fixed point** | fix | `world_.compact()` ran only when the ladder finished, which is after the whole window the lumps are in |
+| D621 | **`--no-paste-drop` is the control arm and the gate has both halves** | method | A gate that cannot fail is not a gate; the test asserts the fault under the flag |
+| D621 | **The mid-load blocks are NOT this** | honesty | Both arms are the same picture at frame 600, and the control holds nought empty bricks there |
+| D621 | **The pool is pinned at its leaf ceiling for the whole load** | finding | 262,144 leaves, 252-338 refusals a frame, `deferred 0`, `evicted 0`, every refusal counted as `built` |
+| D621 | **`no_room` is counted at all four allocation choke points** | method | `out_of_memory` was set at one of them, so a jammed pool was indistinguishable from a busy one |

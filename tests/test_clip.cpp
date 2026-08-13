@@ -209,6 +209,77 @@ TEST_CASE("paste modes touch only what they say they will") {
     }
 }
 
+// D620. A Replace paste ERASES where the clip is empty, and `paste_clip` writes whole bricks
+// through `brick_for_write().assign()` — which the chunk never sees voxel by voxel, so nothing
+// above it unlinks a brick the write emptied. Left allocated, that brick is `NodePool::world_has`
+// telling the render tree the world holds matter here: the descent calls the cell occupied,
+// `build_leaf` finds nothing to build and refuses, the marcher draws a filled cube it can never
+// replace, occlusion treats it as opaque — and the chisel's own CPU raycast passes straight
+// through, which is the sentence from the player that found this.
+//
+// The gate is `world_has`'s own question rather than the count, because the count is a symptom and
+// the question is the fault. `any_matter_in` asks it by brick pointer for exactly this reason.
+TEST_CASE("a replace paste that empties a brick leaves nothing claiming matter") {
+    // One brick's worth of glass at the origin brick, and a clip of pure air over it.
+    static constexpr i64 kBrickLow[3] = {0, 0, 0};
+    static constexpr i64 kBrickHigh[3] = {7, 7, 7};
+    World target;
+    MatterLedger ledger;
+    for (i64 z = 0; z < 8; ++z) {
+        for (i64 y = 0; y < 8; ++y) {
+            for (i64 x = 0; x < 8; ++x) target.set(x, y, z, kGlass);
+        }
+    }
+    REQUIRE(any_matter_in(target, kBrickLow, kBrickHigh));
+    REQUIRE(target.stats().empty_bricks == 0);
+
+    World source;   // nothing in it at all
+    const Clip air = capture_clip(source, 0, 0, 0, 7, 7, 7);
+    REQUIRE(air.solid_count() == 0);
+
+    SUBCASE("the brick goes with its last voxel") {
+        const PasteStats stats =
+            paste_clip(target, ledger, air, 0, 0, 0, PasteMode::Replace,
+                       MatterReason::PlayerPlace, 1);
+        CHECK(stats.bricks_emptied == 1);
+        CHECK(target.get(3, 3, 3) == kAir);
+        // The three that have to agree, and the third is the one that was wrong: the voxels are
+        // gone, the count is nought, and the question every child mask in the render tree is
+        // derived from now answers no.
+        CHECK(target.stats().empty_bricks == 0);
+        CHECK_FALSE(any_matter_in(target, kBrickLow, kBrickHigh));
+        // The chunk had one brick and now has none, so it goes too -- `world_has` answers level 8
+        // and above out of the set of chunks that exist, and an empty one claims eight metres.
+        CHECK(target.stats().empty_chunks == 0);
+        CHECK_FALSE(target.has_chunk(ChunkCoord{0, 0, 0}));
+    }
+
+    SUBCASE("the control arm is the fault, so the gate can fail") {
+        const PasteStats stats =
+            paste_clip(target, ledger, air, 0, 0, 0, PasteMode::Replace,
+                       MatterReason::PlayerPlace, 1, nullptr, 0, 1, /*drop_empty=*/false);
+        CHECK(stats.bricks_emptied == 1);
+        CHECK(target.get(3, 3, 3) == kAir);
+        CHECK(target.stats().empty_bricks == 1);
+        // Every voxel is gone and the world still says there is matter here. That is the lump.
+        CHECK(any_matter_in(target, kBrickLow, kBrickHigh));
+    }
+
+    SUBCASE("a brick the paste only partly clears stays, and stays honest") {
+        World keep;
+        keep.set(0, 0, 0, kRock);
+        const Clip one = capture_clip(keep, 0, 0, 0, 7, 7, 7);
+        const PasteStats stats =
+            paste_clip(target, ledger, one, 0, 0, 0, PasteMode::Replace,
+                       MatterReason::PlayerPlace, 1);
+        CHECK(stats.bricks_emptied == 0);
+        CHECK(target.get(0, 0, 0) == kRock);
+        CHECK(target.get(3, 3, 3) == kAir);
+        CHECK(target.stats().empty_bricks == 0);
+        CHECK(any_matter_in(target, kBrickLow, kBrickHigh));
+    }
+}
+
 namespace {
 Clip scaled(const Clip& clip, f64 uniform) {
     const f64 factor[3] = {uniform, uniform, uniform};

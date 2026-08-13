@@ -188,6 +188,22 @@ u32 Chunk::node_count() const {
     return static_cast<u32>(nodes_.size() - free_nodes_.size());
 }
 
+u32 Chunk::empty_bricks() const {
+    // Over the storage rather than over the octree: 32,768 descents to visit a few hundred
+    // bricks is the shape of walk this exists to catch rather than to imitate. The free list is
+    // short — it is the bricks freed since the chunk was made — so marking it costs nothing.
+    if (bricks_.empty()) return 0;
+    std::vector<u8> freed(bricks_.size(), 0);
+    for (u32 index : free_bricks_) {
+        if (index < freed.size()) freed[index] = 1;
+    }
+    u32 count = 0;
+    for (usize index = 0; index < bricks_.size(); ++index) {
+        if (freed[index] == 0 && bricks_[index].empty()) ++count;
+    }
+    return count;
+}
+
 u64 Chunk::solid_voxels() const {
     u64 total = 0;
     for (u32 bz = 0; bz < kBricksPerAxis; ++bz) {

@@ -46,6 +46,12 @@ struct WorldStats {
     u64 bricks = 0;
     u64 solid_voxels = 0;
     u64 bytes = 0;
+    // Both of these must be nought, always, and neither is a size. They are the two ways this
+    // world can lie to `NodePool::world_has` — an allocated brick with nothing in it, and an
+    // allocated chunk with no bricks — and a lie in either direction is a lump the marcher draws
+    // and the chisel's own raycast cannot find. See Chunk::empty_bricks and D620.
+    u64 empty_bricks = 0;
+    u64 empty_chunks = 0;
     // Cost per voxel of allocated space. This is the number documentation/03 §3 and the
     // memory budget are written against, because it is what scales with world size.
     f64 bytes_per_voxel() const {

@@ -440,6 +440,26 @@ failure, not a compile error.
     (`--clip-coarse 4`, metre 8) ran through the untested half. Ask what your tests hold FIXED, and
     whether the thing you are about to build varies it. D613.
 
+26. **Every audit agreeing is not evidence when they all read the same source.** Three checks stand
+    over the render tree: `NodeBuffers::audit` compares the card with the pool, and `stale_leaves`
+    and `stale_masks` compare the pool with `world_has`. All three printed *"agrees, leaf for leaf"*
+    and *"mask for mask"* on a settled camera with **304 lumps standing in front of it**, because
+    `world_has` was the thing that was wrong and every one of them is downstream of it. The
+    instrument that found it had to ask the world a question no check asked — how many allocated
+    bricks hold nothing — and that number could not have been derived from anything the engine
+    already printed. Traps 7, 10 and 13 are this from other sides; the addition is that a *redundant
+    set of checks* is only as good as its deepest shared reader, and the way to find that reader is
+    to ask which one of them could be wrong and leave all the others content. D621.
+
+27. **A counter incremented on one of several failure paths reads as success on the rest.**
+    `NodeUploadBatch::out_of_memory` was set where the entry-level shell failed and nowhere else, so
+    a pool jammed at its leaf ceiling for the whole of a load printed `deferred 0` — and `refine`'s
+    caller incremented `built` whatever `refine` had actually managed, so 252 refusals a frame read
+    as 252 successes. The cure is what `note_no_room` now is: every path that gives up funnels
+    through one line, so the count cannot be right for some callers and silent for others. Trap 7 in
+    the instrument rather than in the structure, and trap 20's twin — there a pass got cheaper by
+    doing less, here a pass reported success by failing. D621.
+
 ---
 
 ## 4b. The bug that was open here — closed, and what it teaches
@@ -643,19 +663,55 @@ eighteen-box ladder build **byte-identical worlds** with despeckling off (`a1f8b
    differ on `sampler.clip`, 0 of 297 on the facility**. D613's class one step along. What is left
    without the skirt is 46 cells of 152,064 on the facility wearing a neighbour's colour.
 
-#### OPEN, AND IT IS NOT THE LADDER: "huge brick blocks on top of things" (D620)
+#### HALF CLOSED: "huge brick blocks on top of things" — D620 bounded it, D621 closed one half
 
-**Start here, and read D620 first.** The player noticed that the chisel's aim cursor does not detect
-the lumps. That cursor is a CPU raycast against `World`, so **the lumps are not voxels** -- they are
-the render tree drawing a stand-in for a node whose leaf it has not got. §4b's own words for this
-shape are *"the descent said unbuilt-but-occupied, occlusion reads that as opaque"*, and trap 7 is
-the rule it breaks.
+**Read D620 then D621.** D620 was right about the shape and it came from one sentence the player
+said in passing: the chisel's aim cursor does not detect the lumps. That cursor is a CPU raycast
+against `World`, so **the lumps are not voxels** — they are the render tree drawing a stand-in for
+a node whose leaf it has not got. §4b's own words for this shape are *"the descent said
+unbuilt-but-occupied, occlusion reads that as opaque"*, and trap 7 is the rule it breaks.
+
+There are **two populations**, and they had been read as one for four entries.
+
+**The ones that survive a settle: CLOSED (D621).** `paste_clip` writes whole bricks through
+`brick_for_write().assign()`, a refinement paste REPLACES, and a Replace write that takes the last
+voxel out of a brick left it allocated. `world_has` asks whether a brick is *allocated*, so the
+render tree was told the world holds matter it does not; `build_leaf` correctly refuses to build a
+node with nothing in it, so the cell stayed unbuilt-but-occupied for ever. `drop_brick_if_empty`'s
+own header has said since D357 that a bulk writer through `brick_for_write` has to say so, and
+`op.cpp` was taught to; the paste never was. Measured at the fixed point, enclosed camera: **304
+allocated bricks holding nothing → 0**, sun faces shadowed by a cell the pool has not built
+**12,517 → 113**, gathering rays stopped by one **8.2% → 0.0%**, fireflies **108 → 0**, 20% of
+pixels changed, and the world byte-identical (same content hash, same 125,419,666 voxels).
+`--no-paste-drop` is the control arm.
+
+**And the reason no audit caught it, which is the reusable half**: `NodeBuffers::audit` compares the
+card with the pool, and `stale_leaves`/`stale_masks` compare the pool with `world_has`. **`world_has`
+was the liar**, so all three agreed perfectly with 304 lumps on screen. See trap 26.
+
+**The ones a player watches during a load: STILL OPEN, and this is where to start.** Both arms are
+the same picture at frame 600 and the control holds *nought* empty bricks there, so it is not the
+above. D620 said to read `deferred` and `out_of_room_` during a load and nobody had; read now, with
+`no_room` counted at all four of the pool's allocation choke points rather than at one:
+
+| frame | leaves held | NO ROOM this frame | deferred | evicted |
+|---|---|---|---|---|
+| 300 | **262,144 — the ceiling** | **252** | 0 | 0 |
+| 600 | **262,144 — the ceiling** | **338** | 0 | 0 |
+| 1200 | 33,282 | 0 | 0 | 0 |
+
+The pool sits pinned at `max_occupancy_leaves` for the whole load, refuses hundreds of builds a
+frame, evicts nothing, and reported `deferred 0` — with every refusal counted as `built`, because
+`refine`'s caller increments `built` whatever `refine` managed and `out_of_memory` was set in one
+place only. **The load's peak leaf demand is eight times the settled demand and why is not
+diagnosed.** That is the next question: not "raise the ceiling" but *what is holding a quarter of a
+million leaves during a load that thirty-three thousand serve afterwards*, and why the erode sweep
+gives up nothing while it happens. Trap 20 applies to any fix here — a pass that gets cheaper by
+building less is a regression in improvement's clothes.
 
 Everything below this line, and D617 through D619, is work on the thing that MAKES voxels. None of
-it could have fixed this, and D619's starvation fix was a real fault that is not this one. First
-run: `--debug-mode 3` during a load -- the level a lump is drawn at names the node standing in for
-it -- and read `stale_leaves`, `stale_masks`, `deferred` and `out_of_room_`, none of which has been
-looked at during a load.
+it could have fixed either population, and D619's starvation fix was a real fault that is not this
+one.
 
 #### Was closed and was not: "huge brick blocks on top of things" -- the starvation half (D619)
 

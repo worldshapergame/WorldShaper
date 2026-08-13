@@ -60,6 +60,7 @@ void NodeUploadBatch::clear() {
     evicted_on_screen = 0;
     churned = 0;
     deferred = 0;
+    no_room = 0;
     out_of_memory = false;
 }
 
@@ -136,6 +137,14 @@ void NodePool::create(const NodePoolBudget& budget, const VoxelTypeTable& types)
 // stops building because it ran out of memory must not look like a tree that stopped because the
 // world is empty. `out_of_room_` is how the two are told apart.
 
+// One place, so that "the pool had nowhere to put it" is one fact with one counter rather than
+// four assignments to a flag nobody printed. See NodeUploadBatch::no_room.
+void NodePool::note_no_room() {
+    out_of_room_ = true;
+    ++batch_.no_room;
+    batch_.out_of_memory = true;
+}
+
 u32 NodePool::allocate_node() {
     if (!free_singles_.empty()) {
         const u32 slot = free_singles_.back();
@@ -147,7 +156,7 @@ u32 NodePool::allocate_node() {
         return slot;
     }
     if (next_free_ >= budget_.max_nodes) {
-        out_of_room_ = true;
+        note_no_room();
         return kNoNode;
     }
     const u32 slot = next_free_++;
@@ -169,7 +178,7 @@ u32 NodePool::allocate_children() {
         return base;
     }
     if (next_free_ + 8 > budget_.max_nodes) {
-        out_of_room_ = true;
+        note_no_room();
         return kNoNode;
     }
     const u32 base = next_free_;
@@ -480,7 +489,7 @@ u32 NodePool::build_leaf(const World& world, const NodeKey& key, u32& budget) {
         leaf = next_leaf_++;
     }
     if (leaf == kNoNode) {
-        out_of_room_ = true;
+        note_no_room();
         free_singles_.push_back(slot);
         return kNoNode;
     }
@@ -492,7 +501,7 @@ u32 NodePool::build_leaf(const World& world, const NodeKey& key, u32& budget) {
         // pool that does not hold the voxel data is not a replacement for residency.
         const u32 offset = payload_pool_.allocate(static_cast<u32>(encoded.size()));
         if (offset == kNoOffset) {
-            out_of_room_ = true;
+            note_no_room();
             free_leaves_.push_back(leaf);
             free_singles_.push_back(slot);
             ++budget;

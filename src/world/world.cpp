@@ -74,6 +74,8 @@ WorldStats World::stats() const {
         out.bricks += chunk.brick_count();
         out.solid_voxels += chunk.solid_voxels();
         out.bytes += chunk.bytes();
+        out.empty_bricks += chunk.empty_bricks();
+        if (chunk.empty()) out.empty_chunks += 1;
     }
     return out;
 }

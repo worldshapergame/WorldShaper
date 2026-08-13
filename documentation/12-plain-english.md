@@ -2424,33 +2424,54 @@ will always be some step -- but the big visible one is gone.
 every frame, which is the test that would say whether those two remaining steps are visible to an
 eye. The world is proved; the walk is not.
 
-### The brick blocks: still there, and here is the honest state of it
+### The brick blocks: half of them are gone, and I was wrong about what they were
 
 You reported big cube-shaped lumps sitting on top of things while the world loads, with a photo of
-an urn as a stack of coarse blocks in a niche whose walls were already sharp.
+an urn as a stack of coarse blocks in a niche whose walls were already sharp. I gave three different
+answers to that and the first two were wrong. Then you said, in passing, *"the circle voxel aim
+thing doesn't detect the lumps"* — and that one sentence was worth more than all three of mine,
+because the aim circle is drawn by asking the world what is under your cursor. If it goes straight
+through a lump, **the lump is not made of voxels**. Nothing you can chisel is there. It is the
+renderer drawing a solid cube where it has been told there is something and has nothing to show.
 
-**What they are**: the first pass. The building is made once at eight voxels per metre and each of
-those is blown up four times on the way in, so anything thinner than about 12 cm arrives as a cube.
-I photographed the same moment in the build from before this week's work -- the lumps are there too.
-They are not something I added. What I did add is that everything *around* them now sharpens
-quickly, so they are the only wrong thing left in view instead of one wrong thing among many.
+It turns out there are two different lumps wearing the same coat.
 
-**What I changed**: the ladder now makes sixteen pieces at a time instead of one (it was still doing
-one at a time from when a piece was a thousand times bigger), it does the pieces that are most
-*wrong* before the ones that are merely big on screen, and I removed a third-of-a-second stall that
-my own first attempt introduced. That makes the lumps brief. It does not make them absent, and you
-have told me they still show up, which is fair.
+**The kind that never goes away — fixed this week.** When the game sharpens a piece of the building,
+it writes the finer version over the blocky one, and that means *rubbing out* the coarse blocks
+that were too fat. The rubbing-out worked. What did not happen is that the now-empty box was left
+lying around, still registered as "there is something here". So the renderer kept drawing a cube on
+it, kept casting its shadow, and kept refusing to build anything better — for ever, because there
+was nothing there to build. Standing in the entrance hall with the world completely finished, there
+were **304 of these**. They are the grey brick-sized blotches all over the marble, the black bars
+either side of the doorway, and the dirty shadow under the arch.
 
-**What actually removes them** is step 4: if nothing is made up front, there is no blown-up first
-pass to leave lumps. That is the next thing I build.
+The fix is one line's worth of idea: when a write empties a box, throw the box away, which is what
+every other part of the game that removes matter already does. Measured, standing still with the
+world settled: **304 empty boxes to nought**, faces wrongly in shadow **12,517 to 113**, stray white
+sparkles **108 to nought**, and a fifth of the screen changed. The building itself is bit-for-bit
+the same building — same voxel count, same fingerprint — so nothing was given up for it. It is also
+very slightly *faster*, and the work the processor does per frame dropped by two thirds, because the
+game had been asking for those 304 boxes over and over again three hundred million times a run.
 
-**One thing to check first, though.** There is a second possible cause I have named but not tested.
-The ladder skips a piece it thinks is hidden behind something else, and the margin for that
-judgement used to be twelve metres and is now a quarter of a metre -- so a piece just behind
-another piece's own coarse overshoot can be refused for as long as you stand still. On the last
-measured run, 4,096 pieces out of 20,020 were refused that way. If a lump is still there after the
-world has gone quiet and stopped working, it is that, not the first pass -- and it would be my
-fault from step 2 rather than something step 4 fixes. There is a one-flag test for it and I have
-written down how to run it.
+**And the reason it went unnoticed for so long is worth a sentence.** The game has three separate
+self-checks that compare the renderer's copy of the world against the world. All three said
+"agrees, perfectly" while those 304 lumps were on screen — because all three ask the *same* question
+underneath, and that question was the one telling the lie. I had to write a check that asked the
+world something none of them asked.
 
-**Steps 4 to 8 are not built.** The loading bar is still there -- that is step 4, and it is next.
+**The kind you see while it loads — still there.** I photographed the same moment of the load with
+and without the fix and they are the same picture, so the big blocks during loading are something
+else. I have now measured what, and it is not the ladder and not the first pass:
+
+The renderer has room for a fixed number of bricks. During a load it is **completely full** — jammed
+at its ceiling — throwing away two to three hundred requests every frame, and its own report said
+`0 refused`, because the counter was only being incremented on one of the four ways it can run out.
+Every refusal was being logged as a success. Once the world settles it needs **one eighth** of that
+room. So something during loading is holding eight times the bricks the finished world needs, and
+nothing gives any of them back while it happens.
+
+That is the next thing I look at, and the question is not "make the room bigger" — that would hide
+it. It is *what is holding a quarter of a million bricks during a load that thirty-three thousand
+serve afterwards*.
+
+**Steps 4 to 8 are not built.** The loading bar is still there — that is step 4.

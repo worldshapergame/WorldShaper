@@ -162,6 +162,18 @@ struct PasteStats {
     u64 bricks_written = 0;
     u64 chunks_touched = 0;
 
+    // Bricks this paste wrote that hold nothing afterwards, and chunks it left with no bricks at
+    // all. A Replace paste ERASES where the clip is empty, so a node re-sampled finer than the
+    // coarse voxels standing in for it clears them — and a brick or a chunk emptied that way is
+    // still allocated. `NodePool::world_has` asks whether a brick is allocated, so every one of
+    // these is the render tree told the world holds matter it does not: a filled cube the marcher
+    // draws, occlusion treats as opaque, `build_leaf` refuses to build, and the chisel's own
+    // raycast passes straight through. D620, and D357-D361 through a different door.
+    //
+    // Both are counted whether or not they were then dropped, because the count is the evidence.
+    u64 bricks_emptied = 0;
+    u64 chunks_emptied = 0;
+
     // True when a chunk was created that nothing ended up being written into, which is the only
     // reason a paste ever leaves anything worth compacting. The bricks it does write are built by
     // Brick::assign, which already picks the smallest encoding that fits — running compact over
@@ -206,8 +218,14 @@ struct PasteStats {
 // the one into the other, and it is what lets a world be shown coarse and then sharpened in place.
 //
 // One is the ordinary case and costs nothing: the shift is zero and every loop below is what it was.
+//
+// `drop_empty` unlinks a brick this paste emptied and a chunk it left with nothing, at the moment
+// it happens, which is what `Chunk::drop_brick_if_empty`'s own header says a bulk writer through
+// `brick_for_write` has to do and what this function never did. False is the control arm for D620
+// and is the behaviour every build before it had.
 PasteStats paste_clip(World& world, MatterLedger& ledger, const Clip& clip, i64 ox, i64 oy,
                       i64 oz, PasteMode mode, MatterReason reason, u32 player,
-                      JobSystem* jobs = nullptr, usize type_count = 0, u32 scale = 1);
+                      JobSystem* jobs = nullptr, usize type_count = 0, u32 scale = 1,
+                      bool drop_empty = true);
 
 }  // namespace ws

@@ -38,6 +38,13 @@ public:
 
     bool empty() const { return brick_count_ == 0; }
     u32 brick_count() const { return brick_count_; }
+
+    // How many allocated bricks hold nothing. This should be nought at every moment, and it is
+    // an instrument rather than a statistic: an empty brick left allocated is `world_has` — and
+    // therefore every child mask in the render tree — claiming matter the world does not have,
+    // which the marcher draws as a filled cube it can never build (D620). A count above nought
+    // names how many lumps are standing.
+    u32 empty_bricks() const;
     u32 node_count() const;
     u64 solid_voxels() const;
     usize bytes() const;

@@ -337,6 +337,15 @@ struct NodeUploadBatch {
     // rather than a proxy for it.
     u32 churned = 0;
     u32 deferred = 0;              // wanted, but the frame's budget ran out
+    // Wanted, and the pool had nowhere to put it: a node slot, a run of eight, an occupancy leaf
+    // or a stretch of payload. Distinct from `deferred`, which is a budget this frame and is
+    // served on the next one, and distinct again from a cell the world is empty at.
+    //
+    // It exists because `out_of_memory` was set in exactly one place -- the entry-level shell --
+    // so a pool jammed at its leaf ceiling reported `deferred 0` and counted every failed refine
+    // as `built`. That is trap 7 living in the instrument: "I could not fit it" arriving as
+    // "here you are". D621.
+    u32 no_room = 0;
     bool out_of_memory = false;
     void clear();
 };
@@ -599,6 +608,7 @@ private:
     // shadow ray believes it and flies out of a sealed room (D324).
     void release_children(u32 slot);
     void release(u32 slot);
+    void note_no_room();
     u32 allocate_node();
     u32 allocate_children();
 
