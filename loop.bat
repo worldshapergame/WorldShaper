@@ -220,12 +220,41 @@ function Show-Event($line) {
 
 # Is a loop already running here? A stale lock from a machine switched off
 # mid-run must not be mistaken for one, so the pid is checked, not the file.
+#
+# ...and the pid ALONE is not enough, which cost a real morning. Windows reuses
+# process ids freely. A loop was killed by the machine being switched off at the
+# wall, its lock survived, and by the next day pid 17276 belonged to a Realtek
+# audio component started that morning -- so this function found a live process,
+# reported the loop as running, and the wrap-up request went to a file nobody was
+# ever going to read. The symptom is the worst kind: it says the thing you want to
+# hear.
+#
+# So the lock records the pid AND the process start time, and both have to match.
+# A recycled id cannot fake the second: it is the moment that process began, to a
+# hundred nanoseconds. Reading StartTime can be refused for a process owned by
+# another account, and a refusal is treated as "not mine" -- which is the safe
+# direction, because the cost of clearing a lock that was live is one message and
+# the cost of trusting one that is dead is a night that never runs.
+#
+# A lock written by an older copy of this file has no second field. It cannot be
+# verified, so it is treated as stale and removed; the next run writes one that
+# can be. That is a one-time self-heal rather than a migration.
 function Get-RunningLoop {
     if (-not (Test-Path $lockFile)) { return $null }
     $recorded = (Get-Content $lockFile -Raw).Trim()
     if (-not $recorded) { return $null }
-    $live = Get-Process -Id ([int]$recorded) -ErrorAction SilentlyContinue
-    if (-not $live) { Remove-Item $lockFile -Force -ErrorAction SilentlyContinue; return $null }
+    $parts = $recorded -split '\s+'
+    # Emits NOTHING. A helper that ends in `return $null` writes a null into this
+    # function's output and the explicit `return $null` after it writes a second,
+    # so the caller gets a two-element array -- which tests as TRUE and would have
+    # this report a running loop always. `Remove-Item` is silent, so this is.
+    $drop = { Remove-Item $lockFile -Force -ErrorAction SilentlyContinue }
+    if ($parts.Count -lt 2) { & $drop; return $null }
+    $live = Get-Process -Id ([int]$parts[0]) -ErrorAction SilentlyContinue
+    if (-not $live) { & $drop; return $null }
+    $began = $null
+    try { $began = $live.StartTime.Ticks } catch { $began = $null }
+    if ($null -eq $began -or "$began" -ne $parts[1]) { & $drop; return $null }
     return $live
 }
 
@@ -798,7 +827,11 @@ Write-Banner "Working on: $($opt.Goal)"
 if (Test-Path $stopFile) { Remove-Item $stopFile -Force }
 if (Test-Path $wrapFile) { Remove-Item $wrapFile -Force }
 Set-Content -Path $goalFile -Value $opt.Goal -Encoding utf8
-Set-Content -Path $lockFile -Value $PID -Encoding utf8
+# The pid and the moment this process began, because a pid on its own is a number
+# Windows hands out again -- see Get-RunningLoop for the morning that cost.
+Set-Content -Path $lockFile `
+    -Value ("{0} {1}" -f $PID, [System.Diagnostics.Process]::GetCurrentProcess().StartTime.Ticks) `
+    -Encoding utf8
 
 try {
     $iteration = 0
