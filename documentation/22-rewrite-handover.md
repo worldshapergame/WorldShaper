@@ -617,6 +617,50 @@ had to land first.
 **`a1f8bc6c656343b7`, 1,430,104 voxels**. The facility should lose 3.7 s of wall clock and must keep
 its content hash for a given camera, or `baseline.ps1` stops working (R11g).
 
+##### AND THE BLOCKER, found by reading before building: where does the STIPPLE VERDICT come from?
+
+**R11d cannot start until this is answered, and it is not a detail.** The up-front sample is the only
+place in the engine that ever looks at the whole building at once, and one thing is taken from it
+that nothing else can produce: `refine_stipple_`, the verdict on which materials are a deliberate
+dither and must never be despeckled. Every node the ladder refines is despeckled against it. Delete
+the up-front sample and there is no verdict, and `forge::despeckle` reads an absent verdict as
+**"leave every speck alone, everywhere"** — which is D625, the fault that shipped silently on every
+cached load for the life of the feature.
+
+The measurements that already exist and bound the problem:
+
+- **A coarser sample is not a cheaper verdict, it is a different one.** D625 tried exactly this and
+  refused it on measurement: at sample metres 8, 4, 2 and 1 the verdict sees **35, 31, 26 and 19**
+  materials, and metre 4 shares only two of metre 8's six protected ones — material 27 is spared at
+  metre 8 and repainted at metre 4.
+- **The verdict today is the metre-8 one**, not the authored one, because `--clip-coarse 4` is what
+  the up-front build samples at. So the answer being preserved is not sacred; it is whatever metre 8
+  says, and that is the arm any replacement must be compared against.
+- **The cache already carries it** (D625, format 4). So this only blocks a COLD load. Every launch
+  after the first already has the verdict without a whole-clip sample.
+- **The removable part without solving it is only 959 ms of the 3.7 s** — the paste (257 ms) and the
+  compact (702 ms). The sample itself is 2,754 ms and is what produces the verdict. Skipping the
+  paste alone gives a player 2.75 s of loading bar and then an EMPTY world, which is worse than what
+  is being fixed.
+
+**Three candidate answers, in the order they look promising, and each is a measurement rather than
+an argument:**
+
+1. **Accumulate it across the ladder's own nodes.** The verdict is a ratio per material — specks over
+   that material's surface — and both counts are additive across disjoint boxes. Take the verdict
+   when coverage is complete and despeckle from then on. **The known flaw is measurable**: a voxel
+   isolated *within a node* may not be isolated in the whole, which is R11b's skirt problem exactly
+   (D615: a box one voxel larger is a different question; 2 of 96 nodes differ on `sampler.clip`).
+   The arm to run is the accumulated verdict against the metre-8 verdict, material for material.
+2. **Derive it from the paint rules** rather than from any sample. A dither is authored as a rule
+   keyed on noise; whether that is recoverable statically is unknown and nobody has looked.
+3. **Keep one whole-clip sample at the coarsest resolution whose verdict still agrees with metre 8.**
+   D625's ladder says metre 4 already disagrees, so this is probably dead — but it has only been
+   measured at four resolutions and by material COUNT rather than by which materials.
+
+**Do not start by deleting the coarse build.** Start by answering this, because the answer decides
+whether R11d is a scheduling change or a new pass.
+
 ---
 
 #### 2. The 923 field nodes that carry no box
