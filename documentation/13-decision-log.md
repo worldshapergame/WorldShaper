@@ -5634,3 +5634,116 @@ times the settled demand and why has not been diagnosed.
 | D621 | **The mid-load blocks are NOT this** | honesty | Both arms are the same picture at frame 600, and the control holds nought empty bricks there |
 | D621 | **The pool is pinned at its leaf ceiling for the whole load** | finding | 262,144 leaves, 252-338 refusals a frame, `deferred 0`, `evicted 0`, every refusal counted as `built` |
 | D621 | **`no_room` is counted at all four allocation choke points** | method | `out_of_memory` was set at one of them, so a jammed pool was indistinguishable from a busy one |
+
+## D622 — the load was three things waiting, and none of them was the sampler being slow
+
+Asked for: make the world load dramatically faster while you are standing in it, at no expense.
+
+Nothing in this repository had ever measured where a load's seconds go. The batch line times **one
+batch**, and a batch is a few tens of milliseconds; the total, split by which half of the ladder
+spent it, did not exist. It does now, beside the settle line, and it named all three faults in one
+run.
+
+### The budget, cold facility, enclosed camera, 1280x800, `--settle`, `--no-clip-cache`
+
+| | before | after | |
+|---|---|---|---|
+| **wall clock, launch to settled** | **83.6 s** | **17.3 s** | **4.8x** |
+| ladder elapsed | 78,867 ms | **12,421** | 6.4x |
+| — pick, **main thread** | 25,929 ms | **822** | **31x** |
+| — — of which occlusion raycasts | **7,103,492** | **149,512** | **48x** |
+| — — list entries swept | 74,141,297 | 16,287,045 | 4.6x |
+| — sample, background | 33,912 ms | **6,361** | 5.3x |
+| — paste | 174 ms | 140 | — |
+| wakes / nodes each | 1,806 / 12.91 | 487 / **47.96** | |
+| frames to settle | 3,268 | **701** | |
+| **frame time during the load** | 24.1 ms | **17.7 ms** | it is smoother as well as shorter |
+
+Three faults, each a wait rather than a cost.
+
+**1. The batch was sampled one node at a time, on one core.** The loop over the batch was serial and
+each `forge::sample` was handed the job system to split *itself* across — which R11a had already
+measured as buying exactly nothing: **1.389 ms threaded against 1.391 serial**, at every level, to
+three digits, because a node is eight voxels a side and therefore eight z slabs. So sixteen nodes
+were sixteen consecutive samples each failing to use eight workers. The parallelism belongs one
+level up, where the units are independent by construction: every job owns its clip and its
+settings, the plan is borrowed const, the field has no mutable state, and `despeckle` takes the
+whole-clip verdict by const pointer. `nullptr` inside, because handing one JobSystem to eight
+concurrent samples is the submitter collision of D511-D514 and the inner split was worth nothing
+anyway. **33,912 to 7,691 ms on its own.**
+
+**2. Seven million raycasts to choose sixteen nodes.** The picker made two full passes over every
+node the ladder has ever made — 40,436 by the end. The first found the single best node, testing
+each new front runner with a CPU raycast against `World`; the second built a shortlist by *the same
+arithmetic* to fill the rest of the batch.
+
+Seven million is not a constant factor, it is a bug wearing a profile. The ray fires only for a node
+that BEATS the current front runner, which sounds logarithmic — but **a node the ray refuses does
+not become the front runner**, so `keenest` stays where it was and the next node above it fires
+another. With 6,042 nodes permanently occluded on this camera, nearly every one of them cast a ray
+on nearly every wake for the whole run.
+
+`kRefuseFor` already existed to stop exactly that, and D619 deliberately exempted this sweep from it
+so that *"the single best node in the world"* stayed a true sentence. That exemption bought a
+distinction with no consequence — a refusal expires after 32 wakes, so the node it protects is
+retried about twice a second — and it cost seven million rays. One cheap sweep now ranks everything
+with no ray, no field and no world; the expensive tests are paid only by the shortlist; the winner
+is the first entry that survives them. **25,996 to 1,736 ms.**
+
+**3. The ladder slept four fifths of the load.** Batch sixteen was chosen in D617 when a batch was
+sampled one node at a time, and at that rate sixteen was all a frame could carry. Once the batch is
+spread across the workers a wake costs about four milliseconds of a twenty-two millisecond frame,
+and `pump_refinement` runs once a frame: **1,730 wakes over 1,716 frames**, one apiece, with 7.6 s
+of sampling stretched over 38.5 s of load. Batch **16 to 128** fills the frame with sampling instead
+of waiting. Measured across four sizes, wall clock: 16 gives 41.4 s, 64 gives 19.9, **128 gives
+17.3**, 512 gives 18.3.
+
+### At no expense, and that was checked rather than assumed
+
+- **The world is the same world.** R11b's and R11c's own gate — `clips/sampler.clip` forced to full
+  detail with despeckling off — returns **`a1f8bc6c656343b7`, 1,430,104 solid voxels**, byte for byte
+  the reference recorded in D615 and D616, through 9,819 samples at six resolutions.
+- On the facility the fixed point moves by **+32 nodes sharpened and +351 voxels of 125.4 million**
+  (0.0003%), *upward* — the merged sweep reaches slightly more, because the refusal memo now applies
+  to the winner as well as to the batch. The order of refinement changed; what it converges to did
+  not.
+- **The settled frame is unchanged**: GPU 6.73 / 6.90 ms over 150 frames against 7.62 / 7.71 before,
+  which is inside the family of a scene that is marginally more complete. Nothing about the settled
+  renderer was touched.
+- **The frame during the load is faster**, 24.1 to 17.7 ms, because the main thread's share of a wake
+  went from 14.4 ms to 1.7.
+- 535 tests, 18.67 M assertions, passing. Two runs of the final arm agree to 0.5% and produce the
+  same content hash.
+
+### What was measured and NOT carried
+
+**More workers.** The sampler is deliberately held to half the machine (5 of 10 here) because it
+runs while somebody is playing. At 12 workers sampling drops 6,361 to 4,509 ms and wall clock 17.3
+to 15.9 s — and **the paste goes 140 to 1,607 ms**, which is D511-D514's shape arriving from the
+other side: the oversubscribed background pool starves the foreground one. Not carried.
+`--refine-workers` exists so the size of that choice is a measurement rather than an assumption.
+
+### Why this is 4.8x and not 100x, which is what was asked for
+
+The three faults above were all *waiting*. What is left is *work*, and it is one number: the ladder
+asks the field for about **3.8 million voxels** across 23,356 nodes, each against the facility's 139
+paint rules, at roughly **8 microseconds a voxel** — about 32 core-seconds. Five workers make that a
+**6.4 s floor**, and it is 51% of what remains. Two more halvings are visible from here and neither
+is large: the sampler is idle about 40% of the elapsed time waiting for the next frame, which a
+double-buffered pick would recover (12.4 to about 8 s), and the up-front coarse build is another
+3.6 s, which is **R11d**.
+
+Sub-second means not evaluating a 139-rule field per voxel on a CPU at all. That is **R12, the field
+on the card**, which section 8 already names as R11's successor — and this measurement is the first
+hard number for why it exists.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D622 | **The ladder's run totals are printed beside the settle line** | method | One batch was timed; the load never was, and all three faults were visible in the first run of it |
+| D622 | **A batch is sampled one node per worker** | performance | R11a proved a single node gains nothing from the pool; the batch gains 4.4x |
+| D622 | **One cheap sweep, and no ray inside it** | performance | Two passes computed the same rank; the rays were 7.1 M because a refusal does not move the front runner |
+| D622 | **The main sweep honours `kRefuseFor` too** | performance | D619's exemption bought a guarantee that expires in half a second and cost 48x the rays |
+| D622 | **The batch is 128, not 16** | performance | 16 was sized for a serial sampler; the ladder slept four fifths of the load waiting for frames |
+| D622 | **Taking more than half the machine is not carried** | honesty | Sampling 6,361 to 4,509 ms and the paste 140 to 1,607: the background pool starves the foreground one |
+| D622 | **The byte-identical gate is the acceptance test, not the timing** | method | All three changes are scheduling; `a1f8bc6c656343b7` says so |
+| D622 | **100x is not reachable by scheduling** | honesty | 3.8 M voxels x 139 rules x 8 us is a 6.4 s floor at five workers. That is R12's number |

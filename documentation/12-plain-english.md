@@ -2474,4 +2474,66 @@ That is the next thing I look at, and the question is not "make the room bigger"
 it. It is *what is holding a quarter of a million bricks during a load that thirty-three thousand
 serve afterwards*.
 
+### The world now sharpens around you nearly five times faster
+
+You asked for this to be dramatically faster at no expense. It is **4.8 times faster** — the
+facility went from **83.6 seconds** to settle down to **17.3** — and I want to be straight with you
+that you asked for a hundred times and I can tell you exactly why that is not on the table by this
+route. The short version is at the bottom.
+
+**Nothing had ever measured where a load's time goes.** The log timed one batch of work, and a batch
+is a few hundredths of a second. So I made it add up the whole load and say which half spent it.
+That one line found three faults in its first run, and every one of them was the game **waiting**
+rather than working.
+
+1. **The sharpening was running on one core.** The game picks a batch of pieces and samples them.
+   Each sample was told "spread yourself across the workers" — and a piece is eight voxels wide, so
+   there is nothing to spread. I had already measured that a year's worth of ago and written it down.
+   So sixteen pieces were done one after another, each on effectively one core, while the other seven
+   sat idle. Giving each *worker a piece* instead of each *piece the workers*: **34 seconds to 7.7.**
+
+2. **Seven million ray tests to choose sixteen pieces.** To decide what to sharpen next, the game
+   walks its whole list of pieces twice and fires a test ray for any piece that beats the current
+   leader, to see whether it is behind a wall. The catch: a piece that *fails* that test does not
+   become the leader — so the bar never rises, and every one of the 6,042 pieces permanently hidden
+   behind walls fired a ray on almost every wake, for the whole load. Ranking everything cheaply
+   first and only ray-testing the handful that could win: **26 seconds to 1.7, and seven million rays
+   to 150 thousand.**
+
+3. **It was asleep four fifths of the time.** Sixteen pieces a go was the right number back when they
+   were done one at a time. Once they are spread across the workers, sixteen takes four milliseconds
+   of a twenty-two millisecond frame, and the game only starts a new batch once per frame — so it did
+   1,730 batches over 1,716 frames and spent the rest waiting. **128 a go** instead.
+
+**And it is the same building.** That is the part I checked hardest, because "faster" is easy if you
+are allowed to make less. Forced to full detail on the test clip, the world comes out with the
+**identical fingerprint and the identical 1,430,104 voxels** as the reference I recorded two days
+ago. On the facility the finished world has **32 more pieces sharpened and 351 more voxels out of
+125 million** — very slightly *more* complete, because the picker now reaches a couple of things it
+used to keep re-testing. The settled frame rate is unchanged, and the frame rate *during* loading is
+**better** (24.1 ms a frame to 17.7), because the main thread's share of a batch went from 14 ms to
+under 2.
+
+**One thing I measured and did not keep.** The sharpener deliberately gets half your machine so it
+does not stutter the game while you play. Giving it everything makes sampling 30% faster and makes
+the *pasting* eleven times slower — the background work simply starves the foreground work. Left
+alone.
+
+### Why it is not a hundred times, and what a hundred times would actually take
+
+The three faults above were all waiting. What is left is real work, and it is one number: building
+the facility asks the shape-description about **3.8 million voxels**, and each one is checked against
+**139 painting rules**, at about eight millionths of a second each. That is 32 seconds of one core's
+time. Five cores make it **6.4 seconds**, and that is now half of what is left. No amount of
+scheduling gets under it.
+
+Two more halvings are in sight and I have not built them: the sharpener still idles about 40% of the
+time waiting for the next frame (worth roughly 12 seconds down to 8), and the blocky first pass costs
+another 3.6 seconds, which is step 4.
+
+To get to under a second you have to stop asking a 139-rule description about voxels **on the
+processor** and ask it on the graphics card, which is step 12 of the plan and was always going to be
+its own piece of work. This measurement is the first hard number for why that step exists — before
+today nobody could have told you that the field evaluation is half the load.
+
 **Steps 4 to 8 are not built.** The loading bar is still there — that is step 4.

@@ -663,6 +663,44 @@ eighteen-box ladder build **byte-identical worlds** with despeckling off (`a1f8b
    differ on `sampler.clip`, 0 of 297 on the facility**. D613's class one step along. What is left
    without the skirt is 46 cells of 152,064 on the facility wearing a neighbour's colour.
 
+#### THE LOAD IS 4.8× SHORTER, and the instrument that did it is the thing to keep (D622)
+
+**Read D622 before touching the ladder.** Nothing here had ever measured where a load's seconds go —
+the batch line times one batch, and a batch is tens of milliseconds. A run-total line beside the
+settle line, split by which half of the ladder spent the time, named three faults in its first run.
+All three were **waiting**, not cost:
+
+1. **the batch was sampled one node at a time on one core** — the loop was serial and each
+   `forge::sample` was handed the pool to split *itself* across, which R11a had already measured as
+   worth nothing (1.389 ms threaded against 1.391 serial: a node is eight z slabs). One node per
+   worker instead: **33,912 → 7,691 ms**;
+2. **7.1 million occlusion raycasts to choose sixteen nodes** — the picker made two full sweeps of a
+   40,436-entry list, and the first cast a ray for every node beating the front runner. A node the
+   ray *refuses* does not become the front runner, so `keenest` never rose and every one of the 6,042
+   permanently occluded nodes fired a ray on nearly every wake. One cheap sweep, no ray in it, the
+   expensive tests paid only by the shortlist: **25,996 → 1,736 ms, rays 7,103,492 → 149,512**;
+3. **the ladder slept four fifths of the load** — batch 16 was sized in D617 for a serial sampler, so
+   a wake cost 4 ms of a 22 ms frame and `pump_refinement` runs once a frame: 1,730 wakes over 1,716
+   frames. Batch **16 → 128**.
+
+**Wall clock, cold facility, enclosed camera: 83.6 s → 17.3 s.** Frames to settle 3,268 → 701, and
+the frame *during* the load 24.1 → 17.7 ms, so it is smoother as well as shorter. The acceptance
+test is not the timing: `clips/sampler.clip --refine-all --no-despeckle` returns
+**`a1f8bc6c656343b7`, 1,430,104 voxels**, byte for byte D615/D616's reference. All three changes are
+scheduling.
+
+**Not carried, and measured:** more than half the machine for the sampler. At 12 workers of 10,
+sampling drops 6,361 → 4,509 ms and **the paste goes 140 → 1,607 ms** — D511–D514 from the other
+side, the background pool starving the foreground one.
+
+**And the honest ceiling.** What is left is work rather than waiting, and it is one number: the
+ladder asks the field for **3.8 M voxels** against 139 paint rules at ~8 µs each, about 32
+core-seconds, so five workers are a **6.4 s floor** — 51% of what remains. The two halvings still
+visible are a double-buffered pick (the sampler idles ~40% of elapsed waiting for frames, worth
+~12.4 → ~8 s) and **R11d**'s up-front coarse build (3.6 s). Sub-second means not evaluating a
+139-rule field per voxel on a CPU at all, which is **R12**, and this is the first hard number for
+why R12 exists.
+
 #### HALF CLOSED: "huge brick blocks on top of things" — D620 bounded it, D621 closed one half
 
 **Read D620 then D621.** D620 was right about the shape and it came from one sentence the player

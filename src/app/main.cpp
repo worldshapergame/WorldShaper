@@ -109,6 +109,16 @@ struct Options {
     // allocated, which is `NodePool::world_has` telling the render tree the world holds matter it
     // does not. This turns the drop off and restores that, lumps and all.
     bool no_paste_drop = false;
+    // The control arm for the batch being sampled one node per worker rather than one node at a
+    // time. R11a proved a single node gains nothing from the job system; the batch does.
+    bool no_batch_parallel = false;
+    // How many nodes the ladder picks and samples per wake. 0 keeps kRefineBatch. This is how the
+    // default was chosen and is the control arm for it.
+    usize refine_batch = 0;
+    // How many workers the background sampler gets. 0 is half the machine, which is the standing
+    // rule: this runs while somebody is playing and taking every core sharpens the world by
+    // stuttering it. Overridable so that the size of that choice is measured rather than assumed.
+    u32 refine_workers = 0;
     std::string clip_part;        // build only this let name, for looking at one piece
 
     // A smaller box to sample, overriding the clip's own.
@@ -712,6 +722,12 @@ Options parse_options(int argc, char** argv) {
             options.no_paste_pool = true;
         } else if (arg == "--no-paste-drop") {
             options.no_paste_drop = true;
+        } else if (arg == "--no-batch-parallel") {
+            options.no_batch_parallel = true;
+        } else if (arg == "--refine-workers" && i + 1 < argc) {
+            options.refine_workers = static_cast<u32>(std::max(1, std::atoi(argv[++i])));
+        } else if (arg == "--refine-batch" && i + 1 < argc) {
+            options.refine_batch = static_cast<usize>(std::max(1, std::atoi(argv[++i])));
         } else if (arg == "--clip-part") {
             if (i + 1 < argc) options.clip_part = argv[++i];
         } else if (arg == "--clip-bounds") {
@@ -1049,6 +1065,12 @@ void print_help() {
         "  --clip-align          report parts that nearly line up but do not\n"
         "  --clip-at x,y,z       where to stamp it, in voxels (default the origin)\n"
         "  --clip-metre N        sample at N voxels per metre instead of the file's\n"
+        "  --refine-batch N      nodes the ladder picks and samples per wake (default 128). 16\n"
+        "                        is what it was when a batch was sampled one node at a time\n"
+        "  --refine-workers N    workers the background sampler gets (default half the machine).\n"
+        "                        More loads faster and steals from the paste; both are measured\n"
+        "  --no-batch-parallel   sample the batch one node at a time on one core, which is what\n"
+        "                        it did before D622. That stage's control arm\n"
         "  --no-paste-drop       a refinement paste leaves a brick it emptied allocated, and a\n"
         "                        chunk it emptied in the world. D620's control arm: every one of\n"
         "                        those is a cube the renderer draws over geometry that is not\n"
@@ -1532,7 +1554,22 @@ private:
     // Sixteen, because a node is about a millisecond and sixteen of them is under a frame's worth
     // of sampling and about eight milliseconds of pasting -- inside R11b's 16 ms gate with room to
     // spare, and twenty times the rate.
-    static constexpr usize kRefineBatch = 16;
+    // How many nodes one wake picks, samples and pastes.
+    //
+    // Sixteen was chosen when the batch was sampled ONE NODE AT A TIME on one core (D617), and at
+    // that rate sixteen was already all a frame could carry. Once the batch is spread across the
+    // sampler's workers a wake costs about four milliseconds of a twenty-two millisecond frame, and
+    // the ladder spends four fifths of the load asleep waiting for the next frame: measured, 1,730
+    // wakes over 1,716 frames, one apiece, with 7.6 s of sampling stretched over 38.5 s of load.
+    //
+    // The right size is the one that fills a frame with useful sampling rather than with waiting,
+    // so it follows the worker count and the per-node cost rather than being a number from when
+    // the shape was different. `--refine-batch` overrides it, which is how it was chosen.
+    static constexpr usize kRefineBatch = 128;
+    // The shortlist the batch is drawn from. Deep enough that it still fills when most of it is
+    // refused: about a thirty-second of the occluded nodes are re-offered on any given wake
+    // (kRefuseFor), which is a couple of hundred on the facility, so several times the batch.
+    static constexpr usize kShortlistMax = 4096;
     // How many wakes a node refused by the occlusion ray is left out of the batch for.
     //
     // A batch of sixteen was still delivering one node a batch, and the reason was not the picker's
@@ -1667,6 +1704,20 @@ private:
     static constexpr u64 kSettleGiveUp = 30000;
     f64 refine_sample_ms_ = 0.0;   // the background half, which the paste timing never saw
     u64 refine_asked_ = 0;
+    // Where a LOAD's seconds actually go, accumulated over the whole run and printed at the settle
+    // line. The batch line times one batch and a batch is a few tens of milliseconds; what nobody
+    // could see is the total, split by which half of the ladder spent it. The pick runs on the main
+    // thread and the sample does not, so they are not interchangeable seconds.
+    f64 refine_total_pick_ms_ = 0.0;      // start_refinement, main thread
+    f64 refine_total_sweep_ms_ = 0.0;     // ...of which, the two sweeps of the whole node list
+    f64 refine_total_ray_ms_ = 0.0;       // ...of which, occlusion raycasts against World
+    f64 refine_total_sample_ms_ = 0.0;    // forge::sample, on the background thread
+    f64 refine_total_paste_ms_ = 0.0;     // paste_clip plus the announcement, main thread
+    u64 refine_total_wakes_ = 0;
+    u64 refine_total_nodes_ = 0;          // nodes delivered, so a wake's yield is visible
+    u64 refine_total_rays_ = 0;
+    u64 refine_total_swept_ = 0;          // list entries walked, which is what a sweep costs
+    u64 refine_began_ns_ = 0;
     void start_refinement();
     void pump_refinement();
     // The ladder's boxes, from the clip's own bounds. One function so the run that builds the
@@ -2489,6 +2540,9 @@ void Application::start_refinement() {
     // One wake, one tick. This is what the occlusion refusals in `refine_candidate` are dated
     // against; see kRefuseFor.
     ++refine_wake_;
+    const u64 pick_began = now_ns();
+    ++refine_total_wakes_;
+    if (refine_began_ns_ == 0) refine_began_ns_ = pick_began;
 
     // Nearest first, measured from where the camera is now rather than from where it was when the
     // list was made. Somebody who walks across the building while it sharpens should have the far
@@ -2504,17 +2558,47 @@ void Application::start_refinement() {
     const f64 fy = std::sin(camera_.pitch());
     const f64 fz = std::sin(camera_.yaw()) * cp;
 
-    // Pick, split, pick again. A node that is large on screen is cut into eight and the choice is
-    // made afresh, because one of those eight is now a better answer than their parent was; a node
-    // small enough for its distance is sampled as it stands. Bounded by the level range, so this
-    // runs at most three times and usually once.
+    // ONE sweep of the list, not two, and no ray inside it.
+    //
+    // This used to be two full passes over every node the ladder has ever made. The first found the
+    // single best node in the world, testing each new front runner with an occlusion RAYCAST
+    // against `World`; the second built a shortlist by exactly the same arithmetic to fill the rest
+    // of the batch. Both walked the whole list, which reaches 40,394 on the facility.
+    //
+    // Measured over a cold load: **25,996 ms on the main thread** of a 54,485 ms ladder — two
+    // sweeps a wake over **74,141,297 entries** and **7,103,492 raycasts**. The rays are the part
+    // worth understanding, because 7.1 million to choose sixteen nodes is not a constant factor,
+    // it is a bug wearing a profile: the first sweep casts its ray only for a node that BEATS the
+    // current front runner, which sounds like a logarithmic number of them — but a node refused by
+    // the ray does not become the front runner, so `keenest` stays where it was and the next node
+    // above it casts another. With 6,042 nodes permanently occluded on this camera, nearly every
+    // one of them casts a ray on nearly every wake, for the whole run.
+    //
+    // `kRefuseFor` already exists to stop exactly that, and D619 deliberately exempted this sweep
+    // from it so that "the single best node in the world" stayed a true statement. That exemption
+    // is what costs the seven million rays, and what it buys is a distinction with no consequence:
+    // a refusal expires after 32 wakes, so the node it protects is retried about twice a second.
+    // The guarantee becomes "the best node not refused within the last half second", which is the
+    // guarantee every other member of the batch already had.
+    //
+    // So: rank everything cheaply — no ray, no field, no world — keep the best few, and pay for
+    // the expensive tests only on those. The winner is simply the first entry that survives them,
+    // which is what `best` was. The census beside the settle line is the gate: "neither" must stay
+    // at nought, because it counts nodes refused by nothing at all.
     const u32 finest = refine_finest_level();
-    usize best = refine_regions_.size();
-    f64 keenest = 0.0;
-    f64 best_keen = 0.0;
+    const usize batch_size = (options_.refine_batch > 0)
+                                 ? std::min<usize>(options_.refine_batch, kShortlistMax / 4)
+                                 : kRefineBatch;
+    const usize kShortlist = std::min(batch_size * 8, kShortlistMax);
+    usize short_at[kShortlistMax];
+    f64 short_rank[kShortlistMax];
+    usize short_count = 0;
+    const u64 sweep_began = now_ns();
+    refine_total_swept_ += refine_regions_.size();
     for (usize i = 0; i < refine_regions_.size(); ++i) {
         const RefineNode& box = refine_regions_[i];
         if (box.done) continue;
+        if (box.refuse_until > refine_wake_) continue;
 
         // Distance to the box, nought inside it, so the one you are standing in always wins.
         const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
@@ -2523,128 +2607,39 @@ void Application::start_refinement() {
         const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
 
         // How big it is on screen: its size over its distance, which is the projected angle to
-        // within a constant and is the whole of the pixel criterion. A box that covers more of the
-        // view has more to gain from detail than one that covers less, whatever their distances.
+        // within a constant and is the whole of the pixel criterion. Times how much better a
+        // sample would make it -- see refine_candidate for why the two are different questions.
         const f64 across = std::max({box.high.x - box.low.x, box.high.y - box.low.y,
                                      box.high.z - box.low.z});
-        f64 keen = across / std::max(away, 0.5);
-        // ...times how much better a sample would make it. See refine_candidate for why the two
-        // are different questions: the floor under your feet is large on screen and already very
-        // nearly right, and an urn six metres away is small on screen and entirely wrong.
-        f64 rank = keen * (static_cast<f64>(refine_resolution(box.key.level)) /
-                           static_cast<f64>(std::max(1, box.applied_per_metre)));
+        f64 rank = (across / std::max(away, 0.5)) *
+                   (static_cast<f64>(refine_resolution(box.key.level)) /
+                    static_cast<f64>(std::max(1, box.applied_per_metre)));
 
-        // And whether it is in front. Not a frustum test ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a box behind the player is not merely
-        // small on screen, it is absent, and no amount of nearness should buy it a turn ahead of
-        // something visible. Halved rather than refused, because turning round should find the
-        // world improved rather than untouched.
+        // And whether it is in front. Not a frustum test -- a box behind the player is not merely
+        // small on screen, it is absent. Demoted rather than refused, because turning round should
+        // find the world improved rather than untouched. Three multiplies and no ray, which is why
+        // it belongs here rather than in the expensive pass.
         const f64 to_x = (box.low.x + box.high.x) * 0.5 - cx;
         const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
         const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
         const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
-        if (reach > 1e-6 && !options_.refine_all) {
-            const f64 facing = (to_x * fx + to_y * fy + to_z * fz) / reach;
-            if (facing < 0.0) {
-                keen *= 0.05;
-                rank *= 0.05;
-            }
+        if (reach > 1e-6 && !options_.refine_all &&
+            (to_x * fx + to_y * fy + to_z * fz) / reach < 0.0) {
+            rank *= 0.05;
         }
 
-        // And whether anything is in the way.
-        //
-        // Facing the camera is not the same as being seen. A room behind a wall is squarely in
-        // front of the player and scores as though it were on screen, which on a building of a
-        // hundred rooms is most of the work spent on geometry nobody can look at. One ray through
-        // the world answers it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the world the ray crosses is the coarse one, and a blocky wall
-        // occludes exactly as well as a sharp one for this purpose.
-        //
-        // Asked last, and only of a box that is already the front runner, because a raycast is far
-        // dearer than the arithmetic above and most boxes are eliminated by it.
-        if (best != refine_regions_.size() && rank <= keenest) continue;
-
-        // A node that sampling could not change. Asked only of a front runner, so most nodes never
-        // pay for it, and it is what stops standing in a room from sampling the four thousand
-        // one-metre nodes of air around the camera.
-        //
-        // TWO questions, and the pair is the point -- the first version asked only the world and
-        // lost 4,923 voxels of 1.43 million. The world says whether there is anything here to
-        // replace, which covers the coarse build's overshoot; the FIELD says whether a sample
-        // would find anything, which covers a feature the coarse build was too blunt to see. A
-        // node that fails both is a node whose sample would be air pasted over air.
-        // Nothing to gain at all: empty in both the world and the field, or already as fine as
-        // this node can ever be and already in the world. A node that merely cannot improve at
-        // its own level is left alone here -- it wants splitting, and the loop below does that.
-        if (refine_node_is_a_no_op(box) ||
-            (box.key.level <= finest && !refine_would_improve(box))) {
-            refine_regions_[i].done = true;
-            continue;
+        if (short_count == kShortlist && rank <= short_rank[kShortlist - 1]) continue;
+        usize at = (short_count < kShortlist) ? short_count++ : kShortlist - 1;
+        while (at > 0 && short_rank[at - 1] < rank) {
+            short_at[at] = short_at[at - 1];
+            short_rank[at] = short_rank[at - 1];
+            --at;
         }
-
-        if (reach > 1e-6 && !options_.refine_all) {
-            const f64 v = static_cast<f64>(kVoxelsPerMetre);
-            const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z,
-                                           reach * v);
-            // Something solid, and not merely the box's own front face ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â anything within its own
-            // extent is the thing itself arriving, not an obstruction.
-            if (blocked.hit && blocked.distance < (reach - across) * v) continue;
-        }
-
-        best = i;
-        keenest = rank;
-        best_keen = keen;
+        short_at[at] = i;
+        short_rank[at] = rank;
     }
-    if (best == refine_regions_.size()) {
-        // Nothing this camera can improve. Not the same as "every box is sharp": a box behind a
-        // wall is skipped by the occlusion test above and stays coarse for as long as the camera
-        // stands here, so the facility settles at four regions left and never writes its cache.
-        //
-        // It is a fixed point all the same, and that is what a measurement needs. See --settle.
-        refine_settled_ = true;
-        return;
-    }
+    refine_total_sweep_ms_ += ns_to_ms(now_ns() - sweep_began);
 
-    // Large on screen and not as fine as this camera justifies: cut it into eight and follow the
-    // best of the eight down. Splitting costs nothing but the list -- no sampling, no pasting, no
-    // field evaluation -- so it is done eagerly and the sample that follows is the right size and
-    // the right RESOLUTION the first time (R11c).
-    //
-    // Following the winner down rather than choosing again from the whole list is the difference
-    // between a ladder that works and one that does not. Re-picking globally after every split
-    // lands on some other far-away node -- its parent is still large and therefore still keen --
-    // so the list is cut finer and finer everywhere and nothing is ever sampled. Measured before
-    // it was written this way: four nodes refined and then a world that declared itself settled.
-    while (refine_regions_[best].key.level > finest &&
-           (options_.refine_all || best_keen > kRefineSplitAt ||
-            !refine_would_improve(refine_regions_[best]))) {
-        const usize first_child = refine_regions_.size();
-        const u32 kept = split_refine_node(best);
-        if (kept == 0) return;   // nothing of it was inside the clip after all
-
-        usize chosen = refine_regions_.size();
-        f64 chosen_keen = 0.0;
-        f64 chosen_rank = 0.0;
-        const auto consider = [&](usize at) {
-            f64 keen = 0.0;
-            f64 rank = 0.0;
-            if (!refine_candidate(at, cx, cy, cz, fx, fy, fz, keen, rank)) return;
-            if (chosen == refine_regions_.size() || rank > chosen_rank) {
-                chosen = at;
-                chosen_keen = keen;
-                chosen_rank = rank;
-            }
-        };
-        consider(best);
-        for (usize at = first_child; at + 1 < first_child + kept; ++at) consider(at);
-        if (chosen == refine_regions_.size()) return;   // none of the eight is worth a sample
-        best = chosen;
-        best_keen = chosen_keen;
-    }
-
-    refine_settled_ = false;
-
-    // The batch. The winner is the first of it, and the rest are the next best that survive the
-    // same tests -- taken by repeating the pick with the chosen ones held out. See kRefineBatch
-    // for why the ladder samples several at once now and what it was before.
     refine_batch_.clear();
     const auto enlist = [&](usize at) {
         RefineJob job;
@@ -2659,75 +2654,8 @@ void Application::start_refinement() {
         // chosen twice in one batch would be sampled twice and pasted twice.
         refine_regions_[at].done = true;
     };
-    enlist(best);
 
-    // The rest of the batch comes out of ONE pass, not one pass each.
-    //
-    // Picking sixteen nodes by repeating the pick sixteen times is sixteen sweeps of a list that
-    // is thirty-six thousand long by the time the facility settles, each with an occlusion ray
-    // cast for every front runner, all on the main thread. Measured: a **379 ms** frame. So the
-    // sweep happens once and keeps a shortlist of the best few by rank -- arithmetic only, no rays
-    // -- and the expensive tests are then paid for only by the handful that could still win.
-    // Deep enough that the batch still fills when most of the shortlist is refused, and ranked the
-    // same way the main sweep ranks -- facing demotion included.
-    //
-    // Sixty-four entries ranked without the facing demotion looked like a generous margin over a
-    // batch of sixteen and was not one. A node the picker refuses is never marked done, so it comes
-    // back into the shortlist every frame for the rest of the run: the nodes behind the camera and
-    // the nodes behind a wall are big and near, they rank high on size-over-distance alone, and
-    // they sat in the shortlist for ever while the nodes that could actually be sampled were
-    // crowded out below the cut. Measured on the enclosed camera: 5,727 batches delivered 6,996
-    // nodes -- 1.22 a batch against a batch size of sixteen, and exactly 1.00 over the last five
-    // hundred batches, because `best` from the main sweep was the only member that ever survived.
-    // The ladder took one node a frame and never reached its fixed point at all: `--settle` hit its
-    // 180-second give-up on every run, which is also why the one-flag test of D618 compared two
-    // timeouts rather than two fixed points and has to be read as telling us nothing.
-    //
-    // The facing demotion is three multiplies and it costs no ray, so it belongs in the cheap pass
-    // rather than being discovered by the expensive one. Depth is what covers the rest: the loop
-    // below stops as soon as the batch is full, so a deeper shortlist is only walked as far as it
-    // has to be, and D617's one-sweep-no-rays property is untouched.
-    //
-    // This alone took the mean to 1.84 and still ended at 1.00 a batch; it needed `kRefuseFor` as
-    // well before the ladder converged. Together they give 15.26 a batch, 14.02 over the last five
-    // hundred, and a fixed point at frame 3438.
-    constexpr usize kShortlist = kRefineBatch * 32;
-    usize short_at[kShortlist];
-    f64 short_rank[kShortlist];
-    usize short_count = 0;
-    for (usize i = 0; i < refine_regions_.size(); ++i) {
-        const RefineNode& box = refine_regions_[i];
-        if (box.done) continue;
-        if (box.refuse_until > refine_wake_) continue;
-        const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
-        const f64 dy = std::max({box.low.y - cy, 0.0, cy - box.high.y});
-        const f64 dz = std::max({box.low.z - cz, 0.0, cz - box.high.z});
-        const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
-        const f64 across = std::max({box.high.x - box.low.x, box.high.y - box.low.y,
-                                     box.high.z - box.low.z});
-        f64 rank = (across / std::max(away, 0.5)) *
-                   (static_cast<f64>(refine_resolution(box.key.level)) /
-                    static_cast<f64>(std::max(1, box.applied_per_metre)));
-        const f64 to_x = (box.low.x + box.high.x) * 0.5 - cx;
-        const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
-        const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
-        const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
-        if (reach > 1e-6 && !options_.refine_all &&
-            (to_x * fx + to_y * fy + to_z * fz) / reach < 0.0) {
-            rank *= 0.05;
-        }
-        if (short_count == kShortlist && rank <= short_rank[kShortlist - 1]) continue;
-        usize at = (short_count < kShortlist) ? short_count++ : kShortlist - 1;
-        while (at > 0 && short_rank[at - 1] < rank) {
-            short_at[at] = short_at[at - 1];
-            short_rank[at] = short_rank[at - 1];
-            --at;
-        }
-        short_at[at] = i;
-        short_rank[at] = rank;
-    }
-
-    for (usize entry = 0; entry < short_count && refine_batch_.size() < kRefineBatch; ++entry) {
+    for (usize entry = 0; entry < short_count && refine_batch_.size() < batch_size; ++entry) {
         usize next = short_at[entry];
         f64 next_rank = 0.0;
         f64 next_keen = 0.0;
@@ -2763,29 +2691,81 @@ void Application::start_refinement() {
         enlist(next);
     }
 
+    if (refine_batch_.empty()) {
+        // Nothing this camera can improve. Not the same as "every node is sharp": a node behind a
+        // wall is refused by the occlusion ray and stays coarse for as long as the camera stands
+        // here, and one refused within the last `kRefuseFor` wakes is not even offered.
+        //
+        // It is a fixed point all the same, and that is what a measurement needs -- and it is an
+        // honest one under the merged sweep, because a refusal expires on a timer: if any of them
+        // becomes viable the very next wake picks it up, which breaks the settle streak long before
+        // `kSettleFrames` is reached. See --settle.
+        refine_settled_ = true;
+        refine_total_pick_ms_ += ns_to_ms(now_ns() - pick_began);
+        return;
+    }
+    refine_settled_ = false;
+
     if (refine_jobs_ == nullptr) {
         // Fewer workers than the main system, and deliberately. This runs while somebody is
         // playing; taking every core would sharpen the world by stuttering it.
         const u32 hardware = std::thread::hardware_concurrency();
-        refine_jobs_ = std::make_unique<JobSystem>(hardware > 4 ? hardware / 2 : 1);
+        const u32 workers = (options_.refine_workers > 0)
+                                ? options_.refine_workers
+                                : (hardware > 4 ? hardware / 2 : 1);
+        WS_LOG_INFO("clip", "the ladder's sampler: {} workers of {} the machine has", workers,
+                    hardware);
+        refine_jobs_ = std::make_unique<JobSystem>(workers);
     }
+
+    refine_total_nodes_ += refine_batch_.size();
+    refine_total_pick_ms_ += ns_to_ms(now_ns() - pick_began);
 
     refine_ready_.store(false, std::memory_order_release);
     refine_running_ = true;
     refine_thread_ = std::thread([this] {
         const u64 began = now_ns();
-        u64 asked = 0;
-        for (RefineJob& job : refine_batch_) {
-            job.result = std::make_unique<forge::SampleResult>(
-                forge::sample(refine_plan_, job.settings, refine_jobs_.get(), {}));
-            // Every node the ladder sharpens, as well as the first build. One that came back
-            // speckled and was pasted in would put the fault back after the coarse world had been
-            // cleaned of it -- with the verdict taken from the whole clip rather than from this
-            // node, because what a material's specks are a large enough share of is a question
-            // about the building and five hundred cells cannot answer it (forge::StippleVerdict).
-            if (despeckle_) forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
-            asked += job.result->voxels_asked;
+        // ONE NODE PER WORKER, not one node at a time.
+        //
+        // This loop was serial, and each `sample` call was handed the job system to split ITSELF
+        // across — which R11a measured as buying exactly nothing: 1.389 ms threaded against 1.391
+        // serial, at every level, to three digits, because a node is eight voxels a side and
+        // therefore eight z slabs. So a batch of sixteen nodes was sixteen consecutive samples
+        // each failing to use eight workers, and the whole background half of a load ran on
+        // roughly one core. Measured over a cold facility: **33,912 ms of sampling** out of 78,867
+        // ms of ladder.
+        //
+        // The parallelism belongs one level up, where the units are independent by construction:
+        // every job owns its own clip and its own settings, the plan is borrowed const, the field
+        // is const and has no mutable state, and `despeckle` takes the whole-clip verdict by const
+        // pointer. Nothing is shared that is written.
+        //
+        // `nullptr` inside, deliberately: handing the same JobSystem to eight concurrent samples is
+        // the submitter collision D511-D514 is about, and by R11a's own measurement the inner split
+        // was worth nothing anyway.
+        std::vector<u64> asked_by(refine_batch_.size(), 0);
+        const auto take = [&](usize begin, usize end) {
+            for (usize i = begin; i < end; ++i) {
+                RefineJob& job = refine_batch_[i];
+                job.result = std::make_unique<forge::SampleResult>(
+                    forge::sample(refine_plan_, job.settings, nullptr, {}));
+                // Every node the ladder sharpens, as well as the first build. One that came back
+                // speckled and was pasted in would put the fault back after the coarse world had
+                // been cleaned of it -- with the verdict taken from the whole clip rather than from
+                // this node, because what a material's specks are a large enough share of is a
+                // question about the building and five hundred cells cannot answer it
+                // (forge::StippleVerdict).
+                if (despeckle_) forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
+                asked_by[i] = job.result->voxels_asked;
+            }
+        };
+        if (refine_jobs_ != nullptr && refine_batch_.size() > 1 && !options_.no_batch_parallel) {
+            refine_jobs_->parallel_for(refine_batch_.size(), 1, take);
+        } else {
+            take(0, refine_batch_.size());
         }
+        u64 asked = 0;
+        for (u64 n : asked_by) asked += n;
         refine_sample_ms_ = ns_to_ms(now_ns() - began);
         refine_asked_ = asked;
         refine_ready_.store(true, std::memory_order_release);
@@ -2869,6 +2849,8 @@ void Application::pump_refinement() {
         announce_world_change(lo, hi);
     }
     const f64 paste_ms = ns_to_ms(now_ns() - paste_began);
+    refine_total_paste_ms_ += paste_ms;
+    refine_total_sample_ms_ += refine_sample_ms_;
 
     // Everything the player did, done again. An op is a SHAPE -- FillBox carries two corners in
     // world voxels, not the voxels it happened to change -- so replaying it against finer geometry
@@ -3165,7 +3147,10 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
 
     if (reach > 1e-6 && !options_.refine_all) {
         const f64 v = static_cast<f64>(kVoxelsPerMetre);
+        const u64 ray_began = now_ns();
         const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
+        refine_total_ray_ms_ += ns_to_ms(now_ns() - ray_began);
+        ++refine_total_rays_;
         if (blocked.hit && blocked.distance < (reach - across) * v) {
             // Remembered, not just refused. See kRefuseFor.
             refine_regions_[at].refuse_until = refine_wake_ + kRefuseFor;
@@ -7796,6 +7781,29 @@ int Application::play(const Options& options) {
             }
             if (!refine_regions_.empty()) {
                 WS_LOG_INFO("frame", "ladder: {}", refine_census());
+                // Where a load's seconds went, over the whole run rather than over one batch.
+                //
+                // The batch line has always timed one batch, and one batch is a few tens of
+                // milliseconds -- so the thing nobody could see is which half of the ladder owns
+                // the minute. The pick runs on the MAIN thread and the sample does not, so these
+                // are not interchangeable seconds: a second of picking is a second of the player's
+                // frame rate and a second of sampling is a second of a worker's.
+                const f64 elapsed = (refine_began_ns_ != 0)
+                                        ? ns_to_ms(now_ns() - refine_began_ns_)
+                                        : 0.0;
+                WS_LOG_INFO(
+                    "frame",
+                    "ladder cost: {:.0f} ms elapsed, {} wakes delivering {} nodes ({:.2f} each); "
+                    "pick {:.0f} ms MAIN THREAD (sweeps {:.0f} over {} entries, {} rays {:.0f}), "
+                    "sample {:.0f} ms background, paste {:.0f} ms",
+                    elapsed, refine_total_wakes_, refine_total_nodes_,
+                    (refine_total_wakes_ > 0)
+                        ? static_cast<f64>(refine_total_nodes_) /
+                              static_cast<f64>(refine_total_wakes_)
+                        : 0.0,
+                    refine_total_pick_ms_, refine_total_sweep_ms_, refine_total_swept_,
+                    refine_total_rays_, refine_total_ray_ms_, refine_total_sample_ms_,
+                    refine_total_paste_ms_);
             }
             // Averages, not the last frame. One frame's GPU time moves several per cent from
             // clock and scheduling alone, so a figure another build has to beat has to be a
