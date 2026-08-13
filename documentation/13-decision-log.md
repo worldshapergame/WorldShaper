@@ -6182,3 +6182,81 @@ facility.
 | D628 | **A verdict is compared material for material, never by count** | method | D625's lesson; a matching count can hide a disagreeing verdict |
 | D628 | **The surviving route counts against the WORLD after the paste** | plan | The boundary is only a lie while the neighbours are unknown; after the paste they are not |
 | D628 | **The comparison instrument is kept** | method | It is the gate any future route is judged by: 0 DIFFER on the facility |
+
+## D629 — route 1b works, and it proves the verdict is a property of the RESOLUTION, not the building
+
+D628 refuted route 1: summing the ladder's per-node speck counts changed the verdict on 11 of the
+facility's 35 materials, because `paint_specks` reads outside its clip as air and 296 of a leaf
+node's 512 cells are its own face. The surviving route was 1b — count against the world, where the
+neighbours across a box edge are real.
+
+**Built as a chunk tiling with a one-voxel skirt.** `stipple_counts(clip, margin)` counts only the
+interior and reads neighbours out of the margin; `Application::stipple_counts_from_world` captures
+each chunk with a one-voxel skirt and sums. The interiors tile the world exactly once, so the sum is
+the same population a whole-world capture would count, voxel for voxel, and there is no boundary to
+lie about. A whole-world capture is not an option: the facility's box is 1,088 × 669 × 800, which is
+582 million cells and 2.3 GB of clip.
+
+### It fixed the boundary and still disagreed — and the disagreement is the finding
+
+| against the metre-8 whole-clip verdict, facility, every node forced | route 1 (summed nodes) | route 1b (from the world) |
+|---|---|---|
+| materials agreeing | 20 | **30** |
+| materials differing | **11**, in both directions | **5**, all one way |
+| deliberate dithers destroyed | 2 of 6 | 5 of 6 |
+
+Route 1b's five are `-358 -392 -455 -509 -554`: it repaints five of the six materials the shipped
+verdict spares. That looks worse and is not — the direction is now consistent, which says it is
+measuring one thing correctly rather than adding noise.
+
+**So the arm that settles it: take the whole-clip verdict at the AUTHORED resolution and compare.**
+`--clip-coarse 1` samples the whole facility at metre 32 rather than metre 8:
+
+```
+stipple verdict at metre 8 : 35 materials seen, 6 kept as a dither: *27 *358 *392 *455 *509 *554
+stipple verdict at metre 32: 27 materials seen, 1 kept as a dither: *27
+```
+
+**Route 1b's world verdict protects exactly `{27}` — the metre-32 set, precisely.** The method is
+right. What differs is the resolution the question is asked at, and D625 had already measured the
+shape of this without drawing the conclusion: 35, 31, 26 and 19 materials at metres 8, 4, 2 and 1.
+
+### What that means, and it is not an engineering question any more
+
+**The verdict the engine ships is the metre-8 one for no reason anybody chose.** It is whatever the
+up-front build happens to sample at, and `--clip-coarse 4` is a load-time optimisation. Nothing in
+the world is ever built at metre 8: the ladder samples at the authored resolution, so **the specks
+being judged are metre-32 voxels and the judge is a metre-8 verdict.** That inconsistency has been
+shipping since D610 and this is the first measurement that could see it.
+
+It also means **R11d cannot have the metre-8 verdict without a metre-8 whole-clip sample**, and that
+sample *is* the up-front build. There is no cheaper source, because it is not a property of the
+building.
+
+So the choice is the user's and there are three, all measurable:
+
+1. **Keep a whole-clip sample at metre 8 purely for the verdict.** R11d then removes the paste and
+   the compact (959 ms of 3.7 s) and the blocky first pass, but not the 2,754 ms of sampling. The
+   loading bar stays and the player gets an empty world for 2.75 s, which is worse than today.
+2. **Accept the authored-resolution verdict** — route 1b, free, no whole-clip sample, R11d unblocked
+   outright. Five weathering coats stop being protected and get despeckled. **This is a visible
+   change to the building and needs to be looked at rather than argued about.**
+3. **Re-tune the threshold so the metre-32 verdict protects the same six.** `stipple_share` is 0.05
+   and `kStippleFloor` is 16, both chosen at D609/D610 from metre-8 numbers. A coat's speck fraction
+   falls as the sampling gets finer, so there may be a threshold at metre 32 that recovers the six.
+   The target is a number: the settle line reading **0 DIFFER**.
+
+### What is kept
+
+`forge::StippleCounts`, `stipple_counts(clip, margin)`, `stipple_verdict(counts, share)` and
+`Application::stipple_counts_from_world`, plus the settle-line comparison that names every material
+that moved and which way. 537 tests.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D629 | **Route 1b is correct as a METHOD** | finding | It reproduces the metre-32 whole-clip verdict exactly, `{27}` for `{27}` |
+| D629 | **The verdict is a property of the resolution, not the building** | finding | metre 8 protects six materials, metre 32 protects one, on the same building |
+| D629 | **The shipped verdict is metre-8 by accident** | finding | It is whatever `--clip-coarse` samples at, and nothing in the world is ever built at metre 8 |
+| D629 | **The specks being judged are metre-32 and the judge is metre-8** | finding | Shipping since D610; this is the first instrument that could see it |
+| D629 | **R11d cannot have the metre-8 verdict without the up-front sample** | plan | There is no cheaper source because it is not a property of the building |
+| D629 | **Which verdict to keep is the user's call, not a measurement** | honesty | Option 2 changes five weathering coats and has to be looked at |

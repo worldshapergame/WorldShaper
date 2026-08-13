@@ -545,19 +545,59 @@ SpeckReport paint_specks(const Clip& clip, usize examples_per_type) {
     return out;
 }
 
-StippleCounts stipple_counts(const Clip& clip) {
+StippleCounts stipple_counts(const Clip& clip, i32 margin) {
     StippleCounts out;
     if (clip.empty()) return out;
-    const SpeckReport found = paint_specks(clip, 0);
-    for (const TypeShare& share : found.by_type) {
-        StippleCounts::Pair& pair = out.by_type[share.type];
-        pair.specks = share.count;
-        // `fraction` is specks over THAT material's own surface, so the denominator comes back out
-        // of it. Rounded to nearest rather than truncated: the fraction is a double built from two
-        // integers and 972/12303 does not come back as 12303 by flooring.
-        pair.surface = (share.fraction > 0.0)
-                           ? static_cast<u64>(static_cast<f64>(share.count) / share.fraction + 0.5)
-                           : 0;
+    if (margin <= 0) {
+        // No margin: the whole clip is the population, which is what `paint_specks` already reports.
+        const SpeckReport found = paint_specks(clip, 0);
+        for (const TypeShare& share : found.by_type) {
+            StippleCounts::Pair& pair = out.by_type[share.type];
+            pair.specks = share.count;
+            // `fraction` is specks over THAT material's own surface, so the denominator comes back
+            // out of it. Rounded to nearest rather than truncated: the fraction is a double built
+            // from two integers and 972/12303 does not come back as 12303 by flooring.
+            pair.surface = (share.fraction > 0.0)
+                               ? static_cast<u64>(static_cast<f64>(share.count) / share.fraction +
+                                                  0.5)
+                               : 0;
+        }
+        return out;
+    }
+
+    // The same test paint_specks applies, but the population is the INTERIOR and the neighbours may
+    // come out of the margin. Written out rather than shared with paint_specks because the only
+    // thing they have in common is the six-neighbour test, and paint_specks also collects examples
+    // and shares that this has no use for.
+    const auto at = [&](i32 x, i32 y, i32 z) -> VoxelTypeId {
+        if (x < 0 || y < 0 || z < 0 || x >= clip.size[0] || y >= clip.size[1] ||
+            z >= clip.size[2]) {
+            return kAir;
+        }
+        return clip.at(x, y, z);
+    };
+    for (i32 z = margin; z < clip.size[2] - margin; ++z) {
+        for (i32 y = margin; y < clip.size[1] - margin; ++y) {
+            for (i32 x = margin; x < clip.size[0] - margin; ++x) {
+                const VoxelTypeId mine = clip.at(x, y, z);
+                if (mine == kAir) continue;
+                const VoxelTypeId around[6]{at(x - 1, y, z), at(x + 1, y, z), at(x, y - 1, z),
+                                            at(x, y + 1, z), at(x, y, z - 1), at(x, y, z + 1)};
+                bool exposed = false;
+                bool kin = false;
+                for (const VoxelTypeId near : around) {
+                    if (near == kAir) {
+                        exposed = true;
+                    } else if (near == mine) {
+                        kin = true;
+                    }
+                }
+                if (!exposed) continue;   // buried, and nobody's business -- see paint_specks
+                StippleCounts::Pair& pair = out.by_type[mine];
+                ++pair.surface;
+                if (!kin) ++pair.specks;
+            }
+        }
     }
     return out;
 }

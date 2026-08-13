@@ -1866,6 +1866,8 @@ private:
     // world and the run that loads a half-built one plan the same grid ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â if they did not, the
     // flags in the cache would be read against boxes they were never about.
     void seed_refine_nodes(const forge::Script& script);
+    // R11d route 1b: the verdict's counts taken from the world instead of from a whole-clip sample.
+    forge::StippleCounts stipple_counts_from_world();
     bool refine_node_of(const NodeKey& key, RefineNode& out) const;
     u32 split_refine_node(usize at);
     bool refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64 fy, f64 fz,
@@ -3408,6 +3410,44 @@ void Application::save_refined_world() {
 //
 // The seed is the coarsest level, four metres, over the clip's bounds. Everything below that is
 // made by `split_refine_node` when the picker wants it, and nothing is planned in advance.
+// The stipple counts taken from the WORLD, chunk by chunk, each with a one-voxel skirt.
+//
+// R11d route 1b, and D628 is why it exists. The verdict is a ratio per material and both its counts
+// are additive over disjoint boxes -- but only if the boxes know their neighbours. Summing the
+// ladder's own per-node counts does not: `paint_specks` reads outside its clip as air, so every
+// voxel on a node face is counted as surface and as a speck, and 296 of a leaf node's 512 cells are
+// its own face. Measured, that changed the verdict on 11 of the facility's 35 materials and cleaned
+// away two of its six deliberate dithers.
+//
+// A chunk captured with a one-voxel skirt fixes both halves at once: the skirt supplies REAL
+// neighbours across the edge, and the interiors of the chunks tile the world exactly once, so the
+// sum over them is the same population a whole-clip capture would have counted, voxel for voxel.
+//
+// Chunk by chunk because a whole-world capture is not affordable -- the facility's box is 1088 x 669
+// x 800, which is 582 million cells and 2.3 GB of clip. One chunk with its skirt is 258 cubed.
+forge::StippleCounts Application::stipple_counts_from_world() {
+    forge::StippleCounts total;
+    const std::vector<ChunkCoord> coords = world_.sorted_chunk_coords();
+    if (coords.empty()) return total;
+
+    std::vector<forge::StippleCounts> per(coords.size());
+    const auto take = [&](usize begin, usize end) {
+        for (usize i = begin; i < end; ++i) {
+            const i64 base[3] = {coords[i].x << 8, coords[i].y << 8, coords[i].z << 8};
+            const Clip box = capture_clip(world_, base[0] - 1, base[1] - 1, base[2] - 1,
+                                          base[0] + 256, base[1] + 256, base[2] + 256);
+            per[i] = forge::stipple_counts(box, 1);
+        }
+    };
+    if (paste_jobs_ != nullptr && coords.size() > 1) {
+        paste_jobs_->parallel_for(coords.size(), 1, take);
+    } else {
+        take(0, coords.size());
+    }
+    for (const forge::StippleCounts& one : per) total.add(one);
+    return total;
+}
+
 void Application::seed_refine_nodes(const forge::Script& script) {
     refine_bounds_low_ = script.settings.low;
     refine_bounds_high_ = script.settings.high;
@@ -8261,8 +8301,10 @@ int Application::play(const Options& options) {
                 // verdicts protect -- not how many. D625 refused a coarse stand-in because metre 4
                 // saw 31 materials against metre 8's 35 and shared only two of its six protected
                 // ones, so a count that agrees can hide a verdict that does not.
+                // From the WORLD (route 1b) rather than from the ladder's own summed per-node
+                // counts (route 1, refuted by D628). Both are computed; this is the one judged.
                 const forge::StippleVerdict summed =
-                    forge::stipple_verdict(refine_stipple_counts_, 0.05);
+                    forge::stipple_verdict(stipple_counts_from_world(), 0.05);
                 usize agree = 0;
                 usize differ = 0;
                 usize only_summed = 0;
@@ -8300,7 +8342,8 @@ int Application::play(const Options& options) {
                     extra += std::to_string(static_cast<u64>(type));
                 }
                 WS_LOG_INFO("frame",
-                            "stipple verdict, summed over {} nodes against the whole-clip one: "
+                            "stipple verdict, from the WORLD against the whole-clip one ({} nodes "
+                            "sharpened): "
                             "{} materials agree, {} DIFFER, {} seen only by the sum, {} only by the "
                             "whole clip{}{}{}{}",
                             refine_total_nodes_, agree, differ, only_summed, only_whole,

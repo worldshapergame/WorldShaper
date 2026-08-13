@@ -660,6 +660,26 @@ an argument:**
    **The instrument is built and kept**, and it is the gate: `forge::StippleCounts`,
    `stipple_verdict(counts, share)`, and a settle-line comparison naming every material that moves
    and which way. Any route is judged by that line reading **0 DIFFER on the facility**.
+
+   **1b IS BUILT AND IT WORKS — and it settled the whole question. Read D629.**
+   `stipple_counts_from_world` captures each chunk with a one-voxel skirt and counts only the
+   interior, so the interiors tile the world once and no box has a boundary to lie about. It took
+   the facility from 11 materials differing to **5, all in one direction** — and those five are
+   `358 392 455 509 554`.
+   Then the arm that settles it: `--clip-coarse 1` takes the whole-clip verdict at the AUTHORED
+   metre 32 instead of metre 8. **Metre 8 protects six materials; metre 32 protects one — `{27}`.
+   Route 1b's world verdict protects exactly `{27}`.** The method is right; the RESOLUTION is the
+   difference, and D625's 35/31/26/19 at metres 8/4/2/1 was the same fact without the conclusion.
+   **So there is no cheaper source for the metre-8 verdict, because it is not a property of the
+   building** — it is whatever `--clip-coarse` happens to sample at, and nothing in the world is
+   ever built at metre 8. The specks being judged are metre-32 voxels and the judge is a metre-8
+   verdict, which has been true since D610.
+   **The next move is a decision rather than a measurement**, and D629 lists the three: keep a
+   metre-8 whole-clip sample for the verdict alone (R11d then only saves 959 ms and leaves the
+   player an empty world); accept the authored-resolution verdict (free, R11d unblocked, five
+   weathering coats stop being protected — has to be LOOKED at); or re-tune `stipple_share` /
+   `kStippleFloor`, which were set from metre-8 numbers at D609/D610, until the metre-32 verdict
+   protects the same six. The target for the third is the settle line reading **0 DIFFER**.
 2. **Derive it from the paint rules** rather than from any sample. A dither is authored as a rule
    keyed on noise; whether that is recoverable statically is unknown and nobody has looked.
 3. **Keep one whole-clip sample at the coarsest resolution whose verdict still agrees with metre 8.**

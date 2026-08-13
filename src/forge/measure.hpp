@@ -311,7 +311,15 @@ struct StippleCounts {
     bool any() const { return !by_type.empty(); }
 };
 
-StippleCounts stipple_counts(const Clip& clip);
+// `margin` is a shell of cells, in voxels, that supplies NEIGHBOURS but is not itself counted.
+//
+// This is what makes the counts summable in practice as well as in principle. D628 measured the
+// naive sum and it destroyed two of the facility's six deliberate dithers: `paint_specks` reads
+// outside its clip as AIR, so every voxel on a box's own face counts as surface and as a speck, and
+// 296 of a leaf node's 512 cells ARE its own face. With a margin captured from the world, the
+// neighbours across the edge are real and the interiors of the boxes tile the world exactly once --
+// so the sum over them is the same population the whole clip would have counted, voxel for voxel.
+StippleCounts stipple_counts(const Clip& clip, i32 margin = 0);
 // The same rule `stipple_verdict(clip)` applies, over counts from wherever they came.
 StippleVerdict stipple_verdict(const StippleCounts& counts, f64 stipple_share = 0.05);
 
