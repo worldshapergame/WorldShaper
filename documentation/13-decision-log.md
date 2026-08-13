@@ -5366,6 +5366,28 @@ R11b's to fix rather than R11d's. Do that before assuming it is the coarse build
 | D618 | **The occlusion tolerance is a named suspect** | plan | It fell from twelve metres to a quarter when the unit became a node; 4,096 of 20,020 nodes are refused on it |
 | D618 | **`--refine-all` against a normal settle is the test** | method | One flag separates "not yet" from "never", and neither answer should be assumed |
 
+### Narrowed the same day: editing does NOT show them, only loading does
+
+First reported as *"whenever a new voxel detail loads or whenever i break or place a voxel"*, then
+withdrawn on the second half: *"nevermind it doesnt show while chiselling"*. Reproduced against a
+scripted chisel (`--chisel 4,6 --settle` at the facade) and the frame is clean, which agrees.
+
+**That is worth more than it looks, because it eliminates the whole edit path** -- the pool's leaf
+invalidation, the refold, the face wipe and `--face-edit-seed` are all common to editing and to a
+refinement paste, and if they were the cause a chisel would show it too. Both go through
+`announce_world_change`; only one of them shows cubes.
+
+So the cause is in what a REFINEMENT paste does and an edit does not: it replaces a box of the world
+with voxels sampled at a different resolution, and it does so thousands of times a load since R11b
+where the eighteen-box ladder did it eighteen times. The suspects left are the coarse build standing
+until a node lands on it (R11d's), and the paste itself -- a `Replace` at scale blowing one sampled
+cell up into a filled cube of world voxels, which is exactly the shape of what is described and
+would appear at the moment new detail arrives rather than before it.
+
+**Next session starts here**: photograph two consecutive frames either side of one refinement paste,
+with `--settle` off and a camera watching a node land. That says which of the two it is, and the
+edit path is already excluded.
+
 ---
 
 ## D619 — the ladder was starved, and that is what the lumps were
