@@ -11,11 +11,14 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -1610,9 +1613,65 @@ private:
     };
     std::vector<RefineJob> refine_batch_;
     std::unique_ptr<forge::SampleResult> refine_result_;
+
+    // A batch with what its sampling cost, which travels with it rather than in a shared field:
+    // with more than one batch in flight, `refine_sample_ms_` written by the worker and read by the
+    // paste is two batches' numbers racing for one slot.
+    struct RefineDelivery {
+        std::vector<RefineJob> jobs;
+        f64 sample_ms = 0.0;
+        u64 asked = 0;
+    };
+
+    // The sampler is a PERSISTENT thread with a queue, not a thread per batch.
+    //
+    // It used to be one `std::thread` per wake, and the main thread only noticed the result on the
+    // next frame -- so the sampler finished its 13 ms of work and then sat idle until a frame
+    // boundary came round, 25.5 ms after it started. Measured: 6,361 ms of sampling inside 12,421 ms
+    // of ladder, so it was asleep for 49% of a load with work queued up behind it.
+    //
+    // Two batches in flight instead of one: while the sampler works on the first, the main thread
+    // has already picked the second and put it on the queue, so the moment one finishes the next
+    // starts with no frame boundary in between. The pick has to stay on the main thread -- it reads
+    // the camera, casts rays against `World` and mutates the node list -- but it is 1.7 ms a wake,
+    // so having it run one batch ahead costs nothing and hides the whole gap.
+    // ONE, and the two that were built and measured are recorded here because the reason is not
+    // obvious and will be proposed again.
+    //
+    // Two batches in flight is worth 9%: the sampler stops waiting for a frame boundary between
+    // batches, ladder 12,421 -> 10,961 ms and wall clock 17.3 -> 15.7 s. It also **loses voxels**.
+    // The pick asks `refine_node_is_a_no_op`, which asks the WORLD whether there is anything to
+    // replace -- and a node picked while the previous batch is still sampling is judged against a
+    // world that batch has not been pasted into yet. A node whose matter is about to arrive reads as
+    // empty, is marked `done`, and never comes back. Measured on R11b's own gate: `sampler.clip`
+    // forced to full detail came back **1,429,498 voxels against the reference 1,430,104**, 606
+    // gone, on a gate that had passed unchanged since D615.
+    //
+    // This is R11c's inherited trap 2 one level along -- "a node is skipped only when the world AND
+    // the field agree nothing would change" -- with the new wrinkle that the world is only an honest
+    // witness when nothing is in flight over it. Fixing it properly means the skip test consulting
+    // what is queued as well as what is pasted, which is a real piece of work and is not free.
+    //
+    // Delivering every landed batch rather than one a frame was worth a further 4% and made the
+    // ORDER of refinement depend on frame timing: two runs settled on different worlds
+    // (`91c00087d98b7532` against `e3a294190ee25fab`). Every measurement here is gated on a content
+    // hash (trap 8, trap 19), so that is not a trade this project can take either.
+    static constexpr u32 kRefineInFlight = 1;
     std::thread refine_thread_;
-    std::atomic<bool> refine_ready_{false};
-    bool refine_running_ = false;
+    std::mutex refine_mutex_;
+    std::condition_variable refine_cv_;
+    bool refine_quit_ = false;                    // under refine_mutex_
+    std::deque<RefineDelivery> refine_queued_;    // picked, waiting for the sampler
+    std::deque<RefineDelivery> refine_landed_;    // sampled, waiting for the paste
+    u32 refine_outstanding_ = 0;                  // queued plus in the sampler's hands
+    void refine_worker();
+    void stop_refine_worker();
+    // Anything picked, sampling, or sampled and not yet pasted. What `refine_running_` was, and it
+    // has to be asked under the lock now that the answer lives in three places.
+    bool refine_busy();
+    // One landed batch into the world: mark, paste, announce, replay, log. Split out of
+    // pump_refinement so that several can be delivered in one frame.
+    void deliver_refinement(RefineDelivery delivered);
     u32 refine_scale_ = 1;      // what the world is at now; 1 is the clip's own detail
     i32 refine_authored_ = 0;   // voxels per metre the clip asked for
     i64 refine_at_[3]{0, 0, 0};
@@ -1718,7 +1777,10 @@ private:
     u64 refine_total_rays_ = 0;
     u64 refine_total_swept_ = 0;          // list entries walked, which is what a sweep costs
     u64 refine_began_ns_ = 0;
-    void start_refinement();
+    // True when a batch was picked and handed to the sampler, so the caller can keep topping the
+    // queue up until it is full. One call a frame is not enough: the sampler eats a batch every
+    // 13 ms and a frame is 19, so a single pick per frame leaves it idle again.
+    bool start_refinement();
     void pump_refinement();
     // The ladder's boxes, from the clip's own bounds. One function so the run that builds the
     // world and the run that loads a half-built one plan the same grid ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â if they did not, the
@@ -2522,8 +2584,97 @@ void Application::draw_loading() {
 // spends almost all of its total on the last step. That is the property that makes this worth
 // doing: every rung before the last is nearly free next to it, and the player sees the world from
 // the first one.
-void Application::start_refinement() {
-    if (refine_running_) return;
+// The sampler's own loop. Started on the first hand-off and stopped at the fixed point.
+//
+// It owns nothing: the plan is borrowed const, the field under it belongs to `refine_script_`, and
+// every job owns its clip. So the ONE rule is that the plan and the script must outlive it, which
+// is why `stop_refine_worker` is called before either is reset.
+void Application::refine_worker() {
+    for (;;) {
+        RefineDelivery batch;
+        {
+            std::unique_lock<std::mutex> lock(refine_mutex_);
+            refine_cv_.wait(lock, [this] { return refine_quit_ || !refine_queued_.empty(); });
+            if (refine_quit_) return;
+            batch = std::move(refine_queued_.front());
+            refine_queued_.pop_front();
+        }
+
+        const u64 began = now_ns();
+        // ONE NODE PER WORKER, not one node at a time.
+        //
+        // This loop was serial, and each `sample` call was handed the job system to split ITSELF
+        // across -- which R11a measured as buying exactly nothing: 1.389 ms threaded against 1.391
+        // serial, at every level, to three digits, because a node is eight voxels a side and
+        // therefore eight z slabs. So a batch of sixteen nodes was sixteen consecutive samples each
+        // failing to use eight workers, and the whole background half of a load ran on roughly one
+        // core. Measured over a cold facility: **33,912 ms of sampling** out of 78,867 ms of ladder.
+        //
+        // The parallelism belongs one level up, where the units are independent by construction:
+        // every job owns its own clip and its own settings, the plan is borrowed const, the field is
+        // const and has no mutable state, and `despeckle` takes the whole-clip verdict by const
+        // pointer. Nothing is shared that is written.
+        //
+        // `nullptr` inside, deliberately: handing the same JobSystem to eight concurrent samples is
+        // the submitter collision D511-D514 is about, and by R11a's own measurement the inner split
+        // was worth nothing anyway.
+        std::vector<u64> asked_by(batch.jobs.size(), 0);
+        const auto take = [&](usize begin, usize end) {
+            for (usize i = begin; i < end; ++i) {
+                RefineJob& job = batch.jobs[i];
+                job.result = std::make_unique<forge::SampleResult>(
+                    forge::sample(refine_plan_, job.settings, nullptr, {}));
+                // Every node the ladder sharpens, as well as the first build. One that came back
+                // speckled and was pasted in would put the fault back after the coarse world had
+                // been cleaned of it -- with the verdict taken from the whole clip rather than from
+                // this node, because what a material's specks are a large enough share of is a
+                // question about the building and five hundred cells cannot answer it
+                // (forge::StippleVerdict).
+                if (despeckle_) forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
+                asked_by[i] = job.result->voxels_asked;
+            }
+        };
+        if (refine_jobs_ != nullptr && batch.jobs.size() > 1 && !options_.no_batch_parallel) {
+            refine_jobs_->parallel_for(batch.jobs.size(), 1, take);
+        } else {
+            take(0, batch.jobs.size());
+        }
+        batch.asked = 0;
+        for (u64 n : asked_by) batch.asked += n;
+        batch.sample_ms = ns_to_ms(now_ns() - began);
+
+        {
+            std::lock_guard<std::mutex> lock(refine_mutex_);
+            refine_landed_.push_back(std::move(batch));
+        }
+    }
+}
+
+void Application::stop_refine_worker() {
+    if (!refine_thread_.joinable()) return;
+    {
+        std::lock_guard<std::mutex> lock(refine_mutex_);
+        refine_quit_ = true;
+    }
+    refine_cv_.notify_all();
+    refine_thread_.join();
+    std::lock_guard<std::mutex> lock(refine_mutex_);
+    refine_quit_ = false;
+    refine_queued_.clear();
+    refine_landed_.clear();
+    refine_outstanding_ = 0;
+}
+
+bool Application::refine_busy() {
+    std::lock_guard<std::mutex> lock(refine_mutex_);
+    return refine_outstanding_ > 0 || !refine_landed_.empty();
+}
+
+bool Application::start_refinement() {
+    {
+        std::lock_guard<std::mutex> lock(refine_mutex_);
+        if (refine_outstanding_ >= kRefineInFlight) return false;
+    }
     if (refine_script_ == nullptr) {
         // There is no ladder at all ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the clip was built at its authored detail in one pass, or
         // the world came back from the cache already finished. Nothing here can be improved, and
@@ -2534,7 +2685,7 @@ void Application::start_refinement() {
         // measurement at all. That was reachable before ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `--clip-coarse 1 --settle` hangs ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â and
         // it is reachable constantly now that a finished world is cached and read back.
         refine_settled_ = true;
-        return;
+        return false;
     }
 
     // One wake, one tick. This is what the occlusion refusals in `refine_candidate` are dated
@@ -2702,7 +2853,7 @@ void Application::start_refinement() {
         // `kSettleFrames` is reached. See --settle.
         refine_settled_ = true;
         refine_total_pick_ms_ += ns_to_ms(now_ns() - pick_began);
-        return;
+        return false;
     }
     refine_settled_ = false;
 
@@ -2721,89 +2872,91 @@ void Application::start_refinement() {
     refine_total_nodes_ += refine_batch_.size();
     refine_total_pick_ms_ += ns_to_ms(now_ns() - pick_began);
 
-    refine_ready_.store(false, std::memory_order_release);
-    refine_running_ = true;
-    refine_thread_ = std::thread([this] {
-        const u64 began = now_ns();
-        // ONE NODE PER WORKER, not one node at a time.
-        //
-        // This loop was serial, and each `sample` call was handed the job system to split ITSELF
-        // across — which R11a measured as buying exactly nothing: 1.389 ms threaded against 1.391
-        // serial, at every level, to three digits, because a node is eight voxels a side and
-        // therefore eight z slabs. So a batch of sixteen nodes was sixteen consecutive samples
-        // each failing to use eight workers, and the whole background half of a load ran on
-        // roughly one core. Measured over a cold facility: **33,912 ms of sampling** out of 78,867
-        // ms of ladder.
-        //
-        // The parallelism belongs one level up, where the units are independent by construction:
-        // every job owns its own clip and its own settings, the plan is borrowed const, the field
-        // is const and has no mutable state, and `despeckle` takes the whole-clip verdict by const
-        // pointer. Nothing is shared that is written.
-        //
-        // `nullptr` inside, deliberately: handing the same JobSystem to eight concurrent samples is
-        // the submitter collision D511-D514 is about, and by R11a's own measurement the inner split
-        // was worth nothing anyway.
-        std::vector<u64> asked_by(refine_batch_.size(), 0);
-        const auto take = [&](usize begin, usize end) {
-            for (usize i = begin; i < end; ++i) {
-                RefineJob& job = refine_batch_[i];
-                job.result = std::make_unique<forge::SampleResult>(
-                    forge::sample(refine_plan_, job.settings, nullptr, {}));
-                // Every node the ladder sharpens, as well as the first build. One that came back
-                // speckled and was pasted in would put the fault back after the coarse world had
-                // been cleaned of it -- with the verdict taken from the whole clip rather than from
-                // this node, because what a material's specks are a large enough share of is a
-                // question about the building and five hundred cells cannot answer it
-                // (forge::StippleVerdict).
-                if (despeckle_) forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
-                asked_by[i] = job.result->voxels_asked;
-            }
-        };
-        if (refine_jobs_ != nullptr && refine_batch_.size() > 1 && !options_.no_batch_parallel) {
-            refine_jobs_->parallel_for(refine_batch_.size(), 1, take);
-        } else {
-            take(0, refine_batch_.size());
-        }
-        u64 asked = 0;
-        for (u64 n : asked_by) asked += n;
-        refine_sample_ms_ = ns_to_ms(now_ns() - began);
-        refine_asked_ = asked;
-        refine_ready_.store(true, std::memory_order_release);
-    });
+    // Hand it over and go. The sampler is already running and may already be halfway through the
+    // batch before this one; that is the whole point of `kRefineInFlight`.
+    if (!refine_thread_.joinable()) refine_thread_ = std::thread([this] { refine_worker(); });
+    {
+        std::lock_guard<std::mutex> lock(refine_mutex_);
+        RefineDelivery handed;
+        handed.jobs.swap(refine_batch_);
+        refine_queued_.push_back(std::move(handed));
+        ++refine_outstanding_;
+    }
+    refine_cv_.notify_one();
+    return true;
 }
 
-// Take delivery of a finished box, if one is ready, and put it in the world.
+// Take delivery of a finished batch, if one is ready, and put it in the world.
 void Application::pump_refinement() {
-    if (!refine_running_) {
-        start_refinement();
-        // Refinement has run out of things this camera can improve, and ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â because this branch is
-        // only reached with no box in flight ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the last one has landed. That is the moment the
-        // world on disk can be brought up to date, and it is the only moment when doing so cannot
-        // catch the world half-pasted.
-        if (!refine_running_) save_refined_world();
+    // KEEP THE SAMPLER FED FIRST, before anything else this function does.
+    //
+    // The order matters and it is the whole of the double buffer. Picking after the paste means the
+    // sampler is idle for the length of the paste; picking before it means the queue is topped up
+    // while the previous batch is still being sampled, so `kRefineInFlight` batches are always
+    // outstanding and the sampler never waits for a frame boundary. `start_refinement` returns at
+    // once when the queue is already full, so this is free on the frames it is not needed.
+    //
+    // A LOOP, not one call. The sampler eats a batch every 13 ms and a frame is 19, so handing over
+    // one batch a frame refills the queue more slowly than the sampler drains it and it goes idle
+    // again anyway -- measured at 58% busy with a single call here. This tops the queue right up.
+    while (start_refinement()) {
+    }
+
+    // ONE batch a frame, and that is a correctness choice rather than a throughput one.
+    //
+    // Delivering every landed batch, and releasing the sampler's slot when a batch LANDS rather
+    // than when it is pasted, was built and measured: 10,932 -> 10,313 ms, four per cent. It also
+    // made the number of picks in a frame a function of how many batches happened to land in it,
+    // which makes the ORDER of refinement depend on timing -- and two runs of it settled on
+    // different worlds (`91c00087d98b7532` against `e3a294190ee25fab`, 32,750 nodes against
+    // 32,754). Every measurement in this repository is gated on a content hash (trap 8, trap 19),
+    // and a world that differs run to run is not a scene anything can be measured against. Four per
+    // cent is not worth that, and R11g is where it would have to be paid for.
+    //
+    // One delivery a frame and one pick per delivery keeps the interleaving deterministic: the
+    // sequence of picks and deliveries is the same however long the frames take.
+    RefineDelivery delivered;
+    {
+        std::lock_guard<std::mutex> lock(refine_mutex_);
+        if (!refine_landed_.empty()) {
+            delivered = std::move(refine_landed_.front());
+            refine_landed_.pop_front();
+            --refine_outstanding_;
+        }
+    }
+    if (delivered.jobs.empty()) {
+        // Nothing has landed. If nothing is coming either, this is the fixed point -- and it is the
+        // only moment the world on disk can be written without catching it half-pasted.
+        if (!refine_busy()) save_refined_world();
         return;
     }
-    if (!refine_ready_.load(std::memory_order_acquire)) return;
+    deliver_refinement(std::move(delivered));
+}
 
-    refine_thread_.join();
-    refine_running_ = false;
-    if (refine_batch_.empty()) return;
-
+void Application::deliver_refinement(RefineDelivery delivered) {
     const u64 began = now_ns();
+    refine_sample_ms_ = delivered.sample_ms;
+    refine_asked_ = delivered.asked;
 
-    // Take the whole batch off the shared slot and set the NEXT one sampling before pasting this
-    // one, rather than after.
-    //
-    // The two were serialised: the worker sat idle for the whole paste, then the main thread sat
-    // idle for the whole sample, and the world sharpened at the sum of the two instead of the
-    // larger. Overlapped, the sampler is never waiting on a paste it takes no part in.
     std::vector<RefineJob> finished;
-    finished.swap(refine_batch_);
+    finished.swap(delivered.jobs);
     for (const RefineJob& job : finished) {
         refine_regions_[job.at].done = true;
         refine_regions_[job.at].applied_per_metre = job.settings.voxels_per_metre;
     }
-    start_refinement();
+
+    // Set the NEXT batch sampling before pasting this one, rather than after.
+    //
+    // The two were serialised once: the worker sat idle for the whole paste, then the main thread
+    // sat idle for the whole sample, and the world sharpened at the sum instead of the larger.
+    //
+    // And it has to be HERE rather than at the top of the frame. With one batch in flight, the slot
+    // is still held at the top of pump_refinement by the batch about to be delivered, so the pick
+    // there refuses and the next one does not go out until the following frame. Measured: ladder
+    // 12,421 -> 15,170 ms on that ordering alone, with the picking a frame late changing which
+    // nodes are held out and so the world it settles on as well.
+    while (start_refinement()) {
+    }
 
     // Sized like any foreground pool rather than like the sampler, which is deliberately held to
     // half the machine because it runs while somebody is playing. The paste is not background
@@ -2893,14 +3046,16 @@ void Application::pump_refinement() {
             WS_LOG_INFO("clip", "kept the finished world; the next launch reads it back");
             refine_cache_path_.clear();
         }
+        // Before the script goes: the plan borrows the field out of it and the sampler borrows the
+        // plan, so a worker still holding either is a dangling walk. Stopping it is also what makes
+        // `refine_jobs_.reset()` safe -- the worker submits to that pool.
+        stop_refine_worker();
         refine_script_.reset();
         refine_plan_ = {};
         refine_jobs_.reset();
         paste_jobs_.reset();   // nothing left to paste, so nothing left for these to do
         return;
     }
-
-    start_refinement();
 }
 
 // What the world on disk is worth, and when it is worth writing.
@@ -3352,6 +3507,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     // and nothing to carry on. Nothing is coarse, so nothing needs sharpening, and standing the
     // ladder up over it would re-sample the whole building to arrive back where it already is.
     if (cache.regions.empty()) {
+        stop_refine_worker();   // the plan borrows the script's field; see pump_refinement
         refine_script_.reset();
         refine_plan_ = {};
         refine_regions_.clear();
@@ -3396,6 +3552,7 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     refine_saved_regions_ = done;
     if (done == refine_regions_.size()) {
         // Finished, so there is no ladder to stand up and no reason to keep the field alive.
+        stop_refine_worker();   // the plan borrows the script's field; see pump_refinement
         refine_script_.reset();
         refine_plan_ = {};
         refine_regions_.clear();
@@ -7625,7 +7782,7 @@ int Application::play(const Options& options) {
             ns_to_ms(now_ns() - load_began_ns_) > options_.max_seconds * 1000.0;
 
         if (options_.settle && !settled_seen_) {
-            if (refine_settled_ && !refine_running_) {
+            if (refine_settled_ && !refine_busy()) {
                 ++settle_streak_;
             } else {
                 settle_streak_ = 0;
@@ -8155,7 +8312,7 @@ int Application::play(const Options& options) {
     // alive: a ComputePipeline left to its own destructor runs after ~Application has taken the
     // device with it, and destroying a pipeline against a dead device is an access violation in
     // the driver with this file nowhere in the stack.
-    if (refine_thread_.joinable()) refine_thread_.join();
+    stop_refine_worker();
     clouds_.destroy();
     destroy_render_target();
     if (descriptor_pool_ != VK_NULL_HANDLE) {

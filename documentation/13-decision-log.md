@@ -5747,3 +5747,54 @@ hard number for why it exists.
 | D622 | **Taking more than half the machine is not carried** | honesty | Sampling 6,361 to 4,509 ms and the paste 140 to 1,607: the background pool starves the foreground one |
 | D622 | **The byte-identical gate is the acceptance test, not the timing** | method | All three changes are scheduling; `a1f8bc6c656343b7` says so |
 | D622 | **100x is not reachable by scheduling** | honesty | 3.8 M voxels x 139 rules x 8 us is a 6.4 s floor at five workers. That is R12's number |
+
+## D623 — the double buffer was built, measured at 9%, and reverted: it loses voxels
+
+D622 left the sampler idle 49% of a load, waiting for a frame boundary between batches, and named a
+double-buffered pick as the next step. It was built: a persistent sampler thread with a queue and
+`kRefineInFlight` batches outstanding, so the moment one batch finishes the next starts with no
+frame in between.
+
+**It works and it is worth 9%**: ladder elapsed 12,421 → 10,961 ms, wall clock 17.3 → 15.7 s, over
+two runs each.
+
+**It also loses 606 voxels, and that is why it is not carried.** R11b's own gate — `sampler.clip`
+forced to full detail with despeckling off — came back **1,429,498 against the reference
+1,430,104**, on a check that had passed unchanged since D615.
+
+The reason is worth more than the 9%. The pick asks `refine_node_is_a_no_op`, which asks the
+**world** whether there is anything here to replace. With a batch in flight, a node is picked
+against a world **that batch has not been pasted into yet** — so a node whose matter is about to
+arrive reads as empty, is marked `done`, and never comes back. R11c's inherited trap 2 says *"a node
+is skipped only when the world AND the field agree nothing would change"*; the new wrinkle is that
+**the world is only an honest witness when nothing is in flight over it.**
+
+Fixing it properly means the skip test consulting what is queued as well as what is pasted. That is
+a real piece of work, it is not free, and it is now written down as the price of the 9%.
+
+**A second half was built and reverted for a different reason.** Delivering every landed batch
+instead of one a frame, and releasing the sampler's slot when a batch *lands* rather than when it is
+pasted, was worth a further 4% (10,932 → 10,313 ms). It makes the number of picks in a frame a
+function of how many batches happen to land in it, so the **order** of refinement depends on frame
+timing — and two runs settled on different worlds, `91c00087d98b7532` against `e3a294190ee25fab`,
+32,750 nodes against 32,754. Every measurement in this repository is gated on a content hash (traps
+8 and 19). Four per cent does not buy a world that differs run to run.
+
+**What is kept**: the sampler is now a persistent thread with a queue rather than a `std::thread` per
+batch, with `kRefineInFlight = 1`. Behaviour-identical — wall 17.1 s, `789c8a80f40323a1`, the same
+world and the same timing as before — and the machinery for the second batch is there behind one
+constant, for whoever pays for the skip test.
+
+**And one ordering trap it exposed.** With one batch in flight the pick must happen *inside* the
+delivery, not at the top of the frame: the slot is still held by the batch about to be delivered, so
+a pick at the top refuses and the next batch does not go out until the following frame. Measured on
+that alone: ladder **12,421 → 15,170 ms**, and the world it settles on changes too, because picking a
+frame late changes which nodes are held out.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D623 | **Two batches in flight is not carried** | honesty | Worth 9%, loses 606 voxels: a node is picked against a world the in-flight batch has not landed in |
+| D623 | **The world is only an honest witness when nothing is in flight** | finding | R11c's trap 2 one level along, and it is what any future double buffer has to pay for |
+| D623 | **Delivering every landed batch is not carried either** | honesty | Worth 4%, makes the settled world depend on frame timing; two runs, two hashes |
+| D623 | **The sampler is a persistent thread with a queue** | design | Behaviour-identical at one in flight, and the second is one constant away |
+| D623 | **The pick belongs inside the delivery, not at the top of the frame** | correctness | The slot is still held there; picking a frame late cost 12,421 → 15,170 ms and changed the world |
