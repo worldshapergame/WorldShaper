@@ -8,6 +8,8 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 
 #include "forge/clip_script.hpp"
 #include "forge/measure.hpp"
@@ -447,4 +449,77 @@ solid block
     // The palette's entry is the LAST declaration, which is the one `paint stone` used.
     REQUIRE(b.script.material_types[0] < b.script.material_names.size());
     CHECK(b.script.material_names[b.script.material_types[0]] == "stone");
+}
+
+TEST_CASE("a part beside the world wins over the one the game ships, and is the only thing that "
+          "can freeze a world") {
+    // D494's resolution order, pinned, because it is what a world is assembled out of and because
+    // getting it wrong is invisible from the game.
+    //
+    // Beside-wins is deliberate: it is what lets a player copy the facility's parts next to their
+    // own world, edit a wall, and get their wall. Nothing here argues with that. What this test is
+    // for is the OTHER half of it, which had no test and cost five days.
+    //
+    // Before D494 the game copied those parts into the player's worlds folder itself. The copying
+    // stopped; the copies stayed. So an upgraded shelf holds a folder of fragments frozen at
+    // whatever date it was made, beside-wins makes that folder the building, and every fix to the
+    // shipped clip afterwards goes into the game and never into the world. Reported as a doorway
+    // still barred after the bars were removed, and reasonably blamed on a cache -- a frozen world
+    // and a stale cache are the same picture from the player's chair.
+    //
+    // Three cases, because the bug lives in the difference between them: beside wins when it is
+    // there, shipped is used when it is not, and a name that is in neither place is an error that
+    // says so rather than a world that silently loses a wall.
+    const std::filesystem::path root =
+        std::filesystem::temp_directory_path() / "ws_test_include_order";
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+    std::filesystem::create_directories(root / "mine" / "parts", ignored);
+    std::filesystem::create_directories(root / "shipped" / "parts", ignored);
+
+    const auto put = [](const std::filesystem::path& at, const std::string& text) {
+        std::ofstream out(at, std::ios::binary);
+        out << text;
+    };
+    put(root / "mine" / "world.clip", "include \"parts/wall.clip\"\n");
+    put(root / "mine" / "parts" / "wall.clip", "let wall = box 0 0 0  1 1 1\n");
+    put(root / "shipped" / "parts" / "wall.clip", "let wall = box 0 0 0  9 9 9\n");
+
+    const std::string shipped = (root / "shipped").string();
+    const std::string manifest = (root / "mine" / "world.clip").string();
+
+    {
+        std::vector<SourceLine> origin;
+        std::vector<ScriptError> errors;
+        const std::string text = expand_includes(manifest, origin, errors, shipped);
+        CHECK(errors.empty());
+        // The player's copy, not the game's. The 9s are the shipped file and must not appear.
+        CHECK(text.find("1 1 1") != std::string::npos);
+        CHECK(text.find("9 9 9") == std::string::npos);
+    }
+
+    // Take the copy away and the same manifest builds from the game's own parts -- which is what
+    // makes deleting it the cure for a frozen world rather than a way to empty one. Before D494
+    // this left a world that opened as an empty sky, three times.
+    std::filesystem::remove(root / "mine" / "parts" / "wall.clip", ignored);
+    {
+        std::vector<SourceLine> origin;
+        std::vector<ScriptError> errors;
+        const std::string text = expand_includes(manifest, origin, errors, shipped);
+        CHECK(errors.empty());
+        CHECK(text.find("9 9 9") != std::string::npos);
+    }
+
+    // And a piece that is in neither place is one error naming the piece, not a quiet hole in the
+    // building.
+    put(root / "mine" / "world.clip", "include \"parts/roof.clip\"\n");
+    {
+        std::vector<SourceLine> origin;
+        std::vector<ScriptError> errors;
+        expand_includes(manifest, origin, errors, shipped);
+        REQUIRE(errors.size() == 1);
+        CHECK(errors[0].message.find("parts/roof.clip") != std::string::npos);
+    }
+
+    std::filesystem::remove_all(root, ignored);
 }

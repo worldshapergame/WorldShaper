@@ -1466,6 +1466,45 @@ std::string expand_includes(const std::string& path, std::vector<SourceLine>& or
                     if (std::filesystem::exists(fallback, missing) && !missing) {
                         resolved = fallback.string();
                     }
+                } else if (!beside.empty()) {
+                    // A copy beside the world WON, and the game ships a different one. Said out
+                    // loud, because the silence is the whole bug.
+                    //
+                    // Before D494 the facility's parts were copied into the player's worlds
+                    // folder. That copying stopped; the copies did not go anywhere. So a shelf
+                    // that has been through an upgrade still has a folder of fragments dated
+                    // whenever it was made, and "beside always wins" -- which is right, and is
+                    // what lets a player edit the parts -- makes that folder the building. Every
+                    // fix to the shipped clip since then goes into the game and never into the
+                    // world, and from the outside it looks like a world that refuses to change:
+                    // reported as arches still barred after the arch was fixed, and reasonably
+                    // blamed on a cache, because a frozen world and a stale cache look identical
+                    // from the player's chair.
+                    //
+                    // Not fixed by preferring the shipped file. That would silently throw away
+                    // the edits of the player D494 was written for. The fault is that the choice
+                    // was invisible, so this makes it visible and leaves the choice alone: an
+                    // include that is shadowed says so, by name, with both dates.
+                    const std::filesystem::path shipped =
+                        (std::filesystem::path(beside) / named).lexically_normal();
+                    std::error_code either;
+                    if (std::filesystem::exists(shipped, either) && !either &&
+                        shipped.lexically_normal() !=
+                            std::filesystem::path(resolved).lexically_normal()) {
+                        const auto read_all = [](const std::string& from) {
+                            std::ifstream in(from, std::ios::binary);
+                            return std::string((std::istreambuf_iterator<char>(in)),
+                                               std::istreambuf_iterator<char>());
+                        };
+                        if (read_all(resolved) != read_all(shipped.string())) {
+                            WS_LOG_WARN("clip",
+                                        "'{}' is being taken from beside the world and NOT from "
+                                        "the game's own clips, and the two differ. The copy beside "
+                                        "it is what this world is built from; delete it to follow "
+                                        "the game's",
+                                        named);
+                        }
+                    }
                 }
                 // Said HERE, with the line that asked for it and the name it asked for, rather
                 // than as "could not open <absolute path>" from inside the recursion. A piece

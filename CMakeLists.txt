@@ -266,11 +266,24 @@ add_dependencies(WorldShaper ws_shaders)
 
 # The clips are content, and the facility is the scene now, so they have to travel with the
 # executable the way the compiled shaders do. Their built WORLDS do not: see cmake/copy_clips.cmake.
-add_custom_command(TARGET WorldShaper POST_BUILD
+#
+# A TARGET OF ITS OWN, and it was a POST_BUILD command on WorldShaper until a clip fix went
+# missing. A post-build command runs when the target RELINKS, and editing a .clip relinks nothing —
+# so the copy beside the executable stayed as it was, `run.bat` loads from there because it cds
+# into buildin, and the fix was correct, committed, rebuilt and invisible. copy_clips.cmake's own
+# header worries about exactly that outcome one door along ("a clip fix could be correct, committed
+# and invisible") and it happened again through this one.
+#
+# A custom target with no OUTPUT is always out of date, so this runs every build. That is cheap
+# rather than wasteful: `configure_file COPYONLY` compares before it writes, so an unchanged clip
+# does not even get its timestamp touched.
+add_custom_target(ws_clips ALL
     COMMAND ${CMAKE_COMMAND}
             -DSRC="${CMAKE_CURRENT_SOURCE_DIR}/clips"
             -DDST="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/clips"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_clips.cmake")
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/copy_clips.cmake"
+    COMMENT "clips -> ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/clips")
+add_dependencies(WorldShaper ws_clips)
 
 # Record where glslc lives so runtime hot reload can find it without a PATH lookup.
 target_compile_definitions(ws_gpu PUBLIC WS_GLSLC_PATH="${Vulkan_GLSLC_EXECUTABLE}")

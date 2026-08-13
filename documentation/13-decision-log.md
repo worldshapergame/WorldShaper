@@ -4304,3 +4304,111 @@ about this: the difference succeeded, it simply had nothing to bite on.
 | D606 | **Measure the void against the deepest MEMBER, not the wall face** | correctness | Trim projects into the room; a void sized to the wall cuts none of it and the cut still reports success |
 | D606 | **Extend the head with the jamb** | consistency | Otherwise the reveal is 1.71 deep below the springing and 1.40 above it, which steps at the impost |
 | D606 | **The numbers are in the clip beside the change** | process | The next person to move that void needs the table, not the conclusion |
+
+## D607 — the yellow square that survived leaving the world, and the doorway that stayed barred
+
+**Reported from playing:** *"i was playing once and i started making squares on the floor, i noticed
+that even when i left and rejoined and even if we dont have world saving yet the yellow square
+persisted pointing at a cache issue, now every world i made with the facility has the square and
+consistently also the bars on the hall entrances"* — with a photograph of the bars D606 had already
+removed.
+
+One report, **three separate faults**, and the reason it read as one is that all three produce the
+same sentence: *the world will not change*.
+
+### 1. An edited world was cached as the clip's own
+
+`save_refined_world` refused to cache a **half-built** edited world, and the reasoning it carried
+was correct as far as it went: a region paste is a Replace over its box, so a later box would put
+pristine clip geometry back over anything carved inside it — which a live session survives, because
+`pump_refinement` replays the op log after every paste, and a fresh run would not, because its op
+log starts empty. From that it concluded that a world which is **finished** has no later box to undo
+the edits and could be cached as it stood.
+
+Every word of that is true and it answers the wrong question. It asks whether the cache would be
+**self-consistent**. The question is what the cache **is**: a file keyed on the **clip**, handed to
+every world built from that clip, in this run and every run after it. So a square carved into the
+floor of a finished facility was written into the facility's cache — and every new world made from
+the facility came up with the square already in it. Exactly the report. Made baffling by the game
+having no world saving yet, so the one thing that could not be happening appeared to be. **The
+persistence was not the world's; it was the clip's.**
+
+The guard is now `if (!op_log_.ops().empty())`, finished or not. Shown as two flags of one build on
+`many_lamps.wsworld`, both from a cold cache: no edit → *cache wrote … (1 MB in 4 ms)*; one carve on
+frame 1 → *"4 of 4 regions sharpened, but the world has been edited; not caching it as the clip's
+own"*, and no file on disk. The first attempt at that pair proved nothing — with `--settle` the
+ladder finishes long before the default edit frame of 100, so the cache was written before the carve
+existed and the arm was measuring an unedited world. **Trap 15 again: a control arm that never ran
+looks exactly like one that passed.**
+
+What it costs: somebody who builds before the ladder settles gets no cache that run and the next
+launch resamples. That is the right way round — a cache is an optimisation, and a world coming back
+with somebody else's edits in it is a wrong answer.
+
+### 2. The clips beside the executable were four days old
+
+`run.bat` does `cd /d "%~dp0build\bin"`, so the game reads `build\bin\clips\…`, and that copy was
+made by an `add_custom_command(TARGET WorldShaper POST_BUILD …)`. A POST_BUILD command runs when the
+target **relinks**. Editing a `.clip` relinks nothing, so D606's fix sat in
+`clips\facility\halls.clip` at 5.76 while the game went on reading 5.45 from `build\bin`. Verified
+as the two lines side by side before the fix.
+
+Now an `add_custom_target(ws_clips ALL …)` with no declared output, which is always out of date and
+therefore always runs, plus `add_dependencies(WorldShaper ws_clips)`. It is the one kind of build
+step you WANT to be unconditional: nobody is waiting on a file copy.
+
+### 3. And the world on the shelf was assembled from a copy frozen on 8 August
+
+The two fixes above were real and neither was the reason the user still saw bars — because the world
+they play is opened **off the shelf**, and the shelf held its own copy of the building's parts.
+
+Before D494 the game copied the facility's twenty-two fragments into the player's worlds folder.
+That copying stopped. **The copies did not go anywhere.**
+`%LOCALAPPDATA%\WorldShaper\worlds\facility\` was still there, dated 8 August, and
+`expand_includes` resolves an include **beside the file first** — which is D494's design and is not
+wrong: it is what lets a player copy the parts next to their own world, edit a wall, and get their
+wall.
+
+So the shelf's `facility.wsworld` was built from an 8 August `halls.clip`, and every fix since went
+into the game and never into the world. Of the twenty-two fragments in that folder, **exactly one
+differed from the shipped copy** — `halls.clip`, the one D606 had just fixed — which is what proves
+it a stale dump rather than anything the player made.
+
+**Not fixed by preferring the shipped file.** That silently discards the edits of the player D494
+was written for. The fault was never the order; it was that the order was **invisible**. So an
+include that is shadowed now says so by name, once, at load:
+
+> `'facility/halls.clip' is being taken from beside the world and NOT from the game's own clips, and
+> the two differ. The copy beside it is what this world is built from; delete it to follow the
+> game's`
+
+The folder on this machine was **moved, not deleted**, to
+`%LOCALAPPDATA%\WorldShaper\pre-D494-copy-of-facility-parts`. Same camera, same shelf world, before
+and after: the white lintel band and the red waist band go, and the arch opens through to the hall.
+
+**Left undone, and it is a real gap:** every player who upgraded through D494 has this folder and no
+way to know. A migration that deleted it would be safe by construction — after removal every include
+still resolves, to the shipped file — but telling a pre-D494 dump from a working copy is a
+heuristic, and a heuristic that deletes a player's files is a bad trade to make silently. It wants a
+line in the library UI, not a rule in the loader.
+
+### The reusable half
+
+**A cache keyed on a description must never absorb an edit to the thing described.** The key says
+what may be shared; anything not in the key must not be in the file. `save_refined_world` was asking
+whether its file was *coherent* when the question was whether it was *shareable*.
+
+And: three faults, one sentence. A frozen world, a stale build copy and a poisoned cache are the
+same picture from the player's chair, and the natural move — believing the first cause you find
+explains the whole report — would have shipped two real fixes and left the bug. **The report is not
+fixed until the picture changes.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D607 | **An edited world is never cached, finished or not** | correctness | The file is keyed on the clip and shared by every world built from it; an edit is not in the key |
+| D607 | **The clips copy is an always-run target, not a POST_BUILD step** | build | POST_BUILD runs on relink, and editing a clip relinks nothing — the game read a four-day-old building |
+| D607 | **Beside-wins stays; the shadowing is announced** | correctness | Preferring the shipped file would throw away the edits D494 exists to protect; the fault was that the choice was silent |
+| D607 | **The stale copy is moved, not deleted** | process | Nothing is lost if the diagnosis is wrong, and the world follows the game either way |
+| D607 | **No automatic migration of pre-D494 copies** | deferred | Telling a stale dump from a working copy is a heuristic, and one that deletes player files should not ride on this change |
+| D607 | **A test pins the include order** | correctness | Beside-wins, shipped-fallback and neither-is-an-error had no test at all, and it is what a world is assembled out of |
+| D607 | **Keep looking after the first real cause** | process | Two of the three faults were genuine and neither was why the picture had not changed |

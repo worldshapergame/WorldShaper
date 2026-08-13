@@ -2548,16 +2548,32 @@ void Application::save_refined_world() {
     // say the same thing is the sort of cost that only shows up as a stutter nobody can explain.
     if (done <= refine_saved_regions_) return;
 
-    // An edited world is not cached MID-ladder, and the reason is not obvious. A region paste is
-    // a Replace over its box, so a later box would put pristine clip geometry back over anything
-    // carved inside it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which the live session survives because pump_refinement replays the op
-    // log after every paste, and a fresh run would not, because its op log starts empty. The edits
-    // would quietly come back. A world that is FINISHED has no later box to undo them and is
-    // cached as it stands, which is what it has always done.
-    if (done < refine_regions_.size() && !op_log_.ops().empty()) {
+    // AN EDITED WORLD IS NEVER CACHED, finished or not.
+    //
+    // This used to refuse only a HALF-BUILT edited world, on the argument that a later region
+    // paste is a Replace over its box and would put pristine clip geometry back over anything
+    // carved inside it, while a world that is FINISHED has no later box to undo the edits and
+    // so could be cached as it stood. Every word of that is true and it answers the wrong
+    // question. It asks whether the cache would be SELF-CONSISTENT. The question is what the
+    // cache IS.
+    //
+    // This file is keyed on the CLIP and handed to every world built from that clip, in this run
+    // and in every run after it. So a player who carved a square into the floor of a finished
+    // facility had that square written into the clip's cache -- and then every new world they
+    // made from the facility came up with the square already in it. Reported exactly that way,
+    // and made baffling by the game having no world saving yet, so the one thing that could not
+    // be happening appeared to be. The persistence was not the world's; it was the clip's.
+    //
+    // What it costs: somebody who builds before the ladder finishes gets no cache written that
+    // run, so the next launch resamples. That is the right way round -- a cache is an
+    // optimisation and a world coming back with somebody else's edits in it is a wrong answer --
+    // and it costs nothing in the ordinary case, because the ladder settles long before anyone
+    // has walked to the far side of the building.
+    if (!op_log_.ops().empty()) {
         WS_LOG_INFO("clip",
-                    "{} of {} regions sharpened, but the world has been edited; not caching a "
-                    "half-built world an edit would be replayed over",
+                    "{} of {} regions sharpened, but the world has been edited; not caching it "
+                    "as the clip's own -- the cache is keyed on the clip, so every world built "
+                    "from it would come up with these edits",
                     done, refine_regions_.size());
         return;
     }

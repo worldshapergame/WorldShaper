@@ -158,6 +158,20 @@ twenty-two pieces is one file that cannot be broken by deleting a folder. That b
 the facility's parts were copied onto the player's shelf, looked like an ordinary folder, and were
 deleted three times, each time leaving a world that opened as an empty sky.
 
+**And beside-always-winning has a second face** (D607). The copying stopped at D494; the copies did
+not go anywhere. A shelf that has been through that upgrade still holds a folder of fragments dated
+whenever it was made, beside-wins makes that folder the building, and every fix to the shipped clip
+afterwards goes into the game and never into the world. The facility on this machine was assembled
+from an 8 August copy for five days, through two fixes to the doorway it kept showing barred — and
+it read as a cache fault, reasonably, because **a frozen world and a stale cache are the same
+picture from the player's chair**. The order is not the bug and is not changed: preferring the
+shipped file would throw away the edits beside-wins exists to protect. What is fixed is the silence.
+An include taken from beside the world while the game ships a *different* one now says so by name,
+once, at load. Removing such a folder is safe by construction — every include still resolves, to the
+shipped file — but the game does not remove it for you: telling a stale dump from a working copy is
+a heuristic, and a heuristic that deletes a player's files should not be silent. **That is a line
+the library still owes the player**, and until it exists the log is the only place it is said.
+
 **There is no characters shelf** (D479). There was one, holding `.wsclip` files — the same format on
 a different shelf — and what made it a different shelf was the idea that a character is a different
 *kind* of thing. It is not. A character is a clip you can **wear** as well as one you can **stamp

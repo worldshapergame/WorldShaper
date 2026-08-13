@@ -1087,6 +1087,16 @@ rather than from `--clip-file`:
 - and every paste is an announced world change, so it rebuilds the light list. That is how the
   flicker above fires with nobody editing anything.
 
+**A run that edits the world now writes no cache at all** (D607) — not "no cache until the ladder
+finishes", which is what it used to mean. The file is keyed on the **clip** and handed to every
+world built from it, so a square carved into a finished facility came back in every new world made
+from that clip. If you are measuring loads, that means `--edit`, `--chisel` and anything that puts
+an op in the log leave the next run cold, and the log says so in as many words: *"N of M regions
+sharpened, but the world has been edited; not caching it as the clip's own"*. Two arms of one build
+on `many_lamps.wsworld` prove it, and note the arm that nearly lied: with `--settle` the ladder
+finishes long before the **default edit frame of 100**, so the edit arm cached an unedited world and
+looked identical to the control. Pass `--edit-frame 1`.
+
 **A trap for anyone measuring loads:** `--clip-coarse` is part of the cache key, because
 `src/app/main.cpp` divides `script.settings.voxels_per_metre` by `coarse` *before* the key is
 computed. A 608 MB cache written under `--clip-coarse 1` is deleted as stale by the next default
