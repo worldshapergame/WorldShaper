@@ -5184,3 +5184,87 @@ resolution with the level**, which is the next step and the one that also ends t
 | D615 | **`--refine-all` exists for the gate** | method | Two arms that each stop somewhere different cannot be compared at all |
 | D615 | **The skirt was built, measured and reverted** | honesty | 240 voxels lost; the sampler answers differently for a box one voxel larger, and that is not R11b's to fix |
 | D615 | **The facility gate is not measured** | honesty | Proved on `clips/sampler.clip`; the facility A/B is ten minutes a side and was not run |
+
+## D616 — R11c: a node is sampled at the detail its own level asks for
+
+**This is R8c, arriving where it belongs.** Since the plan was written in 2026-08-09 the answer to
+"why is there a loading bar" has included *field-driven subdivision — `forge/field.cpp` already
+answers at any resolution* — and it sat in §7, an experimental mode, off by default, last in the
+order (D612). R11b made the unit of refinement a node. This makes the node's **resolution** follow
+its level: `256 / 2^level`, capped at what the clip was authored with. One voxel a metre at an
+eight-metre node, eight at a one-metre node, thirty-two at the quarter-metre leaf.
+
+Because a node is eight voxels a side at every level, that single rule ties the three things
+together: how big the piece is, how finely it is sampled, and when it is split are one quantity.
+
+### The split rule had to change with it, and by sixteen times
+
+R11b split a node when it was more than **a quarter** of its own distance across. With the
+resolution following the level that is a node holding voxels **sixteen pixels wide** — invisible
+while every node was sampled at the authored resolution, and the whole picture now. The rule is
+`8 × 0.002`: eight voxels covering eight pixels, at a pixel of about 0.002 radians (1280×800, 90°).
+Settled, every node in the world holds voxels about a pixel across — 32 a metre within sixteen
+metres, 8 a metre at sixty — and nothing anywhere is sampled at a detail the screen cannot show.
+
+### Measured
+
+`clips/sampler.clip`, `--refine-all --settle --no-despeckle`, against the eighteen-box ladder:
+
+| | control | R11b | **R11c** |
+|---|---|---|---|
+| content hash | `a1f8bc6c656343b7` | `a1f8bc6c656343b7` | **`a1f8bc6c656343b7`** |
+| solid voxels | 1,430,104 | 1,430,104 | **1,430,104** |
+| units | 1 box | 264 nodes | 9,819 nodes |
+
+**Byte-identical again**, now through nine thousand samples at six different resolutions. That is
+the gate that says the resolution ladder composes: a node sampled at one voxel a metre and blown up
+sixteen times, then replaced by children at two, then four, ends where a single full-detail sample
+ends.
+
+Facility, default camera, no cache, `--settle`: 120 eight-metre seeds become **30,898 nodes**, of
+which 9,272 are sampled and 14,096 are left coarse because the camera cannot see them. **Worst
+paste 12 ms**, against R11b's gate of 16. The picture at the rotunda is the building it should be.
+
+### Three things that had to come with it
+
+- **A node too coarse to help must SPLIT, not finish.** The up-front build lays the world down at
+  eight voxels a metre (`--clip-coarse 4`), so a level-8 node at one voxel a metre is a worse
+  answer than what is already there. The first version marked such a node done — and the ladder
+  refined **four nodes and declared the world settled**. It has to be split until its children are
+  fine enough to improve on what is there. `refine_would_improve` is that question.
+- **Never coarsen.** Every node carries what the world already holds in it, in voxels a metre; a
+  sample only happens when the node's own level beats it, and children inherit the number. Without
+  it a coarse node pasted over refined children turns a wall blocky as you walk away.
+- **`refine_finest_level` counts from the coarse end.** Counting up from level 0 returns level 0,
+  because `refine_resolution` is capped at the authored resolution and every level below the leaf
+  answers 32 as well — a node one voxel wide, split for ever, at a detail the clip does not have.
+
+### The follow-the-winner-down rule, which is what makes it terminate
+
+Splitting the chosen node and then **re-picking from the whole list** does not work: the next best
+node is some other unsplit one, still large and therefore still keen, so the list is cut finer and
+finer everywhere and nothing is ever sampled. The loop now splits the winner and picks the best of
+its eight children, down to the level the camera justifies, and samples that. The same reasoning
+applies to any queue where the unit of work can subdivide.
+
+### What is NOT done
+
+**The gate the plan asks for is not measured.** It wants a fly from 60 m to 1 m at the facade with
+no consecutive-frame pixel difference above the run-to-run floor, and that has not been run. What
+is measured is the world, not the walk.
+
+And the step is smaller rather than gone: a volume now goes 8 → 16 → 32 voxels a metre as you
+approach, in two doublings that follow the camera, where it used to jump 8 → 32 in one. Levels are
+powers of two, so a sampled world has 2× steps in it by construction; what removes the visible step
+is those being small, local and early, plus the marcher's own filtering between levels. **R11d** —
+nothing sampled up front — is what makes the coarse floor go away entirely.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D616 | **A node is sampled at `256 / 2^level`, capped at the authored resolution** | design | R8c. The size, the detail and the split are then one quantity rather than three that can drift |
+| D616 | **The split threshold is eight voxels at a pixel each, not a quarter of the distance** | correctness | With the resolution following the level, a quarter is voxels sixteen pixels wide |
+| D616 | **A node that cannot improve at its own level splits; only one at the finest level finishes** | correctness | The first version refined four nodes and called the world settled |
+| D616 | **A node never overwrites detail finer than its own** | correctness | Otherwise walking away from a wall turns it blocky |
+| D616 | **The split loop follows the winner down rather than re-picking** | correctness | Re-picking globally cuts the whole list finer and never samples |
+| D616 | **Only boxes sharp at the authored resolution are cached** | correctness | The file has nowhere to say which detail a box holds, and a coarse box read as finished is a world that never comes good |
+| D616 | **The fly-in gate is not measured** | honesty | The world is proved identical; the walk from 60 m to 1 m has not been photographed |

@@ -2392,5 +2392,36 @@ shape-maker is fixed, and the measuring tool now watches for it.
 
 **You will not see the loading bar go yet.** That is step 4, and it needs step 3 first.
 
-**Steps 3 to 8 are not built.** The loading bar and the blocky first minute are still there; what
-has changed is the size and order of the pieces that arrive after it.
+### Step 3 is built: how finely a piece is made follows how big it is on your screen
+
+Until now every piece was made at full detail -- 32 voxels to the metre -- however far away it was.
+A wall sixty metres off was carved at three-centimetre precision so it could be drawn as a smudge.
+
+Now the detail follows the size on screen. A piece eight metres across is made at one voxel per
+metre; a piece a quarter of a metre across is made at 32. And since a piece is always eight voxels
+across whatever its size, that is one rule doing three jobs: how big the piece is, how finely it is
+cut, and when it splits are all the same number. Settled, every part of the world is held at about
+one voxel per pixel -- full detail within about sixteen metres of you, and progressively coarser
+beyond, which is precisely as much as you can see.
+
+**It builds the same world.** Forced to full detail, the small test building comes out **byte for
+byte identical** to the old way again -- this time through **9,819 separate pieces made at six
+different resolutions**, each one blown up and then replaced by finer children as the scale
+descends. That is the check that the whole ladder of detail composes properly rather than merely
+looking plausible.
+
+On the facility, standing in the rotunda: 120 eight-metre pieces become about 31,000, of which
+9,272 get made and **14,096 are left coarse because you cannot see them from where you are
+standing**. The worst pause from a piece landing is 12 milliseconds, under a frame.
+
+**What you would see**: the jump from blocky to sharp is smaller and it follows you. It used to be
+one jump of 4x (eight voxels per metre to thirty-two) applied to a whole twelve-metre slab. It is
+now two jumps of 2x each, applied to a piece the size of your reach, at the moment you get close
+enough for it to matter. It is not perfectly smooth yet -- the sizes are powers of two, so there
+will always be some step -- but the big visible one is gone.
+
+**What I did not check**: walking from sixty metres up to the facade with a camera and photographing
+every frame, which is the test that would say whether those two remaining steps are visible to an
+eye. The world is proved; the walk is not.
+
+**Steps 4 to 8 are not built.** The loading bar is still there -- that is step 4, and it is next.

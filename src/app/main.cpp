@@ -1083,26 +1083,32 @@ constexpr f32 kGameSecondsPerSecond = 60.0f;
 // to the same invocation.
 constexpr u32 kFacesPerFrame = 96u * 1024u;
 
-// R11b: the coarsest and finest node the clip ladder refines in, as levels of the world's own tree.
+// R11c: how big a node is on screen before it is worth splitting, as a fraction of its distance.
 //
-// Seven is four metres and five is one. The FLOOR is where a sample stops being worth its own
-// arrival: R11a measured one node at 1.2 ms of which most is the descent from the root of a field
-// that describes a whole building, and a one-metre box at the authored thirty-two voxels a metre is
-// 32,768 cells -- a hundredth of a second of sampling and well under a frame of pasting.
+// A node is EIGHT VOXELS a side at every level (see forge::node_voxels_per_metre), so this is the
+// pixel rule with the eight folded in: at 1280x800 and a 90-degree lens a pixel is about 0.002
+// radians, so eight voxels covering eight pixels is eight times that. Settled, every node in the
+// world is then at the level whose voxels are about a pixel across -- 32 voxels a metre within
+// sixteen metres, 8 a metre at sixty, and nothing anywhere is sampled at a detail the screen
+// cannot show.
 //
-// The CEILING is memory and it is temporary. A sample allocates five bytes a cell up front, so a
-// four-metre box at metre 32 is 2 M cells and 10 MB, an eight-metre one would be 84 MB, and a
-// twelve-metre one -- the old ladder's unit -- was 283 MB every time. Once the resolution follows
-// the level (R11c) a node is 512 cells however many metres it spans, and this ceiling goes.
-constexpr u32 kRefineCoarsest = 7;
-constexpr u32 kRefineFinest = 5;
+// It replaces R11b's quarter, and the quarter is why: with the resolution FOLLOWING the level, a
+// node that is a quarter of its own distance across holds voxels sixteen pixels wide. That was
+// invisible while every node was sampled at the authored resolution and is the whole picture now.
+constexpr f64 kRefineSplitAt = 8.0 * 0.002;
 
-// A node splits when its own size is more than a quarter of its distance from the camera. That is
-// its projected size to within a constant, and it is the same quantity the ladder already ranks by
-// -- so the grain of what arrives and the order it arrives in come from one rule rather than two
-// that can disagree. A four-metre node splits within sixteen metres, a two-metre node within eight,
-// and inside eight metres of where somebody is standing the world arrives a metre at a time.
-constexpr f64 kRefineSplitAt = 0.25;
+// R11b: the coarsest node the clip ladder starts from, as a level of the world's own tree.
+//
+// Eight metres, which used to be unaffordable and is now free. Under R11b every node was sampled
+// at the AUTHORED resolution, so a box cost five bytes a cell of its own volume -- four metres was
+// 2 M cells and 10 MB, eight would have been 84 MB, and the old twelve-metre ladder unit was 283 MB
+// every time. R11c samples a node at the resolution its own level implies, so a node is 512 cells
+// however many metres it spans, and the ceiling is a scheduling choice rather than a memory one.
+//
+// The FINEST level is not a constant: it is wherever the level's own resolution reaches the one
+// the clip was authored at, which is level 3 for a clip at 32 voxels a metre. See
+// Application::refine_finest_level.
+constexpr u32 kRefineCoarsest = 8;
 
 // Must match kSkyBurst and kSkyConverged in shaders/node.glsl. Nothing here meters the ambient
 // burst -- three ways of doing that were built and measured and all three were slower than none;
@@ -1530,6 +1536,12 @@ private:
     // Detail arrives at the grain the camera justifies, which is section 1's rule applied to the
     // MAKING of voxels rather than to the marching of them.
     //
+    // **R11c: and the node is sampled at the resolution its own level implies** -- 256 / 2^level,
+    // capped at what the clip was authored with. So a node does not merely arrive in the right
+    // SIZE, it arrives at the right DETAIL: one voxel a metre at eight metres across, thirty-two
+    // at a quarter of a metre. The split rule and the resolution are then the same quantity, which
+    // is why there is no second constant here to drift from the first.
+    //
     // The box is CLIPPED to the clip's own bounds. A node is a box of the world, the clip is not
     // obliged to fill it, and sampling the overhang would invent matter outside the building.
     struct RefineNode {
@@ -1537,6 +1549,14 @@ private:
         forge::Vec3 low;         // its box in metres, clipped to the clip's bounds
         forge::Vec3 high;
         bool done = false;
+        // R11c: how finely the world already holds this volume, in voxels a metre. A node is only
+        // worth sampling at a resolution FINER than this -- otherwise the paste would blow a
+        // coarser answer up over a better one and the world would go backwards, which is a step in
+        // the wrong direction and would be visible as a wall turning blocky as you walked away.
+        //
+        // It starts at whatever the up-front coarse build laid down, is set to the node's own
+        // resolution when it is refined, and is inherited by children when a node splits.
+        i32 applied_per_metre = 0;
     };
     std::vector<RefineNode> refine_regions_;
     usize refine_region_ = 0;   // the one being sampled right now
@@ -1549,6 +1569,9 @@ private:
     forge::Vec3 refine_bounds_high_{0, 0, 0};
     // Which materials are a deliberate dither, decided once over the whole clip.
     forge::StippleVerdict refine_stipple_;
+    // What the up-front coarse build laid the world down at, in voxels a metre. Every node starts
+    // knowing this, so the ladder never spends a sample arriving at a detail already there.
+    i32 refine_coarse_per_metre_ = 0;
     bool refine_wants_compact_ = false;
     // How many boxes the world on disk already has. The cache is written whenever refinement runs
     // out of things it can do and this has moved since, which is once per camera rather than once
@@ -1578,8 +1601,17 @@ private:
     // flags in the cache would be read against boxes they were never about.
     void seed_refine_nodes(const forge::Script& script);
     bool refine_node_of(const NodeKey& key, RefineNode& out) const;
-    void split_refine_node(usize at);
+    u32 split_refine_node(usize at);
+    bool refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64 fy, f64 fz,
+                          f64& keen);
     bool refine_node_is_a_no_op(const RefineNode& node) const;
+    // R11c. What a node at this level is sampled at, and by how much it is blown up on the way in.
+    i32 refine_resolution(u32 level) const;
+    u32 refine_scale_for(u32 level) const;
+    // The level whose own resolution is the one the clip was authored at -- where the ladder stops
+    // splitting, because below it a node would be asked for a detail the clip does not have.
+    u32 refine_finest_level() const;
+    bool refine_would_improve(const RefineNode& node) const;
     // Pick a half-built world back up: adopt the cache's flags onto the planned grid and leave
     // the ladder standing if anything is still coarse.
     void resume_refinement(forge::Script&& script, const WorldCache& cache,
@@ -2391,7 +2423,7 @@ void Application::start_refinement() {
     // made afresh, because one of those eight is now a better answer than their parent was; a node
     // small enough for its distance is sampled as it stands. Bounded by the level range, so this
     // runs at most three times and usually once.
-    for (u32 round = 0; round <= kRefineCoarsest - kRefineFinest; ++round) {
+    const u32 finest = refine_finest_level();
     usize best = refine_regions_.size();
     f64 keenest = 0.0;
     f64 best_keen = 0.0;
@@ -2446,7 +2478,11 @@ void Application::start_refinement() {
         // replace, which covers the coarse build's overshoot; the FIELD says whether a sample
         // would find anything, which covers a feature the coarse build was too blunt to see. A
         // node that fails both is a node whose sample would be air pasted over air.
-        if (refine_node_is_a_no_op(refine_regions_[i])) {
+        // Nothing to gain at all: empty in both the world and the field, or already as fine as
+        // this node can ever be and already in the world. A node that merely cannot improve at
+        // its own level is left alone here -- it wants splitting, and the loop below does that.
+        if (refine_node_is_a_no_op(box) ||
+            (box.key.level <= finest && !refine_would_improve(box))) {
             refine_regions_[i].done = true;
             continue;
         }
@@ -2474,18 +2510,43 @@ void Application::start_refinement() {
         return;
     }
 
-    // Large on screen and not yet as fine as this camera justifies: cut it into eight and choose
-    // again. Splitting costs nothing but the list -- no sampling, no pasting, no field evaluation
-    // -- so the loop does it eagerly and the sample that follows is the right size the first time.
-    if (refine_regions_[best].key.level > kRefineFinest &&
-        (options_.refine_all || best_keen > kRefineSplitAt)) {
-        split_refine_node(best);
-        continue;
+    // Large on screen and not as fine as this camera justifies: cut it into eight and follow the
+    // best of the eight down. Splitting costs nothing but the list -- no sampling, no pasting, no
+    // field evaluation -- so it is done eagerly and the sample that follows is the right size and
+    // the right RESOLUTION the first time (R11c).
+    //
+    // Following the winner down rather than choosing again from the whole list is the difference
+    // between a ladder that works and one that does not. Re-picking globally after every split
+    // lands on some other far-away node -- its parent is still large and therefore still keen --
+    // so the list is cut finer and finer everywhere and nothing is ever sampled. Measured before
+    // it was written this way: four nodes refined and then a world that declared itself settled.
+    while (refine_regions_[best].key.level > finest &&
+           (options_.refine_all || best_keen > kRefineSplitAt ||
+            !refine_would_improve(refine_regions_[best]))) {
+        const usize first_child = refine_regions_.size();
+        const u32 kept = split_refine_node(best);
+        if (kept == 0) return;   // nothing of it was inside the clip after all
+
+        usize chosen = refine_regions_.size();
+        f64 chosen_keen = 0.0;
+        const auto consider = [&](usize at) {
+            f64 keen = 0.0;
+            if (!refine_candidate(at, cx, cy, cz, fx, fy, fz, keen)) return;
+            if (chosen == refine_regions_.size() || keen > chosen_keen) {
+                chosen = at;
+                chosen_keen = keen;
+            }
+        };
+        consider(best);
+        for (usize at = first_child; at + 1 < first_child + kept; ++at) consider(at);
+        if (chosen == refine_regions_.size()) return;   // none of the eight is worth a sample
+        best = chosen;
+        best_keen = chosen_keen;
     }
 
     refine_settled_ = false;
     refine_region_ = best;
-    refine_script_->settings.voxels_per_metre = refine_authored_;
+    refine_script_->settings.voxels_per_metre = refine_resolution(refine_regions_[best].key.level);
 
     // Sampled at its own box exactly, with NO SKIRT, and that is a measured retreat rather than
     // the obvious thing.
@@ -2533,12 +2594,6 @@ void Application::start_refinement() {
         refine_result_ = std::move(built);
         refine_ready_.store(true, std::memory_order_release);
     });
-    return;
-    }
-    // Every round split and none sampled, which the level range makes impossible. Settled rather
-    // than silently doing nothing, because a ladder that stops without saying so is a `--settle`
-    // that never fires (see the note at the top of this function).
-    refine_settled_ = true;
 }
 
 // Take delivery of a finished box, if one is ready, and put it in the world.
@@ -2574,6 +2629,8 @@ void Application::pump_refinement() {
     std::unique_ptr<forge::SampleResult> finished = std::move(refine_result_);
     const usize pasted_region = refine_region_;
     refine_regions_[pasted_region].done = true;
+    refine_regions_[pasted_region].applied_per_metre =
+        refine_resolution(refine_regions_[pasted_region].key.level);
     start_refinement();
 
     // NOT varied, and this is the second time that lesson has been learned.
@@ -2606,11 +2663,17 @@ void Application::pump_refinement() {
     // REPLACE, so the box supersedes the coarse voxels standing in for it. Stamped instead, the
     // blocky overshoot survives outside the finer surface and the world only ever grows.
     const u64 paste_began = now_ns();
+    // Blown up by whatever this node's level was sampled at, exactly as the up-front coarse build
+    // is: `voxels_per_metre` decides how big a metre is and not how finely it is cut, so a node
+    // sampled at eight voxels a metre and pasted at scale one would be a quarter-size building in
+    // the corner of its own node. R11c.
+    const u32 scale = refine_scale_for(refine_regions_[pasted_region].key.level);
     const PasteStats stamped = paste_clip(
-        world_, ledger_, finished->clip, finished->origin_voxel[0] + refine_at_[0],
-        finished->origin_voxel[1] + refine_at_[1],
-        finished->origin_voxel[2] + refine_at_[2], PasteMode::Replace,
-        MatterReason::PlayerPlace, 1, paste_pool, types_.type_count(), 1);
+        world_, ledger_, finished->clip,
+        finished->origin_voxel[0] * static_cast<i64>(scale) + refine_at_[0],
+        finished->origin_voxel[1] * static_cast<i64>(scale) + refine_at_[1],
+        finished->origin_voxel[2] * static_cast<i64>(scale) + refine_at_[2], PasteMode::Replace,
+        MatterReason::PlayerPlace, 1, paste_pool, types_.type_count(), scale);
     const f64 paste_ms = ns_to_ms(now_ns() - paste_began);
     // NOT compacted here, and that was the hiccup.
     //
@@ -2646,12 +2709,13 @@ void Application::pump_refinement() {
     // edit makes, because it is the same event: the world here is not what you were told it was.
     // What it costs is bounded by that box and is charged against a paste that already measures in
     // seconds. See D397.
-    const i64 paste_lo[3] = {finished->origin_voxel[0] + refine_at_[0],
-                             finished->origin_voxel[1] + refine_at_[1],
-                             finished->origin_voxel[2] + refine_at_[2]};
-    const i64 paste_hi[3] = {paste_lo[0] + std::max(finished->clip.size[0] - 1, 0),
-                             paste_lo[1] + std::max(finished->clip.size[1] - 1, 0),
-                             paste_lo[2] + std::max(finished->clip.size[2] - 1, 0)};
+    const i64 paste_lo[3] = {finished->origin_voxel[0] * static_cast<i64>(scale) + refine_at_[0],
+                             finished->origin_voxel[1] * static_cast<i64>(scale) + refine_at_[1],
+                             finished->origin_voxel[2] * static_cast<i64>(scale) + refine_at_[2]};
+    const i64 paste_hi[3] = {
+        paste_lo[0] + std::max(finished->clip.size[0] * static_cast<i64>(scale) - 1, i64{0}),
+        paste_lo[1] + std::max(finished->clip.size[1] * static_cast<i64>(scale) - 1, i64{0}),
+        paste_lo[2] + std::max(finished->clip.size[2] * static_cast<i64>(scale) - 1, i64{0})};
     const u64 announce_began = now_ns();
     announce_world_change(paste_lo, paste_hi);
     const f64 announce_ms = ns_to_ms(now_ns() - announce_began);
@@ -2765,7 +2829,12 @@ void Application::save_refined_world() {
     // reader (a world built in one pass, with no ladder behind it).
     cache.regions.reserve(done);
     for (const RefineNode& box : refine_regions_) {
-        if (!box.done) continue;
+        // Only what is sharp at the clip's OWN resolution. Since R11c a node is refined at the
+        // detail its level implies, so most of the list is coarse answers that a later run
+        // standing somewhere else would want to improve on -- writing those would tell that run
+        // the volume is finished when it is merely started, and the file has nowhere to record
+        // which of the two it means.
+        if (!box.done || box.applied_per_metre < refine_authored_) continue;
         CachedRegion out;
         out.low[0] = box.low.x;
         out.low[1] = box.low.y;
@@ -2834,6 +2903,7 @@ void Application::seed_refine_nodes(const forge::Script& script) {
             for (i64 x = first[0]; x <= last[0]; ++x) {
                 RefineNode node;
                 if (refine_node_of(NodeKey{x, y, z, kRefineCoarsest}, node)) {
+                    node.applied_per_metre = refine_coarse_per_metre_;
                     refine_regions_.push_back(node);
                 }
             }
@@ -2864,7 +2934,7 @@ bool Application::refine_node_of(const NodeKey& key, RefineNode& out) const {
 
 // Eight children in the parent's place. The list is the ladder's whole state, so this is the only
 // thing that ever adds to it.
-void Application::split_refine_node(usize at) {
+u32 Application::split_refine_node(usize at) {
     const NodeKey parent = refine_regions_[at].key;
     RefineNode children[8];
     u32 kept = 0;
@@ -2873,16 +2943,115 @@ void Application::split_refine_node(usize at) {
                             parent.y * 2 + static_cast<i64>((octant >> 1) & 1u),
                             parent.z * 2 + static_cast<i64>((octant >> 2) & 1u),
                             parent.level - 1};
-        if (refine_node_of(child, children[kept])) ++kept;
+        if (refine_node_of(child, children[kept])) {
+            children[kept].applied_per_metre = refine_regions_[at].applied_per_metre;
+            ++kept;
+        }
     }
     if (kept == 0) {
         // Nothing of the parent is inside the clip after all, which the parent's own clip test
         // should have caught. Marked rather than left, so the picker cannot choose it again.
         refine_regions_[at].done = true;
-        return;
+        return 0;
     }
     refine_regions_[at] = children[0];
     for (u32 i = 1; i < kept; ++i) refine_regions_.push_back(children[i]);
+    return kept;
+}
+
+// Is this node worth a sample from where the camera is, and how keenly?
+//
+// The same three questions the picker asks of every node -- how big it is on screen, whether it is
+// in front, whether anything is in the way -- plus the two that say a sample would change nothing.
+// Pulled out because R11c has to ask them of the eight children of a node it has just split, and a
+// second copy of this reasoning is a second copy to get wrong.
+//
+// Marks a node done when sampling it could not change anything, which is why it is not const: the
+// answer is worth keeping, and the picker would otherwise ask the field about the same empty node
+// on every frame for the rest of the run.
+bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64 fy, f64 fz,
+                                   f64& keen) {
+    const RefineNode& box = refine_regions_[at];
+    if (box.done) return false;
+
+    const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
+    const f64 dy = std::max({box.low.y - cy, 0.0, cy - box.high.y});
+    const f64 dz = std::max({box.low.z - cz, 0.0, cz - box.high.z});
+    const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const f64 across = std::max({box.high.x - box.low.x, box.high.y - box.low.y,
+                                 box.high.z - box.low.z});
+    keen = across / std::max(away, 0.5);
+
+    const f64 to_x = (box.low.x + box.high.x) * 0.5 - cx;
+    const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
+    const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
+    const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
+    if (reach > 1e-6 && !options_.refine_all) {
+        const f64 facing = (to_x * fx + to_y * fy + to_z * fz) / reach;
+        if (facing < 0.0) keen *= 0.05;
+    }
+
+    // Empty in both the world and the field, or as fine as it will ever get and already there.
+    // Anything else that cannot improve at its OWN level is a candidate for splitting, and the
+    // caller decides that; see refine_would_improve.
+    if (refine_node_is_a_no_op(box) ||
+        (box.key.level <= refine_finest_level() && !refine_would_improve(box))) {
+        refine_regions_[at].done = true;
+        return false;
+    }
+
+    if (reach > 1e-6 && !options_.refine_all) {
+        const f64 v = static_cast<f64>(kVoxelsPerMetre);
+        const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
+        if (blocked.hit && blocked.distance < (reach - across) * v) return false;
+    }
+    return true;
+}
+
+// R11c: the resolution a node at this level is sampled at, and the scale it is pasted with.
+//
+// `256 / 2^level`, capped at what the clip was authored with -- 32 voxels a metre at the level-3
+// leaf, 8 at a one-metre node, 1 at an eight-metre one. That is the whole of R8c, and the reason
+// it is a function of the LEVEL rather than a second rule about pixels is that a node's level
+// already IS its pixel footprint: the ladder splits a node when it covers more than eight pixels
+// (kRefineSplitAt), so the level a node settles at is the level whose voxels are about a pixel
+// across. One quantity, one rule, no second constant to drift from the first.
+i32 Application::refine_resolution(u32 level) const {
+    const i32 authored = (refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre;
+    const i32 wanted = forge::node_voxels_per_metre(level);
+    if (wanted <= 0) return 1;
+    return std::min(wanted, authored);
+}
+
+u32 Application::refine_scale_for(u32 level) const {
+    const i32 authored = (refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre;
+    const i32 held = refine_resolution(level);
+    return static_cast<u32>(std::max(1, authored / std::max(1, held)));
+}
+
+u32 Application::refine_finest_level() const {
+    // From the COARSE end down, and that direction is the whole of it: `refine_resolution` is
+    // capped at the authored resolution, so every level below the leaf answers "32 voxels a metre"
+    // as well and counting upwards returns level 0 -- a node one voxel wide, split for ever, at a
+    // detail the clip does not have. The answer wanted is the coarsest level that reaches the
+    // clip's own resolution, which is 3 for a clip at 32 a metre.
+    const i32 authored = (refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre;
+    for (u32 step = 0; step <= forge::kCoarsestSampledLevel; ++step) {
+        const u32 level = forge::kCoarsestSampledLevel - step;
+        if (forge::node_voxels_per_metre(level) >= authored) return level;
+    }
+    return 0;
+}
+
+// Would a sample at this node's own level put anything better in the world than what is there?
+//
+// R11c samples a node at `256 / 2^level`, so a coarse node is a WORSE answer than the up-front
+// build already laid down -- level 8 is one voxel a metre against the coarse build's eight. Such a
+// node is not finished and is not worth sampling: it wants SPLITTING, until its children are fine
+// enough to improve on what is there. Marking it done instead is a ladder that refines nothing at
+// all, which is exactly what the first version of this did.
+bool Application::refine_would_improve(const RefineNode& node) const {
+    return refine_resolution(node.key.level) > node.applied_per_metre;
 }
 
 // Would sampling this node change anything? See `any_matter_in` for why the world half is answered
@@ -2933,6 +3102,9 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     refine_script_ = std::make_unique<forge::Script>(std::move(script));
     refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                       refine_script_->paint);
+    // What the world on disk is already at: the coarse rung it was built with. A cached world may
+    // hold sharpened boxes as well, which resume_refinement marks below.
+    refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
     seed_refine_nodes(*refine_script_);
 
     // An empty list is a world built at its authored detail in one pass, with no ladder behind it
@@ -2967,7 +3139,14 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
         }
         return false;
     };
-    for (RefineNode& node : refine_regions_) node.done = already_sharp(node);
+    for (RefineNode& node : refine_regions_) {
+        if (!already_sharp(node)) continue;
+        node.done = true;
+        // Sharp means sharp at the clip's own resolution: only boxes refined that finely are
+        // written (see save_refined_world), so a coarse node over one of them must never be
+        // sampled and blown up across it. R11c.
+        node.applied_per_metre = (refine_authored_ > 0) ? refine_authored_ : kVoxelsPerMetre;
+    }
 
     usize done = 0;
     for (const RefineNode& box : refine_regions_) {
@@ -3338,10 +3517,12 @@ void Application::build_world() {
                 refine_script_ = std::make_unique<forge::Script>(std::move(script));
                 refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
                                                   refine_script_->paint);
+                refine_coarse_per_metre_ = refine_script_->settings.voxels_per_metre;
                 seed_refine_nodes(*refine_script_);
                 WS_LOG_INFO("clip",
-                            "{} four-metre nodes to sharpen, biggest on screen first, splitting "
-                            "to a metre as you get near them",
+                            "{} eight-metre nodes to sharpen, biggest on screen first; each one "
+                            "splits until its voxels are about a pixel, and is sampled at the "
+                            "detail its own level asks for",
                             refine_regions_.size());
             }
             // The two ns figures are summed across worker threads, so they exceed the wall clock

@@ -563,7 +563,7 @@ the order:
 |---|---|---|
 | **R11a** | ~~one node, sampled, **timed**~~ — **DONE** (D613). `--sample-cost` and `tools/samplecost.ps1`; the numbers are below | nothing. It is a measurement |
 | **R11b** | ~~the unit of refinement is a node, not a region~~ -- **DONE** (D615): seeded at four metres, split to one as you get near | detail stops arriving as slabs |
-| **R11c** | resolution is `256 / 2^level`, not one of two constants. **This is R8c** | the 8 → 32 jump from blocky to sharp goes |
+| **R11c** | ~~resolution is `256 / 2^level`~~ -- **DONE** (D616): and the split threshold became eight voxels at a pixel each | the 8 -> 32 jump becomes 8 -> 16 -> 32, following you |
 | **R11d** | nothing is sampled up front. **The headline** | no loading bar at all |
 | **R11e** | a light path may not cause sampling — R9h one level down | nothing, until it is missing |
 | **R11f** | a world is a clip plus its edits. **R8d, and the only sub-step that can lose data** | a `.world` stops being 608 MB |
@@ -642,6 +642,40 @@ eighteen-box ladder build **byte-identical worlds** with despeckling off (`a1f8b
    side is not the same question as an aligned one. `--sample-cost` reproduces it: **2 of 96 nodes
    differ on `sampler.clip`, 0 of 297 on the facility**. D613's class one step along. What is left
    without the skirt is 46 cells of 152,064 on the facility wearing a neighbour's colour.
+
+#### R11c is done as well -- start at R11d
+
+A node is now sampled at `256 / 2^level`, capped at the clip's authored resolution, and the split
+threshold is **eight voxels at a pixel each** (`8 x 0.002`) rather than R11b's quarter of the
+distance -- with the resolution following the level, a quarter is a node holding voxels sixteen
+pixels wide. Settled, every node holds voxels about a pixel across: 32 a metre within sixteen
+metres, 8 a metre at sixty, and nothing anywhere sampled at a detail the screen cannot show.
+
+**Proved the same way b was**: forced to full detail on `clips/sampler.clip`, the level ladder
+builds a **byte-identical world** (`a1f8bc6c656343b7`, 1,430,104 voxels) through **9,819 samples at
+six different resolutions**. That is the check that the resolution ladder composes -- coarse
+sample, blown up, then replaced by finer children, ends where one full-detail sample ends.
+Facility, default camera: 120 eight-metre seeds become **30,898 nodes**, 9,272 sampled, 14,096 left
+coarse behind walls, **worst paste 12 ms**.
+
+**Four things R11d inherits.**
+
+1. **The up-front coarse build is now the floor under everything.** Every node knows what the world
+   already holds where it is (`applied_per_metre`, seeded from `--clip-coarse`), and only samples
+   when its own level beats it. Remove the up-front build and that floor becomes nothing, which is
+   exactly what R11d wants -- but the first frame then has no world at all until the first nodes
+   land, so R11d is about what is drawn in the meantime.
+2. **A node too coarse to improve must SPLIT, not finish.** The first version marked it done and the
+   ladder refined four nodes and declared itself settled. `refine_would_improve` is that question.
+3. **The split loop follows the winner down.** Re-picking from the whole list after each split lands
+   on some other unsplit node, still large and still keen, so the list is cut finer everywhere and
+   nothing is ever sampled.
+4. **Only boxes sharp at the authored resolution are written to the cache**, because `CachedRegion`
+   has nowhere to record which detail a box holds, and a coarse box read back as finished is a
+   world that never comes good. If R11d wants coarse work remembered, that field is what to add.
+
+**The fly-in gate is still owed**: 60 m to 1 m at the facade with no consecutive-frame spike. What
+is proved is the world, not the walk.
 
 **And the fault the gate found, because the shape of it will recur.** The agreement check failed
 before it passed: the same node came out **differently** sampled alone and sampled inside the
