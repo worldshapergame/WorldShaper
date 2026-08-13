@@ -6013,3 +6013,98 @@ most of it. **Not done here, and not guessed at: the number above is the size of
 **Tests.** `test_world_cache.cpp`'s round-trip helper now builds two leaves that differ in level (4
 and 7) as well as in position, with negative coordinates, and asserts `key[0..2]`, `level` and
 `applied_per_metre` survive the trip. 537 cases, 18,670,541 assertions, passing.
+
+## D627 — the ladder never stood down, so a finished world swept for ever and wrote half a gigabyte
+
+D626 left 4,788 ms of a cached load doing ladder work that delivers nothing, and named standing the
+ladder down as the next thing. Reproduced first, and the reproduction found a second cost nobody had
+counted.
+
+### What a cached launch actually did
+
+Steady state, facility, enclosed camera, fourth launch onward:
+
+```
+ladder cost: 5756 ms elapsed, 270 wakes delivering 0 nodes (0.00 each);
+             pick 584 ms MAIN THREAD (sweeps 142 over 17,876,700 entries, 99,600 rays)
+```
+
+Every frame, for the whole run, on a world already as sharp as that camera can make it: everything
+left is behind a wall or behind the player. About **2.2 ms of every frame** of main thread, for ever.
+
+**And the one that was worse and invisible.** A sweep that delivers nothing still marks nodes
+`done` — a no-op and a node that cannot improve are both settled by the picker — so the count crept
+up a few hundred at a time, `save_refined_world`'s *"has anything been sharpened since the file was
+written"* guard passed each time, and the whole cache was rewritten. Measured on one launch:
+**28 writes of 18 MB, 504 MB to disk, on a run that sharpened nothing at all.**
+
+### The fix, and the two versions of it that were wrong
+
+The ladder stands down when a sweep finds nothing, and is re-armed by the only two things that can
+change the answer: the camera moving (`kStandDownMove` a brick, `kStandDownTurn` two degrees) and the
+world changing (`announce_world_change`). A stand-down is also what owes the cache a save, so the
+save happens once per fixed point instead of once per frame the count moved on.
+
+**Standing down on the FIRST empty sweep loses the tail.** An occlusion refusal is provisional —
+D619 retries it every `kRefuseFor` wakes rather than marking it done — and a sleeping ladder does not
+wake, so the most recent memos are never retried at all. Measured: the cold facility settled **32
+nodes short** of the control and its content hash moved from `789c8a80f40323a1` to
+`46ae5ba4f78bad20`. Those 32 are exactly what the control picks up while its last memos expire. So
+the ladder stands down only after **a whole `kRefuseFor` window of sweeps that found nothing**, which
+means every memo has been retried and still found nothing. That is the honest fixed point.
+
+**"Stand down once the clock passes the furthest-out memo" can never be satisfied.** It was the first
+version and it looked obviously right. Every sweep rewrites the memos of the nodes it refuses, so the
+horizon moves with the clock and the test is never true — the cached arm went straight back to 270
+wakes. The window has to be measured from the last sweep that **delivered**, not from the memos.
+
+### Measured
+
+**Cached launch — what a player gets on every launch after the first:**
+
+| | before | after |
+|---|---|---|
+| wakes, all delivering nothing | 270 | **33** |
+| pick, main thread | 584 ms | **147 ms** |
+| list entries swept | 17,876,700 | **2,184,930** |
+| occlusion raycasts | 99,600 | **11,832** |
+| **cache writes** | **28 — 504 MB** | **1 — 18 MB** |
+| wall clock | 6.90 s | **6.04, 6.08 s** |
+| world | `9a20ee1f5af7df09` | **identical, both runs** |
+
+**Cold load — the world is byte-identical and the ladder is cheaper anyway**, because the sweeps it
+skips are the ones that would have found nothing:
+
+| | before | after |
+|---|---|---|
+| content hash | `789c8a80f40323a1` | **`789c8a80f40323a1`** |
+| nodes sharpened / delivered | 32,712 / 23,356 | **32,712 / 23,356** |
+| wakes | 486 | **249** |
+| pick, main thread | 814 ms | **519 ms** |
+| entries swept | 16,246,609 | **6,663,277** |
+| occlusion raycasts | 148,902 | **92,120** |
+
+**The re-arm fires.** A cached launch with the camera turning at 20°/s: **stood down 23 times, woken
+23 by the camera**, 762 wakes against 1 when still. `clips/sampler.clip --refine-all --no-despeckle`
+returns `a1f8bc6c656343b7` and 1,430,104 voxels. 537 tests.
+
+### The method note, and it cost most of the session
+
+Two wrong causes were chased before the right one, and both times the reasoning was from a counter
+rather than from a control. The stand-down instrument said **2 stand-downs on a cold load**, which
+was read as *"two events cannot have moved the hash"* — but the count was low **because** of the very
+skip under suspicion, so the instrument was measuring the fix rather than the fault. What settled it
+in one run was `git stash` + rebuild + the same command: a control arm of the build without the
+change, on the same machine, in the same minute. **Reach for the control arm before the third
+theory**, not after it. Trap 16 says count the events rather than reason about the signal; this is
+its other edge — a count taken from inside the change is not a control.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D627 | **The ladder stands down when a sweep finds nothing** | performance | 270 wakes a launch delivering nothing, 2.2 ms of every frame, for ever |
+| D627 | **...but only after a whole `kRefuseFor` window of them** | correctness | Sleeping on the first loses the tail: 32 nodes short and a moved content hash |
+| D627 | **The window is measured from the last sweep that DELIVERED** | correctness | Measuring it from the memos can never be satisfied; every sweep rewrites them |
+| D627 | **Re-armed by camera movement and by an edit, and by nothing else** | design | Those are the only two things that can change what the last sweep decided |
+| D627 | **Only a camera move expires the memos** | correctness | A refinement paste comes through `announce_world_change` too |
+| D627 | **A stand-down is what owes the cache a save** | fix | 28 writes of 18 MB on a launch that sharpened nothing |
+| D627 | **Reach for the control arm before the third theory** | method | Two wrong causes were argued from a counter taken inside the change |

@@ -511,6 +511,20 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### CLEARED FIRST: the ladder now stands down (D627)
+
+D626 left 4,788 ms of a cached load doing ladder work that delivered nothing, and that is gone. The
+ladder stands down when a sweep finds nothing and is re-armed by the camera moving or the world
+changing. **Cached launch: 270 wakes → 33, pick 584 → 147 ms, 99,600 occlusion rays → 11,832, and
+the cache written once instead of 28 times — 504 MB → 18 MB.** The cold load is byte-identical
+(`789c8a80f40323a1`) and cheaper anyway, 486 wakes → 249.
+
+**Two versions of it were wrong and both are worth knowing.** Standing down on the FIRST empty sweep
+loses the tail — an occlusion refusal is retried every `kRefuseFor` wakes and a sleeping ladder never
+wakes, so the cold facility settled 32 nodes short and its hash moved. And "stand down once the clock
+passes the furthest-out memo" can never be satisfied, because every sweep rewrites the memos it
+refuses. The window is measured from the last sweep that **delivered**.
+
 ### THE ORDER, chosen by the user on 2026-08-13: do these three, in this order
 
 The user was shown the measured breakdown of a 17.1 s cold load and asked for the order. They chose

@@ -1605,6 +1605,66 @@ private:
     // 478, then zero. Solid voxels moved 0.06%, so nothing was traded away for it.
     static constexpr u64 kRefuseFor = 32;
     u64 refine_wake_ = 0;
+    // THE LADDER STANDS DOWN when a sweep finds nothing it can do, and is re-armed by the only two
+    // things that can change the answer: the camera moving, and the world changing.
+    //
+    // Without it the ladder sweeps the whole node list every frame for the rest of the run. On a
+    // CACHED launch of the facility that is the ordinary case rather than an edge one -- everything
+    // left is behind a wall or behind the player -- and it measured **270 wakes delivering 0 nodes**,
+    // 17.9 million list entries and 99,600 occlusion raycasts, for 584 ms of main thread on a world
+    // already as sharp as that camera can make it. About 2.2 ms of every frame, permanently.
+    //
+    // And a second cost that is worse and was invisible: each sweep marks a few more nodes done --
+    // no-ops and nodes that cannot improve -- so `done` creeps, `save_refined_world`'s
+    // "has anything been sharpened since the file was written" guard passes, and the whole cache is
+    // rewritten. Measured on one cached launch: **28 writes of 18 MB, 504 MB to disk**, for a run
+    // that sharpened nothing at all.
+    bool refine_stood_down_ = false;
+    u64 refine_stand_downs_ = 0;   // instrument: how often, and by what it was woken
+    u64 refine_rearm_camera_ = 0;
+    u64 refine_rearm_world_ = 0;
+    f64 refine_stand_at_[3]{0.0, 0.0, 0.0};    // where the camera was when it stood down
+    f64 refine_stand_dir_[3]{0.0, 0.0, 1.0};
+    // A brick, and about two degrees. Below these the same occlusion rays give the same answers, so
+    // re-sweeping is work with a known result.
+    static constexpr f64 kStandDownMove = 0.25;
+    static constexpr f64 kStandDownTurn = 0.99939;   // cos 2 degrees
+    // The furthest-out occlusion refusal the ladder is still holding, in wakes.
+    //
+    // A ladder must NOT stand down while one of these is outstanding. `kRefuseFor` exists because
+    // an occlusion refusal is provisional -- D619 retries it every 32 wakes rather than marking it
+    // done -- and a sleeping ladder does not wake, so a memo written just before it slept would
+    // never be retried at all. Measured: standing down without this test settled the cold facility
+    // 32 nodes short of the control and moved its content hash from `789c8a80f40323a1` to
+    // `46ae5ba4f78bad20`. Those 32 are the tail the control finds while the last memos expire.
+    // The wake at which the current run of sweeps-that-found-nothing began, or 0 for "the last
+    // sweep found something".
+    //
+    // The ladder stands down after a full `kRefuseFor` window of them, and the window is the whole
+    // point rather than hysteresis. An occlusion refusal is provisional -- D619 retries it every 32
+    // wakes instead of marking it done -- so a ladder that slept on its first empty sweep would
+    // leave the most recent memos never retried at all. Measured without the window: the cold
+    // facility settled 32 nodes short of the control and its content hash moved from
+    // `789c8a80f40323a1` to `46ae5ba4f78bad20`. Those 32 are exactly the tail the control picks up
+    // as its last memos expire. A whole window of nothing means every memo has been retried and
+    // still found nothing, which is the honest fixed point.
+    //
+    // The first thing tried was "stand down once `refine_wake_` passes the furthest-out memo", and
+    // it can never be satisfied: every sweep rewrites the memos it refuses, so the horizon moves
+    // with the clock. The window has to be measured from the last sweep that DELIVERED, not from
+    // the memos.
+    u64 refine_empty_since_ = 0;
+    // One save per fixed point, rather than one per frame that the count happens to have moved on.
+    //
+    // `save_refined_world` refuses to rewrite the file unless something has been sharpened since it
+    // was last written -- and a sweep that delivers NOTHING still marks nodes done, because a
+    // no-op and a node that cannot improve are both settled by the picker. So on a cached launch,
+    // where every sweep delivers nothing, the count crept up a few hundred at a time and the guard
+    // passed every time: measured at **28 writes of 18 MB, 504 MB to disk, on a launch that
+    // sharpened nothing at all**. The stand-down is the fixed point, so it is what owes a save.
+    bool refine_save_owed_ = false;
+    bool refine_should_rearm() const;
+    void rearm_refinement(bool forget_refusals);
     struct RefineJob {
         usize at = 0;                       // which node in the list
         forge::SampleSettings settings;
@@ -2686,10 +2746,66 @@ bool Application::refine_busy() {
     return refine_outstanding_ > 0 || !refine_landed_.empty();
 }
 
+// Has anything happened that could change what the last sweep decided?
+//
+// Only two things can. The camera moving changes what is behind it and what is behind something
+// else -- both of which are refusals rather than facts about the world. The world changing is
+// handled by `rearm_refinement`, called from `announce_world_change`, because an edit is an event
+// rather than a state to compare against.
+bool Application::refine_should_rearm() const {
+    const f64 dx = camera_.metres_x() - refine_stand_at_[0];
+    const f64 dy = camera_.metres_y() - refine_stand_at_[1];
+    const f64 dz = camera_.metres_z() - refine_stand_at_[2];
+    if (dx * dx + dy * dy + dz * dz > kStandDownMove * kStandDownMove) return true;
+
+    const f64 cp = std::cos(camera_.pitch());
+    const f64 fx = std::cos(camera_.yaw()) * cp;
+    const f64 fy = std::sin(camera_.pitch());
+    const f64 fz = std::sin(camera_.yaw()) * cp;
+    const f64 along = fx * refine_stand_dir_[0] + fy * refine_stand_dir_[1] +
+                      fz * refine_stand_dir_[2];
+    return along < kStandDownTurn;
+}
+
+// Wake it up. `forget_refusals` is for the camera having moved and for nothing else.
+//
+// `RefineNode::refuse_until` is dated in WAKES (kRefuseFor), and a stood-down ladder does not wake,
+// so a memo written just before the player turned round would still be in the future when it starts
+// again -- which is exactly the case re-arming exists for. Advancing the clock past them expires the
+// lot in one line.
+//
+// An EDIT must not do that, and the reason is a measurement rather than a principle. A refinement
+// paste comes through `announce_world_change` too, and a ladder that stands down between batches --
+// which it does, whenever a sweep happens to find every shortlisted node occluded -- would then have
+// every memo expired on every paste. That is not a smaller sweep, it is a DIFFERENT schedule: the
+// cold facility went from 486 wakes of 48 nodes to 187 of 124.73 and its content hash moved from
+// `789c8a80f40323a1` to `46ae5ba4f78bad20`. The world is not wrong -- the byte-identical gate still
+// passes -- but every figure in this repository is compared against that hash, and a stand-down for
+// the CACHED case must not reschedule the COLD one. Memos expire on their own within 32 wakes once
+// the ladder is running again, which is what an edit needs and all it needs.
+void Application::rearm_refinement(bool forget_refusals) {
+    if (!refine_stood_down_) return;
+    refine_stood_down_ = false;
+    refine_empty_since_ = 0;
+    refine_save_owed_ = false;   // whatever is written next will be written at the next fixed point
+    if (forget_refusals) {
+        refine_wake_ += kRefuseFor;
+        ++refine_rearm_camera_;
+    } else {
+        ++refine_rearm_world_;
+    }
+}
+
 bool Application::start_refinement() {
     {
         std::lock_guard<std::mutex> lock(refine_mutex_);
         if (refine_outstanding_ >= kRefineInFlight) return false;
+    }
+    // Stood down, and nothing has moved. The sweep below would walk the whole node list and cast an
+    // occlusion ray for every shortlisted node to arrive at the answer it arrived at last frame.
+    if (refine_stood_down_) {
+        if (!refine_should_rearm()) return false;
+        rearm_refinement(/*forget_refusals=*/true);   // the camera moved; every memo is stale
     }
     if (refine_script_ == nullptr) {
         // There is no ladder at all ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the clip was built at its authored detail in one pass, or
@@ -2868,10 +2984,28 @@ bool Application::start_refinement() {
         // becomes viable the very next wake picks it up, which breaks the settle streak long before
         // `kSettleFrames` is reached. See --settle.
         refine_settled_ = true;
+        // Nothing this camera can do, so stop asking until something moves. Remembering WHERE it
+        // was asked from is the whole of the re-arm test.
+        // ...but only after a whole refusal window of finding nothing. See refine_empty_since_.
+        if (refine_empty_since_ == 0) refine_empty_since_ = refine_wake_;
+        if (refine_wake_ - refine_empty_since_ < kRefuseFor) {
+            refine_total_pick_ms_ += ns_to_ms(now_ns() - pick_began);
+            return false;
+        }
+        refine_stood_down_ = true;
+        refine_save_owed_ = true;
+        ++refine_stand_downs_;
+        refine_stand_at_[0] = cx;
+        refine_stand_at_[1] = cy;
+        refine_stand_at_[2] = cz;
+        refine_stand_dir_[0] = fx;
+        refine_stand_dir_[1] = fy;
+        refine_stand_dir_[2] = fz;
         refine_total_pick_ms_ += ns_to_ms(now_ns() - pick_began);
         return false;
     }
     refine_settled_ = false;
+    refine_empty_since_ = 0;   // this sweep found something; the window starts again from the next
 
     if (refine_jobs_ == nullptr) {
         // Fewer workers than the main system, and deliberately. This runs while somebody is
@@ -2941,9 +3075,13 @@ void Application::pump_refinement() {
         }
     }
     if (delivered.jobs.empty()) {
-        // Nothing has landed. If nothing is coming either, this is the fixed point -- and it is the
-        // only moment the world on disk can be written without catching it half-pasted.
-        if (!refine_busy()) save_refined_world();
+        // Nothing has landed. If nothing is coming either and the ladder has stood down, this is
+        // the fixed point -- and it is the only moment the world on disk can be written without
+        // catching it half-pasted. The stand-down is what makes it once rather than every frame.
+        if (refine_save_owed_ && !refine_busy()) {
+            refine_save_owed_ = false;
+            save_refined_world();
+        }
         return;
     }
     deliver_refinement(std::move(delivered));
@@ -4523,6 +4661,10 @@ void Application::invalidate_edited_chunks(const std::vector<Op>& ops) {
 // It takes a BOX rather than a list of ops because the paste is not made of ops. The edit path
 // unions its group and hands the union over, which is what the light window already used.
 void Application::announce_world_change(const i64 lo[3], const i64 hi[3]) {
+    // The world changed, so the last sweep's answer is stale whatever the camera is doing: carving
+    // a wall is exactly what turns a refused node into a reachable one. A refinement paste comes
+    // through here too, and must NOT expire the refusal memos with it -- see rearm_refinement.
+    rearm_refinement(/*forget_refusals=*/false);
     // And for a couple of seconds afterwards, every surface re-measures its shadow.
     //
     // A converged face stops tracing shadow rays and is only refreshed by a two per cent
@@ -8116,7 +8258,8 @@ int Application::play(const Options& options) {
                     "frame",
                     "ladder cost: {:.0f} ms elapsed, {} wakes delivering {} nodes ({:.2f} each); "
                     "pick {:.0f} ms MAIN THREAD (sweeps {:.0f} over {} entries, {} rays {:.0f}), "
-                    "sample {:.0f} ms background, paste {:.0f} ms",
+                    "sample {:.0f} ms background, paste {:.0f} ms; stood down {} times "
+                    "(woken {} by the camera, {} by the world)",
                     elapsed, refine_total_wakes_, refine_total_nodes_,
                     (refine_total_wakes_ > 0)
                         ? static_cast<f64>(refine_total_nodes_) /
@@ -8124,7 +8267,8 @@ int Application::play(const Options& options) {
                         : 0.0,
                     refine_total_pick_ms_, refine_total_sweep_ms_, refine_total_swept_,
                     refine_total_rays_, refine_total_ray_ms_, refine_total_sample_ms_,
-                    refine_total_paste_ms_);
+                    refine_total_paste_ms_, refine_stand_downs_, refine_rearm_camera_,
+                    refine_rearm_world_);
                 // The verdict is the whole point of the line, not the counts. Every node the
                 // ladder sharpens is despeckled against a judgement taken once over the WHOLE clip
                 // (forge::StippleVerdict), and forge::despeckle reads an EMPTY verdict as
