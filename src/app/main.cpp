@@ -1510,6 +1510,25 @@ private:
     //
     // Foreground work and background work must not share a queue. This is the foreground one.
     std::unique_ptr<JobSystem> paste_jobs_;
+    // R11c: the nodes in flight, and their results. A BATCH rather than one.
+    //
+    // The unit of refinement went from a twelve-metre box to a node, which is a thousand times
+    // less volume -- and the ladder still started one sample per wake and pasted one result per
+    // frame. So the throughput fell by the same factor the unit did, and what a player saw was a
+    // room that took minutes to come good instead of seconds, with the coarse build's lumps left
+    // standing in it the whole time. That is what "huge brick blocks on top of things" was.
+    //
+    // Sixteen, because a node is about a millisecond and sixteen of them is under a frame's worth
+    // of sampling and about eight milliseconds of pasting -- inside R11b's 16 ms gate with room to
+    // spare, and twenty times the rate.
+    static constexpr usize kRefineBatch = 16;
+    struct RefineJob {
+        usize at = 0;                       // which node in the list
+        forge::SampleSettings settings;
+        u32 scale = 1;
+        std::unique_ptr<forge::SampleResult> result;
+    };
+    std::vector<RefineJob> refine_batch_;
     std::unique_ptr<forge::SampleResult> refine_result_;
     std::thread refine_thread_;
     std::atomic<bool> refine_ready_{false};
@@ -1603,7 +1622,7 @@ private:
     bool refine_node_of(const NodeKey& key, RefineNode& out) const;
     u32 split_refine_node(usize at);
     bool refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64 fy, f64 fz,
-                          f64& keen);
+                          f64& keen, f64& rank);
     bool refine_node_is_a_no_op(const RefineNode& node) const;
     // R11c. What a node at this level is sampled at, and by how much it is blown up on the way in.
     i32 refine_resolution(u32 level) const;
@@ -2443,6 +2462,11 @@ void Application::start_refinement() {
         const f64 across = std::max({box.high.x - box.low.x, box.high.y - box.low.y,
                                      box.high.z - box.low.z});
         f64 keen = across / std::max(away, 0.5);
+        // ...times how much better a sample would make it. See refine_candidate for why the two
+        // are different questions: the floor under your feet is large on screen and already very
+        // nearly right, and an urn six metres away is small on screen and entirely wrong.
+        f64 rank = keen * (static_cast<f64>(refine_resolution(box.key.level)) /
+                           static_cast<f64>(std::max(1, box.applied_per_metre)));
 
         // And whether it is in front. Not a frustum test ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a box behind the player is not merely
         // small on screen, it is absent, and no amount of nearness should buy it a turn ahead of
@@ -2454,7 +2478,10 @@ void Application::start_refinement() {
         const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
         if (reach > 1e-6 && !options_.refine_all) {
             const f64 facing = (to_x * fx + to_y * fy + to_z * fz) / reach;
-            if (facing < 0.0) keen *= 0.05;
+            if (facing < 0.0) {
+                keen *= 0.05;
+                rank *= 0.05;
+            }
         }
 
         // And whether anything is in the way.
@@ -2467,7 +2494,7 @@ void Application::start_refinement() {
         //
         // Asked last, and only of a box that is already the front runner, because a raycast is far
         // dearer than the arithmetic above and most boxes are eliminated by it.
-        if (best != refine_regions_.size() && keen <= keenest) continue;
+        if (best != refine_regions_.size() && rank <= keenest) continue;
 
         // A node that sampling could not change. Asked only of a front runner, so most nodes never
         // pay for it, and it is what stops standing in a room from sampling the four thousand
@@ -2497,7 +2524,7 @@ void Application::start_refinement() {
         }
 
         best = i;
-        keenest = keen;
+        keenest = rank;
         best_keen = keen;
     }
     if (best == refine_regions_.size()) {
@@ -2529,12 +2556,15 @@ void Application::start_refinement() {
 
         usize chosen = refine_regions_.size();
         f64 chosen_keen = 0.0;
+        f64 chosen_rank = 0.0;
         const auto consider = [&](usize at) {
             f64 keen = 0.0;
-            if (!refine_candidate(at, cx, cy, cz, fx, fy, fz, keen)) return;
-            if (chosen == refine_regions_.size() || keen > chosen_keen) {
+            f64 rank = 0.0;
+            if (!refine_candidate(at, cx, cy, cz, fx, fy, fz, keen, rank)) return;
+            if (chosen == refine_regions_.size() || rank > chosen_rank) {
                 chosen = at;
                 chosen_keen = keen;
+                chosen_rank = rank;
             }
         };
         consider(best);
@@ -2545,28 +2575,95 @@ void Application::start_refinement() {
     }
 
     refine_settled_ = false;
-    refine_region_ = best;
-    refine_script_->settings.voxels_per_metre = refine_resolution(refine_regions_[best].key.level);
 
-    // Sampled at its own box exactly, with NO SKIRT, and that is a measured retreat rather than
-    // the obvious thing.
+    // The batch. The winner is the first of it, and the rest are the next best that survive the
+    // same tests -- taken by repeating the pick with the chosen ones held out. See kRefineBatch
+    // for why the ladder samples several at once now and what it was before.
+    refine_batch_.clear();
+    const auto enlist = [&](usize at) {
+        RefineJob job;
+        job.at = at;
+        job.settings = refine_script_->settings;
+        job.settings.voxels_per_metre = refine_resolution(refine_regions_[at].key.level);
+        job.settings.low = refine_regions_[at].low;
+        job.settings.high = refine_regions_[at].high;
+        job.scale = refine_scale_for(refine_regions_[at].key.level);
+        refine_batch_.push_back(std::move(job));
+        // Held out of the next pick, and put back by pump_refinement when the result lands. A node
+        // chosen twice in one batch would be sampled twice and pasted twice.
+        refine_regions_[at].done = true;
+    };
+    enlist(best);
+
+    // The rest of the batch comes out of ONE pass, not one pass each.
     //
-    // Despeckling wants one: the pass repaints a lone voxel with what most of its face neighbours
-    // wear, and at the edge of a box the neighbours outside read as air, so every voxel on a
-    // node's surface is judged against a fiction -- one voxel in six on a one-metre node. Sampling
-    // a one-voxel margin and cropping it off fixes that exactly, because the pass reads from a
-    // copy in one simultaneous step.
-    //
-    // It was built, measured and taken out again. A box one voxel larger on every side is not the
-    // same question as an aligned one: 34 cells halve into 17s, and every settle decision below
-    // that is taken over a box no aligned run ever asks about. The world it built was **240 voxels
-    // of 1.43 million short** of the one the eighteen-box ladder builds, and `--sample-cost` now
-    // reproduces the cause on its own: **2 of 96 nodes differ when the box around them grows by
-    // one voxel**. That is D613's class of fault one step along, it is not R11b's to fix, and a
-    // skirt over a sampler that answers differently for odd-sized boxes trades a paint fault for a
-    // geometry one. D615.
-    refine_script_->settings.low = refine_regions_[best].low;
-    refine_script_->settings.high = refine_regions_[best].high;
+    // Picking sixteen nodes by repeating the pick sixteen times is sixteen sweeps of a list that
+    // is thirty-six thousand long by the time the facility settles, each with an occlusion ray
+    // cast for every front runner, all on the main thread. Measured: a **379 ms** frame. So the
+    // sweep happens once and keeps a shortlist of the best few by rank -- arithmetic only, no rays
+    // -- and the expensive tests are then paid for only by the handful that could still win.
+    constexpr usize kShortlist = kRefineBatch * 4;
+    usize short_at[kShortlist];
+    f64 short_rank[kShortlist];
+    usize short_count = 0;
+    for (usize i = 0; i < refine_regions_.size(); ++i) {
+        const RefineNode& box = refine_regions_[i];
+        if (box.done) continue;
+        const f64 dx = std::max({box.low.x - cx, 0.0, cx - box.high.x});
+        const f64 dy = std::max({box.low.y - cy, 0.0, cy - box.high.y});
+        const f64 dz = std::max({box.low.z - cz, 0.0, cz - box.high.z});
+        const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const f64 across = std::max({box.high.x - box.low.x, box.high.y - box.low.y,
+                                     box.high.z - box.low.z});
+        const f64 rank = (across / std::max(away, 0.5)) *
+                         (static_cast<f64>(refine_resolution(box.key.level)) /
+                          static_cast<f64>(std::max(1, box.applied_per_metre)));
+        if (short_count == kShortlist && rank <= short_rank[kShortlist - 1]) continue;
+        usize at = (short_count < kShortlist) ? short_count++ : kShortlist - 1;
+        while (at > 0 && short_rank[at - 1] < rank) {
+            short_at[at] = short_at[at - 1];
+            short_rank[at] = short_rank[at - 1];
+            --at;
+        }
+        short_at[at] = i;
+        short_rank[at] = rank;
+    }
+
+    for (usize entry = 0; entry < short_count && refine_batch_.size() < kRefineBatch; ++entry) {
+        usize next = short_at[entry];
+        f64 next_rank = 0.0;
+        f64 next_keen = 0.0;
+        if (!refine_candidate(next, cx, cy, cz, fx, fy, fz, next_keen, next_rank)) continue;
+        // Split it down the same way the winner was, so every member of the batch is at the level
+        // its own distance justifies rather than at whatever level it happened to be listed at.
+        while (refine_regions_[next].key.level > finest &&
+               (options_.refine_all || next_keen > kRefineSplitAt ||
+                !refine_would_improve(refine_regions_[next]))) {
+            const usize first_child = refine_regions_.size();
+            const u32 kept = split_refine_node(next);
+            if (kept == 0) { next = refine_regions_.size(); break; }
+            usize pick = refine_regions_.size();
+            f64 pick_rank = 0.0;
+            f64 pick_keen = 0.0;
+            const auto weigh = [&](usize at) {
+                f64 keen = 0.0;
+                f64 rank = 0.0;
+                if (!refine_candidate(at, cx, cy, cz, fx, fy, fz, keen, rank)) return;
+                if (pick == refine_regions_.size() || rank > pick_rank) {
+                    pick = at;
+                    pick_rank = rank;
+                    pick_keen = keen;
+                }
+            };
+            weigh(next);
+            for (usize at = first_child; at + 1 < first_child + kept; ++at) weigh(at);
+            if (pick == refine_regions_.size()) { next = refine_regions_.size(); break; }
+            next = pick;
+            next_keen = pick_keen;
+        }
+        if (next == refine_regions_.size()) continue;
+        enlist(next);
+    }
 
     if (refine_jobs_ == nullptr) {
         // Fewer workers than the main system, and deliberately. This runs while somebody is
@@ -2579,19 +2676,20 @@ void Application::start_refinement() {
     refine_running_ = true;
     refine_thread_ = std::thread([this] {
         const u64 began = now_ns();
-        auto built = std::make_unique<forge::SampleResult>(
-            forge::sample(refine_plan_, refine_script_->settings, refine_jobs_.get(), {}));
-        // Every region the ladder sharpens, as well as the first build below. A region that came
-        // back speckled and was pasted in would put the fault back after the coarse world had been
-        // cleaned of it, and a seam between a despeckled chunk and a speckled one is worse than
-        // either alone. This lambda is already off the main thread, so it costs nobody a frame.
-        // With the verdict taken from the whole clip rather than from this node. What a material's
-        // specks are a large enough share of is a question about the building, and five hundred
-        // cells cannot answer it -- see forge::StippleVerdict.
-        if (despeckle_) forge::despeckle(built->clip, 0.05, &refine_stipple_);
+        u64 asked = 0;
+        for (RefineJob& job : refine_batch_) {
+            job.result = std::make_unique<forge::SampleResult>(
+                forge::sample(refine_plan_, job.settings, refine_jobs_.get(), {}));
+            // Every node the ladder sharpens, as well as the first build. One that came back
+            // speckled and was pasted in would put the fault back after the coarse world had been
+            // cleaned of it -- with the verdict taken from the whole clip rather than from this
+            // node, because what a material's specks are a large enough share of is a question
+            // about the building and five hundred cells cannot answer it (forge::StippleVerdict).
+            if (despeckle_) forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
+            asked += job.result->voxels_asked;
+        }
         refine_sample_ms_ = ns_to_ms(now_ns() - began);
-        refine_asked_ = built->voxels_asked;
-        refine_result_ = std::move(built);
+        refine_asked_ = asked;
         refine_ready_.store(true, std::memory_order_release);
     });
 }
@@ -2611,131 +2709,87 @@ void Application::pump_refinement() {
 
     refine_thread_.join();
     refine_running_ = false;
-    if (refine_result_ == nullptr) return;
+    if (refine_batch_.empty()) return;
 
     const u64 began = now_ns();
 
-    // Take the finished box off the shared slot and set the NEXT one sampling before pasting this
+    // Take the whole batch off the shared slot and set the NEXT one sampling before pasting this
     // one, rather than after.
     //
     // The two were serialised: the worker sat idle for the whole paste, then the main thread sat
     // idle for the whole sample, and the world sharpened at the sum of the two instead of the
-    // larger. Overlapped, the sampler is never waiting on a paste it takes no part in ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which very
-    // nearly halves how long it takes for what you are looking at to come good.
-    //
-    // Safe because nothing below reads the script: the paste needs only the result, and variation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
-    // the one thing that did read it ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no longer runs per region. The box is marked done first, so
-    // the choice made below cannot land on the box being pasted.
-    std::unique_ptr<forge::SampleResult> finished = std::move(refine_result_);
-    const usize pasted_region = refine_region_;
-    refine_regions_[pasted_region].done = true;
-    refine_regions_[pasted_region].applied_per_metre =
-        refine_resolution(refine_regions_[pasted_region].key.level);
+    // larger. Overlapped, the sampler is never waiting on a paste it takes no part in.
+    std::vector<RefineJob> finished;
+    finished.swap(refine_batch_);
+    for (const RefineJob& job : finished) {
+        refine_regions_[job.at].done = true;
+        refine_regions_[job.at].applied_per_metre = job.settings.voxels_per_metre;
+    }
     start_refinement();
-
-    // NOT varied, and this is the second time that lesson has been learned.
-    //
-    // Variation gives every voxel its own version of its material, so it interns something close to
-    // one type per voxel. Done once over a whole clip that is a million of them, which is already
-    // most of the table. Done per REGION it is a million per region and they do not share: the same
-    // perturbed colour is interned again in every box that happens to contain it. Three hundred and
-    // seventy-eight boxes reached 2,105,602 types and overran the buffer the table is uploaded
-    // through ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â an assert, mid-play, after several minutes of hitching.
-    //
-    // It was also most of the hitch. Interning a million materials on the main thread is what those
-    // two-hundred to nine-hundred millisecond frames were.
-    //
-    // So the world keeps the flat materials its paint rules give it. The no-two-voxels-alike
-    // shading is lost until there is somewhere to put it that does not scale with how the world was
-    // divided up ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â which is a real gap and is recorded as one, not a decision that this looks
-    // better.
 
     // Sized like any foreground pool rather than like the sampler, which is deliberately held to
     // half the machine because it runs while somebody is playing. The paste is not background
-    // work: it is the frame the player is waiting inside, it lasts about a tenth of a second, and
-    // for that tenth of a second it is worth more than the sample it briefly oversubscribes.
+    // work: it is the frame the player is waiting inside.
     if (paste_jobs_ == nullptr && !options_.no_paste_pool) {
         paste_jobs_ = std::make_unique<JobSystem>();
     }
     JobSystem* const paste_pool =
         options_.no_paste_pool ? refine_jobs_.get() : paste_jobs_.get();
 
-    // REPLACE, so the box supersedes the coarse voxels standing in for it. Stamped instead, the
-    // blocky overshoot survives outside the finer surface and the world only ever grows.
+    // REPLACE, so a node supersedes the coarser voxels standing in for it, and blown up by
+    // whatever its own level was sampled at (R11c) -- `voxels_per_metre` decides how big a metre
+    // is and not how finely it is cut, so a node sampled at eight voxels a metre and pasted at
+    // scale one would be a quarter-size building in the corner of its own node.
     const u64 paste_began = now_ns();
-    // Blown up by whatever this node's level was sampled at, exactly as the up-front coarse build
-    // is: `voxels_per_metre` decides how big a metre is and not how finely it is cut, so a node
-    // sampled at eight voxels a metre and pasted at scale one would be a quarter-size building in
-    // the corner of its own node. R11c.
-    const u32 scale = refine_scale_for(refine_regions_[pasted_region].key.level);
-    const PasteStats stamped = paste_clip(
-        world_, ledger_, finished->clip,
-        finished->origin_voxel[0] * static_cast<i64>(scale) + refine_at_[0],
-        finished->origin_voxel[1] * static_cast<i64>(scale) + refine_at_[1],
-        finished->origin_voxel[2] * static_cast<i64>(scale) + refine_at_[2], PasteMode::Replace,
-        MatterReason::PlayerPlace, 1, paste_pool, types_.type_count(), scale);
-    const f64 paste_ms = ns_to_ms(now_ns() - paste_began);
-    // NOT compacted here, and that was the hiccup.
-    //
-    // compact() walks the whole world to find chunks that have been emptied. Called once at the end
-    // of a build that is the right thing; called after every REGION it is the whole world walked
-    // three hundred times over, and it does not care how small the region was. That is why halving
-    // the region size made the stall MORE frequent rather than smaller: the cost of finishing a box
-    // is fixed, not proportional to its volume, and the fixed part was this.
-    //
-    // A region paste replaces coarse voxels with fine ones in the same place, so it very rarely
-    // empties a chunk at all. Left to the end, where there is one walk instead of hundreds.
-    if (stamped.chunks_left_empty) refine_wants_compact_ = true;
+    u64 bricks = 0;
+    for (const RefineJob& job : finished) {
+        if (job.result == nullptr || job.result->clip.empty()) continue;
+        const i64 scale = static_cast<i64>(job.scale);
+        const i64 lo[3] = {job.result->origin_voxel[0] * scale + refine_at_[0],
+                           job.result->origin_voxel[1] * scale + refine_at_[1],
+                           job.result->origin_voxel[2] * scale + refine_at_[2]};
+        const PasteStats stamped =
+            paste_clip(world_, ledger_, job.result->clip, lo[0], lo[1], lo[2], PasteMode::Replace,
+                       MatterReason::PlayerPlace, 1, paste_pool, types_.type_count(), job.scale);
+        bricks += stamped.bricks_written;
+        if (stamped.chunks_left_empty) refine_wants_compact_ = true;
 
-    // Everything the player did, done again. An op is a SHAPE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FillBox carries two corners in
-    // world voxels, not the voxels it happened to change ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so replaying it against finer geometry
+        // And the renderer is told. This paste has just rewritten a box of the world at several
+        // times the detail it held a moment ago, and everything downstream is holding a copy of
+        // the blockier version: the node pool's leaves are copies taken at build time, and a
+        // face's ambient occlusion is a measurement taken through them which, since R10d,
+        // converges and then stops casting rays for ever. Neither can notice on its own. See D397.
+        const i64 hi[3] = {
+            lo[0] + std::max(job.result->clip.size[0] * scale - 1, i64{0}),
+            lo[1] + std::max(job.result->clip.size[1] * scale - 1, i64{0}),
+            lo[2] + std::max(job.result->clip.size[2] * scale - 1, i64{0})};
+        announce_world_change(lo, hi);
+    }
+    const f64 paste_ms = ns_to_ms(now_ns() - paste_began);
+
+    // Everything the player did, done again. An op is a SHAPE -- FillBox carries two corners in
+    // world voxels, not the voxels it happened to change -- so replaying it against finer geometry
     // re-cuts the same volume at the new detail. The cut re-measures itself.
     const u64 replay_began = now_ns();
     const std::vector<Op>& done = op_log_.ops();
     if (!done.empty()) apply_ops(world_, done, ledger_);
     const f64 replay_ms = ns_to_ms(now_ns() - replay_began);
 
-    // And the renderer is told, which for the whole life of the clip ladder it was not.
-    //
-    // This paste has just rewritten a box of the world at four times the detail it held a moment
-    // ago, and everything downstream is holding a copy of the blocky version: the node pool's
-    // leaves are copies taken at build time, and a face's ambient occlusion is a measurement taken
-    // through them which, since R10d, converges and then stops casting rays for ever. Neither can
-    // notice on its own -- the pool's feedback reports what a ray could not FIND, and a brick that
-    // is resident but out of date is found; and a face's own samples cannot see a change that
-    // arrives after they have stopped being taken, which is D373's lesson from the other end.
-    //
-    // The box is the clip's own extent where it landed, and the announcement is the same one an
-    // edit makes, because it is the same event: the world here is not what you were told it was.
-    // What it costs is bounded by that box and is charged against a paste that already measures in
-    // seconds. See D397.
-    const i64 paste_lo[3] = {finished->origin_voxel[0] * static_cast<i64>(scale) + refine_at_[0],
-                             finished->origin_voxel[1] * static_cast<i64>(scale) + refine_at_[1],
-                             finished->origin_voxel[2] * static_cast<i64>(scale) + refine_at_[2]};
-    const i64 paste_hi[3] = {
-        paste_lo[0] + std::max(finished->clip.size[0] * static_cast<i64>(scale) - 1, i64{0}),
-        paste_lo[1] + std::max(finished->clip.size[1] * static_cast<i64>(scale) - 1, i64{0}),
-        paste_lo[2] + std::max(finished->clip.size[2] * static_cast<i64>(scale) - 1, i64{0})};
-    const u64 announce_began = now_ns();
-    announce_world_change(paste_lo, paste_hi);
-    const f64 announce_ms = ns_to_ms(now_ns() - announce_began);
-
-    finished.reset();
-
     usize left = 0;
     for (const RefineNode& box : refine_regions_) {
         if (!box.done) ++left;
     }
-    // Split, because "pasted N ms" was three different things in one number and they do not scale
-    // with the same quantity: the paste itself is O(the box), the replay is O(what the player has
-    // done), and the announcement is O(the box in BRICKS). A region that asked for 440,142 voxels
-    // took 7,099 ms and one that asked for 3,295,122 took 81 -- which no reading of a single
-    // figure can explain, and which the split answers in one line.
+    i32 coarsest = 1 << 20;
+    i32 finest_seen = 0;
+    for (const RefineJob& job : finished) {
+        coarsest = std::min(coarsest, job.settings.voxels_per_metre);
+        finest_seen = std::max(finest_seen, job.settings.voxels_per_metre);
+    }
     WS_LOG_INFO("clip",
-                "region: sampled {:.0f} ms ({} voxels asked), pasted {:.0f} ms "
-                "(paste {:.0f} + replay {:.0f} + announce {:.0f}), {} bricks, {} left",
-                refine_sample_ms_, refine_asked_, ns_to_ms(now_ns() - began), paste_ms, replay_ms,
-                announce_ms, stamped.bricks_written, left);
+                "batch: {} nodes at metre {}-{}, sampled {:.0f} ms ({} voxels asked), pasted "
+                "{:.0f} ms (paste {:.0f} + replay {:.0f}), {} bricks, {} nodes left",
+                finished.size(), coarsest, finest_seen, refine_sample_ms_, refine_asked_,
+                ns_to_ms(now_ns() - began), paste_ms, replay_ms, bricks, left);
 
     if (left == 0) {
         // The one walk, now that there is nothing left to empty.
@@ -2970,7 +3024,7 @@ u32 Application::split_refine_node(usize at) {
 // answer is worth keeping, and the picker would otherwise ask the field about the same empty node
 // on every frame for the rest of the run.
 bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64 fy, f64 fz,
-                                   f64& keen) {
+                                   f64& keen, f64& rank) {
     const RefineNode& box = refine_regions_[at];
     if (box.done) return false;
 
@@ -3005,6 +3059,27 @@ bool Application::refine_candidate(usize at, f64 cx, f64 cy, f64 cz, f64 fx, f64
         const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z, reach * v);
         if (blocked.hit && blocked.distance < (reach - across) * v) return false;
     }
+
+    // HOW MUCH BETTER this sample would make the world, against how big it is on screen. The two
+    // are different questions and only the first was being asked.
+    //
+    // Reported as "huge brick blocks on top of things when they load", with a photograph of an urn
+    // standing as a slab of quarter-metre cubes in a niche whose walls were already sharp. The
+    // blocks are the up-front coarse build -- eight voxels a metre blown up four times, so every
+    // feature slimmer than 12 cm arrives fattened into a lump -- and they are not new. What is new
+    // is that the ladder now sharpens the near walls and floor in seconds, so the lumps are left
+    // standing against surroundings that are already right, where the old ladder left the whole
+    // room blocky for a minute and nothing stood out.
+    //
+    // Ranking by screen size alone spends the first several thousand samples taking the floor you
+    // are standing on from 8 voxels a metre to 32 -- where the coarse answer was already very
+    // nearly right, because a flat floor is exactly what a coarse sample gets right -- before
+    // touching an urn six metres away that is entirely wrong. Multiplying by the RATIO of what a
+    // node would hold to what it holds now sorts that out: a node nobody has touched is worth four
+    // rungs and outranks one already refined once, so the world evens out before it sharpens, and
+    // it costs one divide.
+    rank = keen * (static_cast<f64>(refine_resolution(box.key.level)) /
+                   static_cast<f64>(std::max(1, box.applied_per_metre)));
     return true;
 }
 

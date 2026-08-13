@@ -5268,3 +5268,61 @@ nothing sampled up front — is what makes the coarse floor go away entirely.
 | D616 | **The split loop follows the winner down rather than re-picking** | correctness | Re-picking globally cuts the whole list finer and never samples |
 | D616 | **Only boxes sharp at the authored resolution are cached** | correctness | The file has nowhere to say which detail a box holds, and a coarse box read as finished is a world that never comes good |
 | D616 | **The fly-in gate is not measured** | honesty | The world is proved identical; the walk from 60 m to 1 m has not been photographed |
+
+## D617 — "huge brick blocks on top of things": the unit shrank a thousandfold and the rate did not
+
+**Reported with a photograph**: an urn standing in a niche as a slab of coarse cubes, with the wall
+and columns around it already sharp. *"i see these huge brick blocks on top of things when they
+load sometimes."*
+
+**What the blocks are, and they are not new.** They are the up-front coarse build: `--clip-coarse 4`
+samples the whole clip at eight voxels a metre and the paste blows each cell up four times, so every
+feature slimmer than 12 cm arrives as a lump. Photographed the same frame from the pre-R11b build:
+the urns are lumps there too. **What is new is the contrast.** The node ladder sharpens the near
+walls and floor quickly, so the lumps are left standing against surroundings that are already
+right, where the eighteen-box ladder left the whole room blocky for a minute and nothing stood out.
+
+Three faults behind how long they stay, all found by measuring the reported case rather than the
+settled one.
+
+### 1. The rate. The unit went from twelve metres to a node and the ladder still did one at a time
+
+`start_refinement` starts ONE sample and `pump_refinement` pastes ONE result. That was written for
+a twelve-metre region costing seconds; a node costs about a millisecond, so the throughput fell by
+the same factor the unit did. The ladder now takes a **batch of sixteen** per wake — under a frame's
+worth of sampling, and about twenty times the rate.
+
+### 2. The order. Screen size alone spends the first thousands of samples where it matters least
+
+A node was ranked by how big it is on screen. The floor under your feet is large on screen and the
+coarse answer was already very nearly right, because a flat floor is exactly what a coarse sample
+gets right; an urn six metres away is small on screen and entirely wrong. So the ladder took the
+floor from 8 voxels a metre to 32 before touching the urn.
+
+The rank is now that size **times how much better the sample would make it** — the ratio of what the
+node would hold to what it holds now. A node nobody has touched is worth four rungs and outranks one
+already refined once, so the world evens out before it sharpens. One divide.
+
+### 3. Picking sixteen nodes sixteen times is a 379 ms frame
+
+Repeating the pick fills a batch and sweeps a list thirty-six thousand long each time, casting an
+occlusion ray for every front runner, on the main thread. Measured at **379 ms in one frame**. The
+sweep happens once now and keeps a shortlist of the best sixty-four by rank — arithmetic only, no
+rays — and the expensive tests are paid for only by the handful that could still win. **379 → 15 ms**,
+inside R11b's 16 ms gate.
+
+### What did not change
+
+`clips/sampler.clip` with `--refine-all --no-despeckle` still builds the **byte-identical world**:
+`a1f8bc6c656343b7`, 1,430,104 solid voxels, 9,819 nodes. 534 tests, 18.7 M assertions, passing.
+
+**The blocks are not gone.** They are the up-front coarse build and they will be there until **R11d**
+removes it — what changes here is how long they stand, which was the complaint. The settled picture
+at the rotunda is the building it should be.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D617 | **The ladder samples a batch of sixteen a wake** | performance | The unit shrank a thousandfold and the rate did not follow it |
+| D617 | **Rank is screen size times how much a sample would improve** | design | Size alone sharpens the flat floor, which was nearly right, before the urn, which was wrong |
+| D617 | **The batch comes out of one sweep with a shortlist** | performance | Sixteen sweeps of thirty-six thousand nodes with occlusion rays was a 379 ms frame |
+| D617 | **The blocks themselves are R11d's** | honesty | They are the up-front coarse build; this makes them brief, not absent |
