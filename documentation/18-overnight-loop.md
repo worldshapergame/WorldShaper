@@ -220,6 +220,26 @@ over a network share or a remote desktop.
 is made of five-second sleeps that check for `STOP-LOOP` and for a wrap-up request between
 each one. A loop that cannot be stopped for two hours is not a loop you can leave running.
 
+### If it says a loop is running and you know one is not
+
+**It could, once, and the failure said the thing you wanted to hear.** The lock recorded the
+loop's process id and the next launch asked whether a process with that id existed. Windows
+hands ids out again, so that question has a wrong answer waiting inside it.
+
+What happened: a run was ended by the machine being switched off at the wall — no clean exit,
+so the lock survived — and two days later that id belonged to a Realtek audio component started
+that morning. The launch found a live process, reported the loop as running, refused to start,
+and wrote the wrap-up request to a file nobody was ever going to read. The loop had in fact been
+dead for two days, and the only evidence was that `journal.md` had not been touched since.
+
+The lock records the process's **start time** beside its id now, and both have to match; a
+recycled id cannot fake the second. A lock written by an older copy of `loop.bat` has only the
+id, cannot be verified, and is treated as stale — which self-heals on the next run.
+
+**If you ever doubt it**, the honest test is not the lock. Look at `journal.md` and
+`logs\iteration-NNNN.log` in the state directory: a live loop has written to one of them within
+the last few minutes. Deleting `running.lock` is safe whenever that is not true.
+
 ## What you see while it runs
 
 The window streams the work as it happens, not a summary afterwards:
@@ -258,7 +278,7 @@ sweep the journal and the logs into the history.
 | `journal.md` | The loop's memory, and your morning report |
 | `logs\iteration-NNNN.log` | Raw stream-json for one iteration |
 | `prompt.txt` | Exactly what the last iteration was told |
-| `running.lock` | The pid of the live loop, so a second launch can find it |
+| `running.lock` | The pid of the live loop **and the moment that process started**, so a second launch can find it — see below for why the pid alone is not enough |
 
 ## What each iteration is told
 
