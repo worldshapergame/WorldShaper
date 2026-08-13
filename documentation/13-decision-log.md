@@ -6384,3 +6384,53 @@ The flag stays opt-in and the default is untouched: `789c8a80f40323a1`, 125,420,
 | D631 | **The occlusion ray reads the world the ladder is building** | finding | With nothing under it the refusals follow the build order, and a refusal outlives what caused it |
 | D631 | **Every counter reads calm while it happens** | honesty | `neither` 0, nothing deferred, nothing starved, and the ladder stands down convinced it finished |
 | D631 | **R11d's real content is the visibility tests, not the paste** | plan | They have to be asked of the field rather than of the world |
+
+## D632 — D631 read the design goal as a bug: a world that holds only what has been looked at
+
+D631 measured `--no-coarse-paste` building 19,751,324 voxels against the pasted arm's 125,420,017 and
+called it *"a sixth of a building"*. **That reading is wrong and this entry corrects it**, because
+the sentence it contradicts is the third thing the user asked for, in their own words in §1 of the
+handover: *"if you cannot see it, it is not processed and does not exist, unless it is close to
+you."*
+
+A world holding only what the camera has been able to see is not a failure of the ladder. It is the
+ladder working.
+
+**The test D631 never ran.** Same flag, same clip, 2,400 frames, the only difference being whether
+the camera moves:
+
+| | standing still | walking (`--fly 0,0,3,25`) |
+|---|---|---|
+| chunks | 50 | **55** |
+| solid voxels | 19,751,324 | **29,622,982** |
+| stood down / woken by the camera | 1 / 0 | **6 / 6** |
+
+The world grows as the player moves, the ladder stands down when there is nothing more to see from
+where they are, and the camera wakes it again. That is the whole mechanism working end to end, and
+D627's stand-down is what makes it visible.
+
+**What D631 got right, and it is why the mistake was easy.** Every counter reads calm — `neither` is
+0, nothing is deferred, nothing is starved. Reading those and the voxel count together, "the ladder
+stopped early" and "the ladder finished what it could see" produce identical instrument output. The
+one measurement that separates them is whether the number MOVES when the camera does, and it was not
+taken. **A completeness figure measured from one camera cannot tell a pixel-driven system from a
+broken one** — which is trap 8 arriving at the thing trap 8 exists to protect.
+
+**What is actually owed, and neither of these is the occlusion test D631 proposed:**
+
+- **The content hash becomes camera-dependent by construction**, which is R11g and has been named
+  since D612. `baseline.ps1` refuses to compare two rows measured against different worlds, and
+  every row of it now would be. Nothing can be measured against a moving scene until R11g exists,
+  and that is now a blocker for the flag rather than a note about it.
+- **What the cache saves is a partial world.** D626 made it carry the ladder's whole leaf set with
+  the detail each reached, so a later run from another camera should carry on from it — but that is
+  the argument, not a measurement. The arm to run is a launch from a second camera against a cache
+  written by the first.
+
+The flag stays opt-in on those two, not on the voxel count. The default is untouched.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D632 | **D631's "sixth of a building" is the design, not a fault** | correction | The world grows 19.75 M → 29.62 M voxels when the camera walks the same scene |
+| D632 | **A completeness figure from one camera cannot judge a pixel-driven world** | method | "Stopped early" and "finished what it could see" give identical counters; only movement separates them |
+| D632 | **The real blockers are R11g and the cache, not the occlusion test** | plan | The hash is camera-dependent by construction and the saved world is partial |
