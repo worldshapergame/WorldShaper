@@ -4575,6 +4575,21 @@ that because the width is not what makes it. So nothing was changed: the rim kee
 the stay and the volutes keep the dimensions `fittings.clip` spends four paragraphs defending as the
 renderer load they exist to be.
 
+### One trap found on the way, NOT fixed
+
+`--clip-part` does not paint the same as the whole building, and it says nothing about it.
+`--clip-part rotunda_urns` reports the four urns as 59.5% limestone and 40.5% marble with no gilt
+anywhere; the same urns sampled out of the assembled building with `--clip-bounds` are 35.9% gilt,
+and the whole-building run shows `paint gilt where=rotunda_urns` firing on 20,556 voxels. So the
+part build is wrong about the colour of the thing it was asked to show, and it was wrong quietly
+enough to send this investigation down a false trail for several runs -- the first reading was
+"the gilt rule never fires", which is a serious fault, and it is not true.
+
+It is left alone here because it is a fault in the measuring tool rather than in the building, and
+because guessing at the cause -- rule boxes culled against a smaller descent, most likely -- is how
+the last several hours were spent. **Until it is fixed, a `--clip-part` histogram is evidence about
+shape and not about paint.** `--clip-bounds` on the whole clip is the one that can be believed.
+
 ### The reusable half
 
 **"Make sure this never happens again" is a request for an instrument, not a patch.** Two of the
@@ -4596,3 +4611,4 @@ did nothing is the one you most need named, and it is the one that sorting by co
 | D609 | **The lamp rim is NOT widened** | correctness | Measured at three widths: 3, 2, 3 specks. It is a curved material boundary on a 3 cm grid, and width is not what makes it |
 | D609 | **Nothing changed on the urns** | correctness | Zero specks in their box; the green is the niche reflected in a near-mirror, which is what the urns are there to test |
 | D609 | **Examples are taken per material, not in scan order** | measurement | The first twelve were all limestone off one cornice, crowding out the twenty-six materials nobody had looked at |
+| D609 | **`--clip-part` paints differently from the whole building** | deferred | Reports the urns with no gilt when the building has them gilt; a tool fault, and diagnosing it blind is what cost this investigation its false trail |
