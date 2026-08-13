@@ -2363,5 +2363,34 @@ a test file with four rules the same empty piece takes 0.012. So the thing to fi
 else is that the maker should read the rule book once, not once per question. Nobody knew that
 before this measurement; it is exactly what step 1 exists for.
 
-**Steps 2 to 8 are not built.** The loading bar, the blocky first minute and the chunks are all
-still there.
+### Step 2 is built: the world stops arriving in slabs
+
+The old way cut the building into eighteen boxes of about twelve metres each, decided before the
+first frame, and sharpened them one at a time. That is what you were seeing as it "loading in
+chunks" -- and a finer fixed grid would have been the same complaint at a smaller size, so that is
+not what replaced it.
+
+Now the piece being made is a **cube of the same tree the renderer uses to look at the world**, and
+it **splits when you get close to it**. The building starts as four-metre pieces; anything within
+about eight metres of where you are standing is made a metre at a time instead. So what arrives is
+small and near you, and the far side of the building still arrives in bigger pieces because you
+cannot see the difference from there anyway. It is the same rule the game already used to decide
+what to sharpen FIRST, now also deciding how big a bite to take.
+
+**It builds the same world.** On a small test building, made the old way and the new way, the two
+come out **byte for byte identical** -- same voxels, same materials, same everything. That is the
+check that matters: changing how the work is cut up must not change what gets built. The one
+exception is the pass that cleans up stray single voxels of the wrong colour, which now judges a
+voxel at the edge of a piece against the empty space outside it rather than against its real
+neighbours: about 46 voxels in 152,000 come out a shade different on the facility. Small, measured,
+and written down rather than waved away.
+
+I tried the obvious fix -- make each piece slightly larger than needed so the edges can see their
+neighbours, then trim it -- and it **lost 240 voxels out of 1.4 million**, because the shape-maker
+answers slightly differently when the box it is given is an odd size. So that fix is out until the
+shape-maker is fixed, and the measuring tool now watches for it.
+
+**You will not see the loading bar go yet.** That is step 4, and it needs step 3 first.
+
+**Steps 3 to 8 are not built.** The loading bar and the blocky first minute are still there; what
+has changed is the size and order of the pieces that arrive after it.

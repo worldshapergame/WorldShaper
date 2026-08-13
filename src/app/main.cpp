@@ -256,6 +256,15 @@ struct Options {
     u32 sample_cost_nodes = 24;       // nodes with matter timed per reference box
     u32 sample_cost_boxes = 3;        // reference boxes, when the whole clip will not fit at once
     std::string sample_cost_csv;      // a row per level, for documentation/baselines/
+    // Refine everything the clip covers, whether this camera can see it or not.
+    //
+    // The ladder skips what is hidden -- that is the rule the whole rewrite is about -- and it
+    // means a run from one camera never finishes the building, which is correct in play and
+    // useless for a gate. R11b has to show that a world refined NODE by node comes out identical
+    // to one refined in eighteen boxes, and two arms that each stop somewhere different cannot be
+    // compared at all. With this the ladder ranks by distance alone and stops only when there is
+    // nothing left anywhere, so both arms end at the same world or the difference is real.
+    bool refine_all = false;
     // Work out the clip's paint rules again for every node, which is what `sample` did before
     // D614 split `plan_sample` off. The control arm for that split, and the only honest way to
     // measure it: two flags of one build rather than two builds (D407).
@@ -712,6 +721,8 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.sample_cost_csv = argv[++i];
         } else if (arg == "--sample-cost-replan") {
             options.sample_cost_replan = true;
+        } else if (arg == "--refine-all") {
+            options.refine_all = true;
         } else if (arg == "--clip-at") {
             if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
         } else if (arg == "--material") {
@@ -1071,6 +1082,27 @@ constexpr f32 kGameSecondsPerSecond = 60.0f;
 // millisecond against the pass's 4.4 ms budget, leaving room for the sky and lamp rays R3c adds
 // to the same invocation.
 constexpr u32 kFacesPerFrame = 96u * 1024u;
+
+// R11b: the coarsest and finest node the clip ladder refines in, as levels of the world's own tree.
+//
+// Seven is four metres and five is one. The FLOOR is where a sample stops being worth its own
+// arrival: R11a measured one node at 1.2 ms of which most is the descent from the root of a field
+// that describes a whole building, and a one-metre box at the authored thirty-two voxels a metre is
+// 32,768 cells -- a hundredth of a second of sampling and well under a frame of pasting.
+//
+// The CEILING is memory and it is temporary. A sample allocates five bytes a cell up front, so a
+// four-metre box at metre 32 is 2 M cells and 10 MB, an eight-metre one would be 84 MB, and a
+// twelve-metre one -- the old ladder's unit -- was 283 MB every time. Once the resolution follows
+// the level (R11c) a node is 512 cells however many metres it spans, and this ceiling goes.
+constexpr u32 kRefineCoarsest = 7;
+constexpr u32 kRefineFinest = 5;
+
+// A node splits when its own size is more than a quarter of its distance from the camera. That is
+// its projected size to within a constant, and it is the same quantity the ladder already ranks by
+// -- so the grain of what arrives and the order it arrives in come from one rule rather than two
+// that can disagree. A four-metre node splits within sixteen metres, a two-metre node within eight,
+// and inside eight metres of where somebody is standing the world arrives a metre at a time.
+constexpr f64 kRefineSplitAt = 0.25;
 
 // Must match kSkyBurst and kSkyConverged in shaders/node.glsl. Nothing here meters the ambient
 // burst -- three ways of doing that were built and measured and all three were slower than none;
@@ -1488,13 +1520,35 @@ private:
     // times the last, so the final one is minutes, and until it lands EVERYTHING is coarse ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the
     // wall you are standing at included, however long you look at it. Sampling the box you are
     // standing in instead is a second, and it is the only part of the world anybody can see.
-    struct RefineRegion {
-        forge::Vec3 low;
+    // **R11b: that box is now a NODE of the same octree the renderer marches** (D615). It was
+    // eighteen fixed boxes of twelve metres, cut from the clip's bounds before the first frame was
+    // drawn and identical from every camera -- which is what a player was reporting as the world
+    // loading "in chunks", and a finer fixed grid would have been the same complaint at a smaller
+    // size. Now the list starts as four-metre nodes and a node SPLITS when it is large on screen:
+    // within eight metres the world arrives a metre at a time, past sixteen it arrives four metres
+    // at a time, and what decides is the projected size `start_refinement` already scored boxes by.
+    // Detail arrives at the grain the camera justifies, which is section 1's rule applied to the
+    // MAKING of voxels rather than to the marching of them.
+    //
+    // The box is CLIPPED to the clip's own bounds. A node is a box of the world, the clip is not
+    // obliged to fill it, and sampling the overhang would invent matter outside the building.
+    struct RefineNode {
+        NodeKey key;             // which node of the world's own tree this is
+        forge::Vec3 low;         // its box in metres, clipped to the clip's bounds
         forge::Vec3 high;
         bool done = false;
     };
-    std::vector<RefineRegion> refine_regions_;
+    std::vector<RefineNode> refine_regions_;
     usize refine_region_ = 0;   // the one being sampled right now
+    // The clip's paint rules, worked out once (D614). A node sample that re-derived a hundred and
+    // thirty-nine of them would spend longer arriving than sampling.
+    forge::SamplePlan refine_plan_;
+    // The clip's own bounds, kept because `refine_script_->settings` is overwritten with each
+    // node's box before it is sampled and would otherwise be the last node rather than the clip.
+    forge::Vec3 refine_bounds_low_{0, 0, 0};
+    forge::Vec3 refine_bounds_high_{0, 0, 0};
+    // Which materials are a deliberate dither, decided once over the whole clip.
+    forge::StippleVerdict refine_stipple_;
     bool refine_wants_compact_ = false;
     // How many boxes the world on disk already has. The cache is written whenever refinement runs
     // out of things it can do and this has moved since, which is once per camera rather than once
@@ -1522,7 +1576,10 @@ private:
     // The ladder's boxes, from the clip's own bounds. One function so the run that builds the
     // world and the run that loads a half-built one plan the same grid ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â if they did not, the
     // flags in the cache would be read against boxes they were never about.
-    void plan_refine_regions(const forge::Script& script);
+    void seed_refine_nodes(const forge::Script& script);
+    bool refine_node_of(const NodeKey& key, RefineNode& out) const;
+    void split_refine_node(usize at);
+    bool refine_node_is_a_no_op(const RefineNode& node) const;
     // Pick a half-built world back up: adopt the cache's flags onto the planned grid and leave
     // the ladder standing if anything is still coarse.
     void resume_refinement(forge::Script&& script, const WorldCache& cache,
@@ -2330,10 +2387,16 @@ void Application::start_refinement() {
     const f64 fy = std::sin(camera_.pitch());
     const f64 fz = std::sin(camera_.yaw()) * cp;
 
+    // Pick, split, pick again. A node that is large on screen is cut into eight and the choice is
+    // made afresh, because one of those eight is now a better answer than their parent was; a node
+    // small enough for its distance is sampled as it stands. Bounded by the level range, so this
+    // runs at most three times and usually once.
+    for (u32 round = 0; round <= kRefineCoarsest - kRefineFinest; ++round) {
     usize best = refine_regions_.size();
     f64 keenest = 0.0;
+    f64 best_keen = 0.0;
     for (usize i = 0; i < refine_regions_.size(); ++i) {
-        const RefineRegion& box = refine_regions_[i];
+        const RefineNode& box = refine_regions_[i];
         if (box.done) continue;
 
         // Distance to the box, nought inside it, so the one you are standing in always wins.
@@ -2357,7 +2420,7 @@ void Application::start_refinement() {
         const f64 to_y = (box.low.y + box.high.y) * 0.5 - cy;
         const f64 to_z = (box.low.z + box.high.z) * 0.5 - cz;
         const f64 reach = std::sqrt(to_x * to_x + to_y * to_y + to_z * to_z);
-        if (reach > 1e-6) {
+        if (reach > 1e-6 && !options_.refine_all) {
             const f64 facing = (to_x * fx + to_y * fy + to_z * fz) / reach;
             if (facing < 0.0) keen *= 0.05;
         }
@@ -2374,7 +2437,21 @@ void Application::start_refinement() {
         // dearer than the arithmetic above and most boxes are eliminated by it.
         if (best != refine_regions_.size() && keen <= keenest) continue;
 
-        if (reach > 1e-6) {
+        // A node that sampling could not change. Asked only of a front runner, so most nodes never
+        // pay for it, and it is what stops standing in a room from sampling the four thousand
+        // one-metre nodes of air around the camera.
+        //
+        // TWO questions, and the pair is the point -- the first version asked only the world and
+        // lost 4,923 voxels of 1.43 million. The world says whether there is anything here to
+        // replace, which covers the coarse build's overshoot; the FIELD says whether a sample
+        // would find anything, which covers a feature the coarse build was too blunt to see. A
+        // node that fails both is a node whose sample would be air pasted over air.
+        if (refine_node_is_a_no_op(refine_regions_[i])) {
+            refine_regions_[i].done = true;
+            continue;
+        }
+
+        if (reach > 1e-6 && !options_.refine_all) {
             const f64 v = static_cast<f64>(kVoxelsPerMetre);
             const RayHit blocked = raycast(world_, cx * v, cy * v, cz * v, to_x, to_y, to_z,
                                            reach * v);
@@ -2385,6 +2462,7 @@ void Application::start_refinement() {
 
         best = i;
         keenest = keen;
+        best_keen = keen;
     }
     if (best == refine_regions_.size()) {
         // Nothing this camera can improve. Not the same as "every box is sharp": a box behind a
@@ -2396,9 +2474,36 @@ void Application::start_refinement() {
         return;
     }
 
+    // Large on screen and not yet as fine as this camera justifies: cut it into eight and choose
+    // again. Splitting costs nothing but the list -- no sampling, no pasting, no field evaluation
+    // -- so the loop does it eagerly and the sample that follows is the right size the first time.
+    if (refine_regions_[best].key.level > kRefineFinest &&
+        (options_.refine_all || best_keen > kRefineSplitAt)) {
+        split_refine_node(best);
+        continue;
+    }
+
     refine_settled_ = false;
     refine_region_ = best;
     refine_script_->settings.voxels_per_metre = refine_authored_;
+
+    // Sampled at its own box exactly, with NO SKIRT, and that is a measured retreat rather than
+    // the obvious thing.
+    //
+    // Despeckling wants one: the pass repaints a lone voxel with what most of its face neighbours
+    // wear, and at the edge of a box the neighbours outside read as air, so every voxel on a
+    // node's surface is judged against a fiction -- one voxel in six on a one-metre node. Sampling
+    // a one-voxel margin and cropping it off fixes that exactly, because the pass reads from a
+    // copy in one simultaneous step.
+    //
+    // It was built, measured and taken out again. A box one voxel larger on every side is not the
+    // same question as an aligned one: 34 cells halve into 17s, and every settle decision below
+    // that is taken over a box no aligned run ever asks about. The world it built was **240 voxels
+    // of 1.43 million short** of the one the eighteen-box ladder builds, and `--sample-cost` now
+    // reproduces the cause on its own: **2 of 96 nodes differ when the box around them grows by
+    // one voxel**. That is D613's class of fault one step along, it is not R11b's to fix, and a
+    // skirt over a sampler that answers differently for odd-sized boxes trades a paint fault for a
+    // geometry one. D615.
     refine_script_->settings.low = refine_regions_[best].low;
     refine_script_->settings.high = refine_regions_[best].high;
 
@@ -2413,19 +2518,27 @@ void Application::start_refinement() {
     refine_running_ = true;
     refine_thread_ = std::thread([this] {
         const u64 began = now_ns();
-        auto built = std::make_unique<forge::SampleResult>(forge::sample(
-            refine_script_->field, refine_script_->solid, refine_script_->paint,
-            refine_script_->settings, refine_jobs_.get(), {}));
+        auto built = std::make_unique<forge::SampleResult>(
+            forge::sample(refine_plan_, refine_script_->settings, refine_jobs_.get(), {}));
         // Every region the ladder sharpens, as well as the first build below. A region that came
         // back speckled and was pasted in would put the fault back after the coarse world had been
         // cleaned of it, and a seam between a despeckled chunk and a speckled one is worse than
         // either alone. This lambda is already off the main thread, so it costs nobody a frame.
-        if (despeckle_) forge::despeckle(built->clip);
+        // With the verdict taken from the whole clip rather than from this node. What a material's
+        // specks are a large enough share of is a question about the building, and five hundred
+        // cells cannot answer it -- see forge::StippleVerdict.
+        if (despeckle_) forge::despeckle(built->clip, 0.05, &refine_stipple_);
         refine_sample_ms_ = ns_to_ms(now_ns() - began);
         refine_asked_ = built->voxels_asked;
         refine_result_ = std::move(built);
         refine_ready_.store(true, std::memory_order_release);
     });
+    return;
+    }
+    // Every round split and none sampled, which the level range makes impossible. Settled rather
+    // than silently doing nothing, because a ladder that stops without saying so is a `--settle`
+    // that never fires (see the note at the top of this function).
+    refine_settled_ = true;
 }
 
 // Take delivery of a finished box, if one is ready, and put it in the world.
@@ -2546,7 +2659,7 @@ void Application::pump_refinement() {
     finished.reset();
 
     usize left = 0;
-    for (const RefineRegion& box : refine_regions_) {
+    for (const RefineNode& box : refine_regions_) {
         if (!box.done) ++left;
     }
     // Split, because "pasted N ms" was three different things in one number and they do not scale
@@ -2572,6 +2685,7 @@ void Application::pump_refinement() {
             refine_cache_path_.clear();
         }
         refine_script_.reset();
+        refine_plan_ = {};
         refine_jobs_.reset();
         paste_jobs_.reset();   // nothing left to paste, so nothing left for these to do
         return;
@@ -2597,7 +2711,7 @@ void Application::save_refined_world() {
     if (refine_cache_path_.empty() || refine_regions_.empty()) return;
 
     usize done = 0;
-    for (const RefineRegion& box : refine_regions_) {
+    for (const RefineNode& box : refine_regions_) {
         if (box.done) ++done;
     }
     // Nothing has been sharpened since the file was written. Rewriting six hundred megabytes to
@@ -2627,7 +2741,7 @@ void Application::save_refined_world() {
     // has walked to the far side of the building.
     if (!op_log_.ops().empty()) {
         WS_LOG_INFO("clip",
-                    "{} of {} regions sharpened, but the world has been edited; not caching it "
+                    "{} of {} nodes sharpened, but the world has been edited; not caching it "
                     "as the clip's own -- the cache is keyed on the clip, so every world built "
                     "from it would come up with these edits",
                     done, refine_regions_.size());
@@ -2641,8 +2755,17 @@ void Application::save_refined_world() {
     cache.world = &world_;
     cache.ledger = &ledger_;
     cache.materials = materials_;
-    cache.regions.reserve(refine_regions_.size());
-    for (const RefineRegion& box : refine_regions_) {
+    // Only the sharpened ones, because that is now what the list MEANS: the boxes somebody has
+    // already paid for, read back by containment rather than by position (see resume_refinement).
+    // The unsharpened ones are not information -- the reading run works out its own grid from where
+    // its own camera is standing.
+    //
+    // Never empty: this function returns above unless at least one more box has been sharpened
+    // than the file already knew about, and an empty list means something else entirely to the
+    // reader (a world built in one pass, with no ladder behind it).
+    cache.regions.reserve(done);
+    for (const RefineNode& box : refine_regions_) {
+        if (!box.done) continue;
         CachedRegion out;
         out.low[0] = box.low.x;
         out.low[1] = box.low.y;
@@ -2675,58 +2798,109 @@ void Application::save_refined_world() {
     });
     if (!write_world_cache(refine_cache_path_, refine_cache_key_, cache)) return;
     refine_saved_regions_ = done;
-    WS_LOG_INFO("clip", "kept the world with {} of {} regions sharpened", done,
+    WS_LOG_INFO("clip", "kept the world with {} of {} nodes sharpened", done,
                 refine_regions_.size());
 }
 
-// Boxes of about twelve metres, cut from the clip's own bounds.
+// The nodes the clip ladder starts from, and the two operations that reshape them.
 //
-// Refining the whole world a rung at a time is the wrong shape for this: every rung is eight times
-// the last, so the final one is minutes, and until it lands EVERYTHING is coarse ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the wall you are
-// standing at included. Sampling the box you are standing in instead is a second.
+// R11b. This was `plan_refine_regions`: eighteen boxes of about twelve metres, cut from the clip's
+// bounds before the first frame was drawn, the same eighteen from every camera and every run. It
+// had to be a pure function of the bounds, because the cache recorded which of them were sharp by
+// INDEX and a flag is only meaningful against a grid that comes out the same way twice.
 //
-// Twelve metres, and the number comes from measuring where the time goes. Sampling a four-metre box
-// took about a hundred milliseconds for ten thousand voxels ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ten microseconds each, against barely
-// one when the whole clip is sampled in a single call. Almost none of that is the voxels. It is the
-// fixed cost of a sample: allocating the clip, starting the workers, descending from the root of a
-// field that describes the entire building however small the box asked for is. Three hundred and
-// seventy-eight boxes paid it three hundred and seventy-eight times, and the world sharpened at
-// eleven boxes in twenty-two seconds.
+// That is the shape a player was reporting: the world arriving as slabs, each one a large piece of
+// the building appearing at once, in an order that had nothing to do with what they were looking
+// at beyond which slab was nearest. A finer fixed grid is the same complaint at a smaller size, so
+// what replaces it is not a finer grid: it is a node of the same octree the renderer marches, and
+// it SPLITS when the camera gets close enough to justify a smaller one.
 //
-// Four was chosen to keep the stall short, and that reasoning was wrong twice over: the paste
-// measures ZERO milliseconds, and what actually stalled was the world compaction, which is now done
-// once at the end. A small box buys nothing. Twelve is twenty-seven times the volume for very nearly
-// the same fixed cost, and still fine enough that the box in front of you is a small part of the
-// building rather than half of it.
-//
-// It is a pure function of the clip's bounds on purpose. The cache records which of these boxes have
-// been sharpened, and a flag is only meaningful against a grid that comes out the same way twice.
-void Application::plan_refine_regions(const forge::Script& script) {
-    const forge::Vec3 lo = script.settings.low;
-    const forge::Vec3 hi = script.settings.high;
-    const f64 want = 12.0;
-    const auto steps = [&](f64 a, f64 b) {
-        return std::max<i32>(1, static_cast<i32>(std::ceil((b - a) / want)));
-    };
-    const i32 nx = steps(lo.x, hi.x);
-    const i32 ny = steps(lo.y, hi.y);
-    const i32 nz = steps(lo.z, hi.z);
+// The seed is the coarsest level, four metres, over the clip's bounds. Everything below that is
+// made by `split_refine_node` when the picker wants it, and nothing is planned in advance.
+void Application::seed_refine_nodes(const forge::Script& script) {
+    refine_bounds_low_ = script.settings.low;
+    refine_bounds_high_ = script.settings.high;
     refine_regions_.clear();
-    refine_regions_.reserve(static_cast<usize>(nx) * static_cast<usize>(ny) *
-                            static_cast<usize>(nz));
-    for (i32 z = 0; z < nz; ++z) {
-        for (i32 y = 0; y < ny; ++y) {
-            for (i32 x = 0; x < nx; ++x) {
-                RefineRegion box;
-                box.low = {lo.x + (hi.x - lo.x) * x / nx, lo.y + (hi.y - lo.y) * y / ny,
-                           lo.z + (hi.z - lo.z) * z / nz};
-                box.high = {lo.x + (hi.x - lo.x) * (x + 1) / nx,
-                            lo.y + (hi.y - lo.y) * (y + 1) / ny,
-                            lo.z + (hi.z - lo.z) * (z + 1) / nz};
-                refine_regions_.push_back(box);
+
+    const f64 span = static_cast<f64>(i64{1} << kRefineCoarsest) / static_cast<f64>(kVoxelsPerMetre);
+    const i64 first[3] = {static_cast<i64>(std::floor(refine_bounds_low_.x / span)),
+                          static_cast<i64>(std::floor(refine_bounds_low_.y / span)),
+                          static_cast<i64>(std::floor(refine_bounds_low_.z / span))};
+    const i64 last[3] = {static_cast<i64>(std::ceil(refine_bounds_high_.x / span)) - 1,
+                         static_cast<i64>(std::ceil(refine_bounds_high_.y / span)) - 1,
+                         static_cast<i64>(std::ceil(refine_bounds_high_.z / span)) - 1};
+    for (i64 z = first[2]; z <= last[2]; ++z) {
+        for (i64 y = first[1]; y <= last[1]; ++y) {
+            for (i64 x = first[0]; x <= last[0]; ++x) {
+                RefineNode node;
+                if (refine_node_of(NodeKey{x, y, z, kRefineCoarsest}, node)) {
+                    refine_regions_.push_back(node);
+                }
             }
         }
     }
+}
+
+// One node as a box, clipped to the clip's own bounds. False when nothing of it is inside them.
+//
+// A node is a box of the WORLD and a clip is not obliged to fill one. Sampling the overhang would
+// ask the field about places the author excluded and paste whatever it answered, which on a clip
+// whose ground plane runs to the horizon is a building with a skirt of extra floor round it.
+bool Application::refine_node_of(const NodeKey& key, RefineNode& out) const {
+    const forge::NodeBox box = forge::node_box(key);
+    out.key = key;
+    out.low = {std::max(box.low.x, refine_bounds_low_.x), std::max(box.low.y, refine_bounds_low_.y),
+               std::max(box.low.z, refine_bounds_low_.z)};
+    out.high = {std::min(box.high.x, refine_bounds_high_.x),
+                std::min(box.high.y, refine_bounds_high_.y),
+                std::min(box.high.z, refine_bounds_high_.z)};
+    out.done = false;
+    // A hair of margin, because a node that clips to a sliver thinner than one voxel samples to
+    // nothing and would be picked, sampled and marked done for no reason for ever.
+    const f64 voxel = 1.0 / static_cast<f64>(std::max(1, refine_authored_));
+    return out.high.x - out.low.x >= voxel && out.high.y - out.low.y >= voxel &&
+           out.high.z - out.low.z >= voxel;
+}
+
+// Eight children in the parent's place. The list is the ladder's whole state, so this is the only
+// thing that ever adds to it.
+void Application::split_refine_node(usize at) {
+    const NodeKey parent = refine_regions_[at].key;
+    RefineNode children[8];
+    u32 kept = 0;
+    for (u32 octant = 0; octant < 8; ++octant) {
+        const NodeKey child{parent.x * 2 + static_cast<i64>(octant & 1u),
+                            parent.y * 2 + static_cast<i64>((octant >> 1) & 1u),
+                            parent.z * 2 + static_cast<i64>((octant >> 2) & 1u),
+                            parent.level - 1};
+        if (refine_node_of(child, children[kept])) ++kept;
+    }
+    if (kept == 0) {
+        // Nothing of the parent is inside the clip after all, which the parent's own clip test
+        // should have caught. Marked rather than left, so the picker cannot choose it again.
+        refine_regions_[at].done = true;
+        return;
+    }
+    refine_regions_[at] = children[0];
+    for (u32 i = 1; i < kept; ++i) refine_regions_.push_back(children[i]);
+}
+
+// Would sampling this node change anything? See `any_matter_in` for why the world half is answered
+// by brick, and `forge::box_may_hold_matter` for why the field half cannot miss.
+bool Application::refine_node_is_a_no_op(const RefineNode& node) const {
+    if (forge::box_may_hold_matter(refine_plan_, node.low, node.high, refine_authored_)) {
+        return false;
+    }
+    const f64 per = static_cast<f64>(refine_authored_ > 0 ? refine_authored_ : kVoxelsPerMetre);
+    const i64 low[3] = {
+        static_cast<i64>(std::floor(node.low.x * per)) + refine_at_[0],
+        static_cast<i64>(std::floor(node.low.y * per)) + refine_at_[1],
+        static_cast<i64>(std::floor(node.low.z * per)) + refine_at_[2]};
+    const i64 high[3] = {
+        static_cast<i64>(std::ceil(node.high.x * per)) - 1 + refine_at_[0],
+        static_cast<i64>(std::ceil(node.high.y * per)) - 1 + refine_at_[1],
+        static_cast<i64>(std::ceil(node.high.z * per)) - 1 + refine_at_[2]};
+    return !any_matter_in(world_, low, high);
 }
 
 // A cached world is not necessarily a finished one, and this is what tells them apart.
@@ -2757,57 +2931,60 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
     refine_at_[1] = options_.clip_at[1];
     refine_at_[2] = options_.clip_at[2];
     refine_script_ = std::make_unique<forge::Script>(std::move(script));
-    plan_refine_regions(*refine_script_);
+    refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
+                                      refine_script_->paint);
+    seed_refine_nodes(*refine_script_);
 
-    const bool same_grid = cache.regions.size() == refine_regions_.size();
-    bool same_boxes = same_grid;
-    if (same_grid) {
-        for (usize i = 0; i < refine_regions_.size() && same_boxes; ++i) {
-            const CachedRegion& from = cache.regions[i];
-            const RefineRegion& box = refine_regions_[i];
-            same_boxes = from.low[0] == box.low.x && from.low[1] == box.low.y &&
-                         from.low[2] == box.low.z && from.high[0] == box.high.x &&
-                         from.high[1] == box.high.y && from.high[2] == box.high.z;
-        }
+    // An empty list is a world built at its authored detail in one pass, with no ladder behind it
+    // and nothing to carry on. Nothing is coarse, so nothing needs sharpening, and standing the
+    // ladder up over it would re-sample the whole building to arrive back where it already is.
+    if (cache.regions.empty()) {
+        refine_script_.reset();
+        refine_plan_ = {};
+        refine_regions_.clear();
+        refine_cache_path_.clear();
+        return;
     }
-    if (!same_boxes) {
-        if (!cache.regions.empty()) {
-            WS_LOG_WARN("clip",
-                        "the cached world's {} regions do not match the {} this build plans; "
-                        "sharpening all of them again",
-                        cache.regions.size(), refine_regions_.size());
+
+    // What the file holds is now the boxes that WERE sharpened rather than flags against a fixed
+    // grid, so a node is already sharp when a saved box contains it -- a containment test rather
+    // than a comparison of corners.
+    //
+    // That is what makes R11b's grid possible at all. The old list had to be a pure function of
+    // the clip's bounds, because the flags were positional: box seven meant whatever this build's
+    // seventh box was, and a build that cut the grid differently read somebody else's flags. A
+    // node grid that follows the camera has no such stable index by construction. It also means a
+    // cache written by any camera is usable by any other, and that an old file still reads: its
+    // sharpened boxes are boxes, and they contain whatever they contain.
+    const auto already_sharp = [&](const RefineNode& node) {
+        for (const CachedRegion& from : cache.regions) {
+            if (!from.done) continue;
+            if (from.low[0] <= node.low.x && from.high[0] >= node.high.x &&
+                from.low[1] <= node.low.y && from.high[1] >= node.high.y &&
+                from.low[2] <= node.low.z && from.high[2] >= node.high.z) {
+                return true;
+            }
         }
-        // An empty list is the other case entirely: a world built at its authored detail in one
-        // pass, with no ladder behind it and nothing to carry on. Nothing is coarse, so nothing
-        // needs sharpening, and standing the ladder up over it would re-sample the whole building
-        // to arrive back where it already is.
-        if (cache.regions.empty()) {
-            refine_script_.reset();
-            refine_regions_.clear();
-            refine_cache_path_.clear();
-            return;
-        }
-    } else {
-        for (usize i = 0; i < refine_regions_.size(); ++i) {
-            refine_regions_[i].done = cache.regions[i].done;
-        }
-    }
+        return false;
+    };
+    for (RefineNode& node : refine_regions_) node.done = already_sharp(node);
 
     usize done = 0;
-    for (const RefineRegion& box : refine_regions_) {
+    for (const RefineNode& box : refine_regions_) {
         if (box.done) ++done;
     }
     refine_saved_regions_ = done;
     if (done == refine_regions_.size()) {
         // Finished, so there is no ladder to stand up and no reason to keep the field alive.
         refine_script_.reset();
+        refine_plan_ = {};
         refine_regions_.clear();
         refine_cache_path_.clear();
         refine_saved_regions_ = 0;
         WS_LOG_INFO("clip", "the cached world is fully sharpened");
         return;
     }
-    WS_LOG_INFO("clip", "cached world has {} of {} regions sharpened; carrying on from here", done,
+    WS_LOG_INFO("clip", "cached world has {} of {} nodes sharpened; carrying on from here", done,
                 refine_regions_.size());
 }
 
@@ -3100,7 +3277,15 @@ void Application::build_world() {
             // D610. Before variation, which is the only place it can go: variation mints a record
             // per voxel and after it every voxel is alone in its material by construction.
             if (options_.despeckle) {
-                const forge::DespeckleReport dots = forge::despeckle(built.clip);
+                // The verdict from THIS sample -- the whole clip in one box -- is kept and handed
+                // to every node the ladder refines afterwards. It is the last time anything looks
+                // at the whole building at once, and what it is being asked is a question only the
+                // whole building can answer: which materials are a deliberate dither. A node's own
+                // five hundred cells would say something different in every node, and the seams
+                // between those answers are visible (R11a: 29 nodes of 297 differ).
+                refine_stipple_ = forge::stipple_verdict(built.clip);
+                const forge::DespeckleReport dots = forge::despeckle(built.clip, 0.05,
+                                                                     &refine_stipple_);
                 if (dots.repainted > 0) {
                     WS_LOG_INFO("clip",
                                 "despeckled {} lone voxels of the wrong material ({} left as a "
@@ -3151,8 +3336,12 @@ void Application::build_world() {
                 refine_at_[1] = options_.clip_at[1];
                 refine_at_[2] = options_.clip_at[2];
                 refine_script_ = std::make_unique<forge::Script>(std::move(script));
-                plan_refine_regions(*refine_script_);
-                WS_LOG_INFO("clip", "{} regions to sharpen, biggest on screen first",
+                refine_plan_ = forge::plan_sample(refine_script_->field, refine_script_->solid,
+                                                  refine_script_->paint);
+                seed_refine_nodes(*refine_script_);
+                WS_LOG_INFO("clip",
+                            "{} four-metre nodes to sharpen, biggest on screen first, splitting "
+                            "to a metre as you get near them",
                             refine_regions_.size());
             }
             // The two ns figures are summed across worker threads, so they exceed the wall clock
@@ -7099,7 +7288,7 @@ int Application::play(const Options& options) {
             // Left as a warning rather than an implicit wait, because --settle is the wait and
             // some runs genuinely want the cold case.
             usize unrefined = 0;
-            for (const RefineRegion& box : refine_regions_) {
+            for (const RefineNode& box : refine_regions_) {
                 if (!box.done) ++unrefined;
             }
 
@@ -7123,7 +7312,7 @@ int Application::play(const Options& options) {
                 refine_regions_.empty()
                     ? std::string("no ladder, the world is at the detail the clip asked for")
                     : std::to_string(refine_regions_.size() - unrefined) + " of " +
-                          std::to_string(refine_regions_.size()) + " regions sharpened";
+                          std::to_string(refine_regions_.size()) + " nodes sharpened";
             WS_LOG_INFO("frame", "scene: {} chunks, {} solid voxels, {}, content {:016x}",
                         measured_world.chunks, measured_world.solid_voxels, sharpness,
                         world_.content_hash());
@@ -7888,6 +8077,10 @@ struct LevelCost {
     usize checked = 0;
     usize disagreed = 0;
     usize despeckle_differed = 0;
+    u64 despeckle_cells = 0;
+    usize skirt_checked = 0;
+    usize skirt_differed = 0;
+    u64 skirt_cells = 0;
     // WHICH WAY a disagreement went, which a count cannot say and which decides whose fault it
     // is: matter the box has and the node does not is a node that invents geometry, and matter the
     // node has and the box does not is a box that skipped past it. The two have opposite cures.
@@ -8070,9 +8263,16 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
             // cells: whether that survives being asked node by node is R11b's problem and this is
             // where it becomes visible.
             forge::SampleResult cleaned;
+            forge::StippleVerdict verdict;
             if (options.despeckle) {
                 cleaned = whole;
-                forge::despeckle(cleaned.clip);
+                // The verdict from the BOX, handed to the node below, because that is what the
+                // ladder does now (D615): which materials are a deliberate dither is a question
+                // about the whole clip, and five hundred cells cannot answer it. What is left
+                // after this is the other half -- a node's edge voxels judged against the air
+                // outside their own box instead of against their neighbours.
+                verdict = forge::stipple_verdict(cleaned.clip);
+                forge::despeckle(cleaned.clip, 0.05, &verdict);
             }
 
             const i64 across = whole.clip.size[0] / forge::kNodeVoxels;
@@ -8201,10 +8401,46 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
                     }
                     if (!same) ++row.disagreed;
 
+                    // And the same node inside a box one voxel larger all round, which is not the
+                    // question above. An aligned reference halves into the node's own boundaries
+                    // all the way down; a box of ten cells halves into fives, and every settle
+                    // decision below that is taken over a box no aligned run ever asks about.
+                    //
+                    // R11b wanted that skirt so a node's edge voxels could see their true
+                    // neighbours while despeckling, and the world it built came out 240 voxels of
+                    // 1.43 million short of the aligned ladder's. This is what makes the size of
+                    // that visible rather than inferred.
+                    {
+                        forge::SampleSettings skirted = one;
+                        const f64 voxel = 1.0 / static_cast<f64>(row.per_metre);
+                        skirted.low = {one.low.x - voxel, one.low.y - voxel, one.low.z - voxel};
+                        skirted.high = {one.high.x + voxel, one.high.y + voxel, one.high.z + voxel};
+                        const forge::SampleResult around = sample_box(skirted, &jobs);
+                        std::vector<VoxelTypeId> in_skirt(want_types.size());
+                        if (forge::node_block(around, key, in_skirt.data(), nullptr)) {
+                            ++row.skirt_checked;
+                            bool same_skirted = true;
+                            for (usize i = 0; i < in_skirt.size(); ++i) {
+                                const i32 x = static_cast<i32>(i % forge::kNodeVoxels);
+                                const i32 y = static_cast<i32>((i / forge::kNodeVoxels) %
+                                                               forge::kNodeVoxels);
+                                const i32 z = static_cast<i32>(i / (forge::kNodeVoxels *
+                                                                    forge::kNodeVoxels));
+                                if (alone.clip.voxels[alone.clip.index(x, y, z)] == in_skirt[i]) {
+                                    continue;
+                                }
+                                ++row.skirt_cells;
+                                same_skirted = false;
+                            }
+                            if (!same_skirted) ++row.skirt_differed;
+                        }
+                    }
+
                     if (options.despeckle && !cleaned.clip.empty() &&
                         forge::node_block(cleaned, key, clean_types.data(), nullptr)) {
                         forge::SampleResult alone_clean = alone;
-                        forge::despeckle(alone_clean.clip);
+                        forge::despeckle(alone_clean.clip, 0.05, &verdict);
+                        bool counted_here = false;
                         for (usize i = 0; i < clean_types.size(); ++i) {
                             const i32 x = static_cast<i32>(i % forge::kNodeVoxels);
                             const i32 y = static_cast<i32>((i / forge::kNodeVoxels) %
@@ -8215,9 +8451,10 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
                                 clean_types[i]) {
                                 continue;
                             }
-                            ++row.despeckle_differed;
-                            break;
+                            ++row.despeckle_cells;
+                            counted_here = true;
                         }
+                        if (counted_here) ++row.despeckle_differed;
                     }
                 }
             }
@@ -8271,10 +8508,18 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
     usize checked = 0;
     usize disagreed = 0;
     usize despeckled = 0;
+    u64 despeckle_cells = 0;
+    usize skirted = 0;
+    usize skirt_seen = 0;
+    u64 skirt_cells = 0;
     for (const LevelCost& row : table) {
         checked += row.checked;
         disagreed += row.disagreed;
         despeckled += row.despeckle_differed;
+        despeckle_cells += row.despeckle_cells;
+        skirted += row.skirt_differed;
+        skirt_seen += row.skirt_checked;
+        skirt_cells += row.skirt_cells;
     }
     std::printf("\nreference     ");
     for (const LevelCost& row : table) {
@@ -8320,10 +8565,15 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
                         static_cast<unsigned long long>(row.cells_only_in_box));
         }
     }
+    std::printf("skirt         %zu of %zu nodes differ when the box around them is one voxel "
+                "larger, %llu cells in all\n",
+                skirted, skirt_seen, static_cast<unsigned long long>(skirt_cells));
     if (options.despeckle) {
-        std::printf("despeckle     %zu of %zu nodes come out different when the pass is run per "
-                    "node rather than per box\n",
-                    despeckled, checked);
+        std::printf("despeckle     %zu of %zu nodes and %llu of %llu cells come out different "
+                    "when the pass runs on the node rather than the box, with the box's own "
+                    "verdict in both\n",
+                    despeckled, checked, static_cast<unsigned long long>(despeckle_cells),
+                    static_cast<unsigned long long>(compared));
     }
     for (const LevelCost& row : table) {
         if (row.level != kLeafLevel) continue;

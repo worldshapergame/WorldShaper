@@ -383,6 +383,11 @@ TEST_CASE("a small box and a big one agree about the voxels they share") {
     paint.push_back(PaintRule{f.constant(0.0), -1e30, 1e30, stone});
 
     JobSystem jobs;
+    // The third box is the first GROWN BY ONE VOXEL, which is the case R11b's skirt makes: a node
+    // sampled with a one-voxel margin so its edge voxels can see their true neighbours. It is not
+    // the same question as a big box against a small one -- the grown box is a different size on
+    // every axis, so the descent halves it differently all the way down, and every settle decision
+    // is taken over a box the aligned run never asked about.
     for (i32 per_metre : {1, 2, 4, 32}) {
         SampleSettings big;
         big.low = {-4.0, -4.0, -4.0};
@@ -395,20 +400,33 @@ TEST_CASE("a small box and a big one agree about the voxels they share") {
         small.high = {1.0, 1.0, 1.0};
         const SampleResult part = sample(f, all, paint, small, &jobs);
 
+        const f64 voxel = 1.0 / static_cast<f64>(per_metre);
+        SampleSettings grown = small;
+        grown.low = {small.low.x - voxel, small.low.y - voxel, small.low.z - voxel};
+        grown.high = {small.high.x + voxel, small.high.y + voxel, small.high.z + voxel};
+        const SampleResult skirted = sample(f, all, paint, grown, &jobs);
+
         CAPTURE(per_metre);
         REQUIRE(!part.clip.empty());
-        for (i32 z = 0; z < part.clip.size[2]; ++z) {
-            for (i32 y = 0; y < part.clip.size[1]; ++y) {
-                for (i32 x = 0; x < part.clip.size[0]; ++x) {
-                    const i32 at[3] = {
-                        static_cast<i32>(part.origin_voxel[0] - whole.origin_voxel[0]) + x,
-                        static_cast<i32>(part.origin_voxel[1] - whole.origin_voxel[1]) + y,
-                        static_cast<i32>(part.origin_voxel[2] - whole.origin_voxel[2]) + z};
-                    INFO("cell (" << x << ", " << y << ", " << z << ")");
-                    CHECK(part.clip.at(x, y, z) == whole.clip.at(at[0], at[1], at[2]));
+        const auto same_as = [&](const SampleResult& other, const char* what) {
+            for (i32 z = 0; z < part.clip.size[2]; ++z) {
+                for (i32 y = 0; y < part.clip.size[1]; ++y) {
+                    for (i32 x = 0; x < part.clip.size[0]; ++x) {
+                        const i32 at[3] = {
+                            static_cast<i32>(part.origin_voxel[0] - other.origin_voxel[0]) + x,
+                            static_cast<i32>(part.origin_voxel[1] - other.origin_voxel[1]) + y,
+                            static_cast<i32>(part.origin_voxel[2] - other.origin_voxel[2]) + z};
+                        if (part.clip.at(x, y, z) == other.clip.at(at[0], at[1], at[2])) continue;
+                        INFO(what << ": cell (" << x << ", " << y << ", " << z << ") is "
+                                  << part.clip.at(x, y, z) << " alone and "
+                                  << other.clip.at(at[0], at[1], at[2]) << " there");
+                        REQUIRE(false);
+                    }
                 }
             }
-        }
+        };
+        same_as(whole, "against a box four times the size");
+        same_as(skirted, "against the same box grown by one voxel");
     }
 }
 

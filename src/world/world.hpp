@@ -108,4 +108,18 @@ private:
     std::unordered_map<ChunkCoord, Chunk, ChunkCoordHash> chunks_;
 };
 
+// Could this box of voxel coordinates hold anything? Inclusive of both corners.
+//
+// Answered by BRICK and deliberately conservative: a box that clips one corner of a brick is told
+// yes if that brick holds anything anywhere. A brick pointer is the question, which is only an
+// honest one because `Chunk::set` and `drop_brick_if_empty` unlink a brick when its last voxel
+// goes (D357-D361) -- before that an emptied brick claimed matter for ever and this would have
+// answered yes over deleted buildings.
+//
+// R11b asks it of a node before sampling one. Refining a node that holds nothing is a sample, a
+// paste and an announcement to arrive at the world that is already there, and standing in a room
+// splits the space around the camera into four thousand one-metre nodes of which nearly all are
+// air. Cheap: a two-metre node is 512 pointer reads inside one chunk.
+bool any_matter_in(const World& world, const i64 low[3], const i64 high[3]);
+
 }  // namespace ws

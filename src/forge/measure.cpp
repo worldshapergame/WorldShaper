@@ -545,14 +545,9 @@ SpeckReport paint_specks(const Clip& clip, usize examples_per_type) {
     return out;
 }
 
-DespeckleReport despeckle(Clip& clip, f64 stipple_share) {
-    DespeckleReport out;
+StippleVerdict stipple_verdict(const Clip& clip, f64 stipple_share) {
+    StippleVerdict out;
     if (clip.empty()) return out;
-
-    // Which materials are allowed to be despeckled at all. Asked first, in full, because the
-    // decision is about a MATERIAL and not about a voxel: whether a lone verde voxel is a mistake
-    // depends on how the other four hundred thousand verde voxels in the clip are behaving, and
-    // no amount of looking at its six neighbours can tell you that.
     const SpeckReport found = paint_specks(clip, 0);
     // A STIPPLE IS A LARGE SHARE **AND** A LARGE NUMBER, and the second half was missing from the
     // first version of this. A material with one surface voxel in the whole clip and one speck has
@@ -567,12 +562,24 @@ DespeckleReport despeckle(Clip& clip, f64 stipple_share) {
     // entire clip is not a dither anybody can see, and whatever it is, it is not something the
     // author would notice losing.
     constexpr u64 kStippleFloor = 16;
-    std::map<VoxelTypeId, bool> allowed;
     for (const TypeShare& share : found.by_type) {
         const bool stipple = share.fraction >= stipple_share && share.count >= kStippleFloor;
-        allowed[share.type] = !stipple;
+        out.allowed[share.type] = !stipple;
     }
-    if (found.specks == 0) return out;
+    return out;
+}
+
+DespeckleReport despeckle(Clip& clip, f64 stipple_share, const StippleVerdict* verdict) {
+    DespeckleReport out;
+    if (clip.empty()) return out;
+
+    // Which materials may be despeckled at all -- see StippleVerdict for why this is a question
+    // about the whole clip and why a caller refining one node at a time has to bring its own.
+    const StippleVerdict asked = (verdict == nullptr) ? stipple_verdict(clip, stipple_share)
+                                                      : StippleVerdict{};
+    const std::map<VoxelTypeId, bool>& allowed =
+        (verdict == nullptr) ? asked.allowed : verdict->allowed;
+    if (allowed.empty()) return out;
 
     const auto type_at = [&](i32 x, i32 y, i32 z) -> VoxelTypeId {
         if (x < 0 || y < 0 || z < 0 || x >= clip.size[0] || y >= clip.size[1] ||

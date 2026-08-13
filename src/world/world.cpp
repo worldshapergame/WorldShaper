@@ -101,4 +101,42 @@ std::vector<ChunkCoord> World::sorted_chunk_coords() const {
     return out;
 }
 
+bool any_matter_in(const World& world, const i64 low[3], const i64 high[3]) {
+    for (u32 axis = 0; axis < 3; ++axis) {
+        if (low[axis] > high[axis]) return false;
+    }
+    // Walked chunk by chunk rather than brick by brick over the whole box, because a chunk that
+    // does not exist answers for 32,768 bricks in one lookup -- which is the ordinary case for a
+    // node in the air above a building.
+    const ChunkCoord first = chunk_coord_of(low[0], low[1], low[2]);
+    const ChunkCoord last = chunk_coord_of(high[0], high[1], high[2]);
+    for (i64 cz = first.z; cz <= last.z; ++cz) {
+        for (i64 cy = first.y; cy <= last.y; ++cy) {
+            for (i64 cx = first.x; cx <= last.x; ++cx) {
+                const Chunk* chunk = world.chunk(ChunkCoord{cx, cy, cz});
+                if (chunk == nullptr) continue;
+                // The bricks this chunk holds that the box actually reaches.
+                const i64 base[3] = {cx * kChunkEdge, cy * kChunkEdge, cz * kChunkEdge};
+                u32 from[3];
+                u32 to[3];
+                for (u32 axis = 0; axis < 3; ++axis) {
+                    const i64 lo = std::max(low[axis], base[axis]) - base[axis];
+                    const i64 hi = std::min(high[axis], base[axis] + kChunkEdge - 1) - base[axis];
+                    if (lo > hi) return false;   // cannot happen; the loops bound it
+                    from[axis] = static_cast<u32>(lo / kBrickEdge);
+                    to[axis] = static_cast<u32>(hi / kBrickEdge);
+                }
+                for (u32 bz = from[2]; bz <= to[2]; ++bz) {
+                    for (u32 by = from[1]; by <= to[1]; ++by) {
+                        for (u32 bx = from[0]; bx <= to[0]; ++bx) {
+                            if (chunk->brick(bx, by, bz) != nullptr) return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
 }  // namespace ws

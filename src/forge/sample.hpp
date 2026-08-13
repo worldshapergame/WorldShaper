@@ -310,6 +310,22 @@ struct SamplePlan {
 
 SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule>& paint);
 
+// Could this box hold any matter at all, at this resolution?
+//
+// A conservative answer: `true` means "sample it and find out", and only `false` is a promise. It
+// is the same test the descent settles its very first box with — the field read once at the
+// centre, against the half-diagonal, what displacement can hide, and the reach of the thin-feature
+// rescue — so a box this says no to is a box `sample` would hand back filled with air.
+//
+// One field evaluation, and R11b needs it for a reason worth stating. Refining node by node means
+// asking about thousands of boxes that hold nothing, and the cheap way to skip them is to ask the
+// WORLD whether it has anything there — which is wrong, because the world at that moment holds a
+// coarse approximation, and a feature the coarse pass was too blunt to find is a feature the skip
+// would make permanent. Measured on `clips/sampler.clip`: 4,923 voxels of 1.43 million went
+// missing that way. Asking the field instead cannot miss anything the sampler would have found,
+// because it is the sampler's own argument.
+bool box_may_hold_matter(const SamplePlan& plan, Vec3 low, Vec3 high, i32 voxels_per_metre);
+
 // Fill a clip from a field.
 //
 // `jobs` may be null, in which case it runs on the calling thread. With a job system it splits

@@ -1335,6 +1335,34 @@ SampleResult sample(const SamplePlan& plan, const SampleSettings& settings, JobS
     return result;
 }
 
+bool box_may_hold_matter(const SamplePlan& plan, Vec3 low, Vec3 high, i32 voxels_per_metre) {
+    if (!plan.ok()) return true;
+    const i32 per_metre = (voxels_per_metre > 0) ? voxels_per_metre : kVoxelsPerMetre;
+    const f64 voxel = 1.0 / static_cast<f64>(per_metre);
+
+    const Vec3 middle{(low.x + high.x) * 0.5, (low.y + high.y) * 0.5, (low.z + high.z) * 0.5};
+    const f64 half[3] = {(high.x - low.x) * 0.5, (high.y - low.y) * 0.5, (high.z - low.z) * 0.5};
+    const f64 radius = std::sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2]);
+
+    // What this box has to allow for, by the same reasoning as `slack_here`: only the parts of the
+    // shape whose own boxes it is near, and the whole-shape displacement always.
+    f64 slack = plan.prune_slack;
+    if (plan.parts_usable && !plan.part_box.empty()) {
+        f64 worst = 0.0;
+        for (usize i = 0; i < plan.part_box.size(); ++i) {
+            if (plan.part_slack[i] <= worst) continue;
+            if (away_from(plan.part_box[i], middle) > radius) continue;
+            worst = plan.part_slack[i];
+            if (worst >= Field::kInfiniteSlack) return true;
+        }
+        slack = worst + plan.amplitude;
+    }
+    if (slack >= Field::kInfiniteSlack) return true;
+
+    const f64 dc = plan.field->eval(plan.prune_root, middle);
+    return !(dc > radius + slack + voxel * kHalfCellDiagonal);
+}
+
 // One sample from a clip that is only sampled once. The ladder, the instrument and anything else
 // taking more than one from the same field wants the two halves apart.
 SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,

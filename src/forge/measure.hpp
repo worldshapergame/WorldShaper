@@ -32,6 +32,7 @@
 // notices texture.
 
 #include <string>
+#include <map>
 #include <vector>
 
 #include "core/types.hpp"
@@ -263,7 +264,26 @@ struct DespeckleReport {
     std::vector<TypeShare> by_type;   // what was repainted, biggest first
 };
 
-DespeckleReport despeckle(Clip& clip, f64 stipple_share = 0.05);
+// Which materials a lone voxel may be repainted out of, decided over a WHOLE clip.
+//
+// The judgement is about a MATERIAL and not about a voxel: whether a stray verde voxel is a
+// mistake depends on how the other four hundred thousand verde voxels are behaving, and no amount
+// of looking at its six neighbours can tell you that. Over a whole building that is a sound
+// question to ask of the sample in hand. Over one NODE it is not -- five hundred cells cannot say
+// whether a coat is a deliberate dither -- and R11b refines a node at a time.
+//
+// So the verdict is separable: taken once from a sample of the whole clip, and handed to every
+// node's despeckle afterwards. A material absent from the map has no specks anywhere in the clip
+// and nothing to decide.
+struct StippleVerdict {
+    std::map<VoxelTypeId, bool> allowed;
+    bool any() const { return !allowed.empty(); }
+};
+StippleVerdict stipple_verdict(const Clip& clip, f64 stipple_share = 0.05);
+
+// `verdict` null asks the clip in front of it, which is right for a clip that IS the whole thing.
+DespeckleReport despeckle(Clip& clip, f64 stipple_share = 0.05,
+                          const StippleVerdict* verdict = nullptr);
 
 // Where two parts of a shape occupy the same voxels.
 //

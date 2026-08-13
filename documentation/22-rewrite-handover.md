@@ -562,7 +562,7 @@ the order:
 | | what it is | what a player sees |
 |---|---|---|
 | **R11a** | ~~one node, sampled, **timed**~~ — **DONE** (D613). `--sample-cost` and `tools/samplecost.ps1`; the numbers are below | nothing. It is a measurement |
-| **R11b** | the unit of refinement is a node, not a region — `plan_refine_regions` and its eighteen boxes go | detail stops arriving as slabs |
+| **R11b** | ~~the unit of refinement is a node, not a region~~ -- **DONE** (D615): seeded at four metres, split to one as you get near | detail stops arriving as slabs |
 | **R11c** | resolution is `256 / 2^level`, not one of two constants. **This is R8c** | the 8 → 32 jump from blocky to sharp goes |
 | **R11d** | nothing is sampled up front. **The headline** | no loading bar at all |
 | **R11e** | a light path may not cause sampling — R9h one level down | nothing, until it is missing |
@@ -596,7 +596,7 @@ The figures below are **after D614's plan split**, which is what R11b will be bu
 is ten times the median, so the mean follows which nodes the stride landed on. Same `-Nodes`, same
 `-Boxes`, or the comparison is about the sampling rather than about the build.
 
-**Three things to know before writing a line of R11b.**
+**Three things R11b had to know, and what R11b did with them (D615).**
 
 1. ~~**The fixed cost of a sample is the PAINT RULES, not the box.**~~ **Found, and FIXED — D614.**
    It was 0.213 ms an empty node on the facility's 139 rules against 0.012 on a clip with four,
@@ -612,6 +612,36 @@ is ten times the median, so the mean follows which nodes the stride landed on. S
    nodes come out different when the pass runs on the node rather than on the box around it,
    because it decides what is a deliberate stipple from a material's share of the clip's whole
    surface, and a node is 512 cells. Measured and deliberately not fixed — it is R11b's.
+
+#### R11b is done too -- start at R11c
+
+The eighteen boxes are gone. The unit is a node of the render tree, seeded at four metres, and it
+**splits into eight when it is more than a quarter of its own distance across** -- the projected
+size the ladder already ordered its work by, so grain and order are one rule rather than two.
+Inside eight metres of the camera the world arrives a metre at a time.
+
+**What is proved, and where.** On `clips/sampler.clip` with `--refine-all`, the node ladder and the
+eighteen-box ladder build **byte-identical worlds** with despeckling off (`a1f8bc6c656343b7`,
+1,430,104 solid voxels in both) and identical geometry with it on. **The facility A/B was not run**
+-- it is about ten minutes a side -- so the gate is met on a small clip and the facility is owed.
+
+**Three things R11c inherits.**
+
+1. **The four-metre ceiling is memory and R11c removes it.** A sample allocates five bytes a cell
+   up front: four metres at the authored resolution is 2 M cells and 10 MB, eight metres would be
+   84 MB, and the old twelve-metre unit was 283 MB every time. Once the resolution follows the
+   level a node is 512 cells however many metres it spans, and the ladder can seed at level 8 or
+   above.
+2. **A node is skipped only when the world AND the field agree nothing would change**
+   (`any_matter_in` and `forge::box_may_hold_matter`). Asking the world alone lost 4,923 voxels of
+   1.43 million on `sampler.clip`, because a feature the coarse pass was too blunt to see is a
+   feature the skip makes permanent. Keep both halves.
+3. **Despeckling is still the residual, and the skirt that would fix it is reverted.** Sampling a
+   node with a one-voxel margin, despeckling, and cropping the margin off is exactly right in
+   principle -- and it lost **240 voxels of 1.43 million**, because a box one voxel larger on every
+   side is not the same question as an aligned one. `--sample-cost` reproduces it: **2 of 96 nodes
+   differ on `sampler.clip`, 0 of 297 on the facility**. D613's class one step along. What is left
+   without the skirt is 46 cells of 152,064 on the facility wearing a neighbour's colour.
 
 **And the fault the gate found, because the shape of it will recur.** The agreement check failed
 before it passed: the same node came out **differently** sampled alone and sampled inside the

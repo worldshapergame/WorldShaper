@@ -5092,3 +5092,95 @@ was the same each time: **an answer of "nothing here" cost nearly as much as an 
 | D614 | **`--sample-cost-replan` is the control arm** | method | Two flags of one build, D407, for a change whose only evidence is a timing |
 | D614 | **The plan borrows the field and does not own it** | correctness | A plan outliving its field is a dangling walk; the ladder holds the script beside it |
 | D614 | **The descent borrows the plan's part lists rather than copying them** | performance | Copying per call is the thing this entry exists to stop, one level down |
+
+## D615 — R11b: the world is refined a node at a time, and the node follows the camera
+
+**The eighteen boxes are gone.** `plan_refine_regions` cut the clip's bounds into boxes of about
+twelve metres before the first frame was drawn — the same eighteen from every camera, in every run,
+because the cache recorded which of them were sharp *by index* and a positional flag is only
+meaningful against a grid that comes out the same way twice. What a player saw was the building
+arriving in slabs.
+
+What replaces it is a **node of the same octree the renderer marches**. The list is seeded at
+four-metre nodes over the clip's bounds and a node **splits into eight when it is large on screen**
+— more than a quarter of its own distance across, which is the projected size the ladder already
+ranked its work by. So within eight metres of where somebody is standing the world arrives a metre
+at a time, past sixteen metres it arrives four metres at a time, and the grain and the order come
+from **one** rule rather than two that can disagree. Nothing is planned in advance.
+
+### Three things that had to be built with it
+
+- **A node that sampling cannot change is skipped**, and it takes TWO questions. `any_matter_in`
+  asks the world, by brick, whether there is anything here to replace — which covers the coarse
+  build's overshoot. `forge::box_may_hold_matter` asks the FIELD, in one evaluation, whether a
+  sample could find anything — the sampler's own settle test, so it cannot miss what the sampler
+  would have found. **The world half alone lost 4,923 voxels of 1.43 million**: a feature the
+  coarse pass was too blunt to see is a feature the skip made permanent. Standing in a room splits
+  the space around the camera into thousands of one-metre nodes and nearly all of them are air, so
+  the skip is not an optimisation, it is what makes the grain affordable at all.
+- **The cache stores the boxes that were sharpened, and reads them back by containment.** It used
+  to store a flag per box of a fixed grid, which a camera-dependent grid cannot have. An old file
+  still loads: its sharpened boxes are boxes, and they contain whatever they contain.
+- **Despeckle's judgement is separated from its pass.** `forge::stipple_verdict` decides which
+  materials are a deliberate dither — a question about the whole building that five hundred cells
+  cannot answer — once, from the coarse build, and every node is despeckled with it.
+
+### Measured: the geometry is identical, and the paint is nearly so
+
+`clips/sampler.clip`, `--refine-all --settle`, node ladder against the eighteen-box build, both
+arms of one source with the control binary kept from the commit before:
+
+| | control | node ladder |
+|---|---|---|
+| solid voxels | 1,430,104 | **1,430,104** |
+| content hash, `--no-despeckle` | `a1f8bc6c656343b7` | **`a1f8bc6c656343b7`** |
+| content hash, despeckling | `0fe3a76b9ee5222d` | `a6df65f97b164327` |
+| units refined | 1 box | 264 nodes |
+
+**With despeckling off the two worlds are byte-identical.** The refinement grain changes nothing
+about what the world is — which is the whole gate, and it is what says the node boxes tile the clip
+exactly, that the pastes land where they should, and that the skip is sound.
+
+What is left is despeckling's other half: a node's edge voxels are judged against the air outside
+their own box instead of against their neighbours. `--sample-cost` measures it — **115 of 49,152
+cells on `sampler.clip` and 46 of 152,064 on the facility**, a couple of voxels a node wearing a
+neighbour's colour. Recorded rather than fixed, and see below for why the obvious fix is not in.
+
+### Built, measured and reverted: the one-voxel skirt
+
+The obvious fix for that residual is to sample each node with a **one-voxel margin** so its edge
+voxels see their true neighbours, despeckle, and crop the margin off before pasting. Despeckle
+reads from a copy in one simultaneous step, so for the interior that is *exactly* the answer a
+sample of the whole building gives. It was built, and the world it produced was **240 voxels of
+1.43 million short** of the aligned ladder's.
+
+The cause is in the sampler, not in the ladder: **a box one voxel larger on every side is not the
+same question as an aligned one.** Thirty-four cells halve into seventeens, and every settle
+decision below that is taken over a box no aligned run ever asks about. `--sample-cost` now
+reproduces it directly — **2 of 96 nodes and 22 cells on `clips/sampler.clip`**, and **0 of 297 on
+the facility**, which is why it took a second clip to find. That is D613's class one step along,
+and a skirt over a sampler that answers differently for odd boxes trades a paint fault for a
+geometry one. Not carried. The check stays in the instrument, because the fix is worth having and
+the next thing that wants an unaligned box — R11c re-sampling a node at a coarser resolution — will
+want it more.
+
+### What a player sees, and what is NOT done
+
+Detail stops arriving in twelve-metre slabs. It arrives in pieces of one to four metres, smallest
+and nearest first, and the piece size follows how close they are. **The facility gate is not
+measured**: `--refine-all` on the facility is a ten-minute run in both arms and it has not been
+done, so what is proved is proved on a small clip. The memory ceiling is still there and is why the
+coarsest unit is four metres — a sample allocates five bytes a cell up front, so four metres at the
+authored resolution is 10 MB and eight would be 84. **R11c removes that ceiling by dropping the
+resolution with the level**, which is the next step and the one that also ends the 8 → 32 jump.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D615 | **The unit of refinement is a node of the render tree** | design | Eighteen fixed boxes are what "it loads in chunks" was, and a finer fixed grid is the same complaint smaller |
+| D615 | **A node splits on the rule the ladder already ordered by** | design | Grain and order from one quantity, so they cannot drift apart — D204 applied to the ladder |
+| D615 | **A node is skipped only when the world AND the field both say nothing changes** | correctness | The world half alone lost 4,923 voxels; the field half cannot miss what the sampler would find |
+| D615 | **The cache holds sharpened boxes, read by containment** | correctness | A camera-dependent grid has no stable index; old files still read |
+| D615 | **The stipple judgement is separated from the despeckle pass** | correctness | Which materials are a dither is a question about a building, not about 512 cells |
+| D615 | **`--refine-all` exists for the gate** | method | Two arms that each stop somewhere different cannot be compared at all |
+| D615 | **The skirt was built, measured and reverted** | honesty | 240 voxels lost; the sampler answers differently for a box one voxel larger, and that is not R11b's to fix |
+| D615 | **The facility gate is not measured** | honesty | Proved on `clips/sampler.clip`; the facility A/B is ten minutes a side and was not run |
