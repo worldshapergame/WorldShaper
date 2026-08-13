@@ -124,6 +124,9 @@ struct Options {
     // metre-8 sample's six. A verdict that depends on how much of the building the camera happened
     // to sharpen is not a verdict.
     bool stipple_at_coarse = true;
+    // R11d: take the up-front coarse sample for its verdict but do not paste it, so the ladder
+    // builds the world from nothing. Opt-in while it is being measured.
+    bool no_coarse_paste = false;
     // How many nodes the ladder picks and samples per wake. 0 keeps kRefineBatch. This is how the
     // default was chosen and is the control arm for it.
     usize refine_batch = 0;
@@ -738,6 +741,8 @@ Options parse_options(int argc, char** argv) {
             options.no_batch_parallel = true;
         } else if (arg == "--stipple-from-world") {
             options.stipple_at_coarse = false;
+        } else if (arg == "--no-coarse-paste") {
+            options.no_coarse_paste = true;
         } else if (arg == "--refine-workers" && i + 1 < argc) {
             options.refine_workers = static_cast<u32>(std::max(1, std::atoi(argv[++i])));
         } else if (arg == "--refine-batch" && i + 1 < argc) {
@@ -3554,7 +3559,11 @@ void Application::seed_refine_nodes(const forge::Script& script) {
             for (i64 x = first[0]; x <= last[0]; ++x) {
                 RefineNode node;
                 if (refine_node_of(NodeKey{x, y, z, kRefineCoarsest}, node)) {
-                    node.applied_per_metre = refine_coarse_per_metre_;
+                    // Nought when nothing was pasted: `applied_per_metre` is what the world
+                    // already holds here, and with no coarse paste it holds nothing. Seeding it
+                    // with the coarse resolution anyway would tell every node it was already
+                    // eight-voxels-a-metre good and the ladder would refine almost nothing.
+                    node.applied_per_metre = options_.no_coarse_paste ? 0 : refine_coarse_per_metre_;
                     refine_regions_.push_back(node);
                 }
             }
@@ -4343,8 +4352,31 @@ void Application::build_world() {
                             variety.distinct_types, variety.voxels, variety.largest_group,
                             variety.perturb_ms, variety.intern_ms, variety.resolve_ms);
             }
+            // R11d: the coarse sample is TAKEN and not PASTED.
+            //
+            // The sample has to happen -- it is the only whole-building measurement there is, and
+            // D629 and D630 between them established that the stipple verdict cannot come from
+            // anywhere else without becoming a function of where the player stood. What does not
+            // have to happen is putting its voxels into the world: that is the blocky first pass,
+            // it is what the player complained about, and the ladder builds the same building
+            // better. Seeded at eight metres, the first batch of 128 nodes covers the whole
+            // facility at one voxel a metre in tens of milliseconds and then splits by what is on
+            // screen, which is what "driven by pixels" was supposed to mean all along.
+            //
+            // What it costs: paste 257 ms and the compact 702 ms that follows it, and the world is
+            // empty for the frames before the first batch lands. That last part is the risk and it
+            // is what the measurement below is of.
             progress_.enter(LoadStage::Stamping);
-            const PasteStats stamped = paste_clip(
+            if (options_.no_coarse_paste) {
+                const u64 skipped_at = now_ns();
+                WS_LOG_INFO("clip",
+                            "the coarse build was sampled for its verdict and NOT pasted; the "
+                            "ladder builds the world from nothing (R11d)");
+                (void)skipped_at;
+            }
+            const PasteStats stamped = options_.no_coarse_paste
+                ? PasteStats{}
+                : paste_clip(
                 world_, ledger_, built.clip,
                 built.origin_voxel[0] * static_cast<i64>(coarse) + options_.clip_at[0],
                 built.origin_voxel[1] * static_cast<i64>(coarse) + options_.clip_at[1],
@@ -4352,7 +4384,7 @@ void Application::build_world() {
                 PasteMode::SolidOnly, MatterReason::PlayerPlace, 1, &jobs, types_.type_count(),
                 coarse);
             const u64 pasted_at = now_ns();
-            if (stamped.chunks_left_empty) world_.compact();
+            if (stamped.chunks_left_empty && !options_.no_coarse_paste) world_.compact();
 
             // Hold on to everything the ladder needs. The script owns the field, which the
             // background sampler reads and nothing else touches once parsing is done.

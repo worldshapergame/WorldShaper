@@ -6322,3 +6322,65 @@ one now also has to answer why a partial world sees zero.
 | D630 | **A partial world protects 0 materials against a whole one's 1** | finding | The verdict would depend on where the player walked |
 | D630 | **The 444,889-pixel difference is unconverged light, not specks** | honesty | The clean reopens 68 chunks of light and the shot was 30 frames later |
 | D630 | **A whole-building verdict needs a whole-building measurement** | plan | Which is the up-front sample, which is what R11d wants to delete |
+
+## D631 — R11d's first form: the paste goes, and the occlusion test needs the world it removed
+
+D630 left three ways forward and the smallest was taken: keep the up-front sample, because it is the
+only whole-building measurement and the verdict cannot come from anywhere else without becoming a
+function of where the player stood — but **do not paste it**. The blocky first pass is what the
+player complained about, and the ladder builds the same building.
+
+**Built, opt-in as `--no-coarse-paste`, and it does what it says.** `paste 0 ms, compact 0 ms`,
+everything ready at **t+3,026 ms**, and the world starts empty. Nodes are seeded with
+`applied_per_metre = 0` rather than the coarse resolution, because with nothing pasted the world
+holds nothing and telling every node it was already eight-voxels-a-metre good would refine nothing.
+
+**And the world comes out a sixth of a building.**
+
+| facility, enclosed camera, cold | pasted (ships) | not pasted |
+|---|---|---|
+| chunks | 68 | **50** |
+| solid voxels | 125,420,017 | **19,751,324** |
+| nodes sharpened | 32,712 of 40,436 | 37,119 of 46,007 |
+| left coarse: occluded | 6,022 | **8,446** |
+| wall clock | 19.1 s | 18.9 s |
+
+More nodes sharpened, six times less building, and the whole of the difference is in one census
+column: **occluded, 6,022 → 8,446**.
+
+### Why, and it is the trap the step was written to avoid wearing a different coat
+
+The picker refuses a node it cannot see, by casting a ray through **the world**. With the coarse
+build under it that ray is honest from the first frame: a wall exists at eight voxels a metre and
+what is behind it really is behind it. With nothing pasted, the ray is asked of a world that is
+still being built — so the order inverts. Early nodes are refused by nothing, because nothing is
+there to occlude them; the geometry that happens to arrive first then occludes everything behind
+it; and a node refused after that stays refused for as long as the camera stands still. The ladder
+reaches a fixed point that is a fixed point of its own build order rather than of the building.
+
+The handover's warning for this step was *"spawning into an empty room that fills with big blocky
+boxes"*. It is worse than that and quieter: the room fills correctly and **the rest of the building
+never arrives at all**, with every counter reading calm — `neither` is 0, nothing is starved,
+nothing is deferred, and the ladder stands down convinced it is finished.
+
+### What it costs to fix, and it is not this step
+
+The occlusion test has to stop being a fact about the world and become a fact about what the world
+is going to hold. That is the FIELD's question, not `World`'s — `forge::box_may_hold_matter` already
+answers "could this box hold anything" without a sample, and the picker already calls it. What does
+not exist is an occlusion test against the field, and a ray marched through a procedural field per
+candidate node is a different order of cost from a raycast against bricks.
+
+**So R11d is not "delete the paste". It is "the ladder's visibility tests must not read the world
+they are building".** That is the next thing, and it is a sub-step rather than a note.
+
+The flag stays opt-in and the default is untouched: `789c8a80f40323a1`, 125,420,017 voxels, 19.1 s,
+537 tests.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D631 | **The coarse sample is kept and the coarse PASTE can go** | design | The sample is the only whole-building verdict; the voxels are the blocky first pass |
+| D631 | **Not pasting it builds a sixth of the building** | finding | 19,751,324 voxels against 125,420,017, and 8,446 nodes refused as occluded against 6,022 |
+| D631 | **The occlusion ray reads the world the ladder is building** | finding | With nothing under it the refusals follow the build order, and a refusal outlives what caused it |
+| D631 | **Every counter reads calm while it happens** | honesty | `neither` 0, nothing deferred, nothing starved, and the ladder stands down convinced it finished |
+| D631 | **R11d's real content is the visibility tests, not the paste** | plan | They have to be asked of the field rather than of the world |
