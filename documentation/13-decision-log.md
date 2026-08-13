@@ -4265,3 +4265,42 @@ next measurement measures.
 | D605 | **Assert the phrases are present** | correctness | The audits log and set no exit code, so absence-of-failure passes for a run that never got that far |
 | D605 | **`--no-clip-cache` on the audit run** | measurement | Running the tests must not sharpen the world and move the `content` hash the renderer figures are compared against |
 | D605 | **An unknown argument should probably be fatal** | deferred | A warning is why this hid — making it fatal is a change to how every scripted run behaves, and it deserves its own pass over what is legitimately passed through rather than riding on this one |
+
+## D606 — both halls were barred across the doorway, and the void was measured against the wrong thing
+
+**Reported from playing, with a photograph: the entrances to both side rooms are blocked by two
+horizontal bars, one white and one red.** They are the DADO and the IMPOST, left standing where the
+arch should have cut them.
+
+`halls.clip` punches an arch void through the wall and subtracts it from every member that stands
+in the air, and it says so in its own words — *"no cornice and no dado crosses the opening."* The
+void stopped at **x 5.45**, reasoned in the file as *"0.05 past my own west face, so the reveal is
+cut past its own rounding"*. That is true of the **wall** and false of everything standing **on**
+it, because trim projects into the room:
+
+| member on the west wall | reaches | left standing |
+|---|---|---|
+| dado body | 5.445 | — |
+| dado cap | 5.535 | 0.085 |
+| dado ovolo | 5.535 | 0.085 |
+| impost bed | 5.580 | 0.130 |
+| **impost corona** | **5.670** | **0.220** |
+
+The dado is painted **porphyry**, so its remnant reads **red** at waist height; the impost is the
+wall's own stone, so its remnant reads **white** above head height. Both halls, identically, because
+the fault is a number and not a shape — `part_halls` is `mirror { halls_mass }`.
+
+The void runs to **5.76** now, which is 0.09 past the deepest of them — the M/5 this file already
+uses for a projection it wants to be certainly clear of a face. The head is extended with it so the
+reveal does not step at the springing.
+
+**The reusable half:** a void that only has to cut a WALL may stop at the wall face. A void that has
+to cut what STANDS on the wall has to reach past the furthest thing standing there, and the number
+to check it against is the deepest moulding, never the face. Nothing in the clip language warns
+about this: the difference succeeded, it simply had nothing to bite on.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D606 | **Measure the void against the deepest MEMBER, not the wall face** | correctness | Trim projects into the room; a void sized to the wall cuts none of it and the cut still reports success |
+| D606 | **Extend the head with the jamb** | consistency | Otherwise the reveal is 1.71 deep below the springing and 1.40 above it, which steps at the impost |
+| D606 | **The numbers are in the clip beside the change** | process | The next person to move that void needs the table, not the conclusion |

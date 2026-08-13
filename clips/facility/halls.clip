@@ -180,10 +180,31 @@ let halls_air = union { halls_room halls_vault }
 # semicircular head of 1.125 crowning at 5.625.
 #
 # It is punched from x = 4.05, which is 0.75 inside the contract's rotunda radius of 4.80, so it
-# goes clean through whatever the rotunda builds there and this file never has to know. It runs to
-# 5.45, which is 0.05 past my own west face, so the reveal is cut past its own rounding.
-let halls_arch_jamb = box 4.05 1.80 -1.125   5.45 4.50 1.125
-let halls_arch_head = cylinder 4.75 4.50 0  r=1.125 h=1.40 axis=x
+# goes clean through whatever the rotunda builds there and this file never has to know.
+#
+# IT RUNS TO 5.76, AND IT USED TO RUN TO 5.45. That was reasoned as "0.05 past my own west face,
+# so the reveal is cut past its own rounding" -- true of the WALL and false of everything standing
+# on it. THE PART below cuts the dado, the impost, the responds and the rib with this void so that
+# nothing crosses the opening, and those members do not stop at the wall face: they project into
+# the room. Measured on the west wall, where the arch is:
+#
+#   dado body      to 5.445   cut
+#   dado cap       to 5.535   0.085 left standing
+#   dado ovolo     to 5.535   0.085 left standing
+#   impost bed     to 5.580   0.130 left standing
+#   impost corona  to 5.670   0.220 left standing
+#
+# What that draws is two bars straight across the doorway: the dado at waist height, in porphyry,
+# so it reads RED, and the impost above head height in the wall's own stone, so it reads WHITE. It
+# looks exactly like somebody barred the room off. Reported from playing, both halls, and it is the
+# same 0.220 in each because the fault is a number rather than a shape.
+#
+# 5.76 is 0.09 past the deepest of them, which is the M/5 this file already uses for a projection
+# it wants to be certainly clear of a face. A void that stops at the wall cuts the wall; a void
+# that has to cut what STANDS on the wall has to reach past the furthest thing standing there, and
+# the number to check it against is the corona, not the face.
+let halls_arch_jamb = box 4.05 1.80 -1.125   5.76 4.50 1.125
+let halls_arch_head = cylinder 4.905 4.50 0  r=1.125 h=1.71 axis=x
 let halls_arch_void = union { halls_arch_jamb halls_arch_head }
 
 # ================================================================================================
