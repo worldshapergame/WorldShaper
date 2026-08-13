@@ -3035,7 +3035,25 @@ void Application::deliver_refinement(RefineDelivery delivered) {
     refine_bricks_emptied_ += bricks_emptied;
     refine_chunks_emptied_ += chunks_emptied;
 
-    if (left == 0) {
+    // AND NOTHING IS STILL OUT BEING SAMPLED. `left` counts nodes that are not `done`, and a node
+    // is marked done when it is PICKED rather than when it lands (see enlist) -- it has to be, or
+    // the next pick would choose it again and sample it twice. So a batch in the sampler's hands
+    // reads here as nought left, and the fixed point can be declared over work already paid for.
+    //
+    // With one batch in flight that is not a corner: the pick above this paste is the LAST thing
+    // that happens before the count, so the common case is a batch outstanding at exactly this
+    // moment. Tearing down here stops the worker and drops it, which is 606 voxels of the sampler
+    // clip that were sampled and never pasted -- the world came back 1,429,498 against the
+    // reference 1,430,104, and every load since D623 has been quietly short.
+    //
+    // It was reachable before the persistent worker as well, and worse: the teardown reset the
+    // script and the plan the running thread was reading, and the batch landed afterwards anyway.
+    // That accident is what kept the count right, over a use-after-free, and it is why the second
+    // "fully sharpened" line was printed at all.
+    //
+    // Waiting costs nothing. The outstanding batch lands within a frame or two, is pasted like any
+    // other, and the delivery after it finds left == 0 with the sampler idle. See D624.
+    if (left == 0 && !refine_busy()) {
         // The one walk, now that there is nothing left to empty.
         if (refine_wants_compact_) world_.compact();
         const WorldStats now = world_.stats();

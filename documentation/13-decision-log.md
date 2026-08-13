@@ -5781,9 +5781,17 @@ timing — and two runs settled on different worlds, `91c00087d98b7532` against 
 8 and 19). Four per cent does not buy a world that differs run to run.
 
 **What is kept**: the sampler is now a persistent thread with a queue rather than a `std::thread` per
-batch, with `kRefineInFlight = 1`. Behaviour-identical — wall 17.1 s, `789c8a80f40323a1`, the same
-world and the same timing as before — and the machinery for the second batch is there behind one
-constant, for whoever pays for the skip test.
+batch, with `kRefineInFlight = 1`. The machinery for the second batch is there behind one constant,
+for whoever pays for the skip test.
+
+> **Correction, D624.** This paragraph said the kept half was *"behaviour-identical — wall 17.1 s,
+> `789c8a80f40323a1`, the same world and the same timing as before"*, and the commit message said
+> *"gate restored: `a1f8bc6c656343b7`, 1,430,104 voxels"*. **That was wrong.** The kept half lost the
+> same 606 voxels, for a different reason, and shipped that way. The facility half of the claim holds
+> — `789c8a80f40323a1` is unchanged, because that camera never reaches the fixed point at all — and
+> checking the facility hash is what made a broken gate look like a passing one. **A hash that cannot
+> reach the code you changed is not a control arm.** Read D624 before trusting any figure between
+> here and it.
 
 **And one ordering trap it exposed.** With one batch in flight the pick must happen *inside* the
 delivery, not at the top of the frame: the slot is still held by the batch about to be delivered, so
@@ -5798,3 +5806,49 @@ frame late changes which nodes are held out.
 | D623 | **Delivering every landed batch is not carried either** | honesty | Worth 4%, makes the settled world depend on frame timing; two runs, two hashes |
 | D623 | **The sampler is a persistent thread with a queue** | design | Behaviour-identical at one in flight, and the second is one constant away |
 | D623 | **The pick belongs inside the delivery, not at the top of the frame** | correctness | The slot is still held there; picking a frame late cost 12,421 → 15,170 ms and changed the world |
+
+## D624 — the last batch of every load was being thrown away, and the fixed point was the bug
+
+D623 shipped the persistent sampler thread and claimed the gate with it. The gate was not passing.
+`clips/sampler.clip --refine-all --no-despeckle` returned **1,429,498 voxels, `3a5b95b2390990a8`**
+against the reference **1,430,104, `a1f8bc6c656343b7`** — the same 606 voxels the double buffer lost,
+arriving through a different door, in the half that WAS carried.
+
+**What a player was getting**: the world they spawn into is permanently missing the last batch of
+geometry the load had already paid to sample. Not blurry, not late — absent, and it never comes back,
+because every node in it is marked done.
+
+**The invariant.** `enlist` marks a node `done` when it is **picked**, not when it lands. It has to:
+the pick that follows would otherwise choose the same node again and sample and paste it twice. So
+`left`, which counts nodes that are not `done`, reads **nought while a batch is still out being
+sampled**. `deliver_refinement` tested `left == 0` and declared the ladder finished — over work that
+had been paid for and not yet delivered. And it is not a rare window: the pick sits directly above the
+count, so a batch outstanding at exactly that moment is the *common* case, not a corner.
+
+**Why it did not show before the persistent worker.** D622's teardown did not call
+`stop_refine_worker()`. The outstanding `std::thread` therefore landed anyway — into a reset script
+and a reset plan it was still reading, which is a use-after-free that happened to preserve the voxel
+count, and which is why the old build printed *"world fully sharpened"* **twice**. D623 made the
+teardown correct, the batch was dropped cleanly instead of landing by accident, and the count went
+short. The regression was introduced by fixing a different bug properly.
+
+**The fix is one condition**: `if (left == 0 && !refine_busy())`. Waiting costs nothing — the
+outstanding batch lands within a frame or two, is pasted like any other, and the delivery after it
+finds the count at nought with the sampler idle.
+
+**Measured.** Gate, three runs: **1,430,104 voxels, `a1f8bc6c656343b7`**, one *"fully sharpened"*
+line, settling at frames 311, 300 and 304. Cold facility, enclosed camera, no cache, two runs: wall
+**17.6 and 18.2 s**, ladder **12,894 and 13,124 ms**, content **`789c8a80f40323a1`** — D622's world,
+unchanged. Against D622's logged 17.3 s / 12,421 ms that is the machine's own spread and not a cost:
+the edited branch **cannot execute on that camera at all**, which settles with 32,712 of 40,436 nodes
+sharpened and therefore never reaches `left == 0`. Whole suite passes.
+
+**And that is the method finding.** The facility hash was the control arm D623 checked, and the
+facility hash could not have moved whatever the change did. The gate that could move is the one on the
+clip small enough to finish — which is exactly why R11b built it. **Check the arm that can fail.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D624 | **The fixed point is `left == 0` AND the sampler idle** | correctness | A node is done when picked, not when landed, so nought left is not nothing outstanding; the load dropped its last batch, 606 voxels |
+| D624 | **D622 kept the count over a use-after-free** | finding | The teardown never stopped the worker, so the dropped batch landed into a reset plan anyway — and printed "fully sharpened" twice saying so |
+| D624 | **A hash that cannot reach your change is not a control arm** | method | D623 read the facility (never reaches the fixed point) and called the gate restored; the gate is the clip that finishes |

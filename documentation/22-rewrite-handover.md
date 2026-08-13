@@ -816,6 +816,16 @@ is in flight over it**, and making the skip test consult the queue as well as th
 of that 9%. Delivering every landed batch rather than one a frame was worth a further 4% and made
 the settled world depend on frame timing (two runs, two hashes) — refused for trap 8/19.
 
+**The half that WAS kept lost the same 606 voxels too, and shipped — D624.** `enlist` marks a node
+`done` when it is **picked**, not when it lands (it must, or the next pick samples it twice), so
+`left == 0` in `deliver_refinement` reads true with a batch still out at the sampler — and the pick
+sits directly above that count, so an outstanding batch there is the common case. D622 got away with
+it because its teardown never stopped the worker, so the dropped batch landed anyway into a reset
+plan; that accident is why the old build printed *"fully sharpened"* twice. Fixed by testing
+`left == 0 && !refine_busy()`. **D623 checked the FACILITY hash and called the gate restored — the
+facility never reaches the fixed point, so that hash could not have moved whatever the change did.
+Check the arm that can fail: the gate is the clip small enough to finish.**
+
 **So the honest ceiling, and the arithmetic of why 100× is not on this road.** The load is 17.1 s:
 about **1.1 s** of startup, **3.7 s** of up-front coarse build (sample 2,754 + paste 257 + compact
 702 — **R11d** removes all of it), and **12.4 s** of ladder, of which **6.3 s is sampling**, 0.8 s
