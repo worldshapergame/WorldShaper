@@ -73,6 +73,23 @@ struct CachedRegion {
     bool done = false;
 };
 
+// One material's answer to "may a lone voxel of this be repainted, or is it a deliberate dither?"
+//
+// The forge takes that judgement once, over the whole clip, and hands it to every box the ladder
+// sharpens afterwards -- a box's own five hundred cells cannot tell a weathering coat from a
+// sampling accident, and the seams between per-box answers are visible. It is therefore something
+// a world KNOWS, not something it can work out again from a corner of itself, and a cached world
+// that comes back without it comes back unable to despeckle anything at all: forge::despeckle
+// reads an empty verdict as "leave every speck alone, everywhere". That is what this list is for.
+//
+// Kept as a plain pair rather than the forge's own StippleVerdict so that world/ does not have to
+// know what a clip is. The ids are indices into the type table written beside it, so they mean the
+// same thing on the way back in.
+struct CachedStipple {
+    VoxelTypeId type = 0;
+    bool may_despeckle = false;
+};
+
 // One chunk's emissive cells, kept so that finding the lamps does not mean reading the world again.
 //
 // R9g. Emitters are the one thing about a world that is expensive to find and tiny to store: the
@@ -102,6 +119,17 @@ struct WorldCache {
     // what a clip built at its authored detail in one pass looks like. It is not the same as a
     // ladder with nothing done, which is a list of boxes all reading false.
     std::vector<CachedRegion> regions;
+    // What the despeckler is allowed to touch. See CachedStipple: this is the one thing about a
+    // world that is taken from the whole clip at once, so a run that resumes from this file has no
+    // way to derive it and must be given it.
+    //
+    // `stipple_taken` and an empty list are NOT the same thing, and conflating them is trap 7 in
+    // its purest form: "no material has any specks" and "nobody ever asked" both come out as an
+    // empty map, and the second must not be read as the first. A file written by a --no-despeckle
+    // run has no verdict in it, and the run that loads it needs to say so rather than quietly
+    // sharpen a building full of stray voxels.
+    bool stipple_taken = false;
+    std::vector<CachedStipple> stipple;
     // Where the lamps are, per chunk. Empty means "this file predates R9g or was written by a run
     // that had not scanned", and the reader treats that as "scan on demand" rather than as "there
     // are no lamps" -- which is trap 7, and here it would be a building with its lights off.

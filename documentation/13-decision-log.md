@@ -5852,3 +5852,80 @@ clip small enough to finish — which is exactly why R11b built it. **Check the 
 | D624 | **The fixed point is `left == 0` AND the sampler idle** | correctness | A node is done when picked, not when landed, so nought left is not nothing outstanding; the load dropped its last batch, 606 voxels |
 | D624 | **D622 kept the count over a use-after-free** | finding | The teardown never stopped the worker, so the dropped batch landed into a reset plan anyway — and printed "fully sharpened" twice saying so |
 | D624 | **A hash that cannot reach your change is not a control arm** | method | D623 read the facility (never reaches the fixed point) and called the gate restored; the gate is the clip that finishes |
+
+## D625 — the despeckler was off on every cached load, because the verdict was never written down
+
+**What a player was getting**: stray voxels of the wrong material, scattered through the building,
+on every launch after the first. The first launch was clean. Nothing in the code said so — the
+comment at the sampler asserts the opposite, in full sentences, and had done since R11a.
+
+**The mechanism, and it is trap 7 exactly.** `forge::stipple_verdict` is taken **once, over the
+whole clip**, in the up-front coarse sample: which materials are a deliberate dither (a weathering
+coat, a two-tone tile) and must be left alone, and which lone voxels are sampling accidents to be
+repainted. A node's own five hundred cells cannot tell those apart — R11a measured 29 nodes of 297
+disagreeing with the whole-clip answer, and the seams between per-node answers are visible — so the
+verdict is kept in `refine_stipple_` and handed to every node the ladder sharpens afterwards.
+
+It was assigned in exactly one place: inside the cold build, at `main.cpp:3892`. `resume_refinement`
+never touched it. So a cached load began with an empty map, and `forge::despeckle` reads an empty
+verdict not as "despeckle everything" but as **"leave every speck alone, everywhere"**
+(`measure.cpp:582`). The despeckler ran 23,000 times per load and did nothing, silently, on the path
+every launch after the first takes.
+
+**How it was found, and why it needed an instrument first.** The per-node call threw its
+`DespeckleReport` away, so "the ladder despeckles every node it sharpens" was an assertion in a
+comment with no counter behind it. Two atomics and one line at settle time:
+
+    ladder despeckle: verdict holds 35 materials, 512 voxels repainted, 663 left as a deliberate stipple
+
+Cold that reads 35/512/663. Cached, before the fix, it read **0/0/0**.
+
+**A cheaper verdict does not exist, and this was measured before the file format was touched.** The
+obvious alternative — re-take the verdict on resume from a cheap low-resolution sample of the whole
+clip — was tried at sample metres 8, 4, 2 and 1 (`--clip-coarse` 4/8/16/32):
+
+| metre | materials seen | kept as a dither | despeckled / left |
+|---|---|---|---|
+| 8 | 35 | 6 (27, 358, 392, 455, 509, 554) | 605 / 1004 |
+| 4 | 31 | 5 (188, 358, 386, 392, 483) | 357 / 291 |
+| 2 | 26 | 8 | 199 / 235 |
+| 1 | 19 | 1 (383) | 132 / 21 |
+
+The verdict is **not stable across resolution**: metre 4 shares two of metre 8's six, and material 27
+is protected at metre 8 and repainted at metre 4. The material set shrinks 35 → 31 → 26 → 19,
+because a coarse sample never meets most of the materials, and a material absent from a non-empty
+verdict is never despeckled at all (`measure.cpp:604`). A cheap stand-in would not be a cheap
+verdict, it would be a different and quietly wrong one. **Recorded as a refuted approach.**
+
+**The fix**: the verdict travels with the world. `WorldCache` gains `stipple_taken` and a
+`CachedStipple` list, written after the regions block; cache version 3 → 4, so every existing
+`.world` file is rejected and rebuilt rather than loaded and left speckled. The flag is separate
+from the list on purpose — "asked, and no material clears the floor" and "nobody ever asked" are
+both an empty map and mean opposite things. A file without a verdict now produces a warning naming
+the file, instead of a building that quietly keeps its specks.
+
+**Measured**, one build, 640×400, `--settle --screenshot-frame 120`, canonical flags:
+
+| arm | despeckle line | content |
+|---|---|---|
+| cold | 35 materials, **512** repainted, 663 left | `789c8a80f40323a1` |
+| cached, before | 0 materials, **0** repainted, 0 left | `007113c0915ed6b1` |
+| cached, after | 35 materials, **511** repainted, 662 left | `789c8a80f40323a1` |
+| cached, after, again | 35 materials, 511 repainted, 662 left | `789c8a80f40323a1` |
+
+**The content hash is the result.** A cached load did not merely despeckle less than a cold one — it
+built a *different world*. It now builds the same one, twice running. The one-voxel difference in the
+repaint count is 32 fewer nodes in the ladder's node set (23,324 against 23,356) and does not move
+the hash. Screenshots read: the world is correct and the cached arm is, if anything, cleaner.
+
+**A second finding, not fixed here, recorded because it is the next big one.** The resume log now
+prints the saved-box count beside the sharpened-seed count, and it reads:
+
+    cached world has 0 of 120 nodes sharpened from 19680 saved boxes
+
+`already_sharp` tests **seed** nodes for containment in a saved box, and since R11c a saved box is
+*smaller* than a seed — so a box can never contain one, no seed is ever marked done, and children
+made later by `split_refine_node` are never tested against the cache at all. Nineteen thousand
+paid-for boxes come back and mark nothing. The cached load then re-sharpens 23,324 nodes, 11.7 s of
+them, reproducing voxels the cache already loaded. **The region list is currently used for nothing
+but whether it is empty.** Fixing that is worth more than anything else on the ladder.

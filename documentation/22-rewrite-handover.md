@@ -531,6 +531,39 @@ work, and these three are the only three places it lives.
 
 ---
 
+#### 0. Since the order was chosen: a bug is closed, and a fourth place was found
+
+**Closed (D625).** A cached load — the path every launch after the first takes — was running with
+the despeckler off. The stipple verdict is taken once over the whole clip in the up-front coarse
+build, `resume_refinement` never took one, and `forge::despeckle` reads an empty verdict as *"leave
+every speck alone, everywhere"*. It now travels in the world cache (format 3 → 4, so the first run
+after any build of this code is necessarily cold), and the cached world's content hash moved
+`007113c0915ed6b1 → 789c8a80f40323a1` — **the cold build's hash**, stable over two runs. Note for
+step 1: `refine_stipple_` is now populated on both paths, so R11d does not have to keep the coarse
+build alive merely to keep the verdict.
+
+**Found, and not fixed (the fourth place).** The resume log was given the ratio it was missing:
+
+    cached world has 0 of 120 nodes sharpened from 19680 saved boxes
+
+`already_sharp` in `resume_refinement` tests **seed** nodes for containment in a saved box, and since
+R11c a saved box is *smaller* than a seed — so a box can never contain one, no seed is marked done,
+and children made later by `split_refine_node` are never tested against the cache at all. Nineteen
+thousand paid-for boxes come back and mark nothing; the cached load then re-sharpens 23,324 nodes,
+**11.7 s**, reproducing voxels the cache had already loaded into the world. The region list is used
+for nothing but whether it is empty.
+
+This is not one of the three, and it is bigger than two of them *for the common case*: the three
+above are the cold load, and this is every load after it. It is also close to R11f's business —
+`CachedRegion` records no detail level, which is the same missing field both need. **Suggested
+reading before touching it**: `save_refined_world`'s `applied_per_metre >= refine_authored_` filter
+is what makes the saved boxes sub-seed-sized, so the fix is either to test nodes at every level
+against the box list rather than only seeds, or to record the level on the box and let a seed inherit
+"already at metre N" from its children's boxes. Do not guess which; measure the box-size histogram
+first.
+
+---
+
 #### 1. R11d — nothing is sampled up front
 
 **What it is.** The up-front build samples the *whole building* at metre 8 and inflates it 4× on

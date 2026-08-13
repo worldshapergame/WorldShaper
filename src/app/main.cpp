@@ -1732,6 +1732,11 @@ private:
     forge::Vec3 refine_bounds_high_{0, 0, 0};
     // Which materials are a deliberate dither, decided once over the whole clip.
     forge::StippleVerdict refine_stipple_;
+    // Whether anybody has decided that, which is NOT the same as the decision being non-empty. An
+    // empty verdict switches despeckling off everywhere (forge::despeckle), so "no material is a
+    // dither" and "nobody looked" produce identical behaviour and must not produce identical
+    // records: this is what the cache writes down so the next run knows which one it inherited.
+    bool refine_stipple_taken_ = false;
     // What the up-front coarse build laid the world down at, in voxels a metre. Every node starts
     // knowing this, so the ladder never spends a sample arriving at a detail already there.
     i32 refine_coarse_per_metre_ = 0;
@@ -1776,6 +1781,12 @@ private:
     u64 refine_total_nodes_ = 0;          // nodes delivered, so a wake's yield is visible
     u64 refine_total_rays_ = 0;
     u64 refine_total_swept_ = 0;          // list entries walked, which is what a sweep costs
+    // What despeckling actually did over the whole ladder, which until now nothing counted: the
+    // per-node call at the sampler throws its report away, so "the ladder despeckles every node it
+    // sharpens" was an assertion in a comment with no instrument behind it. Atomic because the
+    // sampler runs the nodes of a batch on several workers at once; the sum is order-independent.
+    std::atomic<u64> refine_total_repainted_{0};
+    std::atomic<u64> refine_total_left_{0};
     u64 refine_began_ns_ = 0;
     // True when a batch was picked and handed to the sampler, so the caller can keep topping the
     // queue up until it is full. One call a frame is not enough: the sampler eats a batch every
@@ -2630,7 +2641,12 @@ void Application::refine_worker() {
                 // this node, because what a material's specks are a large enough share of is a
                 // question about the building and five hundred cells cannot answer it
                 // (forge::StippleVerdict).
-                if (despeckle_) forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
+                if (despeckle_) {
+                    const forge::DespeckleReport cleaned =
+                        forge::despeckle(job.result->clip, 0.05, &refine_stipple_);
+                    refine_total_repainted_.fetch_add(cleaned.repainted, std::memory_order_relaxed);
+                    refine_total_left_.fetch_add(cleaned.left, std::memory_order_relaxed);
+                }
                 asked_by[i] = job.result->voxels_asked;
             }
         };
@@ -3163,6 +3179,19 @@ void Application::save_refined_world() {
         out.done = box.done;
         cache.regions.push_back(out);
     }
+    // Which materials the despeckler may touch, carried with the world because a run that resumes
+    // from this file cannot work it out again: the verdict is taken over the WHOLE clip in one
+    // sample, and a resuming run never has the whole clip -- it has this world and a list of boxes.
+    //
+    // Until this line the resume path started with an empty verdict, which forge::despeckle reads
+    // as "leave every speck alone, everywhere", so every cached load -- the common path -- sharpened
+    // the building with the despeckler silently off. Measured: 512 voxels repainted on the cold arm,
+    // 0 on the cached one, same clip, same camera.
+    cache.stipple_taken = refine_stipple_taken_;
+    cache.stipple.reserve(refine_stipple_.allowed.size());
+    for (const auto& [type, may] : refine_stipple_.allowed) {
+        cache.stipple.push_back(CachedStipple{type, may});
+    }
     // Where the lamps are, so the run that loads this file does not have to read every brick of
     // every chunk to find out. R9g, and D587 is what it costs when nobody keeps it: 14 ms of scan
     // to rediscover twenty-one fittings.
@@ -3533,6 +3562,40 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
         return;
     }
 
+    // Which materials are a deliberate dither. Taken from the whole clip in one sample by the run
+    // that built this world, and there is no whole clip here to take it from again -- so it is read
+    // back rather than re-derived, and a cheaper stand-in was tried and does not work: sampled at
+    // metres 4, 2 and 1 the verdict keeps five, eight and one material against metre 8's six, and
+    // shares only two of them, because a coarser sample simply never meets most of the materials.
+    //
+    // Without this the resume path began with an empty map, and an empty map is not "despeckle
+    // everything" but "despeckle nothing, anywhere" (forge::despeckle). Every cached load therefore
+    // sharpened its nodes with the despeckler off while the code above claimed it did not.
+    if (cache.stipple_taken) {
+        refine_stipple_.allowed.clear();
+        for (const CachedStipple& entry : cache.stipple) {
+            refine_stipple_.allowed[entry.type] = entry.may_despeckle;
+        }
+        refine_stipple_taken_ = true;
+        usize kept = 0;
+        for (const auto& [type, may] : refine_stipple_.allowed) {
+            (void)type;
+            if (!may) ++kept;
+        }
+        WS_LOG_INFO("clip",
+                    "cached world brought its stipple verdict back: {} materials, {} of them a "
+                    "deliberate dither",
+                    refine_stipple_.allowed.size(), kept);
+    } else if (options_.despeckle) {
+        // Said out loud rather than absorbed, because the effect is invisible: the world still
+        // sharpens, it just keeps every stray voxel it makes. A file written before this format, or
+        // by a --no-despeckle run, has no verdict to give and this run has no way to take one.
+        WS_LOG_WARN("clip",
+                    "the cached world carries no stipple verdict, so nothing this run sharpens can "
+                    "be despeckled; delete '{}' to rebuild it with one",
+                    refine_cache_path_.empty() ? cache_path : refine_cache_path_);
+    }
+
     // What the file holds is now the boxes that WERE sharpened rather than flags against a fixed
     // grid, so a node is already sharp when a saved box contains it -- a containment test rather
     // than a comparison of corners.
@@ -3579,8 +3642,15 @@ void Application::resume_refinement(forge::Script&& script, const WorldCache& ca
         WS_LOG_INFO("clip", "the cached world is fully sharpened");
         return;
     }
-    WS_LOG_INFO("clip", "cached world has {} of {} nodes sharpened; carrying on from here", done,
-                refine_regions_.size());
+    // The saved-box count is in here as well, because the interesting number is the RATIO. The
+    // containment test above runs over the seeds only, and since R11c a saved box is smaller than a
+    // seed, so a box can never contain one: thousands of paid-for boxes can come back and mark zero
+    // seeds done. When those two numbers are "0 of 120 sharpened, from 3000 saved boxes" the file
+    // is being used for nothing but its emptiness.
+    WS_LOG_INFO("clip",
+                "cached world has {} of {} nodes sharpened from {} saved boxes; carrying on from "
+                "here",
+                done, refine_regions_.size(), cache.regions.size());
 }
 
 void Application::build_world() {
@@ -3879,6 +3949,31 @@ void Application::build_world() {
                 // five hundred cells would say something different in every node, and the seams
                 // between those answers are visible (R11a: 29 nodes of 297 differ).
                 refine_stipple_ = forge::stipple_verdict(built.clip);
+                // Asked, and this is the answer -- separately from what the answer was. A verdict
+                // that happens to be empty is a real verdict ("no material clears the floor"); a
+                // run that never took one is not. They mean opposite things to the despeckler and
+                // the cache has to be able to write down which of the two it is holding.
+                refine_stipple_taken_ = true;
+                // What the verdict actually SAYS, not just that one was taken. Two traps live in
+                // forge::despeckle and both are invisible without this line: an empty verdict turns
+                // despeckling off everywhere, and a material missing from the map is never
+                // despeckled at all. R11d has to reproduce this map from a cheaper sample, and the
+                // only way to know whether a cheaper sample agrees is to print both and compare.
+                {
+                    std::string says;
+                    usize kept = 0;
+                    for (const auto& [type, may] : refine_stipple_.allowed) {
+                        if (!may) ++kept;
+                        if (!says.empty()) says += ' ';
+                        if (!may) says += '*';
+                        says += std::to_string(static_cast<u64>(type));
+                    }
+                    WS_LOG_INFO("clip",
+                                "stipple verdict at metre {}: {} materials seen, {} kept as a "
+                                "deliberate dither (marked *): {}",
+                                script.settings.voxels_per_metre, refine_stipple_.allowed.size(),
+                                kept, says);
+                }
                 const forge::DespeckleReport dots = forge::despeckle(built.clip, 0.05,
                                                                      &refine_stipple_);
                 if (dots.repainted > 0) {
@@ -7979,6 +8074,19 @@ int Application::play(const Options& options) {
                     refine_total_pick_ms_, refine_total_sweep_ms_, refine_total_swept_,
                     refine_total_rays_, refine_total_ray_ms_, refine_total_sample_ms_,
                     refine_total_paste_ms_);
+                // The verdict is the whole point of the line, not the counts. Every node the
+                // ladder sharpens is despeckled against a judgement taken once over the WHOLE clip
+                // (forge::StippleVerdict), and forge::despeckle reads an EMPTY verdict as
+                // "despeckle nothing anywhere" -- so a run that reaches here holding nought
+                // materials did not despeckle a single one of the nodes it pasted, however many it
+                // sharpened. Printing the size of the verdict next to the work it governed is the
+                // only way that failure is visible from a log.
+                WS_LOG_INFO("frame",
+                            "ladder despeckle: verdict holds {} materials, {} voxels repainted, {} "
+                            "left as a deliberate stipple",
+                            refine_stipple_.allowed.size(),
+                            refine_total_repainted_.load(std::memory_order_relaxed),
+                            refine_total_left_.load(std::memory_order_relaxed));
             }
             // Averages, not the last frame. One frame's GPU time moves several per cent from
             // clock and scheduling alone, so a figure another build has to beat has to be a

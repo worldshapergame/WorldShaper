@@ -215,6 +215,79 @@ TEST_CASE("a world built in one pass carries no regions") {
     CHECK(in.regions.empty());
 }
 
+// The stipple verdict is the one thing about a world that cannot be re-derived from a corner of
+// it: it is taken over the whole clip in a single sample, and a run that resumes from this file has
+// only the world and a list of boxes. Left out of the file, the resuming run starts with an empty
+// verdict — which forge::despeckle reads as "leave every speck alone, everywhere" — and sharpens
+// the whole building with the despeckler silently off. Measured before it was fixed: 512 voxels
+// repainted building the facility cold, 0 loading the same world from cache.
+TEST_CASE("a cached world brings its stipple verdict back") {
+    Scratch file("ws_test_cache_stipple.world");
+    Side wrote;
+    populate(wrote);
+
+    WorldCache out = wrote.handle();
+    out.regions = two_regions(true, false);
+    out.stipple_taken = true;
+    out.stipple.push_back(CachedStipple{27, false});    // a deliberate dither: leave it alone
+    out.stipple.push_back(CachedStipple{131, true});    // a sampling accident: repaint it
+    out.stipple.push_back(CachedStipple{554, false});
+    const u64 key = world_cache_key("a clip", 32, 1234);
+    REQUIRE(write_world_cache(file.path, key, out));
+
+    Side read;
+    WorldCache in = read.handle();
+    REQUIRE(read_world_cache(file.path, key, in, nullptr));
+
+    CHECK(in.stipple_taken);
+    REQUIRE(in.stipple.size() == 3);
+    CHECK(in.stipple[0].type == 27);
+    CHECK_FALSE(in.stipple[0].may_despeckle);
+    CHECK(in.stipple[1].type == 131);
+    CHECK(in.stipple[1].may_despeckle);
+    CHECK(in.stipple[2].type == 554);
+    CHECK_FALSE(in.stipple[2].may_despeckle);
+}
+
+// Trap 7, in the place it does the most damage: "nobody asked" and "asked, and no material clears
+// the floor" are both an empty list, and they mean opposite things. A run that inherits the first
+// has to say out loud that it cannot despeckle; a run that inherits the second is correct to leave
+// everything standing. One flag, written separately from the list, is what tells them apart.
+TEST_CASE("an empty verdict is not the same as no verdict") {
+    const u64 key = world_cache_key("a clip", 32, 1234);
+    {
+        Scratch file("ws_test_cache_stipple_empty.world");
+        Side wrote;
+        populate(wrote);
+        WorldCache out = wrote.handle();
+        out.regions = two_regions(true, false);
+        out.stipple_taken = true;   // asked, and nothing came back
+        REQUIRE(write_world_cache(file.path, key, out));
+
+        Side read;
+        WorldCache in = read.handle();
+        REQUIRE(read_world_cache(file.path, key, in, nullptr));
+        CHECK(in.stipple_taken);
+        CHECK(in.stipple.empty());
+    }
+    {
+        Scratch file("ws_test_cache_stipple_none.world");
+        Side wrote;
+        populate(wrote);
+        WorldCache out = wrote.handle();
+        out.regions = two_regions(true, false);   // never asked: --no-despeckle built this one
+        REQUIRE(write_world_cache(file.path, key, out));
+
+        Side read;
+        WorldCache in = read.handle();
+        in.stipple_taken = true;                              // rubbish the reader must clear
+        in.stipple.push_back(CachedStipple{1, true});         // ditto
+        REQUIRE(read_world_cache(file.path, key, in, nullptr));
+        CHECK_FALSE(in.stipple_taken);
+        CHECK(in.stipple.empty());
+    }
+}
+
 // A file from the version before the region list is rejected rather than read up to the point
 // where the format diverges. That is what the version in the header is for, and the reader gets it
 // from the same three fields world_cache_matches reads.

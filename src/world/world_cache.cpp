@@ -21,7 +21,11 @@ namespace {
 constexpr u32 kMagic = 0x57534357u;   // "WSCW"
 // 2 — the sharpened-region list, so a world cached before it finished can be carried on rather
 // than mistaken for a finished one. An older file is rejected by the header check and rebuilt.
-constexpr u32 kVersion = 3u;   // R9g: a chunk's emissive cells are written beside the world
+// 3 — R9g: a chunk's emissive cells are written beside the world.
+// 4 — the stipple verdict, without which a resumed world cannot despeckle anything it sharpens.
+// Not read compatibly from a version 3 file: the missing verdict is exactly the fault being fixed,
+// so a file that does not have one is rebuilt rather than loaded and quietly left speckled.
+constexpr u32 kVersion = 4u;
 
 // A brick, exactly as it is held. No canonical form, no re-encode: the whole reason this file
 // exists is that it can be read faster than the world can be rebuilt, and a normalisation pass
@@ -247,6 +251,17 @@ bool write_world_cache(const std::string& path, u64 key, const WorldCache& cache
         put_pod(out, static_cast<u8>(region.done ? 1u : 0u));
     }
 
+    // Which materials the despeckler may touch. Taken once over the whole clip and unobtainable
+    // from anything a resuming run has to hand -- see CachedStipple. The flag goes out separately
+    // from the list because "asked, and nothing had specks" and "never asked" are different
+    // answers and the reader has to be able to tell them apart.
+    put_pod(out, static_cast<u8>(cache.stipple_taken ? 1u : 0u));
+    put_pod(out, static_cast<u32>(cache.stipple.size()));
+    for (const CachedStipple& entry : cache.stipple) {
+        put_pod(out, entry.type);
+        put_pod(out, static_cast<u8>(entry.may_despeckle ? 1u : 0u));
+    }
+
     // Where the lamps are, so a loaded world does not have to be read again to find them. R9g,
     // and the same argument as the ledger below: rediscovering them is the order of work this file
     // exists to skip.
@@ -440,6 +455,19 @@ bool read_world_cache(const std::string& path, u64 key, WorldCache& cache, JobSy
         for (f64& v : region.high) v = in.pod<f64>();
         region.done = in.pod<u8>() != 0u;
         cache.regions.push_back(region);
+    }
+    if (!in.ok) return false;
+
+    cache.stipple_taken = in.pod<u8>() != 0u;
+    const u32 stipple_count = in.pod<u32>();
+    cache.stipple.clear();
+    if (!in.ok) return false;
+    cache.stipple.reserve(stipple_count);
+    for (u32 i = 0; i < stipple_count && in.ok; ++i) {
+        CachedStipple entry;
+        entry.type = in.pod<u32>();
+        entry.may_despeckle = in.pod<u8>() != 0u;
+        cache.stipple.push_back(entry);
     }
     if (!in.ok) return false;
 
