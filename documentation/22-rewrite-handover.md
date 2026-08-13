@@ -541,28 +541,47 @@ change is not new machinery, it is **who chooses the box and the resolution**:
   node. A node's level is already a function of its pixel footprint, so resolution becomes a function
   of pixel coverage by construction rather than by a second rule that could disagree.
 
-**The order to build it in, and the first two are visible on their own:**
+**The plan now has a stage for it. `21-renderer-rewrite.md` §8 R11 — the world source, driven by
+pixels · XL — is the next stage, with R12 (the field on the card) after it.** Read the stage there
+rather than re-deriving it here; what follows is only the shape of it and the two traps that decide
+the order:
 
-1. **the unit stops being a region** — subdivide adaptively from the clip's bounds instead of
-   planning eighteen boxes, so what arrives is small and near-first. The player stops seeing chunks;
-2. **the resolution follows the level** rather than being one of two constants, which removes the
-   hard 8 → 32 step and is where "no detail steps anywhere" is finally true of the world as well as
-   of the marcher;
-3. **nothing is sampled up front** — the first box is on demand too, so there is no loading bar at
-   all. Keep a very coarse whole-building rung under it if frame one should be a silhouette rather
-   than an empty room; §8.0 measures that rung at **130 ms of sampling at `--clip-coarse 32`**.
+| | what it is | what a player sees |
+|---|---|---|
+| **R11a** | one node, sampled, **timed** — the instrument, and nothing after it may be sized without it | nothing. It is a measurement |
+| **R11b** | the unit of refinement is a node, not a region — `plan_refine_regions` and its eighteen boxes go | detail stops arriving as slabs |
+| **R11c** | resolution is `256 / 2^level`, not one of two constants. **This is R8c** | the 8 → 32 jump from blocky to sharp goes |
+| **R11d** | nothing is sampled up front. **The headline** | no loading bar at all |
+| **R11e** | a light path may not cause sampling — R9h one level down | nothing, until it is missing |
+| **R11f** | a world is a clip plus its edits. **R8d, and the only sub-step that can lose data** | a `.world` stops being 608 MB |
+| **R11g** | `--settle` and the harness mean what they say | nothing. It protects every figure in this file |
+| **R11h** | an edit is served at full detail whatever has been looked at | a chisel at sixty metres cuts properly |
 
-**Two hazards to size before starting, both real.**
+**Do a before b, and b and c before d.** a is the instrument three later trades are against. d without
+b and c under it is spawning into an empty room that fills with big blocky boxes, which is worse than
+what is being fixed. f is last because it is the one that can lose somebody's building.
+
+**Two hazards to size before starting, both real, and both are sub-steps rather than notes.**
 
 - **Every measurement in this repository is against a content hash and `--settle`** (trap 8, trap
   19). A world that only samples what a camera asked for has a *camera-dependent* content hash by
   construction. `--settle` already means "refinement has nothing left it can do from here" and
   generalises, but `baseline.ps1`'s gate does not, and it has been silently broken by a weaker
-  version of this once already (D524).
+  version of this once already (D524). **R11g.**
 - **What is saved.** A clip-backed world stops being a 608 MB voxel dump and becomes a clip plus the
-  edits made to it. That is R8d's *derived nodes are evictable; carved ones persist*, and it is the
-  whole difference between infinite detail and infinite storage — but `save_refined_world`,
-  `world_cache.*` and `CachedRegion` are all written against the eighteen-box ladder today.
+  edits made to it — but `save_refined_world`, `world_cache.*` and `CachedRegion` are all written
+  against the eighteen-box ladder today, and after it a chisel on a surface nobody has looked at
+  closely would carve a blocky approximation that the file then treats as authoritative. **R11f and
+  R11h, and they are the two to be most careful with.**
+
+**And the process lesson, which is worth more than the stage.** The mechanism was in the plan from
+the day it was written (R8c, 2026-08-09) and the sentence connecting it to loading was added on
+2026-08-11, in §8.0's `the cold load, measured` row, in answer to an earlier version of this same
+report. Both were true and neither was ever scheduled, because R8c lived inside §7 — an experimental
+mode, off by default, last in the order. **A correct answer filed under "measured, not a fault" is
+not a plan.** When something the user is complaining about turns out to be already understood, the
+question to ask is not *is this known* but *is there a lettered sub-step whose gate would fail if it
+were still true* — and here there was not.
 
 ### Closed: the paste, which is what a player actually felt
 

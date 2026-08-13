@@ -110,6 +110,15 @@ consequences and no rendering payoff, and it is not in this plan.
 
 ## 3. Streaming is what the pixels asked for, and nothing else
 
+> **This section is about LOADING a node and says nothing about MAKING one, and that gap is what
+> D611 walked through.** Every rule below governs a node the world already holds — fetched,
+> uploaded, evicted. In a world built from a clip the voxels do not exist until something samples
+> the field for them, and until R11 that sampling is over a fixed list of boxes at two fixed
+> resolutions, decided before the first frame. So all four rules below can be kept perfectly, and
+> measured as kept, while a player still watches a loading bar and then watches the building sharpen
+> in slabs. **R11 is this section applied one step further left**, and the rules are the same four
+> rules with *sampled* substituted for *fetched*.
+
 ### The rule, stated exactly
 
 1. A ray descends only while a node's projected footprint exceeds the pixel footprint. **A node
@@ -380,6 +389,14 @@ those are bugs to be fixed; they are all consequences of the wrong thing owning 
 
 `--infinite-detail`. Off by default until it is measured.
 
+> **Two of the things described below are no longer this section's, and that is the correction
+> D611 forced.** *The field answers at any resolution* and *a derived node is evictable while a
+> carved one is not* are statements about how a world exists at all — they are what removes the
+> loading bar and what shrinks a 608 MB `.world` — and keeping them inside an off-by-default
+> experiment meant the plan could be followed faithfully and still leave both undone. They are
+> **R11c and R11f** now. What is left here is genuinely only the unclamping: signed levels, and a
+> child source for a world with no field behind it.
+
 ### The rule is the rule already there, unclamped
 
 The marcher descends while a node's footprint exceeds a pixel and stops at level 0 because level
@@ -538,11 +555,13 @@ checked. Tick the ledger in §8.0 when one lands.
 | R4 | c. outgoing bins | **the storage and the split are in; the reflected IMAGE is not.** D591, D592. The composite splits what leaves a surface by metalness read as a quantity: the diffuse loses the metal's share (in `face_terms.glsl`, so the gathering ray applies it too — D420), the sun comes back through a GGX lobe with **no storage at all** because the face has already measured what fraction of the disc it can see, and the environment comes back out of **sixteen outgoing bins** filled by the gathering ray the face was already casting. The bins are a **pool of 65,536 blocks (8.7 MB) that faces HOLD** — four-way on the slot, cold at 600 frames, weakest loses — because 34 words × 1,081,344 slots is 147 MB for a number that is nought on nine faces in ten, which is §4's *matte stone allocates no payload*. **Costs nothing measurable**, two flags of one build interleaved: enclosed faces **3.228 against 3.242 / 3.200**, close **3.766 against 3.924 / 3.879**, resolve 0.869 / 0.864 / 0.844, flying and chiselling both inside their own spread. The picture moves **4.467 of 255 over 119,491 pixels enclosed, 8.778 over 251,607 at the great door**, and is STEADIER not noisier — two consecutive settled frames differ by 1.95 against 2.32 with the stage off. **What it does not do is draw a reflection you can recognise, and D592 is why**: sixteen bins is 20.4 degrees, this building's metals are genuinely rough, and the near-mirrors are dielectrics ranked below the pool's floor. 256 bins were built, measured and reverted — **the bin count is bounded by the RAY budget** (512 far samples over 256 bins is two apiece) **and a cosine-weighted ray cannot fill a grazing bin**, which is where a reflection is read from. `--no-face-lobe` is the control arm, `--lobe-floor` the capacity dial, `--debug-mode 22` the residency view and `23` the term on its own |
 | R4 | b. bins from coverage | **the RAY is in; the coverage rule is not.** D594. A face that holds a lobe casts its own ray: it picks a bin round-robin, draws a half vector from that bin's kernel, reflects the bin's direction about it and marches unbounded — Karis's split-sum prefilter with the view direction taken as the BIN rather than as the normal, which is the whole of what fills the grazing bins a reflection is read out of. Bins went 16 → **36** and the pool 65,536 × 34 words → **131,072 × 76 (38.9 MB)**, because the worth floor now admits the glass and the water and that takes the population asking to 44,700 — declines **47% → 0.8%**. Worth **3.913 of 255 over 103,874 pixels** at the great door against `--no-lobe-ray`. Costs **nothing measurable settled** (close faces 4.229 against 4.218) and **1.5 ms flying** (9.318 against 7.825). Three tunings, each measured: the burst is **8 rays a visit and not 32**, which reverses D394 for this term because a lobe ray is unbounded where an ambient near ray is not (11.9 → 9.3 ms flying); a warm block is only taken by a face worth **1.5×** its holder, because a take-over resets the burst and equal-worth faces traded one for ever (417 hand-overs a frame → 13); and the far ray's splat is kept only in the control arm. **R4b's second half is built, measured and OFF** (D599): a second size class of 144 bins as four consecutive blocks. **Coverage turns out not to be the lever** -- a face is one voxel and the pixels on it span 0.86 degrees, so sharpness is the bin and coverage does not enter -- and gating on it made the class patchy across one surface, which is D387's discontinuity in a size class. Driven from roughness instead it is affordable in MEMORY (17,389 of 21,200 holders qualify, nought declined) and not in RAYS: speckled at 8 samples a bin and still speckled at 24, which is four times the rays for the same noise. `--lobe-coverage` is opt-in. **What is left**: the mottle at 24 samples a bin, which **R5 closed** (D595): the lobe is blended with its coplanar neighbours' bin against the same bin, ONCE, on the visit after it converges — speckle at the great door **21.73 → 14.75** on `--debug-mode 23`, at 4.292 ms against 4.229 settled |
 | R4 | d. incoming bins | **transmission is in; refraction is not.** D601–D604. A face resolves what it lets through (D601); the shadow, ambient, gathering and lamp rays stop being blocked by a pane, which is the largest single number this stage has produced — a wing hall lit only by lamps because every window in the building was treated as stone comes back daylit, **95.577 of 255 over 1,018,413 pixels of 1,024,000** (D602). The tint the marcher accumulated was read by nothing for one commit, and the attenuation was per VOXEL where opacity is a property of the material: taken per METRE and rooted to the voxel, a four-voxel pane transmits 0.987 instead of 0.32, and the light meter caught it before the eye did (D603). Then the PRIMARY ray: a second `node_march` per glass pixel into a new `rgba32ui` image on binding 26, shaded down the same 533-line path as the pane by extracting it into `shade_surface`, and composited as `(1−T)·diffuse + specular + emission + T·behind` — a window is fifteen glazed lights with the wooden bars across them where it was a flat milky panel, **19.85 of 255 over 707,823 pixels**, costing **5.147 → 5.393 ms** at a camera facing one and nothing measurable at a camera without a pane on screen, all of it in the visibility pass, 0.737 → 0.966 (D604). **What is left**: `ior` is carried by the material and used by no ray, so nothing is displaced; no Beer-Lambert over the true path; no dispersion |
-| R6a–R8 | | not started |
+| R6a–R8 | | not started. **R8 is re-sized to L**: R8c and R8d are moved to R11, which needs both for the whole world rather than for a mode |
+| **R11** | **the world source, driven by pixels** | **NOT STARTED, and it is the next stage.** D611. R0–R10 rewrote everything to the right of `World` and nothing to the left of it: a clip still becomes voxels over a fixed list of eighteen boxes at one of two fixed resolutions, both chosen before the first frame is drawn. §1's rule is therefore true of the marcher and false of the thing that feeds it, and a player sees that as a loading bar, a blocky first minute and detail arriving in slabs. Reproduced on the shelf world with no usable cache: coarse build at metre 8, **ready at t+3,615 ms**, eighteen boxes at 624–7,406 ms of sampling each, **8 of 18 done by frame 900**. The mechanism has been R8c since 2026-08-09 and the row below has connected it to loading since 2026-08-11 — what was missing is that R8c sat in §7, an experimental mode off by default and last in the order, so this plan could be followed to the letter and still leave the loading bar. **a is the instrument and nothing may be sized without it; b and c are what a player sees; d is the headline and needs both under it; f is last because it is the only one that can lose data** |
+| **R12** | **the field on the card** | **not started, and it is R11's successor rather than a parallel option.** After R11 the CPU round trip — miss, report, sample, paste, upload — is the last thing between a ray and its geometry. `20-clip-forge.md` §4 already names the GPU as the answer and says why it transliterates. It also unblocks R2b's unfinished half, which has been stuck since D259 because eviction can only drop what it can afford to rebuild |
 | **the large edit** | **an edit announced a volume to a tree that is not stored by volume** | **cause found and fixed — D515, D516.** The same shape as the paste one level down. `announce_world_change` named every brick in the edited box and the pool walked up from each; on a 36-million-voxel delete that is **1,573,269 bricks announced** to produce **13,325 refolds and no rebuilt leaves**, at **718 ms in one frame** — gather 457, descend 257, fold **4**. The pool holds the tree, so it now takes the **box** and descends from its own roots, pruning children that miss it, post-order so the fold ordering falls out instead of being sorted for. **718 → 7 ms**, and the edit frame is no longer the worst frame in the run (node-pool CPU worst 890.7 on the edit frame → 26.2 at startup). A one-voxel chisel is unchanged. `NodePool::stale_masks` is the audit that had to exist first, because a child mask is invisible to both the GPU mirror and `stale_leaves`, and both ways of getting it wrong are silent. **What is left in that frame is the undo capture: 194 ms into 538,169 inverse ops**, which is now the largest part of a large edit |
 | **the paste, which is what a player feels** | **the region paste blocked the main thread for seconds, and it was not the paste** | **cause found and fixed — D511–D514.** Handover §5 has opened with *slice the paste across frames* since it was written, against measured stalls of 1.4 to 14.1 s. Splitting the one timing figure into its three parts said the replay and the announcement are **0 ms** and all of it is `paste_clip` — and then said something the plan had no room for: paste time does not track the paste. The same 991-brick region went in **146 ms and in 7,076**. It tracked the **sample running beside it**, because `parallel_for` queues a take-LOOP rather than a slice, so the background sampler owned every worker of the pool the paste was also given, and `wait()` handed the main thread the sampler's jobs. Foreground and background now have separate pools: worst paste **7,282 → 92 ms**, the twelve pastes of a cold load **34,697 → 719 ms**, frames drawn before settle **453 → 5,439**, sample +1–3%, and the same content hash `1f4710eee4ee2585` in both arms. `--no-paste-pool` is the control arm and `JobSystem::submitter_collisions()` is the instrument that makes the next one loud. **Slicing is not done and is no longer first**: what is left is 31–92 ms, and the premise it was sized against has moved by 79× |
 | **the light while moving** | **the card's copy of the face table ran hundreds of thousands of records behind the store, and the light was not late — it was not being computed** | **cause found and fixed — D544–D546.** The face pass shades what the CARD holds, and an upload that ran out of staging cleared **nothing** and restaged the whole dirty set next frame, so it ran out in the same place for ever: measured flying at 1440p, **434,838 records behind** with the upload exhausted on 165 frames of 400. A partial upload marks clean exactly the runs it staged now (`DirtySet::clear_range`, six cases in `tests/test_dirty_set.cpp`), and the card is **0 records ahead against 80,211** with **1 exhausted frame against 253**. **What it uncovered is worth more than the fix**: the backlog was not making the pass shade too much, it was making it shade almost nothing — `seen on the card: 0 of 721,911` in the control arm, because the card's bucket table was too far behind for a pixel to find its own face, so `may_cast` was false everywhere and the frame was drawn from **8,255 throwaway provisional stand-ins against 723**, with **0 read-reports reaching the host against 22,702**. The faces pass therefore reads **6.8 ms against 2.0** flying and none of it is new work; the picture goes from hard-edged black and white blocks on the balustrade and cornice to lit stone, **44.90 of 255 over 2.76 M pixels of 3.69 M**, speckle **23.86 with 2,720 fireflies → 19.92 with 944**. That is D502's reported picture through a **third** distinct cause, so read `the card is N records ahead of the store` and `seen on the card` before theorising about the store. `--whole-set-retry` is the control arm. **What is left is a budget question and it is R5's**: the pass is over its 4.40 ms flying figure honestly for the first time |
-| **the cold load, measured** | **what a world with no cache actually costs, and what the one lever that already exists buys** | **not a fault — a measurement.** Reported as the new streaming not being in use, and **withdrawn by the reporter once they were running the current build**: it is using it and it is working. What is below is kept because it is the only measurement of this case anybody has taken, and because two of the numbers in it were wrong the first time they were quoted. Reported as *it should load in half a second cold start no cache ... resolution based ... without chunks*. Facility, no cache, warm shaders, time to ready against `--clip-coarse`: **4 → 4,049 ms** (today's default), **8 → 1,784**, **16 → 1,369**, **32 → 808**, **64 → 2,059** (worse: scaling 64× on paste fills 1.36 **billion** voxels). At 32 the sampling is **130 ms** and the remaining 655 ms is paste 232 + upload 232 + pipelines 191, none of which is the field. **One correction to an earlier figure in this row: the first measurement here said 15,197 ms, and about ten seconds of that was the driver compiling shaders on a cold cache, not world building.** A number that includes somebody else's compiler is not a number about this program. Two things follow. The cheap one: the coarse rung is a lever that already exists and takes a cold uncached load to **0.81 s**, at the cost of a first frame sampled at metre 1 and scaled 32× — playable, recognisably the building, visibly blocky until the ladder catches up. The real one is unchanged: half a second with a *sharp* first frame means nothing is sampled up front at all, which is R8c (`forge/field.cpp` already answers at any resolution) with R1e removing the addressing that keeps a chunk world necessary. **The node pool being the marcher is not the same as the new streaming being in use, and this row exists because that was confused three times in one session** |
+| **the cold load, measured** | **what a world with no cache actually costs, and what the one lever that already exists buys** | **not a fault — a measurement.** Reported as the new streaming not being in use, and **withdrawn by the reporter once they were running the current build**: it is using it and it is working. What is below is kept because it is the only measurement of this case anybody has taken, and because two of the numbers in it were wrong the first time they were quoted. Reported as *it should load in half a second cold start no cache ... resolution based ... without chunks*. Facility, no cache, warm shaders, time to ready against `--clip-coarse`: **4 → 4,049 ms** (today's default), **8 → 1,784**, **16 → 1,369**, **32 → 808**, **64 → 2,059** (worse: scaling 64× on paste fills 1.36 **billion** voxels). At 32 the sampling is **130 ms** and the remaining 655 ms is paste 232 + upload 232 + pipelines 191, none of which is the field. **One correction to an earlier figure in this row: the first measurement here said 15,197 ms, and about ten seconds of that was the driver compiling shaders on a cold cache, not world building.** A number that includes somebody else's compiler is not a number about this program. Two things follow. The cheap one: the coarse rung is a lever that already exists and takes a cold uncached load to **0.81 s**, at the cost of a first frame sampled at metre 1 and scaled 32× — playable, recognisably the building, visibly blocky until the ladder catches up. The real one is unchanged: half a second with a *sharp* first frame means nothing is sampled up front at all, which is R8c (`forge/field.cpp` already answers at any resolution) with R1e removing the addressing that keeps a chunk world necessary. **The node pool being the marcher is not the same as the new streaming being in use, and this row exists because that was confused three times in one session**. **Reported again on 2026-08-13 and NOT withdrawn this time — see the R11 row above and D611.** The reporter's words were *"the entire rewritten renderer was meant to also make the game have no loading time … it loads with very low detail and i gotta wait for it to load and it loads in chunks, this contradicts the entire point of pixel screen based loading"*, and every clause of it reproduces. **This row is where the answer was written down and then not scheduled**, which is the whole reason R11 exists as a stage: a measurement filed under "not a fault" is not a plan, and the sentence about R8c below was true when it was written, true when R1e landed two days later, and acted on by nobody |
 
 #### What a player was actually waiting for, which none of the above was
 
@@ -814,8 +833,19 @@ output during a measurement, and write shader files with a writer that does not 
   push tier entirely.
 - **R2b — the sub-pixel rule.** A node smaller than a pixel is never requested, uploaded or
   stored. This is where resolution becomes a real memory lever.
+
+  **Its unfinished half is blocked on R12 and has been since D259, which nobody had named.** *Never
+  requested* is done; *never stored* is not, because eviction can only give up what it can afford to
+  rebuild, and today rebuilding means the CPU re-sampling a region or reading it off disk. A node
+  the card can **derive in a dispatch** costs nothing to throw away — so R12 is what turns this from
+  a memory policy into a memory guarantee. Do not attempt the second half before it.
 - **R2c — proximity.** 20 m at full detail regardless of visibility, for collision, physics and
   editing (D199).
+
+  **It gains a second job at R11h and the two must not be confused.** Today it is a *residency*
+  guarantee over a world whose voxels all exist. After R11d they do not all exist, and the same
+  twenty metres becomes a *sampling* guarantee — which is what stops a chisel carving a blocky
+  approximation into a world that R11f then treats as authoritative.
 - **R2d — what to draw while waiting.** The gap R1b left: a wanted-not-built node currently skips
   like empty space, so a region draws as sky for a frame. Draw the parent instead — but never a
   level coarser than the pixel resolves, or a two-kilometre block containing ground a mile away
@@ -1717,17 +1747,181 @@ The only pass left that scales with resolution, so it gets its own stage.
 - **R7c — step count in the descent.**
   *Gate: primary visibility at 4K ≤ 1.6× its cost at 1440p.*
 
-### R8 — Infinite detail, experimental · XL
+### R8 — Infinite detail, experimental · L
+
+**Re-sized from XL, because R11 takes two of its five sub-steps and builds them for the whole
+world rather than for a mode.** R8c and R8d are the mechanism this stage was mostly made of, and
+they are general: *the field answers at any resolution* and *a derived node is evictable while a
+carved one is not* are statements about how a world exists at all, not about an experimental
+option. Once R11 has them, what is left here really is only the unclamping.
 
 - **R8a — signed levels** through `NodeKey`, the descent and the face key.
-- **R8b — hashed variation** as the always-available child source.
-- **R8c — field-driven subdivision** from `forge/field.cpp`, which already answers at any
-  resolution and whose node array transliterates to a compute shader (`20-clip-forge.md` §4).
-- **R8d — derived nodes are evictable; carved ones persist.** That is the whole difference between
-  infinite detail and infinite storage.
+- **R8b — hashed variation** as the always-available child source, for a world with no field
+  behind it — a hand-carved world, or one loaded from a file whose clip is gone.
+- ~~**R8c — field-driven subdivision**~~ — **moved to R11c.** It is what a level below 0 asks the
+  field for, and it is the same call R11 makes at every level above 0.
+- ~~**R8d — derived nodes are evictable; carved ones persist**~~ — **moved to R11f.** The rule is
+  the same one; R11 needs it for the save format at level 0 and above, which is where the 608 MB
+  is.
 - **R8e — `--infinite-detail`,** off by default.
   *Gate: standing 10 cm from a wall costs within 30% of standing 2 m from it; resident bytes stay
   bounded by resolution; a carved sub-voxel edit survives a save and reload.*
+
+---
+
+### R11 — The world source, driven by pixels · XL
+
+**This is the stage that was missing, and its absence is why the plan could be followed to the
+letter and still leave a loading bar.** D611.
+
+R0 through R10 rewrote everything to the right of `World`: one octree, residency from feedback, a
+face store, light per face, all of it driven by what a pixel asked for. **Nothing to the left of
+`World` changed.** A clip still becomes voxels by `forge::sample` over a **fixed list of boxes** at
+one of **two fixed resolutions**, and both are chosen before the first frame is drawn:
+
+```
+clips/*.clip → forge::sample(box, voxels_per_metre) → voxels → World → NodePool → rays
+               ^^^ eighteen boxes, metre 8 then metre 32            ^^^ §1's rule, and it holds
+```
+
+So §1's rule — *detail is a continuous function of how many pixels a thing covers* — is true of the
+marcher and false of the thing that feeds it. A player sees the difference as a loading bar
+counting voxels, a blocky first minute, and detail arriving in slabs.
+
+**The mechanism was in this plan from the day it was written; the scheduling is what was missing.**
+R8c has said *field-driven subdivision from `forge/field.cpp`, which already answers at any
+resolution* since 2026-08-09, and §8.0's `the cold load, measured` row has said *"half a second with
+a sharp first frame means nothing is sampled up front at all, which is R8c … with R1e removing the
+addressing that keeps a chunk world necessary"* since 2026-08-11. But R8c sat inside §7, an
+**experimental mode, off by default, last in the order** — so following this plan faithfully reaches
+it after everything else and then ships it switched off. Neither sentence is a plan for the load.
+
+**Everything this stage needs is already built and proven by the ladder itself.** `forge::sample`
+takes a box in metres and a `voxels_per_metre`, and that is its whole signature. The ladder already
+calls it per box off the main thread; `paste_clip(..., coarse)` already inflates a coarse sample
+into real voxels; `start_refinement` already orders boxes by screen coverage, facing and occlusion;
+`NodePool::request` is already the only route by which anything is ever built and it already carries
+the level. **What changes is who chooses the box and the resolution** — and because a node's level
+*is* its pixel footprint (R2a, D190), resolution becomes a function of pixel coverage by
+construction rather than by a second rule that can drift from the first. That is D204's *one
+constant in one place* applied to the one quantity this whole plan is about.
+
+- **R11a — one node, sampled, timed. Nothing after this may be sized without it.** The primitive is
+  `forge::sample` over a node-sized box at `256 / 2^level` voxels per metre — 32 at the level-3
+  leaf, 4 at a two-metre node, 1 at an eight-metre one. Every figure this project has about the
+  sampler is whole-building or whole-region; **nothing anywhere says what one node costs**, and
+  three of this stage's sub-steps are trades against that number. Build the instrument first:
+  cost per level, and the **agreement check** beside it.
+  `src/forge/sample.*`, `tools/samplecost.ps1`, `documentation/baselines/`.
+
+  **The agreement check is not a formality and there is a known failure standing next to it.**
+  `--clip-part` paints differently from the whole building (D609, D610) — a part restriction, not a
+  box restriction, and the ladder's eighteen boxes are evidence that box restriction is exact at
+  region size. Nobody has told those two apart at *brick* size, where a paint rule keyed on a
+  pattern has almost no box to settle against.
+  *Gate: a node's voxels are identical whether sampled alone or as part of the whole building, at
+  every level, on the facility — types as well as occupancy. Cost per level recorded.*
+
+- **R11b — the unit of refinement is a node, not a region.** Delete `plan_refine_regions` and its
+  eighteen boxes. The queue is fed by adaptive subdivision from the clip's bounds, ordered by the
+  screen-coverage, facing and occlusion test `start_refinement` already applies — which is already
+  the right test and is applied to the wrong grain.
+  `src/app/main.cpp` (`plan_refine_regions`, `start_refinement`, `pump_refinement`),
+  `src/world/world_cache.*` (`CachedRegion`).
+  *Gate: the facility reaches its authored detail from a fixed camera at the same content hash the
+  eighteen-box ladder reaches; no paste over 16 ms; and what a player watches arrive is smaller
+  than a chunk. **This one is judged in game as well as by the hash** — the report it answers is
+  "it loads in chunks", and a finer grid of squares is the same bug.*
+
+- **R11c — the resolution is the level's, not one of two constants.** `256 / 2^level`, so a node
+  arrives at the detail its own footprint asks for and is re-sampled finer as it grows on screen.
+  This is R8c, arriving here rather than in the experimental stage. It is what finally makes *no
+  detail steps anywhere* true of the world and not only of the marcher — the 8 → 32 jump is the
+  last hard step in the engine.
+  *Gate: walking from 60 m to 1 m at the facade on `--fly`, no consecutive-frame pixel difference
+  exceeds the run-to-run floor at any point. A step is a spike, and a spike is what this measures.*
+
+- **R11d — nothing is sampled up front.** The first box is on demand like every other. `--clip-coarse`
+  stops being a load-time lever and becomes what it should always have been: the floor level the
+  first frame may be drawn at.
+  *Gate: time to first frame under 500 ms on the facility with no cache — against 3,615 ms measured
+  at D611 — and the first frame is the building in silhouette rather than an empty room.*
+
+- **R11e — a light path may not cause sampling.** R9h's rule, one level down and now with teeth: a
+  gathering ray that may pull geometry out of the field is a dark room that samples the whole
+  building. R9a and R9i are the two deliberate exceptions and they are exceptions about *claiming a
+  face* and *naming the cell that stopped it*, neither of which may become a sample job.
+  *Gate: node requests from light paths cause zero sample jobs, counted rather than reasoned about;
+  `clips/sealed_dark.clip` samples nothing after the room itself.*
+
+- **R11f — a world is a clip plus its edits.** R8d promoted out of the experimental stage, because
+  the 608 MB is at level 0 and above, not below it. A derived node is re-derivable and need not be
+  in the file; a carved one must be, for ever. This is the sub-step that changes what a `.world`
+  *is*, and it is the one with the most ways to lose somebody's building.
+  `src/world/world_cache.*`, `save_refined_world`, `src/world/serialize.*`.
+  *Gate: a carved voxel survives save and reload with the clip re-derived around it; no derived node
+  is in the file; the facility's cache falls from 608 MB; and an old `.world` still loads.*
+
+- **R11g — `--settle` and the harness mean what they say.** Traps 8 and 19, and this is the sub-step
+  that protects every measurement in this repository rather than the picture. A world that samples
+  only what a camera asked for has a **camera-dependent content hash by construction**, so "two runs
+  of one build against one scene" stops being free. `--settle` already means *refinement has nothing
+  left it can do from here* and generalises correctly; `baseline.ps1`'s gate does not, and a weaker
+  version of this broke it silently once already (D524).
+  *Gate: two runs of one camera agree on the content hash to the digit; `baseline.ps1` refuses a row
+  whose world is short of what its camera asked for, and says which camera.*
+
+- **R11h — an edit needs voxels that may never have been sampled.** Today the world holds real
+  voxels everywhere, so a chisel always has something to cut. After R11d it does not, and a chisel
+  at a surface that has only ever been seen from 60 m would carve a four-voxel-wide blocky
+  approximation into the world **permanently**, because R11f makes carved matter authoritative. The
+  proximity radius answers it and is already built — 20 m at full detail regardless of visibility
+  (R2c, D199) — but it holds *residency* today and must hold *sampling* here.
+  *Gate: chiselling a surface 20 m away that has never been looked at closely produces the same
+  world as chiselling it from one metre, byte for byte.*
+
+**Order inside the stage, and why it is not the order of the report.** a first, because it is the
+instrument and three later trades are against its number. Then b and c, which are the two a player
+can see and can accept or reject on their own. Then d, which is the headline and which needs b and c
+under it — without them, "no loading bar" is spawning into an empty room that fills with big blocky
+boxes, which is a worse experience than the one being fixed. e, g and h are guards and can land
+beside any of them; **f is last and is the only one that can lose data.**
+
+---
+
+### R12 — The field on the card · L
+
+**The successor, and it is what makes "no loading" total rather than merely fast.** After R11 the
+CPU still stands between a ray and its geometry: the marcher stops at a node the pool has not built,
+reports it, a worker samples the field, the result is pasted, uploaded, and the ray finds it some
+frames later. That round trip is the last remaining reason a first frame is not simply *correct*.
+
+`20-clip-forge.md` §4 already names this as the answer and says why it is tractable: *"the real
+answer for live re-voxelisation is the GPU: nodes are plain data of a fixed size with no pointers
+and evaluation is a switch with a shallow stack, which is a shape that transliterates to a compute
+shader without changing."*
+
+- **R12a — the field as an array**, the same fixed-size pointerless records `forge/field.cpp` walks,
+  uploaded once per clip and re-uploaded when it changes. `src/gpu/field_buffers.*`.
+- **R12b — `shaders/field.glsl`, the evaluator.** One function, a switch and a shallow stack, held
+  to R1a's standard: a `mirror_field` that walks it exactly as the shader will, asserted against the
+  CPU sampler voxel for voxel over the whole facility. A second evaluator that disagrees with the
+  first by one voxel is D204's fault in its worst form — two renderers computing the same world.
+- **R12c — the marcher derives rather than stops.** A descent that reaches a node the pool has not
+  built evaluates the field there instead of reporting a miss. R2d's stand-in stops being what a
+  player waits behind and becomes what is drawn for the one frame a derivation costs.
+- **R12d — the CPU sampler becomes the writer of what is EDITED, not of what is seen.** Sampling for
+  the *screen* is the card's; sampling for *collision, physics and the chisel* stays on the CPU,
+  because those need voxels in `World` and not pixels. That split is R11h's line, drawn once.
+  *Gate: cold facility, no cache, first frame correct and under 200 ms; `mirror_field` exact over
+  the whole building; the CPU sampler runs only inside the proximity radius and on edits, counted.*
+
+**Two consequences worth expecting rather than discovering.** A world derived from a field means
+**editing the clip changes the world with no rebuild** — which is the thing `20-clip-forge.md` calls
+live re-voxelisation and is a feature nobody has asked for yet. And it makes R2b's unfinished half
+tractable at last: *a node finer than the pixel is never stored* has been half-built since D259
+because eviction can only drop what it can afford to rebuild, and a derivable node costs a
+dispatch to rebuild.
 
 ---
 
@@ -1752,6 +1946,17 @@ data model below the chunk, `forge/`, and every test.
 
 Net: roughly 3,500 lines deleted against roughly 2,200 written.
 
+**R11 and R12 add to all four lists, and the deletions are the point.** Deleted:
+`plan_refine_regions` and the eighteen-box ladder in `src/app/main.cpp`, `CachedRegion` and the
+sharpened-region list in `src/world/world_cache.*`, and `--clip-coarse` as a **load-time lever** —
+it survives only as the floor level a first frame may be drawn at. Rewritten:
+`start_refinement`/`pump_refinement` from a region picker into a node queue fed by
+`NodePool::request`; `save_refined_world` and the `.world` format from a voxel dump into a clip
+plus its edits. New: `tools/samplecost.ps1` and the per-level cost baseline (R11a),
+`src/gpu/field_buffers.*` and `shaders/field.glsl` with its `mirror_field` (R12). Kept exactly as
+they are, and this is the reason the stage is affordable at all: **the whole of `forge/`**, which
+already answers a box at any resolution and needs no change to be asked differently.
+
 ---
 
 ## 10. Risks, and what each one would look like
@@ -1770,6 +1975,11 @@ Net: roughly 3,500 lines deleted against roughly 2,200 written.
 | AO folded up the tree makes distance too dark | mid and far cameras darken against the reference while the close one matches | fold coverage-weighted, and gate the fold on the mid/far/distant cameras rather than only on the one the feature was built at |
 | AO applied on top of a real sky-visibility or bounce term | every crease double-darkened, and it looks like a taste problem rather than a bug | the rule in R10: one visibility factor for the ambient integral, one consumer, checked when R3c's sky and R9's bounce land |
 | An edit does not reopen AO near it | a carved doorway leaves the wall beside it dark for the rest of the session | R10f's invalidation radius, and a test that carves and re-measures rather than a screenshot |
+| **A camera-dependent world breaks every measurement in the repository** | two runs of one build at one camera disagree on the content hash, so no A/B in this file gates any more — and it reads as flakiness rather than as a design consequence | **R11g, and it is a sub-step rather than a note because it protects the harness and not the picture.** `--settle` already means *nothing left this camera can improve* and generalises; `baseline.ps1`'s gate does not, and D524 is the same fault at a smaller scale |
+| **A chisel lands on a surface that has only ever been seen from sixty metres** | the player carves a doorway and gets a four-voxel-wide blocky hole, permanently, because R11f makes carved matter authoritative | **R11h.** The proximity radius already exists and already holds twenty metres at full detail (R2c, D199); it holds *residency* today and must hold *sampling* after R11d |
+| **Sampling a brick-sized box paints differently from sampling the building** | a fine grid of wrongly-coloured cells, arriving as the camera approaches, that no picture diff against a cached world can catch because both are wrong the same way | **R11a's gate, before anything is built on it.** `--clip-part` is already known to do this (D609, D610); nobody has told a *part* restriction apart from a *box* restriction at brick size, where a pattern-keyed paint rule has almost no box to settle against |
+| **A light path pulls geometry out of the field** | standing in a dark room samples the whole building; the sealed-room gate goes from instant to minutes | **R11e**, which is R9h's rule one level down. R9a and R9i are the two deliberate exceptions and neither may become a sample job |
+| **Two field evaluators disagree by one voxel** | geometry that differs between the frame it was derived on and the frame it was pasted on; a seam that moves when you look away | **R12b's `mirror_field`**, asserted against the CPU sampler over the whole facility. This is D204's rule — one constant in one place — applied to an evaluator, and R1a caught two of its four bugs with nothing but the equivalent |
 
 ---
 
@@ -1801,6 +2011,14 @@ proposals and take their real numbers when they land.
 | D200a | **Ambient occlusion is the visibility factor of the ambient integral, and there is exactly one of it.** The same rays, the same face, the same accumulation as the sun, over the hemisphere instead of over the sun's disc — and nothing in the composite multiplies by it twice. Screen space is excluded on the same line as everything else: it is a second gather per pixel. |
 | D200b | **Occlusion varies within a face, and it is stored as a low-order fit rather than as a map.** The face pass already jitters its sample across the face and throws the position away; keeping the Legendre moments of it costs no rays, no pass and no solve, and the terms it produces *are* the value, the gradient and the curvature of the real visibility field. |
 | D200c | **AO of static geometry converges and then stops being traced at all**, which is what makes it affordable to be good. The sun cannot do this because the sun moves. Edits reopen it within a radius. |
+| D200d | **The world source is pixel-driven or the rule is not kept.** §1's rule governs what is *made*, not only what is *marched*. A marcher that resolves continuously over a world sampled at two fixed resolutions keeps the rule where nobody was complaining and breaks it where they were. |
+| D200e | **A node's sampling resolution is `256 / 2^level` and there is no second rule.** A level already is a pixel footprint (D190), so deriving resolution from it cannot disagree with the marcher; a parallel rule about distance or region size can, and every such pair in this engine has eventually been found disagreeing (traps 13 and 19). |
+| D200f | **Nothing is sampled before the first frame.** A loading bar counting voxels is the plainest possible statement that the world is built by volume rather than by what is seen. `--clip-coarse` survives as the floor level a first frame may be drawn at, and as nothing else. |
+| D200g | **A world is a clip plus its edits.** A derived node is re-derivable and is not in the file; a carved one is authoritative and is, for ever. This is D197 stated for level 0 and above, which is where the 608 MB is. |
+| D200h | **No light path may cause SAMPLING**, which is R9h's streaming rule one level down. R9a's face claim and R9i's stopped cell remain the two deliberate exceptions and neither may become a sample job. |
+| D200i | **An edit is served at full detail regardless of what has been looked at.** The proximity radius (D199) becomes a sampling guarantee and not only a residency one, because after D200f a chisel can otherwise carve a blocky approximation into a world that then treats it as authoritative. |
+| D200j | **`--settle` and the content hash are part of the design, not of the harness.** A camera-dependent world makes "two runs of one build against one scene" something that has to be arranged rather than assumed, and every figure in this project rests on it. |
+| D200k | **One field evaluator, mirrored, or two renderers compute the world two ways.** R12's shader is held to R1a's standard: walked exactly as the shader walks it and asserted against the CPU sampler over a whole building. |
 
 ---
 

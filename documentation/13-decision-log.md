@@ -4861,3 +4861,73 @@ written against the eighteen-box ladder and all three are in the change.
 | D611 | **Resolution comes from the node's LEVEL, not a second rule** | design | A level is already a pixel footprint; a parallel rule is a rule that can disagree with the first |
 | D611 | **The eager cached path is half the fault, not the fix** | diagnosis | 804 ms with no pops, because it has already paid for every voxel whether or not one is seen |
 | D611 | **Nothing is fixed by this entry** | honesty | It records a reproduction and a plan; the ledger must not read as though the stage landed |
+
+## D612 — the plan gets the stage it was missing
+
+**Asked for directly**, after D611 established that following `21-renderer-rewrite.md` faithfully
+would never remove the loading bar: *"can you add new steps to the plan so that this will be done
+and even more that would follow it appropriately."*
+
+### What was wrong with the plan, exactly
+
+Not that it lacked the mechanism. **R8c — *field-driven subdivision from `forge/field.cpp`, which
+already answers at any resolution*** — has been in §8 since the plan was written (`669f883`,
+2026-08-09). And §8.0's `the cold load, measured` row has said *"half a second with a sharp first
+frame means nothing is sampled up front at all, which is R8c … with R1e removing the addressing that
+keeps a chunk world necessary"* since `95a33f0`, 2026-08-11 — written in answer to an **earlier**
+version of the same report, then filed under *not a fault — a measurement* and closed.
+
+What was wrong is **where R8c lived**. §7 is *Infinite detail — the experimental mode*; R8 is the
+last of eight stages; R8e is `--infinite-detail`, **off by default until it is measured**. So the
+one sub-step that removes loading sat inside an opt-in experiment about walking up to a wall, behind
+every other stage, and nothing in the plan named the eighteen-box ladder, `plan_refine_regions` or
+`--clip-coarse` as things that go. **A plan can be followed to the letter, every gate met, and leave
+the reported fault untouched** — which is what had happened.
+
+### What landed
+
+**R11 — the world source, driven by pixels · XL**, eight lettered sub-steps: a the instrument
+(one node sampled and timed, with the agreement check beside it), b the unit becomes a node, c the
+resolution is `256 / 2^level` (this is R8c), d nothing is sampled up front, e no light path may
+cause sampling, f a world is a clip plus its edits (this is R8d), g `--settle` and the harness, h an
+edit is served at full detail. **R12 — the field on the card · L**, four sub-steps, which
+`20-clip-forge.md` §4 already named as the answer to live re-voxelisation.
+
+And five amendments that stop the same thing happening again:
+
+- **§3 opens with what it does not cover.** Every rule in it governs *fetching* a node the world
+  already holds; none of them governs *making* one. All four can be kept perfectly, and measured as
+  kept, while a player watches a loading bar — which is exactly what was measured.
+- **§7 says which two of its parts are no longer its.** R8c and R8d are statements about how a world
+  exists at all, not about a mode, and keeping them inside an off-by-default experiment is what
+  caused this.
+- **R8 is re-sized XL → L**, having lost both.
+- **R2b and R2c gain what R11 and R12 do to them.** R2b's unfinished half — *never stored* — has
+  been blocked since D259 for a reason nobody had named: eviction can only give up what it can
+  afford to rebuild, and a node the card can derive in a dispatch costs nothing to throw away.
+  R2c's twenty metres becomes a **sampling** guarantee and not only a residency one.
+- **The `cold load, measured` row now says it was reported again and not withdrawn**, and that it is
+  the place the answer was written down and not scheduled.
+
+### The reusable half, and it is a rule about plans rather than about renderers
+
+**A correct answer filed under "measured, not a fault" is not a plan.** Twice now this row has held
+the right mechanism, and twice the work stopped at the measurement. When a user complains about
+something that turns out to be already understood, the question is not *is this known* — it is
+**is there a lettered sub-step whose gate would fail if it were still true**. Here there was not,
+and there is now.
+
+The second half: **where a sub-step lives decides whether it happens.** R8c was correct, numbered,
+and unreachable, because everything around it was an experiment that was off by default. Anything
+general enough to change the default build does not belong inside an opt-in mode, however naturally
+it was discovered there.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D612 | **R11 is a stage, not a note on R8** | plan | A sub-step inside an off-by-default experiment, last in the order, is one the plan can be followed past |
+| D612 | **R8c and R8d move out of §7 wholesale** | plan | *The field answers at any resolution* and *derived is evictable, carved persists* describe how a world exists, not how a mode behaves |
+| D612 | **R11a is the instrument and comes first** | method | Every figure this project has about the sampler is whole-building or whole-region; three of R11's trades are against a number nobody has |
+| D612 | **R11f is last because it is the only one that can lose data** | method | It changes what a `.world` is; the rest change when voxels are made |
+| D612 | **§3 states what it does not cover** | correctness | Its four rules govern fetching, not making, and all four can be kept while the reported fault stands |
+| D612 | **R2b's second half is blocked on R12, and says so now** | plan | Eviction can only give up what it can afford to rebuild; that had never been written down as the blocker |
+| D612 | **Nothing is built by this entry** | honesty | It amends the plan. R11a has not started |
