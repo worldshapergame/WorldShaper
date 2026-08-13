@@ -256,6 +256,10 @@ struct Options {
     u32 sample_cost_nodes = 24;       // nodes with matter timed per reference box
     u32 sample_cost_boxes = 3;        // reference boxes, when the whole clip will not fit at once
     std::string sample_cost_csv;      // a row per level, for documentation/baselines/
+    // Work out the clip's paint rules again for every node, which is what `sample` did before
+    // D614 split `plan_sample` off. The control arm for that split, and the only honest way to
+    // measure it: two flags of one build rather than two builds (D407).
+    bool sample_cost_replan = false;
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
     // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
@@ -706,6 +710,8 @@ Options parse_options(int argc, char** argv) {
             options.sample_cost_boxes = static_cast<u32>(next_number(3));
         } else if (arg == "--sample-cost-csv") {
             if (i + 1 < argc) options.sample_cost_csv = argv[++i];
+        } else if (arg == "--sample-cost-replan") {
+            options.sample_cost_replan = true;
         } else if (arg == "--clip-at") {
             if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
         } else if (arg == "--material") {
@@ -7910,11 +7916,28 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
     const usize want_empty = std::max<usize>(1, options.sample_cost_nodes / 3);
     const usize want_boxes = std::max<usize>(1, options.sample_cost_boxes);
 
-    std::printf("sample cost   %s, %.2f x %.2f x %.2f m, %d rules\n",
+    std::printf("sample cost   %s, %.2f x %.2f x %.2f m, %d rules%s\n",
                 options.clip_file.empty() ? default_clip_path().c_str()
                                           : options.clip_file.c_str(),
                 clip_high.x - clip_low.x, clip_high.y - clip_low.y, clip_high.z - clip_low.z,
-                static_cast<int>(script.paint.size()));
+                static_cast<int>(script.paint.size()),
+                options.sample_cost_replan ? ", REPLANNED at every sample (the control arm)" : "");
+
+    // The clip's rules, worked out once. Every sample below is taken from this, which is what R11b
+    // does and therefore what this has to be measuring; `--sample-cost-replan` is the arm that
+    // works them out again per node, which is what `sample` did before D614.
+    const u64 plan_began = now_ns();
+    const forge::SamplePlan plan =
+        forge::plan_sample(script.field, script.solid, script.paint);
+    const f64 plan_ms = ns_to_ms(now_ns() - plan_began);
+    const auto sample_box = [&](const forge::SampleSettings& where, JobSystem* pool) {
+        return options.sample_cost_replan
+                   ? forge::sample(script.field, script.solid, script.paint, where, pool)
+                   : forge::sample(plan, where, pool);
+    };
+    std::printf("plan          %.3f ms, once, for %zu rules of which %zu are placed and %zu can be "
+                "settled for no box at all\n",
+                plan_ms, plan.rules_total, plan.rules_placed, plan.rules_per_voxel);
 
     // The scout. One cheap pass over the whole building, and everything that needs to know where
     // the matter is reads it rather than sampling again.
@@ -7922,7 +7945,7 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
     scout_settings.voxels_per_metre = kScoutPerMetre;
     const u64 scout_began = now_ns();
     const forge::SampleResult scout =
-        forge::sample(script.field, script.solid, script.paint, scout_settings, &jobs);
+        sample_box(scout_settings, &jobs);
     const f64 scout_ms = ns_to_ms(now_ns() - scout_began);
 
     // Every leaf node that holds anything, in world node coordinates. A scout cell is exactly a
@@ -8037,8 +8060,7 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
 
         for (const Reference& reference : references) {
             const u64 began = now_ns();
-            const forge::SampleResult whole = forge::sample(script.field, script.solid,
-                                                            script.paint, reference.settings, &jobs);
+            const forge::SampleResult whole = sample_box(reference.settings, &jobs);
             row.reference_ms += ns_to_ms(now_ns() - began);
             if (whole.clip.empty()) continue;
 
@@ -8106,16 +8128,14 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
                         forge::node_sample_settings(script.settings, key);
 
                     const u64 pool_began = now_ns();
-                    forge::SampleResult alone =
-                        forge::sample(script.field, script.solid, script.paint, one, &jobs);
+                    forge::SampleResult alone = sample_box(one, &jobs);
                     const f64 pool_ms = ns_to_ms(now_ns() - pool_began);
 
                     // And again with no job system at all. Eight voxels a side is eight z slabs,
                     // and whether waking a pool for that is worth its own cost is exactly the sort
                     // of thing R11b would otherwise guess at.
                     const u64 serial_began = now_ns();
-                    const forge::SampleResult serial =
-                        forge::sample(script.field, script.solid, script.paint, one, nullptr);
+                    const forge::SampleResult serial = sample_box(one, nullptr);
                     const f64 serial_ms = ns_to_ms(now_ns() - serial_began);
 
                     (solid_pass ? solid_ms : empty_ms).push_back(pool_ms);

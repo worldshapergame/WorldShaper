@@ -5041,3 +5041,54 @@ rather than fixed here.
 | D613 | **The fixed cost is per RULE and is 85% of an empty node** | measurement | 0.213 ms on 139 rules against 0.012 on four. That is the number R11b has to attack, and it is not the voxels |
 | D613 | **The pool is not worth waking for one node** | measurement | 1.389 ms threaded against 1.391 serial, at every level |
 | D613 | **Despeckle per node is recorded, not fixed** | honesty | 29 of 297 nodes differ; it is a whole-clip judgement and R11b owns it |
+
+## D614 — the rule book is read once, not once per question
+
+**R11a said what R11b had to fix first and this is it.** `sample()` worked out, on every single
+call, what each paint rule's slack is, where its bounding box is and what pieces its zone is made
+of — a walk of the field per rule, a hundred and thirty-nine of them on the facility — and none of
+it is a question about the box. A whole-building sample pays it once against nine million voxels
+and nobody could see it. A **node** pays it in full for an answer about 512, and D613 measured that
+as **0.213 ms of the 1.389 a node costs, and 85% of what a node holding nothing costs at all**.
+
+So it is split: `forge::plan_sample(field, root, paint)` returns a `SamplePlan` — the widened rules,
+their slacks, their boxes, their pieces, the shape's parts and the two prune constants — and
+`sample(plan, settings, jobs)` takes many boxes from one plan. The old signature still exists and
+is now two lines: plan, then sample. **Nothing that takes a single sample changed at all.**
+
+### Measured, two flags of one build, facility, `--sample-cost-replan` the control arm
+
+| | replanned every node | one plan | |
+|---|---|---|---|
+| an empty node at the leaf | 0.211 ms | **0.014 ms** | **15× cheaper** |
+| a node with matter at the leaf | 1.426 ms | **1.175 ms** | −18% |
+| the median node at the leaf | 0.678 ms | **0.476 ms** | −30% |
+| an empty node at level 4 | 0.463 ms | 0.261 ms | −44% |
+| asking one node at a time, against one call | **21.9×** | **7.5×** | the trade R11b makes |
+
+The plan itself is **0.220 ms, once**. The whole-building sample is unchanged in both time and
+matter — 2,651–2,680 ms at metre 8 against 2,645–2,680 before, 1,959,046 solid voxels either way —
+because it takes one sample and the work is the same work, moved.
+
+**What it does not fix.** A node with matter is still 1.175 ms against the 0.18 ms the same node
+costs inside a box, and that residue is the descent from the root of a field that describes a whole
+building. Batching siblings is the next lever and it is R11b's to measure, not to assume: the point
+of doing this one first is that it was the larger number and the smaller change.
+
+### The shape of the mistake, which is the reusable part
+
+Nothing here was slow. Every line of that setup is necessary, cheap for the caller it was written
+for, and correct. It became a cost only when the **size of the question changed** — and the code
+that pays it has no way to notice, because a per-call cost is invisible to every instrument that
+divides by voxels. This is the third time in this rewrite that a fixed cost per unit of work
+appeared when the unit got smaller (D511's job pool, D525's `stats()` sweep, now this), and the tell
+was the same each time: **an answer of "nothing here" cost nearly as much as an answer of
+"something here".**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D614 | **A clip's rules are worked out once, into a `SamplePlan`** | performance | 0.213 ms per call on 139 rules, paid per node, was 85% of what an empty node cost |
+| D614 | **`sample()` keeps its old signature as a two-line wrapper** | method | Every single-sample caller is unchanged and untouchable by this |
+| D614 | **`--sample-cost-replan` is the control arm** | method | Two flags of one build, D407, for a change whose only evidence is a timing |
+| D614 | **The plan borrows the field and does not own it** | correctness | A plan outliving its field is a dangling walk; the ladder holds the script beside it |
+| D614 | **The descent borrows the plan's part lists rather than copying them** | performance | Copying per call is the thing this entry exists to stop, one level down |

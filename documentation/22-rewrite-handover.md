@@ -579,24 +579,33 @@ what is being fixed. f is last because it is the one that can lose somebody's bu
 `tools\samplecost.ps1` runs it in **18 seconds** and writes `documentation/baselines/r11a-sample-cost.csv`.
 Facility, eight workers, RelWithDebInfo. D613.
 
-| level | node | voxels/m | nodes with matter | one node | empty node | asking one at a time costs |
-|---|---|---|---|---|---|---|
-| 3 | 0.25 m | 32 | 269,337 | **1.389 ms** | 0.213 ms | **21.5×** |
-| 4 | 0.50 m | 16 | 42,062 | 1.857 | 0.418 | 7.9× |
-| 5 | 1.00 m | 8 | 7,558 | 2.402 | 0.531 | 5.1× |
-| 6 | 2.00 m | 4 | 1,464 | 2.462 | 0.349 | 2.7× |
-| 7 | 4.00 m | 2 | 330 | 2.324 | 0.562 | 1.1× |
-| 8 | 8.00 m | 1 | 72 | 2.502 | 0.219 | 1.2× |
+The figures below are **after D614's plan split**, which is what R11b will be building on. The
+`empty node` column is the one that moved: it was 0.213 ms at the leaf and 0.418 at level 4.
+
+| level | node | voxels/m | nodes with matter | one node | median | empty node | asking one at a time costs |
+|---|---|---|---|---|---|---|---|
+| 3 | 0.25 m | 32 | 269,337 | **1.216 ms** | 0.513 | **0.017 ms** | **7.8×** |
+| 4 | 0.50 m | 16 | 42,062 | 2.016 | 1.029 | 0.260 | 6.1× |
+| 5 | 1.00 m | 8 | 7,558 | 2.841 | 2.910 | 0.446 | 4.6× |
+| 6 | 2.00 m | 4 | 1,464 | 2.203 | 1.161 | 0.153 | 2.4× |
+| 7 | 4.00 m | 2 | 330 | 1.964 | 0.997 | 0.386 | 0.9× |
+| 8 | 8.00 m | 1 | 72 | 2.396 | 1.283 | 0.041 | 1.1× |
+
+**Compare like with like when you re-run it.** Two runs of one build over one building came out
+13% and 25% apart when one asked for 8 nodes a box and the other 24: the worst node at every level
+is ten times the median, so the mean follows which nodes the stride landed on. Same `-Nodes`, same
+`-Boxes`, or the comparison is about the sampling rather than about the build.
 
 **Three things to know before writing a line of R11b.**
 
-1. **The fixed cost of a sample is the PAINT RULES, not the box.** An empty node — arrive, answer
-   "nothing here", leave — is **0.213 ms on the facility's 139 rules and 0.012 ms on a clip with
-   four**. `sample()` re-derives every rule's slack, bounding box and pieces on every call, and a
-   node pays all of it for a quarter-metre answer. On the level-3 reference boxes that setup is
-   **19.3 of the 29.7 predicted seconds**: most of the 21.5× is arriving, not sampling. Hoisting
-   the per-clip half of that setup out of `sample()` is worth more than any batching scheme, and it
-   is a smaller change.
+1. ~~**The fixed cost of a sample is the PAINT RULES, not the box.**~~ **Found, and FIXED — D614.**
+   It was 0.213 ms an empty node on the facility's 139 rules against 0.012 on a clip with four,
+   because `sample()` re-derived every rule's slack, box and pieces on every call. It is now
+   `forge::plan_sample` once and `sample(plan, settings)` many times: **an empty node at the leaf
+   is 0.014 ms against 0.211, a node with matter 1.19 against 1.43, and asking one node at a time
+   costs 7.5× a single call rather than 21.9×.** `--sample-cost-replan` is the control arm. What
+   is left of a node's price is the descent from the root of a field describing a whole building;
+   batching siblings is the next lever and it has not been measured.
 2. **The job pool is not worth waking for one node**: 1.389 ms threaded against 1.391 serial, at
    every level, to three digits. Eight voxels a side is eight z slabs.
 3. **Despeckle is a whole-clip judgement and will not survive being asked per node.** 29 of 297

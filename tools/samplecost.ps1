@@ -79,17 +79,19 @@ Write-Host ("`nthe run took {0:N1} s" -f $took)
 if ($before -ne $null -and $csv -ne "" -and (Test-Path $csv)) {
     $after = Import-Csv $csv
     Write-Host "`nagainst the last recorded run" -ForegroundColor Cyan
-    Write-Host ("{0,-6} {1,>12} {2,>12} {3,>9}" -f "level", "was ms", "now ms", "change")
+    Write-Host ("{0,-6} {1,12} {2,12} {3,9}" -f "level", "was ms", "now ms", "change")
     foreach ($row in $after) {
         $was = $before | Where-Object { $_.level -eq $row.level }
         if ($was -eq $null) { continue }
         $old = [double]$was.one_ms
         $new = [double]$row.one_ms
         $move = if ($old -gt 0) { 100.0 * ($new - $old) / $old } else { 0.0 }
-        # Five per cent, because a single sample of a few dozen nodes is not tighter than that --
-        # the worst node at every level is several times the median, so which nodes the spread
-        # picked matters. Anything larger is worth looking at rather than worth believing.
-        $colour = if ([math]::Abs($move) -gt 5.0) { "Yellow" } else { "Gray" }
+        # Fifteen per cent, measured rather than chosen: two runs of ONE build over the same
+        # facility came out 13% and 25% apart when one asked for 8 nodes a box and the other 24.
+        # The worst node at every level is ten times the median, so the mean moves with which
+        # nodes the spread happened to land on. Compare like with like -- same -Nodes, same
+        # -Boxes -- and treat anything under this as noise rather than as news.
+        $colour = if ([math]::Abs($move) -gt 15.0) { "Yellow" } else { "Gray" }
         Write-Host ("{0,-6} {1,12:N3} {2,12:N3} {3,8:N1}%" -f $row.level, $old, $new, $move) `
             -ForegroundColor $colour
     }

@@ -255,6 +255,61 @@ struct SampleResult {
 // restriction rather than a box restriction, and nobody has told the two apart at this size.
 bool node_block(const SampleResult& sampled, const NodeKey& key, VoxelTypeId* types, u8* inside);
 
+// Everything about a field and its paint rules that does not depend on the box or the resolution.
+//
+// # Why this is a type rather than a few locals inside `sample`
+//
+// It was a few locals inside `sample`, and R11a measured what that costs when the box is small.
+// Working out each rule's slack, its bounding box and the pieces its zone is made of is a walk of
+// the field per rule — a hundred and thirty-nine of them on the facility — and it came out the
+// same every time, because none of it is a question about the box. A whole-building sample pays it
+// once against nine million voxels and it is invisible. A NODE pays it in full for an answer about
+// five hundred and twelve, and it was **0.213 ms of the 1.389 a node cost, and 85% of what a node
+// holding nothing cost at all**: the same clip with four rules instead of a hundred and thirty-nine
+// answered in 0.012 ms. That is not the sampling, it is the arriving. D613, D614.
+//
+// So a plan is made once per clip and handed to every sample taken from it. `sample` keeps its old
+// signature and builds one internally, so nothing that took a single sample had to change.
+//
+// # What it does NOT hold
+//
+// The box, the resolution, the bounds shape, the clip being filled, and the per-rule cost counters.
+// Those are `SampleSettings` and they change per call, which is the whole point of the split: one
+// plan, many boxes. It borrows the field by pointer and does not own it — a plan outliving its
+// field is a dangling walk, and the ladder that holds one holds the script beside it.
+struct SamplePlan {
+    const Field* field = nullptr;
+    u32 root = 0;
+    u32 prune_root = 0;          // the shape under its outermost displacements
+    f64 slack = 0.0;             // what a single voxel has to allow for
+    f64 prune_slack = 0.0;       // what a box has to allow for
+    f64 amplitude = 0.0;         // how far the whole-shape displacement can move a surface
+
+    // The rules with their accepted bands grown by that displacement, which is what the descent
+    // actually tests against. See the long note where they are widened.
+    std::vector<PaintRule> widened;
+    std::vector<f64> rule_slack;
+    std::vector<Field::Aabb> rule_box;
+    std::vector<Field::Aabb> rule_piece;    // flat, with a begin/end pair per rule below
+    std::vector<u32> rule_piece_at;
+
+    // The parts the shape is made of, each with its own box and its own allowance.
+    std::vector<Field::Aabb> part_box;
+    std::vector<f64> part_slack;
+    bool parts_usable = false;
+
+    // Reported by every sample taken from this plan, because they are properties of the clip
+    // rather than of the box: how many rules there are, how many name a place, and how many can be
+    // settled for neither a box nor a region and are therefore asked at every solid voxel.
+    usize rules_total = 0;
+    usize rules_placed = 0;
+    usize rules_per_voxel = 0;
+
+    bool ok() const { return field != nullptr; }
+};
+
+SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule>& paint);
+
 // Fill a clip from a field.
 //
 // `jobs` may be null, in which case it runs on the calling thread. With a job system it splits
@@ -271,6 +326,11 @@ using SampleWatcher = std::function<void(f64 fraction, u64 done, u64 expected)>;
 SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,
                     const SampleSettings& settings, JobSystem* jobs = nullptr,
                     const SampleWatcher& watch = {});
+
+// The same, over a plan that has already been worked out. This is the one a caller taking many
+// samples from one clip wants; the signature above is this one with `plan_sample` in front of it.
+SampleResult sample(const SamplePlan& plan, const SampleSettings& settings,
+                    JobSystem* jobs = nullptr, const SampleWatcher& watch = {});
 
 // Give every voxel its own version of its material.
 //

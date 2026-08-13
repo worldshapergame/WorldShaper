@@ -1842,11 +1842,15 @@ constant in one place* applied to the one quantity this whole plan is about.
   | 7 | 4.00 m | 2 | 330 | 2.324 | 0.562 | 1.1× |
   | 8 | 8.00 m | 1 | 72 | 2.502 | 0.219 | 1.2× |
 
-  **What R11b has to know before it starts.** The fixed cost of a sample is the **paint rules**:
-  0.213 ms for an empty node on 139 rules against 0.012 ms on four, because `sample()` re-derives
-  every rule's slack, box and pieces on every call. On the level-3 reference boxes that is 19.3 of
-  the 29.7 predicted seconds — most of the penalty is arriving, not sampling, and hoisting the
-  per-clip half of that setup is worth more than any batching. Beside it: **the job pool buys
+  **What R11b had to know before it started, and the first half is now done.** The fixed cost of a
+  sample was the **paint rules**: 0.213 ms for an empty node on 139 rules against 0.012 ms on four,
+  because `sample()` re-derived every rule's slack, box and pieces on every call. **D614 splits
+  that into `forge::plan_sample`** — one plan per clip, many boxes from it — and the table above is
+  after it: an empty node at the leaf is **0.017 ms against 0.213**, a node with matter **1.216
+  against 1.389**, and asking one node at a time costs **7.8× a single call rather than 21.5×**.
+  `--sample-cost-replan` is the control arm. What is left of a node's price is the descent from the
+  root of a field that describes a whole building; batching siblings is the next lever and it is
+  unmeasured. Beside it: **the job pool buys
   nothing at node size** (1.389 threaded against 1.391 serial), and **despeckle is a whole-clip
   judgement** — 29 of 297 nodes come out different when it is run per node rather than per box,
   because a material's stipple share cannot be read off 512 cells.

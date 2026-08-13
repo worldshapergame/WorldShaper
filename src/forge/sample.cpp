@@ -449,9 +449,10 @@ struct Descent {
     f64 prune_slack = 0.0;         // the worst case, when the parts cannot be told apart
     f64 outer_amplitude = 0.0;     // the displacement that applies everywhere, allowed for always
     // Each part of the shape, with its own box and its own slack, so a box can allow only for
-    // the parts it is actually near.
-    std::vector<Field::Aabb> part_box;
-    std::vector<f64> part_slack;
+    // the parts it is actually near. Borrowed from the plan rather than held, because a plan
+    // serves many samples and copying its lists per call is the thing D614 exists to stop.
+    const std::vector<Field::Aabb>* part_box = nullptr;
+    const std::vector<f64>* part_slack = nullptr;
     bool parts_usable = false;
     // True when no bounds shape narrows the clip, so every cell belongs to it and the mask was
     // filled in once at allocation.
@@ -535,12 +536,14 @@ f64 away_from(const Field::Aabb& box, Vec3 p) {
 // The bounding boxes are already grown by the displacement amount (see build_bounds), so "outside
 // the box" already means "outside the displaced shape", and this stays conservative.
 f64 slack_here(const Descent& d, Vec3 middle, f64 radius) {
-    if (!d.parts_usable) return d.prune_slack;
+    if (!d.parts_usable || d.part_box == nullptr) return d.prune_slack;
+    const std::vector<Field::Aabb>& boxes = *d.part_box;
+    const std::vector<f64>& slacks = *d.part_slack;
     f64 worst = 0.0;
-    for (usize i = 0; i < d.part_box.size(); ++i) {
-        if (d.part_slack[i] <= worst) continue;
-        if (away_from(d.part_box[i], middle) > radius) continue;
-        worst = d.part_slack[i];
+    for (usize i = 0; i < boxes.size(); ++i) {
+        if (slacks[i] <= worst) continue;
+        if (away_from(boxes[i], middle) > radius) continue;
+        worst = slacks[i];
         if (worst >= Field::kInfiniteSlack) return Field::kInfiniteSlack;
     }
     // Not capped by the whole-shape figure, deliberately. A part that says nothing about its
@@ -895,51 +898,10 @@ void descend(const Descent& d, const i32 low[3], const i32 high[3], bool whole_c
 
 }  // namespace
 
-SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,
-                    const SampleSettings& settings, JobSystem* jobs, const SampleWatcher& watch) {
-    SampleResult result;
-
-    const i32 per_metre = (settings.voxels_per_metre > 0) ? settings.voxels_per_metre
-                                                          : kVoxelsPerMetre;
-    const f64 voxel = 1.0 / static_cast<f64>(per_metre);
-
-    // The voxel range the requested box covers. Half-open at the top, so a box exactly one metre
-    // across at thirty-two voxels per metre is thirty-two voxels and not thirty-three — an
-    // off-by-one here is a clip that grows a voxel every time it is re-sampled.
-    const i64 lo[3] = {voxel_floor(settings.low.x, per_metre),
-                       voxel_floor(settings.low.y, per_metre),
-                       voxel_floor(settings.low.z, per_metre)};
-    const i64 hi[3] = {voxel_floor(settings.high.x, per_metre),
-                       voxel_floor(settings.high.y, per_metre),
-                       voxel_floor(settings.high.z, per_metre)};
-
-    i32 size[3];
-    for (u32 axis = 0; axis < 3; ++axis) {
-        const i64 span = hi[axis] - lo[axis];
-        size[axis] = static_cast<i32>(std::max<i64>(span, 0));
-        result.origin_voxel[axis] = lo[axis];
-    }
-    if (size[0] <= 0 || size[1] <= 0 || size[2] <= 0) return result;
-
-    Clip& clip = result.clip;
-    clip.size[0] = size[0];
-    clip.size[1] = size[1];
-    clip.size[2] = size[2];
-    const usize cells = static_cast<usize>(size[0]) * static_cast<usize>(size[1]) *
-                        static_cast<usize>(size[2]);
-    clip.voxels.assign(cells, kAir);
-    // Every cell belongs to the clip unless a bounds shape says otherwise, so in the ordinary case
-    // the mask is right the moment it exists and the sampler never touches it again.
-    clip.inside.assign(cells, settings.has_bounds ? u8{0} : u8{1});
-
-    const f64 centre_shift = settings.sample_at_centre ? 0.5 : 0.0;
-
-    // Whether any rule wants a surface normal. Six extra evaluations a voxel is not free, and
-    // most clips never ask for it.
-    bool wants_normal = false;
-    for (const PaintRule& rule : paint) {
-        if (rule.facing_axis < 3) wants_normal = true;
-    }
+SamplePlan plan_sample(const Field& field, u32 root, const std::vector<PaintRule>& paint) {
+    SamplePlan plan;
+    plan.field = &field;
+    plan.root = root;
 
     // How far it is safe to jump ahead through empty space.
     //
@@ -1111,45 +1073,13 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     }
     rule_piece_at[paint.size()] = static_cast<u32>(rule_piece.size());
 
-    // Asked of a box, and then of its halves, and then of theirs.
-    //
-    // A signed distance says more than "is there matter at this point". It says how far away the
-    // nearest matter is, and that bounds the answer for every point within that distance. So the
-    // sampler need never ask about a point at all until it has narrowed down to somewhere the
-    // answer could still go either way — which is a thin shell around the surface, and nothing
-    // else.
-    //
-    // A box is read once at its centre. If the distance there exceeds the half-diagonal (plus what
-    // displacement can hide) then every point in the box is on the same side of the surface, and
-    // the box is settled: filled or empty, in one reading, however large it is. Otherwise it is
-    // cut in half on each axis and its eight children are asked the same question. Only a box that
-    // has come all the way down to a single voxel and *still* straddles the surface costs a
-    // per-voxel evaluation.
-    //
-    // The work therefore scales with the area of the surface rather than the volume of the box.
-    // That is the difference between a building costing what its walls cost and costing what the
-    // air around them costs — for the facility, sixty million shape evaluations became four.
-    //
-    // The paint comes down with it. A rule keyed on a shape is settled by the same argument, so
-    // "water where the pool is" is answered once for the half of the site that has no pool in it
-    // rather than three million times. A rule keyed on a pattern cannot be settled that way — a
-    // noise says nothing about the next voxel — so it is inherited as "still to ask" and paid for
-    // per voxel, which is the honest price of asking for one.
-    Descent descent;
-    descent.field = &field;
-    descent.root = root;
-    descent.prune_root = prune_root;
-    descent.prune_slack = prune_slack;
-    descent.outer_amplitude = amplitude;
-    descent.inside_by_default = !settings.has_bounds;
-
     // The parts the shape is made of, each with its own box and its own allowance. Only usable
     // when every part can be bounded and measured — one part that cannot is one part that could
     // be anywhere, and then the worst case is the only honest answer.
     {
         std::vector<Field::Part> parts;
         field.union_children(prune_root, parts);
-        descent.parts_usable = !parts.empty();
+        plan.parts_usable = !parts.empty();
         for (const Field::Part& piece : parts) {
             const u32 part = piece.node;
             // Only the parts that ask for something. A part with no slack contributes nothing to
@@ -1177,39 +1107,133 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
                 box.low = Vec3{box.low.x - by, box.low.y - by, box.low.z - by};
                 box.high = Vec3{box.high.x + by, box.high.y + by, box.high.z + by};
             }
-            descent.part_box.push_back(box);
-            descent.part_slack.push_back(part_slack);
+            plan.part_box.push_back(box);
+            plan.part_slack.push_back(part_slack);
         }
     }
-    descent.paint = &widened;
+
+    // What every sample taken from this plan reports about the clip rather than about its box.
+    plan.rules_total = paint.size();
+    for (const PaintRule& r : paint) { if (r.has_place) ++plan.rules_placed; }
+    for (usize i = 0; i < paint.size(); ++i) {
+        if (rule_slack[i] >= Field::kInfiniteSlack && rule_box[i].infinite()) ++plan.rules_per_voxel;
+    }
+
+    plan.prune_root = prune_root;
+    plan.slack = slack;
+    plan.prune_slack = prune_slack;
+    plan.amplitude = amplitude;
+    plan.widened = std::move(widened);
+    plan.rule_slack = std::move(rule_slack);
+    plan.rule_box = std::move(rule_box);
+    plan.rule_piece = std::move(rule_piece);
+    plan.rule_piece_at = std::move(rule_piece_at);
+    return plan;
+}
+
+SampleResult sample(const SamplePlan& plan, const SampleSettings& settings, JobSystem* jobs,
+                    const SampleWatcher& watch) {
+    SampleResult result;
+    if (!plan.ok()) return result;
+    const Field& field = *plan.field;
+
+    const i32 per_metre = (settings.voxels_per_metre > 0) ? settings.voxels_per_metre
+                                                          : kVoxelsPerMetre;
+    const f64 voxel = 1.0 / static_cast<f64>(per_metre);
+
+    // The voxel range the requested box covers. Half-open at the top, so a box exactly one metre
+    // across at thirty-two voxels per metre is thirty-two voxels and not thirty-three — an
+    // off-by-one here is a clip that grows a voxel every time it is re-sampled.
+    const i64 lo[3] = {voxel_floor(settings.low.x, per_metre),
+                       voxel_floor(settings.low.y, per_metre),
+                       voxel_floor(settings.low.z, per_metre)};
+    const i64 hi[3] = {voxel_floor(settings.high.x, per_metre),
+                       voxel_floor(settings.high.y, per_metre),
+                       voxel_floor(settings.high.z, per_metre)};
+
+    i32 size[3];
+    for (u32 axis = 0; axis < 3; ++axis) {
+        const i64 span = hi[axis] - lo[axis];
+        size[axis] = static_cast<i32>(std::max<i64>(span, 0));
+        result.origin_voxel[axis] = lo[axis];
+    }
+    if (size[0] <= 0 || size[1] <= 0 || size[2] <= 0) return result;
+
+    Clip& clip = result.clip;
+    clip.size[0] = size[0];
+    clip.size[1] = size[1];
+    clip.size[2] = size[2];
+    const usize cells = static_cast<usize>(size[0]) * static_cast<usize>(size[1]) *
+                        static_cast<usize>(size[2]);
+    clip.voxels.assign(cells, kAir);
+    // Every cell belongs to the clip unless a bounds shape says otherwise, so in the ordinary case
+    // the mask is right the moment it exists and the sampler never touches it again.
+    clip.inside.assign(cells, settings.has_bounds ? u8{0} : u8{1});
+
+    const f64 centre_shift = settings.sample_at_centre ? 0.5 : 0.0;
+
+    // Asked of a box, and then of its halves, and then of theirs.
+    //
+    // A signed distance says more than "is there matter at this point". It says how far away the
+    // nearest matter is, and that bounds the answer for every point within that distance. So the
+    // sampler need never ask about a point at all until it has narrowed down to somewhere the
+    // answer could still go either way — which is a thin shell around the surface, and nothing
+    // else.
+    //
+    // A box is read once at its centre. If the distance there exceeds the half-diagonal (plus what
+    // displacement can hide) then every point in the box is on the same side of the surface, and
+    // the box is settled: filled or empty, in one reading, however large it is. Otherwise it is
+    // cut in half on each axis and its eight children are asked the same question. Only a box that
+    // has come all the way down to a single voxel and *still* straddles the surface costs a
+    // per-voxel evaluation.
+    //
+    // The work therefore scales with the area of the surface rather than the volume of the box.
+    // That is the difference between a building costing what its walls cost and costing what the
+    // air around them costs — for the facility, sixty million shape evaluations became four.
+    //
+    // The paint comes down with it. A rule keyed on a shape is settled by the same argument, so
+    // "water where the pool is" is answered once for the half of the site that has no pool in it
+    // rather than three million times. A rule keyed on a pattern cannot be settled that way — a
+    // noise says nothing about the next voxel — so it is inherited as "still to ask" and paid for
+    // per voxel, which is the honest price of asking for one.
+    Descent descent;
+    descent.field = &field;
+    descent.root = plan.root;
+    descent.prune_root = plan.prune_root;
+    descent.prune_slack = plan.prune_slack;
+    descent.outer_amplitude = plan.amplitude;
+    descent.inside_by_default = !settings.has_bounds;
+    descent.part_box = &plan.part_box;
+    descent.part_slack = &plan.part_slack;
+    descent.parts_usable = plan.parts_usable;
+    descent.paint = &plan.widened;
     descent.settings = &settings;
     descent.clip = &clip;
-    std::vector<std::atomic<u64>> rule_cost(settings.count_rule_cost ? paint.size() : 0);
+    std::vector<std::atomic<u64>> rule_cost(
+        settings.count_rule_cost ? plan.widened.size() : 0);
     for (std::atomic<u64>& c : rule_cost) c.store(0, std::memory_order_relaxed);
     if (!rule_cost.empty()) descent.rule_cost = rule_cost.data();
 
-    descent.rule_slack = &rule_slack;
-    descent.rule_box = &rule_box;
-    if (!rule_piece.empty()) {
-        descent.rule_piece = &rule_piece;
-        descent.rule_piece_at = &rule_piece_at;
+    descent.rule_slack = &plan.rule_slack;
+    descent.rule_box = &plan.rule_box;
+    if (!plan.rule_piece.empty()) {
+        descent.rule_piece = &plan.rule_piece;
+        descent.rule_piece_at = &plan.rule_piece_at;
     }
     descent.voxel = voxel;
     descent.centre_shift = centre_shift;
-    descent.slack = slack;
+    descent.slack = plan.slack;
     for (u32 axis = 0; axis < 3; ++axis) {
         descent.lo[axis] = lo[axis];
         descent.size[axis] = size[axis];
     }
 
-    result.rules_total = paint.size();
-    for (const PaintRule& r : paint) { if (r.has_place) ++result.rules_placed; }
-    for (usize i = 0; i < paint.size(); ++i) {
-        if (rule_slack[i] >= Field::kInfiniteSlack && rule_box[i].infinite()) ++result.rules_per_voxel;
-    }
-    result.slack = slack;
-    result.prune_slack = prune_slack;
-    result.parts = descent.parts_usable ? descent.part_slack.size() : 0;
+    result.rules_total = plan.rules_total;
+    result.rules_placed = plan.rules_placed;
+    result.rules_per_voxel = plan.rules_per_voxel;
+    result.slack = plan.slack;
+    result.prune_slack = plan.prune_slack;
+    result.parts = plan.parts_usable ? plan.part_slack.size() : 0;
 
     // The worst part, and how much of the clip it reaches over — which together are the whole
     // story of why a build is slow. A part with a large slack and a small box costs nothing but
@@ -1220,10 +1244,10 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     const f64 whole = std::max(1e-9, (settings.high.x - settings.low.x) *
                                          (settings.high.y - settings.low.y) *
                                          (settings.high.z - settings.low.z));
-    for (usize i = 0; i < descent.part_slack.size(); ++i) {
-        if (descent.part_slack[i] <= result.best_part_slack) continue;
-        result.best_part_slack = descent.part_slack[i];
-        const Field::Aabb& b = descent.part_box[i];
+    for (usize i = 0; i < plan.part_slack.size(); ++i) {
+        if (plan.part_slack[i] <= result.best_part_slack) continue;
+        result.best_part_slack = plan.part_slack[i];
+        const Field::Aabb& b = plan.part_box[i];
         result.worst_part_reach =
             b.infinite() ? 1.0
                          : std::min(1.0, ((b.high.x - b.low.x) * (b.high.y - b.low.y) *
@@ -1286,7 +1310,6 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
         }
     };
 
-    (void)wants_normal;
     if (jobs != nullptr && top_count > 1) {
         jobs->parallel_for(top_count, 1, do_top);
     } else {
@@ -1310,6 +1333,13 @@ SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& 
     }
     clip.build_coarse();
     return result;
+}
+
+// One sample from a clip that is only sampled once. The ladder, the instrument and anything else
+// taking more than one from the same field wants the two halves apart.
+SampleResult sample(const Field& field, u32 root, const std::vector<PaintRule>& paint,
+                    const SampleSettings& settings, JobSystem* jobs, const SampleWatcher& watch) {
+    return sample(plan_sample(field, root, paint), settings, jobs, watch);
 }
 
 // --------------------------------------------------------------------------------------
