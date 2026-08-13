@@ -405,9 +405,15 @@ let fittings_pl_base = box -0.4500 -0.0500 -0.0900   0.4500 0.1800 0.8100 round=
 let fittings_pl_die  = box -0.3600  0.1800 -0.0900   0.3600 1.1700 0.7200 round=0.0120
 let fittings_pl_cap  = box -0.4500  1.1700 -0.0900   0.4500 1.3500 0.8100 round=0.0135
 let fittings_pl_pan  = box -0.1800  0.4500  0.6525   0.1800 0.9000 0.7600 round=0.0110
+# And the same panel on both flanks. The die is 0.72 across and 0.81 deep and had one sunk face
+# out of four; the two a person walking past actually sees at an angle were blank. Sunk the same
+# 0.0675 (M/6.7) the front is, which is the shallowest sink this building allows itself indoors --
+# see the note in rotunda.clip about a panel a raking light cannot find.
+let fittings_pl_pan_e = box  0.2925  0.4500  0.0900   0.3700 0.9000 0.5400 round=0.0110
+let fittings_pl_pans = union { fittings_pl_pan  mirror { fittings_pl_pan_e } axis=x }
 let fittings_plinth  = difference {
     union { fittings_pl_base fittings_pl_die fittings_pl_cap }
-    fittings_pl_pan
+    fittings_pl_pans
 }
 
 # THE FIGURE. Its axis is z = 0.36, the middle of the plinth, and it stands from 1.35 to 3.13.
@@ -430,32 +436,182 @@ let fittings_plinth  = difference {
 # The main cone's slope is 5.85 to 1 — 1.71 m of rise (3.8 M) for 0.2925 of radius (0.65 M) — which
 # is 0.183 m of top-of-matter between neighbouring columns, just under the 0.1875 that counts. That
 # is the only reason those two numbers are what they are.
-let fittings_st_robe = intersection {
-    union {
-        cone 0 1.3000 0.3600  r=0.3600 h=2.0250 axis=y
-        cone 0 1.3000 0.3600  r=0.3825 h=0.5625 axis=y
-    }
-    box -0.3825 1.3000 -0.0225   0.3825 2.3400 0.7425
+#
+# ------------------------------------------------------------------------------------------------
+# AND THAT SLOPE IS WHY EVERYTHING BELOW THE SHOULDERS IS CARVED AND NOTHING IS ADDED.
+#
+# Reported from playing as *"improve drastically the statues"*, which was fair: the figure was a
+# smooth cone, an egg and a ball, and at ten metres down a hall it read as a bollard under a sheet.
+#
+# The obvious way to improve a figure is to put more on it — a knee through the cloth, a mantle over
+# a shoulder, a hem that stands out. Work the arithmetic before writing any of it. At y = 1.85 the
+# cone is 0.262 from its axis; the column standing on that surface tops out at 1.850 and its
+# neighbour one voxel further out tops at 1.667, which is the 0.183 the paragraph above defends. The
+# cone is ALREADY AT THE LIMIT, everywhere, by construction. A knee bulging two centimetres proud of
+# it does not cost 0.02 of rise, it costs 0.345 — because the neighbouring column does not climb
+# with the bulge, it stays on the cone — and 0.345 is a counted fault right round the figure.
+#
+# **So nothing below the shoulders is allowed to stick out, and the whole sculpture down there is
+# subtraction.** A groove can never raise the top of any column, so a carved fold is free whatever
+# it costs a bulge. That is the opposite of how one would model this in clay and it is the right way
+# round here, and it is worth saying plainly because the next person will reach for a knee first.
+#
+# What is added is all ABOVE the shoulders or beyond 0.2925 in x, where the drop underneath is more
+# than 0.75 and reads as a wall rather than a step — which is the licence the forward arm has always
+# had and the reason its elbow is at 0.2925 and not wherever looked best.
+let fittings_st_cone  = cone 0 1.3000 0.3600  r=0.3600 h=2.0250 axis=y
+let fittings_st_flare = cone 0 1.3000 0.3600  r=0.3825 h=0.5625 axis=y
+let fittings_st_gown  = intersection {
+    union { fittings_st_cone fittings_st_flare }
+    box -0.3825 1.3000 -0.0225   0.3825 2.4300 0.7425
 }
-let fittings_st_torso = ellipsoid 0 2.5650 0.3600  rx=0.1800 ry=0.2925 rz=0.1125
-let fittings_st_shldr = capsule -0.1800 2.7450 0.3600   0.1800 2.7450 0.3600  r=0.1035
+
+# THE DRAPERY, CUT AS BROAD SCALLOPS AND NOT AS GROOVES, and the difference is the whole lesson.
+#
+# The first attempt cut nine narrow folds with capsules of radius 0.045 laid along the cone. It
+# looked, in the round, like broken ice. 0.045 is 1.4 voxels, and this file's own header says what
+# that is: *a displacement smaller than a voxel cannot be geometry, it can only be dither*. A
+# narrow groove at that depth does not make a shadow, it makes every third voxel one step darker,
+# and nine of them turn a clean cone into noise.
+#
+# What reads at 32 voxels per metre is not the hollow, it is the RIDGE between two hollows. So the
+# cloth is cut with six cylinders of radius 0.20 -- broad and shallow, a scallop 0.045 deep and
+# 0.25 across -- laid so that adjacent scallops meet in a cusp. The hollows are gentle enough that
+# the sampler renders them as a smooth turn of the surface, and the six cusps between them are
+# geometric creases, where shading changes discontinuously and a voxel edge is an asset rather than
+# an artefact. Six lobes to a skirt, ridges on the front, the flanks and the back.
+#
+# The axis of each cutter is at 0.20 + r(y) - 0.045 from the figure's own axis, which is what puts
+# its surface exactly 0.045 inside the cloth: r(1.42) = 0.3387 gives 0.4937, r(2.16) = 0.2071 gives
+# 0.3621. They start at 1.42 rather than at the hem so that a hand's width of plain cloth is left
+# round the foot -- a hem needs one uninterrupted band or the scallops read as damage.
+#
+# The cutters are enormous and they reach through the wall behind the figure. That is safe and it
+# is worth saying why: they are subtracted from `fittings_st_gown` alone, and a difference in this
+# language takes matter only from the shape it is applied to. Nothing outside the robe can be
+# harmed by them however far they extend.
+let fittings_st_lobe_30 = capsule 0.2469 1.4200  0.7876   0.1811 2.1600 0.6736  r=0.2000
+let fittings_st_lobe_90 = capsule 0.4937 1.4200  0.3600   0.3621 2.1600 0.3600  r=0.2000
+let fittings_st_lobe_15 = capsule 0.2469 1.4200 -0.0676   0.1811 2.1600 0.0464  r=0.2000
+
+# And a groove round the skirt a hand above the hem, which is what stops a cone reading as a cone:
+# the eye needs one horizontal to measure the verticals against. Ring 0.3351 is exactly r(1.44).
+let fittings_st_hemcut = torus 0 1.4400 0.3600  ring=0.3351 tube=0.0450 axis=y
+
+let fittings_st_carving = union {
+    mirror { union {
+        fittings_st_lobe_30 fittings_st_lobe_90 fittings_st_lobe_15
+    } } axis=x
+    fittings_st_hemcut
+}
+let fittings_st_robe = difference { fittings_st_gown fittings_st_carving }
+
+# THE BODY, IN THREE AND NOT IN ONE. It was a single ellipsoid, and a single ellipsoid has no waist,
+# which is the whole of why the figure read as an egg on a cone. Chest, waist and hips, blended with
+# a 0.05 fillet so the joins are anatomy and not three balls in a bag.
+#
+# Not one of the three is wider than the 0.1800 the old ellipsoid was, in either axis, and that is
+# deliberate: the torso stands where the cone has narrowed to 0.175, so anything wider than the
+# figure already was would put a new step round the shoulders.
+let fittings_st_chest = ellipsoid 0 2.7000 0.3600  rx=0.1800 ry=0.1800 rz=0.1170
+let fittings_st_waist = ellipsoid 0 2.4300 0.3600  rx=0.1440 ry=0.1350 rz=0.0990
+let fittings_st_hips  = ellipsoid 0 2.2500 0.3600  rx=0.1755 ry=0.1350 rz=0.1080
+let fittings_st_torso = union smooth=0.0180 {
+    fittings_st_chest fittings_st_waist fittings_st_hips
+}
+
+# The girdle, carved rather than laid on, for the reason the whole lower half is carved: a band
+# standing 0.02 proud at the waist costs 0.19 of rise and a groove costs nothing. A torus turned to
+# the waist's own section, so it bites the flanks and the front by the same amount.
+let fittings_st_girdle = torus 0 2.4750 0.3600  ring=0.1530 tube=0.0270 axis=y
+
+# The mantle: cloth over the left shoulder and across the chest to the right hip, which is the one
+# addition above the shoulders that does any work at ten metres. It is what says "draped figure"
+# rather than "person". Kept inside x = 0.1800 so it adds nothing to the silhouette in the axis
+# that matters, and allowed to stand 0.033 proud on the FRONT, where the drop beneath it is 1.0 m
+# and reads as a wall.
+let fittings_st_mantle = capsule -0.1300 2.8000 0.4600   0.1250 2.3800 0.4300  r=0.0500
+let fittings_st_mant_e = capsule -0.1300 2.8000 0.4600  -0.1550 2.7000 0.3400  r=0.0450
+
+let fittings_st_shldr = capsule -0.1755 2.7650 0.3600   0.1800 2.7300 0.3600  r=0.1035
 let fittings_st_neck  = capsule 0 2.7900 0.3600   0 2.8800 0.3600  r=0.0540
-let fittings_st_head  = ellipsoid 0 3.0150 0.3600  rx=0.1125 ry=0.1575 rz=0.1260
-let fittings_st_armd  = capsule -0.2250 2.6550 0.3600  -0.1350 2.1150 0.4275  r=0.0675
+
+# ------------------------------------------------------------------------------------------------
+# THE HEAD, which is 0.315 tall and 0.225 across — ten voxels by seven at metre 32.
+#
+# That is a big head for a 1.78 m figure: seven and a half heads is the classical canon and this is
+# five and a half. It stays big on purpose. Seven voxels of width is barely enough for a brow, a
+# nose and two sockets, and at the canon it would be five, which is not enough for anything. A
+# figure whose face reads and whose proportion is a little heroic beats a correctly proportioned one
+# with a blank ball on top, at every distance anybody will ever stand at.
+#
+# Everything here is one or two voxels. The nose stands 0.036 proud, which is 1.15 voxels; the
+# sockets are cut 0.0315, which is one. They are not detail so much as SILHOUETTE and shading — what
+# actually reads at ten metres is the hair mass, the knot at the nape and the line of the brow, and
+# what reads at arm's length is that the face has a direction.
+let fittings_st_skull = ellipsoid 0 3.0150 0.3600  rx=0.1080 ry=0.1440 rz=0.1215
+let fittings_st_jaw   = ellipsoid 0 2.9300 0.3690  rx=0.0855 ry=0.0810 rz=0.0900
+# The hair is an oversized skull with the face cut off it, so it is a cap of stone over the cranium
+# and down the nape and stops at the hairline instead of swallowing the features.
+let fittings_st_hair  = difference {
+    ellipsoid 0 3.0330 0.3465  rx=0.1215 ry=0.1530 rz=0.1305
+    box -0.2000 2.9000 0.4050   0.2000 3.2000 0.6000
+}
+let fittings_st_bun   = sphere 0 3.0060 0.2520  r=0.0675
+let fittings_st_brow  = capsule -0.0720 3.0510 0.4590   0.0720 3.0510 0.4590  r=0.0225
+let fittings_st_nose  = capsule 0 3.0150 0.4770   0 2.9650 0.4950  r=0.0225
+let fittings_st_ear_e = ellipsoid 0.0990 3.0060 0.3510  rx=0.0270 ry=0.0405 rz=0.0315
+let fittings_st_ears  = mirror { fittings_st_ear_e } axis=x
+let fittings_st_eye_e = sphere 0.0540 3.0240 0.4680  r=0.0315
+let fittings_st_eyes  = mirror { fittings_st_eye_e } axis=x
+let fittings_st_mouth = capsule -0.0270 2.9550 0.4590   0.0270 2.9550 0.4590  r=0.0160
+let fittings_st_head  = difference {
+    union {
+        fittings_st_skull fittings_st_jaw fittings_st_hair fittings_st_bun
+        fittings_st_brow fittings_st_nose fittings_st_ears
+    }
+    union { fittings_st_eyes fittings_st_mouth }
+}
+
+# THE HANGING ARM, now bent at the elbow, and the elbow is at x = 0.2925 to the voxel because that
+# is where the old straight arm's widest point was. Everything under it is 1.04 m down, which is a
+# wall and not a step; move it in to 0.27 and the drop becomes 0.69, which is a counted fault right
+# round the figure. The hand still ends inside the robe, the way a real one disappears into cloth.
+let fittings_st_armd_u = capsule -0.1800 2.7500 0.3550  -0.2250 2.4650 0.3800  r=0.0675
+let fittings_st_armd_l = capsule -0.2250 2.4650 0.3800  -0.1530 2.1300 0.4500  r=0.0585
+
+# THE FORWARD ARM, and it now holds something. A statue at the end of a hall is read by its
+# ATTRIBUTE before it is read by its face — that is what tells you it is a figure and not a post,
+# from the doorway, at eight metres, in a room lit by four sconces. A scroll, because this is a
+# public building and because a cylinder 0.081 across survives the grid where a wreath would not.
 let fittings_st_armu  = capsule  0.2250 2.6550 0.3600   0.2475 2.2500 0.4275  r=0.0675
 let fittings_st_fore  = capsule  0.2475 2.2500 0.4275   0.1350 2.3400 0.6975  r=0.0563
+let fittings_st_hand  = ellipsoid 0.1305 2.3400 0.7150  rx=0.0585 ry=0.0630 rz=0.0630
+let fittings_st_scrl  = capsule 0.0500 2.3000 0.7000   0.2100 2.3800 0.7400  r=0.0405
 
-# Three folds of drapery, laid on the robe's own surface so they stand 0.0225 proud of it — a
-# sub-voxel ridge on a curved surface, which is the same question a coffer's moulding asks and is
-# asked here on a body instead of on a ceiling.
+# Three folds laid ON the robe rather than cut into it, standing 0.0225 proud — a sub-voxel ridge on
+# a curved surface, which is the same question a coffer's moulding asks and is asked here on a body
+# instead of on a ceiling. They are the CONTROL for the carved folds above: same file, same figure,
+# same frame, one set added at two thirds of a voxel and one set cut at a voxel and a half, so what
+# the sampler does with each can be compared rather than argued about.
 let fittings_st_fold_c = capsule 0       1.3500 0.6975   0       2.2500 0.5400  r=0.0225
 let fittings_st_fold_e = capsule  0.3375 1.3500 0.3600    0.1800 2.2500 0.3600  r=0.0225
 let fittings_st_fold_w = capsule -0.3375 1.3500 0.3600   -0.1800 2.2500 0.3600  r=0.0225
 
+let fittings_st_body = difference {
+    union smooth=0.0120 {
+        fittings_st_torso fittings_st_shldr fittings_st_neck
+        fittings_st_armd_u fittings_st_armd_l
+        fittings_st_armu fittings_st_fore fittings_st_hand fittings_st_scrl
+        fittings_st_mantle fittings_st_mant_e
+    }
+    fittings_st_girdle
+}
+
 let fittings_figure = union {
     fittings_st_robe
-    fittings_st_torso fittings_st_shldr fittings_st_neck fittings_st_head
-    fittings_st_armd fittings_st_armu fittings_st_fore
+    fittings_st_body
+    fittings_st_head
     fittings_st_fold_c fittings_st_fold_e fittings_st_fold_w
 }
 

@@ -431,6 +431,24 @@ paint plaster where=halls_face below=0.02
 let halls_panel_face = mirror { round { union { halls_lunettes halls_tymp halls_blind } } by=0.03 } axis=x
 paint stucco where=halls_panel_face below=0.02
 
+# AND THE BLIND PANEL IN PORPHYRY, WHICH IS FOR THE STATUE AND NOT FOR ITSELF.
+#
+# fittings.clip stands a marble figure in front of this panel -- "the far wall of a room eight
+# metres long and the one thing standing at the end of it", which is what this file's own note
+# above calls it. A white figure against a stucco panel eighteen values from limestone has nothing
+# to be seen against, and the entire silhouette -- the head, the shoulders, the arm, the scroll --
+# was being spent on a background of the same brightness. Sculpting it further would have bought
+# nothing; the ground is what was missing.
+#
+# Porphyry, because the dado in this room is already porphyry, so the palette is not widened by a
+# colour, and because rotunda.clip does exactly this a room away: a verde lining behind a gilt urn,
+# for the same reason and with the same argument written under it.
+#
+# The lunettes and the tympanum keep their stucco. Only the panel with somebody standing in front
+# of it changes.
+let halls_blind_face = mirror { round { halls_blind } by=0.03 } axis=x
+paint porphyry where=halls_blind_face below=0.02
+
 # --- the floor ------------------------------------------------------------------------------------
 #
 # Thin slabs from 1.70 to 1.86, straddling the floor plane so they catch its surface and nothing

@@ -7,6 +7,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -586,4 +587,61 @@ TEST_CASE("paint specks: a voxel alone in its material is found, a thin line is 
         const SpeckReport dots = paint_specks(clip);
         CHECK(dots.specks == 0);
     }
+}
+
+TEST_CASE("despeckle repaints a lone voxel and leaves a deliberate stipple alone") {
+    // D610. The pass has to do two opposite things and the whole of its value is in the second.
+    Clip clip;
+    clip.size[0] = clip.size[1] = clip.size[2] = 11;
+    clip.voxels.assign(11 * 11 * 11, kAir);
+    clip.inside.assign(11 * 11 * 11, 1);
+    const VoxelTypeId stone = 21;
+    const VoxelTypeId gilt = 22;
+    const VoxelTypeId moss = 23;
+
+    for (i32 z = 1; z <= 9; ++z) {
+        for (i32 x = 1; x <= 9; ++x) {
+            for (i32 y = 1; y <= 3; ++y) clip.voxels[clip.index(x, y, z)] = stone;
+        }
+    }
+    // One accident: a single gilt voxel in the top face, alone on all six sides.
+    clip.voxels[clip.index(5, 3, 5)] = gilt;
+    // And a stipple: moss scattered across the same face so that most moss voxels are isolated.
+    // This is what a weathering coat looks like, and it must survive the pass untouched.
+    // Twenty-four of them, because a stipple is a large SHARE and a large NUMBER: see the floor
+    // in despeckle(). A dither of four voxels is not a dither.
+    for (i32 z = 1; z <= 9; z += 2) {
+        for (i32 x = 1; x <= 9; x += 2) {
+            if (x == 5 && z == 5) continue;
+            clip.voxels[clip.index(x, 3, z)] = moss;
+        }
+    }
+    clip.build_coarse();
+
+    const usize moss_before = static_cast<usize>(
+        std::count(clip.voxels.begin(), clip.voxels.end(), moss));
+    REQUIRE(moss_before > 0);
+
+    const DespeckleReport out = despeckle(clip);
+
+    // The accident is gone, repainted as the stone it was sitting on.
+    CHECK(clip.at(5, 3, 5) == stone);
+    CHECK(out.repainted == 1);
+    REQUIRE(out.by_type.size() == 1);
+    CHECK(out.by_type[0].type == gilt);
+
+    // Every moss voxel is exactly where it was: a dither smoothed away is a coat that no longer
+    // exists, and this is the assertion that stops a later "improvement" from eating one.
+    CHECK(static_cast<usize>(std::count(clip.voxels.begin(), clip.voxels.end(), moss)) ==
+          moss_before);
+    CHECK(out.left > 0);
+
+    // And no matter moved. Despeckling is a paint pass; if it ever changes the solid count it has
+    // become something else and every measurement taken through it is wrong.
+    CHECK(std::count(clip.voxels.begin(), clip.voxels.end(), kAir) ==
+          11 * 11 * 11 - static_cast<i64>(9 * 9 * 3));
+
+    // Idempotent: running it twice must change nothing the second time.
+    const DespeckleReport again = despeckle(clip);
+    CHECK(again.repainted == 0);
 }

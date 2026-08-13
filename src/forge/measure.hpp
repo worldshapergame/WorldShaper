@@ -229,6 +229,42 @@ struct SpeckReport {
 // crowded material cannot fill the list. See the note where they are collected.
 SpeckReport paint_specks(const Clip& clip, usize examples_per_type = 2);
 
+// And REMOVING them, which is a different job from finding them and a much more delicate one.
+//
+// Reported as *"the 3x3 speckles never got fixed fix them now too"*, and that is fair: D609 built
+// the instrument and then argued, correctly in both cases, that the two specks reported were not
+// faults. It did not follow that the other two thousand were fine. A lone voxel of somebody else's
+// material on a surface is wrong wherever it comes from — a rule reaching two centimetres past its
+// own shape, two curved surfaces of different materials meeting on a 3 cm grid, a fitting buried
+// 0.09 into a wall painted by both — and it is wrong the same way each time. It is not worth twenty
+// separate fixes in twenty fragments. It is worth one pass.
+//
+// A speck is repainted with the material MOST of its face neighbours wear. Geometry is untouched:
+// no voxel is added, none is removed, so the volume, the components and the walkability cannot
+// move. Only the colour of an isolated voxel changes, and only to the colour of what it sits on.
+//
+// # What must NOT be despeckled, and how it is told apart
+//
+// A weathering coat keyed on noise is MEANT to be specks — the facility's desert and overgrown
+// coats are a dither, and a dither with its isolated voxels smoothed away is a coat that no longer
+// exists. So the pass will not touch a material whose specks are a large share of its own surface.
+// That is exactly the fraction paint_specks already reports, and exactly the reading D609 gave it:
+// tens of per cent is a stipple, a fraction of one is an accident. `stipple_share` is where the
+// line is drawn, and a material at or above it is left entirely alone.
+//
+// # Why it runs on the sampler's output and not on a rule
+//
+// Because the fault is not in any one rule. It is in what two correct rules do where they meet, at
+// this resolution — and the resolution is not a thing any fragment author can see from inside their
+// own file. Twenty authors cannot each be asked to defend a boundary none of them owns.
+struct DespeckleReport {
+    u64 repainted = 0;
+    u64 left = 0;                     // specks in materials judged to be a deliberate stipple
+    std::vector<TypeShare> by_type;   // what was repainted, biggest first
+};
+
+DespeckleReport despeckle(Clip& clip, f64 stipple_share = 0.05);
+
 // Where two parts of a shape occupy the same voxels.
 //
 // Not an error in itself — a building is full of deliberate overlaps, and a union is how you

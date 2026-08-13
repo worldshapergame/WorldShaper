@@ -4612,3 +4612,164 @@ did nothing is the one you most need named, and it is the one that sorting by co
 | D609 | **Nothing changed on the urns** | correctness | Zero specks in their box; the green is the niche reflected in a near-mirror, which is what the urns are there to test |
 | D609 | **Examples are taken per material, not in scan order** | measurement | The first twelve were all limestone off one cornice, crowding out the twenty-six materials nobody had looked at |
 | D609 | **`--clip-part` paints differently from the whole building** | deferred | Reports the urns with no gilt when the building has them gilt; a tool fault, and diagnosing it blind is what cost this investigation its false trail |
+
+## D610 — a lamp on a door, a copy of a manifest, and two thousand specks that did need fixing
+
+Three reports in one sitting, and each one corrected something the entry before it got wrong.
+
+### 1. The world on the shelf was a copy of the MANIFEST
+
+*"i still see everything as it was before."*
+
+D607 found a stale copy of the facility's twenty-two **fragments** in the player's worlds folder and
+moved it out. That fixed nothing, and the reason is one level up: the world on the shelf is
+`facility.wsworld`, a copy of `clips/facility.clip` taken on some earlier day, and **the manifest is
+where the assembly lives**. So D608's fix — the line that puts the furniture back into the halls —
+went into the game's manifest and never into the file the player opens.
+
+Diffed: the shelf copy differed from the shipped one by exactly five lines, and all five were that
+fix. Nothing the player had written. It has been refreshed in place, author tag kept, with the old
+one beside it at `%LOCALAPPDATA%\WorldShaper\facility.wsworld.before-refresh`.
+
+And the game now says so. D607 taught it to announce an **include** shadowed by a copy; this
+announces the **file itself** when it is a copy of a shipped clip of the same stem and the two have
+drifted. The worlds shelf lists no built-ins — `shipped_kinds()` gives that kind no shipped folder,
+the facility is on the CLIPS shelf — so this copy is the only facility world a player has and
+deleting it would leave them none. Which is exactly why it has to speak up rather than be quietly
+wrong.
+
+**Three separate stale copies of one building, found one report at a time.** The pattern is worth
+naming: anything the game once copied into the player's data is a fork, it will drift, and the drift
+is invisible from inside the game unless something is written to notice it.
+
+### 2. A door and a window still cut a fitting. A room does not.
+
+*"you added lamps on the lesser doors"*, with a photograph of a bronze sconce alight in the middle
+of a closed door leaf.
+
+D608 wrote `let furnished = union { hollowed part_fittings }`, which puts the furniture back after
+**every** void. That is right for a room's air and wrong for a hole through a wall, and the two had
+never needed telling apart before because nothing had ever been added back at all:
+
+| void | what it is | must it cut a fitting? |
+|---|---|---|
+| `void_vestibule` `void_rotunda` `void_halls` `void_stair` | the **air of a room** | **No.** A fitting stands in a room's air by definition. Subtracting these is what deleted every sconce, bench and statue indoors (D608) |
+| `void_doors` `void_windows` | an **opening through a wall** | **Yes.** Nothing may stand in one; the hole is the point |
+
+So `difference { part_fittings void_doors void_windows }`, unioned after `hollowed`.
+
+**Left for `fittings.clip` and not fixed here:** the outer portico sconce is at x = ±5.40 and the
+side door's void is x 4.50 … 6.30. It is placed squarely in a doorway and comes out cut in half —
+which is where it was before D608 as well; the change only made it visible for a day. That file
+reasons the placement from *"the great door's dressing stops at 2.025 and the antae start at 6.05"*
+and never mentions the side doorcase, which runs 4.05 … 6.75 through the middle of that span.
+Moving it is an elevation decision and belongs in the file that draws the elevation.
+
+### 3. The specks did need fixing, and one pass fixes all of them
+
+*"the 3x3 speckles never got fixed fix them now too"* — and that is fair. D609 built the instrument
+and then argued, correctly in both reported cases, that what had been photographed was not a fault.
+It did not follow that the other two thousand were fine.
+
+A lone voxel of somebody else's material on a surface is wrong wherever it comes from — a rule
+reaching two centimetres past its own shape, two curved surfaces meeting on a 3 cm grid, a fitting
+buried 0.09 into a wall painted by both — and it is wrong the same way each time. Twenty fixes in
+twenty fragments would each be an argument with an author about a boundary none of them owns.
+**It is one pass.**
+
+`despeckle` repaints a speck with the material most of its face neighbours wear. Read from a copy
+and written to the clip, so a repainted voxel cannot become the evidence for the next one — in
+place, a run of three specks would repaint the first, find the second no longer isolated, and leave
+it, which makes the answer depend on the scan order.
+
+**What must not be touched, and the mistake in the first attempt.** A weathering coat keyed on noise
+is *meant* to be specks. The first discriminator was the fraction D609 already reports: leave a
+material alone if its specks are a large share of its own surface. That is exactly backwards for
+small accidents — **a material with one surface voxel and one speck has a fraction of 100%**, so the
+single stray voxel this whole pass exists for was the one case it was most certain was deliberate.
+Caught by the test, not by reading the code. A stipple is now a large share **and** a large number:
+at least sixteen specks, because a dither of four voxels is not a dither anybody can see.
+
+**Two flags of one build, on the facility:**
+
+| | `--no-despeckle` | default |
+|---|---|---|
+| solid voxels | 127,305,669 | **127,305,669** |
+| components | 1088 | **1088** |
+| voxels not joined | 2482 | **2482** |
+| walkable | 25.5%, worst rise 0.75 m | **identical** |
+| specks | 2486 | **1394** |
+| repainted | — | 1050 |
+| left as a stipple | — | 964 |
+
+Geometry does not move — it cannot; the pass only writes to `voxels`. The 964 left are the
+limestone weathering stipple at 7.9% of its own surface. Everything the player photographed is in
+the repainted column: bronze #383 (51), the lamp remnants, and verde #442 (16).
+
+It runs on the first build **and on every region the ladder sharpens**, because a region pasted in
+speckled would put the fault back after the world had been cleaned of it, and a seam between a
+despeckled chunk and a speckled one is worse than either alone.
+
+### 4. And the statues
+
+*"improve drastically the statues."* Fair as well: a cone, an egg and a ball.
+
+The interesting part is what the walkability arithmetic does to the obvious approach. `fittings.clip`
+defends the robe's cone slope as 0.183 m of rise between neighbouring columns, *just* under the
+0.1875 that counts as a fault — so **the cone is already at the limit, everywhere, by construction.**
+A knee bulging 2 cm proud of it does not cost 0.02 of rise; it costs 0.345, because the neighbouring
+column does not climb with the bulge, it stays on the cone.
+
+**So everything below the shoulders is subtraction and nothing is added.** A groove can never raise
+the top of any column. That is the opposite of how one would model this in clay and it is the right
+way round here.
+
+The first attempt cut nine narrow folds at 0.045 — 1.4 voxels — and in the round it looked like
+broken ice. This file's own header says why: *a displacement smaller than a voxel cannot be geometry,
+it can only be dither*. What reads at 32 voxels per metre is not the hollow but the **ridge between
+two hollows**, so the cloth is now cut by six cylinders of radius 0.20 — a scallop 0.045 deep and
+0.25 across — leaving six geometric cusps where shading changes discontinuously.
+
+Added, all of it above the shoulders or beyond x = 0.2925 where the drop underneath is a wall and
+not a step: a chest/waist/hips body in place of one ellipsoid, a carved girdle, a mantle across the
+chest, a bent elbow with its widest point at 0.2925 to the voxel because that is where the old
+straight arm's was, a hand, and **a scroll** — because a statue at the end of a hall is read by its
+attribute before its face. A head with hair, a knot at the nape, a brow, a nose, sockets and ears,
+kept deliberately over-scale: seven voxels of width is barely enough for a face and the classical
+canon would give five.
+
+**And a ground to be seen against**, which turned out to matter more than any of the geometry.
+`halls.clip` painted the blind panel behind the figure in stucco, eighteen values from limestone, so
+a white marble figure had nothing to be seen against and the entire silhouette was being spent on a
+background of its own brightness. It is porphyry now — the same stone as the dado in that room, so
+the palette is not widened, and the same argument `rotunda.clip` writes under its verde niche behind
+a gilt urn.
+
+**Cost, honestly:** the building goes from 1086 components and 2480 unjoined voxels to **1088 and
+2482**. The statue measures one piece on its own — `--clip-part fittings_statue` says so — but two
+of its four copies shed a voxel each at their own grid phase, which is the failure `fittings.clip`
+describes for thin metal arriving through a different door. Two voxels in 127 million, named here
+rather than left for somebody to find.
+
+### The reusable half
+
+**A discriminator built from a ratio fails at small populations, and it fails in the direction that
+hurts.** The rarer the accident, the more confidently the fraction called it deliberate. Any rule of
+the form "leave it alone if most of it looks like this" needs a floor under the *count* as well.
+
+And: **an instrument is not a fix.** D609 was right that the two things photographed were not faults
+and wrong to stop there. The correct response to "make sure this never happens again" is the
+measurement *and* the pass that acts on it.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D610 | **Doors and windows cut fittings; rooms do not** | correctness | A fitting stands in a room's air by definition and may never stand in an opening |
+| D610 | **Specks are repainted, not merely counted** | correctness | Twenty fragments cannot each be asked to defend a boundary at a resolution none of them can see |
+| D610 | **A stipple is a large share AND at least sixteen specks** | correctness | A fraction alone calls a single stray voxel 100% deliberate, which is the exact case the pass exists for |
+| D610 | **Despeckle reads from a copy** | correctness | In place, three specks in a row resolve differently depending on scan order |
+| D610 | **The ladder despeckles every region it pastes** | correctness | A speckled paste after a cleaned build is a visible seam, not a partial fix |
+| D610 | **Below the shoulders a statue is carved, never added** | correctness | The robe's cone is at the walkability limit by construction; 2 cm of bulge costs 0.345 of rise |
+| D610 | **Scallops, not grooves** | correctness | 1.4 voxels of depth is dither; what reads is the cusp between two broad hollows |
+| D610 | **The blind panel behind the figure is porphyry** | consistency | A white figure on a white panel spends its whole silhouette on nothing; rotunda.clip already argues this for its urns |
+| D610 | **The shelf copy of a shipped clip announces its drift** | correctness | Three stale copies of one building, found one report at a time, none of them visible from inside the game |
+| D610 | **The outer portico sconce is left where it is** | deferred | It stands in the side door's opening; moving it is an elevation decision for the file that draws the elevation |

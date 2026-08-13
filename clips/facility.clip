@@ -112,7 +112,30 @@ let hollowed = difference {
 # line. It cannot open a seam: part_fittings removes no matter, exposes no void of its own, and
 # overlaps its hosts by 0.05 everywhere. The grain still runs over it, because `all` displaces what
 # comes out of here and not what went in.
-let furnished = union { hollowed part_fittings }
+# A DOOR AND A WINDOW STILL CUT A FITTING. A ROOM DOES NOT. That is the whole of the distinction
+# this line exists to make, and the first version of it did not make it: `union { hollowed
+# part_fittings }` put the furniture back after EVERY void, so a sconce standing in a doorway was
+# no longer cut by the doorway. Reported from playing, immediately, as a lamp on one of the lesser
+# doors -- a bronze bracket with its bowl alight, hanging in mid-air in front of a closed door
+# leaf, which is what the portico's outer sconce has always been and what `void_doors` had always
+# quietly been hiding.
+#
+# The two kinds of void are not the same kind of thing and it took a wrong picture to see it:
+#
+#   void_vestibule, void_rotunda, void_halls, void_stair   the AIR OF A ROOM. A fitting stands in
+#       a room's air by definition, and subtracting these deleted every sconce, bench and statue
+#       indoors (D608). They must not touch part_fittings.
+#   void_doors, void_windows                               an OPENING THROUGH A WALL. Nothing may
+#       stand in one -- not a fitting, not anything -- because the hole is the point. These must
+#       still cut part_fittings, exactly as they did before D608.
+#
+# LEFT FOR fittings.clip AND NOT FIXED HERE: the outer portico sconce is at x = +-5.40 and the side
+# door's void is x = 4.50 .. 6.30, so it is placed squarely in a doorway and comes out cut in half.
+# That is where it was before D608 too; the change only made it visible for a day. The file's own
+# note reasons the placement from "the great door's dressing stops at 2.025 and the antae start at
+# 6.05" and never mentions the side doorcase, which runs 4.05 .. 6.75 straight through the middle
+# of that span. Moving it is an elevation decision and belongs in the file that draws the elevation.
+let furnished = union { hollowed  difference { part_fittings void_doors void_windows } }
 
 # --- surface --------------------------------------------------------------------------------------
 #

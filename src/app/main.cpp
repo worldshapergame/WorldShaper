@@ -97,6 +97,7 @@ struct Options {
     // front of you, and a scripted screenshot should not depend on the network.
     bool no_update_check = (WS_DEBUG != 0);
     bool no_clip_cache = false;   // always rebuild the clip, never read or write the cache
+    bool despeckle = true;        // repaint lone voxels of the wrong material (D610)
     // The control arm for the region paste's own pool: put the paste back on the sampler's job
     // system, which is where it was and which is what made it wait for the sample. See D511.
     bool no_paste_pool = false;
@@ -664,6 +665,10 @@ Options parse_options(int argc, char** argv) {
             options.clip_align = true;
         } else if (arg == "--clip-metre") {
             options.clip_metre = static_cast<i32>(next_number(0));
+        } else if (arg == "--no-despeckle") {
+            // The control arm for D610. Two flags of one build: with it, every lone voxel of the
+            // wrong material stays exactly where the sampler put it.
+            options.despeckle = false;
         } else if (arg == "--no-clip-cache") {
             options.no_clip_cache = true;
         } else if (arg == "--no-paste-pool") {
@@ -1376,6 +1381,9 @@ private:
     void apply_knobs();
 
     Options options_;
+    // Copied out of the options so the sampler thread never reads them while the main thread is
+    // in the middle of a reload. One bool, set once at startup.
+    bool despeckle_ = true;
     Window& window_;
     Device& device_;
     Swapchain& swapchain_;
@@ -2365,6 +2373,11 @@ void Application::start_refinement() {
         auto built = std::make_unique<forge::SampleResult>(forge::sample(
             refine_script_->field, refine_script_->solid, refine_script_->paint,
             refine_script_->settings, refine_jobs_.get(), {}));
+        // Every region the ladder sharpens, as well as the first build below. A region that came
+        // back speckled and was pasted in would put the fault back after the coarse world had been
+        // cleaned of it, and a seam between a despeckled chunk and a speckled one is worse than
+        // either alone. This lambda is already off the main thread, so it costs nobody a frame.
+        if (despeckle_) forge::despeckle(built->clip);
         refine_sample_ms_ = ns_to_ms(now_ns() - began);
         refine_asked_ = built->voxels_asked;
         refine_result_ = std::move(built);
@@ -2789,6 +2802,55 @@ void Application::build_world() {
         const std::string source = forge::expand_includes(
             path, origin, trouble, (std::filesystem::path(Window::base_path()) / "clips").string());
 
+        // AND THE FILE ITSELF, when it is a copy of one the game ships.
+        //
+        // D607 taught the game to say when an INCLUDE beside a world shadows a shipped fragment.
+        // This is the same fault one level up and it took a second report to find, because moving
+        // the stale fragments out fixed nothing: the world on the shelf is `facility.wsworld`, a
+        // copy of `clips/facility.clip` taken on some earlier day, and the manifest is where the
+        // assembly lives. So the fix that put the furniture back into the halls went into the
+        // game's manifest and never into the copy, and from the player's chair the building was
+        // unchanged for the third time running.
+        //
+        // The worlds shelf lists no built-ins -- `shipped_kinds()` gives the worlds kind no
+        // shipped folder, the facility is on the CLIPS shelf -- so this copy is the only facility
+        // world a player has and deleting it would leave them none. Which is exactly why it has
+        // to announce itself rather than be quietly correct or quietly wrong.
+        //
+        // Compared on the file's own text with line endings and the author tag taken out: the tag
+        // is stamped in as a world is copied to the shelf (D447) and is not a difference in what
+        // the file builds.
+        if (!source.empty()) {
+            const std::filesystem::path shipped =
+                std::filesystem::path(Window::base_path()) / "clips" /
+                (std::filesystem::path(path).stem().string() + ".clip");
+            std::error_code there;
+            if (std::filesystem::exists(shipped, there) && !there &&
+                shipped.lexically_normal() !=
+                    std::filesystem::absolute(std::filesystem::path(path), there)
+                        .lexically_normal()) {
+                const auto flatten = [](const std::string& from) {
+                    std::ifstream in(from, std::ios::binary);
+                    std::string text((std::istreambuf_iterator<char>(in)),
+                                     std::istreambuf_iterator<char>());
+                    std::string out;
+                    out.reserve(text.size());
+                    for (char c : text) {
+                        if (c != '\r') out += c;
+                    }
+                    return ui::without_author(out);
+                };
+                if (flatten(path) != flatten(shipped.string())) {
+                    WS_LOG_WARN("clip",
+                                "'{}' is a COPY of the game's own '{}' and the two have drifted "
+                                "apart. This world is built from the copy, so nothing the game "
+                                "ships changes it. Duplicate the built-in again to catch up",
+                                std::filesystem::path(path).filename().string(),
+                                shipped.filename().string());
+                }
+            }
+        }
+
         JobSystem jobs;
 
         forge::Script script = forge::parse_clip_script(source, types_, tags_);
@@ -2992,6 +3054,17 @@ void Application::build_world() {
                     progress_.within(fraction);
                     progress_.count(done, expected);
                 });
+            // D610. Before variation, which is the only place it can go: variation mints a record
+            // per voxel and after it every voxel is alone in its material by construction.
+            if (options_.despeckle) {
+                const forge::DespeckleReport dots = forge::despeckle(built.clip);
+                if (dots.repainted > 0) {
+                    WS_LOG_INFO("clip",
+                                "despeckled {} lone voxels of the wrong material ({} left as a "
+                                "deliberate stipple)",
+                                dots.repainted, dots.left);
+                }
+            }
             const u64 sampled_at = now_ns();
             progress_.enter(LoadStage::Varying);
             // Every voxel gets its own version of its material before it goes in, so the world
@@ -5715,6 +5788,7 @@ void Application::record_frame(f32 time_seconds) {
 
 int Application::play(const Options& options) {
     options_ = options;
+    despeckle_ = options.despeckle;
 
     // ---- the loading screen ------------------------------------------------------------
     //
@@ -7743,9 +7817,14 @@ int run_clip_tool(const Options& options) {
     // Always counted here. This is the measuring tool; a build it measures should be able to say
     // where it went, and one atomic beside an evaluation is nothing next to the evaluation.
     script.settings.count_rule_cost = true;
-    const forge::SampleResult built =
+    forge::SampleResult built =
         forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
     const u64 sampled = now_ns();
+
+    // The measuring tool despeckles too, or its numbers are about a world nobody plays. D610.
+    // `--no-despeckle` is the control arm and leaves every lone voxel where the sampler put it.
+    forge::DespeckleReport cleaned;
+    if (options.despeckle) cleaned = forge::despeckle(built.clip);
 
     forge::SampleResult varied = built;
     const forge::VariationReport variety = forge::apply_variation(
@@ -7991,6 +8070,20 @@ int run_clip_tool(const Options& options) {
         // And single voxels wearing the wrong material. See paint_specks: run on the BUILT clip
         // and not the varied one, because variation gives almost every voxel a record of its own
         // and after it every voxel is alone in its type.
+        if (cleaned.repainted > 0 || cleaned.left > 0) {
+            std::printf("despeckled    %llu lone voxels repainted, %llu left as a stipple\n",
+                        static_cast<unsigned long long>(cleaned.repainted),
+                        static_cast<unsigned long long>(cleaned.left));
+            for (const forge::TypeShare& share : cleaned.by_type) {
+                const char* name = (share.type < script.material_names.size() &&
+                                    !script.material_names[share.type].empty())
+                                       ? script.material_names[share.type].c_str()
+                                       : "?";
+                std::printf("  repainted  %-12s #%-4u %8llu\n", name,
+                            static_cast<unsigned>(share.type),
+                            static_cast<unsigned long long>(share.count));
+            }
+        }
         const forge::SpeckReport dots = forge::paint_specks(built.clip);
         std::printf("specks        %llu of %llu surface voxels alone in their material (%.3f%%)\n",
                     static_cast<unsigned long long>(dots.specks),

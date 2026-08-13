@@ -545,5 +545,114 @@ SpeckReport paint_specks(const Clip& clip, usize examples_per_type) {
     return out;
 }
 
+DespeckleReport despeckle(Clip& clip, f64 stipple_share) {
+    DespeckleReport out;
+    if (clip.empty()) return out;
+
+    // Which materials are allowed to be despeckled at all. Asked first, in full, because the
+    // decision is about a MATERIAL and not about a voxel: whether a lone verde voxel is a mistake
+    // depends on how the other four hundred thousand verde voxels in the clip are behaving, and
+    // no amount of looking at its six neighbours can tell you that.
+    const SpeckReport found = paint_specks(clip, 0);
+    // A STIPPLE IS A LARGE SHARE **AND** A LARGE NUMBER, and the second half was missing from the
+    // first version of this. A material with one surface voxel in the whole clip and one speck has
+    // a speck fraction of 100%, which read as "obviously a deliberate dither" and left the single
+    // stray voxel exactly where it was. That is the case this whole pass exists for, and the
+    // fraction test alone gets it precisely backwards -- the smaller the accident, the more
+    // convinced the test was that it was on purpose. Caught by the test, not by reading it.
+    //
+    // So a material is only spared when its specks are both a large share of its own surface and
+    // numerous in absolute terms. A weathering coat covers an area by definition: the facility's
+    // limestone stipple is 972 specks at 7.9%. A dither of fewer than kStippleFloor voxels in an
+    // entire clip is not a dither anybody can see, and whatever it is, it is not something the
+    // author would notice losing.
+    constexpr u64 kStippleFloor = 16;
+    std::map<VoxelTypeId, bool> allowed;
+    for (const TypeShare& share : found.by_type) {
+        const bool stipple = share.fraction >= stipple_share && share.count >= kStippleFloor;
+        allowed[share.type] = !stipple;
+    }
+    if (found.specks == 0) return out;
+
+    const auto type_at = [&](i32 x, i32 y, i32 z) -> VoxelTypeId {
+        if (x < 0 || y < 0 || z < 0 || x >= clip.size[0] || y >= clip.size[1] ||
+            z >= clip.size[2]) {
+            return kAir;
+        }
+        return clip.at(x, y, z);
+    };
+
+    // READ FROM A COPY AND WRITE TO THE CLIP, so that a repainted voxel cannot become one of the
+    // neighbours the next voxel is judged against. In place, a run of three specks in a line would
+    // repaint the first, then find the second no longer isolated, and leave it -- which makes the
+    // result depend on the scan order. It has to be one simultaneous step or it is not a rule.
+    const std::vector<VoxelTypeId> before = clip.voxels;
+    std::map<VoxelTypeId, u64> repainted;
+
+    for (i32 z = 0; z < clip.size[2]; ++z) {
+        for (i32 y = 0; y < clip.size[1]; ++y) {
+            for (i32 x = 0; x < clip.size[0]; ++x) {
+                const VoxelTypeId mine = before[clip.index(x, y, z)];
+                if (mine == kAir) continue;
+                const auto may = allowed.find(mine);
+                if (may == allowed.end()) continue;   // this material has no specks at all
+
+                const VoxelTypeId around[6]{
+                    type_at(x - 1, y, z), type_at(x + 1, y, z), type_at(x, y - 1, z),
+                    type_at(x, y + 1, z), type_at(x, y, z - 1), type_at(x, y, z + 1),
+                };
+                bool exposed = false;
+                bool kin = false;
+                for (const VoxelTypeId near : around) {
+                    if (near == kAir) {
+                        exposed = true;
+                    } else if (near == mine) {
+                        kin = true;
+                    }
+                }
+                if (!exposed || kin) continue;
+                if (!may->second) {
+                    ++out.left;   // a stipple, and it stays a stipple
+                    continue;
+                }
+
+                // The material most of the neighbours wear. Ties go to the first in the fixed
+                // order above rather than to whichever the map happens to iterate first, because
+                // a clip must build identically every time on every machine.
+                VoxelTypeId best = kAir;
+                i32 best_count = 0;
+                for (const VoxelTypeId near : around) {
+                    if (near == kAir) continue;
+                    i32 count = 0;
+                    for (const VoxelTypeId other : around) {
+                        if (other == near) ++count;
+                    }
+                    if (count > best_count) {
+                        best_count = count;
+                        best = near;
+                    }
+                }
+                if (best == kAir) continue;   // a voxel with no solid neighbour at all: leave it
+
+                clip.voxels[clip.index(x, y, z)] = best;
+                ++out.repainted;
+                ++repainted[mine];
+            }
+        }
+    }
+
+    for (const auto& entry : repainted) {
+        TypeShare share;
+        share.type = entry.first;
+        share.count = entry.second;
+        share.fraction = 0.0;
+        out.by_type.push_back(share);
+    }
+    std::sort(out.by_type.begin(), out.by_type.end(),
+              [](const TypeShare& a, const TypeShare& b) { return a.count > b.count; });
+    if (out.repainted > 0) clip.build_coarse();
+    return out;
+}
+
 }  // namespace forge
 }  // namespace ws
