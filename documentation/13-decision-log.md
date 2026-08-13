@@ -5326,3 +5326,42 @@ at the rotunda is the building it should be.
 | D617 | **Rank is screen size times how much a sample would improve** | design | Size alone sharpens the flat floor, which was nearly right, before the urn, which was wrong |
 | D617 | **The batch comes out of one sweep with a shortlist** | performance | Sixteen sweeps of thirty-six thousand nodes with occlusion rays was a 379 ms frame |
 | D617 | **The blocks themselves are R11d's** | honesty | They are the up-front coarse build; this makes them brief, not absent |
+
+## D618 — the blocks are still reported after D617, and this is what is known
+
+*"they still show up"*, after D617 took the ladder's rate up twenty-fold, re-ordered it by how much
+a sample improves things, and cut a 379 ms frame to 15. **The entry is here because the report is
+open, not because anything was built for it.**
+
+### What D617 did and did not do
+
+It made the lumps **brief**. It could not make them absent, because they are the up-front coarse
+build: `--clip-coarse 4` samples the whole clip at eight voxels a metre and the paste blows every
+cell up four times, so anything slimmer than 12 cm enters the world already fattened into a cube.
+Nothing that speeds the ladder up removes them; only not making them in the first place does, and
+that is **R11d**, which deletes the up-front build entirely. Until then, every fresh load and every
+new part of the building that comes into view starts as those cubes.
+
+### Two causes, and only one of them is R11d's
+
+- **Transient.** The coarse build standing until the nodes over it are refined. Expected, and it is
+  what the settled picture rules out: at the default camera, settled, the rotunda's urns and
+  mouldings are correct. Somebody WALKING sees this constantly, because new geometry keeps
+  arriving in view coarse. R11d is the fix and it is the next step.
+- **Permanent, and it would be new.** The ladder skips a node it judges hidden, by casting one ray
+  and refusing the node if something is hit before `distance − the node's own extent`. That
+  tolerance was twelve metres when the unit was a region and is **a quarter of a metre** now, so a
+  node whose front is a hair behind another node's coarse overshoot can be refused for as long as
+  the camera stands there. The last settled run left **4,096 nodes of 20,020 unrefined** on that
+  test. If any of them are in fact visible, their lumps never go.
+
+**The one-flag test that tells them apart**, and it has not been run: settle at the camera that
+shows the lump, then settle again with `--refine-all`, which disables the facing and occlusion
+tests. If the lump survives the first and not the second, it is the occlusion tolerance and it is
+R11b's to fix rather than R11d's. Do that before assuming it is the coarse build.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D618 | **The report is open and D617 did not close it** | honesty | D617 made the lumps brief; they are the up-front coarse build and only R11d removes them |
+| D618 | **The occlusion tolerance is a named suspect** | plan | It fell from twelve metres to a quarter when the unit became a node; 4,096 of 20,020 nodes are refused on it |
+| D618 | **`--refine-all` against a normal settle is the test** | method | One flag separates "not yet" from "never", and neither answer should be assumed |

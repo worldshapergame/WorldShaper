@@ -2424,4 +2424,33 @@ will always be some step -- but the big visible one is gone.
 every frame, which is the test that would say whether those two remaining steps are visible to an
 eye. The world is proved; the walk is not.
 
+### The brick blocks: still there, and here is the honest state of it
+
+You reported big cube-shaped lumps sitting on top of things while the world loads, with a photo of
+an urn as a stack of coarse blocks in a niche whose walls were already sharp.
+
+**What they are**: the first pass. The building is made once at eight voxels per metre and each of
+those is blown up four times on the way in, so anything thinner than about 12 cm arrives as a cube.
+I photographed the same moment in the build from before this week's work -- the lumps are there too.
+They are not something I added. What I did add is that everything *around* them now sharpens
+quickly, so they are the only wrong thing left in view instead of one wrong thing among many.
+
+**What I changed**: the ladder now makes sixteen pieces at a time instead of one (it was still doing
+one at a time from when a piece was a thousand times bigger), it does the pieces that are most
+*wrong* before the ones that are merely big on screen, and I removed a third-of-a-second stall that
+my own first attempt introduced. That makes the lumps brief. It does not make them absent, and you
+have told me they still show up, which is fair.
+
+**What actually removes them** is step 4: if nothing is made up front, there is no blown-up first
+pass to leave lumps. That is the next thing I build.
+
+**One thing to check first, though.** There is a second possible cause I have named but not tested.
+The ladder skips a piece it thinks is hidden behind something else, and the margin for that
+judgement used to be twelve metres and is now a quarter of a metre -- so a piece just behind
+another piece's own coarse overshoot can be refused for as long as you stand still. On the last
+measured run, 4,096 pieces out of 20,020 were refused that way. If a lump is still there after the
+world has gone quiet and stopped working, it is that, not the first pass -- and it would be my
+fault from step 2 rather than something step 4 fixes. There is a one-flag test for it and I have
+written down how to run it.
+
 **Steps 4 to 8 are not built.** The loading bar is still there -- that is step 4, and it is next.

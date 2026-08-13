@@ -643,6 +643,28 @@ eighteen-box ladder build **byte-identical worlds** with despeckling off (`a1f8b
    differ on `sampler.clip`, 0 of 297 on the facility**. D613's class one step along. What is left
    without the skirt is 46 cells of 152,064 on the facility wearing a neighbour's colour.
 
+#### OPEN: "huge brick blocks on top of things", reported twice
+
+Reported with a photograph of an urn standing as a slab of coarse cubes in a niche whose walls were
+already sharp, and reported again after D617. **Read D617 and D618 before touching it.**
+
+The blocks are the up-front coarse build -- eight voxels a metre blown up four times, so anything
+slimmer than 12 cm enters the world fattened into a cube. They are not new (the same frame from the
+pre-R11b build has them); what is new is that everything around them now sharpens fast, so they
+stand out. D617 made them brief -- batching sixteen nodes a wake, ranking by how much a sample
+improves rather than by size on screen, and a 379 ms frame down to 15 -- and **the report came back
+anyway**, which is the honest state of it.
+
+**R11d removes the cause.** With nothing sampled up front there is no inflated coarse world to leave
+lumps in the first place.
+
+**But run the one-flag test first**: settle at a camera that shows a lump, then settle again with
+`--refine-all`. That flag turns off the facing and occlusion tests. If the lump survives the first
+and not the second it is not the coarse build at all -- it is the occlusion tolerance, which was
+twelve metres when the unit was a region and is **a quarter of a metre** now, and which refused
+**4,096 nodes of 20,020** on the last settled run. That would be R11b's fault, not R11d's, and
+building R11d on top of it would leave a hole in the world instead of a lump.
+
 #### R11c is done as well -- start at R11d
 
 A node is now sampled at `256 / 2^level`, capped at the clip's authored resolution, and the split
