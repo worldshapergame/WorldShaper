@@ -906,6 +906,20 @@ away 93% of the field, at 175 nodes a visit of 2,505.
 figure to read on a real machine is `where shape ... us per shape eval` from `--clip-file`, and the
 load's own stage lines.
 
+**And the map of where an evaluation goes, which is the thing to have before R12 (D639).** Per shape
+evaluation, of 176 node visits: **union 61.5**, box 34.2, difference 15.8, translate 14.6, mirror
+11.9, intersection 7.9, rotate 5.6, repeat 5.5. **A third of it is union nodes** — `combine` folds
+more than four parts into a left-leaning chain whose first child is everything folded so far, so its
+box is the whole site and the chain is walked to its full depth every time.
+
+**Folding it balanced instead was built and refused**: the boxes get tighter and reject 5.5% more,
+and the tree then evaluates **2.7% MORE shape primitives**, for a net 1.9% of instructions — because
+the chain's first child is a *prefix minimum* and that is a better heuristic than a tight box. So
+three groupings of the same parts have now been measured — chain, balanced tree, BVH — and **the
+simplest wins**. The parts of a building are layers, not regions; do not build a fourth grouping
+without a clip whose parts are actually separated. **For R12 this says the win on the card is
+parallelism, not cleverness about hierarchy.**
+
 ---
 
 **What follows is the stage as it was written, before the histogram refuted it.**

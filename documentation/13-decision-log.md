@@ -6785,3 +6785,71 @@ run the game.
 | D638 | **The cull throws away 93% of the field already** | finding | 175 nodes a visit of 2,505 reachable — the cost was the fault, not the reach |
 | D638 | **D637 re-measured with the BVH repaired, and holds** | method | A verdict taken while both arms were mis-costed is not a verdict |
 | D638 | **Wall clock on this container drifts 20% between runs** | honesty | Alternate the arms, and prefer an instrument that cannot drift |
+
+## D639 — where a shape evaluation actually goes, and three groupings of a union measured
+
+D638 left the sampler at 176 node visits per shape evaluation and no map of what they are. Taken
+with a temporary counter in `Field::eval`, reverted afterwards so the hot path keeps nothing —
+`clips/facility.clip` at metre 2, 329,268 shape evaluations, 58,004,621 visits:
+
+| op | per evaluation | share |
+|---|---|---|
+| **union** | **61.5** | **34.9%** |
+| box | 34.2 | 19.4% |
+| difference | 15.8 | 9.0% |
+| translate | 14.6 | 8.3% |
+| mirror | 11.9 | 6.8% |
+| intersection | 7.9 | 4.5% |
+| rotate | 5.6 | 3.2% |
+| repeat | 5.5 | 3.1% |
+| cylinder | 2.9 | 1.6% |
+| everything else | 16.3 | 9.2% |
+
+**A third of every evaluation is spent in union nodes**, more than in all the shape primitives put
+together, and the reason is `combine`: more than four parts fold into a **left-leaning chain**, four
+at a time, with everything folded so far as the first child. The accumulated child's box is the box
+round *everything so far* — the whole site by the fourth group — so it can never be rejected and
+every evaluation walks the chain to its full depth. A union of a hundred and eighty parts is sixty
+nodes deep and all sixty are visited, every time.
+
+**So the obvious fix was built: fold BALANCED instead.** A union is a minimum and an intersection is
+a maximum; both are associative, commutative and exact, so regrouping them cannot move the answer by
+one bit (a difference and a smooth union are neither, and would have kept the chain). Four wide and
+log deep, every interior box is the box round four neighbouring parts rather than round everything
+up to here.
+
+**It is not worth having, and the measurement is why.** Same content hash, same voxels asked, and:
+
+| | chain | balanced |
+|---|---|---|
+| box tests | 69,482,584 | 65,658,995 (**−5.5%**) |
+| **shape primitives evaluated** (`sd_box`) | 11,247,056 | **11,546,413 (+2.7%)** |
+| nodes visited | 57,471,406 | 57,975,509 (+0.9%) |
+| instructions | 12,123,068,100 | 11,891,153,050 (−1.9%) |
+
+**The tighter boxes reject more, and the tree evaluates more shapes anyway** — because the chain's
+shape is accidentally a good heuristic. Its first child is a *prefix minimum over every part folded
+so far*, so one descent produces a small running answer that rejects the three leaves at every level
+on the way back up. A balanced group of four starts from within itself and has nothing that strong
+to reject against. Net 1.9% of instructions, bought with a permanent constraint — every op ever
+routed through `combine` would have to be checked for associativity, silently, or shapes change.
+**Refused, and reverted.**
+
+**And that closes the family, which is worth more than the 1.9%.** Three groupings of the same parts
+have now been measured against each other: the **chain** (what ships), a **balanced tree** (here),
+and a **BVH over the flattened leaves** (D637, 31% worse). The simplest is the best of the three, and
+the cause is the same one `field.hpp` names above the accelerator: the parts of a building are
+**layers, not regions**, so no grouping by locality has anything to reject with. **Nobody should
+build a fourth one without a clip whose parts are actually separated.**
+
+**What this leaves for R12.** The map says a card evaluating this field would spend a third of itself
+walking union nodes and a fifth in box primitives, and that the win there is parallelism, not
+cleverness about hierarchy — the hierarchy question is now answered three ways.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D639 | **A third of a shape evaluation is union nodes** | finding | 61.5 visits of 176, more than every shape primitive together |
+| D639 | **The chain's first child is a prefix minimum, and that is why it wins** | finding | One descent gives an answer strong enough to reject the rest |
+| D639 | **Balanced folding built, measured, refused** | decision | −1.9% instructions while evaluating 2.7% MORE shapes |
+| D639 | **Three groupings measured; the simplest wins** | method | Chain, balanced tree and BVH — the parts are layers, not regions |
+| D639 | **The visit counter is not kept** | method | It is an increment in the hottest loop in the build; take it, read it, revert it |

@@ -2733,3 +2733,35 @@ but I would not have known that without going back and re-running it.
 
 **Same caveat as before:** no graphics card here, so the building maths is measured and the loading
 screen is not. The number to look at on your machine is the loading report.
+
+## Where the building maths actually goes — and a good idea that was not
+
+Having made the skipping cheaper, I wanted the map: of everything the maths does to place one voxel,
+what is it doing? So I counted, on the facility.
+
+**A third of it is one thing: joining parts together.** When a clip says "this building is these
+hundred and eighty pieces", the code folds them up four at a time, each fold carrying everything so
+far. That makes a ladder a hundred and eighty rungs long, and every single question about every
+single voxel climbs the whole ladder. Actual shapes — the spheres, boxes and columns — are only a
+fifth. Moving things about (turning, mirroring, repeating) is another fifth.
+
+**So I built the obvious fix and it did not work.** Instead of a ladder, fold the pieces into a
+balanced tree, four at a time, so it is five levels deep instead of a hundred and eighty. Each
+branch then covers four neighbouring pieces rather than the whole site, which should let far more be
+skipped. It does: 5.5% more skipping. **And it evaluated 2.7% more actual shapes, for a net gain of
+under 2%** — so I threw it away.
+
+The reason is a nice one. The ladder is accidentally clever: because each rung carries *everything
+below it*, climbing down once gives you a very good "nearest thing so far", and a good answer is
+what lets everything else be skipped. A tidy tree gives you a worse answer for longer. Neatness lost
+to an accident.
+
+**That is now three ways of organising the same pieces, all measured** — the ladder, the balanced
+tree, and the search trees from last time — and the plain ladder beats both. The reason is the same
+every time and it is written in the code: a building is made of *layers*, not *regions*. Every wall,
+every window, every roof covers the whole site, so there is nothing to rule out. **I would not try a
+fourth arrangement, and I would want a clip of separate buildings before anybody did.**
+
+**None of that is in the game.** Only the change from the previous entry is; this one was built,
+measured and taken back out. It is in the record because the next person to have the same good idea
+should be able to find out in a minute that it was already tried.
