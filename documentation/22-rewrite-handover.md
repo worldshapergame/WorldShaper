@@ -590,6 +590,37 @@ sixth of a building"* and D632 had to correct it — it is the design, and *"sto
 nearly condemned a working carve on a `0 leaves rebuilt` line that is about what the POOL held, not
 about what the edit did.
 
+#### ASKED FOR NEXT: noise and speckle. Start at R5b, and start with these numbers.
+
+The user asked for speckle down 100x. **R5's own gate is 4x** (§8 R5d: *"speckle down 4x against the
+R0 baseline on the enclosed-room camera"*), and that is the honest target -- speckle is a variance
+measure with a floor set by how many samples a face has had and by real detail in the scene, so a
+filter that took it 100x down would have taken the mouldings with it. Say that in those terms.
+
+Measured now, settled, 1280x800 quality 7, facility:
+
+| camera | speckle | fireflies | faces settled |
+|---|---|---|---|
+| enclosed `0,0,0,-90,0` | **8.93** | **0** | 114,491 of 245,511 |
+| close `0,2,-20,90,0` | **28.98** | **54** | 454,799 of 589,870 |
+
+**The close camera is 3.2x the room and carries every firefly, so it is the one to work against** --
+and the number that points at why is the last column: **135,071 of its faces, 23%, have not
+settled.** The grain is faces that are still measuring, not converged faces disagreeing.
+
+**Half of R5b may already exist.** `face_light_seed` seeds a new face from the coarse stand-in over
+it (R9d, D308-D311) and `face_reseed` scales a pair of counts down keeping the ratio, with the
+comment at `node.glsl:1350` saying in as many words *"the same arithmetic face_light_seed already
+does to a stand-in's history, applied to a face's own"*. So check what claim time actually does
+before writing a seeding path; what is more likely missing is the **temporal** half -- the sun is a
+running mean that converges and stops (R10d), which is right for a static face and is exactly what
+leaves a newly claimed one noisy for its first frames.
+
+**The gate is not the speckle number alone.** R5d's own wording: *two identical frames are
+bit-identical, and a slow dolly-out shows no transition.* Temporal averaging fails by SMEARING, and a
+smear is invisible in a speckle metric -- it is what `--fly` and the consecutive-frame pair are for
+(trap 15).
+
 ### THE ORDER, chosen by the user on 2026-08-13: do these three, in this order
 
 The user was shown the measured breakdown of a 17.1 s cold load and asked for the order. They chose
