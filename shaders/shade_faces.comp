@@ -527,7 +527,7 @@ bool face_fold(uint slot, uint light_at, ivec3 node, uint level, uint dir) {
     return true;
 }
 
-void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
+void face_light_seed(uint slot, uint light_at, ivec3 node, uint level, uint dir) {
     // The NEAREST ancestor that has something to say, not the one three levels up.
     //
     // Three levels was the right distance for a stand-in, which is a face claimed for a region the
@@ -557,6 +557,22 @@ void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
         break;
     }
     if (anc == kNoFace) return;
+
+    // ---- the sun, which was the one term a claim did not inherit (R5b) ------------------------
+    //
+    // Done here rather than in its own pass because the ancestor has already been found and the
+    // reasoning for taking it is the same one the near field, the sky and the lamps are taken on:
+    // this face covers a piece of what that one covers, and its shadow is very nearly the same
+    // measurement. See kSunSeedSamples for why the count is three and not eight, and note the
+    // counters live in `faces.items`, not in the light words the rest of this function writes.
+    const uint sun_seed = (node_push.edit_seed >> 16) & 0xFFFFu;
+    if (sun_seed != 0u && anc < faces.items.length() && slot < faces.items.length()) {
+        const uint anc_counters = faces.items[anc].counters;
+        if (face_samples_of(anc_counters) >= kSunSeedMin) {
+            faces.items[slot].counters =
+                face_reseed(anc_counters, min(sun_seed, face_samples_of(anc_counters)));
+        }
+    }
 
     // How much of the ancestor's answer is worth taking, and where in it this face sits.
     //
@@ -2032,7 +2048,7 @@ void main() {
         // stand-in itself -- it IS the coarse face, and the one three levels above it is six levels
         // above the geometry and is almost never claimed.
         if (!provisional_face) {
-            face_light_seed(light_at, ivec3(face.x, face.y, face.z), level, direction);
+            face_light_seed(slot, light_at, ivec3(face.x, face.y, face.z), level, direction);
         }
     }
 

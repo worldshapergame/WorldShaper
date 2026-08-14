@@ -134,6 +134,13 @@ layout(push_constant) uniform NodeConstants {
     uint light_read_period;
     // How many samples a face keeps when the host announces that the world under it changed.
     // 0 is the old wipe and is the control arm for that change. See kFaceEditSeed.
+    // Two seeds packed in one word, because this block is full at the 128 bytes Vulkan
+    // guarantees and one more uint would cost sixteen for alignment rather than four.
+    //   low  16: how many samples a face keeps when the world under it changed. 0 is the old
+    //            wipe and is that change's control arm. See kFaceEditSeed.
+    //   high 16: how many samples of its ancestor's sun a newly claimed face starts with. 0 is
+    //            the old behaviour — a face's first ray decides its shadow outright — and is
+    //            R5b's control arm. See kSunSeedSamples.
     uint edit_seed;
     // 1: an edit reopens a face's LAMP term only where it can stand between that face and a
     // fitting. 0 reopens the whole sixteen-metre box, which is the control arm and is what made a
@@ -958,6 +965,33 @@ const uint kFaceSettled = 1u;
 // different answer: a face that may be read at one sample is still converging at four, so it keeps
 // its ray every frame until it has enough of them to be worth refreshing rather than finishing.
 const uint kFaceEager = 4u;
+// How many samples of its ancestor's answer a NEWLY CLAIMED face starts with. R5b.
+//
+// `kShadowSettled` is 1, so the composite reads a face's own sun the moment it has one ray — and
+// one ray is 0% or 100%. Every face claimed on the same frame tosses that coin independently, and
+// a wall claimed as the camera turns is a field of them: this is what the handover means by "the
+// grain is faces that are still measuring, not converged faces disagreeing", and it is 23% of the
+// close camera's faces.
+//
+// So a face starts from what the surface above it already measured, at the ratio it held — the
+// arithmetic `face_reseed` does for an edit, applied to a claim, and the same argument
+// `face_light_seed` makes for the near field, the sky and the lamps, which are all seeded this way
+// already. The sun was the one term that was not.
+//
+// **Three and not eight, and the reason is the schedule rather than the picture.** `sun_due`
+// stops thinning a face by `face_stride` only while it holds fewer than `kFaceEager` samples, so a
+// seed of four or more would buy a prior and pay for it by taking the face off the eager schedule
+// — a newer face getting FEWER rays is the opposite of what this is for. At three the face keeps
+// every frame's ray and its first one moves the fraction by a quarter instead of flipping it.
+//
+// The live value is the high half of `node_push.edit_seed`, so `--sun-seed 0` is the old behaviour
+// exactly and is this change's control arm.
+const uint kSunSeedSamples = 3u;
+// ...and how many the ancestor needs before its answer is worth taking. A face that is itself a
+// coin toss has nothing to lend, and seeding from four rays of noise is not a prior — it is the
+// noise arriving one level coarser, which is the sentence `face_light_seed` already refuses the
+// sky on.
+const uint kSunSeedMin = 8u;
 const uint kFaceWindow = 256u;   // where both counts halve, so the sun may move
 
 // The same figure for the ambient term, and it is eight times larger for a reason that does not
@@ -1490,7 +1524,8 @@ FaceWork face_work_of(uint slot, Face face, bool provisional_face) {
 
     // An announcement lowers a face's confidence; it does not erase its answer. See kFaceEditSeed:
     // zeroing this is what made every edit turn the room into flashing blocks.
-    w.counters = w.edit_reset ? face_reseed(face.counters, node_push.edit_seed) : face.counters;
+    w.counters =
+        w.edit_reset ? face_reseed(face.counters, node_push.edit_seed & 0xFFFFu) : face.counters;
     w.samples = face_samples_of(w.counters);
     // The sun's stride is the ON-SCREEN class's budget and must not be applied on top of the
     // off-screen one. A face that got here because a gathering ray is reading it has already been

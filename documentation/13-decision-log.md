@@ -7208,3 +7208,67 @@ entry exists because for a while they were being written as one.**
 | D643 | **A report ends on the next step; the closing inventory of failures goes** | user request | Their build and their call: *"this may cause you to fail further by manifestation"* |
 | D643 | **Nothing is hidden by it — facts move, they do not vanish** | clarification | Anything that changes a decision is stated once, in place, in the flow of the work it came from |
 | D643 | **The decision log keeps every wrong turn** | unchanged | The record and the report have different readers and different jobs |
+
+## D644 — R5b's obvious first idea, built and measured: seeding a face's sun from its ancestor makes the grain WORSE
+
+**§5 said to check what claim time actually does before writing a seeding path. It does three of the
+four terms.** A face claimed fresh has all its light words zeroed and then `face_light_seed` fills
+in, from the nearest useful ancestor: the near field, the sky and bounce, and the lamps. **The sun
+is the one term that inherits nothing** — its counters start at zero samples, and `kShadowSettled`
+is **1**, so the composite reads the face's own answer from its very first ray. One ray is 0% or
+100%. Every face claimed on the same frame tosses that coin independently, which is exactly the
+handover's *"the grain is faces that are still measuring, not converged faces disagreeing"*.
+
+So the obvious change: seed the sun at claim the way the other three are seeded, keeping the
+ancestor's ratio at a small count. `--sun-seed N`, packed into the high half of `edit_seed` because
+the node push block is full at the 128 bytes Vulkan guarantees. **Three** samples and not eight,
+because `sun_due` stops thinning a face by `face_stride` only while it holds fewer than
+`kFaceEager` = 4 — a larger seed buys a prior and pays for it by taking a new face off the eager
+schedule, which is backwards.
+
+### The measurement, and it refuses the change
+
+Close camera `0,2,-20,90,0`, 320×200, quality 7, frame 40, the overlay band excluded:
+
+| arm | speckle | fireflies |
+|---|---|---|
+| `--sun-seed 0`, what ships | **91.62** | 1 |
+| `--sun-seed 0`, repeated | **91.38** | 2 |
+| `--sun-seed 3` | **108.65** | 1 |
+
+**The control repeats to 0.3% and the change is 19% the wrong way.** Both pictures are the building,
+correctly drawn; this is not a broken arm, it is a worse one.
+
+**Why, and the codebase says it in a comment about a different term.** An ancestor's shadow fraction
+is an average over four times the area. Seeding every child with it makes them all wrong *in the
+same direction at the parent's scale*, and then each child's own rays pull away from it at its own
+rate — so a wall spends longer as a field of mutually disagreeing intermediate values instead of
+resolving. `face_light_seed` refuses the ancestor's GRADIENT for precisely this reason: *"a parent's
+noise arrives in every one of its children as a tilt they all agree about, which is worse than noise
+because it is structured"*. The same argument applies to the mean when what is being measured is a
+shadow EDGE, which is the case a coarse parent cannot represent at all.
+
+**The default is nought and the flag stays.** The path is a dozen lines, the sweep is worth having,
+and the next idea is next door to it.
+
+### Where the numbers point next
+
+The fault the measurement leaves standing is not that a new face has no prior. It is that
+**`kShadowSettled = 1` shows a face's own coin toss the moment it has one ray**, and the alternative
+was rejected once on the grounds that what would be shown instead is full sun — *"wrong on every
+face, in the same direction, for four frames"*. That reasoning predates R9f: there IS something
+else to show now, and it is the coarse stand-in the store already keeps over that face, which is a
+real measurement of the same place and is what the composite draws before the first ray anyway.
+
+**So the next arm is: hold the stand-in until the face has `kFaceEager` samples of its own, rather
+than seeding the face's own counters with somebody else's answer.** It differs from this change in
+the way that matters — the face's own measurement is never contaminated, it just is not believed
+until there is enough of it. That is a change to the composite rather than to the store.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D644 | **Three of the four terms are seeded at claim; the sun is not** | finding | Near field, sky/bounce and lamps come from the nearest useful ancestor; the sun starts at zero samples and `kShadowSettled` is 1 |
+| D644 | **Seeding the sun from the ancestor makes speckle 19% worse** | measurement | 108.65 against a control repeating at 91.62 and 91.38, close camera, frame 40, overlay excluded |
+| D644 | **A parent's mean is structured error at the parent's scale** | finding | The same argument `face_light_seed` already refuses the parent's gradient on, applied to a shadow edge a coarse face cannot represent |
+| D644 | **`--sun-seed` ships at 0 and the path is kept** | decision | The default is what the measurement says; the flag is what makes the next sweep one command |
+| D644 | **The next arm is the composite, not the store** | direction | Hold the coarse stand-in until a face has `kFaceEager` samples of its own, so its measurement is never contaminated — only disbelieved until there is enough of it |

@@ -231,6 +231,14 @@ struct Options {
     // three levels up -- and indoors that stand-in is inside the same sixteen-metre box and has
     // been wiped by the same line. See kFaceEditSeed in shaders\node.glsl.
     u32 face_edit_seed = 8;
+    // How many samples of its ancestor's sun a newly claimed face starts with (R5b).
+    //
+    // **Nought by default, and that is a measurement rather than a caution.** Built at three,
+    // measured, and it made the grain 19% WORSE on the close camera against a control that
+    // repeats to 0.3% — see D644. The flag and the path are kept because the sweep is worth
+    // having and because the next idea is next door to this one; the default is what the
+    // measurement says.
+    u32 sun_seed = 0;
 
     // An edit reopens a face's LAMP term only where it can stand between that face and a fitting.
     //
@@ -837,6 +845,8 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--face-edit-seed" && i + 1 < argc) {
             options.face_edit_seed = static_cast<u32>(std::atoll(argv[++i]));
+        } else if (arg == "--sun-seed") {
+            if (i + 1 < argc) options.sun_seed = static_cast<u32>(std::atoll(argv[++i]));
         } else if (arg == "--no-lamp-edit-scope") {
             options.lamp_edit_scope = false;
         } else if (arg == "--chisel" && i + 1 < argc) {
@@ -1121,6 +1131,9 @@ void print_help() {
         "                        R11a, and the number every later trade in R11 is against\n"
         "  --clip-field          the field's nodes and their bounding boxes, and which ops have\n"
         "                        none, without sampling anything. The parse alone decides it\n"
+        "  --sun-seed N          how many samples of its ancestor's shadow a newly claimed face\n"
+        "                        starts with. 0 by default and by MEASUREMENT: three made the\n"
+        "                        grain 19%% worse on the close camera (D644)\n"
         "  --eval-f32            evaluate the field at single precision, as a graphics card\n"
         "                        would. R12's precision question: compare the content line\n"
         "  --accelerate-from N   how many parts a union needs before it is given a bounding\n"
@@ -2250,6 +2263,13 @@ private:
         u32 light_read_period;
         // How many samples a face keeps when the host announces the world under it changed.
         // 0 restores the wipe, which is this change's control arm. See kFaceEditSeed.
+        // Two seeds in one word, low half then high, because this block is FULL: it is 128
+        // bytes exactly, `sun_colour` needs sixteen-byte alignment, and one more u32 costs
+        // sixteen rather than four. They pair honestly — both are "how many samples of somebody
+        // else's answer a face starts from" — and both are counts that fit in sixteen bits by
+        // construction, since `kFaceWindow` halves at 256.
+        //   low  16: how many samples a face keeps when the host announces the world changed
+        //   high 16: how many samples of its ancestor's sun a newly claimed face starts with
         u32 edit_seed;
         // An edit reopens a face's lamp term only where it can stand between that face and a
         // fitting. 0 reopens the whole sixteen-metre box, which is the control arm.
@@ -5706,7 +5726,7 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.prolong = options_.face_prolong ? 1u : 0u;
     push.report_crossings = options_.node_crossings ? 1u : 0u;
     push.light_read_period = options_.light_read_period;
-    push.edit_seed = options_.face_edit_seed;
+    push.edit_seed = (options_.face_edit_seed & 0xFFFFu) | ((options_.sun_seed & 0xFFFFu) << 16);
     push.lamp_edit_scope = options_.lamp_edit_scope ? 1u : 0u;
     push.face_read_period = options_.face_read_period;
     push.secondary_period = options_.secondary_period;
