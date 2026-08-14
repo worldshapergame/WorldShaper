@@ -505,6 +505,16 @@ failure, not a compile error.
     count, ask what the members are and *who reads them*, because a population that cannot be acted
     on does not stop being counted. D636.
 
+29. **A shared machine's wall clock drifts between runs, so an arm measured an hour ago is not a
+    control.** The same binary in the same configuration read **8.6 s** in one session and
+    **11.2 s** in the next on this container — a 30% swing with nothing changed but the hour. Two
+    arms are only comparable when they are alternated within minutes of each other, which is what
+    every figure in D637 and D638 is. Better still, reach for an instrument that cannot drift:
+    `valgrind --tool=callgrind` counts INSTRUCTIONS and call counts exactly, needs no change to the
+    code, and gave D638 both its diagnosis (a box test called 1.93 times per node visited) and its
+    proof (the visit count unchanged either side of the fix). It is fifty times slower, so run it
+    at a coarse metre. D638.
+
 ---
 
 ## 4b. The bug that was open here — closed, and what it teaches
@@ -871,6 +881,30 @@ is now off, the machinery is kept, and the threshold is settable so the A/B stay
 four-core Linux container with no card in it, so the seconds are not comparable to anything else
 here and the load itself was never run. **Read the load's own lines on a real machine before quoting
 a figure.**
+
+**And then the profile said the cull itself was the expensive thing (D638).** `callgrind` on the
+sampler — no code change, and immune to the wall-clock drift this container has — found
+`squared_distance_to` at **31% of every instruction in the build**, called **1.93 times per node
+visited** where a union child needs one. The union path worked out each child's box distance to sort
+by, dropped the array, and asked for the same number again in the rejection test; the BVH measured
+each child to order it and again to admit it. Keeping the numbers, and stopping at the first
+rejection since a sorted union proves the rest, gives:
+
+| | before | after |
+|---|---|---|
+| box tests | 111.1 M | **69.5 M** |
+| nodes visited | 57,471,406 | **57,471,406 — unchanged** |
+| instructions, whole build | 14.72 G | **12.12 G (−17.7%)** |
+| wall, metre 16 | 65.5 / 65.8 s | **53.2 / 53.6 s** |
+
+**Same content hash on five clips**, and the unchanged visit count is what says nothing is being
+skipped that should not be. **So the sampling half is about a fifth cheaper than the figures above
+it in this document** — which are all pre-D638 — and the cull was never broken: it already throws
+away 93% of the field, at 175 nodes a visit of 2,505.
+
+**What is NOT known:** what any of this is worth to a load, because the game cannot run here. The
+figure to read on a real machine is `where shape ... us per shape eval` from `--clip-file`, and the
+load's own stage lines.
 
 ---
 

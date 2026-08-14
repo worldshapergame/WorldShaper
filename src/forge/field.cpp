@@ -980,9 +980,17 @@ f64 Field::eval(u32 at, Vec3 p) const {
             // evaluation cost 3.4 microseconds against the old building's 312 nanoseconds, and
             // almost all of the difference was walking subtrees that the very next comparison
             // would have thrown away.
+            // The distances are KEPT, and that is worth a third of a box test per node visited.
+            //
+            // They were worked out here to sort by, the array went out of scope, and the rejection
+            // below asked for the very same number again — so a union of four children paid seven
+            // box distances where four would do. Measured on the facility under callgrind:
+            // `squared_distance_to` was called **1.93 times per node visited** and was **31% of
+            // every instruction in the sample**, which is more than the shapes themselves. D638.
             u32 order[4] = {0, 1, 2, 3};
-            if (!bounds_.empty() && n.children > 1) {
-                f64 away[4];
+            f64 away[4] = {0.0, 0.0, 0.0, 0.0};
+            const bool sorted = !bounds_.empty() && n.children > 1;
+            if (sorted) {
                 for (u32 i = 0; i < n.children; ++i) {
                     away[i] = squared_distance_to(bounds_[n.child[i]], p);
                 }
@@ -1017,11 +1025,17 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 // Getting it wrong is not loud. The sign never changed, so nothing appeared or
                 // vanished; the magnitude did, which moved the surface normals, which moved the
                 // paint rule that follows them. Four hundred voxels of moss in the wrong place.
-                if (!bounds_.empty()) {
-                    const f64 away = squared_distance_to(bounds_[n.child[i]], p);
+                if (sorted) {
                     // Outside the box at all, and either already inside something (so nothing
                     // outside can be nearer) or nearer than the box can possibly be.
-                    if (away > 0.0 && (d < 0.0 || d * d <= away)) continue;
+                    //
+                    // And `break` rather than `continue`, which is the sort paying a second time.
+                    // The children are in ascending box distance and `d` only ever shrinks, so a
+                    // child rejected here is a proof that every child after it is rejected too:
+                    // its box is at least as far, against a running answer that is at most as
+                    // large. Reaching for the next one was asking a question whose answer was
+                    // already known.
+                    if (away[i] > 0.0 && (d < 0.0 || d * d <= away[i])) break;
                 }
                 d = std::min(d, eval(n.child[i], p));
             }
@@ -1478,12 +1492,22 @@ u32 Field::build_bvh(Accelerator& bvh, std::vector<u32>& work, usize begin, usiz
 // subtree will say, because a shape you are inside reports a negative distance.
 f64 Field::eval_accelerated(const Accelerator& bvh, Vec3 p) const {
     f64 d = 1e30;
-    u32 stack[64];
+    // The distance travels WITH the node, for the reason the union path above now does the same:
+    // a child's box was already measured to decide which of the two to visit first, and measuring
+    // it again on the way out is the same arithmetic twice. It cannot have changed — a box and a
+    // point are both fixed for the whole of this call — so this is a saving and not a shortcut.
+    // D638.
+    struct Pending {
+        u32 node;
+        f64 away;
+    };
+    Pending stack[64];
     u32 top = 0;
-    stack[top++] = 0;
+    stack[top++] = Pending{0, squared_distance_to(bvh.nodes[0].box, p)};
     while (top > 0) {
-        const BvhNode& node = bvh.nodes[stack[--top]];
-        const f64 away = squared_distance_to(node.box, p);
+        const Pending taken = stack[--top];
+        const BvhNode& node = bvh.nodes[taken.node];
+        const f64 away = taken.away;
         if (away > 0.0 && (d < 0.0 || d * d <= away)) continue;
 
         if (node.count > 0) {
@@ -1502,11 +1526,11 @@ f64 Field::eval_accelerated(const Accelerator& bvh, Vec3 p) const {
         const f64 ra = squared_distance_to(bvh.nodes[node.right].box, p);
         if (top + 2 <= 64) {
             if (la <= ra) {
-                stack[top++] = node.right;
-                stack[top++] = node.left;
+                stack[top++] = Pending{node.right, ra};
+                stack[top++] = Pending{node.left, la};
             } else {
-                stack[top++] = node.left;
-                stack[top++] = node.right;
+                stack[top++] = Pending{node.left, la};
+                stack[top++] = Pending{node.right, ra};
             }
         }
     }

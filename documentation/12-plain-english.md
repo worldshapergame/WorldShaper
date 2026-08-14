@@ -2693,3 +2693,43 @@ card in it at all: I could run the shape maths, the tests and the tools, and not
 second is an estimate from the part I *could* measure, and the first thing to do on your machine is
 open the loading report and see whether it is there. If it is not, say so and I will find out where
 it went.
+
+## A third of the building work was measuring boxes, and half of that was the same measurement twice
+
+After the last piece I still did not know *where* the building work goes — only how much of it there
+is. So I ran the shape maths under a profiler, which counts every single machine instruction and,
+unlike a stopwatch, cannot be thrown off by the machine being busy.
+
+**The answer was not the shapes.** It was the *skipping*. Before the maths asks a piece of the
+building "how far away are you", it asks a much cheaper question first — "could you possibly be the
+nearest thing?" — using a box drawn round that piece. Those box questions turned out to be **31% of
+the entire build**, more than all the spheres, cylinders and mouldings put together.
+
+**And it was asking each one twice.** The code works out the distance to each piece's box in order
+to put the pieces in order — nearest first — then forgets the numbers it just worked out and asks
+for them all over again when it decides which pieces to skip. Four pieces cost seven questions where
+four would do. The same thing was happening in the other of the two search paths.
+
+There was also a small piece of reasoning to add: once the pieces are sorted nearest-first and one
+of them is far enough to skip, **every piece after it is too** — they are further away and the
+answer we are comparing against only gets smaller. So it can stop looking rather than test each one.
+
+**What it is worth.** The box questions drop by **37%**, and the whole build by **18%** — measured
+two ways that agree: 14.7 billion instructions down to 12.1 billion, and the clock going from 65.5
+seconds to 53.2 on the same test. **It comes out the identical building** — same fingerprint on five
+different clips — which is the only way I would accept a change like this, because a skipping rule
+that is slightly wrong does not crash or look broken, it just quietly moves a surface and puts the
+moss in the wrong place.
+
+**One thing this ruled out, which is worth as much as the speed.** I had assumed the skipping was
+working badly. It is not: it already throws away **93% of the building** at every question — 175
+pieces looked at out of 2,505. So there is no big win left in "skip more". The remaining cost is the
+plain price of asking, which is what step 12 — moving this onto the graphics card — is for.
+
+**And a correction to the last entry.** I had reported that the extra search trees cost a fifth and
+save nothing. They were also paying for every box twice, so that comparison was unfair to them. With
+both sides repaired they are still a third *worse* than not having them, so the conclusion stands —
+but I would not have known that without going back and re-running it.
+
+**Same caveat as before:** no graphics card here, so the building maths is measured and the loading
+screen is not. The number to look at on your machine is the loading report.

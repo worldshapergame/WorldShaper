@@ -6704,3 +6704,84 @@ worked, it was never measured against not having it.
 | D637 | **The clip is byte-identical in every arm** | gate | Same content hash at both resolutions, so this is cost and not answer |
 | D637 | **Clips where no hierarchy engages measure the same** | method | The null control is what says the facility's gap is not the harness |
 | D637 | **The load figure is predicted, not measured** | honesty | Measured where the game cannot run; read the load lines on a real machine |
+
+**Re-measured at D638 and it holds.** The accelerated path was paying for every box twice, exactly
+as the union path was, so this verdict was taken with both arms mis-costed. Repaired, the hierarchy
+arm is 11.99 / 12.14 s against 9.15 / 9.00 s without it — a third worse rather than a fifth, because
+the arm it is being compared against got cheaper too. The seconds above are from an earlier session
+and this container's wall clock drifts about 20% between them; the ratio is what survives.
+
+## D638 — a third of the sample was box distances, and half of those were the same one twice
+
+D637 left the sampler at 2.6 µs a shape evaluation and no idea where it goes. **`callgrind` on a
+single-threaded harness answers that without touching the code**, and it says something nobody would
+have guessed: **`squared_distance_to` — the box test the CULL is made of — is 31% of every
+instruction in the build, more than the shapes themselves.**
+
+**The number that gives it away.** On `clips/facility.clip` at metre 2: **111,053,665 calls to
+`squared_distance_to` against 57,471,406 recursive calls to `Field::eval`** — 1.93 box tests for
+every node visited, where a union child needs one.
+
+**Because it is the same distance twice.** The union path works out every child's box distance in
+order to sort by it, lets the array go out of scope with the `if`, and then asks for the very same
+number again in the rejection test a few lines below. A union of four children paid seven box
+distances where four would do. `eval_accelerated` had it too, in its own shape: each BVH child is
+measured to decide which to visit first, pushed, and measured again when it is popped.
+
+**Three changes, and the second is the only one that is an argument rather than an oversight.**
+
+1. The `away[]` array is hoisted out of the sort and read by the test.
+2. The test **breaks** instead of continuing. The children are in ascending box distance and the
+   running answer only ever shrinks, so a child rejected here proves every child after it is
+   rejected: its box is at least as far, against an answer at most as large.
+3. The BVH stack carries each node's distance with it, so a box measured to order a pair is not
+   measured again to admit it.
+
+**Measured, and the instrument that matters here is the one that cannot drift.**
+
+| | before | after |
+|---|---|---|
+| calls to `squared_distance_to` | 111,053,665 | **69,482,584 (−37.4%)** |
+| calls to `Field::eval` | 57,471,406 | **57,471,406 (unchanged)** |
+| calls to `sd_box` | 11,247,056 | 11,247,056 (unchanged) |
+| instructions, whole build | 14,723,140,141 | **12,123,068,100 (−17.7%)** |
+
+**The unchanged row is the important one.** The same nodes are visited and the same shapes are
+evaluated; what is gone is arithmetic *about* them. If the `break` had been wrong it would show
+there first, as a visit count that fell.
+
+**And the wall clock agrees**, arms alternated as two binaries built from `git stash` either side:
+metre 8, **11.16 / 11.20 / 11.25 / 11.32 s → 9.24 / 9.13 / 9.20 / 9.27 s**; metre 16, **65.51 /
+65.77 s → 53.24 / 53.57 s**. −18% both times, which is what a −17.7% instruction count should look
+like. **The content hash is identical** at both resolutions and on `sampler`, `weather_demo`,
+`glass_test`, `mirror_test` and `sealed_dark` at their authored metres, and `culling a wide union
+changes no answer, whichever way it is culled` in `tests/test_field.cpp` checks all three paths —
+no boxes, boxes, and the BVH — against each other over 4,760 points.
+
+**The cull is not broken; its cost was.** 57,471,406 eval calls over 329,268 shape evaluations is
+**175 nodes visited per evaluation out of 2,505 reachable from the solid** — it is already throwing
+away 93% of the field. That closes off "the culling does not work" as a line of attack and leaves
+"one visit is expensive", which is 114 instructions a node, most of it dispatch and loads.
+
+**D637 was re-checked with the BVH path repaired, because it would have been an artefact
+otherwise.** A verdict that a hierarchy costs more than it saves, taken while the hierarchy was
+paying for every box twice, is not a verdict about hierarchies. Repaired, the accelerated arm is
+**11.99 / 12.14 s against 9.15 / 9.00 s** without it at metre 8 — better than before and still a
+third worse than not having it. **D637 stands.**
+
+**Two honesty notes, and the first is a trap.** This container's wall clock **drifts about 20%
+between runs**: the same binary in the same configuration read 8.6 s in one session and 11.2 s in
+the next. Every comparison above is therefore alternated within minutes, and the instruction count —
+which cannot drift — is what is quoted first. And the *load* is still unmeasured: sampling is 76%
+shape evaluation, so this should be worth about a fifth of the sampling half, but nothing here can
+run the game.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D638 | **The union's box distances are computed once, not twice** | finding | 1.93 box tests per node visited where one is needed |
+| D638 | **One rejection in a sorted union proves the rest** | decision | Ascending boxes against a shrinking answer; `break`, not `continue` |
+| D638 | **The BVH carries each node's distance on its stack** | finding | Measured to order the pair, then measured again to admit it |
+| D638 | **−37% box tests, −17.7% instructions, identical visit count** | gate | The unchanged visit count is what says nothing was skipped wrongly |
+| D638 | **The cull throws away 93% of the field already** | finding | 175 nodes a visit of 2,505 reachable — the cost was the fault, not the reach |
+| D638 | **D637 re-measured with the BVH repaired, and holds** | method | A verdict taken while both arms were mis-costed is not a verdict |
+| D638 | **Wall clock on this container drifts 20% between runs** | honesty | Alternate the arms, and prefer an instrument that cannot drift |

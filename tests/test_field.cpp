@@ -1054,3 +1054,50 @@ TEST_CASE("a hierarchy over a wide union changes no answer, and is off unless as
         }
     }
 }
+
+TEST_CASE("culling a wide union changes no answer, whichever way it is culled") {
+    // D638 made the union's rejection stop at the first child it can reject, on the grounds that
+    // the children are in ascending box distance and the running answer only shrinks — so one
+    // rejection proves the rest. That is an argument, and an argument about a cull is the kind of
+    // thing that is wrong quietly: the sign never changes, the magnitude does, and what moves is
+    // a surface normal and the paint rule that follows it (the four hundred voxels of moss).
+    //
+    // So it is checked the only way that settles it: against the same field with no boxes at all,
+    // where nothing is culled and nothing can be skipped wrongly.
+    const auto street = [](Field& f) {
+        std::vector<u32> parts;
+        for (int i = 0; i < 30; ++i) {
+            const f64 x = static_cast<f64>(i) * 2.0;
+            // Alternating shapes so the parts are not interchangeable, and overlapping in pairs
+            // so some boxes really do contain the same points.
+            parts.push_back((i % 2 == 0) ? f.sphere({x, 0, 0}, 1.2)
+                                         : f.box({x, 0.5, 0}, {0.7, 1.4, 0.7}));
+        }
+        return f.unite(parts);
+    };
+
+    Field bare;                      // no build_bounds: bounds_ is empty and nothing is culled
+    const u32 bare_root = street(bare);
+
+    Field culled;
+    const u32 culled_root = street(culled);
+    culled.build_bounds();
+
+    Field hierarchy;                 // ...and the BVH path, which is a third way to the answer
+    const u32 hierarchy_root = street(hierarchy);
+    hierarchy.accelerate_from(12);
+    hierarchy.build_bounds();
+    REQUIRE(hierarchy.accelerator_count() >= 1);
+
+    for (int i = -6; i < 130; ++i) {
+        for (int j = -3; j < 4; ++j) {
+            for (int k = -2; k < 3; ++k) {
+                const Vec3 p{static_cast<f64>(i) * 0.47, static_cast<f64>(j) * 0.63,
+                             static_cast<f64>(k) * 0.71};
+                const f64 truth = bare.eval(bare_root, p);
+                CHECK(culled.eval(culled_root, p) == doctest::Approx(truth));
+                CHECK(hierarchy.eval(hierarchy_root, p) == doctest::Approx(truth));
+            }
+        }
+    }
+}
