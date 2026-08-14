@@ -282,6 +282,13 @@ struct Options {
     // a region, and a rule keyed on a pattern has almost no box to settle against at eight voxels
     // wide.
     bool sample_cost = false;
+    // The field's shape, and nothing about sampling it.
+    //
+    // The box report is printed at the end of a whole-clip measure, which on the facility at its
+    // authored resolution is minutes of sampling to reach a table that was decided when the file
+    // was parsed. Nothing about a bounding box depends on a voxel, so this stops after the parse.
+    // It is not a cheaper measure: no evaluation happens, so no `us per shape eval` comes with it.
+    bool clip_field = false;
     std::string sample_cost_levels;   // "first,last"; the whole sampleable range by default
     u32 sample_cost_nodes = 24;       // nodes with matter timed per reference box
     u32 sample_cost_boxes = 3;        // reference boxes, when the whole clip will not fit at once
@@ -621,7 +628,7 @@ struct Options {
                !orbit.empty() || !cuts.empty() || chisel_every > 0 || ticks > 0 ||
                !crash_test.empty() || benchmark || !edit.empty() ||
                !preview.empty() || !clip.empty() || !clip_file.empty() || sample_cost ||
-               max_seconds > 0.0;
+               clip_field || max_seconds > 0.0;
     }
 
     // Air that is not empty: --fog "extinction,albedo,g,scale-height,base".
@@ -753,6 +760,8 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.clip_bounds = argv[++i];
         } else if (arg == "--sample-cost") {
             options.sample_cost = true;
+        } else if (arg == "--clip-field") {
+            options.clip_field = true;
         } else if (arg == "--sample-cost-levels") {
             if (i + 1 < argc) options.sample_cost_levels = argv[++i];
         } else if (arg == "--sample-cost-nodes") {
@@ -1098,6 +1107,8 @@ void print_help() {
         "                        sampled alone is the same voxels as that node inside a bigger\n"
         "                        box. Headless; the facility unless --clip-file says otherwise.\n"
         "                        R11a, and the number every later trade in R11 is against\n"
+        "  --clip-field          the field's nodes and their bounding boxes, and which ops have\n"
+        "                        none, without sampling anything. The parse alone decides it\n"
         "  --sample-cost-levels first,last   which levels to walk (3 is a brick, 8 is 8 m)\n"
         "  --sample-cost-nodes N  nodes with matter timed per reference box (24)\n"
         "  --sample-cost-boxes N  reference boxes when the whole clip will not fit at once (3)\n"
@@ -9818,6 +9829,53 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
 
 }  // namespace
 
+// How well the field can cull, and WHERE the nodes that cannot be culled are.
+//
+// The first line has been printed for a while and is a number nobody could act on: a quarter of
+// the facility's field carries no box, and "a quarter" says nothing about whether that is one
+// missing case or forty. The table under it splits every unbounded node by op and by whether the
+// node is the cause — its own case in `build_bounds` gave up — or a casualty, unbounded only
+// because a child is. Writing one bound clears the cause and every casualty above it at once, so
+// the `own` column is the work list and the `from a child` column is what it is worth.
+void print_field_boxes(const forge::Field& field, u32 solid) {
+    const usize unbounded = field.unbounded_nodes();
+    std::printf("field         %zu nodes, %zu with no box (%.0f%%), %zu hierarchies over "
+                "%zu leaves, %zu wide unions\n",
+                field.size(), unbounded,
+                100.0 * static_cast<f64>(unbounded) /
+                    static_cast<f64>(std::max<usize>(1, field.size())),
+                field.accelerator_count(), field.accelerated_leaves(),
+                field.unaccelerated_unions());
+    const auto table = [](const char* heading, const std::vector<forge::Field::Unbounded>& rows) {
+        if (rows.empty()) return;
+        std::printf("%-13s %-20s %8s %14s %10s\n", heading, "op", "its own", "from a child",
+                    "of all");
+        usize own_total = 0;
+        usize inherited_total = 0;
+        for (const forge::Field::Unbounded& row : rows) {
+            own_total += row.own;
+            inherited_total += row.inherited;
+            std::printf("              %-20s %8zu %14zu %10zu\n", forge::op_name(row.op), row.own,
+                        row.inherited, row.total);
+        }
+        std::printf("              %-20s %8zu %14zu\n", "-- all --", own_total, inherited_total);
+    };
+    table("no box by op", field.unbounded_by_op());
+
+    // And the half of the table that decides whether any of it is worth doing. A shape
+    // evaluation walks the solid's subtree and nothing else, so an unbounded pattern that only a
+    // paint rule reads is not a cull that failed — it is a node the cull never sees.
+    const usize shape_nodes = field.nodes_under(solid);
+    const std::vector<forge::Field::Unbounded> shape = field.unbounded_by_op(solid);
+    usize shape_unbounded = 0;
+    for (const forge::Field::Unbounded& row : shape) shape_unbounded += row.own + row.inherited;
+    std::printf("the shape     %zu of the %zu nodes, %zu with no box (%.0f%%)\n", shape_nodes,
+                field.size(), shape_unbounded,
+                100.0 * static_cast<f64>(shape_unbounded) /
+                    static_cast<f64>(std::max<usize>(1, shape_nodes)));
+    table("of those", shape);
+}
+
 // Build a clip from its file and say what it is, without opening a window.
 //
 // The other half of authoring. A screenshot says a room looks plausible; this says the doorway is
@@ -9877,6 +9935,18 @@ int run_clip_tool(const Options& options) {
     // and paying for a whole-building sample at the authored resolution first would be minutes
     // spent measuring the thing this stage exists to stop doing.
     if (options.sample_cost) return run_sample_cost(options, script, jobs);
+
+    // The same argument as the line above, one step earlier: the boxes are decided by the parse,
+    // so asking about them should not cost a whole-building sample.
+    if (options.clip_field) {
+        std::printf("clip          %s at metre %d\n", clip_path.c_str(),
+                    static_cast<int>(script.settings.voxels_per_metre));
+        std::printf("field         %zu nodes, %zu parameters, %zu hierarchies over %zu leaves\n",
+                    script.field.size(), script.field.parameter_count(),
+                    script.field.accelerator_count(), script.field.accelerated_leaves());
+        print_field_boxes(script.field, script.solid);
+        return 0;
+    }
 
     const u64 parsed = now_ns();
     // Always counted here. This is the measuring tool; a build it measures should be able to say
@@ -9966,13 +10036,7 @@ int run_clip_tool(const Options& options) {
                     "%.2f us per shape eval\n",
                     shape_ms, 100.0 * shape_ms / both, paint_ms, 100.0 * paint_ms / both,
                     1000.0 * shape_ms / static_cast<f64>(std::max<u64>(1, built.shape_evaluations)));
-        std::printf("field         %zu nodes, %zu with no box (%.0f%%), %zu hierarchies over "
-                    "%zu leaves, %zu wide unions\n",
-                    script.field.size(), script.field.unbounded_nodes(),
-                    100.0 * static_cast<f64>(script.field.unbounded_nodes()) /
-                        static_cast<f64>(std::max<usize>(1, script.field.size())),
-                    script.field.accelerator_count(), script.field.accelerated_leaves(),
-                    script.field.unaccelerated_unions());
+        print_field_boxes(script.field, script.solid);
     }
 
     // WHICH rules the build spent itself on.
@@ -10272,7 +10336,8 @@ int main(int argc, char** argv) {
         ws::print_help();
         return 0;
     }
-    if ((!options.clip_file.empty() || options.sample_cost) && options.screenshot.empty()) {
+    if ((!options.clip_file.empty() || options.sample_cost || options.clip_field) &&
+        options.screenshot.empty()) {
         return ws::run_clip_tool(options);
     }
     // A modal dialog in an automated run is a hang, so scripted modes get the stderr line

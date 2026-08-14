@@ -2651,3 +2651,37 @@ It is not a bug. It is exactly what you asked for in the first place: *if you ca
 not exist*. A world that stopped early and a world that finished everything it could see produce
 **identical readings on every counter I had**. The only measurement that separates them is whether
 the number moves when you walk — and I had not taken it.
+
+## The second thing on your list was smaller than it looked, and I stopped instead of building it
+
+You picked three things to work on, in order. This is about the second one.
+
+The idea was this: the building is described by a stack of about three and a half thousand
+instructions — *a column here, turned this way, repeated eleven times* — and making voxels out of it
+means asking that stack a question at every point in space. To make that cheap, each instruction
+carries a **box** around whatever it draws, so the question "is there anything of yours near here?"
+is usually answered by three subtractions instead of by doing the work. A quarter of the
+instructions had no box, and the plan was to give them one.
+
+**Before writing any of it I made the game tell me which instructions those were.** That took a new
+line of output and about a second to run. The answer was that the job is nearly all already done:
+
+- Of the 923 boxless instructions, **only 177 are part of the building's shape at all**. The rest
+  belong to the *painting* — grain, brickwork, weathering — and the shape never asks them anything,
+  so their missing boxes cost nothing. The "quarter of everything" number had been counting them.
+- Of those 177, **not one is an oversight**. Fifty-nine are flat ground planes, which really do go
+  on for ever and cannot be put in a box. Eighty-seven are shapes that have been squashed unevenly,
+  and those were left boxless *on purpose* two months ago — a box round one of those makes the game
+  skip a piece of the building that should have been drawn, and it took an afternoon to find out.
+  The last dozen are numbers and patterns, which are not in any place, so there is no box to draw.
+
+So I did not write the bounds. Building them would have taken a day and moved nothing, and the way
+to know that was to spend an hour measuring instead of a day guessing. **What is left of that second
+item is one question I have not answered**: when a piece of the building is made of a dozen or more
+parts, the game builds a little index over them so it can skip most of them; below a dozen it just
+checks each one. Whether that cut-off of twelve is right has never been tested — 190 places in the
+facility fall just under it. That is a measurement, not a build, and it is what "step 2" now means.
+
+**What you would see in the game from any of this: nothing at all.** No picture changes and no
+number changes, because I built an instrument and then chose not to build the thing it was
+measuring. That is the honest report — the value of the hour is that the day did not get spent.

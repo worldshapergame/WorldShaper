@@ -49,19 +49,12 @@ f64 smooth_min(f64 a, f64 b, f64 k) {
 
 f64 smooth_max(f64 a, f64 b, f64 k) { return -smooth_min(-a, -b, k); }
 
-// How far a point is from a box, or zero inside it. A lower bound on the distance to anything
-// the box contains, which is exactly what a union needs to decide whether to look further.
-f64 distance_to(const Field::Aabb& box, Vec3 p) {
-    if (box.infinite()) return 0.0;
-    const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
-    const f64 dy = std::max(std::max(box.low.y - p.y, p.y - box.high.y), 0.0);
-    const f64 dz = std::max(std::max(box.low.z - p.z, p.z - box.high.z), 0.0);
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-// The same, squared, for the cull test — which compares against a distance it already has and so
-// never needs the root. One square root per child per evaluation is not much; a hundred million
-// evaluations with thirty children each is a hundred million square roots too many.
+// How far a point is from a box, or zero inside it — squared, because every caller compares it
+// against a distance it already has and so never needs the root. A lower bound on the distance to
+// anything the box contains, which is exactly what a union needs to decide whether to look
+// further. One square root per child per evaluation is not much; a hundred million evaluations
+// with thirty children each is a hundred million square roots too many. (The unsquared twin was
+// deleted unread: nothing had called it since the cull started comparing squares.)
 f64 squared_distance_to(const Field::Aabb& box, Vec3 p) {
     if (box.infinite()) return 0.0;
     const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
@@ -1410,6 +1403,137 @@ Field::Aabb overlapped(Field::Aabb a, Field::Aabb b) {
 Field::Aabb Field::bounds_of(u32 node) const {
     if (node < bounds_.size()) return bounds_[node];
     return everywhere();
+}
+
+// Which nodes a root can reach. Children always have a lower index than their parent — every
+// builder pushes after its children — so one backward pass marks the whole subtree, with no
+// recursion and no visited set.
+static std::vector<bool> reachable_from(const std::vector<Node>& nodes, u32 root) {
+    std::vector<bool> seen(nodes.size(), false);
+    if (root >= nodes.size()) return seen;
+    seen[root] = true;
+    for (usize i = nodes.size(); i-- > 0;) {
+        if (!seen[i]) continue;
+        for (u32 c = 0; c < nodes[i].children; ++c) seen[nodes[i].child[c]] = true;
+    }
+    return seen;
+}
+
+usize Field::nodes_under(u32 root) const {
+    if (root == kEveryNode) return nodes_.size();
+    const std::vector<bool> seen = reachable_from(nodes_, root);
+    usize n = 0;
+    for (bool one : seen) { if (one) ++n; }
+    return n;
+}
+
+std::vector<Field::Unbounded> Field::unbounded_by_op(u32 root) const {
+    if (bounds_.size() != nodes_.size()) return {};
+    if (root != kEveryNode && root >= nodes_.size()) return {};
+    const std::vector<bool> counted =
+        (root == kEveryNode) ? std::vector<bool>(nodes_.size(), true)
+                             : reachable_from(nodes_, root);
+
+    // One row per op, indexed by the enum, and the empty rows dropped at the end. A map would
+    // be tidier and this is walked once over a few thousand nodes. `Op::Power` is the last
+    // enumerator; `op_name`'s switch is what makes adding one after it a compile error rather
+    // than a row this quietly drops.
+    std::vector<Unbounded> rows(static_cast<usize>(Op::Power) + 1);
+    for (usize i = 0; i < rows.size(); ++i) rows[i].op = static_cast<Op>(i);
+
+    for (usize i = 0; i < nodes_.size(); ++i) {
+        if (!counted[i]) continue;
+        const Node& n = nodes_[i];
+        Unbounded& row = rows[static_cast<usize>(n.op)];
+        ++row.total;
+        if (!bounds_[i].infinite()) continue;
+        // A child with no box is the whole explanation, whatever this node's own case would have
+        // done with a bounded one. Children always have a lower index (see build_bounds), so
+        // their boxes are already decided.
+        bool child_unbounded = false;
+        for (u32 c = 0; c < n.children; ++c) {
+            if (bounds_of(n.child[c]).infinite()) { child_unbounded = true; break; }
+        }
+        if (child_unbounded) ++row.inherited; else ++row.own;
+    }
+
+    std::vector<Unbounded> out;
+    for (const Unbounded& row : rows) {
+        if (row.own > 0 || row.inherited > 0) out.push_back(row);
+    }
+    std::sort(out.begin(), out.end(), [](const Unbounded& a, const Unbounded& b) {
+        if (a.own != b.own) return a.own > b.own;
+        return a.inherited > b.inherited;
+    });
+    return out;
+}
+
+const char* op_name(Op op) {
+    switch (op) {
+        case Op::Constant:           return "constant";
+        case Op::Parameter:          return "param";
+        case Op::Coordinate:         return "axis";
+        case Op::Radius:             return "distance";
+        case Op::Sphere:             return "sphere";
+        case Op::Box:                return "box";
+        case Op::Cylinder:           return "cylinder";
+        case Op::Capsule:            return "capsule";
+        case Op::Torus:              return "torus";
+        case Op::Cone:               return "cone";
+        case Op::Plane:              return "plane";
+        case Op::Ellipsoid:          return "ellipsoid";
+        case Op::Prism:              return "prism";
+        case Op::Platonic:           return "platonic";
+        case Op::Wedge:              return "wedge";
+        case Op::Stairs:             return "stairs";
+        case Op::Revolve:            return "revolve";
+        case Op::Spiral:             return "spiral";
+        case Op::Union:              return "union";
+        case Op::Intersection:       return "intersection";
+        case Op::Difference:         return "difference";
+        case Op::SmoothUnion:        return "smooth union";
+        case Op::SmoothDifference:   return "smooth difference";
+        case Op::SmoothIntersection: return "smooth intersection";
+        case Op::Translate:          return "translate";
+        case Op::Rotate:             return "rotate";
+        case Op::Scale:              return "scale";
+        case Op::Mirror:             return "mirror";
+        case Op::Repeat:             return "repeat";
+        case Op::PolarRepeat:        return "around";
+        case Op::Shell:              return "shell";
+        case Op::Round:              return "round";
+        case Op::Offset:             return "offset";
+        case Op::Displace:           return "displace";
+        case Op::Twist:              return "twist";
+        case Op::Bend:               return "bend";
+        case Op::Sine:               return "sine";
+        case Op::Waves:              return "waves";
+        case Op::Noise:              return "noise";
+        case Op::Fbm:                return "fbm";
+        case Op::Ridged:             return "ridged";
+        case Op::Rasp:               return "rasp";
+        case Op::Cells:              return "cells";
+        case Op::CellEdge:           return "cell edge";
+        case Op::Curvature:          return "curvature";
+        case Op::Occlusion:          return "occlusion";
+        case Op::Facing:             return "facing";
+        case Op::Checker:            return "checker";
+        case Op::Stripes:            return "stripes";
+        case Op::Bricks:             return "bricks";
+        case Op::Add:                return "add";
+        case Op::Multiply:           return "multiply";
+        case Op::Min:                return "min";
+        case Op::Max:                return "max";
+        case Op::Blend:              return "blend";
+        case Op::Remap:              return "remap";
+        case Op::Abs:                return "abs";
+        case Op::Negate:             return "negate";
+        case Op::Step:               return "step";
+        case Op::Smoothstep:         return "smoothstep";
+        case Op::Clamp:              return "clamp";
+        case Op::Power:              return "power";
+    }
+    return "?";
 }
 
 // Everything a plain union finally reaches. A nested union is walked through; anything else is a

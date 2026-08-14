@@ -6551,3 +6551,115 @@ a surface the camera has never approached, which is where the proximity radius h
 | D635 | **A rising voxel count after a carve is the carve working** | method | The hole opens the building to the sky and the ladder builds what it reveals |
 | D635 | **`0 leaves rebuilt` is about the pool, not the edit** | method | It counts what the pool already held; this arm held less because less had been built |
 | D635 | **The far chisel is still unmeasured** | honesty | Sixty metres into a surface never approached, where proximity must hold sampling |
+
+## D636 — step 2's histogram: the 923 nodes with no box are not bounds waiting to be written
+
+**Asked for by the order the user chose on 2026-08-13, step 2, in its own words: *"Find out which
+ops the 923 are... Report the histogram before writing any bounds."* It is reported here, and it
+says the step as written does not survive it.**
+
+The line that started it, unchanged and reproduced to the digit:
+
+```
+field   3744 nodes, 923 with no box (25%), 19 hierarchies over 479 leaves, 190 wide unions
+where   shape 485600 core-ms (76%), paint 154790 core-ms (24%), 2.59 us per shape eval
+```
+
+`Field::unbounded_by_op` is the instrument, `--clip-field` is how to reach it without paying for a
+whole-building sample, and the facility says:
+
+| op | its own doing | from a child | of all |
+|---|---|---|---|
+| param | 396 | 0 | 396 |
+| constant | 157 | 0 | 157 |
+| scale | 94 | 0 | 120 |
+| fbm | 71 | 0 | 71 |
+| plane | 65 | 0 | 65 |
+| bricks | 23 | 0 | 23 |
+| sine | 22 | 0 | 22 |
+| stripes | 22 | 0 | 22 |
+| smoothstep | 3 | 7 | 10 |
+| negate | 3 | 4 | 7 |
+| curvature, facing, occlusion, axis | 3 each | 0 | 3 each |
+| cell edge | 1 | 0 | 1 |
+| multiply | 0 | 14 | 14 |
+| add | 0 | 12 | 12 |
+| translate | 0 | 8 | 411 |
+| intersection | 0 | 4 | 255 |
+| mirror | 0 | 3 | 195 |
+| rotate | 0 | 2 | 158 |
+| **all** | **869** | **54** | |
+
+### Two splits, and both of them are the finding
+
+**The first: a node with no box is either the cause or a casualty.** A node whose own case in
+`build_bounds` gave up is a bound waiting to be written; a node unbounded only because a CHILD is
+will bound itself the moment the child does. Counted together they read as a hundred small jobs
+where there is often one — before the rotate case existed a single turned colonnade took the box off every
+ancestor up to the site. **Today that spread is 54 nodes of 923.** The upward poisoning that made this stage
+look large is already fixed, by the rotate, repeat, revolve and spiral cases and by the rule that
+an intersection keeps a bounded sibling's box.
+
+**The second, and it is the one that decides the stage: a shape evaluation walks the solid's
+subtree and nothing else.** A field holds the shape, every paint rule and every named part in one array. Of the
+3,744 nodes, **2,505 are under the solid, and 177 of those have no box — 7%, not 25%.** The other
+746 are patterns and arithmetic that only a paint rule or a named part reads, and no shape cull
+ever looks at one.
+
+Under the solid, split by op:
+
+| op | its own doing | from a child | of all |
+|---|---|---|---|
+| scale | 87 | 0 | 113 |
+| plane | 59 | 0 | 59 |
+| constant | 5 | 0 | 5 |
+| fbm, negate | 2 each | 0 | 2 each |
+| curvature, occlusion, facing | 1 each | 0 | 1 each |
+| multiply | 0 | 5 | 5 |
+| intersection | 0 | 4 | 217 |
+| smoothstep | 0 | 4 | 4 |
+| mirror | 0 | 3 | 148 |
+| translate | 0 | 1 | 219 |
+| rotate | 0 | 1 | 120 |
+| **all** | **158** | **19** | |
+
+### Not one row of that is a missing case
+
+- **scale, 87 of the 113 in the shape.** Refused on purpose and the refusal is right: a non-uniform
+  scale evaluates its child at `p / s` and multiplies by the SMALLEST factor, so it reports less
+  than the true distance out along the stretched axis. The box would be correct and the cull
+  reading it would still drop a child that was the nearest thing — a piece of the clip quietly
+  missing. `build_bounds` says so in eight lines that cost an afternoon to write.
+- **plane, 59.** A half space is infinite. There is nothing to bound.
+- **constant, param, fbm, sine, stripes, bricks, cell edge, curvature, occlusion, facing** — values,
+  not solids. A constant has no extent; asking where it is is not a question.
+
+**So the honest answer to step 2's first half is that it is already spent.** The stage was sized
+from a 25% figure that counts paint nodes and things with no extent by nature, and the real figure
+for the thing it wanted to speed up is 7%, all of it either deliberate or impossible.
+
+### What is left of step 2, and it is the half nobody has measured
+
+`190 wide unions` with no hierarchy against 19 that have one, because `kAccelerateFrom = 12`. That
+number has never been measured — the handover says so in as many words, *"do not guess at
+kAccelerateFrom"* — and it is the only remaining lever in the step that is not a bound. The plain
+union path already sorts children by box distance and rejects on the running minimum, so a
+hierarchy over four children may buy nothing, and finding out is an A/B that needs the threshold to
+be a flag rather than a constant (D407: two arms are two flags, never two builds).
+
+### And one live idea the histogram turned up, recorded so it is not lost
+
+The scale refusal is about what the node REPORTS, not about where the shape is. The box is known.
+A sound cull is available: the node's answer is at least `(least / most) x` the distance to its own
+box, so a union that compares `box distance x least/most` against its running best may skip it
+without ever dropping a possible winner. That is a change to the cull's contract rather than a
+switch case, it is worth 87 nodes of the facility's shape, and **it is not worth doing before the
+`kAccelerateFrom` arm says whether culling in these unions is where the time goes at all.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D636 | **An unbounded node is counted against its op AND against whoever caused it** | instrument | Cause and casualty are opposite jobs; together they read as a hundred jobs where there is one |
+| D636 | **Only the solid's subtree counts for a shape cull** | finding | 923 with no box is 177 under the solid, 7% of 2,505 — the rest are paint-rule patterns no shape evaluation walks |
+| D636 | **Step 2's first half is spent: there is no bound waiting to be written** | finding | 87 non-uniform scales refused for a correctness reason, 59 half spaces that are genuinely infinite, the rest values with no extent |
+| D636 | **`--clip-field` reports the boxes without sampling anything** | instrument | The parse decides them; reaching the table through a whole-building measure is minutes to print something already known |
+| D636 | **A sound cull for a non-uniform scale exists and is NOT being built yet** | deferred | `box distance x least/most` never drops a possible winner — but `kAccelerateFrom` has to say whether these unions cull at all first |

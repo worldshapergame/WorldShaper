@@ -45,6 +45,12 @@ ContextEntry g_context[kMaxContext];
 std::atomic<int> g_context_count{0};
 std::mutex g_context_mutex;
 
+// Everything from here to the end of the anonymous namespace writes the report, and the report is
+// written by the Windows structured-exception handler. Guarded rather than left in the open
+// because the Linux build has warnings as errors too (D02 keeps it building for the Deck), and an
+// unused static function — or an unused buffer — is one of them.
+#if defined(_WIN32)
+
 // Assembled in a fixed buffer. A crash handler that allocates can fail inside the failure.
 constexpr usize kReportCapacity = 256 * 1024;
 char g_report[kReportCapacity];
@@ -79,8 +85,6 @@ void emit_recent_log() {
     log_recent(tail, sizeof(tail));
     emit("%s", tail);
 }
-
-#if defined(_WIN32)
 
 const char* exception_name(DWORD code) {
     switch (code) {

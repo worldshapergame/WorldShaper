@@ -40,7 +40,13 @@ if(MSVC)
     target_compile_definitions(ws_options INTERFACE
         NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 else()
-    target_compile_options(ws_options INTERFACE -Wall -Wextra -Wpedantic -Werror)
+    # -Wmissing-field-initializers is off for one reason: every Vulkan structure in this codebase
+    # is written as a C++20 designated initialiser, which value-initialises the members that are
+    # not named. gcc warns about each of them anyway, so the Linux build (D02: kept building for
+    # the Deck) turns into several hundred errors that all say "you left sType's neighbours zero",
+    # which is what was meant. Nothing else in -Wextra is relaxed.
+    target_compile_options(ws_options INTERFACE
+        -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers)
 endif()
 
 if(WS_SANITIZE AND MSVC)

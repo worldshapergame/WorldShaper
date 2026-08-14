@@ -172,6 +172,10 @@ enum class Op : u8 {
     Power,         // |child| ^ a[0], keeping the sign
 };
 
+// What an op is called in a clip file, for reports that name one. The word the parser reads
+// wherever there is one, so a line of output can be searched for in the clip that produced it.
+const char* op_name(Op op);
+
 struct Node {
     Op op = Op::Constant;
     f64 a[8]{};
@@ -466,6 +470,37 @@ public:
         }
         return n;
     }
+
+    // WHICH ops have no box, split by whether that is their own doing.
+    //
+    // "A quarter of the field carries no box" is a number nobody can act on: the two ways of
+    // having none are opposite jobs. A node whose own case in `build_bounds` gave up is a bound
+    // waiting to be written; a node with no box only because a CHILD has none is already correct
+    // and will bound itself the moment the child does. Counting them together makes a field look
+    // like a hundred small jobs when it is often one — a single unbounded twist under a colonnade
+    // takes the box off every ancestor up to the site, and all of those are counted too.
+    //
+    // So the rule for reading it: work down the `own` column, and expect the `inherited` column
+    // to fall on its own. `total` is how many nodes of that op the field holds at all, because
+    // "9 of 9 twists" and "9 of 400" are different findings.
+    struct Unbounded {
+        Op op = Op::Constant;
+        usize own = 0;
+        usize inherited = 0;
+        usize total = 0;
+    };
+    // Sorted by `own` and then by `inherited`, both descending: the top of the list is where the
+    // work is. Empty if `build_bounds` has not run.
+    //
+    // `root` limits it to the nodes that root can reach, and the one worth passing is the solid.
+    // A field holds the shape and every paint rule in one array, and only the shape's own subtree
+    // is ever walked by a shape evaluation — so a pattern with no box under a paint rule costs a
+    // shape cull nothing, and counting it makes a field look unbounded where it is not.
+    static constexpr u32 kEveryNode = 0xFFFFFFFFu;
+    std::vector<Unbounded> unbounded_by_op(u32 root = kEveryNode) const;
+
+    // How many nodes that root can reach, which is what one evaluation of it may walk.
+    usize nodes_under(u32 root) const;
 
 private:
     u32 push(const Node& n);

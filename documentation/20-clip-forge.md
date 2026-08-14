@@ -154,6 +154,20 @@ measurement of the matter could have.
 With `--screenshot` the same `--clip-file` stamps the clip into the world instead, so the
 ordinary camera and screenshot machinery can look at it.
 
+**And one instrument about the field rather than about the matter**, because what a clip costs is
+decided by how well it can be culled and nothing above says so:
+
+```
+WorldShaper.exe --clip-field --clip-file clips/facility.clip
+```
+
+It prints the nodes, the bounding boxes, and a table of every op that has none — split by whether
+that is the node's own doing or inherited from a child, and then again for the solid's own subtree,
+which is all a shape evaluation ever walks. **It samples nothing**: the boxes are decided by the
+parse, so this is a second where the full measure is minutes. D636 is what it was written for, and
+the reason it exists is that "a quarter of the field has no box" turned out to be a number nobody
+could act on — a quarter of *what*, caused by *whom*, and read by *which* half of the sampler.
+
 ## 6. Weathering follows the shape
 
 Weathering is not a texture laid over a surface. It is a consequence of the surface's own

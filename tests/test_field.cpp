@@ -963,3 +963,55 @@ TEST_CASE("a sum is settleable only when at most one of its terms moves") {
     CHECK(f.metric_slack(f.add({f.constant(0.02), grain})) >= Field::kInfiniteSlack);
     CHECK(f.metric_slack(f.maximum({ball, grain})) >= Field::kInfiniteSlack);
 }
+
+// The instrument R11's second step starts from, and it is written the way trap 15 says: the arm
+// that must report something has to report it, or the clean arm proves nothing.
+//
+// "A quarter of the field carries no box" is not a work list. Two nodes with no box are opposite
+// jobs — one whose own case in `build_bounds` gave up is a bound waiting to be written, and one
+// that is unbounded only because a CHILD is will bound itself the moment the child does — and a
+// pattern read by a paint rule is neither, because no shape evaluation ever walks it.
+TEST_CASE("an unbounded node is counted against its op, and against whoever caused it") {
+    Field f;
+    const u32 wall = f.box({0, 2.0, 0}, {4.0, 2.0, 0.2});
+    // Unbounded by its own case: a stretched scale is refused on purpose (see the test above),
+    // and a half space really is infinite.
+    const u32 stretched = f.scale(f.sphere({0, 0, 0}, 1.0), {2.0, 1.0, 1.0});
+    const u32 ground = f.plane({0, 1, 0}, 0.0);
+    // Unbounded only by inheritance: a translate of a bounded child would have a box.
+    const u32 moved = f.translate(stretched, {1.0, 0, 0});
+    const u32 shape = f.minimum({wall, moved, ground});
+    // A pattern under nothing but a paint rule, which the shape cannot reach.
+    const u32 grain = f.fbm(0.1, 3, 0.5, 2.0, 1);
+    f.build_bounds();
+
+    REQUIRE(f.bounds_of(shape).infinite());
+
+    usize scale_own = 0, translate_inherited = 0, translate_own = 0, fbm_own = 0;
+    for (const Field::Unbounded& row : f.unbounded_by_op()) {
+        if (row.op == forge::Op::Scale) scale_own = row.own;
+        if (row.op == forge::Op::Translate) { translate_own = row.own; translate_inherited = row.inherited; }
+        if (row.op == forge::Op::Fbm) fbm_own = row.own;
+    }
+    CHECK(scale_own == 1);
+    CHECK(fbm_own == 1);
+    // The translate is a casualty, not a cause. Getting this backwards would send somebody to
+    // write a bound for an op that already has a correct one.
+    CHECK(translate_own == 0);
+    CHECK(translate_inherited == 1);
+
+    // And the filter that decides whether any of it is worth doing: the pattern is not under the
+    // solid, so it is not a cull that failed. Nothing reaches it from `shape`.
+    for (const Field::Unbounded& row : f.unbounded_by_op(shape)) {
+        CHECK(row.op != forge::Op::Fbm);
+    }
+    CHECK(f.nodes_under(grain) == 1);
+    CHECK(f.nodes_under(shape) < f.size());
+    CHECK(f.nodes_under(Field::kEveryNode) == f.size());
+
+    // A bounded field says so rather than saying nothing: no rows at all.
+    Field plain;
+    plain.box({0, 0, 0}, {1.0, 1.0, 1.0});
+    plain.build_bounds();
+    CHECK(plain.unbounded_by_op().empty());
+}

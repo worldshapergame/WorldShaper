@@ -641,7 +641,14 @@ work, and these three are the only three places it lives.
 
 ---
 
-#### 0. Since the order was chosen: a bug is closed, and a fourth place was found
+#### 0. Since the order was chosen: a bug is closed, a fourth place was found, and step 2 shrank
+
+**Step 2 has been measured and is now one measurement rather than a stage (D636).** Its first half —
+"bound the 923 nodes that have no box" — does not survive its own histogram: only 177 of them are
+under the solid at all, and every one of those is either a deliberate refusal or a shape with no
+finite extent. The bounds are not being written. What is left of the step is the `kAccelerateFrom`
+arm, and that is now what step 2 means. The section itself carries the table.
+
 
 **Closed (D625).** A cached load — the path every launch after the first takes — was running with
 the despeckler off. The stipple verdict is taken once over the whole clip in the up-front coarse
@@ -805,11 +812,40 @@ unbounded too, so `Field::eval`'s union sort and `eval_accelerated`'s BVH reject
 work entirely on boxes — cannot throw that branch away for any point. **190 wide unions have no
 hierarchy at all** against 19 that do (`kAccelerateFrom = 12`).
 
-**Where to start.** Find out *which* ops the 923 are: `build_bounds` is one switch in `field.cpp`
-and the answer is a histogram over `Op` for the nodes that come out `everywhere()`. Bounding even
-the common ones tightens every ancestor. **Do not guess at `kAccelerateFrom`** — the plain union
-path already sorts children by box distance and rejects on the running minimum, so a hierarchy over
-four children may buy nothing; measure it as its own arm.
+##### THE HISTOGRAM IS TAKEN, AND IT REFUTES THE FIRST HALF OF THIS STEP (D636)
+
+`.\build\bin\WorldShaper.exe --clip-field --clip-file clips/facility.clip` prints it in under a
+second — the boxes are decided by the parse, so it does not sample anything. **Read D636 before
+doing anything here.** Two lines of it:
+
+```
+the shape     2505 of the 3744 nodes, 177 with no box (7%)
+of those      scale 87 own, plane 59 own, 12 more values, 19 inherited
+```
+
+- **Of the 923, only 177 are under the solid.** A shape evaluation walks the solid's subtree and
+  nothing else; the other 746 are patterns and arithmetic that only a paint rule or a named part
+  reads. The 25% headline was counting nodes no shape cull ever looks at.
+- **Of those 177, 158 are the node's own doing and not one of them is a missing case.** 87 are
+  non-uniform `scale`, refused deliberately because such a node under-reports its distance and a
+  cull that believed its box would drop a child that was the nearest thing. 59 are `plane`, which
+  is a half space and genuinely infinite. The remaining twelve are constants, patterns and
+  weathering terms — values, with no extent to bound.
+- **The upward poisoning is already fixed.** 54 nodes of the 923 are unbounded *by inheritance*,
+  against the 38% the rotate case was written to cure. An intersection keeping a bounded sibling's
+  box is doing most of that work.
+
+**So do not write bounds here.** What remains of this step is the second half only: **190 wide
+unions have no hierarchy at all** against 19 that do (`kAccelerateFrom = 12`), and that constant has
+never been measured. **Do not guess at it** — the plain union path already sorts children by box
+distance and rejects on the running minimum, so a hierarchy over four children may buy nothing.
+Measure it as its own arm, which means **making it a flag first**: two arms are two flags, never two
+builds (D407).
+
+D636 also records one live idea and the reason it is not being built yet: a non-uniform scale can be
+culled soundly against `box distance × least/most`, which never drops a possible winner and would
+recover all 87. It is worth nothing if these unions are not where the time goes, which is what the
+`kAccelerateFrom` arm answers first.
 
 **The trap this stage is made of.** A bound that is too small is not slow, it is **wrong** — it
 deletes geometry, silently, and the symptom is voxels going missing rather than anything crashing.
@@ -821,9 +857,10 @@ was invisible at 32 voxels a metre and constant at 1.
 instrument-and-gate stage**: the acceptance test is the byte-identical gate plus the `us per shape
 eval` figure, and if the figure does not move, say so and stop.
 
-**Size it before building it.** Unknown until the histogram exists: it could be 2× of the 6.3 s
-sampling half, or it could be nothing if the 923 are all ops that genuinely cannot be bounded.
-**Report the histogram before writing any bounds.**
+**Size it before building it.** ~~Unknown until the histogram exists.~~ **Sized, and it came out at
+the small end**: the 923 are almost all ops that genuinely cannot be bounded, so the bounds half is
+worth nothing and is not being done. What is left is one measurement — `kAccelerateFrom` — and its
+own honest range is *"a hierarchy over four children may buy nothing"*.
 
 ---
 
@@ -3422,6 +3459,12 @@ R7 the primary ray, R8 infinite detail.
   documented; revisit only if it shows on the frame graph.
 - The mojibake em-dashes in `shaders/node.glsl` and `resolve.comp` came from a round trip through
   a non-UTF-8 writer. Harmless, ugly, worth a sweep.
+- **A library delete does nothing on Linux.** `send_to_recycle_bin` has a Windows body and a
+  `return false` everywhere else, so on a Steam Deck the shelf refuses every delete and says so.
+  The two tests that cover it are skipped there rather than deleted, so writing the XDG trash
+  (`~/.local/share/Trash`, with the `.trashinfo` record that makes a restore possible) makes them
+  pass on their own. Found by building on Linux for D636, not by a player, and it is the only
+  platform gap that whole build turned up.
 
 ---
 
@@ -3465,6 +3508,21 @@ pool's three audits are reached, and requires all four of their phrases to appea
 audit that logs rather than returns, add its phrase to the `call :require` list in `test.bat` or it
 is not a test.**
 
+**The tree builds and tests on Linux again, and one session found that out the hard way.** A
+session that has no Windows and no GPU — a cloud container, or a Deck — can still do everything on
+the CPU side of this project: `cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo`
+then `cmake --build build-linux`, and `build-linux/bin/ws_tests` runs the whole suite. It needs
+`libvulkan-dev glslc` and SDL3's X11 packages, nothing exotic, and gcc's warnings are errors there
+too, which is what four small portability fixes in D636's commit were. **Two library tests are
+skipped there** — a delete goes to the system recycle bin and there is no Linux implementation of
+`send_to_recycle_bin`, so a player on a Deck cannot delete from the library at all. That is real
+debt, tracked below, and not a test problem.
+
+What that session could NOT do is anything with a picture or a clock: no GPU, and a CPU four cores
+wide and several times slower than the development machine. **Nothing timed on such a machine is
+comparable to anything in this file.** Content is: the facility's field is `3744 nodes, 923 with no
+box` there and here, and `clips/sampler.clip` measures 1,430,104 voxels on both.
+
 ```powershell
 .\build.bat                          # build; NEVER pipe this to Out-Null while measuring
 .\test.bat                           # build, 527 tests, the world audit, the node pool audit
@@ -3474,6 +3532,10 @@ is not a test.**
 .\tools\facecount.ps1                # distinct visible faces per view and resolution
 .\tools\_flybench.ps1 -Rounds 3      # the MOVING case, which the grid cannot see (D410)
 .\tools\_flybench.ps1 -Chisel 8,16   # ...and the WORST case: moving while editing (D413)
+
+# The clip's field, its bounding boxes and which ops have none, WITHOUT sampling anything.
+# The parse decides all of it, so this is a second where the full measure is minutes (D636).
+.\build\bin\WorldShaper.exe --clip-field --clip-file clips\facility.clip
 ```
 
 **The two arms of an A/B on the light pass are two flags, never two builds** (D407, and now D420
