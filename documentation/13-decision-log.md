@@ -7047,6 +7047,13 @@ session doing CPU work only and one that can answer a question about the picture
 **The first picture out of it is 320×200 of sky**, taken at frame 2 when the world was eight nodes,
 which is exactly right and is the reason the second run asked for a later frame.
 
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D641 | **The renderer runs on Mesa's software Vulkan under a virtual X server** | finding | A picture, every audit and the same content hashes, with no GPU in the room — the correctness half of a renderer change becomes gateable in a container |
+| D641 | **A frame is 267 s at the shipped face table and 0.5 s at 16k faces** | measurement | The passes that sweep a million slots are sized for hardware; the window barely matters beside them |
+| D641 | **The node payload was bound past `maxStorageBufferRange` and nothing had ever read that limit** | bug | 512 MB against this device's 128 MB: an invalid descriptor, a shader indexing off the end, and a process that dies in the driver. No-op on every machine this project has measured on |
+| D641 | **The crash survives the fix and is NOT diagnosed** | honesty | Validation clean, still dies at frame 16–17; GPU-assisted validation is the next step and was not run |
+
 ### And it segfaults at about frame 17, in code that has no symbols
 
 Under `gdb`, the faulting thread is at `0x7fffd013bd0e` in an **anonymous mapping**, with a frame
@@ -7054,14 +7061,40 @@ chain of `0xfe1f8000fe1f8000` and `0x0fffff81...` — packed float lanes rather 
 A second thread sits in the same region. That is **JIT-compiled shader code inside the driver**, not
 WorldShaper's own C++: this is a RelWithDebInfo build, so any frame of ours would have resolved.
 
-**That does not make it the driver's bug.** An out-of-bounds access from a compute shader is
-undefined behaviour, and the two ends of that behave differently: hardware with robust access
-returns zeroes and carries on, while a JIT that has compiled the access literally will walk off its
-own buffer and take the process with it. **So the honest classification is "in the driver's code,
-possibly caused by ours"**, and the way to tell them apart is the validation layers, which this
-repository already has a flag for. That run is the next thing and is not finished here.
+**That does not make it the driver's bug**, so `--validation` was run — and it found a real one of
+ours.
 
-**Either answer is worth having.** If validation is clean, this is a lavapipe limitation and the
-container's ceiling is about seventeen frames — enough for a picture, not for a settle. If it is
-not, there is a shader reading outside a buffer, and the machine it has been running on for months
-has simply been the forgiving kind.
+### The bug validation found, and it is a portability fault nothing could have caught here
+
+```
+VUID-VkWriteDescriptorSet-descriptorType-00333, buffer "node payload":
+range is VK_WHOLE_SIZE, effective range 536,870,912 > maxStorageBufferRange 134,217,728
+```
+
+**The node pool's payload is 512 MB and is bound as one storage-buffer descriptor. This device
+binds at most 128 MB.** Nothing in the engine had ever read `maxStorageBufferRange`, because every
+part this has run on reports 4 GB and the question never came up. Where the limit is smaller the
+descriptor is invalid, the shader indexes past what it was actually given, and the process dies
+inside the driver with no frame of ours in the stack.
+
+**The fix is to read the limit and cap the budget to it, before the pool is told** —
+`Device::Caps::max_storage_buffer_range`, clamped in the one place the budget is built, with a
+warning naming both numbers. Not after: the pool sizes its own accounting from that number, and a
+CPU side believing in 512 MB while the card was handed 128 is worse than either. **On any machine
+this project has measured on, the clamp does nothing at all** — the limit is above 512 MB and the
+budget is unchanged. It is a fault that only exists on hardware nobody here owns, which is exactly
+the class of fault a Steam Deck target should care about.
+
+Validation is **clean** afterwards: one error before, none after.
+
+### And the crash is still there, which is the honest half
+
+Same run, same flags, validation silent, and it still dies at **frame 16–17**. So the invalid
+descriptor was real and was not the cause — or not the only one. It is not diagnosed. What is known:
+it is inside JIT-compiled shader code, standard validation has nothing to say about it, and it takes
+about four minutes of wall clock to reach. The next step is GPU-assisted validation (which checks
+buffer indexing inside the shader rather than the descriptors around it), and it is not run here.
+
+**So the container's ceiling today is about sixteen frames** — enough for a picture and for the
+audits, not for a settle. That is worth knowing before somebody plans a speckle measurement around
+it.

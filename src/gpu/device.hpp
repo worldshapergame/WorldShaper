@@ -27,6 +27,15 @@ struct DeviceCapabilities {
     bool has_int64_atomics = false;
     f32 timestamp_period_ns = 0.0f;
     u64 min_uniform_offset = 256;   // alignment for dynamic uniform buffer offsets
+    // The largest range a single storage-buffer descriptor may cover.
+    //
+    // Read because it is NOT effectively infinite everywhere. Every desktop part this has run on
+    // reports 4 GB or more, so the node pool's 512 MB payload has always fitted and nothing ever
+    // checked; a driver that reports **128 MB** — Mesa's software device does — takes the same
+    // binding and produces an invalid descriptor, a shader indexing past the end of what it was
+    // given, and a process that dies inside the driver with no frame of ours in the stack (D641).
+    // A limit that is generous on the machine you develop on is still a limit.
+    u64 max_storage_buffer_range = 0;
 };
 
 class Device {

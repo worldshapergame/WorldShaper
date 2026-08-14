@@ -3612,7 +3612,19 @@ with the pool, does a sealed room come out black, does a frame reproduce. **A sm
 is the pressured regime (D306), not the shipped one**, so anything about eviction or the cold window
 measured that way is about a different state.
 
-**It also segfaults around frame 17 and that is not yet diagnosed** — see D641 for how far it got.
+**Running it there found a real bug in this engine, which is the argument for doing it** (D641).
+`--validation` on that driver reports `VUID-VkWriteDescriptorSet-descriptorType-00333`: the node
+pool's **512 MB payload is bound as one storage-buffer descriptor and this device binds at most
+128 MB**. Nothing had ever read `maxStorageBufferRange` because every part this has run on reports
+4 GB. It is read now and the budget is capped to it before the pool is told — a no-op on every
+machine this project has measured on, and the difference between working and an invalid descriptor
+on one that reports less. **A limit that is generous where you develop is still a limit**, and a
+Deck is the target that makes that not hypothetical.
+
+**It still segfaults at frame 16–17 with validation clean, and that is NOT diagnosed.** So the
+container's ceiling today is about sixteen frames — a picture and the audits, not a settle. The next
+step is GPU-assisted validation, which checks indexing inside a shader rather than the descriptors
+around it.
 
 What that session could NOT do is anything with a clock: a CPU four cores wide and several times
 slower than the development machine, and a software rasteriser besides. **Nothing timed on such a

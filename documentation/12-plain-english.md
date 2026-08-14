@@ -2870,3 +2870,26 @@ thought they were impossible without your machine.
 **One honest caveat: it crashed after about seventeen frames**, and I do not yet know whether that is
 the game's fault or the pretend graphics card's. I am finding out. If it is ours, it is a real bug
 that your machine has simply never been unlucky enough to hit.
+
+## Running it there found a real bug — one your machine could never have shown me
+
+I said I would find out whether the crash on the pretend graphics card was ours or theirs. It is
+**both**, and the half that is ours is worth having.
+
+The engine keeps a big block of graphics memory for the world's geometry — half a gigabyte — and
+hands it to the card as one lump. It turns out there is a limit on how big a single lump you are
+allowed to hand over, and **the engine never once asked what that limit was**. It did not need to:
+every real graphics card it has ever run on allows four gigabytes, so half a gigabyte always fitted.
+The pretend card allows **128 megabytes**. Hand it half a gigabyte and it accepts the instruction,
+the shader then reads past the end of what it was actually given, and the whole thing falls over
+inside the driver where none of our own code is visible.
+
+It now asks, and shrinks the block to fit when it has to, saying so in the log. **On your machine
+this changes precisely nothing** — the limit there is eight times what we ask for. It matters for
+the Steam Deck, which is the machine this project has always said it must run on and which nobody
+here has ever tested on.
+
+**And the honest half: it still crashes at about frame sixteen, and I do not know why.** The
+official checker now reports nothing wrong at all, which means whatever is left is deeper than the
+level it inspects. So the container can give me a picture and all the self-checks, but not a long
+run — and I would rather write that down than leave the next session to discover it.

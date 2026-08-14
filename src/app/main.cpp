@@ -7408,6 +7408,18 @@ int Application::play(const Options& options) {
     // path nobody notices has stopped compiling.
     {
         NodePoolBudget node_budget;
+        // The payload is one storage-buffer binding, so it may not be larger than one is allowed
+        // to be. Clamped BEFORE the pool is told, not after: the pool sizes its own accounting
+        // from this number, and a CPU side that believes in 512 MB while the card was given 128
+        // is worse than either (D641).
+        const u64 binding_limit = device_.caps().max_storage_buffer_range;
+        if (binding_limit > 0 && node_budget.payload_bytes > binding_limit) {
+            WS_LOG_WARN("gpu",
+                        "the node payload wants {} MB and this device binds at most {} MB per "
+                        "storage buffer; the pool is capped to fit",
+                        node_budget.payload_bytes / (1024 * 1024), binding_limit / (1024 * 1024));
+            node_budget.payload_bytes = binding_limit;
+        }
         WS_LOG_INFO("load", "type tables {:.0f} ms  [t+{:.0f} ms]",
                 ns_to_ms(now_ns() - t_tables), ns_to_ms(now_ns() - load_began_ns_));
         const u64 t_pool = now_ns();
