@@ -7100,3 +7100,62 @@ buffer indexing inside the shader rather than the descriptors around it), and it
 **So the container's ceiling today is about sixteen frames** — enough for a picture and for the
 audits, not for a settle. That is worth knowing before somebody plans a speckle measurement around
 it.
+
+## D642 — the container crash is bisected to one flag: R9a, a light ray naming the face it landed on
+
+D641 left a segfault at frame 16–17 with validation clean. It is now narrowed to **one rule**, by
+five arms of one build (D407), each a separate run because two software renders at once take the
+container down with them.
+
+| arm | flags | result |
+|---|---|---|
+| A | `--refine-batch 1` — 128× less pasting | **crashes**, same place |
+| C | `--no-face-reads --no-face-pressure --no-secondary-faces --no-secondary-light --no-light-probe` | **survives to frame 40**, writes a picture of the facility |
+| D | C, but face reads back on | **survives** |
+| E | C, but secondary faces AND secondary light back on | **crashes** |
+| F | C, but secondary faces on, secondary light OFF | **crashes** |
+
+**`--no-secondary-faces` is what avoids it.** That is R9a: *the one ray in the renderer that may add
+to the face set* — a gathering ray naming the face it landed on, so the light of a room can be
+measured from surfaces no pixel is looking at.
+
+**Three things this rules out, each of which was the obvious suspect at the time.** Arm A kills the
+paste path: a hundred and twenty-eight times less pasting per frame crashes at the same frame, so it
+is not proportional to work, to pool growth, or to how much geometry has arrived. Arm D kills the
+face-read reports. And D641's invalid descriptor was real and is fixed and is **not** this — the
+crash outlived it.
+
+### Where it is not, which is where it looked like it would be
+
+All three shader-side appends are bounded, and identically:
+
+```glsl
+uint index = atomicAdd(feedback.count, 1u);
+if (index < push.resolution.w) { feedback.entries[index].coord = ...; }
+```
+
+`node_face_request` — R9a's own write — is one of them. So the fault is not the append this rule
+makes; it is something downstream of a face set that only this rule can grow. **The next suspect is
+the lobe pool** (`131072` blocks, 144 bins each), which R9a feeds by claiming faces that no pixel
+asked for, and which is sized independently of `--face-budget`. That is a hypothesis and not a
+finding: it has not been tested.
+
+### Why this is worth a Windows session's attention
+
+A driver that checks its own memory strictly crashes where hardware with robust access returns
+zeroes and carries on. **The bisection says a rule that ships ON by default is the one that provokes
+it**, and the honest reading of that is: either lavapipe has a bug in a shader only this path
+reaches, or the renderer writes somewhere it should not and an RTX has been forgiving about it for
+months. D641's descriptor fault was exactly that shape and turned out to be ours.
+
+**What would settle it in twenty minutes on the development machine**: run with the Vulkan validation
+layers and GPU-assisted validation on — `--validation` plus
+`VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT` — which checks indexing *inside* a
+shader rather than the descriptors around it. If it names a buffer, it is ours.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D642 | **The crash is R9a's, by five arms of one build** | measurement | `--no-secondary-faces` survives 40 frames and writes a picture; secondary faces alone, with secondary light off, crashes |
+| D642 | **It is not the paste path, not pool growth, not face reads, and not D641's descriptor** | measurement | 128× less pasting crashes at the same frame; the descriptor fault is fixed and the crash outlived it |
+| D642 | **R9a's own append is correctly bounded, so the fault is downstream of the face set it grows** | finding | All three feedback appends test `index < push.resolution.w`; the untested suspect is the lobe pool, which R9a feeds and which is not sized by `--face-budget` |
+| D642 | **One software render at a time, or the container dies** | trap | Two together killed it twice, ten minutes each, presenting as an unrelated restart |

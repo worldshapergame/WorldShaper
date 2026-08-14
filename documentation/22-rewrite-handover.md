@@ -3627,10 +3627,20 @@ world, a JIT of every shader and four worker threads, and two of them together i
 will carry. It costs a session ten minutes each time and reads like an unrelated infrastructure
 failure, which is why it is written here rather than left to be rediscovered.
 
-**It still segfaults at frame 16–17 with validation clean, and that is NOT diagnosed.** So the
-container's ceiling today is about sixteen frames — a picture and the audits, not a settle. The next
-step is GPU-assisted validation, which checks indexing inside a shader rather than the descriptors
-around it.
+**It still segfaults at frame 16–17 with validation clean — and that is now bisected to ONE RULE
+(D642).** Five arms of one build: `--no-secondary-faces` survives forty frames and writes a picture
+of the facility; secondary faces on with secondary light off crashes. **R9a — the one ray in the
+renderer that may add to the face set — is what provokes it.** Not the paste path (128× less pasting
+crashes at the same frame), not face reads, and not D641's descriptor, which is fixed and which the
+crash outlived. R9a's own append is correctly bounded, so the fault is downstream of the face set it
+grows; the untested suspect is the lobe pool, which R9a feeds and which `--face-budget` does not
+size.
+
+**So the container renders forty frames with `--no-secondary-faces` and about sixteen without.**
+And the question a Windows session should ask, because D641's fault was exactly this shape and
+turned out to be ours: `--validation` plus
+`VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT` checks indexing *inside* a shader.
+If it names a buffer, an RTX has been forgiving about a real out-of-bounds write for months.
 
 What that session could NOT do is anything with a clock: a CPU four cores wide and several times
 slower than the development machine, and a software rasteriser besides. **Nothing timed on such a

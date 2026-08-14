@@ -2893,3 +2893,33 @@ here has ever tested on.
 official checker now reports nothing wrong at all, which means whatever is left is deeper than the
 level it inspects. So the container can give me a picture and all the self-checks, but not a long
 run — and I would rather write that down than leave the next session to discover it.
+
+## I found which part of the renderer the crash is in, and it may be a real bug in your build
+
+Last time I said the crash on the pretend graphics card was undiagnosed. It is diagnosed now, near
+enough to hand over.
+
+I ran the game five more times, each with a different part of the lighting switched off, and the
+crash follows exactly one rule: **the one ray in the renderer that is allowed to add a new surface to
+the light system.** It is the rule that lets a room be lit by surfaces you are not currently looking
+at — light bouncing off a wall behind you. Turn that one rule off and the game runs forty frames and
+gives me the photograph of the facility I sent you. Turn it back on, alone, and it dies.
+
+Three things it is *not*, each of which I would have bet on: it is not the world-building (I made the
+game build 128 times less per frame and it died at the same frame), it is not the surface-reporting,
+and it is not the memory-limit bug I fixed earlier — that one was real, and the crash outlived it.
+
+**Why this might matter to you and not just to me.** The pretend graphics card checks every memory
+access strictly. Real graphics cards mostly do not: write somewhere you should not and an NVIDIA card
+usually shrugs and gives you zeroes. So there are two possibilities, and the earlier one in this
+session went the uncomfortable way: either the pretend card has a bug, **or the renderer writes
+somewhere it shouldn't and your card has been quietly forgiving it for months**. I cannot tell which
+from here.
+
+**What settles it, on your machine, in about twenty minutes**: run the game with the checking layers
+turned all the way up — there is a mode that inspects memory access *inside* the shaders rather than
+just around them. If it names a buffer, it is ours and it is a real bug. If it says nothing, the
+pretend card is to blame and I stop worrying about it. I have written the exact command down.
+
+**What you would see in game either way: nothing, today.** That is the point of it — a write that
+lands somewhere harmless is invisible until the day it doesn't.
