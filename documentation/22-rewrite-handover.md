@@ -664,8 +664,47 @@ are worse than a coin toss — a parent's average is wrong in a *correlated* way
 a *bright* way. **So the grain is not a face believing itself too early; it is that there is nothing
 better to show.**
 
-**Which leaves exactly one candidate, and it is now justified by measurement rather than by
-argument: show the coarse STAND-IN.** The store already keeps one over that face (R9f), it is a real
+**BOTH OF THOSE ARE NOW MEASURED TOO, AND SO ARE TWO MORE (D646, D647). Seven arms, and the
+shipped build wins every one of them:**
+
+| what was changed | speckle |
+|---|---|
+| **nothing — what ships** | **91.62**, repeated **91.38** |
+| a young face starts from its ancestor's shadow (`--sun-seed 3`) | 108.65 |
+| its shadow is withheld until four rays (`--shadow-settled 4`) | 107.74, **131 fireflies** |
+| it shows its coarse stand-in until four rays (`--face-answerable 4`) | 107.61 |
+| it casts four sun rays a visit instead of one (`--sun-burst 4`) | 108.70 |
+| the agreement filter off (`--denoise-edge 0`) | 102.22 |
+| the agreement filter tightened (`--denoise-edge 6`) | 112.54 |
+
+Every world within 0.3% of the same leaf count, every arm a flag on one build.
+
+**The four young-face arms land within 1% of each other although one seeds, one withholds, one
+substitutes and one ACCELERATES** — a burst makes a face settle four times faster and costs exactly
+what the three that slow it down cost. No account in terms of convergence speed survives that. What
+they share is that each creates a **second population of faces**, and the boundary between
+populations is what the metric sees. **So the grain is disagreement BETWEEN neighbouring faces, not
+noise within one** — which is why a coin toss everybody shares beats a better answer only some hold.
+
+**That predicted where the gain is, and the prediction held**: the lever that makes neighbours agree
+is R5a's filter, it is the only intervention that moves the number the right way, and its shipped
+sharpness is the minimum of its own sweep. **Nothing reachable by a flag is mistuned.**
+
+**So the next gain needs a mechanism that does not exist yet**, and the diagnosis names its shape:
+make neighbours agree more without blending across a real edge. What ships is one ring of taps
+applied once, and `face_lobe_denoise`'s `kLobeFiltered` bit is explicit that a filter reading the
+array it writes may run once and must not run twice. A second ring, or a second pass over a copy, is
+the untried version — a design question rather than a constant.
+
+**And all of it is the TRANSIENT**: frame 40 of a building still arriving, which is what a player
+turning their head sees, and not the settled case. `--settle` is unreachable in the container.
+
+~~Which leaves exactly one candidate, and it is now justified by measurement rather than by
+argument: show the coarse STAND-IN.~~ **Measured and refused — and D646 corrects the claim under it:
+the marcher ALREADY substitutes a stand-in** (`visibility_face_slot`, at `kFaceSettled`), so this
+needed a flag rather than the new binding D645 costed it at.
+
+**The old note, kept because the reasoning is still the reasoning:** The store already keeps one over that face (R9f), it is a real
 measurement of the same place at the right brightness, and it is what the composite draws before the
 first ray anyway. The cost is that **`resolve.comp` has no face lookup at all** — it does not include
 `node.glsl` — so this needs a binding and the host plumbing under it. That is the next piece of work,

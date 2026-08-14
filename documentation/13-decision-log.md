@@ -7393,3 +7393,64 @@ two to three times the same-arm difference — which is why they are read as rea
 | D646 | **The grain is disagreement between neighbouring faces, not noise within one** | finding | The only thing all four arms share is creating a second population of faces; a shared coin toss beats a better answer held by some |
 | D646 | **The next arm is R5a's agreement filter, which treats every face alike** | direction | `--denoise-edge N`, one command and no code, and 0 is already its control arm |
 | D646 | **The speckle number travels here; a pixel comparison does not** | method | Two runs of one arm share 10.1% of pixels while their speckle agrees to 0.3% |
+
+## D647 — the prediction held, and the one lever that helps is already at its best value
+
+D646 predicted it: if the grain is disagreement between neighbouring faces rather than noise within
+one, then the lever that works is the one that makes neighbours agree, and it should behave unlike
+the four arms that failed. R5a's filter is that lever and it already ships, so testing the prediction
+is two runs and no code.
+
+`--denoise-edge` is the SHARPNESS of the agreement test, not the strength of the filter: at 0 a
+neighbour helps whatever it says (D579's smear), and higher demands closer agreement before a
+neighbour is allowed to help at all.
+
+| `--denoise-edge` | what it means | speckle |
+|---|---|---|
+| 0 | no agreement test — every neighbour blends in | 102.22 |
+| **2, what ships** | the shipped test | **91.62** / 91.38 |
+| 6 | neighbours must agree closely to help | 112.54 |
+
+**A U, with the shipped value at the bottom of it.** Loosening costs 11.6% and tightening costs
+22.8%. So the prediction is confirmed in the way that matters — **this lever moves the grain the
+right way and the four in D644–D646 did not** — and the value on it is already the best of the
+three. Same world in every run, within 0.3% of leaves.
+
+### What the whole sweep says, taken together
+
+Seven arms across four decisions, every one of them a flag on one build, every one on a world
+identical to 0.3%:
+
+| what was changed | speckle |
+|---|---|
+| **nothing — what ships** | **91.5** |
+| a young face starts from its ancestor's shadow | 108.65 |
+| a young face's shadow is withheld until four rays | 107.74 |
+| a young face shows its coarse stand-in until four rays | 107.61 |
+| a young face casts four sun rays a visit instead of one | 108.70 |
+| the agreement filter switched off | 102.22 |
+| the agreement filter tightened threefold | 112.54 |
+
+**Everything reachable by a flag is already at its best setting**, which is a real answer to *"start
+at R5b"*: the speckle that is left is not a mistuned constant and not a missing prior. Four of the
+seven change what a face does while it is young and all four cost about the same 18%, because they
+all create a second population of faces; the two that change the filter are the only ones that move
+the number for the reason the metric measures, and the shipped value is the minimum.
+
+**So the next gain has to come from a mechanism that does not exist yet, and the diagnosis names its
+shape**: make neighbouring faces agree MORE without blending across a real edge. The filter today is
+one ring of taps applied once — `face_lobe_denoise` and its `kLobeFiltered` bit are explicit that a
+filter reading the array it writes may run once and must not run twice. A second ring, or a second
+pass that reads a copy, is the untried version and it is a design question rather than a constant.
+
+**And it should be checked against a settled world**, which no run here reaches: everything above is
+frame 40 of a building still arriving, so it is about the transient. The transient is what a player
+turning their head sees, which is why it is the right thing to have measured first — but the settled
+case is a different measurement and this environment cannot take it.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D647 | **The agreement filter's shipped sharpness is the minimum of its own sweep** | measurement | 102.22 at 0, 91.62 at 2, 112.54 at 6 |
+| D647 | **D646's prediction held: the lever that makes neighbours agree is the one that moves the grain the right way** | finding | It is the only one of six interventions that improves on switching it off, and the four young-face arms all cost the same regardless of mechanism |
+| D647 | **Nothing reachable by a flag is mistuned** | finding | Seven arms, one build each, worlds within 0.3%; the shipped setting wins every sweep |
+| D647 | **The next gain needs a mechanism that does not exist: wider or iterated agreement** | direction | One ring, applied once, is what ships; a filter that reads what it writes may not simply run twice |
