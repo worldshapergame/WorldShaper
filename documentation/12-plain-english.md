@@ -2923,3 +2923,36 @@ pretend card is to blame and I stop worrying about it. I have written the exact 
 
 **What you would see in game either way: nothing, today.** That is the point of it — a write that
 lands somewhere harmless is invisible until the day it doesn't.
+
+## I started on the speckle you asked about, and the obvious fix turned out to make it worse
+
+The grain you see is mostly surfaces that are still working out how much sun they get. Each surface
+in the building measures that by firing rays at the sun and counting how many arrive — but it shows
+you its answer after the *very first* ray. One ray is either "full sun" or "full shadow", nothing
+between, so a wall that has just come into view is a field of surfaces each having tossed its own
+coin. That is the mechanism, and it is exactly what the notes predicted.
+
+The obvious fix: let a new surface start from what the bigger surface above it already knew, instead
+of from nothing. Three of the four kinds of light already do this — the sky, the bounce and the lamps
+are all inherited when a surface is created. **The sun was the only one that wasn't.** So I made it
+inherit too.
+
+**It made the grain 19% worse.** I measured it twice with the change off to be sure the measurement
+was steady — it repeats to a third of a percent — so that is a real result, not noise.
+
+The reason, once I saw it, is written in this project's own code about a different piece of light:
+the bigger surface's answer is an *average* over four times the area, so handing it to all four
+children makes them wrong **together, in the same direction, at the size of the parent** — and
+structured wrongness looks worse than random wrongness. A shadow's edge is exactly the thing a
+bigger surface cannot represent at all.
+
+So it is off, the code stays behind a switch so the next attempt is one command, and it has narrowed
+the problem usefully: the fault is not that a new surface starts from nothing. **It is that the game
+believes a surface's own answer after one ray.** The better idea is to keep showing what is already
+being shown — the coarse version of that surface, which is a real measurement of the same place —
+until the surface has four rays of its own. That way its own answer is never polluted by its parent's;
+it is just not believed until there is enough of it. That is what I would do next.
+
+**What you would see when that lands: less crawling grain on walls as you turn to face them**, and
+the same building otherwise. What would mean it failed: shadows arriving visibly late, or a soft edge
+where there should be a sharp one.

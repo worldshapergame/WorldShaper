@@ -632,6 +632,31 @@ Measured now, settled, 1280x800 quality 7, facility:
 and the number that points at why is the last column: **135,071 of its faces, 23%, have not
 settled.** The grain is faces that are still measuring, not converged faces disagreeing.
 
+##### STARTED, AND THE FIRST IDEA IS MEASURED AND REFUSED (D644)
+
+**What claim time actually does, which §5 said to check first: it seeds three of the four terms.**
+A face claimed fresh inherits the near field, the sky and bounce, and the lamps from its nearest
+useful ancestor. **The sun inherits nothing**, and `kShadowSettled` is 1, so the composite reads a
+face's own shadow from its very first ray — and one ray is 0% or 100%.
+
+Seeding it the same way is built, behind `--sun-seed N`, and **measured 19% the wrong way**: 108.65
+against a control repeating at 91.62 and 91.38 (close camera, 320×200, frame 40, overlay excluded).
+It ships at 0. An ancestor's fraction is an average over four times the area, so seeding every child
+with it is structured error at the parent's scale — the same argument `face_light_seed` already
+refuses the parent's *gradient* on.
+
+**The next arm is the composite rather than the store**: hold the coarse stand-in until a face has
+`kFaceEager` samples of its own, instead of seeding its counters with somebody else's answer. The
+face's own measurement is then never contaminated — it is simply not believed until there is enough
+of it. The objection that sank this idea in the first place (*"what is shown instead is full sun"*)
+predates R9f, and there is now something real to show.
+
+**And the metric is computable where the picture is taken**: `tools/speckle.py` is a transliteration
+of `_measure.ps1`'s `Measure-Speckle`, with a `--top N` band skip, because **the developer overlay is
+in every screenshot, defaults on, has no flag, and its digits differ between two arms of an A/B** —
+text is the worst thing a speckle metric can be shown. Whole-frame, the two arms above read 86.66
+and 102.71; the picture alone is what the table quotes.
+
 **Half of R5b may already exist.** `face_light_seed` seeds a new face from the coarse stand-in over
 it (R9d, D308-D311) and `face_reseed` scales a pair of counts down keeping the ratio, with the
 comment at `node.glsl:1350` saying in as many words *"the same arithmetic face_light_seed already
