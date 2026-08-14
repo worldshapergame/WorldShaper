@@ -6512,3 +6512,42 @@ rather than being thrown away at the end of each.
 | D634 | **A partial world resumes from another camera** | finding | B loads A's 19,751,324 voxels in 52 ms and ends holding 23,137,962 |
 | D634 | **The world converges across launches** | finding | Returning to a visited camera is 9.1 s against 18.6, sampling 1,589 ms against 7,585 |
 | D634 | **The flag is still not the default** | honesty | R11h is unmeasured, every baseline was taken against the other world, and the wait stays |
+
+## D635 — R11h: a chisel cuts properly with no coarse build under it
+
+The last thing owed before `--no-coarse-paste` could be considered for the default. §5 names the
+hazard: *"a chisel on a surface nobody has looked at closely would carve a blocky approximation that
+the file then treats as authoritative"* — and with no coarse build there may be nothing there to cut
+at all.
+
+**Measured.** A 20 m cube carved through the middle of the facility at frame 400, enclosed camera,
+`--settle`, both arms:
+
+| | before the carve | after |
+|---|---|---|
+| pasted (ships) | 125,420,017 | 62,608,814 |
+| `--no-coarse-paste` | 19,751,324 | **25,232,463** |
+
+**The count going UP is not the carve failing.** Cutting a twenty-metre hole through the middle of a
+building opens it to the sky, so a great deal that was occluded becomes visible and the ladder
+builds it. The photograph settles what the number cannot: the cube is cut, its faces are clean and
+sharp rather than stepped, and the portico revealed behind it — six columns, pediment, entablature —
+is built at full detail. It is a correct edit into a world that did not exist there a moment before.
+
+**And a counter that reads alarming and is not.** The pool logs `0 leaves rebuilt` on every edit
+refresh in this arm against the pasted arm's 1,741. That is right: `leaves rebuilt` counts leaves
+the pool already held and had to re-derive, and in this arm it held far fewer, because far fewer had
+ever been built. The 1,152 nodes folded per refresh are the carve propagating. **A counter about
+what the POOL held is not a counter about what the EDIT did**, and reading it as one would have
+condemned a working feature — trap 7's shape, one more time.
+
+So R11h passes on the near case. What it does not test is the far one: a chisel at sixty metres into
+a surface the camera has never approached, which is where the proximity radius has to hold
+*sampling* rather than *residency* (R2c, D199). That arm is not run.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D635 | **A chisel near the camera cuts properly with no coarse build** | finding | The cube is cut with clean faces and the revealed portico is built at full detail |
+| D635 | **A rising voxel count after a carve is the carve working** | method | The hole opens the building to the sky and the ladder builds what it reveals |
+| D635 | **`0 leaves rebuilt` is about the pool, not the edit** | method | It counts what the pool already held; this arm held less because less had been built |
+| D635 | **The far chisel is still unmeasured** | honesty | Sixty metres into a surface never approached, where proximity must hold sampling |
