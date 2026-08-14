@@ -883,9 +883,34 @@ u32 Field::power(u32 child, f64 exponent) {
 
 // --- evaluation ---------------------------------------------------------------------------
 
+// The census, per thread and off unless asked for.
+//
+// A thread_local rather than an atomic because `sample` runs one of these per z slab and an
+// atomic here would be measuring the counter rather than the field. A flag rather than a build
+// flavour because an instrument that needs its own build is one nobody runs (D407's argument, one
+// level down).
+thread_local Field::Walk g_walk;
+thread_local bool g_counting = false;
+
+Field::Walk Field::walk_census() { return g_walk; }
+void Field::reset_walk_census() { g_walk = Walk{}; }
+
+f64 Field::census_eval(u32 at, Vec3 p) const {
+    const bool was = g_counting;
+    g_counting = true;
+    ++g_walk.evaluations;
+    const f64 d = eval(at, p);
+    g_counting = was;
+    return d;
+}
+
 f64 Field::eval(u32 at, Vec3 p) const {
     if (at >= nodes_.size()) return 1e30;
     const Node& n = nodes_[at];
+    if (g_counting) {
+        ++g_walk.nodes;
+        ++g_walk.by_op[static_cast<usize>(n.op)];
+    }
     const f64* a = n.a;
 
     switch (n.op) {
@@ -974,8 +999,13 @@ f64 Field::eval(u32 at, Vec3 p) const {
             // almost all of the difference was walking subtrees that the very next comparison
             // would have thrown away.
             u32 order[4] = {0, 1, 2, 3};
-            if (!bounds_.empty() && n.children > 1) {
-                f64 away[4];
+            // Indexed by the child's own position, which is what `order` holds — and kept,
+            // because the rejection below wants the same number the sort has just worked out.
+            // Recomputing it was up to three extra box distances per union, and a union is a
+            // quarter of every node visit the facility makes (D638).
+            f64 away[4] = {0.0, 0.0, 0.0, 0.0};
+            const bool sorted = !bounds_.empty() && n.children > 1;
+            if (sorted) {
                 for (u32 i = 0; i < n.children; ++i) {
                     away[i] = squared_distance_to(bounds_[n.child[i]], p);
                 }
@@ -1010,11 +1040,14 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 // Getting it wrong is not loud. The sign never changed, so nothing appeared or
                 // vanished; the magnitude did, which moved the surface normals, which moved the
                 // paint rule that follows them. Four hundred voxels of moss in the wrong place.
-                if (!bounds_.empty()) {
-                    const f64 away = squared_distance_to(bounds_[n.child[i]], p);
+                if (sorted) {
                     // Outside the box at all, and either already inside something (so nothing
                     // outside can be nearer) or nearer than the box can possibly be.
-                    if (away > 0.0 && (d < 0.0 || d * d <= away)) continue;
+                    const f64 how_far = away[i];
+                    if (how_far > 0.0 && (d < 0.0 || d * d <= how_far)) {
+                        if (g_counting) ++g_walk.culled;
+                        continue;
+                    }
                 }
                 d = std::min(d, eval(n.child[i], p));
             }
@@ -1036,7 +1069,10 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 // if the running answer already beats that the cut cannot reach here.
                 if (!bounds_.empty()) {
                     const f64 away = squared_distance_to(bounds_[n.child[i]], p);
-                    if (away > 0.0 && (d >= 0.0 || d * d <= away)) continue;
+                    if (away > 0.0 && (d >= 0.0 || d * d <= away)) {
+                        if (g_counting) ++g_walk.culled;
+                        continue;
+                    }
                 }
                 d = std::max(d, -eval(n.child[i], p));
             }
@@ -1602,19 +1638,34 @@ u32 Field::build_bvh(Accelerator& bvh, std::vector<u32>& work, usize begin, usiz
 // subtree will say, because a shape you are inside reports a negative distance.
 f64 Field::eval_accelerated(const Accelerator& bvh, Vec3 p) const {
     f64 d = 1e30;
-    u32 stack[64];
+    // The distance travels WITH the entry rather than being worked out again when it is popped.
+    //
+    // A child's box distance is computed by its parent, to decide which of the two to visit
+    // first, and the old form threw that away and recomputed the identical number one pop later.
+    // The TEST cannot be hoisted — `d` improves between the push and the pop, which is the whole
+    // point of the ordering — but the distance is a function of the box and the point alone, and
+    // neither moves. Same value, computed once: this is a saving and not a change, which is why
+    // the byte-identical gate is the thing that says it landed.
+    struct Entry {
+        u32 node;
+        f64 away;
+    };
+    Entry stack[64];
     u32 top = 0;
-    stack[top++] = 0;
+    stack[top++] = Entry{0, squared_distance_to(bvh.nodes[0].box, p)};
     while (top > 0) {
-        const BvhNode& node = bvh.nodes[stack[--top]];
-        const f64 away = squared_distance_to(node.box, p);
-        if (away > 0.0 && (d < 0.0 || d * d <= away)) continue;
+        const Entry entry = stack[--top];
+        if (entry.away > 0.0 && (d < 0.0 || d * d <= entry.away)) continue;
+        const BvhNode& node = bvh.nodes[entry.node];
 
         if (node.count > 0) {
             for (u32 i = 0; i < node.count; ++i) {
                 const u32 leaf = bvh.order[node.left + i];
                 const f64 leaf_away = squared_distance_to(bounds_[leaf], p);
-                if (leaf_away > 0.0 && (d < 0.0 || d * d <= leaf_away)) continue;
+                if (leaf_away > 0.0 && (d < 0.0 || d * d <= leaf_away)) {
+                    if (g_counting) ++g_walk.culled;
+                    continue;
+                }
                 d = std::min(d, eval(leaf, p));
             }
             continue;
@@ -1626,11 +1677,11 @@ f64 Field::eval_accelerated(const Accelerator& bvh, Vec3 p) const {
         const f64 ra = squared_distance_to(bvh.nodes[node.right].box, p);
         if (top + 2 <= 64) {
             if (la <= ra) {
-                stack[top++] = node.right;
-                stack[top++] = node.left;
+                stack[top++] = Entry{node.right, ra};
+                stack[top++] = Entry{node.left, la};
             } else {
-                stack[top++] = node.left;
-                stack[top++] = node.right;
+                stack[top++] = Entry{node.left, la};
+                stack[top++] = Entry{node.right, ra};
             }
         }
     }

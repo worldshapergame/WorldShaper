@@ -1052,3 +1052,84 @@ TEST_CASE("the accelerator threshold changes what is built and not what is answe
         }
     }
 }
+
+// The cull reuses the distance the sort has just worked out, and the two are indexed differently:
+// `order` holds child positions and the distances are stored by position, so reading one with the
+// other's index is a cull that rejects the wrong child. It would not crash and it would not
+// change a sign — it would move a surface, which is D613's failure mode and the reason this is
+// pinned rather than trusted.
+//
+// Four children, because four is the width the ordering array is built for, and the nearest one
+// is written LAST so a bug that ignores the sort still gets the easy cases right.
+TEST_CASE("a union answers the same however its children were ordered") {
+    for (const bool wide : {false, true}) {
+        Field f;
+        std::vector<u32> parts;
+        // A wide union takes the hierarchy; a narrow one takes the sorted linear scan. Both read
+        // the same distances and both had the same waste in them.
+        const u32 count = wide ? 20u : 4u;
+        for (u32 i = 0; i < count; ++i) {
+            const f64 x = 6.0 - static_cast<f64>(i) * 0.7;
+            parts.push_back(f.box({x, 0.0, 0.0}, {0.25, 0.4, 0.3}, 0.05));
+        }
+        const u32 all = f.unite(parts);
+
+        std::vector<f64> before;
+        for (i32 ix = -30; ix <= 30; ++ix) {
+            for (i32 iy = -6; iy <= 6; ++iy) {
+                before.push_back(at(f, all, ix * 0.31, iy * 0.19, 0.07));
+            }
+        }
+        f.build_bounds();
+        REQUIRE(f.accelerator_count() == (wide ? 1u : 0u));
+        usize seen = 0;
+        for (i32 ix = -30; ix <= 30; ++ix) {
+            for (i32 iy = -6; iy <= 6; ++iy) {
+                // To the bit: the boxes are a way of not asking a question, never a way of
+                // answering one differently.
+                CHECK(at(f, all, ix * 0.31, iy * 0.19, 0.07) == before[seen++]);
+            }
+        }
+        CHECK(seen == before.size());
+    }
+}
+
+// And the census itself, which is only worth having if it counts what it says it counts.
+TEST_CASE("the walk census counts node visits, and costs nothing when nobody is counting") {
+    Field f;
+    const u32 near = f.box({0, 0, 0}, {0.5, 0.5, 0.5});
+    const u32 far_off = f.sphere({40.0, 0, 0}, 0.5);
+    const u32 both = f.unite({near, far_off});
+    f.build_bounds();
+
+    // An ordinary evaluation is not counted at all.
+    Field::reset_walk_census();
+    f.eval(both, {0.1, 0.1, 0.1});
+    CHECK(Field::walk_census().nodes == 0);
+    CHECK(Field::walk_census().evaluations == 0);
+
+    // A counted one visits the union and the child it could not reject, and rejects the other.
+    Field::reset_walk_census();
+    f.census_eval(both, {0.1, 0.1, 0.1});
+    const Field::Walk one = Field::walk_census();
+    CHECK(one.evaluations == 1);
+    CHECK(one.nodes == 2);          // the union and the box it is inside
+    CHECK(one.culled == 1);         // the sphere forty metres away
+    CHECK(one.by_op[static_cast<usize>(forge::Op::Union)] == 1);
+    CHECK(one.by_op[static_cast<usize>(forge::Op::Box)] == 1);
+    CHECK(one.by_op[static_cast<usize>(forge::Op::Sphere)] == 0);
+
+    // And a point that no box can reject: standing where two of them overlap. Equidistant does
+    // NOT do this and the first attempt at this case got that wrong — a child that can only tie
+    // cannot be strictly nearer, so the cull is right to drop it.
+    Field g;
+    const u32 left = g.box({0.0, 0, 0}, {0.5, 0.5, 0.5});
+    const u32 right = g.box({0.6, 0, 0}, {0.5, 0.5, 0.5});
+    const u32 away = g.sphere({40.0, 0, 0}, 0.5);
+    const u32 three = g.unite({left, right, away});
+    g.build_bounds();
+    Field::reset_walk_census();
+    g.census_eval(three, {0.3, 0.0, 0.0});
+    CHECK(Field::walk_census().nodes == 3);   // the union and the two boxes it is inside
+    CHECK(Field::walk_census().culled == 1);  // and the sphere, which no point here can want
+}

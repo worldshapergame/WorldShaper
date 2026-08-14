@@ -2724,3 +2724,36 @@ single number to change.
 finish making itself a little sooner, and look identical while doing it.** If it ever looks anything
 but identical, that is the failure, and it would mean a piece of the building has gone missing
 rather than merely arrived late.
+
+## Then I asked what a single question to the building actually costs, and found 6% sitting in it
+
+Everything above is about *skipping* work — boxes round each piece so the game can tell, cheaply,
+that you are nowhere near it. What nobody had ever measured is what is left after all that skipping:
+when the game asks "what is at this point", how many of the three and a half thousand instructions
+does it really end up running?
+
+Now it says. Over the whole facility, one question runs about **150 of them** — out of 2,505 it
+could have. It throws away about **102** on a box before running them. So the skipping is close to
+done; there is not another big win hiding in it, which is worth knowing because that was the next
+thing I would otherwise have tried.
+
+**The useful half is what those 150 are.** Only about a third of them measure anything — the boxes,
+cylinders and profiles a building is actually made of. The other **two thirds are scaffolding**:
+*combine these*, *move the point over there*, *mirror it*, *turn it*. A building is mostly the shape
+of its own description. That is the single best argument for step 3 — moving this onto the graphics
+card, where thousands of these questions are asked at once instead of one after another — and it is
+now a number rather than an opinion.
+
+**And the instrument found a real bug on its first run.** When the game has a list of pieces, it
+works out how far you are from each one's box so it can look at the nearest first. Then, when it
+tested each piece to decide whether to skip it, **it worked out exactly the same distance all over
+again** — a number that cannot have changed, because neither the box nor your position moved. It now
+keeps the first answer. That is **6% off the shape work on one part of the building and 7% on
+another**, and it is worth being clear that this kind of fix is free of risk in a way most are not:
+it changes what the game *computes twice*, not what it *decides*. I proved that rather than assuming
+it — I built the previous version alongside, ran the full report on the test clip through both, and
+the two are identical line for line except for the two lines that are stopwatches.
+
+**What you would see: the building finishes making itself very slightly sooner. Nothing else.** If
+anything at all looked different, that would be the failure — and the automatic tests now demand
+that every distance come back bit for bit the same whichever path it took.

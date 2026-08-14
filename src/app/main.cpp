@@ -9885,6 +9885,111 @@ void print_field_boxes(const forge::Field& field, u32 solid) {
     table("of those", shape);
 }
 
+// What one evaluation of the shape actually walks, which is the number a clip's cost is made of.
+//
+// `nodes_under` is the ceiling — 2,505 of the facility's 3,744 — and the boxes are meant to be
+// most of the way from it to the floor. Nothing could say where between the two an evaluation
+// lands, so "76% of sampling is shape evaluation at 2.59 us each" had no reading: a thousand nodes
+// at a sensible price and a hundred at a ridiculous one want opposite work.
+//
+// Two populations rather than one average. A uniform grid over the clip box is mostly open air,
+// where a box test throws nearly everything away on the first comparison; the sampler spends its
+// time near surfaces, where it cannot. Reporting only the first would flatter the cull by exactly
+// the amount that matters.
+void print_field_walk(const forge::Field& field, u32 solid, const forge::SampleSettings& box,
+                      u32 side) {
+    const usize could = field.nodes_under(solid);
+    std::vector<u32> open;
+    std::vector<u32> near;
+    std::vector<u32> inside;
+    open.reserve(static_cast<usize>(side) * side * side);
+    u64 culled = 0;
+    u64 walked = 0;
+    forge::Field::Walk totals;
+    // Half a voxel in from each face, so the grid never asks exactly on the box's own plane.
+    const forge::Vec3 span{box.high.x - box.low.x, box.high.y - box.low.y, box.high.z - box.low.z};
+    // "Near a surface" in metres, and generous on purpose: a voxel at the authored resolution is
+    // 3.125 cm, so this is a few voxels either side rather than a knife edge.
+    constexpr f64 kNear = 0.10;
+    for (u32 iz = 0; iz < side; ++iz) {
+        for (u32 iy = 0; iy < side; ++iy) {
+            for (u32 ix = 0; ix < side; ++ix) {
+                const forge::Vec3 p{
+                    box.low.x + span.x * (static_cast<f64>(ix) + 0.5) / static_cast<f64>(side),
+                    box.low.y + span.y * (static_cast<f64>(iy) + 0.5) / static_cast<f64>(side),
+                    box.low.z + span.z * (static_cast<f64>(iz) + 0.5) / static_cast<f64>(side)};
+                forge::Field::reset_walk_census();
+                const f64 d = field.census_eval(solid, p);
+                const forge::Field::Walk one = forge::Field::walk_census();
+                culled += one.culled;
+                walked += one.nodes;
+                for (usize i = 0; i < forge::Field::kOpCount; ++i) totals.by_op[i] += one.by_op[i];
+                const u32 nodes = static_cast<u32>(one.nodes);
+                if (std::abs(d) <= kNear) near.push_back(nodes);
+                else if (d < 0.0) inside.push_back(nodes);
+                else open.push_back(nodes);
+            }
+        }
+    }
+    // Mean and median are not enough on their own here: the first evaluation that came back
+    // reported a worst case twenty-eight times its own mean, and whether that is a curiosity or
+    // half the bill is a question about the TAIL. So the top percentile is printed beside the
+    // middle, with the share of all the walking those top points account for.
+    const auto report = [could](const char* what, std::vector<u32>& counts) {
+        if (counts.empty()) {
+            std::printf("              %-14s none of the grid landed here\n", what);
+            return;
+        }
+        std::sort(counts.begin(), counts.end());
+        u64 total = 0;
+        for (u32 one : counts) total += one;
+        const f64 mean = static_cast<f64>(total) / static_cast<f64>(counts.size());
+        const usize hundredth = counts.size() / 100;
+        u64 top = 0;
+        for (usize i = counts.size() - hundredth; i < counts.size(); ++i) top += counts[i];
+        std::printf("              %-12s %6zu points, mean %6.1f (%4.1f%% of the shape), median "
+                    "%5u, p90 %5u, p99 %5u, worst %5u; the top 1%% is %.0f%% of the walking\n",
+                    what, counts.size(), mean,
+                    100.0 * mean / static_cast<f64>(std::max<usize>(1, could)),
+                    counts[counts.size() / 2], counts[(counts.size() * 9) / 10],
+                    counts[(counts.size() * 99) / 100], counts.back(),
+                    100.0 * static_cast<f64>(top) / static_cast<f64>(std::max<u64>(1, total)));
+    };
+    std::printf("one walk      %u^3 points over the clip box, against %zu nodes the shape can "
+                "reach\n",
+                side, could);
+    report("open air", open);
+    report("near a face", near);
+    report("inside", inside);
+    const usize points = open.size() + near.size() + inside.size();
+    std::printf("              %-12s %.1f children thrown away by a box per evaluation\n", "culled",
+                static_cast<f64>(culled) / static_cast<f64>(std::max<usize>(1, points)));
+
+    // And what those visits are made of. A translate is three subtractions and an fbm is several
+    // octaves of hashing, so a count of nodes is not a cost until it is broken down — and this is
+    // the table R12 would be sized from, since what moves to the card is exactly these rows.
+    const forge::Field::Walk all = totals;
+    std::vector<usize> order;
+    for (usize i = 0; i < forge::Field::kOpCount; ++i) {
+        if (all.by_op[i] > 0) order.push_back(i);
+    }
+    std::sort(order.begin(), order.end(),
+              [&all](usize a, usize b) { return all.by_op[a] > all.by_op[b]; });
+    std::printf("what it walks %llu node visits over %zu evaluations\n",
+                static_cast<unsigned long long>(walked), points);
+    f64 shown = 0.0;
+    for (usize n = 0; n < order.size() && n < 12; ++n) {
+        const f64 share = 100.0 * static_cast<f64>(all.by_op[order[n]]) /
+                          static_cast<f64>(std::max<u64>(1, walked));
+        shown += share;
+        std::printf("              %-20s %10llu %5.1f%%\n", forge::op_name(static_cast<forge::Op>(order[n])),
+                    static_cast<unsigned long long>(all.by_op[order[n]]), share);
+    }
+    if (order.size() > 12) {
+        std::printf("              %-20s %10s %5.1f%%\n", "-- the rest --", "", 100.0 - shown);
+    }
+}
+
 // Build a clip from its file and say what it is, without opening a window.
 //
 // The other half of authoring. A screenshot says a room looks plausible; this says the doorway is
@@ -9961,6 +10066,7 @@ int run_clip_tool(const Options& options) {
                     script.field.size(), script.field.parameter_count(),
                     script.field.accelerator_count(), script.field.accelerated_leaves());
         print_field_boxes(script.field, script.solid);
+        print_field_walk(script.field, script.solid, script.settings, 24);
         return 0;
     }
 

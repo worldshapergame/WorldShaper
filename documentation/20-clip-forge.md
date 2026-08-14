@@ -133,6 +133,15 @@ measured: a union is given a bounding hierarchy at **twelve** children, and swee
 slower because a traversal loses to the sorted linear scan the plain path already does, and the
 minimum sits at 16–64, worth 6–13%. `--accelerate-from N` is that threshold as a flag.
 
+**And what one evaluation walks, which is what the boxes are for** (D638). Over the facility an
+evaluation visits **131 nodes in open air, 165 near a face and 150 inside matter, of the 2,505 the
+shape can reach**, throwing away 102 children on a box as it goes — so the culling is close to done,
+and what is left is the cost of the nodes themselves. **Two thirds of them are structure rather than
+distance**: union 24% of all visits, difference 9%, translate 8%, mirror 7.5%, intersection 6%,
+against `box` at 21% and every other primitive under 4%. A clip is mostly the shape of its own
+expression, which is the strongest argument for evaluating it where thousands of points can be asked
+at once.
+
 The sampler is parallel across z slabs. The real answer for live re-voxelisation is the GPU:
 nodes are plain data of a fixed size with no pointers and evaluation is a switch with a shallow
 stack, which is a shape that transliterates to a compute shader without changing.

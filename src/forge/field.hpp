@@ -511,6 +511,36 @@ public:
     // How many nodes that root can reach, which is what one evaluation of it may walk.
     usize nodes_under(u32 root) const;
 
+    // --- what one evaluation actually walks ------------------------------------------------
+    //
+    // `nodes_under` is the ceiling and the boxes are supposed to be most of the way from it to
+    // the floor, and until now nothing could say where between the two an evaluation lands. That
+    // is the number the whole cost of a clip is made of: sampling the facility is 76% shape
+    // evaluation and one evaluation is 2.59 µs, which is either a thousand nodes at a sensible
+    // price each or a hundred at a ridiculous one, and those want opposite work.
+    //
+    // Counted per thread, and only while `census_eval` is in the stack — the sampler's own
+    // evaluations cost one predictable branch at the top of `eval` and nothing else.
+    // How many ops there are, which is what a per-op tally is sized by. `op_name`'s switch is
+    // what makes adding one after `Power` a compile error rather than a row silently dropped.
+    static constexpr usize kOpCount = static_cast<usize>(Op::Power) + 1;
+
+    struct Walk {
+        u64 evaluations = 0;   // top-level evaluations counted
+        u64 nodes = 0;         // node visits inside them, the number this exists for
+        u64 culled = 0;        // children a box test threw away without evaluating
+        // And WHICH nodes those visits were, because "a hundred and fifty nodes" is a number to
+        // act on only once it says whether they are three subtractions each or a noise octave.
+        u64 by_op[kOpCount]{};
+        f64 per_evaluation() const {
+            return (evaluations == 0) ? 0.0 : static_cast<f64>(nodes) /
+                                                  static_cast<f64>(evaluations);
+        }
+    };
+    f64 census_eval(u32 at, Vec3 p) const;
+    static Walk walk_census();
+    static void reset_walk_census();
+
 private:
     u32 push(const Node& n);
     u32 combine(Op op, const std::vector<u32>& parts, f64 blend);

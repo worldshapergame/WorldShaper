@@ -6752,3 +6752,98 @@ all, then demanded **to the bit** at thresholds of 4, 12 and 20.
 | D637 | **Twelve is too low: the measured minimum is 16–64, and 48 is the best of them** | measurement | −6% on one box and −13% on another, against a ±1.5% noise band established by two arms that built identical accelerators |
 | D637 | **A hierarchy over a small union loses to a sorted linear scan** | finding | At threshold 4 — 108 accelerators — it is nearly as slow as having none; the plain path already sorts by box distance and rejects on the running minimum |
 | D637 | **The default is NOT being changed on this evidence** | honesty | Measured on a four-core container at 2.6× the dev machine's cost per evaluation; the direction should hold, the crossover may not |
+
+## D638 — what one evaluation actually walks, and the 6% the instrument found on its first run
+
+**D636 closed the bounds question and left the real one open: `2.59 µs per shape eval` had no
+reading.** The shape can reach 2,505 nodes. If an evaluation walks a thousand of them the answer is
+better culling; if it walks a hundred, the answer is that each node is expensive and the only route
+left is R12. Nothing in the engine could say which, so `--clip-field` now ends with a census.
+
+`Field::census_eval` counts node visits per evaluation on the calling thread — a thread_local
+rather than an atomic, because `sample` runs one of these per z slab and an atomic would be
+measuring the counter. The sampler's own evaluations pay **one predictable branch** at the top of
+`eval`: the facility slice reads 6.68/6.78 µs with the branch in and 6.63/6.73 without, which is
+inside the ±1.5% band D637 established.
+
+24³ points over the facility's box, split three ways because a uniform grid is mostly open air and
+the sampler is not:
+
+| where the point is | points | mean nodes | of the 2,505 | median | p90 | p99 | worst | top 1% |
+|---|---|---|---|---|---|---|---|---|
+| open air | 10,562 | 131.4 | 5.2% | 108 | 220 | 438 | 2,500 | 9% of the walking |
+| near a face (±10 cm) | 880 | 164.6 | 6.6% | 160 | 266 | 355 | 743 | 3% |
+| inside matter | 2,382 | 150.2 | 6.0% | 81 | 240 | 1,133 | 3,770 | **19%** |
+
+**102 children a box throws away per evaluation.** So the cull is working: an evaluation walks
+5–7% of what it could reach, and there is no second D637 hiding in it. **The tail is real but
+small** — inside matter, 1% of the points account for 19% of that population's walking, which is
+about 3% of the whole.
+
+### And what those visits are made of, which is the row that pays
+
+1,890,005 visits over 13,824 evaluations:
+
+| op | visits | share |
+|---|---|---|
+| union | 452,377 | **23.9%** |
+| box | 403,009 | 21.3% |
+| difference | 173,707 | 9.2% |
+| translate | 149,812 | 7.9% |
+| mirror | 140,890 | 7.5% |
+| intersection | 119,499 | 6.3% |
+| rotate | 67,169 | 3.6% |
+| cylinder | 59,538 | 3.2% |
+| repeat | 49,044 | 2.6% |
+| scale | 39,012 | 2.1% |
+| displace, smoothstep, the rest | | 12.5% |
+
+**Roughly 63% of an evaluation is structure rather than distance** — combining and moving the point,
+not measuring anything. That is the number R12 should be sized from, because it is exactly what
+transliterates to a shader, and it is also what turned up the following.
+
+### The 6%: a box distance was computed to sort by and then computed again to cull by
+
+A union works out how far the point is from each child's box so it can evaluate the nearest first.
+It then threw that away and **recomputed the identical number** for every child it tested. The BVH
+did the same thing one level up: a child's box distance is computed by its parent to decide which
+to visit first, and recomputed when the entry is popped.
+
+The *test* cannot be hoisted — `d` improves between the push and the pop, and that is the whole
+point of visiting in order — but the *distance* is a function of the box and the point, and neither
+moves. It is now carried: `away[]` survives to the cull, and the BVH stack holds a distance beside
+each entry.
+
+| box of the facility | before | after | |
+|---|---|---|---|
+| `-4,0,-4,4,6,4` | 6.68, 6.78 | **6.31, 6.33** | **−6.1%** |
+| `5,0,-4,13,6,4` | 6.07, 6.12 | **5.62, 5.74** | **−6.9%** |
+
+Shape evaluation is 76% of sampling on the whole building, and sampling is 6.3 s of the load's
+floor.
+
+**The gate is the one this change has to pass, and it is not a voxel count.** `clips/sampler.clip`
+was measured with `--clip-slice` and `--clip-symmetry` against a **stashed control build**, and the
+two reports differ **on two lines, both of which are clocks** — volume, surface, centroid, every
+material share, the printed slice and the symmetry report are identical line for line. Voxels and
+field evaluations are unchanged on both facility boxes (398,920 / 3,460,784 and 2,675,197 /
+5,684,795).
+
+Two headless gates, because the indexing is the part that could have gone wrong quietly: *a union
+answers the same however its children were ordered* takes every answer before the boxes exist and
+demands it back **to the bit** afterwards, at four children (the sorted scan) and at twenty (the
+hierarchy), with the nearest child written last so a bug that ignores the sort still passes the easy
+cases. *The walk census counts node visits, and costs nothing when nobody is counting* pins the
+instrument, including that an uncounted evaluation records nothing.
+
+**One wrong expectation in writing that second test, kept because it is the cull's contract:** a
+point exactly equidistant from two children reads as *culled*, and that is right — a child that can
+only tie cannot be strictly nearer. The case that walks both is a point where two boxes **overlap**.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D638 | **An evaluation walks 5–7% of the nodes it could reach** | measurement | 131 in open air, 165 near a face, 150 inside, against 2,505 — the cull is working and there is no second D637 in it |
+| D638 | **63% of a walk is structure, not distance** | finding | union 24%, difference 9%, translate 8%, mirror 7.5%, intersection 6%; box is 21% and every other primitive is under 4% |
+| D638 | **A box distance computed to sort by was computed again to cull by** | bug | −6.1% and −6.9% on two boxes, bit-identical: the value is a function of the box and the point, and neither moves between the two uses |
+| D638 | **The census is off unless asked for and costs one branch** | instrument | thread_local, not atomic, because `sample` runs one per z slab; 6.68/6.78 with it against 6.63/6.73 without |
+| D638 | **A point equidistant from two children is culled, and that is correct** | trap | A child that can only tie cannot be strictly nearer; the case that walks both is overlapping boxes, not equal distances |

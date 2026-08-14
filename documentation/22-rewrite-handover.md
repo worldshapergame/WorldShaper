@@ -643,7 +643,8 @@ work, and these three are the only three places it lives.
 
 #### 0. Since the order was chosen: a bug is closed, a fourth place was found, and step 2 shrank
 
-**Step 2 is measured, both halves, and what is left of it is one number to change (D636, D637).**
+**Step 2 is measured, both halves, it turned up a 6% that was nobody's stage, and what is left of
+it is one number to change (D636, D637, D638).**
 Its first half — "bound the 923 nodes that have no box" — does not survive its own histogram: only
 177 of them are under the solid at all, and every one of those is either a deliberate refusal or a
 shape with no finite extent, so no bounds were written. Its second half, `kAccelerateFrom`, was
@@ -651,6 +652,17 @@ measured instead: **twelve is too low and the sweep's minimum is 16–64**, wort
 evaluation that is 76% of sampling. The default has NOT been moved, because the sweep was taken on a
 container rather than on the development machine; **repeating it there is five minutes and is the
 whole of what step 2 has left.** The section itself carries both tables.
+
+**And then the instrument that should have existed before any of it (D638).** `--clip-field` now
+counts what one evaluation actually WALKS: **131 nodes in open air, 165 near a face, 150 inside
+matter, against the 2,505 the shape can reach** — so the cull is doing its job at 5–7% and there is
+no second D637 hiding in it. What the walk is made of is the useful half: **63% of it is structure
+rather than distance** — union 24%, difference 9%, translate 8%, mirror 7.5%, intersection 6%, with
+`box` at 21% and every other primitive under 4%. **That is the table R12 should be sized from.** On
+its first run it also found a bug worth **−6% of shape evaluation, bit-identical**: a union computed
+each child's box distance to sort by and then computed the identical number again to cull by, and
+the BVH did the same one level up. Now carried rather than recomputed, gated against a stashed
+control build whose whole report differs on two lines, both clocks.
 
 
 **Closed (D625).** A cached load — the path every launch after the first takes — was running with
@@ -3547,8 +3559,9 @@ box` there and here, and `clips/sampler.clip` measures 1,430,104 voxels on both.
 .\tools\_flybench.ps1 -Rounds 3      # the MOVING case, which the grid cannot see (D410)
 .\tools\_flybench.ps1 -Chisel 8,16   # ...and the WORST case: moving while editing (D413)
 
-# The clip's field, its bounding boxes and which ops have none, WITHOUT sampling anything.
-# The parse decides all of it, so this is a second where the full measure is minutes (D636).
+# The clip's field, its bounding boxes and which ops have none, WITHOUT sampling anything —
+# and then what one evaluation walks, by op (D636, D638). The parse decides all of it, so this
+# is a second where the full measure is minutes.
 .\build\bin\WorldShaper.exe --clip-field --clip-file clips\facility.clip
 ```
 
