@@ -6470,3 +6470,45 @@ cache written by the first.
 | D633 | **A camera-dependent world is reproducible per camera** | finding | Two runs of one camera give the same hash to the digit; a second camera differs |
 | D633 | **`baseline.ps1`'s gate needed no change** | finding | It matches rows by view and never compares across cameras |
 | D633 | **`--settle` generalises, as §5 hoped** | finding | "Nothing left it can do from here" is a fixed point of the camera, and D627 made it one |
+
+## D634 — a partial world resumes from another camera, and accumulates across launches
+
+D632 asked for the one measurement R11d still owed: a launch from a second camera against a cache
+written by the first. D626 rebuilt the cache to carry the ladder's whole leaf set with the detail
+each reached, precisely so a partial world could be resumed from somewhere else. That was the
+argument; this is the measurement.
+
+`--no-coarse-paste`, facility, `--settle`, cache cleared first, three launches:
+
+| launch | camera | loaded from cache | ended with | wall |
+|---|---|---|---|---|
+| A | enclosed | — (cold) | 50 chunks, 19,751,324 voxels | 18.6 s |
+| B | close | **50 chunks, 19,751,324 in 52 ms** | 70 chunks, **23,137,962** | 20.3 s |
+| C | enclosed again | **70 chunks, 23,137,962 in 72 ms** | 70 chunks, 23,167,884 | **9.1 s** |
+
+**The world accumulates.** B keeps every voxel A paid for and adds its own; C keeps both. Returning
+to a camera already visited costs **9.1 s against 18.6**, and its sampling is **1,589 ms against
+7,585** — it re-samples almost nothing.
+
+That is the third of the user's three original asks working end to end: the world is what has been
+looked at, it grows as the player moves, it survives the session, and it converges across launches
+rather than being thrown away at the end of each.
+
+### What is still not validated, and it is the reason the flag has not been made the default
+
+- **R11h.** A chisel at a surface nobody has ever looked at closely. With the coarse build there was
+  always something to cut; without it there may be nothing there at all, and R11f makes carved matter
+  authoritative. §5 names this as one of the two sub-steps to be most careful with and it is
+  unmeasured.
+- **The default flip changes every baseline in the repository.** The shipped world becomes
+  camera-dependent — 19,751,324 voxels from the enclosed camera against 125,420,017 — and while D633
+  showed the gate copes, every recorded figure was taken against the other world.
+- **The loading bar does not go with this flag.** The up-front SAMPLE still runs, 2,760 ms of it, and
+  it must until the stipple verdict has another source (D629, D630). Not pasting it saves 959 ms and
+  removes the blocky first pass; it does not remove the wait.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D634 | **A partial world resumes from another camera** | finding | B loads A's 19,751,324 voxels in 52 ms and ends holding 23,137,962 |
+| D634 | **The world converges across launches** | finding | Returning to a visited camera is 9.1 s against 18.6, sampling 1,589 ms against 7,585 |
+| D634 | **The flag is still not the default** | honesty | R11h is unmeasured, every baseline was taken against the other world, and the wait stays |
