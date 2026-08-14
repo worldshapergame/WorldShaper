@@ -231,6 +231,15 @@ struct Options {
     // three levels up -- and indoors that stand-in is inside the same sixteen-metre box and has
     // been wiped by the same line. See kFaceEditSeed in shaders\node.glsl.
     u32 face_edit_seed = 8;
+    // How many rays of its own a face needs before the MARCHER hands it to the composite rather
+    // than the coarse face standing over it (R5b, D646). 1 is what ships: a face becomes
+    // answerable on its first ray. Above it the stand-in is shown meanwhile — a real measurement
+    // of the same place rather than a parent's average or full sun, both of which were measured
+    // and refused in D644 and D645.
+    u32 face_answerable = 1;
+    // How many sun rays a face casts on a visit while it holds fewer than kFaceEager samples
+    // (R5b, D646). 1 is what ships. The sky already bursts; the sun never has.
+    u32 sun_burst = 1;
     // How many rays of its own a face needs before the composite believes its shadow (R5b).
     //
     // 1 is what ships and is the control arm: a face's first ray decides its shadow outright, and
@@ -852,6 +861,10 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--face-edit-seed" && i + 1 < argc) {
             options.face_edit_seed = static_cast<u32>(std::atoll(argv[++i]));
+        } else if (arg == "--sun-burst") {
+            if (i + 1 < argc) options.sun_burst = static_cast<u32>(std::atoll(argv[++i]));
+        } else if (arg == "--face-answerable") {
+            if (i + 1 < argc) options.face_answerable = static_cast<u32>(std::atoll(argv[++i]));
         } else if (arg == "--shadow-settled") {
             if (i + 1 < argc) options.shadow_settled = static_cast<u32>(std::atoll(argv[++i]));
         } else if (arg == "--sun-seed") {
@@ -1140,6 +1153,10 @@ void print_help() {
         "                        R11a, and the number every later trade in R11 is against\n"
         "  --clip-field          the field's nodes and their bounding boxes, and which ops have\n"
         "                        none, without sampling anything. The parse alone decides it\n"
+        "  --sun-burst N         sun rays a young face casts on one visit (1). The sky already\n"
+        "                        bursts; the sun never has, so a new face takes N frames\n"
+        "  --face-answerable N   how many rays of its own a face needs before the marcher hands\n"
+        "                        it to the composite rather than the coarse face over it (1)\n"
         "  --shadow-settled N    how many rays of its own a face needs before its shadow is\n"
         "                        believed (1). Above 1 an unsettled face reads as fully lit\n"
         "  --sun-seed N          how many samples of its ancestor's shadow a newly claimed face\n"
@@ -5716,7 +5733,10 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     const FaceStoreStats set = face_store_.stats();
     const u32 quiet = set.secondary + set.stand_ins;
     const u32 live = std::max(set.faces > quiet ? set.faces - quiet : set.faces, 1u);
-    push.face_stride = std::max(1u, (live + kFacesPerFrame - 1) / kFacesPerFrame);
+    // The stride in the low 24 bits and R5b's first-visit sun burst in the top byte; see
+    // `sun_burst` in node.glsl for why they share a word.
+    push.face_stride = (std::max(1u, (live + kFacesPerFrame - 1) / kFacesPerFrame) & 0x00FFFFFFu) |
+                       ((options_.sun_burst & 0xFFu) << 24);
 
     // Where the card may claim faces of its own, and R3e is the whole of why it may.
     push.provisional_base = face_buffers_.provisional_base();
@@ -5737,7 +5757,8 @@ Application::NodePush Application::make_node_push(u32 face_count) const {
     push.prolong = options_.face_prolong ? 1u : 0u;
     push.report_crossings = options_.node_crossings ? 1u : 0u;
     push.light_read_period = options_.light_read_period;
-    push.edit_seed = (options_.face_edit_seed & 0xFFFFu) | ((options_.sun_seed & 0xFFFFu) << 16);
+    push.edit_seed = (options_.face_edit_seed & 0xFFFFu) | ((options_.sun_seed & 0xFFu) << 16) |
+                     ((options_.face_answerable & 0xFFu) << 24);
     push.lamp_edit_scope = options_.lamp_edit_scope ? 1u : 0u;
     push.face_read_period = options_.face_read_period;
     push.secondary_period = options_.secondary_period;

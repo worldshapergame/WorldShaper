@@ -115,7 +115,10 @@ layout(push_constant) uniform NodeConstants {
     vec4 sun;           // face shader: xyz towards the sun
     uint face_capacity; // buckets in the face table, a power of two
     uint face_probes;
-    uint face_stride;   // face shader: shade one face in this many each frame, round robin
+    // face shader: shade one face in this many each frame, round robin — in the LOW 24 bits,
+    // because a stride is a divisor of the live face count and has never been near a million.
+    // The top byte carries R5b's first-visit sun burst; see `sun_burst` below and D646.
+    uint face_stride;
     uint provisional_base;  // where the card's own faces start in the same array. 0 disables them
     uint face_first;    // face shader: the first slot this dispatch owns
     // The lamps. See "the emitter list" below for why a version and a reset flag are both here.
@@ -138,9 +141,11 @@ layout(push_constant) uniform NodeConstants {
     // guarantees and one more uint would cost sixteen for alignment rather than four.
     //   low  16: how many samples a face keeps when the world under it changed. 0 is the old
     //            wipe and is that change's control arm. See kFaceEditSeed.
-    //   high 16: how many samples of its ancestor's sun a newly claimed face starts with. 0 is
-    //            the old behaviour — a face's first ray decides its shadow outright — and is
-    //            R5b's control arm. See kSunSeedSamples.
+    //   bits 16-23: how many samples of its ancestor's sun a newly claimed face starts with. 0 is
+    //            what ships, by measurement — see kSunSeedSamples and D644.
+    //   bits 24-31: how many samples a face needs before the MARCHER will hand it to the
+    //            composite instead of the coarse face standing over it. 0 or 1 is what ships.
+    //            See `visibility_face_slot` and D646.
     uint edit_seed;
     // 1: an edit reopens a face's LAMP term only where it can stand between that face and a
     // fitting. 0 reopens the whole sixteen-metre box, which is the control arm and is what made a
@@ -961,6 +966,31 @@ uint face_lit_of(uint counters) { return (counters >> 16) & 0xFFFFu; }
 // speckle that is gone before it registers, and it is what R5's denoise exists to take. The face
 // keeps accumulating to kFaceWindow either way -- this gates only when the answer may be READ.
 const uint kFaceSettled = 1u;
+// ...and the live version of it, which only `visibility_face_slot` reads (R5b, D646).
+//
+// The marcher ALREADY hands the composite a coarse stand-in for a face that cannot answer, and
+// this is the number that decides "cannot answer". At 1 a face becomes answerable on its first
+// ray — and one ray is 0% or 100%, which is the grain. Above 1 the stand-in is shown instead: a
+// real measurement of the same place, three levels up, at the right brightness. That is neither of
+// the two things D644 and D645 measured and refused (a parent's average written INTO the face, and
+// full sun), and it costs no new binding, because the choosing happens here and not in the
+// composite.
+//
+// Every other reader of `kFaceSettled` keeps the constant: the fold, the neighbour tests and the
+// gathering ray all mean "has this face any answer at all", which is a different question.
+uint face_answerable() { return max(1u, (node_push.edit_seed >> 24) & 0xFFu); }
+
+// How many sun rays a face casts on a visit while it is still young (R5b, D646).
+//
+// The sun gets ONE ray a visit and the sky gets a burst (`kSkyBurst`), so a new face needs four
+// frames to hold four sun samples — and D644, D645 and D646's first three arms all tried to make
+// those four frames look better by showing something else meanwhile. All three were worse than the
+// coin toss they replaced. This is the other axis: stop waiting rather than dress the wait up.
+//
+// 1 is what ships. The burst applies only below `kFaceEager`, so it costs a handful of rays per
+// face ONCE, and nothing at all on a settled building.
+uint sun_burst() { return max(1u, (node_push.face_stride >> 24) & 0xFFu); }
+uint face_stride_of() { return max(1u, node_push.face_stride & 0x00FFFFFFu); }
 // And how long a face is exempt from the shading stride, which is a different question with a
 // different answer: a face that may be read at one sample is still converging at four, so it keeps
 // its ray every frame until it has enough of them to be worth refreshing rather than finishing.
@@ -1533,9 +1563,10 @@ FaceWork face_work_of(uint slot, Face face, bool provisional_face) {
     // the other, `(slot + frame)` is nought modulo both on almost no frame at all, and the off-screen
     // set would be visited and then given no sun ray -- lit by sky and lamps only, for ever, with
     // every audit line reading exactly as it does when the class is working. Trap 7 in the budget.
+    const uint stride = face_stride_of();
     w.sun_due = w.off_screen ||
-                !(node_push.face_stride > 1u && w.samples >= kFaceEager && !w.near_edit &&
-                  ((slot + node_push.frame) % node_push.face_stride) != 0u);
+                !(stride > 1u && w.samples >= kFaceEager && !w.near_edit &&
+                  ((slot + node_push.frame) % stride) != 0u);
     w.ambient_idle = (face.photons & kFaceAmbientIdle) != 0u && !w.edit_reset;
     w.lamp_idle = (face.photons & kFaceLampIdle) != 0u && !w.edit_reset &&
                   node_push.light_reset == 0u;

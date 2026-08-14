@@ -7320,3 +7320,76 @@ are one command each.
 | D645 | **The shipped choice beats both substitutes** | finding | 91.62 and 91.38 against 108.65 and 107.74, on a control that repeats to 0.3% |
 | D645 | **The grain is not premature belief; it is that there is nothing better to show** | direction | One substitute is wrong in a correlated way and the other in a bright way, which is what makes the stand-in the answer |
 | D645 | **The composite has no face lookup, and now has a reason to get one** | decision | A stand-in read needs a binding `resolve.comp` does not have; the two cheap arms are what justify paying for it |
+
+## D646 — four arms, four mechanisms, one number: the grain is disagreement BETWEEN faces, not noise within one
+
+**First, a correction to D645.** It said showing a face's coarse stand-in would need a new binding
+because `resolve.comp` has no face lookup. It does not: **the MARCHER already substitutes a stand-in**
+and hands the composite whichever slot it chose. `visibility_face_slot` in `visibility.comp` looks
+the fine face up, asks whether it has `kFaceSettled` samples, and falls back to the face three levels
+above it when it has not — claiming one on the spot if the store holds none. The knob was a constant
+in the marcher all along, not a missing feature in the composite.
+
+So the third arm is one flag, not a day: `--face-answerable N`.
+
+### The four arms, same camera, same setup, frame 40, overlay band excluded
+
+| arm | what it changes about a young face | speckle | fireflies |
+|---|---|---|---|
+| **what ships** | its own first ray decides it | **91.62** / **91.38** repeated | 1 / 2 |
+| `--sun-seed 3` (D644) | starts from its ancestor's ratio | 108.65 | 1 |
+| `--shadow-settled 4` (D645) | composite shows full sun meanwhile | 107.74 | **131** |
+| `--face-answerable 4` | marcher shows the coarse stand-in meanwhile | 107.61 | 4 |
+| `--sun-burst 4` | casts four sun rays a visit instead of one | 108.70 | 1 |
+
+**Every arm holds the same world**: 20,718 to 20,829 level-3 leaves across all six runs, 0.3% apart,
+so none of this is one arm having built more building than another.
+
+**Four unrelated mechanisms land within 1% of each other, and all of them are ~18% worse.** One
+seeds, one withholds, one substitutes, one *accelerates* — the burst makes a face settle FOUR TIMES
+FASTER and costs exactly as much as the three that slow it down. No account of the grain in terms of
+how quickly a face converges can explain that.
+
+### What does explain it
+
+**The shipped path treats every face identically at every age.** Faces claimed together hold the same
+sample count, take their rays on the same schedule, and show the same kind of answer — so neighbours
+agree closely and the median test finds little. Each arm introduces a **second population**: seeded
+against unseeded, believed against withheld, own-answer against stand-in, burst against not. The
+boundary between the two populations is what the metric sees, and it costs about the same however
+the two populations were made.
+
+Read that way the earlier numbers stop being three coincidences. **The grain is disagreement BETWEEN
+neighbouring faces, not noise within one face** — which is why a coin toss shared by everybody beats
+a better answer held by some.
+
+**And the pixels say the same thing.** The excess over shipped is diffuse, not seams at a few
+edges: 53% of pixels worse, 47% better, and the worst 1% carry only 9% of it. It is the whole
+picture differing slightly, which is what a second population sprinkled through the frame looks like.
+
+### The prediction this makes, which is the next arm
+
+If the fault is disagreement between neighbours, then **a change that treats every face alike should
+not cost the 18%**, and one that makes neighbours agree should win. R5a's filter is exactly that
+lever and it already ships: `--denoise-edge N` weighs a neighbour's answer against a face's own, and
+**0 is its control arm**. Sweeping it is one command and no code.
+
+That is the first thing to run, and it is a different question from any of the four above.
+
+### One measurement about measuring, which anything here has to be read against
+
+**Two runs of the SAME arm share only 10.1% of their pixels**, mean |Δluma| 7.08 — while their
+speckle figures are 91.62 and 91.38, a quarter of a percent apart. The aggregate metric is stable
+where the pixels are not, because the world is still being built at frame 40 and the ladder delivers
+on wall clock. So: **the speckle number travels in this environment and a pixel comparison does
+not**, and R5d's *"two identical frames are bit-identical"* gate cannot be taken here without
+`--settle`, which no run reaches. The arms above differ from shipped by mean |Δluma| 12.7 to 20.9 —
+two to three times the same-arm difference — which is why they are read as real.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D646 | **The marcher already substitutes a stand-in; D645 was wrong that this needs a binding** | correction | `visibility_face_slot` looks up the fine face, tests `kFaceSettled`, and falls back three levels — the knob was a constant, not a missing feature |
+| D646 | **Four mechanisms, one number: 107.6 to 108.7 against a shipped 91.5** | measurement | Seeding, withholding, substituting and accelerating all cost the same ~18%, on worlds identical to 0.3% |
+| D646 | **The grain is disagreement between neighbouring faces, not noise within one** | finding | The only thing all four arms share is creating a second population of faces; a shared coin toss beats a better answer held by some |
+| D646 | **The next arm is R5a's agreement filter, which treats every face alike** | direction | `--denoise-edge N`, one command and no code, and 0 is already its control arm |
+| D646 | **The speckle number travels here; a pixel comparison does not** | method | Two runs of one arm share 10.1% of pixels while their speckle agrees to 0.3% |

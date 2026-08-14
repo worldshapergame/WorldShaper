@@ -78,7 +78,7 @@ uint visibility_face_slot(ivec3 face_node, uint face_level, uint face_dir) {
     // node_face_report_read.
     node_face_report_read(face_slot);
     bool answerable = face_slot != kNoFace &&
-                      face_samples_of(faces.items[face_slot].counters) >= kFaceSettled;
+                      face_samples_of(faces.items[face_slot].counters) >= face_answerable();
     if (answerable) return face_slot;
 
     const ivec3 coarse = ivec3(face_node.x >> kFaceAncestorStep, face_node.y >> kFaceAncestorStep,

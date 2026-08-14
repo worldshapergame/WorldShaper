@@ -565,7 +565,7 @@ void face_light_seed(uint slot, uint light_at, ivec3 node, uint level, uint dir)
     // this face covers a piece of what that one covers, and its shadow is very nearly the same
     // measurement. See kSunSeedSamples for why the count is three and not eight, and note the
     // counters live in `faces.items`, not in the light words the rest of this function writes.
-    const uint sun_seed = (node_push.edit_seed >> 16) & 0xFFFFu;
+    const uint sun_seed = (node_push.edit_seed >> 16) & 0xFFu;
     if (sun_seed != 0u && anc < faces.items.length() && slot < faces.items.length()) {
         const uint anc_counters = faces.items[anc].counters;
         if (face_samples_of(anc_counters) >= kSunSeedMin) {
@@ -1826,8 +1826,13 @@ void main() {
     // not carried, because it costs the smaller window a finer ray and buys nothing measurable. The
     // reasoning was sound and the answer was still no, which is D417's shape exactly.
     const float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
-    if (sun_possible && sun_due && may_cast) {
-        const uint cone_seed = node_hash_mix(seed ^ 0x85EBCA6Bu);
+    // A burst while the face is young, one ray once it is not (R5b, D646). `counters` is carried
+    // through the loop because `face_accumulate` reads the count it is adding to, and reading the
+    // record back each time would have every ray of one burst accumulate onto the same count.
+    const uint sun_rays = (face_samples_of(counters) < kFaceEager) ? sun_burst() : 1u;
+    uint sun_counters = counters;
+    for (uint ray = 0u; ray < sun_rays && sun_possible && sun_due && may_cast; ++ray) {
+        const uint cone_seed = node_hash_mix((seed ^ 0x85EBCA6Bu) + ray * 0x9E3779B9u);
         const vec2 disc = vec2(float(cone_seed & 0xFFFFu), float((cone_seed >> 16) & 0xFFFFu)) /
                           65536.0;
         const float cos_theta = mix(node_push.sun.w, 1.0, disc.x);
@@ -1848,7 +1853,8 @@ void main() {
         // The penumbra resolves over samples on the FACE, which is what takes it off the pixel: a
         // soft edge costs the face a few frames instead of costing every pixel that looks at it a
         // ray of its own, every frame, for ever.
-        faces.items[slot].counters = face_accumulate(counters, !hit.hit);
+        sun_counters = face_accumulate(sun_counters, !hit.hit);
+        faces.items[slot].counters = sun_counters;
 
         // How far the ray got before it gave up, for the rays that reached nothing. `photons` is
         // GPU-owned and unwritten until the photon pass exists, so this borrows it rather than
