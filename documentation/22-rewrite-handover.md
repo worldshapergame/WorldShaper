@@ -906,6 +906,19 @@ away 93% of the field, at 175 nodes a visit of 2,505.
 figure to read on a real machine is `where shape ... us per shape eval` from `--clip-file`, and the
 load's own stage lines.
 
+**The two together, measured end to end in one alternating run** — what shipped when this session
+started against what ships now, `clips/facility.clip` at metre 8, arms alternated within minutes:
+
+| | wall | µs per shape eval |
+|---|---|---|
+| was (hierarchies on, every box measured twice) | 13.94 / 13.83 s | 3.955 / 3.902 |
+| **now** | **8.89 / 8.83 s** | **2.598 / 2.551** |
+
+**−36%, or 1.56× faster, at the same content hash `67ff8caeeb38a34f`.** Sampling is 2,754 ms of the
+up-front build and 6,322 ms of the ladder (D622, D623), so **if the ratio carries, that is about 3.3
+s off a 17.1 s cold load** — and *if the ratio carries* is doing real work in that sentence, because
+nothing here can run a load. It is the first figure to check on a machine with a card.
+
 **And the map of where an evaluation goes, which is the thing to have before R12 (D639).** Per shape
 evaluation, of 176 node visits: **union 61.5**, box 34.2, difference 15.8, translate 14.6, mirror
 11.9, intersection 7.9, rotate 5.6, repeat 5.5. **A third of it is union nodes** — `combine` folds

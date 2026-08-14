@@ -2765,3 +2765,10 @@ fourth arrangement, and I would want a clip of separate buildings before anybody
 **None of that is in the game.** Only the change from the previous entry is; this one was built,
 measured and taken back out. It is in the record because the next person to have the same good idea
 should be able to find out in a minute that it was already tried.
+
+**What the two changes come to together.** I ran what the game did at the start of this session
+against what it does now, alternating between them so the machine could not favour one: **13.9
+seconds down to 8.9** to build the facility, which is **1.56× faster**, and the identical building
+out of both. Making the building is about 9 seconds of your 17-second load, so **if that ratio holds
+it is around 3 seconds off** — but I want to be careful with that number, because I could not run
+the loading screen here to check it. It is the first thing worth looking at when you next build.
