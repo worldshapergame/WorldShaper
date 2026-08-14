@@ -494,6 +494,33 @@ public:
     // list of things worth bounding. Ops that bound everywhere they appear are left out.
     std::vector<UnboundedCause> unbounded_by_op() const;
 
+    // How wide a union has to be before a hierarchy is built over its children's boxes — and it
+    // is OFF by default, because measured on the facility it costs a fifth of the sample and
+    // returns nothing (D637).
+    //
+    // The reason is written a few lines below this class's own accelerator field, and it was
+    // written before the accelerator was built: "the parts of a building are LAYERS and not
+    // regions. Walls, windows, entablature, roof — every one of their bounding boxes spans the
+    // whole block, so a point in a wall is inside a dozen of them and a dozen subtrees really are
+    // candidates. No ordering and no rejection changes that." A hierarchy that cannot reject is a
+    // traversal paid on top of the linear scan it was meant to replace.
+    //
+    // Measured, interleaved, one build, two rounds, `clips/facility.clip` at metre 16:
+    // **67.2 / 65.0 s with hierarchies against 53.6 / 53.9 s without**, and the same content hash
+    // `6d3f383476ba93ac` either way. At metre 8 it is 11.3 / 11.3 against 8.6 / 8.8, and lowering
+    // the threshold to 4 — the "more hierarchies must be better" arm — is worse again at 12.2 /
+    // 12.9. On clips where no union is wide enough to engage it, the two arms measure the same,
+    // which is what says the gap is real and not the harness.
+    //
+    // Kept rather than deleted, and settable rather than constant, for two reasons: a clip of
+    // separated buildings is the case it was written for and nobody has authored one yet, and
+    // both arms of the A/B have to be ONE build — D407's rule, which the renderer has followed
+    // since, applied to the CPU side. Set it before `build_bounds()`; that is all that reads it.
+    static constexpr usize kAccelerateNever = static_cast<usize>(-1);
+    static constexpr usize kAccelerateFromDefault = kAccelerateNever;
+    void accelerate_from(usize leaves) { accelerate_from_ = leaves; }
+    usize accelerate_from() const { return accelerate_from_; }
+
 private:
     u32 push(const Node& n);
     u32 combine(Op op, const std::vector<u32>& parts, f64 blend);
@@ -547,9 +574,7 @@ private:
     std::vector<Accelerator> accelerators_;
     static constexpr u32 kNoAccelerator = 0xFFFFFFFFu;
 
-    // Below this a linear scan is cheaper than a traversal, and the boxes of a handful of parts
-    // rarely overlap enough to matter.
-    static constexpr usize kAccelerateFrom = 12;
+    usize accelerate_from_ = kAccelerateFromDefault;
 };
 
 }  // namespace forge

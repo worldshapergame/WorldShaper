@@ -1019,3 +1019,38 @@ TEST_CASE("every op says what it is called") {
         CHECK(std::string(name) != "?");
     }
 }
+
+TEST_CASE("a hierarchy over a wide union changes no answer, and is off unless asked for") {
+    // D637: the accelerator is off by default because it costs a fifth of the facility's sample
+    // and rejects nothing. What must stay true is that turning it back on is free of consequence
+    // to the ANSWERS — a hierarchy that changed one would be geometry quietly missing, which is
+    // D613's class and the reason boxes are checked this way rather than by inspection.
+    const auto colonnade = [](Field& f) {
+        std::vector<u32> parts;
+        for (int i = 0; i < 24; ++i) {
+            const f64 x = static_cast<f64>(i) * 1.5;
+            parts.push_back(f.cylinder({x, 0, 0}, 0.4, 2.0, 1));
+        }
+        return f.unite(parts);
+    };
+
+    Field plain;
+    const u32 plain_root = colonnade(plain);
+    plain.build_bounds();
+    CHECK(plain.accelerator_count() == 0);   // the default builds none at all
+
+    Field fast;
+    const u32 fast_root = colonnade(fast);
+    fast.accelerate_from(12);
+    fast.build_bounds();
+    CHECK(fast.accelerate_from() == 12);
+    REQUIRE(fast.accelerator_count() == 1);
+
+    // Every answer, at points inside a column, in the gaps, and well outside the whole run.
+    for (int i = -4; i < 44; ++i) {
+        for (int j = -2; j < 3; ++j) {
+            const Vec3 p{static_cast<f64>(i) * 0.8, static_cast<f64>(j) * 1.1, 0.3};
+            CHECK(fast.eval(fast_root, p) == doctest::Approx(plain.eval(plain_root, p)));
+        }
+    }
+}

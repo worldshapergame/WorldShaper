@@ -2651,3 +2651,45 @@ It is not a bug. It is exactly what you asked for in the first place: *if you ca
 not exist*. A world that stopped early and a world that finished everything it could see produce
 **identical readings on every counter I had**. The only measurement that separates them is whether
 the number moves when you walk — and I had not taken it.
+
+## A whole stage cancelled, and a fifth of the building work found in the wrong place
+
+Two things happened here and neither of them is a feature. One is a stage of the plan I was about to
+start and did not, and one is a piece of the building work that was being spent on nothing.
+
+**The stage I did not build.** The list you ranked put "make the shape maths cheaper" second, and its
+whole case rested on one line the tools print: **a quarter of the building's shape description has no
+bounding box round it**. A box round a piece is how the maths skips it — no box, no skipping, and the
+reasoning was that a piece with no box also takes the box off everything containing it, so a quarter
+becomes most of it. The plan said, in as many words, *count them before writing any code*. So I
+counted them.
+
+**They are not in the shape at all.** Of the 923 boxless pieces, **746 are colours and patterns** —
+numbers, dials, grains, brick courses — that the shape maths never looks at. Of the 177 that are in
+the shape, **146 are two kinds that refuse a box deliberately**, for a reason already written down:
+giving them one would silently delete geometry. And the number that decides it: **none of the 923 is
+anywhere the box would have been read**. There was nothing to bound. The stage is closed with no code
+written, which is the outcome the "measure first" rule exists to produce — and it cost an afternoon
+instead of a fortnight.
+
+**The other half of that stage was real, and it was backwards.** The same tool reports that 19 of the
+building's wide assemblies have a *search tree* built over them to speed the maths up. Nobody had
+ever measured whether that tree helps. It does not. Building the whole facility with the trees takes
+**67 seconds**; with them switched off, **54**. That is a fifth of the shape work spent on a
+structure that never once let the maths skip anything — and the reason was written in the code before
+the tree was built: the parts of a building are *layers*, not *regions*. Every wall, window and roof
+box covers the whole site, so there is never anything to rule out. I checked the obvious counter-move
+too — more trees rather than fewer — and it is worse again.
+
+**It comes out the same building.** Every version produced an identical fingerprint, so this is the
+same world made faster, not a different world. The trees are switched off by default and the
+machinery is kept, in case somebody one day builds a street of separate houses, which is the case it
+was written for.
+
+**What you should expect to see, and what I cannot promise.** Loading should get shorter — my
+estimate is **about a second off the 17 you have now** — because the shape maths is the largest thing
+left in it. **I could not run the game to check.** This session ran on a machine with no graphics
+card in it at all: I could run the shape maths, the tests and the tools, and not the game. So the
+second is an estimate from the part I *could* measure, and the first thing to do on your machine is
+open the loading report and see whether it is there. If it is not, say so and I will find out where
+it went.

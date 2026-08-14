@@ -640,10 +640,11 @@ produced them; **start here and read the numbered step you are on.**
 
 **Where the three stand, 2026-08-14.** Step 1 is **built and opt-in** behind `--no-coarse-paste`,
 blocked from becoming the default by a decision the user has to make about the stipple verdict
-(D629's three options, in step 1 below). Step 2 is **closed with nothing built** — the histogram it
-asked for first says there is nothing to bound (D636), and the one live question left in it is
-`kAccelerateFrom`, which boxes do not touch. **Step 3, R12, is therefore the next of the three that
-has work in it** — and it is stage-sized, so it is not a thing to start next to R5b.
+(D629's three options, in step 1 below). Step 2 is **closed**: the histogram it asked for
+first says there is nothing to bound (D636), and its other half — `kAccelerateFrom` — turned out to
+be a fifth of the sample spent on a hierarchy that rejects nothing, now off by default (D637).
+**Step 3, R12, is therefore the next of the three that has work in it** — and it is stage-sized, so
+it is not a thing to start next to R5b.
 
 The 17.1 s these are against, measured (D622, D623), cold facility, enclosed camera, no cache:
 
@@ -829,11 +830,25 @@ gate applies: *if the figure does not move, say so and stop.* **Nothing was buil
 to be.** The instrument is kept, because the next clip somebody authors can reintroduce the problem
 and the line will now say so in one word.
 
-**What is still open out of this block, and it is a different question:** **190 wide unions with no
-hierarchy** against 19 that have one (`kAccelerateFrom = 12`). Boxes do not touch it. It wants a
-timed A/B of `kAccelerateFrom` against the same clip on the same machine, and §5 already warns not to
-guess at it — the plain union path sorts children by box distance and rejects on the running
-minimum, so a hierarchy over four children may buy nothing.
+**The other half of this block was a different question, and it is now answered: the hierarchy was
+costing a fifth of the sample and rejecting nothing (D637).** §5 warned not to guess at
+`kAccelerateFrom`, so it was measured — one build, three thresholds, interleaved rounds,
+`clips/facility.clip`:
+
+| metre | hierarchies | wall, two rounds |
+|---|---|---|
+| 16, `kAccelerateFrom = 12` (what shipped) | 19 over 479 leaves | 67.2 / 65.0 s |
+| 16, **off** | 0 | **53.6 / 53.9 s** |
+| 8, threshold 4 — "more must be better" | 108 over 996 | 12.2 / 12.9 s, against 11.3 / 11.3 at 12 |
+
+**Same content hash in every arm**, so it is cost and not answer, and on clips where no union is wide
+enough to engage it the two arms measure the same — which is what says the gap is real. The default
+is now off, the machinery is kept, and the threshold is settable so the A/B stays one build.
+
+**Worth roughly 1.2 s of the 17.1 s cold load, and that part is a PREDICTION.** It was measured on a
+four-core Linux container with no card in it, so the seconds are not comparable to anything else
+here and the load itself was never run. **Read the load's own lines on a real machine before quoting
+a figure.**
 
 ---
 

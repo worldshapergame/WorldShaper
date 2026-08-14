@@ -6639,3 +6639,68 @@ neither. The `kAccelerateFrom` arm is still open and still wants a timed A/B.
 | D636 | **The 177 in the shape are 87 scales and 59 planes, both boxless deliberately** | finding | Scale refuses for soundness (D613's class); a plane really is infinite |
 | D636 | **No boxless node is a child of a union, so no cull loses anything** | finding | An intersection takes the overlap, which is where the cascade stops |
 | D636 | **Step 2 is closed with nothing built** | decision | §5's own gate: if the figure cannot move, say so and stop |
+
+## D637 — the union hierarchy costs a fifth of the sample and rejects nothing, so it is off
+
+The one live question D636 left in §5's step 2: **190 wide unions with no hierarchy against 19 that
+have one**, `kAccelerateFrom = 12`, and §5's warning not to guess at it. Measured instead.
+
+**The arms are one build.** `kAccelerateFrom` became `Field::accelerate_from()`, set before
+`build_bounds()`, so three thresholds are three calls in one process rather than three compilers —
+D407's rule applied to the CPU side. Rounds are interleaved and the whole thing is one parse, so the
+clip, the machine and the thermal state are shared by every arm.
+
+**`clips/facility.clip`, two rounds, wall clock and shape core-ms:**
+
+| metre | accelerate_from | hierarchies | wall (r0 / r1) | µs per shape eval |
+|---|---|---|---|---|
+| 8 | **12 — what ships** | 19 over 479 | 11.30 / 11.32 s | 3.131 / 3.209 |
+| 8 | **off** | 0 | **8.64 / 8.83 s** | **2.564 / 2.602** |
+| 8 | 4 | 108 over 996 | 12.21 / 12.90 s | 3.402 / 3.589 |
+| 8 | 24 | 4 over 253 | 10.73 / 10.51 s | 3.040 / 3.011 |
+| 16 | **12 — what ships** | 19 over 479 | 67.17 / 65.00 s | 3.259 / 3.213 |
+| 16 | **off** | 0 | **53.55 / 53.93 s** | **2.539 / 2.629** |
+
+**Every arm produced the same clip.** Content hash `67ff8caeeb38a34f` at metre 8 and
+`6d3f383476ba93ac` at metre 16, identical across all thresholds — so this is a cost difference and
+not a difference of answer. (`voxels_asked` moves by 16 in 2.7 M and `shape_evaluations` by 2:
+different routes to the same place, which is what a sort order does.)
+
+**And the null control is what makes the gap believable.** On `weather_demo.clip` and
+`glass_test.clip` no union is wide enough for a hierarchy at either threshold, and there the two
+arms sit inside each other's spread (8.04 / 8.15 against 8.14 / 7.94, and 0.31 / 0.30 against
+0.31 / 0.30). The harness measures nothing when there is nothing to measure. `sampler.clip` has one
+hierarchy over 17 leaves and shows the same sign, small: 436 / 445 core-ms of shape against 367 /
+367.
+
+**The reason was written down before the accelerator was built.** `field.hpp`, above the BVH's own
+field: *"the parts of a building are LAYERS and not regions. Walls, windows, entablature, roof —
+every one of their bounding boxes spans the whole block, so a point in a wall is inside a dozen of
+them and a dozen subtrees really are candidates. No ordering and no rejection changes that."* A
+hierarchy that cannot reject is a traversal paid **on top of** the linear scan it replaces, and the
+`accelerate_from 4` arm is that stated as an experiment: nine times the hierarchies, worse again.
+
+**So the default is off** (`kAccelerateFromDefault = kAccelerateNever`), the machinery is kept and
+the threshold is settable, because a clip of separated buildings is the case it was written for and
+nobody has authored one yet. `a hierarchy over a wide union changes no answer, and is off unless
+asked for` in `tests/test_field.cpp` holds the equivalence.
+
+**What this is worth, and it is a prediction rather than a measurement.** Sampling is 76% shape
+evaluation, and the load spends 2,754 ms in the up-front sample and 6,322 ms in the ladder's (D622,
+D623). A fifth off the shape half is order 1.2 s of the shipped 17.1 s cold load. **Nobody has run
+that**, because this was measured where the game cannot run — read the load's own lines on a machine
+with a card in it before quoting a figure.
+
+**Two honesty notes.** The seconds above are from a four-core Linux container and are not comparable
+to any other number in this repository; what transfers is the ratio between arms, which is why the
+arms are interleaved and share a process. And the accelerator was never wrong — it was built, it
+worked, it was never measured against not having it.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D637 | **The union BVH is off by default** | decision | It costs 19–24% of the facility's sample and rejects nothing |
+| D637 | **`kAccelerateFrom` became a settable member** | method | Both arms of an A/B must be one build (D407), on the CPU side too |
+| D637 | **Lowering the threshold to 4 is worse, not better** | finding | Nine times the hierarchies, 12.2 / 12.9 s against 11.3 / 11.3 |
+| D637 | **The clip is byte-identical in every arm** | gate | Same content hash at both resolutions, so this is cost and not answer |
+| D637 | **Clips where no hierarchy engages measure the same** | method | The null control is what says the facility's gap is not the harness |
+| D637 | **The load figure is predicted, not measured** | honesty | Measured where the game cannot run; read the load lines on a real machine |
