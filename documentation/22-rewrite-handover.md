@@ -122,8 +122,41 @@ what they can tell you is what it looks like. All three exist to keep that loop 
    a measurement — say that plainly instead of inventing a symptom for it; "you will see nothing,
    and here is what it buys the step after" is an answer they can act on.
 
-**All four are one rule wearing four hats:** the person this is for can only judge the build, so
-every exchange has to be anchored to what the build will do — before, during, after, and next.
+5. **After every change: build, test, COMMIT, and merge it to `main` on GitHub.** Not at the end of a
+   session and not when a stage finishes — with the change. Rule 2 says a report describes a build
+   nobody can go back to unless it is in the history; this is the other half of that sentence, and
+   the half that was being skipped. A commit sitting on a local branch is not in the history the
+   person this is for can reach, and `main` was **58 commits behind `origin/main`** when somebody
+   finally looked.
+
+   The whole loop, and none of it is optional:
+
+   ```bash
+   build.bat  then  build\bin\ws_tests.exe
+   git commit -a
+   git checkout main && git merge --ff-only <branch> && git push origin main
+   ```
+
+   Three things that make this a rule rather than a habit. **Build before you commit** — a working
+   tree that has not been compiled since the last edit is not a change, it is a draft, and one was
+   nearly merged that way. **Kill any stale `WorldShaper.exe` first**: the linker fails with
+   `LNK1168: cannot open bin\WorldShaper.exe for writing` and it reads like a code fault. And
+   **`--ff-only`**, because a rewrite branch that has diverged from `main` is something to find out
+   about deliberately rather than by watching git invent a merge commit.
+
+   **A release is the same loop with a tag on the end, and it is hand-built.** `.github/workflows/
+   release.yml` has never once succeeded on this repository — the runner crashes its own compiler
+   with an access violation, at v0.6.0, v0.6.1 and v0.7.0 alike. So `tools/package.ps1` is the path,
+   its own header says so, and the release notes have to say the download carries **no provenance
+   attestation**. `package.ps1` cannot currently invoke `build.bat` either (`vswhere` does not
+   resolve through it), so its steps are run against an already-gated build: stage, zip, **unpack to
+   a clean directory and run it there**, hash. That last one is not a formality — it is the gate that
+   caught v0.6.0 shipping with a shader path hard-coded to the build machine, which passed every
+   other check and then opened a black window on every computer but one.
+
+**All five are one rule wearing five hats:** the person this is for can only judge the build, so
+every exchange has to be anchored to what the build will do — before, during, after, next, and in a
+place they can actually get at it.
 
 ---
 
