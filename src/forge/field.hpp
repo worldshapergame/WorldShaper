@@ -557,6 +557,17 @@ public:
                                                   static_cast<f64>(evaluations);
         }
     };
+    // Evaluate as a card would: every node's point and every node's answer rounded to f32.
+    //
+    // A LOWER BOUND on what an f32 transliteration changes, and it has to be read as one. Real
+    // f32 also rounds inside each node — every term of `sd_prism`'s trigonometry, every square
+    // root — where this rounds only at the boundaries between them. So a difference this finds is
+    // one an f32 card build would also have; an absence of difference is weaker evidence than it
+    // looks. It exists because "about five voxels per million, extrapolated from a band count" is
+    // an estimate, and the question R12 has to answer is whether the building comes out the same.
+    void set_narrow_to_f32(bool narrow) { narrow_ = narrow; }
+    bool narrow_to_f32() const { return narrow_; }
+
     f64 census_eval(u32 at, Vec3 p) const;
     static Walk walk_census();
     static void reset_walk_census();
@@ -600,6 +611,19 @@ private:
 
     void flatten_union(u32 at, std::vector<u32>& leaves) const;
     u32 build_bvh(Accelerator& bvh, std::vector<u32>& work, usize begin, usize end) const;
+    // Templated on the precision arm rather than branching on it.
+    //
+    // The narrowing has to happen at every node or it models nothing, and a runtime flag read
+    // per node cost a MEASURED 3.3% — 6.48 µs against 6.28 on the control build, which is well
+    // outside the noise band and not a tax an instrument gets to levy on every load. As a
+    // template parameter the shipped path has no branch in it at all and the arm is a second,
+    // cold instantiation nothing but the measurement ever calls. Defined in field.cpp, where
+    // both instantiations are used.
+    template <bool Narrow>
+    f64 eval_impl(u32 at, Vec3 p) const;
+    template <bool Narrow>
+    f64 eval_body(u32 at, Vec3 p) const;
+    template <bool Narrow>
     f64 eval_accelerated(const Accelerator& bvh, Vec3 p) const;
 
     std::vector<Node> nodes_;
@@ -618,6 +642,7 @@ private:
     // rarely overlap enough to matter. **Twelve is a guess and has never been measured** — see
     // `set_accelerate_from`, which is how it is measured without rebuilding.
     usize accelerate_from_ = kAccelerateFromDefault;
+    bool narrow_ = false;   // see set_narrow_to_f32; off everywhere but the measurement
 };
 
 }  // namespace forge

@@ -142,9 +142,14 @@ against `box` at 21% and every other primitive under 4%. A clip is mostly the sh
 expression, which is the strongest argument for evaluating it where thousands of points can be asked
 at once.
 
-The sampler is parallel across z slabs. The real answer for live re-voxelisation is the GPU:
-nodes are plain data of a fixed size with no pointers and evaluation is a switch with a shallow
-stack, which is a shape that transliterates to a compute shader without changing.
+The sampler is parallel across z slabs. The real answer for live re-voxelisation is still the GPU —
+nodes are plain data of a fixed size with no pointers, and the facility's whole field is **351 KB**,
+so the array itself uploads and costs nothing. **But "a switch with a shallow stack that
+transliterates without changing" was wrong and D639 corrects it**: evaluation is recursive and the
+facility's solid is **41 deep**, a card cannot recurse, and each entry of the stack it has to carry
+needs a *point* as well as a node — `revolve`, `twist`, `bend` and `displace` all ask their child
+somewhere else. About 656 bytes an invocation, which is an occupancy question and not a detail. It
+transliterates; it does not transliterate unchanged.
 
 ## 5. Instruments
 
@@ -167,6 +172,14 @@ WorldShaper.exe --clip-file clips/sampler.clip --clip-symmetry --clip-slice 2,-1
 | `span_along` / `gap_along` | doorway widths, wall thickness, head height |
 | `mirror_mismatch` | how many cells break a symmetry, not merely whether one is broken |
 | `slice_text` | a picture, when a number will not do and a screenshot is too much |
+
+**And the one line that lets two runs be compared rather than merely read** (D640). Every measure
+above can match while the voxels differ — a volume is a count, a centroid an average, a share a
+ratio — so the report now carries `content`, a hash of the voxels and the mask. `sampler.clip
+--no-despeckle` is **`da8d21629c21a25d` over 9,437,184 cells**. It is what makes a sampling change
+gateable in a second instead of in a whole game run, and `--eval-f32` uses it to answer what a
+graphics card's single precision would do to a clip: **no geometry at all changes, and fifteen cells
+of `sampler.clip`'s paint do.**
 
 The slice is worth more than it looks. It found the mask bug in §4 in one glance, and no
 measurement of the matter could have.

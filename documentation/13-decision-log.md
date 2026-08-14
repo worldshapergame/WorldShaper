@@ -6928,3 +6928,74 @@ and would have argued against f32 on the strength of a sampling artefact.
 | D639 | **The whole field is 351 KB** | measurement | The upload is nothing; the array really is plain data with no pointers |
 | D639 | **An f32 card build moves a few voxels per million and cannot be byte-identical** | finding | 469 points per million within 1 mm, scaling linearly, so ~4.7 per million within 10 µm — the equality gate has to become a tolerance one, and that is the user's call |
 | D639 | **A grid commensurate with the building measures the building's own planes** | trap | 44 points at 1e-15 were one column's arris, not a distribution; the census is offset off-grid now |
+
+## D640 — the clip tool could never say two builds were identical, and R12's precision question is now measured rather than estimated
+
+### The instrument that was missing, and it was one line
+
+Every summary `--clip-file` prints can match while the voxels differ: a volume is a count, a
+centroid is an average, a material share is a ratio. A change that moves a hundred voxels from one
+face to another shows up in **none** of them. **`Clip::content_hash` has existed since the clipboard
+was written and this tool never printed it** — which is why the byte-identical gate for a sampling
+change has always meant a full game run with `--refine-all`, on a machine with a GPU.
+
+It prints now. `clips/sampler.clip --no-despeckle` is **`da8d21629c21a25d` over 9,437,184 cells**,
+stable run to run, and it moves when the despeckler runs (`3ac749a6ed6bb467`) or the resolution
+changes. **A headless second-long gate where there was a whole-game run.**
+
+### And with it, the f32 question stops being an extrapolation
+
+D639 estimated "about 4.7 voxels per million" from a band count. `--eval-f32` measures it instead:
+every node's point and every node's answer rounded to f32, the clip built **twice in one run**, and
+compared cell by cell.
+
+| clip | cells | differ | gained matter | lost matter | changed material |
+|---|---|---|---|---|---|
+| `clips/sampler.clip` | 9,437,184 | **15** (1.59 per million) | 0 | 0 | **15** |
+| facility `-4,0,-4,4,6,4` | 12,582,912 | **0** | 0 | 0 | 0 |
+| facility `5,0,-4,13,6,4` | 12,582,912 | **0** | 0 | 0 | 0 |
+
+**The geometry survives single precision entirely.** Not one cell of three arms gained or lost
+matter. What moves is **paint**, on the one clip authored to be a knife edge — `sampler.clip` paints
+moss `where=grain above=0.55`, a pattern-keyed threshold, and fifteen cells sit close enough to
+0.55 that a float lands the other side.
+
+**Read as a lower bound**, and the flag's own comment says so: this rounds at the boundaries between
+nodes, where a real card also rounds inside them — every term of `sd_prism`'s trigonometry, every
+square root. A difference found here is one an f32 build would also have; an absence is weaker
+evidence than it looks.
+
+**What it means for step 3.** The decision D639 put to the user is much smaller than D639 thought:
+not "a few hundred voxels of the facility move" but **"the building is identical and fifteen cells of
+colour on the test clip are not"**. The equality gate would still fail, so the choice is still
+theirs — but it is now a choice between f64's rate and fifteen cells of paint on a clip built to
+provoke exactly this.
+
+### The comparison was wrong first, and the new instrument is what caught it
+
+The first version despeckled the f64 arm and not the f32 one, so it compared two variables. It did
+not look wrong — it reported 16 cells differing, a plausible number. **What gave it away was the
+hash**: the f32 arm came back carrying `f22a1d6b2a888a4f`, which is the `--no-despeckle` hash, and an
+f32 arm cannot be a no-despeckle arm. A count would have been believed. Both arms are despeckled
+now.
+
+### And a measurement about the measurement, which changed how it is built
+
+The arm was first a runtime flag read at every node — a wrapper around `eval`. Against a stashed
+control build that cost **6.48 µs against 6.28, +3.3%**, which is outside D637's noise band and not
+a tax an instrument gets to levy on every load for the sake of one measurement. It is a **template
+parameter** now: `eval_impl<Narrow>`, one branch per top-level evaluation and none inside the
+recursion, with the arm as a second cold instantiation.
+
+**Interleaved** against a control binary — alternating runs rather than two blocks, because this
+machine drifts — the templated version reads **6.345 against 6.375, +0.5%, inside the noise**. Note
+the method: the +3.3% was measured as sequential blocks, and the interleaving that settled the
+template was not applied to it. The conclusion holds either way, but the tight variance of the
+wrapper's arms (6.48, 6.48, 6.49) was the signal that it was real rather than drift.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D640 | **The clip tool prints a content hash** | instrument | Every summary it printed can match while the voxels differ; the byte-identical gate needed a whole game run and now needs a second |
+| D640 | **f32 changes no geometry at all, and fifteen cells of paint on the gate clip** | measurement | 0 of 12.5 M cells on two facility boxes; 15 of 9.4 M on `sampler.clip`, every one a material change and none a gain or loss of matter |
+| D640 | **A measurement arm read per node is not free; as a template parameter it is** | method | +3.3% for the runtime flag against a stashed control, +0.5% interleaved for the compile-time one |
+| D640 | **The despeckled/undespeckled mix was caught by the hash, not by the count** | trap | 16 cells differing was plausible; the f32 arm carrying the no-despeckle hash was impossible |

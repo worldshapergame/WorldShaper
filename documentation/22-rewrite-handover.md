@@ -925,12 +925,16 @@ thing between a ray and its geometry.
   `bend` and `displace` all ask a child somewhere else. **~656 bytes an invocation** before the
   hierarchy's own stack. The header is corrected.
 - **The whole field is 351 KB.** The upload is nothing.
-- **An f32 card build cannot be byte-identical.** Voxelising is a threshold test on the sign of `d`,
-  and **469 points per million sit within 1 mm of the surface**, scaling linearly with the band — so
-  about **4.7 per million within 10 µm**, which is the right order for f32 error over a 41-deep
-  expression. A few hundred voxels of the whole facility, each moving at most one voxel. **The
-  equality gate `a1f8bc6c656343b7` would fail on a correct build**, so somebody has to choose f64 on
-  the card or a tolerance gate for the GPU path — before the stage starts, not in its third week.
+- **An f32 card build cannot be byte-identical — and it is MEASURED now, not estimated (D640).**
+  `--eval-f32` builds the clip twice in one run, every node's point and answer rounded to f32, and
+  compares it cell by cell. **The geometry survives entirely**: across three arms not one cell
+  gained or lost matter. What moves is paint, and only on the clip authored to be a knife edge —
+  **15 of `sampler.clip`'s 9,437,184 cells, all material changes**, against **0 of 12,582,912 on
+  each of two facility boxes**. D639's estimate of "a few hundred voxels of the facility" was
+  pessimistic by the width of the building. Read it as a lower bound: this rounds between nodes
+  where a card also rounds inside them. **The equality gate would still fail**, so the choice is
+  still the user's — but it is a choice between f64's rate and fifteen cells of colour on a test
+  clip, not between that and a different building.
 
 **Why it is third and not first.** It is stage-sized (L), it is the highest-risk piece left, and
 steps 1 and 2 both change the number it would be measured against. It also unblocks R2b's unfinished
@@ -3593,6 +3597,12 @@ box` there and here, and `clips/sampler.clip` measures 1,430,104 voxels on both.
 .\tools\facecount.ps1                # distinct visible faces per view and resolution
 .\tools\_flybench.ps1 -Rounds 3      # the MOVING case, which the grid cannot see (D410)
 .\tools\_flybench.ps1 -Chisel 8,16   # ...and the WORST case: moving while editing (D413)
+
+# Is this build's clip the same clip as the last one's? A hash of the voxels, headless, in a
+# second, where this used to mean a whole game run with --refine-all (D640).
+.\build\bin\WorldShaper.exe --clip-file clips\sampler.clip --no-despeckle   # content da8d21629c21a25d
+# ...and what single precision would do to it, both arms built in the one run
+.\build\bin\WorldShaper.exe --clip-file clips\sampler.clip --eval-f32
 
 # The clip's field, its bounding boxes and which ops have none, WITHOUT sampling anything —
 # and then what one evaluation walks, by op (D636, D638). The parse decides all of it, so this

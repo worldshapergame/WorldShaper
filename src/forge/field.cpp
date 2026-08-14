@@ -904,7 +904,28 @@ f64 Field::census_eval(u32 at, Vec3 p) const {
     return d;
 }
 
+// One branch per top-level evaluation rather than one per node, and none at all in the arm that
+// ships: `narrow_` is read once here and the rest is chosen at compile time.
 f64 Field::eval(u32 at, Vec3 p) const {
+    return narrow_ ? eval_impl<true>(at, p) : eval_impl<false>(at, p);
+}
+
+template <bool Narrow>
+f64 Field::eval_impl(u32 at, Vec3 p) const {
+    if constexpr (Narrow) {
+        // Everything a card would hold in a float: the point going in and the answer coming out,
+        // at every node rather than only at the top, which is where the error accumulates.
+        const Vec3 q{static_cast<f64>(static_cast<f32>(p.x)),
+                     static_cast<f64>(static_cast<f32>(p.y)),
+                     static_cast<f64>(static_cast<f32>(p.z))};
+        return static_cast<f64>(static_cast<f32>(eval_body<true>(at, q)));
+    } else {
+        return eval_body<false>(at, p);
+    }
+}
+
+template <bool Narrow>
+f64 Field::eval_body(u32 at, Vec3 p) const {
     if (at >= nodes_.size()) return 1e30;
     const Node& n = nodes_[at];
     if (g_counting) {
@@ -966,7 +987,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
             Vec3 flat{0, 0, 0};
             flat = with_axis(flat, u, r);
             flat = with_axis(flat, axis, axis_of(q, axis));
-            return eval(n.child[0], flat);
+            return eval_impl<Narrow>(n.child[0], flat);
         }
         case Op::Spiral:
             return sd_spiral(p - Vec3{a[0], a[1], a[2]}, a[3], a[4], a[5], a[6],
@@ -977,7 +998,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
             // on Accelerator: what is being replaced is not the union's arithmetic but the
             // assumption that the way an author grouped a building is a useful way to search it.
             if (!accelerator_of_.empty() && accelerator_of_[at] != kNoAccelerator) {
-                return eval_accelerated(accelerators_[accelerator_of_[at]], p);
+                return eval_accelerated<Narrow>(accelerators_[accelerator_of_[at]], p);
             }
 
             // Nearest box first, and this is the difference between a cull that works and one
@@ -1022,7 +1043,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 }
             }
 
-            f64 d = eval(n.child[order[0]], p);
+            f64 d = eval_impl<Narrow>(n.child[order[0]], p);
             for (u32 k = 1; k < n.children; ++k) {
                 const u32 i = order[k];
                 // If the point is already nearer to something than it could possibly be to
@@ -1049,7 +1070,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
                         continue;
                     }
                 }
-                d = std::min(d, eval(n.child[i], p));
+                d = std::min(d, eval_impl<Narrow>(n.child[i], p));
             }
             return d;
         }
@@ -1057,12 +1078,12 @@ f64 Field::eval(u32 at, Vec3 p) const {
             // No cull here, and there cannot be one of this kind: an intersection takes the
             // largest answer, and a child the point is far outside is exactly the child most
             // likely to be it.
-            f64 d = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) d = std::max(d, eval(n.child[i], p));
+            f64 d = eval_impl<Narrow>(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) d = std::max(d, eval_impl<Narrow>(n.child[i], p));
             return d;
         }
         case Op::Difference: {
-            f64 d = eval(n.child[0], p);
+            f64 d = eval_impl<Narrow>(n.child[0], p);
             for (u32 i = 1; i < n.children; ++i) {
                 // Carving with something the point is nowhere near. Outside that child's box its
                 // distance is at least `away`, so the term it contributes is at most −away, and
@@ -1074,27 +1095,27 @@ f64 Field::eval(u32 at, Vec3 p) const {
                         continue;
                     }
                 }
-                d = std::max(d, -eval(n.child[i], p));
+                d = std::max(d, -eval_impl<Narrow>(n.child[i], p));
             }
             return d;
         }
         case Op::SmoothUnion: {
-            f64 d = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) d = smooth_min(d, eval(n.child[i], p), a[0]);
+            f64 d = eval_impl<Narrow>(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) d = smooth_min(d, eval_impl<Narrow>(n.child[i], p), a[0]);
             return d;
         }
         case Op::SmoothIntersection: {
-            f64 d = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) d = smooth_max(d, eval(n.child[i], p), a[0]);
+            f64 d = eval_impl<Narrow>(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) d = smooth_max(d, eval_impl<Narrow>(n.child[i], p), a[0]);
             return d;
         }
         case Op::SmoothDifference: {
-            f64 d = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) d = smooth_max(d, -eval(n.child[i], p), a[0]);
+            f64 d = eval_impl<Narrow>(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) d = smooth_max(d, -eval_impl<Narrow>(n.child[i], p), a[0]);
             return d;
         }
 
-        case Op::Translate: return eval(n.child[0], p - Vec3{a[0], a[1], a[2]});
+        case Op::Translate: return eval_impl<Narrow>(n.child[0], p - Vec3{a[0], a[1], a[2]});
         case Op::Rotate: {
             // Applied backwards, because moving the shape one way is asking about the point the
             // other. Euler xyz, in turns, because a quarter is a rounder thing to type than 90.
@@ -1105,7 +1126,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
             q = {q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx};
             q = {q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy};
             q = {q.x * cz - q.y * sz, q.x * sz + q.y * cz, q.z};
-            return eval(n.child[0], q);
+            return eval_impl<Narrow>(n.child[0], q);
         }
         case Op::Scale: {
             const Vec3 s{a[0] != 0.0 ? a[0] : 1.0, a[1] != 0.0 ? a[1] : 1.0,
@@ -1113,11 +1134,11 @@ f64 Field::eval(u32 at, Vec3 p) const {
             const f64 smallest = std::min(std::abs(s.x), std::min(std::abs(s.y), std::abs(s.z)));
             // Scaled back by the smallest factor so the result never over-states the distance,
             // which would let a march step through the surface. Under-stating is always safe.
-            return eval(n.child[0], {p.x / s.x, p.y / s.y, p.z / s.z}) * smallest;
+            return eval_impl<Narrow>(n.child[0], {p.x / s.x, p.y / s.y, p.z / s.z}) * smallest;
         }
         case Op::Mirror: {
             const u32 axis = static_cast<u32>(a[0]);
-            return eval(n.child[0], with_axis(p, axis, std::abs(axis_of(p, axis))));
+            return eval_impl<Narrow>(n.child[0], with_axis(p, axis, std::abs(axis_of(p, axis))));
         }
         case Op::Repeat: {
             // Folded into the nearest cell, and then checked against the neighbouring cell on the
@@ -1160,7 +1181,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 }
             }
 
-            f64 best = eval(n.child[0], q);
+            f64 best = eval_impl<Narrow>(n.child[0], q);
             // Every combination of leaning neighbours, because with two axes repeating it is the
             // diagonal copy that can be nearest.
             for (u32 mask = 1; mask < (1u << neighbours); ++mask) {
@@ -1168,7 +1189,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 for (u32 i = 0; i < neighbours; ++i) {
                     if ((mask >> i) & 1u) shifted = with_axis(shifted, axes[i], leaning[i]);
                 }
-                best = std::min(best, eval(n.child[0], shifted));
+                best = std::min(best, eval_impl<Narrow>(n.child[0], shifted));
             }
             return best;
         }
@@ -1185,13 +1206,13 @@ f64 Field::eval(u32 at, Vec3 p) const {
             Vec3 q = p;
             q = with_axis(q, u, std::cos(angle) * r);
             q = with_axis(q, v, std::sin(angle) * r);
-            return eval(n.child[0], q);
+            return eval_impl<Narrow>(n.child[0], q);
         }
 
-        case Op::Shell: return std::abs(eval(n.child[0], p)) - a[0];
-        case Op::Round: return eval(n.child[0], p) - a[0];
-        case Op::Offset: return eval(n.child[0], p) + a[0];
-        case Op::Displace: return eval(n.child[0], p) + a[0] * eval(n.child[1], p);
+        case Op::Shell: return std::abs(eval_impl<Narrow>(n.child[0], p)) - a[0];
+        case Op::Round: return eval_impl<Narrow>(n.child[0], p) - a[0];
+        case Op::Offset: return eval_impl<Narrow>(n.child[0], p) + a[0];
+        case Op::Displace: return eval_impl<Narrow>(n.child[0], p) + a[0] * eval_impl<Narrow>(n.child[1], p);
         case Op::Twist: {
             const u32 axis = static_cast<u32>(a[1]);
             u32 u = 0, v = 0;
@@ -1202,7 +1223,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
             Vec3 q = p;
             q = with_axis(q, u, x * c - y * s);
             q = with_axis(q, v, x * s + y * c);
-            return eval(n.child[0], q);
+            return eval_impl<Narrow>(n.child[0], q);
         }
         case Op::Bend: {
             const u32 axis = static_cast<u32>(a[1]);
@@ -1214,7 +1235,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
             Vec3 q = p;
             q = with_axis(q, u, x * c - y * s);
             q = with_axis(q, v, x * s + y * c);
-            return eval(n.child[0], q);
+            return eval_impl<Narrow>(n.child[0], q);
         }
 
         case Op::Sine: {
@@ -1262,14 +1283,14 @@ f64 Field::eval(u32 at, Vec3 p) const {
             // a concave one it is nearer. Six samples, on the axes, which is enough to tell an
             // arris from a hollow and cheap enough to ask per voxel.
             const f64 r = (a[0] > 0.0) ? a[0] : 0.05;
-            const f64 centre = eval(n.child[0], p);
+            const f64 centre = eval_impl<Narrow>(n.child[0], p);
             f64 sum = 0.0;
-            sum += eval(n.child[0], {p.x + r, p.y, p.z});
-            sum += eval(n.child[0], {p.x - r, p.y, p.z});
-            sum += eval(n.child[0], {p.x, p.y + r, p.z});
-            sum += eval(n.child[0], {p.x, p.y - r, p.z});
-            sum += eval(n.child[0], {p.x, p.y, p.z + r});
-            sum += eval(n.child[0], {p.x, p.y, p.z - r});
+            sum += eval_impl<Narrow>(n.child[0], {p.x + r, p.y, p.z});
+            sum += eval_impl<Narrow>(n.child[0], {p.x - r, p.y, p.z});
+            sum += eval_impl<Narrow>(n.child[0], {p.x, p.y + r, p.z});
+            sum += eval_impl<Narrow>(n.child[0], {p.x, p.y - r, p.z});
+            sum += eval_impl<Narrow>(n.child[0], {p.x, p.y, p.z + r});
+            sum += eval_impl<Narrow>(n.child[0], {p.x, p.y, p.z - r});
             return (sum / 6.0 - centre) / r;
         }
         case Op::Occlusion: {
@@ -1283,7 +1304,7 @@ f64 Field::eval(u32 at, Vec3 p) const {
                                    {-k, k, k}, {-k, k, -k}, {-k, -k, k}, {-k, -k, -k}};
             u32 inside = 0;
             for (u32 i = 0; i < 14; ++i) {
-                if (eval(n.child[0], p + dirs[i] * r) < 0.0) ++inside;
+                if (eval_impl<Narrow>(n.child[0], p + dirs[i] * r) < 0.0) ++inside;
             }
             return static_cast<f64>(inside) / 14.0;
         }
@@ -1331,8 +1352,8 @@ f64 Field::eval(u32 at, Vec3 p) const {
         }
 
         case Op::Add: {
-            f64 v = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) v += eval(n.child[i], p);
+            f64 v = eval_impl<Narrow>(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) v += eval_impl<Narrow>(n.child[i], p);
             return v;
         }
         case Op::Multiply: {
@@ -1353,42 +1374,42 @@ f64 Field::eval(u32 at, Vec3 p) const {
             // zero times anything finite is zero — and the one thing it changes is that a factor
             // after a zero is not evaluated, which nothing can observe because nothing in this
             // language has side effects.
-            f64 v = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children && v != 0.0; ++i) v *= eval(n.child[i], p);
+            f64 v = eval_impl<Narrow>(n.child[0], p);
+            for (u32 i = 1; i < n.children && v != 0.0; ++i) v *= eval_impl<Narrow>(n.child[i], p);
             return v;
         }
         case Op::Min: {
-            f64 v = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) v = std::min(v, eval(n.child[i], p));
+            f64 v = eval_impl<Narrow>(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) v = std::min(v, eval_impl<Narrow>(n.child[i], p));
             return v;
         }
         case Op::Max: {
-            f64 v = eval(n.child[0], p);
-            for (u32 i = 1; i < n.children; ++i) v = std::max(v, eval(n.child[i], p));
+            f64 v = eval_impl<Narrow>(n.child[0], p);
+            for (u32 i = 1; i < n.children; ++i) v = std::max(v, eval_impl<Narrow>(n.child[i], p));
             return v;
         }
         case Op::Blend: {
             const f64 t = clamp(a[0], 0.0, 1.0);
-            return eval(n.child[0], p) * (1.0 - t) + eval(n.child[1], p) * t;
+            return eval_impl<Narrow>(n.child[0], p) * (1.0 - t) + eval_impl<Narrow>(n.child[1], p) * t;
         }
         case Op::Remap: {
-            const f64 v = eval(n.child[0], p);
+            const f64 v = eval_impl<Narrow>(n.child[0], p);
             const f64 span = a[1] - a[0];
             const f64 t = (span != 0.0) ? clamp((v - a[0]) / span, 0.0, 1.0) : 0.0;
             return a[2] + (a[3] - a[2]) * t;
         }
-        case Op::Abs: return std::abs(eval(n.child[0], p));
-        case Op::Negate: return -eval(n.child[0], p);
-        case Op::Step: return (eval(n.child[0], p) > a[0]) ? 1.0 : 0.0;
+        case Op::Abs: return std::abs(eval_impl<Narrow>(n.child[0], p));
+        case Op::Negate: return -eval_impl<Narrow>(n.child[0], p);
+        case Op::Step: return (eval_impl<Narrow>(n.child[0], p) > a[0]) ? 1.0 : 0.0;
         case Op::Smoothstep: {
             const f64 span = a[1] - a[0];
-            if (span == 0.0) return (eval(n.child[0], p) > a[0]) ? 1.0 : 0.0;
-            const f64 t = clamp((eval(n.child[0], p) - a[0]) / span, 0.0, 1.0);
+            if (span == 0.0) return (eval_impl<Narrow>(n.child[0], p) > a[0]) ? 1.0 : 0.0;
+            const f64 t = clamp((eval_impl<Narrow>(n.child[0], p) - a[0]) / span, 0.0, 1.0);
             return t * t * (3.0 - 2.0 * t);
         }
-        case Op::Clamp: return clamp(eval(n.child[0], p), a[0], a[1]);
+        case Op::Clamp: return clamp(eval_impl<Narrow>(n.child[0], p), a[0], a[1]);
         case Op::Power: {
-            const f64 v = eval(n.child[0], p);
+            const f64 v = eval_impl<Narrow>(n.child[0], p);
             const f64 m = std::pow(std::abs(v), a[0]);
             return (v < 0.0) ? -m : m;
         }
@@ -1654,6 +1675,7 @@ u32 Field::build_bvh(Accelerator& bvh, std::vector<u32>& work, usize begin, usiz
 // The rejection test is the one the union already used, and it has to be exactly as careful: a
 // point INSIDE a box has a box distance of zero, and zero is not a lower bound on what that
 // subtree will say, because a shape you are inside reports a negative distance.
+template <bool Narrow>
 f64 Field::eval_accelerated(const Accelerator& bvh, Vec3 p) const {
     f64 d = 1e30;
     // The distance travels WITH the entry rather than being worked out again when it is popped.
@@ -1684,7 +1706,7 @@ f64 Field::eval_accelerated(const Accelerator& bvh, Vec3 p) const {
                     if (g_counting) ++g_walk.culled;
                     continue;
                 }
-                d = std::min(d, eval(leaf, p));
+                d = std::min(d, eval_impl<Narrow>(leaf, p));
             }
             continue;
         }

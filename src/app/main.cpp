@@ -293,6 +293,10 @@ struct Options {
     // was parsed. Nothing about a bounding box depends on a voxel, so this stops after the parse.
     // It is not a cheaper measure: no evaluation happens, so no `us per shape eval` comes with it.
     bool clip_field = false;
+    // Sample as a card would: every node's point and every node's answer rounded to f32. R12's
+    // precision question, measured rather than extrapolated. See Field::set_narrow_to_f32 for why
+    // this is a lower bound on what a real f32 build would do.
+    bool eval_f32 = false;
     std::string sample_cost_levels;   // "first,last"; the whole sampleable range by default
     u32 sample_cost_nodes = 24;       // nodes with matter timed per reference box
     u32 sample_cost_boxes = 3;        // reference boxes, when the whole clip will not fit at once
@@ -766,6 +770,8 @@ Options parse_options(int argc, char** argv) {
             options.sample_cost = true;
         } else if (arg == "--clip-field") {
             options.clip_field = true;
+        } else if (arg == "--eval-f32") {
+            options.eval_f32 = true;
         } else if (arg == "--accelerate-from") {
             options.accelerate_from = static_cast<usize>(next_number(0));
         } else if (arg == "--sample-cost-levels") {
@@ -1115,6 +1121,8 @@ void print_help() {
         "                        R11a, and the number every later trade in R11 is against\n"
         "  --clip-field          the field's nodes and their bounding boxes, and which ops have\n"
         "                        none, without sampling anything. The parse alone decides it\n"
+        "  --eval-f32            evaluate the field at single precision, as a graphics card\n"
+        "                        would. R12's precision question: compare the content line\n"
         "  --accelerate-from N   how many parts a union needs before it is given a bounding\n"
         "                        hierarchy instead of a linear scan (12). A large number is the\n"
         "                        control arm: no hierarchy anywhere\n"
@@ -10050,6 +10058,7 @@ int run_clip_tool(const Options& options) {
 
     if (options.clip_metre > 0) script.settings.voxels_per_metre = options.clip_metre;
 
+
     // The accelerator threshold is applied by rebuilding the boxes, which is cheap and is the
     // whole point: one build, two arms.
     if (options.accelerate_from > 0) {
@@ -10121,6 +10130,44 @@ int run_clip_tool(const Options& options) {
     const forge::VariationReport variety = forge::apply_variation(
         varied.clip, types, script.field, script.variation, script.settings, built, &jobs);
 
+    // R12's precision question, answered by building the clip twice in one run.
+    //
+    // The arms have to be a flag rather than two builds (D407), and the comparison has to be per
+    // CELL: the f32 arm of `sampler.clip` has the same voxel count and the same face count as the
+    // f64 one and is a different building, which is exactly what a summary cannot say and what
+    // the content line was added for (D640).
+    if (options.eval_f32) {
+        script.field.set_narrow_to_f32(true);
+        forge::SampleResult narrow =
+            forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+        script.field.set_narrow_to_f32(false);
+        // The same despeckling as the arm it is compared against, or the comparison holds two
+        // variables. It was written the other way first and the content line caught it: the f32
+        // arm came back carrying the `--no-despeckle` hash, which is not a thing an f32 arm can be.
+        if (options.despeckle) forge::despeckle(narrow.clip);
+        u64 differ = 0, gained = 0, lost = 0, repainted = 0;
+        const usize cells = std::min(built.clip.voxels.size(), narrow.clip.voxels.size());
+        for (usize i = 0; i < cells; ++i) {
+            const bool was = built.clip.inside[i] != 0 && built.clip.voxels[i] != kAir;
+            const bool now = narrow.clip.inside[i] != 0 && narrow.clip.voxels[i] != kAir;
+            if (was == now && built.clip.voxels[i] == narrow.clip.voxels[i]) continue;
+            ++differ;
+            if (!was && now) ++gained;
+            else if (was && !now) ++lost;
+            else ++repainted;
+        }
+        std::printf("f32 arm       %016llx against %016llx, %llu of %zu cells differ "
+                    "(%.2f per million)\n",
+                    static_cast<unsigned long long>(narrow.clip.content_hash()),
+                    static_cast<unsigned long long>(built.clip.content_hash()),
+                    static_cast<unsigned long long>(differ), cells,
+                    1e6 * static_cast<f64>(differ) / static_cast<f64>(std::max<usize>(1, cells)));
+        std::printf("              %llu gained matter, %llu lost it, %llu changed material\n",
+                    static_cast<unsigned long long>(gained),
+                    static_cast<unsigned long long>(lost),
+                    static_cast<unsigned long long>(repainted));
+    }
+
     const forge::Measurement m =
         forge::measure(varied.clip, script.settings.voxels_per_metre);
 
@@ -10133,6 +10180,16 @@ int run_clip_tool(const Options& options) {
                     variety.uniqueness() * 100.0,
                     static_cast<unsigned long long>(variety.largest_group));
     }
+    // The one line that lets two runs of this tool be compared rather than merely read.
+    //
+    // Every summary above can match while the voxels differ — a volume is a count, a centroid is
+    // an average, and a material share is a ratio, so a change that moves a hundred voxels from
+    // one face to another shows up in none of them. `Clip::content_hash` has existed since the
+    // clipboard was written and this tool never printed it, which is why the byte-identical gate
+    // for a sampling change has always meant a full game run with `--refine-all` (D640).
+    std::printf("content       %016llx over %llu cells\n",
+                static_cast<unsigned long long>(varied.clip.content_hash()),
+                static_cast<unsigned long long>(varied.clip.cell_count()));
     std::printf("origin        (%lld, %lld, %lld) voxels\n",
                 static_cast<long long>(built.origin_voxel[0]),
                 static_cast<long long>(built.origin_voxel[1]),

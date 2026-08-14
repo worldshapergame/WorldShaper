@@ -1163,3 +1163,32 @@ TEST_CASE("how deep a field is, is the stack an evaluator has to carry") {
     CHECK(f.depth_under(both) == 4);
     CHECK(f.depth_under(Field::kEveryNode) == f.depth_under(deeper));
 }
+
+// R12's precision arm. It has to do exactly two things: change nothing when it is off, and give
+// back numbers a single-precision machine could have produced when it is on.
+TEST_CASE("the single-precision arm is off by default and rounds when it is on") {
+    Field f;
+    // A radius no float can hold exactly, at a point no float can hold exactly, so an f64 answer
+    // and an f32 one cannot coincide by luck.
+    const u32 ball = f.sphere({0.1, 0.2, 0.3}, 0.7);
+    f.build_bounds();
+
+    const Vec3 where{0.30000000000000004, 0.1234567890123, -0.4999999999999};
+    CHECK_FALSE(f.narrow_to_f32());
+    const f64 exact = f.eval(ball, where);
+
+    f.set_narrow_to_f32(true);
+    CHECK(f.narrow_to_f32());
+    const f64 narrowed = f.eval(ball, where);
+    // Representable as a float, which is the whole claim.
+    CHECK(narrowed == static_cast<f64>(static_cast<f32>(narrowed)));
+    // And not the same number, or the arm would be measuring nothing. A sphere is one square
+    // root over three subtractions, so the gap is small — but it is a gap.
+    CHECK(narrowed != exact);
+    CHECK(std::abs(narrowed - exact) < 1e-6);
+
+    // Off again, and the original answer comes back to the bit. A measurement arm that leaves a
+    // trace behind it is worse than no arm.
+    f.set_narrow_to_f32(false);
+    CHECK(f.eval(ball, where) == exact);
+}

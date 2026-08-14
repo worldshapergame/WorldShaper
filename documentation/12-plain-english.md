@@ -2801,3 +2801,41 @@ edge, at exactly x = ±11.475 metres. The building is designed in round numbers,
 it on a grid of round numbers, so my measuring points landed precisely on its corners. A ruler lined
 up with the thing it is measuring measures the ruler. I moved the grid off the round numbers and the
 44 became zero.
+
+## The measuring tool could never tell you two buildings were the same — now it can, in a second
+
+A small thing that turns out to matter for everything above. When I measure a clip, the tool prints
+its volume, its surface area, where its centre of mass is, and how much of each material is in it.
+**Every one of those can match while the building is different.** Move a hundred voxels from one wall
+to the opposite wall and the volume is the same, the surface is the same, the centre of mass is the
+same. The tool would have said nothing changed.
+
+So it now prints a **fingerprint** — one number computed from every voxel. Same building, same
+number; one voxel different, completely different number. The engine has had this for the world since
+the beginning and the clip tool simply never printed it, which is why proving a change hadn't altered
+the building has always meant running the whole game. Now it is one command and one second.
+
+**And the first thing I used it for was the question I left you last time.** I said a graphics-card
+version would want fast arithmetic, that this would move a few voxels, and that you would have to
+choose. That was an *estimate* from counting how close surfaces pass to sample points. With the
+fingerprint I could just do it: build the clip both ways in one run and compare every cell.
+
+**The answer is much better than my estimate.** Across two parts of the facility, **not one voxel of
+the building changes** — not one gained, not one lost. On the little test clip, **15 cells out of
+nine and a half million change colour** — and they are all in one place: a rule that says "moss where
+the grain is above 0.55", which is a knife edge by design, so fifteen cells land on the other side of
+it. Nothing changes shape anywhere.
+
+So the choice I put to you is much smaller than I made it sound: it is not "the building comes out
+different", it is "the building is identical and fifteen specks of colour on a test clip are not".
+The strict check would still complain, so it is still your call — but now it is a call about
+fifteen specks.
+
+**Two mistakes in doing this, both caught by the new fingerprint.** My first comparison cleaned the
+stray voxels out of one version and not the other, so I was comparing two things at once. It looked
+plausible — it reported 16 changed cells. What gave it away was the fingerprint coming back as a
+number I recognised from a *different* setting entirely, which is not something that can happen by
+chance. And my first way of building the "fast arithmetic" mode made the ordinary game 3% slower for
+everyone, to serve a measurement I run once; I rebuilt it so the cost is zero, and checked that by
+running both versions alternately rather than one after the other, because this borrowed machine
+drifts.
