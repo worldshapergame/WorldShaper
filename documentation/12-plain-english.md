@@ -2956,3 +2956,34 @@ it is just not believed until there is enough of it. That is what I would do nex
 **What you would see when that lands: less crawling grain on walls as you turn to face them**, and
 the same building otherwise. What would mean it failed: shadows arriving visibly late, or a soft edge
 where there should be a sharp one.
+
+## And the opposite fix is worse as well — which finally says what the real one has to be
+
+Last section: letting a new surface inherit its parent's answer made the grain 19% worse. So I tried
+the opposite. Instead of giving a new surface a borrowed answer, **don't believe its own answer until
+it has four rays** — leave its measurement clean and just wait before trusting it.
+
+That is worse too, by about the same amount, and it fails in a completely different and very visible
+way: **the number of outright bright specks went from one to a hundred and thirty-one.** You can see
+them in the picture — the steps and the bottom of the facade come out flecked with white dots. The
+reason is what the game shows *while it waits*: full sunlight. So every surface that hasn't finished
+measuring is too bright, and sits there glowing against its finished neighbours.
+
+**Both of the obvious fixes are worse than what the game does today, and they are worse in opposite
+ways** — one is wrong in a way that spreads across a whole wall together, the other is wrong in a way
+that glows. Put side by side, they say something neither said alone:
+
+**The grain is not caused by the game trusting a surface too early. It is caused by there being
+nothing better to show while it waits.**
+
+So the answer is the one thing neither attempt tried: show the **coarse version of that same
+surface** — which the game already keeps, which is a real measurement of the same place, and which is
+already what you see before the very first ray. Nothing borrowed from a parent, nothing invented, no
+white glow. The catch is that the part of the renderer that draws the final picture currently has no
+way to *find* that coarse version — it was never given one — so this needs new plumbing rather than a
+changed number. That is a day's work rather than an afternoon's, and I now have measurements saying
+it is the right day to spend rather than a guess that it might be.
+
+**What you would see when it lands: walls stop crawling as you turn towards them, with no bright
+specks and no delay.** What would mean it failed: shadows that arrive late, or a wall that looks
+smooth but wrong.

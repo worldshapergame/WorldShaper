@@ -645,11 +645,31 @@ It ships at 0. An ancestor's fraction is an average over four times the area, so
 with it is structured error at the parent's scale — the same argument `face_light_seed` already
 refuses the parent's *gradient* on.
 
-**The next arm is the composite rather than the store**: hold the coarse stand-in until a face has
-`kFaceEager` samples of its own, instead of seeding its counters with somebody else's answer. The
-face's own measurement is then never contaminated — it is simply not believed until there is enough
-of it. The objection that sank this idea in the first place (*"what is shown instead is full sun"*)
-predates R9f, and there is now something real to show.
+**That arm is run too, and it is also worse (D645).** `--shadow-settled 4` holds the composite off a
+face's own shadow until it has four rays: **107.74 speckle and 131 FIREFLIES against one**, because
+an unsettled face reads as *fully lit* and the steps and lower facade come out white-flecked. The
+objection in `kShadowSettled`'s own comment — *"wrong on every face, in the same direction, for four
+frames"* — was right, and now has a number.
+
+**The pair is what matters, and neither half says it alone:**
+
+| arm | speckle | fireflies |
+|---|---|---|
+| what ships — believe the first ray | **91.62**, repeated **91.38** | 1, 2 |
+| seed from the ancestor | 108.65 | 1 |
+| believe nothing until four rays | 107.74 | **131** |
+
+**The shipped choice is the best of three, and not because a first ray is good.** Both substitutes
+are worse than a coin toss — a parent's average is wrong in a *correlated* way, full sun is wrong in
+a *bright* way. **So the grain is not a face believing itself too early; it is that there is nothing
+better to show.**
+
+**Which leaves exactly one candidate, and it is now justified by measurement rather than by
+argument: show the coarse STAND-IN.** The store already keeps one over that face (R9f), it is a real
+measurement of the same place at the right brightness, and it is what the composite draws before the
+first ray anyway. The cost is that **`resolve.comp` has no face lookup at all** — it does not include
+`node.glsl` — so this needs a binding and the host plumbing under it. That is the next piece of work,
+and the two cheap arms above are what pay for deciding it is worth doing.
 
 **And the metric is computable where the picture is taken**: `tools/speckle.py` is a transliteration
 of `_measure.ps1`'s `Measure-Speckle`, with a `--top N` band skip, because **the developer overlay is
