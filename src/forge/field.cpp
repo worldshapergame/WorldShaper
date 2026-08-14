@@ -1849,6 +1849,106 @@ void Field::build_bounds() {
     }
 }
 
+std::vector<Field::UnboundedCause> Field::unbounded_by_op() const {
+    // Indexed by the op's own value, which is what makes this one pass rather than a search.
+    std::vector<UnboundedCause> by_op(static_cast<usize>(Op::Power) + 1);
+    for (usize i = 0; i < by_op.size(); ++i) by_op[i].op = static_cast<Op>(i);
+
+    for (usize i = 0; i < nodes_.size() && i < bounds_.size(); ++i) {
+        if (!bounds_[i].infinite()) continue;
+        const Node& n = nodes_[i];
+
+        // Downstream is decided by the CHILDREN's boxes and not by the op, because the same op is
+        // both things in different places: a union of bounded parts bounds, and the one above a
+        // twist does not. Asking the boxes is asking build_bounds what it actually did.
+        bool from_below = false;
+        for (u32 c = 0; c < n.children && c < 4; ++c) {
+            if (n.child[c] < bounds_.size() && bounds_[n.child[c]].infinite()) from_below = true;
+        }
+        UnboundedCause& row = by_op[static_cast<usize>(n.op)];
+        if (from_below) ++row.downstream;
+        else ++row.source;
+    }
+
+    std::vector<UnboundedCause> out;
+    for (const UnboundedCause& row : by_op) {
+        if (row.source != 0 || row.downstream != 0) out.push_back(row);
+    }
+    std::sort(out.begin(), out.end(), [](const UnboundedCause& a, const UnboundedCause& b) {
+        if (a.source != b.source) return a.source > b.source;
+        return a.downstream > b.downstream;
+    });
+    return out;
+}
+
+const char* op_name(Op op) {
+    switch (op) {
+        case Op::Constant: return "constant";
+        case Op::Parameter: return "parameter";
+        case Op::Coordinate: return "coordinate";
+        case Op::Radius: return "radius";
+        case Op::Sphere: return "sphere";
+        case Op::Box: return "box";
+        case Op::Cylinder: return "cylinder";
+        case Op::Capsule: return "capsule";
+        case Op::Torus: return "torus";
+        case Op::Cone: return "cone";
+        case Op::Plane: return "plane";
+        case Op::Ellipsoid: return "ellipsoid";
+        case Op::Prism: return "prism";
+        case Op::Platonic: return "platonic";
+        case Op::Wedge: return "wedge";
+        case Op::Stairs: return "stairs";
+        case Op::Revolve: return "revolve";
+        case Op::Spiral: return "spiral";
+        case Op::Union: return "union";
+        case Op::Intersection: return "intersection";
+        case Op::Difference: return "difference";
+        case Op::SmoothUnion: return "smooth-union";
+        case Op::SmoothDifference: return "smooth-difference";
+        case Op::SmoothIntersection: return "smooth-intersection";
+        case Op::Translate: return "translate";
+        case Op::Rotate: return "rotate";
+        case Op::Scale: return "scale";
+        case Op::Mirror: return "mirror";
+        case Op::Repeat: return "repeat";
+        case Op::PolarRepeat: return "polar-repeat";
+        case Op::Shell: return "shell";
+        case Op::Round: return "round";
+        case Op::Offset: return "offset";
+        case Op::Displace: return "displace";
+        case Op::Twist: return "twist";
+        case Op::Bend: return "bend";
+        case Op::Sine: return "sine";
+        case Op::Waves: return "waves";
+        case Op::Noise: return "noise";
+        case Op::Fbm: return "fbm";
+        case Op::Ridged: return "ridged";
+        case Op::Rasp: return "rasp";
+        case Op::Cells: return "cells";
+        case Op::CellEdge: return "cell-edge";
+        case Op::Curvature: return "curvature";
+        case Op::Occlusion: return "occlusion";
+        case Op::Facing: return "facing";
+        case Op::Checker: return "checker";
+        case Op::Stripes: return "stripes";
+        case Op::Bricks: return "bricks";
+        case Op::Add: return "add";
+        case Op::Multiply: return "multiply";
+        case Op::Min: return "min";
+        case Op::Max: return "max";
+        case Op::Blend: return "blend";
+        case Op::Remap: return "remap";
+        case Op::Abs: return "abs";
+        case Op::Negate: return "negate";
+        case Op::Step: return "step";
+        case Op::Smoothstep: return "smoothstep";
+        case Op::Clamp: return "clamp";
+        case Op::Power: return "power";
+    }
+    return "?";
+}
+
 bool Field::value_range(u32 at, f64& low, f64& high) const {
     if (at >= nodes_.size()) return false;
     const Node& n = nodes_[at];

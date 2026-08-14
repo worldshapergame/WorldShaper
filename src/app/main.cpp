@@ -9973,6 +9973,29 @@ int run_clip_tool(const Options& options) {
                         static_cast<f64>(std::max<usize>(1, script.field.size())),
                     script.field.accelerator_count(), script.field.accelerated_leaves(),
                     script.field.unaccelerated_unions());
+
+        // ...and WHICH ops those boxless nodes are, because the count above pointed at the wrong
+        // work for a whole stage (D636).
+        //
+        // Two columns and not one. A boxless node makes every ancestor boxless too, so a raw
+        // count is mostly consequences: what can be acted on is the node that MADE the infinity,
+        // and the only thing to do about the ones standing over it is to bound that. The list is
+        // sorted so the top of it is the list of things worth bounding.
+        const std::vector<forge::Field::UnboundedCause> causes = script.field.unbounded_by_op();
+        usize made_here = 0;
+        usize standing_over = 0;
+        for (const forge::Field::UnboundedCause& cause : causes) {
+            made_here += cause.source;
+            standing_over += cause.downstream;
+        }
+        if (made_here + standing_over > 0) {
+            std::printf("no box        %zu made here, %zu standing over one\n", made_here,
+                        standing_over);
+            for (usize n = 0; n < causes.size() && n < 12; ++n) {
+                std::printf("              %-18s %6zu made here, %6zu standing over one\n",
+                            forge::op_name(causes[n].op), causes[n].source, causes[n].downstream);
+            }
+        }
     }
 
     // WHICH rules the build spent itself on.

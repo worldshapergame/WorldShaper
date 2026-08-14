@@ -172,6 +172,11 @@ enum class Op : u8 {
     Power,         // |child| ^ a[0], keeping the sign
 };
 
+// What an op is called, in the words the clip file uses. For diagnostics only — no parser reads
+// it back — and it exists because a histogram over `Op` printed as numbers is a histogram nobody
+// can act on without the header open beside it.
+const char* op_name(Op op);
+
 struct Node {
     Op op = Op::Constant;
     f64 a[8]{};
@@ -466,6 +471,28 @@ public:
         }
         return n;
     }
+
+    // WHICH ops the boxless nodes are, and — the part that decides where the work is — whether
+    // each one is the SOURCE of its own infinity or merely standing above one.
+    //
+    // `unbounded_nodes()` above says a quarter of the facility's field cannot be culled. That
+    // number on its own points at nothing: an unbounded node makes every ancestor unbounded too,
+    // so most of the count is unions and translates that would bound perfectly well if the one
+    // twist underneath them did. Bounding a source fixes it and everything over it at once;
+    // "bounding" a downstream node is not a thing that can be done.
+    //
+    // So the split is the instrument, and the rule for it is exactly the one build_bounds uses:
+    // a boxless node with a boxless CHILD is downstream, and a boxless node whose children are
+    // all bounded (or which has none) is where the infinity is made.
+    struct UnboundedCause {
+        Op op = Op::Constant;
+        usize source = 0;       // its own box came out everywhere() with every child bounded
+        usize downstream = 0;   // boxless only because something under it is
+    };
+
+    // Sorted by `source` and then by `downstream`, both descending, so the top of the list is the
+    // list of things worth bounding. Ops that bound everywhere they appear are left out.
+    std::vector<UnboundedCause> unbounded_by_op() const;
 
 private:
     u32 push(const Node& n);

@@ -6551,3 +6551,91 @@ a surface the camera has never approached, which is where the proximity radius h
 | D635 | **A rising voxel count after a carve is the carve working** | method | The hole opens the building to the sky and the ladder builds what it reveals |
 | D635 | **`0 leaves rebuilt` is about the pool, not the edit** | method | It counts what the pool already held; this arm held less because less had been built |
 | D635 | **The far chisel is still unmeasured** | honesty | Sixty metres into a surface never approached, where proximity must hold sampling |
+
+## D636 — the 923 boxless field nodes are not in the shape, and step 2 has nothing to bound
+
+§5's step 2 — the one the user ranked second on 2026-08-13 — is built on one line of the clip tool:
+
+```
+field   3744 nodes, 923 with no box (25%), 19 hierarchies over 479 leaves, 190 wide unions
+where   shape 485600 core-ms (76%), paint 154790 core-ms (24%), 2.59 us per shape eval
+```
+
+and on one inference from it: *"an unbounded node makes every ancestor unbounded too, so
+`Field::eval`'s union sort and `eval_accelerated`'s BVH rejection — both of which work entirely on
+boxes — cannot throw that branch away for any point."* §5 asked for the histogram **before** any
+bounds were written. This is that histogram, and it says the inference is wrong for this clip.
+
+**The instrument.** `Field::unbounded_by_op` returns one row per op with two columns: **made here**,
+where the node's own box came out `everywhere()` with every child bounded, and **standing over one**,
+where it is boxless only because something under it is. The split is the whole point — an ancestor
+cannot be bounded, only the source under it can — and the rule is `build_bounds`'s own: ask the
+children's boxes rather than the op. `op_name` is beside it so the report reads in the clip file's
+own words. The clip tool prints it under the `field` line.
+
+**Measured on `clips/facility.clip`**, which reproduces the documented `923 with no box` exactly:
+
+| | made here | standing over one |
+|---|---|---|
+| parameter | 396 | 0 |
+| constant | 157 | 0 |
+| scale | 94 | 0 |
+| fbm | 71 | 0 |
+| plane | 65 | 0 |
+| bricks, sine, stripes | 67 | 0 |
+| everything else | 19 | 54 |
+| **total** | **869** | **54** |
+
+**Only 54 of the 923 are standing over another, so the cascade the stage was designed around is not
+happening.** The reason it is not is in `build_bounds` and was already written down: a scaled shape
+"is nearly always inside an intersection with something square, and that intersection has a box of
+its own that *is* sound" — an intersection takes the overlap of its children's boxes, so one
+infinite child does not carry. What does carry is a union (the merge of its children) and the
+one-child transforms above it, and those 54 are what that adds up to: 14 multiplies, 12 adds, 8
+translates, 7 smoothsteps, 4 negates, 4 intersections whose children were *all* boxless, 3 mirrors
+and 2 rotates.
+
+**And the second arm settles it.** Marking every node reachable from `script.solid`:
+
+- **746 of the 923 are not in the shape at all.** They are paint and value expressions — the 396
+  parameters, 152 of the constants, 69 fbms, the stripes and the bricks. Nothing culls one of those
+  individually: no shape evaluation visits them, and the paint half reads a box only at the ROOT of
+  a rule (`bounds_of(paint[i].test)` and `bounds_of(paint[i].place)` in `sample.cpp`), never inside
+  the expression under it. That root is where the paint half's own cost lives — D-era work already
+  measured five boxless rules at three quarters of all paint work — and it is already reported per
+  rule as `boxed` / `NO BOX`. **Measured today: of the facility's 139 rules, 5 are placed and none
+  of those has a boxless zone, and exactly 1 unplaced rule has a boxless test.** So the paint half
+  has nothing left to bound either.
+- **177 are in the shape, and 146 of those are `scale` (87) and `plane` (59)** — both boxless *on
+  purpose*. Scale refuses for the soundness reason `build_bounds` sets out at length (a non-uniform
+  scale under-reports distance, so a cull reading its box would drop a child that was still nearest,
+  which is geometry silently missing). A plane is an infinite half-space and its box is honestly
+  infinite.
+- **`boxless nodes that are a direct child of a union: 0`.** That is the number that decides it: a
+  box pays where a union or a BVH can reject a child, and there is no such child to reject.
+
+So there is no bounding work here that could move `us per shape eval`, and §5's own instruction
+applies — *"if the figure does not move, say so and stop"*. The 2.59 µs is being spent somewhere
+else, and the 190 wide unions with no hierarchy against `kAccelerateFrom = 12` is a different
+question that boxes do not touch.
+
+**What this cost and what it teaches.** Nothing was built, because the histogram was asked for
+first. The count that pointed the wrong way — 25% of the field with no box — was true, published in
+the audit line for months, and quoted in the plan; what it lacked was the one distinction that makes
+it actionable, which is *what kind of node* and *whether anything culls it*. The general form is
+worth §4 as a trap of its own, and it is added there
+as 28: a counter that aggregates over two populations with different meanings reads as one fact
+about the larger one, and here the larger population is the one nothing was ever going to cull.
+
+**Not measured here.** This machine has no Vulkan and no Windows, so nothing about the renderer,
+the load or the sample timing was run — the histogram is a property of the parsed field and needs
+neither. The `kAccelerateFrom` arm is still open and still wants a timed A/B.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D636 | **The boxless count is split by source and by ancestry, and printed by op** | instrument | A raw count is mostly consequences; only the source can be acted on |
+| D636 | **81% of the facility's boxless nodes are paint and value expressions** | finding | No shape evaluation visits one, and the paint half reads a box only at a rule's root |
+| D636 | **1 of 139 paint rules has a boxless root, and no placed rule has a boxless zone** | finding | So the paint half has nothing left to bound either |
+| D636 | **The 177 in the shape are 87 scales and 59 planes, both boxless deliberately** | finding | Scale refuses for soundness (D613's class); a plane really is infinite |
+| D636 | **No boxless node is a child of a union, so no cull loses anything** | finding | An intersection takes the overlap, which is where the cascade stops |
+| D636 | **Step 2 is closed with nothing built** | decision | §5's own gate: if the figure cannot move, say so and stop |

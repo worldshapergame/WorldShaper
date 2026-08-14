@@ -494,6 +494,17 @@ failure, not a compile error.
     the instrument rather than in the structure, and trap 20's twin — there a pass got cheaper by
     doing less, here a pass reported success by failing. D621.
 
+28. **A counter over two populations reads as one fact about the larger one, and the larger one is
+    usually the one nothing can act on.** `923 of 3744 field nodes have no box (25%)` was true, sat
+    in the audit line for months, and became a whole stage of the plan — on the reasoning that a
+    boxless node cannot be culled and makes every ancestor boxless too. Split by op and by whether
+    anything reads the box, **746 of the 923 are paint and value expressions no shape evaluation
+    ever visits, 146 of the remaining 177 are scales and planes that refuse a box deliberately, and
+    exactly none of the 923 is a child of a union** — which is the only place a box buys a
+    rejection. The stage had nothing to bound. The general form: before optimising against a
+    count, ask what the members are and *who reads them*, because a population that cannot be acted
+    on does not stop being counted. D636.
+
 ---
 
 ## 4b. The bug that was open here — closed, and what it teaches
@@ -626,6 +637,13 @@ smear is invisible in a speckle metric -- it is what `--fly` and the consecutive
 The user was shown the measured breakdown of a 17.1 s cold load and asked for the order. They chose
 **1, then 2, then 3**. Everything after this block is the detail behind them and the history that
 produced them; **start here and read the numbered step you are on.**
+
+**Where the three stand, 2026-08-14.** Step 1 is **built and opt-in** behind `--no-coarse-paste`,
+blocked from becoming the default by a decision the user has to make about the stipple verdict
+(D629's three options, in step 1 below). Step 2 is **closed with nothing built** — the histogram it
+asked for first says there is nothing to bound (D636), and the one live question left in it is
+`kAccelerateFrom`, which boxes do not touch. **Step 3, R12, is therefore the next of the three that
+has work in it** — and it is stage-sized, so it is not a thing to start next to R5b.
 
 The 17.1 s these are against, measured (D622, D623), cold facility, enclosed camera, no cache:
 
@@ -787,7 +805,39 @@ whether R11d is a scheduling change or a new pass.
 
 ---
 
-#### 2. The 923 field nodes that carry no box
+#### 2. The 923 field nodes that carry no box — CLOSED, with nothing built (D636)
+
+**The histogram this stage asked for before any code was written has been taken, and it says the
+stage has no work in it.** Read D636; the short of it is below, and everything after the rule is the
+reasoning as it stood, kept because the reasoning was sound and the premise was not.
+
+`Field::unbounded_by_op` now splits the boxless nodes two ways — **made here** (its own box came out
+`everywhere()` with every child bounded) against **standing over one** — and the clip tool prints it
+under the `field` line. On the facility:
+
+| | |
+|---|---|
+| boxless nodes | 923 of 3,744, exactly as the old line said |
+| **not in the shape at all** | **746** — parameters, constants, fbm, stripes, bricks. No shape evaluation visits one |
+| in the shape | 177, of which **87 scales and 59 planes are boxless on purpose** |
+| standing over another boxless node | **54**, so the cascade the stage was built on is not happening |
+| **boxless nodes that are a child of a union** | **0** — and that is the only place a box buys a rejection |
+| paint rules with a boxless root | **1 of 139**, and none of the 5 placed rules has a boxless zone |
+
+So the 2.59 µs per shape evaluation is not being paid for by missing boxes, and this stage's own
+gate applies: *if the figure does not move, say so and stop.* **Nothing was built and nothing needs
+to be.** The instrument is kept, because the next clip somebody authors can reintroduce the problem
+and the line will now say so in one word.
+
+**What is still open out of this block, and it is a different question:** **190 wide unions with no
+hierarchy** against 19 that have one (`kAccelerateFrom = 12`). Boxes do not touch it. It wants a
+timed A/B of `kAccelerateFrom` against the same clip on the same machine, and §5 already warns not to
+guess at it — the plain union path sorts children by box distance and rejects on the running
+minimum, so a hierarchy over four children may buy nothing.
+
+---
+
+**What follows is the stage as it was written, before the histogram refuted it.**
 
 **What it is, and it is a measurement rather than a proposal.** `--clip-file clips/facility.clip`
 prints, today:
@@ -824,6 +874,9 @@ eval` figure, and if the figure does not move, say so and stop.
 **Size it before building it.** Unknown until the histogram exists: it could be 2× of the 6.3 s
 sampling half, or it could be nothing if the 923 are all ops that genuinely cannot be bounded.
 **Report the histogram before writing any bounds.**
+
+**— and it was nothing, for a reason nobody had guessed: 81% of them are not in the shape at all.
+That sentence is the one thing worth keeping out of this stage. D636.**
 
 ---
 

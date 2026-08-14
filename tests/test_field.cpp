@@ -963,3 +963,59 @@ TEST_CASE("a sum is settleable only when at most one of its terms moves") {
     CHECK(f.metric_slack(f.add({f.constant(0.02), grain})) >= Field::kInfiniteSlack);
     CHECK(f.metric_slack(f.maximum({ball, grain})) >= Field::kInfiniteSlack);
 }
+
+TEST_CASE("the boxless nodes are reported by op, and split from the ones standing over them") {
+    // The instrument D636 is about. A raw count of boxless nodes cannot be acted on, because most
+    // of it is ancestors of the one node that refused a box — and there is nothing to do to an
+    // ancestor except bound what is under it.
+    Field f;
+    const u32 lump = f.box({0, 0, 0}, {1.0, 1.0, 1.0});
+    const u32 stretched = f.scale(lump, {2.0, 1.0, 1.0});   // refuses a box of its own
+    const u32 moved = f.translate(stretched, {4.0, 0, 0});  // boxless only because of the scale
+    const u32 both = f.unite({moved, f.sphere({8, 0, 0}, 1.0)});
+    f.build_bounds();
+
+    REQUIRE(f.bounds_of(stretched).infinite());
+    REQUIRE(f.bounds_of(moved).infinite());
+    REQUIRE(f.bounds_of(both).infinite());
+
+    usize made_here = 0;
+    usize standing_over = 0;
+    for (const Field::UnboundedCause& cause : f.unbounded_by_op()) {
+        made_here += cause.source;
+        standing_over += cause.downstream;
+        // The scale is the source and nothing else is; the translate and the union are over it.
+        if (cause.op == forge::Op::Scale) {
+            CHECK(cause.source == 1);
+            CHECK(cause.downstream == 0);
+        }
+        if (cause.op == forge::Op::Translate || cause.op == forge::Op::Union) {
+            CHECK(cause.source == 0);
+            CHECK(cause.downstream == 1);
+        }
+    }
+    CHECK(made_here == 1);
+    CHECK(standing_over == 2);
+
+    // Sorted by what can be acted on, so reading the top of the list is reading the work.
+    const std::vector<Field::UnboundedCause> causes = f.unbounded_by_op();
+    REQUIRE(!causes.empty());
+    CHECK(causes.front().op == forge::Op::Scale);
+
+    // And a field where everything bounds says so by being empty rather than by a zero row.
+    Field clean;
+    clean.unite({clean.sphere({0, 0, 0}, 1.0), clean.box({3, 0, 0}, {1.0, 1.0, 1.0})});
+    clean.build_bounds();
+    CHECK(clean.unbounded_by_op().empty());
+    CHECK(clean.unbounded_nodes() == 0);
+}
+
+TEST_CASE("every op says what it is called") {
+    // The names are what makes the histogram above readable, and a missing one is a silent "?"
+    // in the middle of a report rather than a compile error.
+    for (usize i = 0; i <= static_cast<usize>(forge::Op::Power); ++i) {
+        const char* name = op_name(static_cast<forge::Op>(i));
+        CHECK(name != nullptr);
+        CHECK(std::string(name) != "?");
+    }
+}
