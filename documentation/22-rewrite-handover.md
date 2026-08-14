@@ -525,6 +525,38 @@ wakes, so the cold facility settled 32 nodes short and its hash moved. And "stan
 passes the furthest-out memo" can never be satisfied, because every sweep rewrites the memos it
 refuses. The window is measured from the last sweep that **delivered**.
 
+#### R11d IS BUILT AND OPT-IN — `--no-coarse-paste`. Read D630 to D635 before touching it.
+
+The up-front sample is **taken and not pasted**: the ladder builds the world from nothing, seeded at
+eight metres. Five gates were run and it passes all five.
+
+| what was asked of it | result |
+|---|---|
+| does the world grow when the camera moves? | 19,751,324 → **29,622,982** voxels walking the same scene (D632) |
+| is a camera-dependent world reproducible? | same camera twice, **`70b51a3f94dc44ba` to the digit**; a second camera differs (D633) |
+| does `baseline.ps1`'s gate cope? | **it needed no change** — it pairs rows by view and never compares across cameras (D633) |
+| does a partial world resume elsewhere? | B loads A's world in **52 ms** and ends holding both; returning to A is **9.1 s against 18.6** (D634) |
+| does a chisel cut with nothing under it? | **yes** — clean faces, and the portico it reveals is built at full detail (D635) |
+
+**Three things keep it opt-in, and none of them is the ladder.**
+
+1. **The loading bar does NOT go with this flag.** The up-front *sample* still runs — 2,760 ms — and
+   must, until the stipple verdict has another source. Not pasting saves 959 ms and removes the
+   blocky first pass. **D629 and D630 are why the verdict cannot move**, and D630's option 2 is built
+   behind `--stipple-from-world` and measured at **+19 s and a verdict that protects nothing from a
+   real camera**.
+2. **The far chisel is unmeasured** — sixty metres into a surface never approached, where the
+   proximity radius has to hold *sampling* rather than *residency* (R2c, D199). That is R11h's
+   remaining half.
+3. **Flipping the default changes every baseline in the repository**, because the shipped world
+   becomes camera-dependent.
+
+**And two mistakes in here are worth more than the feature.** D631 called the smaller world *"a
+sixth of a building"* and D632 had to correct it — it is the design, and *"stopped early"* and
+*"finished what it could see"* produce **identical counters**; only movement separates them. D635
+nearly condemned a working carve on a `0 leaves rebuilt` line that is about what the POOL held, not
+about what the edit did.
+
 ### THE ORDER, chosen by the user on 2026-08-13: do these three, in this order
 
 The user was shown the measured breakdown of a 17.1 s cold load and asked for the order. They chose
