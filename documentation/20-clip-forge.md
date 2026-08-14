@@ -122,6 +122,17 @@ Both were wrong first and measurably so:
 - the jump skipped the *mask* as well as the evaluation, leaving holes in "which cells belong to
   this clip". Invisible in the voxels. Instantly visible in a printed slice.
 
+**And two things measured about the boxes since, both of which say the obvious next move is not
+the one to make** (D636, D637). *A quarter of the facility's field has no box* was a number nobody
+could act on, and taking it apart said so: only 177 of the 923 boxless nodes are under the solid at
+all — a shape evaluation walks nothing else — and every one of those is either a half space, a
+value with no position, or a non-uniform scale refused on purpose because it under-reports its
+distance. **There is no bound waiting to be written.** What there is, is a threshold nobody had
+measured: a union is given a bounding hierarchy at **twelve** children, and sweeping that from 4 to
+"never" makes a U — no hierarchy at all is 9% slower, one over every union of four or more is 7%
+slower because a traversal loses to the sorted linear scan the plain path already does, and the
+minimum sits at 16–64, worth 6–13%. `--accelerate-from N` is that threshold as a flag.
+
 The sampler is parallel across z slabs. The real answer for live re-voxelisation is the GPU:
 nodes are plain data of a fixed size with no pointers and evaluation is a switch with a shallow
 stack, which is a shape that transliterates to a compute shader without changing.
