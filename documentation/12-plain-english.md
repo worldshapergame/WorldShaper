@@ -2537,3 +2537,117 @@ its own piece of work. This measurement is the first hard number for why that st
 today nobody could have told you that the field evaluation is half the load.
 
 **Steps 4 to 8 are not built.** The loading bar is still there — that is step 4.
+
+### Then I looked at the second time you open the game, and it had been wrong for a long time
+
+Everything above was measured on a **cold** start — the first time you ever open a world, when there
+is nothing saved. Every launch after that reads a saved file instead, and that is the path you
+actually spend your life on. Nobody had measured it. Three things were wrong with it, and the first
+two had been wrong for weeks without anything on screen or in the log saying so.
+
+**The saved building was frozen at sixteen voxels a metre.** The game saves a list of which pieces it
+has sharpened, so the next launch can carry on instead of starting over. It only wrote down pieces
+that had reached the *full authored* detail — and from the ordinary spawn point **no piece ever
+reaches that**, because most of the building is behind a wall or across the courtyard. So the list
+was written **empty**. And an empty list has a second meaning in that file: *"this world was never
+built by sharpening at all — it is finished, leave it alone."* The loader read the second meaning,
+did nothing, and printed **"the world is at the detail the clip asked for"** over a building that was
+permanently half as detailed as its description. It was not slow. It was **finished and wrong**, on
+every launch after the first, for as long as that file has existed.
+
+That is the same trap that has now caught this project three times: *"nobody did anything"* and
+*"there was nothing to do"* looking identical. It is worth me writing down that I have started
+checking for it on purpose.
+
+**The speckle cleaner was switched off too.** The building has materials that are *meant* to look
+mottled — deliberate two-tone dither, weathering, verdigris. The cleaner that removes accidental
+stray voxels has to be told which materials to leave alone, and that decision is taken once, up
+front, while the whole building is being looked at. A saved load never took it — and the cleaner
+reads "no list" as **"leave every speck everywhere alone"**. So it ran twenty-three thousand times a
+load and did nothing at all. A saved world was genuinely a *different world* from a cold one.
+
+Both are fixed, and the honest price is that **a saved load went from 3.8 seconds to 5.8**. I took
+that trade deliberately, because the old 3.8 was fast the way skipping the work is fast. What you get
+for the two seconds is the building at its real 32 voxels a metre — **62,752 finished pieces where
+there were none** — and a world that comes back identical every single time you open it.
+
+### The game was sweeping a finished world for ever, and writing half a gigabyte doing it
+
+Then I went after those two seconds, and found something worse sitting underneath them.
+
+When the world has nothing left to sharpen, the sharpener never noticed. On a saved launch it woke
+**270 times**, walked a list of **17.9 million entries**, fired **99,600 test rays**, and delivered
+**nothing at all**, every frame, for as long as you left the game running — about **2.2 milliseconds
+of every single frame**, permanently, for no result. Everything left to do was behind a wall or
+behind you.
+
+**And the part I had not counted at all.** A sweep that achieves nothing still ticks a couple of
+pieces off as "settled", and the save routine asks only *"has anything been ticked off since I last
+wrote?"* — so it said yes, every time. One launch wrote the whole world file to your disk **28 times.
+Half a gigabyte, on a run that sharpened nothing whatsoever.**
+
+The fix is that the sharpener stands down when a sweep finds nothing, and wakes up again for the only
+two things that can change the answer: **you moving**, and **the world being edited**. Saved launch,
+measured: wakes **270 → 33**, work on the main thread **584 ms → 147**, test rays **99,600 → 11,832**,
+saves to disk **28 (504 MB) → 1 (18 MB)**. The cold load produces a **byte-identical building** and
+is cheaper anyway, because the sweeps it now skips were the ones finding nothing.
+
+**Two versions of this were wrong before the third worked, and both are instructive.** Standing down
+the moment a sweep comes up empty loses the tail — a piece refused for being hidden is only refused
+*provisionally* and gets retried later, and a sleeping sharpener never retries anything, so the world
+came out **32 pieces short** and its fingerprint moved. And "stand down once enough time has passed"
+can never happen, because every sweep pushes the deadline out ahead of itself. It has to be measured
+from the last sweep that actually *delivered* something.
+
+I also want to record how I found it, because it cost most of a day. I twice argued from a counter
+printed **by the new code** — which was like asking the suspect for an alibi. What settled it in one
+run was rebuilding the *old* code on the same machine in the same minute and running the identical
+command. **Reach for the honest comparison before the third theory, not after it.**
+
+### The blocky first pass is gone — you can turn it on today, and I have not made it the default
+
+This is step 4, the one you have been waiting for: **nothing is built up front**. The world assembles
+itself around you from nothing, at the detail your screen asks for, instead of starting as a blocky
+whole building that then gets refined. Run the game with `--no-coarse-paste` and you have it.
+
+I asked it five questions before I would believe it:
+
+- **Does the world grow when you walk?** Standing still it builds 19.8 million voxels; walking the
+  same scene, **29.6 million**. It stops when there is nothing more to see from where you are, and
+  your moving wakes it up again.
+- **Is a world that depends on where you stood still reproducible?** Same camera twice, **the same
+  fingerprint to the last digit**. A different camera gives a different world, which is the point.
+- **Does the measuring harness cope?** Yes, and it needed no changes at all — it compares like with
+  like by construction.
+- **If you leave and come back, is the work kept?** Yes, and this is the one I am most pleased with.
+  Spawn at A, quit, come back at B: it loads A's whole world in **52 milliseconds** and *adds* to it.
+  Go back to A and it takes **9.1 seconds instead of 18.6**, because it re-makes almost nothing. The
+  world accumulates across sessions instead of being thrown away.
+- **Can you chisel into a place that was never built?** Yes. A twenty-metre cube cut through the
+  middle of the building comes out with clean sharp faces, and the portico it exposes — six columns,
+  pediment, entablature — is made at full detail on the spot.
+
+**Now the part I owe you, which is why it is not the default yet.**
+
+**It does not remove the loading bar.** I need to be blunt about that, because it is the thing you
+asked for. The up-front pass does two jobs, and I have only been able to remove one of them. It
+*builds* the blocky building — that is gone, and it saves about a second. It also **takes one look at
+the entire building** to decide which materials are deliberately mottled and must not be cleaned up.
+Nothing else in the game ever sees the whole building at once, so there is nowhere else that decision
+can come from. I tried three ways round it. Adding the answer up piece by piece **destroys two of the
+six deliberate dithers**, because a small box cannot tell its own edge from open air. Taking the
+decision at full detail instead works, and costs **19 extra seconds**. Taking it from only the part
+you have looked at protects **nothing**. So the wait stays at about 2.8 seconds until step 12 changes
+where the building is made. That is an honest dead end, not a thing I have skipped.
+
+**Two other things keep it opt-in.** A chisel *sixty metres away* into a surface you have never
+walked up to is untested — near ones are fine. And switching it on by default makes the shipped world
+depend on where you stand, which invalidates every performance figure recorded in this project; that
+is a deliberate decision to take on purpose rather than by accident.
+
+**One mistake in here was worth more than the feature.** When I first measured the world without the
+blocky pass, it held a sixth as many voxels and I wrote it up as a bug — *"a sixth of a building"*.
+It is not a bug. It is exactly what you asked for in the first place: *if you cannot see it, it does
+not exist*. A world that stopped early and a world that finished everything it could see produce
+**identical readings on every counter I had**. The only measurement that separates them is whether
+the number moves when you walk — and I had not taken it.
