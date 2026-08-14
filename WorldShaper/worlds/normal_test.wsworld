@@ -1,0 +1,70 @@
+# WSauthor: worldshaper
+# A scene for one question: does the shading normal tell a curve from a corner?
+#
+# Everything here is the same dull off-white, lit by the same sun, because the only thing being
+# looked at is the shape of the shading. Colour would only make it harder to see.
+#
+# In one frame, left to right:
+#   - a matte sphere, which must shade as a sphere and not in six steps
+#   - a chrome sphere, which must reflect in more than six directions
+#   - a cube turned off-axis, whose three arrises must stay knife-sharp
+#   - a fluted column, which is the hard case: twenty hard grooves cut into one curve, so a
+#     filter wide enough to smooth the shaft will eat the flutes and a rule that keeps the
+#     flutes will leave the shaft blocky
+#   - a flight of stairs, every tread and riser of which is a genuine arris at the smallest
+#     scale the world has
+# and behind them a wall meeting the floor, which is the interior corner: rounding that one
+# draws a cove that is not there and bleeds the floor's light up the wall.
+
+metre 32
+bounds -7 -0.5 -5   7 4.5 7
+
+material stone   rgb=196,192,184 rough=200
+material pale    rgb=214,211,204 rough=180
+material chrome  rgb=232,232,238 rough=8   metal=250
+material deck    rgb=168,166,160 rough=220
+
+let nt_floor = box -7 -0.5 -5   7 0 7
+let nt_wall  = box -7 0 -5      7 4.0 -4.6
+
+# The two spheres: one that shades and one that reflects. Both r=1 m, which at 32 voxels to the
+# metre is a 32-voxel radius -- big enough that six flat facets are unmistakable and small enough
+# that the whole ball sits inside one frame.
+# The mirror stands at the far end of the row, with the cube between it and the matte ball, so a
+# camera can frame the sphere and the cube together without the mirror in shot. A polished ball
+# is very nearly a light source and the exposure follows it: in frame with the matte one it
+# drives everything else several stops down, and the picture is then of the tone curve rather
+# than of the shading.
+let nt_ball  = sphere -4.4 1.0 0.0 r=1.0
+let nt_mirror = sphere 5.6 1.0 0.0 r=1.0
+
+# Turned a twentieth of a turn (18 degrees) so no face is parallel to a voxel face. An axis-
+# aligned cube proves nothing: its faces are already exactly the faces they are made of, and any
+# rule at all leaves them alone. Off-axis, the faces are staircases and the arrises are real.
+let nt_cube  = box -0.8 -0.8 -0.8   0.8 0.8 0.8
+let nt_cube  = rotate { nt_cube } y=0.05
+let nt_cube  = translate { nt_cube } -1.7 0.8 0.0
+
+# The fluted column. The shaft is a curve, the flutes are hard grooves in it, and both have to
+# survive the same rule.
+let nt_shaft = cylinder 0 1.6 0 r=0.5 h=3.2 axis=y
+let nt_flute = cylinder 0.5 1.6 0 r=0.09 h=3.4 axis=y
+let nt_flutes = around { nt_flute } count=20 axis=y
+let nt_column = difference { nt_shaft nt_flutes }
+let nt_column = translate { nt_column } 0.9 0 0.0
+
+# Treads 30 cm deep and 18 cm high: nine voxels of rise at this resolution, which is the scale a
+# rounding filter is most likely to eat.
+let nt_stairs = stairs 2.4 0 -1.6   4.2 1.44 1.2 run=0.30 rise=0.18
+
+let nt_all = union { nt_floor nt_wall nt_ball nt_mirror nt_cube nt_column nt_stairs }
+
+paint deck
+paint stone   where=nt_wall   below=0.004
+paint pale    where=nt_ball   below=0.004
+paint chrome  where=nt_mirror below=0.004
+paint pale    where=nt_cube   below=0.004
+paint pale    where=nt_column below=0.004
+paint stone   where=nt_stairs below=0.004
+
+solid nt_all

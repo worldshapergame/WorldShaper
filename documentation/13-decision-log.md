@@ -6999,3 +6999,69 @@ wrapper's arms (6.48, 6.48, 6.49) was the signal that it was real rather than dr
 | D640 | **f32 changes no geometry at all, and fifteen cells of paint on the gate clip** | measurement | 0 of 12.5 M cells on two facility boxes; 15 of 9.4 M on `sampler.clip`, every one a material change and none a gain or loss of matter |
 | D640 | **A measurement arm read per node is not free; as a template parameter it is** | method | +3.3% for the runtime flag against a stashed control, +0.5% interleaved for the compile-time one |
 | D640 | **The despeckled/undespeckled mix was caught by the hash, not by the count** | trap | 16 cells differing was plausible; the f32 arm carrying the no-despeckle hash was impossible |
+
+## D641 — the renderer runs in a container, on a software Vulkan, and that changes what a session with no GPU can gate
+
+**Assumed impossible for four rounds of this session and it is not.** Mesa ships `lavapipe`, a
+software Vulkan 1.4 device; with a virtual X server for the surface, WorldShaper opens a device,
+builds the world, renders, prints every audit and writes a PNG.
+
+```bash
+apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  xvfb-run -a -s "-screen 0 640x400x24" ./build-linux/bin/WorldShaper \
+  --no-title --width 160 --height 100 --face-budget 16384 --cam 0,2,-20,90,0 \
+  --screenshot shot.png --screenshot-frame 25 --clip-coarse 8
+```
+
+**Two false starts, both of which read as "this cannot work".** The ICD is `lvp_icd.json`, not
+`lvp_icd.x86_64.json`; pointing `VK_ICD_FILENAMES` at a file that does not exist makes the loader
+report **no driver at all**, which surfaces as `SDL_CreateWindow failed: Installed Vulkan doesn't
+implement the VK_KHR_surface extension` — a message about a missing extension when the fault is a
+missing path. And SDL's `offscreen` video driver provides no Vulkan surface, so a real (virtual) X
+server is required rather than optional.
+
+### The two costs, and both of them have a flag
+
+| | |
+|---|---|
+| the first frame | **204 s** — every compute shader JIT-compiled by the driver, once. A longer run amortises it |
+| a frame at the shipped face table | **266,879 ms** |
+| a frame at `--face-budget 16384` | **503 ms** |
+
+**A 530× difference that is about the TABLE and not about the pixels.** The passes that sweep a
+million face slots are sized for hardware; in software they are the entire frame. Shrinking the
+window from 320×200 to 160×100 barely registers beside it. That is worth knowing on its own, because
+it says which passes are proportional to the store rather than to the screen.
+
+### What it is good for, and what it is not
+
+Nothing timed on a software rasteriser means anything, and a small `--face-budget` is the **pressured
+regime** (D306) rather than the shipped one, so anything about eviction or cold windows measured that
+way is about a different state. What does travel: **a picture is a picture, every audit prints, and
+the content hashes are the same numbers as on the development machine.** So the correctness half of a
+renderer change — does the pool agree with the world, is a sealed room black, do two identical frames
+come out identical — is gateable with no GPU in the room. That is the difference between a container
+session doing CPU work only and one that can answer a question about the picture.
+
+**The first picture out of it is 320×200 of sky**, taken at frame 2 when the world was eight nodes,
+which is exactly right and is the reason the second run asked for a later frame.
+
+### And it segfaults at about frame 17, in code that has no symbols
+
+Under `gdb`, the faulting thread is at `0x7fffd013bd0e` in an **anonymous mapping**, with a frame
+chain of `0xfe1f8000fe1f8000` and `0x0fffff81...` — packed float lanes rather than return addresses.
+A second thread sits in the same region. That is **JIT-compiled shader code inside the driver**, not
+WorldShaper's own C++: this is a RelWithDebInfo build, so any frame of ours would have resolved.
+
+**That does not make it the driver's bug.** An out-of-bounds access from a compute shader is
+undefined behaviour, and the two ends of that behave differently: hardware with robust access
+returns zeroes and carries on, while a JIT that has compiled the access literally will walk off its
+own buffer and take the process with it. **So the honest classification is "in the driver's code,
+possibly caused by ours"**, and the way to tell them apart is the validation layers, which this
+repository already has a flag for. That run is the next thing and is not finished here.
+
+**Either answer is worth having.** If validation is clean, this is a lavapipe limitation and the
+container's ceiling is about seventeen frames — enough for a picture, not for a settle. If it is
+not, there is a shader reading outside a buffer, and the machine it has been running on for months
+has simply been the forgiving kind.

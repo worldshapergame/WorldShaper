@@ -1,0 +1,35 @@
+# WSauthor: worldshaper
+# A sealed room with nothing in it that gives off light. The answer is black.
+#
+# This exists to hold one clause honestly: **if a surface receives no light it is black, and there
+# is no minimum anywhere**. That is easy to assert and easy to lose — a constant added to an ambient
+# term reads as taste, survives every other test, and only shows up as a room that will not go dark.
+# Two of them lived in `resolve.comp` until R9 measured the light they were standing in for
+# (`kIndirectFloor`, which was half of the sky term wherever the sky could not be seen, and
+# `kGroundBounce`, which was added to every surface in the world unconditionally).
+#
+# Nothing here is subtle: a box, hollowed, with no opening, no emitter and no sky. The sun cannot
+# reach it, the sky cannot reach it, there is no lamp in the list, and every gathering ray inside it
+# lands on a surface that is itself receiving nothing. Every term is nought by construction, so the
+# picture is a measurement of whether the renderer agrees.
+
+metre 32
+bounds -4 -0.5 -4   4 3.5 4
+
+material darkstone rgb=170,166,160 rough=210
+
+# Two metres of wall on every side, so nothing leaks in through a corner and no ray finds its way
+# out through the shared edge of two cells — which a voxel grid lets a ray do (see `face_point` in
+# shaders/shade_faces.comp), and which would put a little sky in here and make this test pass for
+# the wrong reason.
+let shell = box -4 -0.5 -4   4 3.5 4
+let void  = box -2  0.5 -2   2 2.5 2
+let walls = difference { shell void }
+
+paint darkstone
+
+solid walls
+
+# The player stands in the middle of the void: 4 m by 2 m by 4 m of air, two metres of stone around
+# it on every side.
+origin 0 -1.5 0

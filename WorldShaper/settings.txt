@@ -1,0 +1,12 @@
+accent 0 1 0
+logo 14715436
+sound 1
+volume 0.6
+interface_scale 0
+username shaper
+split 0 0.500000
+split 1 0.500000
+split 2 0.500000
+split 3 0.500000
+window settings 0 0 0.240000 0.280000 0.300000 0.300000
+window worlds 1 0 0.240000 0.280000 0.300000 0.300000

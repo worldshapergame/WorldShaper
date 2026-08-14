@@ -1,0 +1,71 @@
+# WSauthor: worldshaper
+# Stone at five thicknesses with the sun behind it.
+#
+# The translucency byte has been in the voxel record since the format was written and nothing
+# read it, so every marble surface in the facility rendered as painted stone. What makes marble
+# marble is that the thin parts glow and the thick parts do not, and no clip says which is which
+# — the renderer has to find it out by counting the voxels a scattered ray crosses before it is
+# extinguished, which is the one measurement a voxel world can always make.
+#
+# So: the same stone, five panels, from one voxel thick to a hand's breadth, in a row against an
+# open sky with the sun on the far side of them. The leftmost has the translucency left at zero,
+# which is the picture the renderer used to draw for all five. At the far end is a plinth with a
+# moulding on it, which is the case the facility is actually made of: a solid body that must stay
+# stone with a thin lip that must not.
+#
+# The sun is fixed at (0.41, 0.86, 0.30), so anything seen from negative x is lit from behind.
+#   --cam "-1.5,0.62,-0.8,0,2"     the row of panels
+#   --cam "-0.9,1.35,0.35,42,-10"  the moulding, close
+
+metre 32
+bounds -3.2 -0.4 -3.0   1.6 2.2 2.2
+
+material floorstone rgb=150,146,140 rough=225
+# The reference and the subject. Same colour, same roughness, and the only difference between
+# them is the byte that says how far light gets inside.
+material marble     rgb=228,225,217 rough=140
+material alabaster  rgb=228,225,217 rough=140 translucent=220
+# And what a building is actually faced in. Marble stops light in about a voxel, so a wall of it
+# is stone and only the lip of a moulding is not.
+material marble_t   rgb=228,225,217 rough=140 translucent=110
+material kerb       rgb=96,94,92    rough=235
+
+let tt_floor = box -3.2 -0.4 -3.0   1.6 0 2.2 round=0.02
+
+# Panels standing in the y-z plane so their faces point along x: the near face at x = 0.4 is the
+# one the camera sees, the far face is the one the sun is on. Thickness is the only thing that
+# differs between the four on the right.
+let tt_p0 = box 0.40 0 -2.60   0.53 1.25 -2.05
+let tt_p1 = box 0.40 0 -1.85   0.44 1.25 -1.30
+let tt_p2 = box 0.40 0 -1.10   0.47 1.25 -0.55
+let tt_p3 = box 0.40 0 -0.35   0.56 1.25  0.20
+let tt_p4 = box 0.40 0  0.45   0.80 1.25  1.00
+
+# A block with a moulding run along its top, to show the other half of the same rule: the solid
+# body of it stays stone and the thin lip of the moulding is where the light comes through. This
+# is the case the facility is actually made of — nothing there is a panel in mid air.
+let tt_body  = box 0.40 0    1.30   0.75 0.95 2.00
+let tt_lip   = box 0.28 0.95 1.18   0.87 1.02 2.12
+let tt_cap   = box 0.34 1.02 1.24   0.81 1.09 2.06
+
+let tt_kerb  = box -3.2 0 1.60   1.6 0.22 2.2 round=0.02
+
+let grain = fbm size=0.05 octaves=3 seed=7
+
+let tt_all = union { tt_floor tt_p0 tt_p1 tt_p2 tt_p3 tt_p4 tt_body tt_lip tt_cap tt_kerb }
+let tt_all = displace { tt_all grain } amount=0.003
+
+paint floorstone
+paint marble   where=tt_p0 below=0.008
+paint alabaster where=tt_p1 below=0.008
+paint alabaster where=tt_p2 below=0.008
+paint alabaster where=tt_p3 below=0.008
+paint alabaster where=tt_p4 below=0.008
+paint marble_t where=tt_body below=0.008
+paint marble_t where=tt_lip below=0.008
+paint marble_t where=tt_cap below=0.008
+paint kerb     where=tt_kerb below=0.008
+
+variation colour=0.018 rough=0.035 seed=3
+
+solid tt_all

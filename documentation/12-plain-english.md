@@ -2839,3 +2839,34 @@ chance. And my first way of building the "fast arithmetic" mode made the ordinar
 everyone, to serve a measurement I run once; I rebuilt it so the cost is zero, and checked that by
 running both versions alternately rather than one after the other, because this borrowed machine
 drifts.
+
+## And then I found out the game itself runs on the borrowed machine, which I had assumed it could not
+
+Every report this session has come with the same caveat: *no graphics card here, so nothing about the
+picture*. That turns out to have been wrong, and I should have tested it on the first day rather than
+assuming it.
+
+There is such a thing as a **software graphics card** — a program that pretends to be one and does
+all the work on the ordinary processor. It is slow beyond belief, but it is *correct*. With it, the
+game opens, builds the facility, renders, runs all its self-checks and saves a photograph. I have one
+now: 320×200, and it is a picture of the sky, because I asked for it two frames in when the building
+had barely started existing.
+
+**How slow: the first frame took 267 seconds.** Not the first *second* — the first *frame*. And the
+reason is worth telling you, because it is a fact about the engine rather than about the borrowed
+machine: the light system sweeps a table of a million surfaces every frame. On a real graphics card
+that is nothing, because it does a million small things at once. In software it is a million things
+one after another, and it swamps everything else. Shrinking that table to sixteen thousand took a
+frame from **267 seconds to half a second** — five hundred times faster — while making the picture
+smaller barely helped at all. So the cost is the table, not the pixels.
+
+**What this changes.** It does not give me speeds — nothing timed on a pretend graphics card means
+anything, and I will not quote a single number from it. What it gives me is the ability to check
+whether a change to the *picture* is right: does a sealed room come out black, does the building
+agree with what the engine thinks it drew, does the same frame come out the same twice. Those are
+exactly the checks the noise-and-speckle work you asked for next needs, and until an hour ago I
+thought they were impossible without your machine.
+
+**One honest caveat: it crashed after about seventeen frames**, and I do not yet know whether that is
+the game's fault or the pretend graphics card's. I am finding out. If it is ours, it is a real bug
+that your machine has simply never been unlucky enough to hit.

@@ -1,0 +1,167 @@
+# WSauthor: worldshaper
+# The facility.
+#
+# A neoclassical public building in the Ionic order: a hexastyle portico facing south on a
+# podium reached by a broad flight of steps, a main block with a rusticated ground storey and a
+# piano nobile above it, wings east and west, and a domed rotunda on the centre line.
+#
+# This file is a manifest and almost nothing else. The building is written in the fragments it
+# includes, one to a file, because a building is made of parts and so should the thing that
+# describes it be — and because that way many hands can work on it at once without any two of
+# them editing the same lines.
+#
+# The order matters. `_contract.clip` first, because it holds every dimension the rest derives
+# from and every material they are made of. `_order.clip` second, because it holds the Ionic
+# vocabulary — a column, a pilaster, a capital, a baluster — that the parts place and repeat.
+# Then the parts, outside to inside, and the paint stacks in the order they are included: a
+# later coat covers an earlier one, so the base coat is here at the top and every fragment paints
+# only where its own shapes are.
+#
+# See clips/facility/BRIEF.md for what each part is and the rules they are all written to.
+
+include "facility/_contract.clip"
+include "facility/_order.clip"
+
+# The coat everything starts in. Limestone is what the building is, and every other material in
+# it is an exception argued for by one of the fragments below.
+paint limestone
+
+# --- the ground it stands on ---------------------------------------------------------------
+include "facility/site.clip"
+include "facility/podium.clip"
+include "facility/steps.clip"
+
+# --- the shell -------------------------------------------------------------------------------
+include "facility/walls.clip"
+include "facility/pilasters.clip"
+include "facility/windows.clip"
+include "facility/doors.clip"
+include "facility/portico.clip"
+include "facility/entablature.clip"
+include "facility/pediment.clip"
+include "facility/parapet.clip"
+include "facility/roof.clip"
+
+# --- the dome ---------------------------------------------------------------------------------
+include "facility/drum.clip"
+include "facility/dome.clip"
+
+# --- what is inside it --------------------------------------------------------------------------
+include "facility/vestibule.clip"
+include "facility/rotunda.clip"
+include "facility/halls.clip"
+include "facility/stair.clip"
+include "facility/fittings.clip"
+
+# --- and what the weather has done to all of it ------------------------------------------------
+#
+# Last, and that is the whole of why it is here rather than up with the site it mostly acts on.
+# Weathering appends its coats after the author's, so whatever is included last is painted over
+# everything before it — which is exactly right for sand, moss and stain, and exactly wrong if it
+# is included in the middle.
+#
+# This line was missing for the building's whole first life. The fragment was written, the three
+# `weather` statements in it were correct, and nothing included the file — so the one subsystem
+# the facility exists to exercise was silently absent, and the only sign of it was that the report
+# said one weathering coat where there should have been thirteen.
+include "facility/surface.clip"
+
+# --- assembly ------------------------------------------------------------------------------------
+
+let shell = union {
+    part_site part_podium part_steps
+    part_walls part_pilasters part_windows part_doors
+    part_portico part_entablature part_pediment part_parapet part_roof
+    part_drum part_dome
+}
+
+let inside = union {
+    part_vestibule part_rotunda part_halls part_stair part_surface
+}
+
+let built = union { shell inside }
+
+# The voids come last, so nothing put in afterwards can be eaten by a room being carved. The
+# fragments that need to remove matter — a doorway through a wall, a window through it, the
+# rooms themselves — each expose one shape named `<part>_void`, and they are all taken away
+# here, in one place, where the order is visible.
+let hollowed = difference {
+    built
+    void_doors void_windows void_vestibule void_rotunda void_halls void_stair
+}
+
+# AND THE FURNITURE AFTER THE ROOMS, which is what the paragraph above always claimed happened.
+#
+# It did not. `part_fittings` was in `inside`, `inside` is in `built`, and every room's void is
+# subtracted from `built` — so every sconce, bench and statue standing in a room was cut away by
+# the room it stands in. A room's void is correctly written as *the air of that room less that
+# room's own stone*, which is what stops another fragment leaving a wall in somebody's room; but a
+# fitting is BY DEFINITION a thing standing in somebody's air, and it went with it.
+#
+# What survived was the 0.09 m of backplate buried in the wall: a flat dark rectangle with no
+# bracket, no bowl and no flame. Reported from playing as *"i cant tell what they are"*, which is
+# the exact right reaction to the back of a lamp. The benches, buried the same 0.09 and projecting
+# 0.45 into the room, went altogether, and so did both hall statues.
+#
+# It also took the light with it. halls.clip builds two rooms with no window in either and says in
+# its own header that everything past the first bay arrives from a sconce or from nothing; the
+# eight sconces are that "or from nothing", and with their bowls and flames cut off the halls were
+# lit by nothing at all. The whole emissive load of the building indoors was one deleted union.
+#
+# fittings.clip diagnosed this from inside its own file, measured it, wrote the fix out in
+# clips/facility/requests/fittings.md and could not make it, because the line is here. This is that
+# line. It cannot open a seam: part_fittings removes no matter, exposes no void of its own, and
+# overlaps its hosts by 0.05 everywhere. The grain still runs over it, because `all` displaces what
+# comes out of here and not what went in.
+# A DOOR AND A WINDOW STILL CUT A FITTING. A ROOM DOES NOT. That is the whole of the distinction
+# this line exists to make, and the first version of it did not make it: `union { hollowed
+# part_fittings }` put the furniture back after EVERY void, so a sconce standing in a doorway was
+# no longer cut by the doorway. Reported from playing, immediately, as a lamp on one of the lesser
+# doors -- a bronze bracket with its bowl alight, hanging in mid-air in front of a closed door
+# leaf, which is what the portico's outer sconce has always been and what `void_doors` had always
+# quietly been hiding.
+#
+# The two kinds of void are not the same kind of thing and it took a wrong picture to see it:
+#
+#   void_vestibule, void_rotunda, void_halls, void_stair   the AIR OF A ROOM. A fitting stands in
+#       a room's air by definition, and subtracting these deleted every sconce, bench and statue
+#       indoors (D608). They must not touch part_fittings.
+#   void_doors, void_windows                               an OPENING THROUGH A WALL. Nothing may
+#       stand in one -- not a fitting, not anything -- because the hole is the point. These must
+#       still cut part_fittings, exactly as they did before D608.
+#
+# LEFT FOR fittings.clip AND NOT FIXED HERE: the outer portico sconce is at x = +-5.40 and the side
+# door's void is x = 4.50 .. 6.30, so it is placed squarely in a doorway and comes out cut in half.
+# That is where it was before D608 too; the change only made it visible for a day. The file's own
+# note reasons the placement from "the great door's dressing stops at 2.025 and the antae start at
+# 6.05" and never mentions the side doorcase, which runs 4.05 .. 6.75 straight through the middle
+# of that span. Moving it is an elevation decision and belongs in the file that draws the elevation.
+let furnished = union { hollowed  difference { part_fittings void_doors void_windows } }
+
+# --- surface --------------------------------------------------------------------------------------
+#
+# Twelve millimetres of grain over everything, which is under half a voxel at full detail, so it
+# moves no wall — and is the difference between a face that reads as carved stone and one that
+# reads as a drawing of carved stone.
+let all = displace { furnished grain_fine } amount=0.012
+
+
+variation colour=0.030 rough=0.070 seed=17
+
+solid all
+
+# --- where the origin is ---------------------------------------------------------------------
+#
+# The player spawns at 0,0,0 and should be standing in the middle of the rotunda floor looking out
+# of the main door, so the BUILDING moves to meet that rather than the spawn moving to meet the
+# building. The origin is the one coordinate everybody types; it should mean something.
+#
+# The rotunda floor is a cylinder centred at y 1.7325 and 0.135 thick, so its top face is at 1.80.
+# The origin wants to be an eye height above it: 1.80 + 1.70 = 3.50 m down. Its centre is already at
+# x 0, z 0 — the plan was drawn around it — so nothing moves sideways, and the main door is the
+# opening on the minus-z face, which is the way the spawn looks.
+#
+# `origin` and not a translate around the solid. A translate moves the stone and leaves every paint
+# rule at the height it was drawn for, which put the plinth course and the ground line partway up
+# the walls — geometry right, colour wrong. This moves both.
+origin 0 -3.50 0

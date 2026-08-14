@@ -1,0 +1,48 @@
+# WSauthor: worldshaper
+# A room with a window in it, which is the one frame a fixed exposure cannot render.
+#
+# Outdoors the sky sets the level and everything is within a few stops of it. Indoors the
+# only way in is the window, and the window is the sky: the wall beside it and the sky
+# behind it are ten or twelve stops apart in the same picture. With no exposure at all the
+# renderer picks 1.0, the sky clips to white, and the room -- which is where the light
+# actually has to be judged -- comes out black.
+#
+# So: a plain box room, one opening, a floor that is not the same colour as the walls, and
+# two objects near the window whose falloff away from it is the thing to look at. Nothing
+# clever, because anything clever would be a second variable.
+
+metre 32
+bounds -3.6 -0.4 -4.6   3.6 3.6 4.6
+
+material plaster   rgb=226,222,212 rough=235
+material floorwood rgb=150,112,72  rough=185
+material sill      rgb=96,94,92    rough=205
+material chrome    rgb=232,232,238 rough=8   metal=250
+material redpost   rgb=178,56,50   rough=200
+
+# The shell, hollowed out. The window is cut through the +z wall rather than set into it,
+# because a hole is what lets the light in and a pane would be testing the glass instead.
+let er_shell  = box -3.2 -0.4 -4.2   3.2 3.2 4.2
+let er_void   = box -3.0  0.0 -4.0   3.0 3.0 4.0
+let er_window = box -1.3  0.9  3.8   1.3 2.5 4.4
+let er_cut    = union { er_void er_window }
+let er_room   = difference { er_shell er_cut }
+
+# Something to catch the light on its way in, at two roughnesses, so the window shows up as
+# a reflection as well as as a source.
+let er_ball   = sphere -1.1 0.75 1.4 r=0.75
+let er_post   = cylinder 1.4 1.05 1.1 r=0.2 h=2.1 axis=y
+
+let er_all    = union { er_room er_ball er_post }
+
+# A thin slab lying on the floor, only so there is a shape to name when painting it.
+let er_deck   = box -3.0 0.0 -4.0   3.0 0.02 4.0
+let er_ledge  = box -1.3 0.86 3.7   1.3 0.94 4.5
+
+paint plaster
+paint floorwood where=er_deck   below=0.02
+paint sill      where=er_ledge  below=0.02
+paint chrome    where=er_ball   below=0.02
+paint redpost   where=er_post   below=0.02
+
+solid er_all

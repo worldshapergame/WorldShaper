@@ -3583,10 +3583,41 @@ skipped there** — a delete goes to the system recycle bin and there is no Linu
 `send_to_recycle_bin`, so a player on a Deck cannot delete from the library at all. That is real
 debt, tracked below, and not a test problem.
 
-What that session could NOT do is anything with a picture or a clock: no GPU, and a CPU four cores
-wide and several times slower than the development machine. **Nothing timed on such a machine is
-comparable to anything in this file.** Content is: the facility's field is `3744 nodes, 923 with no
-box` there and here, and `clips/sampler.clip` measures 1,430,104 voxels on both.
+**And the renderer itself runs there too, which nobody had tried** (D641). Not on a GPU — on Mesa's
+software Vulkan, `lavapipe`, under a virtual X server:
+
+```bash
+apt-get install -y mesa-vulkan-drivers vulkan-tools xvfb          # plus libvulkan-dev glslc
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  xvfb-run -a -s "-screen 0 640x400x24" ./build-linux/bin/WorldShaper \
+  --no-title --width 160 --height 100 --face-budget 16384 --cam 0,2,-20,90,0 \
+  --screenshot shot.png --screenshot-frame 25 --clip-coarse 8
+```
+
+The ICD path is `lvp_icd.json` and NOT `lvp_icd.x86_64.json`; naming the file that does not exist
+gives `SDL_CreateWindow failed: Installed Vulkan doesn't implement the VK_KHR_surface extension`,
+which reads like a missing driver rather than like a typo, and cost a session twenty minutes. SDL's
+`offscreen` driver gives no Vulkan surface at all, so the X server is required.
+
+**Two costs dominate and both have a flag.** The first frame is **204 seconds** — every compute
+shader is JIT-compiled by the driver, once, so a longer run amortises it. And a frame at the shipped
+face table is **267 SECONDS**, because the passes that sweep a million slots are sized for hardware;
+`--face-budget 16384` takes that to **0.5 s a frame**, a 530× difference that is entirely about the
+table and not about the pixels. Shrinking the window barely matters by comparison.
+
+**What it is good for and what it is not.** Nothing timed there means anything. But a picture is a
+picture, every audit prints, and the content hashes are the same numbers as on the development
+machine — so the *correctness* half of a change can be gated in a container: does the world agree
+with the pool, does a sealed room come out black, does a frame reproduce. **A small `--face-budget`
+is the pressured regime (D306), not the shipped one**, so anything about eviction or the cold window
+measured that way is about a different state.
+
+**It also segfaults around frame 17 and that is not yet diagnosed** — see D641 for how far it got.
+
+What that session could NOT do is anything with a clock: a CPU four cores wide and several times
+slower than the development machine, and a software rasteriser besides. **Nothing timed on such a
+machine is comparable to anything in this file.** Content is: the facility's field is `3744 nodes,
+923 with no box` there and here, and `clips/sampler.clip` measures 1,430,104 voxels on both.
 
 ```powershell
 .\build.bat                          # build; NEVER pipe this to Out-Null while measuring
