@@ -469,6 +469,33 @@ uint face_material_flags(uint word) { return (word >> 16u) & 0xFFu; }
 // 64 bytes; the weights are only read by the pass that writes them.
 layout(std430, binding = 24) buffer FaceLobe { uint words[]; } face_lobe;
 
+// Every write into the lobe pool goes through here.
+//
+// The path below already refused to write past the end in two places — `if (at >=
+// face_lobe.words.length()) return kNoLobe;` — and did not in the eight others beside them, which
+// is the shape of a guard added where a fault was once seen rather than where the writes are. On
+// hardware with robust access an index past the end is discarded and the frame carries on; on a
+// driver that compiles the access literally it is a segfault with no frame of ours in the stack,
+// which is what D642 bisected to this rule's face set. **No guard here can ever fire on a
+// correctly sized buffer**, so this costs a compare on a cold path and changes nothing that was
+// already right.
+void face_lobe_store(uint at, uint value) {
+    if (at < face_lobe.words.length()) face_lobe.words[at] = value;
+}
+
+// ...and the same for a read, because a load past the end is exactly as fatal on a driver that
+// compiles it literally, and the denoise pass and the burst counter both do one. Nought is the
+// right answer for a block that does not exist: an empty bin and a weight of nought, which every
+// reader already treats as "nothing measured here".
+uint face_lobe_load(uint at) {
+    return (at < face_lobe.words.length()) ? face_lobe.words[at] : 0u;
+}
+
+void face_lobe_or(uint at, uint bits) {
+    if (at < face_lobe.words.length()) face_lobe.words[at] |= bits;
+}
+
+
 // ---- and what a face lets THROUGH, which nothing on the card has ever known (R4d) --------------
 //
 // One word a face slot, card-owned, filled beside the material and for the same reason: a face is
@@ -1970,15 +1997,15 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
     for (uint way = 0u; way < kLobeWays; ++way) {
         const uint header = face_lobe_header(base + way);
         if (header + 1u >= face_lobe.words.length()) return kNoLobe;
-        const uint held = face_lobe.words[header];
+        const uint held = face_lobe_load(header);
         if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) {
-            const uint state = face_lobe.words[face_lobe_state_at(base + way)];
+            const uint state = face_lobe_load(face_lobe_state_at(base + way));
             const uint head = ((state & (kLobeBig | kLobeFollower)) != 0u)
                                   ? base + (way & ~(kLobeBigWays - 1u))
                                   : base + way;
-            face_lobe.words[face_lobe_header(head) + 1u] = frame;
+            face_lobe_store(face_lobe_header(head) + 1u, frame);
             probe_add(kProbeLobeHeld);
-            if ((face_lobe.words[face_lobe_state_at(head)] & kLobeBig) != 0u) {
+            if ((face_lobe_load(face_lobe_state_at(head)) & kLobeBig) != 0u) {
                 probe_add(kProbeLobeBig);
             }
             return head;
@@ -1996,9 +2023,9 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
             bool free_run = true;
             for (uint way = run; way < run + kLobeBigWays; ++way) {
                 const uint header = face_lobe_header(base + way);
-                const uint held = face_lobe.words[header];
+                const uint held = face_lobe_load(header);
                 if (!face_lobe_is_held(held)) continue;
-                const uint since = frame - face_lobe.words[header + 1u];
+                const uint since = frame - face_lobe_load(header + 1u);
                 // A run is taken whole, so every block in it has to be free or cold. Worth is not
                 // enough here: taking four warm blocks off four faces to serve one is a trade this
                 // has no way to price, and the cheap class is what most of the picture is.
@@ -2008,21 +2035,22 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
 
             const uint head = base + run;
             const uint header = face_lobe_header(head);
-            const uint was = face_lobe.words[header];
+            if (header + 1u >= face_lobe.words.length()) continue;
+            const uint was = face_lobe_load(header);
             if (atomicCompSwap(face_lobe.words[header], was, mine) != was) continue;
             for (uint way = 1u; way < kLobeBigWays; ++way) {
-                face_lobe.words[face_lobe_header(head + way)] = mine;
-                face_lobe.words[face_lobe_header(head + way) + 1u] = frame;
-                face_lobe.words[face_lobe_state_at(head + way)] = kLobeFollower;
+                face_lobe_store(face_lobe_header(head + way), mine);
+                face_lobe_store(face_lobe_header(head + way) + 1u, frame);
+                face_lobe_store(face_lobe_state_at(head + way), kLobeFollower);
             }
-            face_lobe.words[header + 1u] = frame;
-            face_lobe.words[face_lobe_state_at(head)] = kLobeBig;
-            face_lobe.words[face_lobe_count_at(head)] = 0u;
+            face_lobe_store(header + 1u, frame);
+            face_lobe_store(face_lobe_state_at(head), kLobeBig);
+            face_lobe_store(face_lobe_count_at(head), 0u);
             for (uint bin = 0u; bin < kLobeBigBins; ++bin) {
                 const uint at = face_lobe_bin_at(head, bin);
                 if (at >= face_lobe.words.length()) return kNoLobe;
-                face_lobe.words[at] = 0u;
-                face_lobe.words[face_lobe_weight_at(head, bin, kLobeBigBins)] = 0u;
+                face_lobe_store(at, 0u);
+                face_lobe_store(face_lobe_weight_at(head, bin, kLobeBigBins), 0u);
             }
             if (face_lobe_is_held(was)) probe_add(kProbeLobeTaken);
             probe_add(kProbeLobeBig);
@@ -2038,7 +2066,7 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
     float best_worth = worth;
     for (uint way = 0u; way < kLobeWays; ++way) {
         const uint header = face_lobe_header(base + way);
-        const uint held = face_lobe.words[header];
+        const uint held = face_lobe_load(header);
         if (!face_lobe_is_held(held)) {
             best = way;
             best_worth = -1.0;
@@ -2046,7 +2074,7 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
         }
         // Cold is a stronger claim than worth: a block whose holder has stopped being shaded is
         // holding an answer nobody is going to read, however valuable that answer would have been.
-        const uint since = frame - face_lobe.words[header + 1u];
+        const uint since = frame - face_lobe_load(header + 1u);
         // ...and a WARM block is only taken by a face worth substantially more, which is hysteresis
         // and not caution.
         //
@@ -2070,7 +2098,8 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
 
     const uint block = base + best;
     const uint header = face_lobe_header(block);
-    const uint was = face_lobe.words[header];
+    if (header + 1u >= face_lobe.words.length()) return kNoLobe;
+    const uint was = face_lobe_load(header);
     if (atomicCompSwap(face_lobe.words[header], was, mine) != was) {
         // Somebody else took it between the look and the swap. One frame without a lobe, and the
         // next visit sorts it out -- retrying here would be a loop whose length is decided by how
@@ -2078,15 +2107,15 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
         probe_add(kProbeLobeDeclined);
         return kNoLobe;
     }
-    face_lobe.words[header + 1u] = frame;
+    face_lobe_store(header + 1u, frame);
     // ...and the count of rays this lobe has taken, which is what decides whether it still bursts.
     // Zeroing it is what makes a taken-over block a new lobe rather than a converged one holding
     // somebody else's answer.
-    face_lobe.words[face_lobe_count_at(block)] = 0u;
+    face_lobe_store(face_lobe_count_at(block), 0u);
     // ...and the class, because this block may have been the head of a big run a moment ago. A
     // stale kLobeBig here would have the next reader index thirty-six bins as a hundred and
     // forty-four and walk into three blocks it does not hold.
-    face_lobe.words[face_lobe_state_at(block)] = 0u;
+    face_lobe_store(face_lobe_state_at(block), 0u);
     // Whatever the last holder measured is about a different surface pointing a different way, and
     // it must not be averaged into this one. Zeroed rather than seeded: there is no ancestor to
     // inherit a lobe from -- a coarse face has no material and so never holds a block -- and a
@@ -2094,8 +2123,8 @@ uint node_face_lobe(uint slot, uint material, uint frame) {
     for (uint bin = 0u; bin < kLobeBins; ++bin) {
         const uint at = face_lobe_bin_at(block, bin);
         if (at >= face_lobe.words.length()) return kNoLobe;
-        face_lobe.words[at] = 0u;
-        face_lobe.words[face_lobe_weight_at(block, bin, kLobeBins)] = 0u;
+        face_lobe_store(at, 0u);
+        face_lobe_store(face_lobe_weight_at(block, bin, kLobeBins), 0u);
     }
     // Counted only where it was somebody ELSE's. A first claim on an empty pool is not churn, and
     // counting the two together would make an empty pool and a thrashing one read the same -- which
@@ -2121,9 +2150,9 @@ uint node_face_lobe_find(uint slot) {
     for (uint way = 0u; way < kLobeWays; ++way) {
         const uint header = face_lobe_header(base + way);
         if (header + 1u >= face_lobe.words.length()) return kNoLobe;
-        const uint held = face_lobe.words[header];
+        const uint held = face_lobe_load(header);
         if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) {
-            const uint state = face_lobe.words[face_lobe_state_at(base + way)];
+            const uint state = face_lobe_load(face_lobe_state_at(base + way));
             return ((state & (kLobeBig | kLobeFollower)) != 0u)
                        ? base + (way & ~(kLobeBigWays - 1u))
                        : base + way;
@@ -2138,12 +2167,12 @@ void node_face_lobe_forget(uint slot) {
     for (uint way = 0u; way < kLobeWays; ++way) {
         const uint header = face_lobe_header(base + way);
         if (header + 1u >= face_lobe.words.length()) return;
-        const uint held = face_lobe.words[header];
+        const uint held = face_lobe_load(header);
         if (face_lobe_is_held(held) && face_lobe_holder_slot(held) == slot) {
             // Every block of the run, not just the one that was found: three quarters of a released
             // big block still marked as held is three blocks nobody can ever take again.
-            face_lobe.words[header] = 0u;
-            face_lobe.words[face_lobe_state_at(base + way)] = 0u;
+            face_lobe_store(header, 0u);
+            face_lobe_store(face_lobe_state_at(base + way), 0u);
             continue;
         }
     }

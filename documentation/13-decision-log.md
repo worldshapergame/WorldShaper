@@ -7135,10 +7135,26 @@ if (index < push.resolution.w) { feedback.entries[index].coord = ...; }
 ```
 
 `node_face_request` — R9a's own write — is one of them. So the fault is not the append this rule
-makes; it is something downstream of a face set that only this rule can grow. **The next suspect is
-the lobe pool** (`131072` blocks, 144 bins each), which R9a feeds by claiming faces that no pixel
-asked for, and which is sized independently of `--face-budget`. That is a hypothesis and not a
-finding: it has not been tested.
+makes; it is something downstream of a face set that only this rule can grow.
+
+**The lobe pool was the first suspect and it is ruled out by measurement.** It is the table R9a
+feeds by claiming faces no pixel asked for, it is 131,072 blocks sized independently of
+`--face-budget`, and it guarded two of its accesses and not the other twenty — the shape of a check
+added where a fault was once seen rather than where the writes are. Every one of them now goes
+through `face_lobe_store`, `face_lobe_load` and `face_lobe_or`, and the two `atomicCompSwap`s refuse
+a block whose header falls outside the buffer. **The arm that crashed twice still crashes**, at
+frame 19 rather than 16.
+
+So the guards are hardening rather than a fix, and they are kept on their own merits: **no guard
+here can fire on a correctly sized buffer**, so on hardware they cost a compare on a cold path and
+change nothing that was already right, while making the invariant explicit where it had been left
+implicit in twenty places. What they buy is that this subsystem can be crossed off in one line next
+time rather than re-suspected.
+
+**Still open, and it needs hardware**: GPU-assisted validation is the instrument that names the
+buffer, and it does not engage on the software driver — the layer produces no output and the run
+dies before a frame. On an RTX it is `--validation` plus
+`VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT`.
 
 ### Why this is worth a Windows session's attention
 
@@ -7157,7 +7173,9 @@ shader rather than the descriptors around it. If it names a buffer, it is ours.
 |---|---|---|---|
 | D642 | **The crash is R9a's, by five arms of one build** | measurement | `--no-secondary-faces` survives 40 frames and writes a picture; secondary faces alone, with secondary light off, crashes |
 | D642 | **It is not the paste path, not pool growth, not face reads, and not D641's descriptor** | measurement | 128× less pasting crashes at the same frame; the descriptor fault is fixed and the crash outlived it |
-| D642 | **R9a's own append is correctly bounded, so the fault is downstream of the face set it grows** | finding | All three feedback appends test `index < push.resolution.w`; the untested suspect is the lobe pool, which R9a feeds and which is not sized by `--face-budget` |
+| D642 | **R9a's own append is correctly bounded, so the fault is downstream of the face set it grows** | finding | All three feedback appends test `index < push.resolution.w` |
+| D642 | **The lobe pool is ruled out: every access guarded, and it still crashes** | measurement | Twenty of its twenty-two accesses were unguarded and now go through one store, one load and one or; the arm reaches frame 19 instead of 16 and dies. Kept as hardening — no guard can fire on a correctly sized buffer |
+| D642 | **GPU-assisted validation does not engage on the software driver** | finding | The layer emits nothing and the run dies before a frame; the instrument that names the buffer needs hardware |
 | D642 | **One software render at a time, or the container dies** | trap | Two together killed it twice, ten minutes each, presenting as an unrelated restart |
 
 ## D643 — a report ends on the next step, not on a list of what went wrong

@@ -1071,11 +1071,11 @@ void face_lobe_add(uint block, uint bin, uint bins, float w, vec3 radiance) {
     const uint at = face_lobe_bin_at(block, bin);
     const uint weight_at = face_lobe_weight_at(block, bin, bins);
     if (weight_at >= face_lobe.words.length()) return;
-    const float had = min(uintBitsToFloat(face_lobe.words[weight_at]), float(kBounceMemory));
-    const vec3 was = face_unpack_rgb9e5(face_lobe.words[at]);
+    const float had = min(uintBitsToFloat(face_lobe_load(weight_at)), float(kBounceMemory));
+    const vec3 was = face_unpack_rgb9e5(face_lobe_load(at));
     const float now = had + w;
-    face_lobe.words[at] = face_pack_rgb9e5(was + (radiance - was) * (w / now));
-    face_lobe.words[weight_at] = floatBitsToUint(now);
+    face_lobe_store(at, face_pack_rgb9e5(was + (radiance - was) * (w / now)));
+    face_lobe_store(weight_at, floatBitsToUint(now));
 }
 
 void face_lobe_accumulate(uint block, uint bins, uint side, vec3 dir, vec3 radiance) {
@@ -1253,12 +1253,12 @@ void face_lobe_denoise(uint block, uint bins, ivec3 node, uint level, uint dir) 
         // surface's answer for a cone the other never measured. A polished face beside a rough one
         // simply keeps its own, which is the honest thing and is rare -- a size class follows the
         // material, and neighbouring faces are nearly always the same material.
-        if (face_lobe_bins_of(face_lobe.words[face_lobe_state_at(block_at)]) != bins) continue;
+        if (face_lobe_bins_of(face_lobe_load(face_lobe_state_at(block_at))) != bins) continue;
         // Weighted by how far along the neighbour's own burst is, capped at converged. A face two
         // visits into its measurement is noise, and noise averaged nine ways is noise one scale
         // coarser -- which is D387's measurement and the same reason `face_light_seed` refuses a
         // thin ancestor.
-        const float count = float(face_lobe.words[face_lobe_count_at(block_at)]);
+        const float count = float(face_lobe_load(face_lobe_count_at(block_at)));
         if (count <= 0.0) continue;
         at[i] = block_at;
         trust[i] = spatial[i] * min(count / float(bins * kLobeSamples), 1.0);
@@ -1267,20 +1267,20 @@ void face_lobe_denoise(uint block, uint bins, ivec3 node, uint level, uint dir) 
     for (uint bin = 0u; bin < bins; ++bin) {
         const uint mine = face_lobe_bin_at(block, bin);
         float weight = kDenoiseCentre;
-        vec3 blended = face_unpack_rgb9e5(face_lobe.words[mine]) * kDenoiseCentre;
+        vec3 blended = face_unpack_rgb9e5(face_lobe_load(mine)) * kDenoiseCentre;
         for (uint i = 0u; i < 8u; ++i) {
             if (at[i] == kNoLobe) continue;
             // A bin the neighbour has not reached yet adds nothing at all, which is what makes the
             // kernel shrink gracefully instead of pulling the answer towards nought. Its weight is
             // stored beside it and is nought exactly when no ray has landed in it.
             const uint neighbour = face_lobe_weight_at(at[i], bin, bins);
-            if (!(uintBitsToFloat(face_lobe.words[neighbour]) > 0.0)) continue;
+            if (!(uintBitsToFloat(face_lobe_load(neighbour)) > 0.0)) continue;
             weight += trust[i];
-            blended += trust[i] * face_unpack_rgb9e5(face_lobe.words[face_lobe_bin_at(at[i], bin)]);
+            blended += trust[i] * face_unpack_rgb9e5(face_lobe_load(face_lobe_bin_at(at[i], bin)));
         }
-        if (weight > 0.0) face_lobe.words[mine] = face_pack_rgb9e5(blended / weight);
+        if (weight > 0.0) face_lobe_store(mine, face_pack_rgb9e5(blended / weight));
     }
-    face_lobe.words[face_lobe_state_at(block)] |= kLobeFiltered;
+    face_lobe_or(face_lobe_state_at(block), kLobeFiltered);
 }
 
 // ---- lamps (R3c) ---------------------------------------------------------------------------
@@ -2064,7 +2064,7 @@ void main() {
     // and the ambient burst above both carry, and a lobe is the slowest accumulator here.
     const uint lobe = provisional_face ? kNoLobe : node_face_lobe(slot, material, node_push.frame);
     // The size this block was given, which decides every index into it from here down.
-    const uint lobe_state = lobe == kNoLobe ? 0u : face_lobe.words[face_lobe_state_at(lobe)];
+    const uint lobe_state = lobe == kNoLobe ? 0u : face_lobe_load(face_lobe_state_at(lobe));
     const uint lobe_bins = face_lobe_bins_of(lobe_state);
     const uint lobe_side = face_lobe_side_of(lobe_state);
     // A big block asks fewer samples of each of its bins, so a face's whole life costs the same
@@ -2085,7 +2085,7 @@ void main() {
     // the same argument for the ambient burst, and D394 is the measurement under it).
     if (lobe != kNoLobe && may_cast && node_push.bounce != 0u && probe_lobe_ray()) {
         const uint count_at = face_lobe_count_at(lobe);
-        const uint taken = face_lobe.words[count_at];
+        const uint taken = face_lobe_load(count_at);
         if (taken < lobe_target) {
             probe_add(kProbeLobeBursting);
             // The face's frame is already set, above the lamps, by the one function that answers
@@ -2105,9 +2105,9 @@ void main() {
                 lobe_cast(lobe, index % lobe_bins, lobe_bins, lobe_side, index / lobe_bins,
                           pixel_angle, corner, across, down, size, chunk_origin);
             }
-            face_lobe.words[count_at] = taken + kLobeBurst;
+            face_lobe_store(count_at, taken + kLobeBurst);
         } else if (probe_denoise() &&
-                   (face_lobe.words[face_lobe_state_at(lobe)] & kLobeFiltered) == 0u) {
+                   (face_lobe_load(face_lobe_state_at(lobe)) & kLobeFiltered) == 0u) {
             // ---- R5: and on the one visit after it finishes, it compares notes ----------------
             //
             // On the visit AFTER the burst rather than on the last visit of it, so that the bins
