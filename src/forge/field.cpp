@@ -1962,7 +1962,7 @@ void Field::build_bounds() {
         if (nodes_[i].op != Op::Union || swallowed[i] != 0) continue;
         leaves.clear();
         flatten_union(static_cast<u32>(i), leaves);
-        if (leaves.size() < kAccelerateFrom) continue;
+        if (leaves.size() < accelerate_from_) continue;
 
         Accelerator bvh;
         bvh.nodes.reserve(leaves.size() * 2);

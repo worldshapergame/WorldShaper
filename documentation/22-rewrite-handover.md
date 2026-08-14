@@ -643,11 +643,14 @@ work, and these three are the only three places it lives.
 
 #### 0. Since the order was chosen: a bug is closed, a fourth place was found, and step 2 shrank
 
-**Step 2 has been measured and is now one measurement rather than a stage (D636).** Its first half —
-"bound the 923 nodes that have no box" — does not survive its own histogram: only 177 of them are
-under the solid at all, and every one of those is either a deliberate refusal or a shape with no
-finite extent. The bounds are not being written. What is left of the step is the `kAccelerateFrom`
-arm, and that is now what step 2 means. The section itself carries the table.
+**Step 2 is measured, both halves, and what is left of it is one number to change (D636, D637).**
+Its first half — "bound the 923 nodes that have no box" — does not survive its own histogram: only
+177 of them are under the solid at all, and every one of those is either a deliberate refusal or a
+shape with no finite extent, so no bounds were written. Its second half, `kAccelerateFrom`, was
+measured instead: **twelve is too low and the sweep's minimum is 16–64**, worth 4–13% of the shape
+evaluation that is 76% of sampling. The default has NOT been moved, because the sweep was taken on a
+container rather than on the development machine; **repeating it there is five minutes and is the
+whole of what step 2 has left.** The section itself carries both tables.
 
 
 **Closed (D625).** A cached load — the path every launch after the first takes — was running with
@@ -835,12 +838,23 @@ of those      scale 87 own, plane 59 own, 12 more values, 19 inherited
   against the 38% the rotate case was written to cure. An intersection keeping a bounded sibling's
   box is doing most of that work.
 
-**So do not write bounds here.** What remains of this step is the second half only: **190 wide
-unions have no hierarchy at all** against 19 that do (`kAccelerateFrom = 12`), and that constant has
-never been measured. **Do not guess at it** — the plain union path already sorts children by box
-distance and rejects on the running minimum, so a hierarchy over four children may buy nothing.
-Measure it as its own arm, which means **making it a flag first**: two arms are two flags, never two
-builds (D407).
+**So do not write bounds here.** What remained of this step was the second half only —
+`kAccelerateFrom = 12`, never measured — and **that is now measured too (D637)**. It is a flag,
+`--accelerate-from N`, because two arms are two flags and never two builds (D407).
+
+**Twelve is too low, and both ends of the sweep are worse than the middle.** On one box of the
+facility, against a ±1.5% noise band that the sweep establishes on itself (48 and 64 build the
+identical accelerators): 4 is +7%, **12 is the baseline**, 16 is −4%, **48 is −6%**, and turning
+hierarchies off entirely is +9%. A second box says −13% for 48. So the biggest unions are worth a
+hierarchy and the small ones lose to the sorted linear scan the plain path already does — the best
+setting builds **two** hierarchies on the facility instead of nineteen.
+
+**The default is still 12, and changing it is the one thing left in step 2.** Every figure above was
+taken on a four-core Linux container at 2.6× the development machine's cost per evaluation, and a
+cache moves a crossover like this. D637 has the five-minute repeat as one PowerShell loop; **if it
+agrees, `kAccelerateFromDefault` in `field.hpp` becomes the measured minimum and step 2 is done.**
+It changes no answer — `clips/sampler.clip` measures 1,430,104 voxels at 12 and at 48 alike, and the
+headless gate demands every distance to the bit across three thresholds.
 
 D636 also records one live idea and the reason it is not being built yet: a non-uniform scale can be
 culled soundly against `box distance × least/most`, which never drops a possible winner and would

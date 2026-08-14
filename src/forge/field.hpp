@@ -499,6 +499,15 @@ public:
     static constexpr u32 kEveryNode = 0xFFFFFFFFu;
     std::vector<Unbounded> unbounded_by_op(u32 root = kEveryNode) const;
 
+    // The width at which a union is worth a bounding hierarchy rather than a linear scan.
+    //
+    // Twelve was chosen without a measurement and the handover says so in as many words. It is a
+    // setting rather than a constant so the two arms of that measurement are two flags and never
+    // two builds (D407) — set it, call `build_bounds` again, and the accelerators are rebuilt.
+    static constexpr usize kAccelerateFromDefault = 12;
+    void set_accelerate_from(usize leaves) { accelerate_from_ = leaves; }
+    usize accelerate_from() const { return accelerate_from_; }
+
     // How many nodes that root can reach, which is what one evaluation of it may walk.
     usize nodes_under(u32 root) const;
 
@@ -556,8 +565,9 @@ private:
     static constexpr u32 kNoAccelerator = 0xFFFFFFFFu;
 
     // Below this a linear scan is cheaper than a traversal, and the boxes of a handful of parts
-    // rarely overlap enough to matter.
-    static constexpr usize kAccelerateFrom = 12;
+    // rarely overlap enough to matter. **Twelve is a guess and has never been measured** — see
+    // `set_accelerate_from`, which is how it is measured without rebuilding.
+    usize accelerate_from_ = kAccelerateFromDefault;
 };
 
 }  // namespace forge

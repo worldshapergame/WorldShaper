@@ -2685,3 +2685,42 @@ facility fall just under it. That is a measurement, not a build, and it is what 
 **What you would see in the game from any of this: nothing at all.** No picture changes and no
 number changes, because I built an instrument and then chose not to build the thing it was
 measuring. That is the honest report — the value of the hour is that the day did not get spent.
+
+## And then the part of it I *could* measure, which was hiding a real 6–13%
+
+The bit of that second item I said was unanswered — I answered it.
+
+When part of the building is a list of pieces, the game has two ways to find which piece you are
+standing near. It can check each one in turn, cheapest-looking first, or it can build a little index
+over them and search that. It uses the index whenever a list has **twelve or more** pieces. Nobody
+ever measured whether twelve was the right place to draw that line; it was a guess made once and
+never revisited.
+
+I made the line something I can change without rebuilding the game, and then swept it: 4, 6, 8, 12,
+16, 24, 32, 48, 64, 96, and off entirely. Two runs of each, on two different parts of the building.
+The answer is that **twelve is in the wrong place, and both extremes are bad**:
+
+- With **no index at all**, making the building is about 9% slower. So the index is worth having.
+- With an index over **every** list of four or more, it is 7% slower — nearly as bad as none. Small
+  lists are faster checked one by one than searched.
+- The best setting is somewhere between **16 and 64**, and it builds **two** indexes over the whole
+  facility instead of nineteen. On one part of the building that is 6% off the shape work; on
+  another it is **13%**.
+
+Shape work is about three quarters of what making the building costs, so this is a real slice of the
+loading time — for a one-number change that alters nothing about what the building looks like. I
+checked that: the test clip comes out at exactly 1,430,104 voxels either way, down to the same
+centre of mass, and there is a new automatic test that demands every distance measurement come back
+*bit for bit* identical whichever setting is used.
+
+**I have not changed the default, and I want to be straight about why.** This session ran on a
+borrowed machine that is roughly two and a half times slower than mine, with a different memory
+layout — and where exactly the "check each one" and "search the index" lines cross is precisely the
+sort of thing that moves between machines. The direction almost certainly holds; the exact number
+might not. Repeating the sweep on my own machine is one command and five minutes, and then it is a
+single number to change.
+
+**What you would see in the game: nothing, until that number changes — then the building should
+finish making itself a little sooner, and look identical while doing it.** If it ever looks anything
+but identical, that is the failure, and it would mean a piece of the building has gone missing
+rather than merely arrived late.

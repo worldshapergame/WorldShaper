@@ -6663,3 +6663,92 @@ switch case, it is worth 87 nodes of the facility's shape, and **it is not worth
 | D636 | **Step 2's first half is spent: there is no bound waiting to be written** | finding | 87 non-uniform scales refused for a correctness reason, 59 half spaces that are genuinely infinite, the rest values with no extent |
 | D636 | **`--clip-field` reports the boxes without sampling anything** | instrument | The parse decides them; reaching the table through a whole-building measure is minutes to print something already known |
 | D636 | **A sound cull for a non-uniform scale exists and is NOT being built yet** | deferred | `box distance x least/most` never drops a possible winner — but `kAccelerateFrom` has to say whether these unions cull at all first |
+
+## D637 — the other half of step 2: twelve is the wrong threshold, and a hierarchy over a small union costs more than it saves
+
+**`kAccelerateFrom` had never been measured. It is measured now, and the handover was right to say
+"do not guess at it" — the guess is wrong in the direction nobody expects.** It is a setting rather
+than a constant now (`Field::set_accelerate_from`, `--accelerate-from N`), because two arms are two
+flags and never two builds (D407).
+
+**Taken on a four-core Linux container, not on the development machine.** Every absolute figure
+below is therefore about 2.6× the dev machine's — 6.68 µs a shape evaluation where D636's line says
+2.59 — and **only the ratios travel**. The repeat on the reference machine is one command and is
+named at the end.
+
+One box of the facility, `--clip-bounds -4,0,-4,4,6,4`, 8×6×8 m at the authored 32 voxels a metre,
+398,920 voxels, 98% of the time in shape evaluation. Two runs of each arm:
+
+| `--accelerate-from` | hierarchies built | µs per shape eval | against the default |
+|---|---|---|---|
+| 4 | 108 over 996 leaves | 7.16 | **+7%** |
+| 6 | — | 6.92 | +4% |
+| 8 | — | 6.90 | +3% |
+| **12, what ships** | **19 over 479** | **6.68** | — |
+| 16 | — | 6.39 | **−4%** |
+| 24 | — | 6.39 | −4% |
+| 32 | 3 over 227 | 6.36 | −5% |
+| 48 | 2 over 194 | 6.29 | **−6%** |
+| 64 | 2 over 194 | 6.36 | −5% |
+| 96 | 1 over 122 | 6.62 | −1% |
+| 200 (none at all) | 0 | 7.27 | **+9%** |
+
+**48 and 64 build the identical accelerators**, which is the control this table needed and did not
+have to be arranged: two arms that differ only in a number that changed nothing read 6.29 and 6.36,
+so **the noise band is about ±1.5%** and every row outside it is a real difference.
+
+A second box, `--clip-bounds 5,0,-4,13,6,4`, 2,675,197 voxels, three arms:
+
+| arm | µs per shape eval | sample |
+|---|---|---|
+| 12, what ships | 6.28 | 13.76 s |
+| 48 | **5.47** | **12.15 s** |
+| 200, no hierarchy | 6.43 | 14.17 s |
+
+**−13% on that box**, and both boxes agree in direction.
+
+### What it means, and it is not "hierarchies are bad"
+
+The two ends of the sweep are both worse than the middle, so both halves are true at once:
+
+- **The biggest unions are worth a hierarchy.** Turning them all off costs 9% and 2%.
+- **The small ones are not.** The plain path already sorts children by box distance and rejects on
+  the running minimum, which is most of what a BVH does, at no build cost and with no indirection.
+  Below twelve leaves, a traversal is losing to a sorted scan — and at four, with 108 accelerators
+  over 996 leaves, it is nearly as bad as having no hierarchies at all.
+
+The best measured setting builds **two** hierarchies on the facility instead of nineteen.
+
+### What is NOT being changed, and why
+
+**The default stays at 12.** These figures come from a machine the project has never measured
+anything on, and the crossover between "traverse" and "scan" is exactly the sort of thing a
+different cache moves. The direction is unlikely to flip; the number certainly can. The repeat is
+five minutes on the development machine and settles it:
+
+```powershell
+foreach ($n in 12,16,24,48,64) {
+  .\build\bin\WorldShaper.exe --clip-file clips\facility.clip --clip-bounds -4,0,-4,4,6,4 `
+      --no-despeckle --accelerate-from $n | Select-String "^where"
+}
+```
+
+**If it agrees, change `kAccelerateFromDefault` in `field.hpp` to whatever the minimum is** — it is
+one number, it changes no answer, and it is worth 4–13% of the 76% of sampling that is shape
+evaluation.
+
+### The gate, which is the part that could have gone wrong silently
+
+An accelerator is a way of not asking a question whose answer was going to be "not me", so it must
+change nothing. `clips/sampler.clip` measures **1,430,104 voxels, 316,640 faces, centroid
+(195.2, 25.5, 83.6)** at 12 and at 48, identically; both facility boxes give the same voxel count in
+every arm. The headless gate is `tests/test_field.cpp`, *the accelerator threshold changes what is
+built and not what is answered*: twenty spheres in a row, every answer taken with no accelerator at
+all, then demanded **to the bit** at thresholds of 4, 12 and 20.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D637 | **`kAccelerateFrom` is a setting, not a constant** | method | It is a measurement, and a measurement needs two arms of one build (D407) |
+| D637 | **Twelve is too low: the measured minimum is 16–64, and 48 is the best of them** | measurement | −6% on one box and −13% on another, against a ±1.5% noise band established by two arms that built identical accelerators |
+| D637 | **A hierarchy over a small union loses to a sorted linear scan** | finding | At threshold 4 — 108 accelerators — it is nearly as slow as having none; the plain path already sorts by box distance and rejects on the running minimum |
+| D637 | **The default is NOT being changed on this evidence** | honesty | Measured on a four-core container at 2.6× the dev machine's cost per evaluation; the direction should hold, the crossover may not |

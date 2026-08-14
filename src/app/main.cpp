@@ -282,6 +282,10 @@ struct Options {
     // a region, and a rule keyed on a pattern has almost no box to settle against at eight voxels
     // wide.
     bool sample_cost = false;
+    // How wide a union has to be before it is worth a bounding hierarchy. `Field`'s own default
+    // is twelve, which was never measured; this is the flag that measures it, because two arms
+    // are two flags and never two builds (D407). 0 means "leave the field's default alone".
+    usize accelerate_from = 0;
     // The field's shape, and nothing about sampling it.
     //
     // The box report is printed at the end of a whole-clip measure, which on the facility at its
@@ -762,6 +766,8 @@ Options parse_options(int argc, char** argv) {
             options.sample_cost = true;
         } else if (arg == "--clip-field") {
             options.clip_field = true;
+        } else if (arg == "--accelerate-from") {
+            options.accelerate_from = static_cast<usize>(next_number(0));
         } else if (arg == "--sample-cost-levels") {
             if (i + 1 < argc) options.sample_cost_levels = argv[++i];
         } else if (arg == "--sample-cost-nodes") {
@@ -1109,6 +1115,9 @@ void print_help() {
         "                        R11a, and the number every later trade in R11 is against\n"
         "  --clip-field          the field's nodes and their bounding boxes, and which ops have\n"
         "                        none, without sampling anything. The parse alone decides it\n"
+        "  --accelerate-from N   how many parts a union needs before it is given a bounding\n"
+        "                        hierarchy instead of a linear scan (12). A large number is the\n"
+        "                        control arm: no hierarchy anywhere\n"
         "  --sample-cost-levels first,last   which levels to walk (3 is a brick, 8 is 8 m)\n"
         "  --sample-cost-nodes N  nodes with matter timed per reference box (24)\n"
         "  --sample-cost-boxes N  reference boxes when the whole clip will not fit at once (3)\n"
@@ -9901,6 +9910,13 @@ int run_clip_tool(const Options& options) {
     if (!script.ok()) return 1;
 
     if (options.clip_metre > 0) script.settings.voxels_per_metre = options.clip_metre;
+
+    // The accelerator threshold is applied by rebuilding the boxes, which is cheap and is the
+    // whole point: one build, two arms.
+    if (options.accelerate_from > 0) {
+        script.field.set_accelerate_from(options.accelerate_from);
+        script.field.build_bounds();
+    }
 
     // A slice of the box instead of all of it, at full resolution, so the cost of sampling can
     // be measured in seconds. Six numbers, in metres, the same two opposite corners `bounds`

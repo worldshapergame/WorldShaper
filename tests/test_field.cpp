@@ -1015,3 +1015,40 @@ TEST_CASE("an unbounded node is counted against its op, and against whoever caus
     plain.build_bounds();
     CHECK(plain.unbounded_by_op().empty());
 }
+
+// The accelerator threshold is a setting because it is a measurement, and a measurement needs two
+// arms of one build (D407). What it must never be is a change to the answer: a hierarchy is a way
+// of not asking a question whose answer was going to be "not me".
+TEST_CASE("the accelerator threshold changes what is built and not what is answered") {
+    Field f;
+    std::vector<u32> parts;
+    for (u32 i = 0; i < 20; ++i) {
+        parts.push_back(f.sphere({static_cast<f64>(i) * 3.0, 0, 0}, 1.0));
+    }
+    const u32 all = f.unite(parts);
+
+    f.set_accelerate_from(200);
+    f.build_bounds();
+    CHECK(f.accelerator_count() == 0);
+    std::vector<f64> plain;
+    for (i32 x = -4; x <= 64; ++x) {
+        for (i32 z = -2; z <= 2; ++z) {
+            plain.push_back(at(f, all, x * 0.7, 0.3, z * 0.9));
+        }
+    }
+
+    for (const usize from : {usize{4}, usize{12}, usize{20}}) {
+        f.set_accelerate_from(from);
+        f.build_bounds();
+        CHECK(f.accelerate_from() == from);
+        CHECK(f.accelerator_count() == 1);
+        usize i = 0;
+        for (i32 x = -4; x <= 64; ++x) {
+            for (i32 z = -2; z <= 2; ++z) {
+                // To the bit. A cull that changes an answer at all is a piece of clip going
+                // missing somewhere else, and "nearly" is how that gets shipped.
+                CHECK(at(f, all, x * 0.7, 0.3, z * 0.9) == plain[i++]);
+            }
+        }
+    }
+}
