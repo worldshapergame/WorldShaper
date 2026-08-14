@@ -6737,6 +6737,19 @@ foreach ($n in 12,16,24,48,64) {
 one number, it changes no answer, and it is worth 4–13% of the 76% of sampling that is shape
 evaluation.
 
+**Re-checked after D638, because that change made both cull paths cheaper and could have moved the
+balance between them.** It did not; it widened the gap. Same two boxes, same arms, on the build that
+carries the box distance rather than recomputing it:
+
+| box | 12, what ships | 24 | 48 |
+|---|---|---|---|
+| `-4,0,-4,4,6,4` | 6.25 | 5.92 (−5.3%) | **5.71 (−8.6%)** |
+| `5,0,-4,13,6,4` | 5.65 | 4.96 (−12.2%) | **4.85 (−14.2%)** |
+
+**Both changes together, against where this session started** (threshold 12, distance recomputed):
+**6.68 → 5.71 µs on one box and 6.27 → 4.85 on the other, −15% and −23%.** One of the two is already
+in and needs nobody's permission; the other is the one number waiting on a repeat.
+
 ### The gate, which is the part that could have gone wrong silently
 
 An accelerator is a way of not asking a question whose answer was going to be "not me", so it must

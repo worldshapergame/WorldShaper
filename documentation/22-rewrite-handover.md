@@ -664,6 +664,11 @@ each child's box distance to sort by and then computed the identical number agai
 the BVH did the same one level up. Now carried rather than recomputed, gated against a stashed
 control build whose whole report differs on two lines, both clocks.
 
+**The two together, which is the figure to hold in mind:** with the reuse in AND the threshold at
+48, one box of the facility goes **6.68 → 5.71 µs a shape evaluation and the other 6.27 → 4.85,
+−15% and −23%**. The first half is already in. The second is the one number waiting on a five-minute
+repeat on the development machine, and D637 has the loop to paste.
+
 
 **Closed (D625).** A cached load — the path every launch after the first takes — was running with
 the despeckler off. The stipple verdict is taken once over the whole clip in the up-front coarse
