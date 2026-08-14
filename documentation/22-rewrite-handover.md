@@ -494,6 +494,18 @@ failure, not a compile error.
     the instrument rather than in the structure, and trap 20's twin — there a pass got cheaper by
     doing less, here a pass reported success by failing. D621.
 
+28. **A grid commensurate with the thing it measures measures the grid.** A census asking how close
+    the facility's surfaces pass to its sample points reported **44 points within 1e-7 m and the
+    same 44 within 1e-5** — a plateau, where a distance field has to thin out as the band does. It
+    was not a field property and it was not a bug in the field: a clip is authored in round metres,
+    its box is round metres, and a grid dividing that box into forty equal parts lands exactly on
+    the building's own faces. All 44 were one column's vertical arris at x = ±11.475, hit dead on,
+    answering 1.1e-15. Offsetting every sample by an amount sharing no factor with the building
+    reads 469, 0, 0 — the distribution a locally linear field must have. **The wrong version was the
+    alarming one**, and it would have argued against an f32 GPU path on the strength of a sampling
+    artefact. The general form: whenever a measurement's sample positions are chosen by dividing
+    something the subject was also authored against, they are not independent of it. D639.
+
 ---
 
 ## 4b. The bug that was open here — closed, and what it teaches
