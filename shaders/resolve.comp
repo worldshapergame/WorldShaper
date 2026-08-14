@@ -105,6 +105,7 @@ const uint kNoFace = 0xFFFFFFFFu;
 // fewer frames in which it does.
 const uint kShadowSettled = 1u;
 
+
 // The cloud volume the cloud pass keeps, at full resolution. Two images alternating; the parity
 // arrives in the push constant, the same as in the path tracer.
 layout(binding = 20, rgba16f) uniform readonly image2D in_cloud[2];
@@ -119,6 +120,18 @@ layout(push_constant) uniform Trace {
     vec4 fog;
     vec4 fog_shape;
 } trace;
+
+// ...and the SUN's own gate, which is the one R5b moves and is a setting rather than this constant.
+//
+// The other three readers of `kShadowSettled` are two debug views and the sky term, and none of
+// them wants to move with it: a view that paints "not measured yet" blue must go on meaning one
+// sample, and the sky has its own count, its own ray and its own reasoning about when to believe
+// it.
+//
+// Carried in `control.x`, which is a word the host already sets to nought and describes as what is
+// left of the accumulator's sample count after R3d — a dead word rather than a stolen one. 0 and 1
+// both mean "believe a face's first ray", which is what shipped and is this arm's control.
+uint sun_settled() { return max(1u, trace.control.x); }
 
 const float kPi = 3.14159265358979;
 const int kChunkEdge = 256;
@@ -569,7 +582,7 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
     if (face_slot < faces.items.length()) {
         uint counters = faces.items[face_slot].counters;
         uint samples = counters & 0xFFFFu;
-        if (samples >= kShadowSettled) {
+        if (samples >= sun_settled()) {
             sun_visible = float((counters >> 16u) & 0xFFFFu) / float(samples);
         }
     }

@@ -7272,3 +7272,51 @@ until there is enough of it. That is a change to the composite rather than to th
 | D644 | **A parent's mean is structured error at the parent's scale** | finding | The same argument `face_light_seed` already refuses the parent's gradient on, applied to a shadow edge a coarse face cannot represent |
 | D644 | **`--sun-seed` ships at 0 and the path is kept** | decision | The default is what the measurement says; the flag is what makes the next sweep one command |
 | D644 | **The next arm is the composite, not the store** | direction | Hold the coarse stand-in until a face has `kFaceEager` samples of its own, so its measurement is never contaminated — only disbelieved until there is enough of it |
+
+## D645 — R5b's second arm: holding the shadow back is worse too, and now the expensive fix is the justified one
+
+D644 refused seeding a face's sun from its ancestor. The alternative it named is the other side of
+the same question — **do not seed the face, disbelieve it**: keep the composite off a face's own
+shadow until it has `kFaceEager` rays of its own, so its measurement is never contaminated, only
+withheld. `--shadow-settled N`, carried in `control.x`, a push word the host already set to nought
+and describes as what R3d left of the accumulator's sample count.
+
+Same camera, same setup, same overlay band excluded, frame 40:
+
+| arm | speckle | fireflies |
+|---|---|---|
+| what ships — believe the first ray | **91.62** | 1 |
+| what ships, repeated | **91.38** | 2 |
+| `--sun-seed 3` — seed from the ancestor (D644) | 108.65 | 1 |
+| `--shadow-settled 4` — believe nothing until four rays | **107.74** | **131** |
+
+**Both alternatives are ~18% worse than what ships, and they are worse in different ways.** Seeding
+gives structured error at the parent's scale and no fireflies. Withholding gives **131 fireflies
+against one**, and the picture says exactly why: the steps and the lower facade are dotted with white
+specks, because an unsettled face reads as **fully lit** and stands out against its settled
+neighbours. That is the trade `kShadowSettled`'s own comment weighed — *"wrong on every face, in the
+same direction, for four frames"* — and it now has a number on it for the first time.
+
+### What the pair of them proves, which neither proves alone
+
+The shipped choice is the best of the three, and the reason is not that a first ray is good. **It is
+that both substitutes for it are worse than a coin toss**: a parent's average is wrong in a
+correlated way, and full sun is wrong in a bright way. The grain is not caused by the face believing
+itself too early — it is caused by there being **nothing better to show**.
+
+So the fix is the one thing neither arm tried: show the **coarse stand-in** the store already keeps
+over that face. It is a real measurement of the same place, at the right brightness, and it is what
+the composite already draws before the first ray. It is also the expensive option, because
+`resolve.comp` does not include `node.glsl` and has no face lookup at all — a stand-in read needs a
+new binding and the host plumbing under it. **That cost is now justified by measurement rather than
+by argument, which is what these two arms were for.**
+
+Both flags ship at the shipped behaviour — `--sun-seed 0`, `--shadow-settled 1` — and both sweeps
+are one command each.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D645 | **Withholding a face's shadow until four rays is 18% worse and makes 131 fireflies** | measurement | An unsettled face reads as fully lit; the steps and lower facade go white-flecked |
+| D645 | **The shipped choice beats both substitutes** | finding | 91.62 and 91.38 against 108.65 and 107.74, on a control that repeats to 0.3% |
+| D645 | **The grain is not premature belief; it is that there is nothing better to show** | direction | One substitute is wrong in a correlated way and the other in a bright way, which is what makes the stand-in the answer |
+| D645 | **The composite has no face lookup, and now has a reason to get one** | decision | A stand-in read needs a binding `resolve.comp` does not have; the two cheap arms are what justify paying for it |

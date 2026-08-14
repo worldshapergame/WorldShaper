@@ -231,6 +231,13 @@ struct Options {
     // three levels up -- and indoors that stand-in is inside the same sixteen-metre box and has
     // been wiped by the same line. See kFaceEditSeed in shaders\node.glsl.
     u32 face_edit_seed = 8;
+    // How many rays of its own a face needs before the composite believes its shadow (R5b).
+    //
+    // 1 is what ships and is the control arm: a face's first ray decides its shadow outright, and
+    // one ray is 0% or 100%. Above it, an unsettled face reads as fully lit instead — which is the
+    // trade the constant's own comment in resolve.comp weighs, and which nobody has ever put a
+    // number on. This is that number.
+    u32 shadow_settled = 1;
     // How many samples of its ancestor's sun a newly claimed face starts with (R5b).
     //
     // **Nought by default, and that is a measurement rather than a caution.** Built at three,
@@ -845,6 +852,8 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--face-edit-seed" && i + 1 < argc) {
             options.face_edit_seed = static_cast<u32>(std::atoll(argv[++i]));
+        } else if (arg == "--shadow-settled") {
+            if (i + 1 < argc) options.shadow_settled = static_cast<u32>(std::atoll(argv[++i]));
         } else if (arg == "--sun-seed") {
             if (i + 1 < argc) options.sun_seed = static_cast<u32>(std::atoll(argv[++i]));
         } else if (arg == "--no-lamp-edit-scope") {
@@ -1131,6 +1140,8 @@ void print_help() {
         "                        R11a, and the number every later trade in R11 is against\n"
         "  --clip-field          the field's nodes and their bounding boxes, and which ops have\n"
         "                        none, without sampling anything. The parse alone decides it\n"
+        "  --shadow-settled N    how many rays of its own a face needs before its shadow is\n"
+        "                        believed (1). Above 1 an unsettled face reads as fully lit\n"
         "  --sun-seed N          how many samples of its ancestor's shadow a newly claimed face\n"
         "                        starts with. 0 by default and by MEASUREMENT: three made the\n"
         "                        grain 19%% worse on the close camera (D644)\n"
@@ -5795,7 +5806,9 @@ TracePush Application::make_trace_push() {
     trace.sun_colour[0] = kSunColour[0];
     trace.sun_colour[1] = kSunColour[1];
     trace.sun_colour[2] = kSunColour[2];
-    trace.control[0] = 0;   // was the accumulator's sample count, which went with R3d
+    // Was the accumulator's sample count, which went with R3d; it carries R5b's shadow gate now.
+    // See `sun_settled` in resolve.comp for why a dead word rather than a new one.
+    trace.control[0] = options_.shadow_settled;
     // Which of the two histories the cloud pass writes this frame; it reads the other.
     cloud_parity_ ^= 1u;
     trace.control[1] = cloud_parity_;
