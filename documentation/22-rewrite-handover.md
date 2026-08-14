@@ -3621,6 +3621,12 @@ machine this project has measured on, and the difference between working and an 
 on one that reports less. **A limit that is generous where you develop is still a limit**, and a
 Deck is the target that makes that not hypothetical.
 
+**One render run at a time.** Two of these launched together killed the container twice in a row,
+both times within a minute of the second one starting — a software Vulkan device holds the whole
+world, a JIT of every shader and four worker threads, and two of them together is more than the box
+will carry. It costs a session ten minutes each time and reads like an unrelated infrastructure
+failure, which is why it is written here rather than left to be rediscovered.
+
 **It still segfaults at frame 16–17 with validation clean, and that is NOT diagnosed.** So the
 container's ceiling today is about sixteen frames — a picture and the audits, not a settle. The next
 step is GPU-assisted validation, which checks indexing inside a shader rather than the descriptors

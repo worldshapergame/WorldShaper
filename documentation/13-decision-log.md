@@ -7053,6 +7053,7 @@ which is exactly right and is the reason the second run asked for a later frame.
 | D641 | **A frame is 267 s at the shipped face table and 0.5 s at 16k faces** | measurement | The passes that sweep a million slots are sized for hardware; the window barely matters beside them |
 | D641 | **The node payload was bound past `maxStorageBufferRange` and nothing had ever read that limit** | bug | 512 MB against this device's 128 MB: an invalid descriptor, a shader indexing off the end, and a process that dies in the driver. No-op on every machine this project has measured on |
 | D641 | **The crash survives the fix and is NOT diagnosed** | honesty | Validation clean, still dies at frame 16–17; GPU-assisted validation is the next step and was not run |
+| D641 | **One software render at a time: two together killed the container twice** | trap | The device holds the world, a JIT of every shader and four workers; two of those is past what the box carries, and it presents as an unrelated restart |
 | D641 | **Running the game from the repository root leaves a folder in it, and one `git add -A` committed it** | trap | `default_root()` falls back to `<cwd>/WorldShaper` with no platform folder, so a run writes settings, a world cache and a shelf of `.wsworld` derived from `clips/`. Seventeen files landed in `314c5ea` and are removed; the path is ignored now |
 
 ### And it segfaults at about frame 17, in code that has no symbols
