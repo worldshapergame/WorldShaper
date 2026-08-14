@@ -22,3 +22,11 @@ renders/
 # things actually cost here. Per-machine, like the built-world cache beside it.
 *.clip.load
 build-linux/
+
+# The game's own per-user folder, made wherever it is run from.
+#
+# `default_root()` falls back to `<working directory>/WorldShaper` when there is no platform
+# folder — which is what running the binary from the repository root does — so a run leaves
+# settings, a world cache and a shelf of worlds derived from `clips/` sitting in the tree. One
+# session committed all seventeen of them with a `git add -A` before noticing (D641).
+WorldShaper/
