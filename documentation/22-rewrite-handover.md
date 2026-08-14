@@ -555,6 +555,28 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
+#### START HERE — where it stands on 2026-08-14, and what the last session could not do
+
+**R5b, noise and speckle, is what the user asked for next and nothing has been built for it.** Its
+numbers are already taken and are three blocks down, under *ASKED FOR NEXT*. Its first step is
+reading rather than writing — `face_light_seed` and `face_reseed` may already be half of it — and
+that reading is **not done**.
+
+**Two things closed since, both of them measured (D636, D637):** step 2 of the chosen order is
+finished with almost no code — the histogram it asked for first says there is nothing to bound, and
+the union hierarchy that was supposed to be its other half turned out to cost a fifth of the sample
+and reject nothing, so it is off. **Step 3, R12, is the next of the three with work in it.**
+
+**A session ran on a machine with no card in it, and that shaped what got done.** The forge, the
+tests and the tools build and run headless; the game does not build at all off Windows and there is
+no Vulkan. So the sample timings above are real and the *load* they imply is a prediction, and
+nothing about the renderer — speckle, faces, frames — could be touched at all. **If you are on such
+a machine, R5b is not startable and step 2's kind of work is.** `build.bat` needs Windows; a
+headless configure for the tests alone is
+`cmake -S . -B build -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_UNIX_CONSOLE_BUILD=ON` with
+`libvulkan-dev` and `glslc` present, and two of the 540 tests fail there by design — the recycle bin
+is a Windows shell call and `send_to_recycle_bin` returns false everywhere else.
+
 #### CLEARED FIRST: the ladder now stands down (D627)
 
 D626 left 4,788 ms of a cached load doing ladder work that delivered nothing, and that is gone. The
