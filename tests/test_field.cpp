@@ -1133,3 +1133,33 @@ TEST_CASE("the walk census counts node visits, and costs nothing when nobody is 
     CHECK(Field::walk_census().nodes == 3);   // the union and the two boxes it is inside
     CHECK(Field::walk_census().culled == 1);  // and the sphere, which no point here can want
 }
+
+// The number R12 is sized by, and it is a bound rather than a worst case somebody hit: a compute
+// shader cannot recurse, so the deepest path from the root is exactly how big the stack it has to
+// carry must be.
+TEST_CASE("how deep a field is, is the stack an evaluator has to carry") {
+    Field f;
+    const u32 one = f.sphere({0, 0, 0}, 1.0);
+    CHECK(f.depth_under(one) == 1);
+
+    // Every wrapper is a level, because every one of them evaluates its child.
+    const u32 moved = f.translate(one, {1.0, 0, 0});
+    const u32 turned = f.rotate(moved, {0, 0.125, 0});
+    CHECK(f.depth_under(moved) == 2);
+    CHECK(f.depth_under(turned) == 3);
+
+    // A union is as deep as its deepest child and not as deep as the sum of them, which is the
+    // property that makes this a stack size and not a node count.
+    const u32 shallow = f.box({4.0, 0, 0}, {0.5, 0.5, 0.5});
+    const u32 both = f.unite({shallow, turned});
+    CHECK(f.depth_under(both) == 4);
+    CHECK(f.depth_under(shallow) == 1);
+
+    // And it is about the ROOT asked for, not about the field: a sibling's depth is not this
+    // one's problem. Getting that wrong would size the shader by the whole file rather than by
+    // the shape it is drawing.
+    const u32 deeper = f.shell(f.round_off(f.offset(both, 0.1), 0.05), 0.02);
+    CHECK(f.depth_under(deeper) == 7);
+    CHECK(f.depth_under(both) == 4);
+    CHECK(f.depth_under(Field::kEveryNode) == f.depth_under(deeper));
+}

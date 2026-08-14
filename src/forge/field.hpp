@@ -202,11 +202,19 @@ struct Node {
 // Turning a dial writes one double and re-evaluates. Nothing is rebuilt, nothing is allocated,
 // and the graph a visual editor is displaying does not change under it.
 //
-// **Being evaluated somewhere else.** Nodes are plain data of a fixed size with no pointers, and
-// evaluation is a switch over them with an explicit stack of at most a handful of entries. That
-// is a shape that transliterates to a compute shader without changing: upload the array, upload
-// the parameters, and a clip can be re-voxelised on the GPU as fast as its parameters change.
-// Nothing here does that yet, and everything here is arranged so that it can.
+// **Being evaluated somewhere else.** Nodes are plain data of a fixed size with no pointers, so
+// the array itself uploads: the facility's whole field is 351 KB. That much of the claim is
+// measured and holds.
+//
+// ~~Evaluation is a switch over them with an explicit stack of at most a handful of entries.~~
+// **That half was wrong and is corrected here (D639).** Evaluation is RECURSIVE, and the
+// facility's solid is **41 deep** — `depth_under` is the exact bound and it is not a sample. A
+// compute shader cannot recurse, so R12 has to carry that stack itself, and each entry needs a
+// POINT as well as a node index, because `revolve`, `twist`, `bend` and `displace` all ask a
+// child somewhere other than where they were asked. That is ~656 bytes an invocation before any
+// of the sixty-four-entry hierarchy stack, and it is an occupancy question rather than a detail.
+// It still transliterates; it does not transliterate *unchanged*, and sizing R12 on "a handful of
+// entries" would have sized it wrong.
 class Field {
 public:
     // --- parameters --------------------------------------------------------------------
@@ -510,6 +518,18 @@ public:
 
     // How many nodes that root can reach, which is what one evaluation of it may walk.
     usize nodes_under(u32 root) const;
+
+    // The longest path from a root to a leaf, which is exactly how deep an evaluator's stack has
+    // to be. Static and exact rather than sampled — a bound, not a worst case somebody happened
+    // to hit — and it is the first number R12 needs, because a compute shader cannot recurse and
+    // has to carry that stack itself, with a POINT on it as well as a node: `revolve`, `twist`
+    // and `displace` all ask a child at a different place from the one they were asked at.
+    usize depth_under(u32 root) const;
+
+    // What the whole field weighs as plain data, which is the other number R12 needs: this is
+    // what an upload costs. Nodes are fixed size with no pointers, which is the property the
+    // header opens by claiming and this is the check on it.
+    usize bytes() const { return nodes_.size() * sizeof(Node) + parameters_.size() * sizeof(f64); }
 
     // --- what one evaluation actually walks ------------------------------------------------
     //

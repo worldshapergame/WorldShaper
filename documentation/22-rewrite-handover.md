@@ -902,6 +902,24 @@ successor (`21-renderer-rewrite.md` §8 R12, and `20-clip-forge.md` §4 for why 
 transliterates). After R11 the CPU round trip — miss, report, sample, paste, upload — is the last
 thing between a ray and its geometry.
 
+##### SIZED, before anybody starts it (D639) — and one number contradicts the plan
+
+`--clip-field` ends with the two numbers this stage has never had, and they are CPU-answerable:
+
+- **The facility's field is 41 deep.** `field.hpp` has claimed since R0 that evaluation is *"a
+  switch with an explicit stack of at most a handful of entries"* that *"transliterates to a compute
+  shader without changing"*. The array does; the evaluation does not. It is recursive, a shader
+  cannot recurse, and each stack entry needs a **point** as well as a node — `revolve`, `twist`,
+  `bend` and `displace` all ask a child somewhere else. **~656 bytes an invocation** before the
+  hierarchy's own stack. The header is corrected.
+- **The whole field is 351 KB.** The upload is nothing.
+- **An f32 card build cannot be byte-identical.** Voxelising is a threshold test on the sign of `d`,
+  and **469 points per million sit within 1 mm of the surface**, scaling linearly with the band — so
+  about **4.7 per million within 10 µm**, which is the right order for f32 error over a 41-deep
+  expression. A few hundred voxels of the whole facility, each moving at most one voxel. **The
+  equality gate `a1f8bc6c656343b7` would fail on a correct build**, so somebody has to choose f64 on
+  the card or a tolerance gate for the GPU path — before the stage starts, not in its third week.
+
 **Why it is third and not first.** It is stage-sized (L), it is the highest-risk piece left, and
 steps 1 and 2 both change the number it would be measured against. It also unblocks R2b's unfinished
 half, stuck since D259.

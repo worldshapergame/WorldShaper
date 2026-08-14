@@ -9899,6 +9899,8 @@ void print_field_boxes(const forge::Field& field, u32 solid) {
 void print_field_walk(const forge::Field& field, u32 solid, const forge::SampleSettings& box,
                       u32 side) {
     const usize could = field.nodes_under(solid);
+    const usize depth = field.depth_under(solid);
+    const usize bytes = field.bytes();
     std::vector<u32> open;
     std::vector<u32> near;
     std::vector<u32> inside;
@@ -9906,24 +9908,45 @@ void print_field_walk(const forge::Field& field, u32 solid, const forge::SampleS
     u64 culled = 0;
     u64 walked = 0;
     forge::Field::Walk totals;
-    // Half a voxel in from each face, so the grid never asks exactly on the box's own plane.
     const forge::Vec3 span{box.high.x - box.low.x, box.high.y - box.low.y, box.high.z - box.low.z};
+    // Off the grid lines on purpose, and this was measured the wrong way first.
+    //
+    // A clip is authored in round metres and its box is round metres too, so dividing that box
+    // into a round number of parts puts sample points exactly ON the building's own faces and
+    // edges. The first run of this reported 44 points sitting within 1e-7 m of the surface and
+    // the same 44 within 1e-5, which is not a distribution — it is one vertical arris of a column
+    // at x = ±11.475, hit exactly, returning 1.1e-15. An offset that shares no factor with the
+    // building moves every sample off the authored planes, and the plateau goes with it.
+    constexpr f64 kOffGrid = 0.2718281828459045;
     // "Near a surface" in metres, and generous on purpose: a voxel at the authored resolution is
     // 3.125 cm, so this is a few voxels either side rather than a knife edge.
     constexpr f64 kNear = 0.10;
+    // And three knife edges, for a different question entirely: R12 puts this evaluation on a
+    // card, where f64 runs at a fraction of f32's rate. Voxelising is a THRESHOLD test on the
+    // sign of d, so the only voxels a change of precision can move are the ones sitting within
+    // that precision of nought. Counting them is what says whether an f32 transliteration is a
+    // free win or a different building.
+    u64 within[3] = {0, 0, 0};
+    constexpr f64 kEdges[3] = {1e-3, 1e-5, 1e-7};
     for (u32 iz = 0; iz < side; ++iz) {
         for (u32 iy = 0; iy < side; ++iy) {
             for (u32 ix = 0; ix < side; ++ix) {
                 const forge::Vec3 p{
-                    box.low.x + span.x * (static_cast<f64>(ix) + 0.5) / static_cast<f64>(side),
-                    box.low.y + span.y * (static_cast<f64>(iy) + 0.5) / static_cast<f64>(side),
-                    box.low.z + span.z * (static_cast<f64>(iz) + 0.5) / static_cast<f64>(side)};
+                    box.low.x +
+                        span.x * (static_cast<f64>(ix) + kOffGrid) / static_cast<f64>(side),
+                    box.low.y +
+                        span.y * (static_cast<f64>(iy) + kOffGrid) / static_cast<f64>(side),
+                    box.low.z +
+                        span.z * (static_cast<f64>(iz) + kOffGrid) / static_cast<f64>(side)};
                 forge::Field::reset_walk_census();
                 const f64 d = field.census_eval(solid, p);
                 const forge::Field::Walk one = forge::Field::walk_census();
                 culled += one.culled;
                 walked += one.nodes;
                 for (usize i = 0; i < forge::Field::kOpCount; ++i) totals.by_op[i] += one.by_op[i];
+                for (usize e = 0; e < 3; ++e) {
+                    if (std::abs(d) < kEdges[e]) ++within[e];
+                }
                 const u32 nodes = static_cast<u32>(one.nodes);
                 if (std::abs(d) <= kNear) near.push_back(nodes);
                 else if (d < 0.0) inside.push_back(nodes);
@@ -9987,6 +10010,17 @@ void print_field_walk(const forge::Field& field, u32 solid, const forge::SampleS
     }
     if (order.size() > 12) {
         std::printf("              %-20s %10s %5.1f%%\n", "-- the rest --", "", 100.0 - shown);
+    }
+
+    // The two numbers R12 has to be sized by before anybody writes a line of it, and one that
+    // decides what it is allowed to promise.
+    std::printf("for the card  %zu deep, %.0f KB of nodes and parameters\n", depth,
+                static_cast<f64>(bytes) / 1024.0);
+    for (usize e = 0; e < 3; ++e) {
+        std::printf("              within %-8g m of the surface: %llu of %zu points, %.0f per "
+                    "million\n",
+                    kEdges[e], static_cast<unsigned long long>(within[e]), points,
+                    1e6 * static_cast<f64>(within[e]) / static_cast<f64>(std::max<usize>(1, points)));
     }
 }
 
@@ -10066,7 +10100,7 @@ int run_clip_tool(const Options& options) {
                     script.field.size(), script.field.parameter_count(),
                     script.field.accelerator_count(), script.field.accelerated_leaves());
         print_field_boxes(script.field, script.solid);
-        print_field_walk(script.field, script.solid, script.settings, 24);
+        print_field_walk(script.field, script.solid, script.settings, 40);
         return 0;
     }
 

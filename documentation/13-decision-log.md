@@ -6860,3 +6860,71 @@ only tie cannot be strictly nearer. The case that walks both is a point where tw
 | D638 | **A box distance computed to sort by was computed again to cull by** | bug | −6.1% and −6.9% on two boxes, bit-identical: the value is a function of the box and the point, and neither moves between the two uses |
 | D638 | **The census is off unless asked for and costs one branch** | instrument | thread_local, not atomic, because `sample` runs one per z slab; 6.68/6.78 with it against 6.63/6.73 without |
 | D638 | **A point equidistant from two children is culled, and that is correct** | trap | A child that can only tie cannot be strictly nearer; the case that walks both is overlapping boxes, not equal distances |
+
+## D639 — sizing R12 before anybody starts it, and one of the two numbers contradicts the plan
+
+**Step 3 is stage-sized L, the highest-risk piece left, and it has never had a number of its own.**
+Two of them are answerable on a CPU and both are now in `--clip-field`.
+
+### The field is 41 deep, and the plan said "a handful"
+
+`field.hpp` has claimed since R0 that *"evaluation is a switch over them with an explicit stack of
+at most a handful of entries. That is a shape that transliterates to a compute shader without
+changing."* The first half is right and the second is not.
+
+`Field::depth_under` is the longest path from a root to a leaf — a static bound, one forward pass,
+not a sample. **The facility's solid is 41 deep.** `clips/sampler.clip` is 6.
+
+Evaluation is *recursive*, and a compute shader cannot recurse. So R12 carries that stack itself,
+and each entry needs a **point** as well as a node index, because `revolve`, `twist`, `bend` and
+`displace` all ask a child somewhere other than where they were asked. **41 × (4 + 12) bytes ≈ 656
+bytes an invocation**, before the sixty-four-entry hierarchy stack the accelerator already uses.
+That is an occupancy question and it is the kind of thing that decides whether a kernel runs at all
+well, so it belongs in the sizing rather than in the first week of the build. The header is
+corrected in the same change, as the rule requires.
+
+**The other number is friendly**: the whole field, nodes and parameters, is **351 KB**. It uploads
+once and it is nothing.
+
+### An f32 field is not the same building, and here is how much not
+
+A card runs f64 at a fraction of f32's rate, so R12 will want f32 — and voxelising is a THRESHOLD
+test on the sign of `d`, so the only voxels a change of precision can move are those sitting within
+that precision of nought. Counted over 64,000 points:
+
+| within | points | per million |
+|---|---|---|
+| 1 mm | 30 | 469 |
+| 10 µm | 0 | 0 |
+| 0.1 µm | 0 | 0 |
+
+The density scales with the band, as a locally linear field must, so the reading is **about 4.7
+voxels per million within 10 µm** — and 10 µm is the right order for f32 error accumulated over a
+41-deep expression on coordinates up to 17 m. **A few hundred voxels of the whole facility, each
+moving by at most one voxel.**
+
+**So R12 in f32 cannot be byte-identical, and that is a decision rather than a bug.** The gate every
+sampling change in this project has been held to — `a1f8bc6c656343b7` on `clips/sampler.clip` — is
+an equality, and an f32 card build would fail it while being right. Somebody has to choose: keep f64
+on the card and pay the rate, or accept a tolerance gate for the GPU path. **Nobody should discover
+that in week three of the stage.**
+
+### And the measurement was wrong the first time, in the way this project keeps being wrong
+
+The first run reported **44 points within 1e-5 m of the surface and the same 44 within 1e-7** —
+a plateau, where a distance field must thin out as the band does. It was not a field property. A
+clip is authored in round metres and its box is round metres, so a grid dividing that box into
+forty equal parts lands exactly ON the building's own faces: those 44 points were one vertical
+arris of a column at x = ±11.475, hit dead on, returning 1.1e-15. **A grid commensurate with the
+thing it measures does not measure it.** The census now offsets every sample by an amount sharing
+no factor with the building, and the plateau went with it — 469, 0, 0.
+
+That is worth a trap of its own, because the wrong version was *more* alarming than the right one
+and would have argued against f32 on the strength of a sampling artefact.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D639 | **The facility's field is 41 deep, not "a handful"** | correction | A shader must carry the stack itself, with a point per entry — ~656 bytes an invocation, which is an occupancy question |
+| D639 | **The whole field is 351 KB** | measurement | The upload is nothing; the array really is plain data with no pointers |
+| D639 | **An f32 card build moves a few voxels per million and cannot be byte-identical** | finding | 469 points per million within 1 mm, scaling linearly, so ~4.7 per million within 10 µm — the equality gate has to become a tolerance one, and that is the user's call |
+| D639 | **A grid commensurate with the building measures the building's own planes** | trap | 44 points at 1e-15 were one column's arris, not a distribution; the census is offset off-grid now |

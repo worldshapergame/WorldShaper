@@ -2757,3 +2757,47 @@ the two are identical line for line except for the two lines that are stopwatche
 **What you would see: the building finishes making itself very slightly sooner. Nothing else.** If
 anything at all looked different, that would be the failure — and the automatic tests now demand
 that every distance come back bit for bit the same whichever path it took.
+
+## And I priced step 3 before starting it, which turned up something the plan had wrong
+
+Step 3 is the big one: moving the making of the building onto the graphics card. It is the only
+thing left that changes the loading time by a lot, and it is also the riskiest, so before anyone
+spends weeks on it I measured the two things that decide what it costs. Both could be measured
+without a graphics card, which is why now was the time.
+
+**The good news.** The whole description of the facility — every instruction, every number — is
+**351 kilobytes**. Sending that to the graphics card is nothing at all. That half of the plan is
+right.
+
+**The awkward news.** The plan has said since the beginning that the way the building is described
+would move onto the card "without changing". It will not, quite. Working out what is at a point
+means following the description down through nested instructions, and the facility nests **41 deep**.
+A graphics card cannot do that the way a normal program does — it has to carry that chain of 41
+along by hand, and each link has to remember *where* it was asking as well as *what* it was asking,
+because instructions like "turn this" and "wobble that" ask their contents at a different place. That
+comes to about 650 bytes for every one of the thousands of questions being asked at once, which
+affects how many the card can have in flight. It is doable. It is not free, and the plan was sized as
+if it were.
+
+**And a decision that is yours, which I want to raise now rather than in week three.** Graphics cards
+do arithmetic at half precision much faster than at full precision, so step 3 will want the fast
+kind. Deciding whether a voxel is inside or outside is a yes/no question with a razor edge, so the
+only voxels that could change are the ones sitting almost exactly on a surface. I counted them:
+about **469 in a million** sit within a millimetre of a surface, and the count falls off in
+proportion — so switching to the fast arithmetic would move roughly **5 voxels in a million**, each
+by at most one voxel. Across the whole facility that is a few hundred voxels out of a hundred and
+twenty-five million.
+
+You would never see it. But this project has a rule that a rebuilt building must come out **exactly**
+identical, down to a single fingerprint number, and that rule is how nearly every silent bug in the
+last two months got caught. A correct graphics-card version would fail that check. So: either it uses
+the slow arithmetic and stays exactly identical, or the check becomes "identical except for a
+handful of edge voxels" for that path only. **I have not chosen; it is not mine to choose.**
+
+**And I got this measurement wrong the first time, in a way worth telling you about.** My first run
+said 44 points were sitting *exactly* on a surface — which would have argued strongly against the
+fast arithmetic. They were not spread over the building. They were all on one column's vertical
+edge, at exactly x = ±11.475 metres. The building is designed in round numbers, and I had measured
+it on a grid of round numbers, so my measuring points landed precisely on its corners. A ruler lined
+up with the thing it is measuring measures the ruler. I moved the grid off the round numbers and the
+44 became zero.

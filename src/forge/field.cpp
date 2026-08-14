@@ -1463,6 +1463,24 @@ usize Field::nodes_under(u32 root) const {
     return n;
 }
 
+usize Field::depth_under(u32 root) const {
+    if (nodes_.empty()) return 0;
+    const u32 from = (root == kEveryNode) ? static_cast<u32>(nodes_.size() - 1) : root;
+    if (from >= nodes_.size()) return 0;
+    // Children always have a lower index than their parent, so one forward pass gives every
+    // node's depth before any parent asks for it.
+    std::vector<u32> deep(nodes_.size(), 1);
+    for (usize i = 0; i < nodes_.size(); ++i) {
+        u32 under = 0;
+        for (u32 c = 0; c < nodes_[i].children; ++c) {
+            const u32 child = nodes_[i].child[c];
+            if (child < i) under = std::max(under, deep[child]);
+        }
+        deep[i] = under + 1;
+    }
+    return deep[from];
+}
+
 std::vector<Field::Unbounded> Field::unbounded_by_op(u32 root) const {
     if (bounds_.size() != nodes_.size()) return {};
     if (root != kEveryNode && root >= nodes_.size()) return {};
