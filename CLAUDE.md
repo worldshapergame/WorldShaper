@@ -68,8 +68,17 @@ otherwise.
 
 The person this is for does not read code and does not run the measurements. What they have is the
 build. So: say what you are about to do and **how they will see it in game** before starting; commit
-before every report; **say what you did not do**; and end with the next step in the same terms —
-what to do, what should change, what would mean it failed.
+before every report; and end with the next step in the same terms — what to do, what should change,
+what would mean it failed.
+
+**A report leads with what was built and ends with the next step. It does not end on failures.**
+Asked for directly on 2026-08-14: no closing list of what was not done, what went wrong, or what was
+got wrong on the way, because *"this may cause you to fail further by manifestation."* Nothing is
+hidden by this — a fact that changes a decision is stated plainly where it belongs, once, in the
+flow of the work it came from. The wrong turns, the reverted experiments and the neutral
+measurements go where they are useful and where they have always gone: `13-decision-log.md`. What
+is dropped is the closing inventory, not the honesty. §1 rule 3 of
+`documentation/22-rewrite-handover.md` is the long form.
 
 ## Where things are written down
 

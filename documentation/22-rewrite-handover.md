@@ -109,9 +109,21 @@ what they can tell you is what it looks like. All three exist to keep that loop 
    report is about something nobody can go back to. It also means the ledger in
    `21-renderer-rewrite.md` §8.0 and the entries in `13-decision-log.md` land at the same time as
    the code they describe, which is what makes the log usable at all.
-3. **Say what you did not do.** Which half of a sub-step landed, what was measured and came out
-   neutral, and what is blocked on something else. Half of this file's value is the things that were
-   built, measured and reverted.
+3. **The record carries what did not work; the REPORT does not end on it.** Asked for directly on
+   2026-08-14 and it revises what this rule used to say. Which half of a sub-step landed, what was
+   measured and came out neutral, what was built and reverted, and every wrong turn — all of that
+   still goes in `13-decision-log.md`, and it is half of what makes that file worth keeping. What
+   changed is where it goes in a message to the person this is for.
+
+   **A report leads with what was built and ends with the next step.** It does not close with a
+   list of what was not done, what went wrong, or what was got wrong on the way — the user's own
+   words: *"this may cause you to fail further by manifestation."* Their build, their call.
+
+   This is not licence to hide anything. A fact that changes what they would decide is stated
+   plainly, in place, as part of the work it belongs to — a measurement that came out neutral, a
+   stage that is blocked, a thing that is still open. **State it once, in the flow, in the terms
+   the work is in, and move on.** What is being dropped is the closing inventory of failures, the
+   self-criticism, and the tallying of mistakes; what is being kept is every fact.
 4. **End every report with the NEXT step and what it will look like in game.** The same test as rule
    1, applied one step ahead: name what is next and say what they should expect to see when it
    lands, in the same terms — what to do, what should change, what would mean it failed. That is

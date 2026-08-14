@@ -7159,3 +7159,34 @@ shader rather than the descriptors around it. If it names a buffer, it is ours.
 | D642 | **It is not the paste path, not pool growth, not face reads, and not D641's descriptor** | measurement | 128× less pasting crashes at the same frame; the descriptor fault is fixed and the crash outlived it |
 | D642 | **R9a's own append is correctly bounded, so the fault is downstream of the face set it grows** | finding | All three feedback appends test `index < push.resolution.w`; the untested suspect is the lobe pool, which R9a feeds and which is not sized by `--face-budget` |
 | D642 | **One software render at a time, or the container dies** | trap | Two together killed it twice, ten minutes each, presenting as an unrelated restart |
+
+## D643 — a report ends on the next step, not on a list of what went wrong
+
+**Asked for directly on 2026-08-14, in the user's own words:** *"stop saying what you did not do or
+things you got wrong or problems you had on the end report, this may cause you to fail further by
+manifestation so avoid it and document to avoid it."*
+
+This revises §1 rule 3 of `22-rewrite-handover.md`, which had said *"say what you did not do"* — a
+rule the same person asked for earlier, and which had grown into every report closing with an
+inventory of omissions, mistakes and difficulties. The person this is built for reads those reports
+as the state of their game.
+
+**What changes: the shape of a message, not the contents of the record.**
+
+- A report **leads with what was built** and **ends with the next step in game terms**.
+- No closing section of what was not done, what went wrong, or what was got wrong on the way.
+- A fact that changes what they would decide is still stated **plainly, once, in place** — inside
+  the work it belongs to rather than gathered into a list at the end. A stage that is blocked, a
+  measurement that came out neutral, a thing still open: all said, all in flow.
+
+**What does not change: this file.** Every wrong turn, every reverted experiment and every neutral
+measurement still goes in `13-decision-log.md`, and §0 of the handover still says those are the most
+useful entries in the repository. The record is for whoever picks the work up; the report is for the
+person deciding what to build next. **They are different documents with different jobs, and this
+entry exists because for a while they were being written as one.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D643 | **A report ends on the next step; the closing inventory of failures goes** | user request | Their build and their call: *"this may cause you to fail further by manifestation"* |
+| D643 | **Nothing is hidden by it — facts move, they do not vanish** | clarification | Anything that changes a decision is stated once, in place, in the flow of the work it came from |
+| D643 | **The decision log keeps every wrong turn** | unchanged | The record and the report have different readers and different jobs |
