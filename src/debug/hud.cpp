@@ -231,6 +231,27 @@ void Hud::draw(const FrameStats& stats, const GpuProfiler& profiler,
                 ImGui::Text("%u:%u", slot + 1, tool_.slot_count[slot]);
             }
         }
+        // ...and what it would paint with, on the end of the same strip. PROVISIONAL, like the
+        // strip it is on.
+        //
+        // Q and E step a palette that is nowhere on screen: the only thing that said which
+        // material was selected was a line in the log and a row of the developer panel, so a
+        // player choosing one had to count keypresses and then make an edit to find out what they
+        // had chosen. The name is the clip author's own word for it, which is the vocabulary they
+        // already have — `type 47` where a material was never named, so an unnamed material and a
+        // renderer with nothing to say are not the same blank (trap 7, in the interface).
+        //
+        // The position and the count come with it because a palette of one and a key that does not
+        // work are the same report from the other side of the screen — this repository has that
+        // exact bug twice, from two different doors, and both times the count would have said so.
+        if (tool_.material_count > 0) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("   Q/E");
+            ImGui::SameLine();
+            ImGui::Text("%s", tool_.material);
+            ImGui::SameLine();
+            ImGui::TextDisabled("%u/%u", tool_.material_index + 1, tool_.material_count);
+        }
         ImGui::End();
     }
 
@@ -344,6 +365,8 @@ void Hud::draw(const FrameStats& stats, const GpuProfiler& profiler,
 
     if (ImGui::CollapsingHeader("Tools", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Text("active: %s (slot %u)", tool_.active_tool, tool_.active_slot + 1);
+        ImGui::Text("material: %s (%u of %u, Q and E step it)", tool_.material,
+                    tool_.material_index + 1, tool_.material_count);
         ImGui::TextDisabled("tap 1-9 to pick a slot, hold one and scroll to cycle it");
         if (tool_.holding) {
             ImGui::Text("clip: %d copies %s   %s", (tool_.copies < 0) ? -tool_.copies : tool_.copies,

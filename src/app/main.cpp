@@ -1952,6 +1952,17 @@ private:
     // Keep what has been sharpened so far, if it is more than the file already holds.
     void save_refined_world();
 
+    // Resolve the palette's names from whichever script still has them, once, where the palette
+    // is set. Safe to call with a script that has no names in it: every entry then falls back to
+    // its type id, which is what a world opened from the cache gets.
+    void name_the_palette(const forge::Script& script);
+    // What to put on screen for the material now selected: the author's name for it, or `type N`
+    // when nothing named it. Never empty, because a blank where a material should be reads as a
+    // renderer fault rather than as an unnamed material.
+    void material_label(char* out, usize size) const;
+    // Which one a load started on, said once. `--material N` picks it and nothing acknowledged it.
+    void log_starting_material() const;
+
     LoadHistory load_history_;
     u64 load_began_ns_ = 0;
     u64 loading_drawn_ns_ = 0;    // when the last loading frame went out, so it can be paced
@@ -2178,6 +2189,15 @@ private:
     EditHistory history_;
     OpLog op_log_;
     std::vector<VoxelTypeId> materials_;
+    // The same palette in the author's words, one entry per `materials_` entry and empty where
+    // there is no name to be had. PROVISIONAL, with the belt it feeds.
+    //
+    // It is a copy rather than a look-up because the two tables it would have to reach are not
+    // both there: the clip's `material_names` is indexed by TYPE ID and lives on a Script the
+    // ladder MOVES out from under this (see the palette comment further down, which is the same
+    // fault's other door), and a world opened from the cache carries type ids with no names at
+    // all. Resolving once, where the palette is set, is the only place both are in hand.
+    std::vector<std::string> material_names_;
     usize material_index_ = 0;
     u64 tick_ = 0;
     u64 last_edit_voxels_ = 0;
@@ -3343,6 +3363,40 @@ void Application::deliver_refinement(RefineDelivery delivered) {
 // So it is written at the fixed point instead, with the flags that say what it is. The next run
 // loads it in a second, and if it stands somewhere else it sharpens what it can see from there and
 // writes again ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the world converges across runs rather than being thrown away at the end of each.
+// The palette in the author's words, resolved once where both tables are in hand.
+//
+// `material_names` is indexed by TYPE ID and `materials_` holds type ids in the order the clip
+// declares them, so this is one look-up per palette entry and not a search. A name that is missing
+// stays empty here rather than becoming "type N" at this point: the fallback belongs to the thing
+// that puts it on screen, so a caller that wants the id can still tell the two apart.
+void Application::name_the_palette(const forge::Script& script) {
+    material_names_.assign(materials_.size(), std::string{});
+    for (usize i = 0; i < materials_.size(); ++i) {
+        const usize type = static_cast<usize>(materials_[i]);
+        if (type < script.material_names.size()) material_names_[i] = script.material_names[type];
+    }
+}
+
+void Application::material_label(char* out, usize size) const {
+    if (out == nullptr || size == 0) return;
+    const bool named = material_index_ < material_names_.size() &&
+                       !material_names_[material_index_].empty();
+    if (named) {
+        std::snprintf(out, size, "%s", material_names_[material_index_].c_str());
+    } else if (material_index_ < materials_.size()) {
+        std::snprintf(out, size, "type %u", static_cast<u32>(materials_[material_index_]));
+    } else {
+        std::snprintf(out, size, "none");
+    }
+}
+
+void Application::log_starting_material() const {
+    char label[40];
+    material_label(label, sizeof(label));
+    WS_LOG_INFO("tool", "starting material: {} ({} of {})", label, material_index_ + 1,
+                materials_.size());
+}
+
 void Application::save_refined_world() {
     if (refine_cache_path_.empty() || refine_regions_.empty()) return;
 
@@ -4281,6 +4335,10 @@ void Application::build_world() {
                 }
                 material_index_ = options_.material % materials_.size();
                 chisel_.set_material(materials_[material_index_]);
+                // The names, from the script that is still standing here — a cache holds type ids
+                // and no words, so a world that came back off the disk with a palette from the
+                // cache gets `type N` and says so rather than a blank.
+                name_the_palette(script);
                 // And where the lamps are, which comes back with the world rather than being read
                 // out of it again. R9g. An OLD file carries none, and that has to mean "nobody
                 // wrote any" rather than "there are none" -- so the map is simply left empty and
@@ -4298,6 +4356,7 @@ void Application::build_world() {
                 // work, and the two have different fixes. That is how this was found.
                 WS_LOG_INFO("tool", "palette: {} materials from {}", materials_.size(),
                             palette_from);
+                log_starting_material();
                 // What came off the disk may be a world that stopped short ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â see
                 // resume_refinement. The script has to be handed over here rather than
                 // rebuilt later, because it owns the field the background sampler reads and
@@ -4512,7 +4571,11 @@ void Application::build_world() {
             if (materials_.empty()) materials_.push_back(1);
             material_index_ = options_.material % materials_.size();
             chisel_.set_material(materials_[material_index_]);
+            // From the same copy the palette came out of, and for the same reason: the ladder has
+            // moved the other one.
+            name_the_palette(palette_script);
             WS_LOG_INFO("tool", "palette: {} materials from the clip", materials_.size());
+            log_starting_material();
             const WorldStats clip_stats = world_.stats();
             WS_LOG_INFO("world", "'{}' built in {:.0f} ms: {} chunks, {} solid voxels", path,
                         ns_to_ms(now_ns() - start), clip_stats.chunks, clip_stats.solid_voxels);
@@ -4574,6 +4637,7 @@ void Application::build_world() {
                              : ("did not build: " + script.errors.front().message);
         materials_.push_back(1);
         material_index_ = 0;
+        material_names_.assign(1, std::string{});
     }
 
 
@@ -4753,8 +4817,10 @@ void Application::update_tools(const InputState& input, bool chisel_has_wheel,
         // Said out loud, because "nothing happened" and "it happened and nothing shows it" are the
         // same report from the other side of the screen, and the palette is not on screen unless
         // the developer panel is open. One line per keypress costs nothing.
-        WS_LOG_INFO("tool", "material {} of {} (type {})", material_index_ + 1, materials_.size(),
-                    chisel_.material());
+        char label[40];
+        material_label(label, sizeof(label));
+        WS_LOG_INFO("tool", "material {} of {}: {} (type {})", material_index_ + 1,
+                    materials_.size(), label, chisel_.material());
     }
 
     // Undo on Z or Ctrl+Z, redo on Y or Ctrl+Y, and both repeat while held.
@@ -6042,6 +6108,9 @@ void Application::record_frame(f32 time_seconds) {
         ToolReport tool;
         tool.active_tool = tool_name(toolbelt_.active());
         tool.active_slot = toolbelt_.active_slot();
+        material_label(tool.material, sizeof(tool.material));
+        tool.material_index = static_cast<u32>(material_index_);
+        tool.material_count = static_cast<u32>(materials_.size());
         for (u32 slot = 0; slot < kToolSlots; ++slot) {
             tool.slot_count[slot] = toolbelt_.slot_size(slot);
             tool.slot_position[slot] = toolbelt_.slot_position(slot);

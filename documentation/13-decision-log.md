@@ -7894,3 +7894,49 @@ the zip. The two documents disagreed for one release; now they do not.
 | D657 | **v0.8.0 published, CI-built** | build | Second green run; the gate opened the zip and built the shipped facility before publishing |
 | D657 | **Minor, not patch** | decision | Two player-visible features since v0.7.1 (D652, D653) and one silent crash fix (D651) |
 | D657 | **15-releases.md now says dispatch** | correction | It still described the tag-push that left three tags pointing at nothing |
+
+## D658 — the belt says what you are painting with
+
+Asked for directly: put the material's name on the provisional strip. It is one line on screen and
+the reason it is worth an entry is what it replaces.
+
+**Q and E step a palette that was nowhere on screen.** The only things that said which material was
+selected were a line in the log and a row of the developer panel behind F1, so choosing one meant
+counting keypresses and then making an edit to find out what had been chosen. The belt along the
+bottom — the provisional strip that shows the nine tool slots until the interface stage gives them
+icons — now ends with `Q/E  alabaster  3/5`: the author's own word for the material, its position
+and how many there are.
+
+**Three details, each of which is a fault this repository has already had.**
+
+- **The name is resolved once, where the palette is set, and copied.** The clip's `material_names`
+  is indexed by TYPE ID while the tool's palette holds type ids in declaration order, so the two
+  tables have to be read together — and they are only both in hand at that one point. The Script the
+  names live on is **moved** out from under the application by the sharpening ladder
+  (`refine_script_ = make_unique<Script>(std::move(script))`), which is exactly how "changing
+  material with Q and E no longer works" happened before: a moved-from object read as an empty
+  palette. Reading names lazily would have walked into it a second time.
+- **A world opened from the cache has type ids and no words**, because the cache stores the palette
+  and not the names. That case prints `type 47` rather than a blank. A blank where a material should
+  be reads as a renderer fault; an id reads as an unnamed material, which is what it is. Trap 7, in
+  the interface.
+- **The count travels with the name.** A palette of one and a key that does not work are the same
+  report from the other side of the screen — this project has had that bug twice, from two different
+  doors (a stale cache, then a moved script), and on both occasions `1/1` on screen would have said
+  so immediately.
+
+The label also goes on the Q/E log line and on a new one at load, since `--material N` chooses the
+starting material and nothing acknowledged it. Checked without a graphics card:
+`--material 3` on `clips/translucency_test.clip` prints **`starting material: marble_t (4 of 5)`**,
+which is the fourth material that clip declares.
+
+**Provisional, and the code says so in both places.** The strip is a stand-in, the label is on it
+until the interface stage gives the belt swatches, and neither is in `14-ui-style.md` because
+neither is the interface this project is going to keep.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D658 | **The material's name goes on the belt** | build | Asked for; Q and E stepped a palette that was nowhere on screen |
+| D658 | **Resolved once at palette time, not looked up per frame** | decision | The names live on a Script the ladder moves; that is a bug this project has already had |
+| D658 | **`type N` where nothing named it** | decision | A blank reads as a renderer fault, an id reads as an unnamed material |
+| D658 | **The position and count travel with it** | decision | `1/1` is the report "Q and E do not work" actually looks like |

@@ -81,6 +81,15 @@ struct ToolReport {
     const char* adjust_mode = "";
     char scale_text[32] = "1x";
     const char* active_tool = "";
+    // What the chisel is painting with, in the clip author's own words. PROVISIONAL, and it is
+    // here rather than pointed at because a `const char*` into the palette would be a dangling
+    // pointer the day a world is opened while the belt is on screen — `scale_text` above is a
+    // buffer for the same reason. See the belt in hud.cpp: the strip is a stand-in until the
+    // interface stage gives it swatches, and a material with no name on screen is the one thing
+    // about an edit a player cannot check before making it.
+    char material[40]{};
+    u32 material_index = 0;   // which entry of the palette, from nought
+    u32 material_count = 0;   // how many Q and E step through
     u32 active_slot = 0;
     u32 slot_count[9]{};
     u32 slot_position[9]{};

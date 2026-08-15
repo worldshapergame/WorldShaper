@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.24)
 # workflow's tag, the name of the zip, and the check the game makes against the latest
 # release to decide whether it is out of date. Bump it here, tag `v<the same number>`, and
 # the release that comes out matches the build that announces itself.
-project(WorldShaper VERSION 0.8.0 LANGUAGES C CXX)
+project(WorldShaper VERSION 0.8.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

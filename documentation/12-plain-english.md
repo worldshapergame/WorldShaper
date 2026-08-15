@@ -3082,3 +3082,21 @@ it, plus its checksum, so "is this the real thing" is a question you can answer 
 The build was made by the workflow rather than by hand, and before it published anything it unzipped
 its own download somewhere else and made the facility build out of it — the check that exists
 because v0.7.0 shipped without the building in it.
+
+## The strip along the bottom now says what you are painting with
+
+Q and E change the material, and until now nothing on screen told you which one you were on. You
+pressed a key, something changed somewhere, and the only way to find out what it was was to cut with
+it. The strip along the bottom of the screen — the one with the nine tool slots on it — now ends
+with the material's name, in the words the world's own file uses, and how far through the list it
+is: `Q/E alabaster 3/5`.
+
+The `3/5` is there for a reason. Twice in this project a report of "changing material does not work"
+turned out to be a list with only one thing in it, and a key that steps a list of one looks exactly
+like a key that does nothing. If it ever says `1/1` again, that is what happened, and it says so
+without anybody having to open a log.
+
+Where a material was never given a name in the file, it shows its number instead — a blank there
+would look like the game failing rather than like a material nobody named.
+
+This is on the temporary strip, not the real interface, and it goes when that arrives.
