@@ -4273,13 +4273,39 @@ void Application::build_world() {
         }
 
         if (script.ok()) {
-            progress_.enter(LoadStage::Sampling);
-            forge::SampleResult built = forge::sample(
-                script.field, script.solid, script.paint, script.settings, &jobs,
-                [this](f64 fraction, u64 done, u64 expected) {
-                    progress_.within(fraction);
-                    progress_.count(done, expected);
-                });
+            // THE UP-FRONT SAMPLE IS NOT TAKEN AT ALL WHEN NOTHING NEEDS IT (R11d, D642).
+            //
+            // This is 2,754 ms of a 17.1 s cold load and it is the loading bar. Two things used to
+            // need it: the paste, which `--no-coarse-paste` already skips, and the stipple verdict,
+            // which is taken from the WORLD now and only comes from here under
+            // `--stipple-at-coarse`. With both off, sampling the whole building at metre 8 produces
+            // a clip that is despeckled, varied, measured and thrown away.
+            //
+            // D642 is what made this safe to say: the verdict this sample used to give protects
+            // four materials that have nothing to protect at the detail a player stands in --
+            // 392, 455 and 509 have no specks at all at metre 32 -- and switching to the world's
+            // own verdict moves 154 voxels in a building of 3.8 M.
+            //
+            // An unsampled `built` is empty, and every use of it downstream is a no-op on an empty
+            // clip by construction: `despeckle` and `apply_variation` have nothing to walk, the
+            // paste is already skipped, and `origin_voxel` is read only by the paste.
+            const bool coarse_sample_needed =
+                !options_.no_coarse_paste || options_.stipple_at_coarse;
+            forge::SampleResult built;
+            if (coarse_sample_needed) {
+                progress_.enter(LoadStage::Sampling);
+                built = forge::sample(
+                    script.field, script.solid, script.paint, script.settings, &jobs,
+                    [this](f64 fraction, u64 done, u64 expected) {
+                        progress_.within(fraction);
+                        progress_.count(done, expected);
+                    });
+            } else {
+                WS_LOG_INFO("clip",
+                            "no up-front sample: the coarse build is not pasted and the stipple "
+                            "verdict comes from the world, so there is nothing for it to produce "
+                            "(R11d, D642)");
+            }
             // D610. Before variation, which is the only place it can go: variation mints a record
             // per voxel and after it every voxel is alone in its material by construction.
             // THE VERDICT NO LONGER COMES FROM HERE (R11d option 2, D629). It used to be taken

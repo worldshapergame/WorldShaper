@@ -1,0 +1,74 @@
+# Builds and tests on Windows, on every push.
+#
+# This repository had no CI at all until now: `release.yml` builds only when a release is being
+# cut, so a change could sit on `main` for a week without anything ever having compiled it on the
+# platform the game ships for. That is not a hypothetical — the whole of this rewrite has been
+# worked on from machines that cannot build it, and the only compiler that had seen `main.cpp` in
+# days was the one in somebody's head.
+#
+# It is deliberately the same shape as the release build, minus the packaging: same pinned Vulkan
+# SDK (release.yml's own comment explains why `latest` is not a version), same Ninja, same tests.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned, for the reason release.yml sets out at length: asking for `latest` made the shader
+      # compiler a different compiler on every run, and one of them crashed on clouds.comp. D641.
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        env:
+          WS_VULKAN_SDK: 1.4.341.0
+        run: |
+          $url = "https://sdk.lunarg.com/sdk/download/$env:WS_VULKAN_SDK/windows/vulkan-sdk.exe"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\vulkan-sdk.exe"
+          $args = @('--root', 'C:\VulkanSDK', '--accept-licenses',
+                    '--default-answer', '--confirm-command', 'install')
+          Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList $args -Wait
+          "VULKAN_SDK=C:\VulkanSDK" >> $env:GITHUB_ENV
+          "C:\VulkanSDK\Bin" >> $env:GITHUB_PATH
+          & C:\VulkanSDK\Bin\glslc.exe --version
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja
+        shell: pwsh
+        run: choco install ninja -y --no-progress
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build
+
+      # The unit suite, and then the headless world audit. Neither needs a graphics card, which is
+      # what makes them runnable here at all — the renderer itself is not tested by this and is not
+      # claimed to be.
+      - name: Test
+        shell: pwsh
+        run: |
+          .\build\bin\ws_tests.exe
+          .\build\bin\WorldShaper.exe --ticks 20000
+
+      # And the clip the game ships with actually builds, from beside the executable, the way a
+      # player's copy does. `--clip-file` with no `--screenshot` is the clip tool: CPU only.
+      - name: The shipped facility builds
+        shell: pwsh
+        run: |
+          $log = & .\build\bin\WorldShaper.exe --clip-file build\bin\clips\facility.clip `
+                 --clip-metre 4 2>&1 | Out-String
+          Write-Host $log
+          if ($LASTEXITCODE -ne 0) { throw "the facility did not build (exit $LASTEXITCODE)" }
+          $volume = [regex]::Match($log, "volume\s+(\d+) voxels")
+          if (-not $volume.Success) { throw "the clip tool reported no volume" }
+          if ([int64]$volume.Groups[1].Value -le 0) { throw "the facility built to nothing" }
+          Write-Host "the facility built: $($volume.Groups[1].Value) voxels"
