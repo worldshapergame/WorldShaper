@@ -4161,7 +4161,7 @@ void Application::build_world() {
                 script.solid = piece;
                 script.has_solid = true;
             } else {
-                WS_LOG_ERROR("clip", "no part called '{}' ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â check the `let` name",
+                WS_LOG_ERROR("clip", "no part called '{}' -- check the `let` name",
                              options_.clip_part);
             }
         }
@@ -4470,7 +4470,29 @@ void Application::build_world() {
         }
         // Nothing to fall back to, and that is deliberate. An empty world says plainly that the
         // clip did not load; a stand-in scene would say the clip loaded and looked like that.
-        WS_LOG_ERROR("clip", "'{}' did not build ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the world is empty", path);
+        //
+        // MISSING and EMPTY are different answers, and they used to be the same one. That cost a
+        // player a download and a bug report: `tools/package.ps1` staged the executable, the
+        // shaders, the licence and the readme, and no `clips/` at all -- so a downloaded build had
+        // nothing beside it to open, the worlds shelf seeded from an empty folder, and what the
+        // game said about it was "this world built to nothing". A sentence about the parser, for a
+        // file the game had never managed to open. There is no reading of it that gets anybody
+        // nearer the truth.
+        //
+        // So the file is asked about before the failure is described, and the description names
+        // the folder the clips are supposed to be in, which is the one thing a player can check.
+        std::error_code missing;
+        const bool no_file = !std::filesystem::exists(path, missing) || missing;
+        const std::string shipped_clips =
+            (std::filesystem::path(Window::base_path()) / "clips").string();
+        if (no_file) {
+            WS_LOG_ERROR("clip",
+                         "'{}' is not there to build -- this install has no such file. The clips "
+                         "that ship with the game belong in '{}'",
+                         path, shipped_clips);
+        } else {
+            WS_LOG_ERROR("clip", "'{}' did not build -- the world is empty", path);
+        }
         // And it says so ON THE SCREEN, which it did not.
         //
         // "the world is empty" was a line in a log file, so what a player got was a sky with
@@ -4478,7 +4500,8 @@ void Application::build_world() {
         // exactly what was reported, twice, and both times the answer was in a log nobody had
         // been given a reason to open. The FIRST error is the one that is said: the rest of any
         // list of them is what the first one caused.
-        world_trouble_ = script.errors.empty()
+        world_trouble_ = no_file ? ("this install has no " + path)
+                       : script.errors.empty()
                              ? std::string("this world built to nothing")
                              : ("did not build: " + script.errors.front().message);
         materials_.push_back(1);

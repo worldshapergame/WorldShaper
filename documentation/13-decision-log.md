@@ -6853,3 +6853,75 @@ cleverness about hierarchy — the hierarchy question is now answered three ways
 | D639 | **Balanced folding built, measured, refused** | decision | −1.9% instructions while evaluating 2.7% MORE shapes |
 | D639 | **Three groupings measured; the simplest wins** | method | Chain, balanced tree and BVH — the parts are layers, not regions |
 | D639 | **The visit counter is not kept** | method | It is an increment in the hottest loop in the build; take it, read it, revert it |
+
+## D640 — the download had no clips in it, and the smoke test could not tell
+
+Reported from a player running the release: **the facility is not there, and the game says it did
+not build anything.** Both halves are true and neither is a renderer fault.
+
+**`tools/package.ps1` staged the executable, `SDL3.dll`, `shaders\` , the licence and the readme.
+It never staged `clips\`.** Everything about a world is read from **the folder the executable is
+in**: `Shell::seed_worlds` fills the worlds shelf from `<exe>/clips` on first run, `expand_includes`
+looks there for an include that is not beside its own file (D494), and the facility is a manifest
+plus twenty-two fragments that live there. A download had none of it, so the shelf seeded from
+nothing, the clips shelf was empty, and a direct launch fell through `default_clip_path()`'s three
+candidates to a file that was not on the disk.
+
+**A source build was never affected**, which is why this survived three releases: `ws_clips` in
+`CMakeLists.txt` copies the clips to `build\bin\clips` on every build, so the layout the developer
+runs is the layout the packager forgot to reproduce. The fix is one line, and it stages
+`build\bin\clips` rather than the source `clips\` on purpose — that is the copy
+`cmake/copy_clips.cmake` has already dropped the built worlds out of, and the facility's is over
+half a gigabyte.
+
+**The gate that should have caught it is the interesting half.** `package.ps1` already unpacks the
+zip into a temp directory and runs it there, and its own comment says that gate "is the only one
+that reproduces a player" — it exists because v0.6.0 shipped with a shader path hard-coded to the
+build machine. But what it asserted was **that a screenshot file appeared**. An empty sky is a
+frame. So the broken zip passed the unit tests, both audits, the version check and the smoke test,
+and was published.
+
+It now reads the log the run produced: it fails on `is not there to build`, `did not build`, `the
+world is empty` or `built to nothing`, and it requires a `built in N ms: C chunks, V solid voxels`
+line with **V greater than nought**. It also passes `--no-clip-cache`, because the world cache lives
+in the player's own folder keyed on the clip's absolute path and the smoke directory is the same
+every time — without it, the second packaging run of a version would load the first one's world and
+report a success that had nothing to do with the zip under test.
+
+**And the game blamed the wrong thing, which is why the report said "it did not build anything".**
+`'{}' did not build -- the world is empty` was printed whether the clip built to nothing or **was
+never there to open**, and the on-screen line said `this world built to nothing` — a sentence about
+the parser, for a file that had never been read. Missing and empty are now different answers, and
+the missing one names the folder the clips belong in.
+
+**Two other things were fixed while the reports were in hand**, both from the same session:
+
+- **`run.bat` only built when `build\bin\WorldShaper.exe` was ABSENT.** So the second time anybody
+  ran it — after a pull, after any edit — it started what was already there. "I updated and nothing
+  changed" is indistinguishable from a change that did not work. It now always builds (Ninja does
+  nothing when nothing changed), says plainly when a running copy is what is blocking the linker
+  (LNK1168, which reads like a code fault and is not), and checks that the executable, the compiled
+  shaders and the clips are all beside each other before starting.
+- **`build.bat` put Visual Studio's Ninja on PATH and not its CMake.** The same installer component
+  ships both, so a machine with Visual Studio and nothing else got `'cmake' is not recognized`,
+  which names no product and nothing to do about it. It now adds VS's CMake too (appended, so
+  somebody who installed their own keeps it) and it names the Vulkan SDK by its download page
+  instead of failing twenty lines inside `find_package(Vulkan REQUIRED COMPONENTS glslc)`.
+
+**What is NOT verified, and it matters here more than usual.** This session ran on Linux with no
+Vulkan and no Windows: **none of `package.ps1`, `run.bat` or `build.bat` was executed, and
+`main.cpp` was not compiled.** The changed C++ was extracted verbatim and compiled against stand-ins
+for everything around it, the scripts were checked for non-ASCII (PowerShell 5.1 reads a BOM-less
+file as ANSI, and this one runs on strangers' machines), and the 541-test suite passes — but the
+first person on Windows should run `build.bat`, then `tools\package.ps1`, and watch the smoke test
+print its voxel count.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D640 | **`clips\` is staged into the zip, from `build\bin\clips`** | fix | Everything about a world is read from the executable's own folder |
+| D640 | **The smoke test reads the log, not just the file listing** | gate | "It drew a frame" is satisfied by an empty sky, which is exactly the bug |
+| D640 | **The smoke run is forced cold** | method | The cache is keyed on a path the smoke directory reuses between runs |
+| D640 | **Missing and empty are different messages** | fix | The game blamed its parser for a file that was never in the download |
+| D640 | **`run.bat` always builds** | fix | It built only when the executable was missing, so updates did nothing |
+| D640 | **`build.bat` finds VS's CMake and names the Vulkan SDK** | fix | The two first-build failures, both previously reported as cryptic |
+| D640 | **None of the three scripts was run** | honesty | No Windows here; the C++ was compiled only as an extracted block |

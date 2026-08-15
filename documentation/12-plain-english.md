@@ -2772,3 +2772,49 @@ seconds down to 8.9** to build the facility, which is **1.56× faster**, and the
 out of both. Making the building is about 9 seconds of your 17-second load, so **if that ratio holds
 it is around 3 seconds off** — but I want to be careful with that number, because I could not run
 the loading screen here to check it. It is the first thing worth looking at when you next build.
+
+## Why your friend's copy had no facility in it
+
+He was right, and it was not the renderer. **The download did not contain the building.**
+
+The game keeps its worlds, its shapes and the twenty-two pieces the facility is assembled from in a
+`clips` folder next to the program. The script that builds the download put the program in the zip,
+the shaders in the zip, the licence and the readme in the zip — and never the clips. So on his
+machine the shelf had nothing on it, there was nothing to open, and when the game went looking for
+the facility it found no such file.
+
+**And then it told him the wrong thing.** The message he saw — "it did not build anything" — is what
+the game says when a world is *described badly and comes out empty*. It said the same thing for a
+file that was never there to read. Those are now two different messages, and the missing one tells
+you which folder the game looked in.
+
+**Why this never happened to you.** Building from source copies the clips next to the program
+automatically, every time. So the layout you have always run is the one the packaging script was
+supposed to reproduce, and did not — which is exactly the kind of fault that only ever shows up on
+somebody else's computer.
+
+**The check that should have caught it has been fixed too, and that matters more than the one line
+that fixes the zip.** Before publishing, the script already unpacks the download somewhere else and
+runs it, precisely so a broken download is caught before anybody gets it. But all it checked was
+that a picture came out. **A picture of an empty sky is still a picture.** It now reads what the
+game said while it ran, and refuses to publish unless the game reports a world with voxels actually
+in it.
+
+**And two things about building from source, since he hit that as well.**
+
+- `run.bat` only built the game when the program was *missing*. Every time after the first it
+  started whatever was already there — so pulling new code and running it gave you the old game,
+  which looks exactly like a change that did not work. It now always builds, and it says so plainly
+  if a copy of the game is already open and blocking it.
+- `build.bat` told Windows where to find one of the two tools Visual Studio ships and not the other,
+  so a machine with Visual Studio and nothing else got `'cmake' is not recognized` — a message that
+  names nothing you can install. It now finds both, and if the Vulkan SDK is missing it says so by
+  name with the page to get it from, instead of failing deep inside a wall of build-system text.
+
+**What I could not do from here.** This machine has no Windows and no graphics card, so **I could
+not run any of the three scripts I changed, and could not compile the game itself.** I compiled the
+changed piece of it on its own, checked the scripts for the character-encoding trap that has bitten
+this project before, and ran the 541 tests. **The next thing to do is on your machine: run
+`build.bat`, then `tools\package.ps1`, and watch it print how many voxels the unpacked copy built.**
+If it prints a number, the download is fixed. If it stops with a complaint, it has caught something
+and the complaint will say what.

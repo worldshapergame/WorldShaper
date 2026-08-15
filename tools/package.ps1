@@ -46,6 +46,23 @@ New-Item -ItemType Directory -Path $staging -Force | Out-Null
 Copy-Item (Join-Path $root "build\bin\WorldShaper.exe") $staging
 Copy-Item (Join-Path $root "build\bin\SDL3.dll") $staging
 Copy-Item (Join-Path $root "build\bin\shaders") (Join-Path $staging "shaders") -Recurse
+
+# THE CLIPS, which this script did not stage for three releases and which is the whole game.
+#
+# The build already puts them beside the executable -- `ws_clips` in CMakeLists.txt, so that a
+# source build and a download have the same layout -- and every one of those is read from
+# `<the executable's folder>/clips`: the worlds shelf seeds itself from there on first run
+# (`Shell::seed_worlds`), an include that is not beside its own file is looked for there (D494),
+# and the facility is twenty-two fragments assembled by a manifest that lives there.
+#
+# Staged from `build\bin\clips` and not from the source `clips\`, deliberately: that folder is
+# where `cmake/copy_clips.cmake` has already dropped the built worlds out, and the facility's is
+# well over half a gigabyte. Copying the source folder would put it in the zip.
+#
+# What a player got without this: the shelf empty, the facility nowhere, and the game saying
+# "this world built to nothing" about a file that was never in the download. D640.
+Copy-Item (Join-Path $root "build\bin\clips") (Join-Path $staging "clips") -Recurse
+
 Copy-Item (Join-Path $root "LICENSE"), (Join-Path $root "README.md") $staging
 
 $zip = Join-Path $package "$name.zip"
@@ -67,15 +84,43 @@ Expand-Archive -Path $zip -DestinationPath $smoke -Force
 $shot = Join-Path $smoke "smoke.png"
 Push-Location $smoke
 try {
-    & (Join-Path $smoke "WorldShaper.exe") --screenshot $shot --screenshot-frame 3 `
-        --no-update-check --no-vsync --width 640 --height 360
+    # `--no-clip-cache` so this is always the COLD path. The world cache lives in the player's own
+    # folder and is keyed on the clip's absolute path, and the smoke test unpacks to the same temp
+    # directory every time -- so without this, the second packaging run of a version would load the
+    # FIRST one's world and report a success that had nothing to do with the zip being tested.
+    $log = & (Join-Path $smoke "WorldShaper.exe") --screenshot $shot --screenshot-frame 3 `
+        --no-update-check --no-vsync --no-clip-cache --width 640 --height 360 2>&1 | Out-String
+    Write-Host $log
     if ($LASTEXITCODE -ne 0) { throw "the unpacked build failed to run (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location
 }
 if (-not (Test-Path $shot)) { throw "the unpacked build started but drew no frame" }
+
+# AND THAT THERE WAS A WORLD IN THE FRAME, which is the half this gate did not have.
+#
+# "It drew a frame" is satisfied by an empty sky, and an empty sky is exactly what a download with
+# no clips in it produces -- so the release that shipped without `clips/` passed every check in this
+# file, including this one, and was broken for every player on the first screen. The comment above
+# says the last gate is "the only one that reproduces a player"; a player who has no world is not
+# reproduced by a screenshot being written.
+#
+# So the log is read. The failure is loud and specific -- the game says which file it could not open
+# -- and the success carries a voxel count that cannot be faked by a sky.
+if ($log -match "is not there to build|did not build|the world is empty|built to nothing") {
+    throw "the unpacked build started and had no world in it: $($Matches[0]). " +
+          "Check that clips\ is in the zip."
+}
+$built = [regex]::Match($log, "(?:built|loaded from cache) in [\d.]+ ms[^:]*: (\d+) chunks, (\d+) solid voxels")
+if (-not $built.Success) {
+    throw "the unpacked build never said it had built a world -- it should log 'built in N ms'"
+}
+if ([int64]$built.Groups[2].Value -le 0) {
+    throw "the unpacked build built a world with no voxels in it"
+}
 Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "smoke test: the unpacked build ran from $smoke and drew a frame"
+Write-Host ("smoke test: the unpacked build ran from $smoke, built {0} solid voxels and drew a " +
+            "frame" -f $built.Groups[2].Value)
 
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
 $hash | Out-File "$zip.sha256" -Encoding ascii
