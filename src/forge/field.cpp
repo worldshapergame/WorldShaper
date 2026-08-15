@@ -1025,6 +1025,9 @@ f64 Field::eval(u32 at, Vec3 p) const {
                 // Getting it wrong is not loud. The sign never changed, so nothing appeared or
                 // vanished; the magnitude did, which moved the surface normals, which moved the
                 // paint rule that follows them. Four hundred voxels of moss in the wrong place.
+                // A child that under-reports may not be skipped on its box, however far away that
+                // box is: it is free to answer less than the distance to it, so "the running
+                // answer already beats your box" says nothing about what it would have said. D644.
                 if (sorted) {
                     // Outside the box at all, and either already inside something (so nothing
                     // outside can be nearer) or nearer than the box can possibly be.
@@ -1384,6 +1387,56 @@ f64 Field::eval(u32 at, Vec3 p) const {
 namespace {
 
 Field::Aabb everywhere() { return Field::Aabb{}; }
+
+// Whether a node's answer can be trusted as at least the distance to its own box.
+//
+// **This is the property every box cull rests on and four primitives do not have.** The union's
+// rejection skips a child when the running answer is already nearer than the child's box; that is
+// only sound if the child, asked at a point outside its box, answers at least the distance to it.
+// An exact signed distance does, because the shape is inside the box. A BOUNDED one need not:
+// `sd_ellipsoid` is "the standard bounded approximation" by its own comment, and a cone, a prism
+// and a platonic solid are built as intersections of half planes, which under-state the distance
+// out past a corner by up to a factor of root three.
+//
+// Measured rather than reasoned: sampling each primitive outside its own box, the worst ratio of
+// answer to box distance is 1.0000 for the sphere, box, cylinder, capsule, torus, wedge, stairs
+// and spiral, and **0.5877 for the ellipsoid, 0.5300 for the cone, 0.8660 for the prism and 0.5774
+// for the platonic**. Every composite is sound (smooth union 1.0412, union, difference, round,
+// translate, repeat and uniform scale all 1.0000). D644.
+//
+// Under-stating a distance is otherwise SAFE and is the direction this whole engine prefers -- a
+// march that steps short is slow, one that steps long goes through the wall. The cull is the one
+// place where the other direction is assumed, and `build_bounds` already refuses a box to a
+// non-uniform scale for exactly this reason, in a comment that describes this bug precisely
+// without knowing four primitives had it too.
+}  // namespace
+
+bool op_reports_true_distance(Op op) {
+    switch (op) {
+        case Op::Ellipsoid: case Op::Cone: case Op::Prism: case Op::Platonic:
+            return false;
+        // **An INTERSECTION belongs on this list and is deliberately NOT on it, because the cure
+        // measured worse than the disease.** Its shape sits in the OVERLAP of its children's boxes
+        // and `bounds_` says so rightly, but its answer is `max` over the children and is only
+        // ever as large as one child's own distance -- and a child's box is bigger than the
+        // overlap. `cull_bounds_` below gives the node a box its answer CAN vouch for, which fixes
+        // a parent culling this node. What that cannot fix is a grandparent culling the union
+        // above it, because the union's box is built from the shape boxes.
+        //
+        // Refusing the cull outright is sound and unusable: the facility's solid holds 217
+        // intersections, refusing them takes the whole tree with them through the honesty AND, and
+        // one sample of the facility at metre 8 went from **12.45 s to over nine minutes** before
+        // it was killed. The right fix is to propagate a second set of boxes through every op --
+        // the same switch, reading children's cull boxes instead of their shape boxes -- and it is
+        // a bigger change than this one. Until then this is a known and bounded hole: 58 points in
+        // 64,000 over the facility, worst 0.139 m, always in the safe-for-marching direction for
+        // the shapes themselves and in the dangerous one for a union above an intersection. D644.
+        default:
+            return true;
+    }
+}
+
+namespace {
 
 Field::Aabb around(Vec3 centre, Vec3 half) {
     Field::Aabb box;
@@ -1835,6 +1888,7 @@ void Field::build_bounds() {
             default: box = everywhere(); break;
         }
         bounds_[i] = box;
+
     }
 
     // Now the boxes exist, so the hierarchy over them can be built.
@@ -2408,6 +2462,466 @@ f64 Field::metric_slack(u32 at) const {
             // them are perfectly good to read — they just say nothing about the next voxel.
             return kInfiniteSlack;
     }
+}
+
+
+// ---- R12b: the non-recursive twin ------------------------------------------------------------
+//
+// See the declaration in field.hpp for why this exists. The shape of it: one frame per node on the
+// way down, a `step` counter saying how far through that node's work we are, and one register for
+// the value a finished child left behind. Nothing here recurses and nothing allocates.
+namespace {
+
+struct MirrorFrame {
+    u32 node = 0;
+    u32 step = 0;       // which child, or which sample point, this frame is on
+    Vec3 p;             // the point this node was asked at
+    f64 acc = 0.0;      // the answer so far
+    // `repeat` works out its folded point and its leaning neighbours once, on the way in, and then
+    // walks up to eight combinations of them. Kept in the frame because a shader has nowhere else.
+    Vec3 fold;
+    u32 axes[3]{0, 0, 0};
+    f64 lean[3]{0.0, 0.0, 0.0};
+    u32 neighbours = 0;
+};
+
+// The fourteen directions `occlusion` asks along, and the six `curvature` does. Written here rather
+// than rebuilt per visit for the same reason the recursive one has them as a local constant.
+constexpr f64 kDiag = 0.5773502691896258;
+const Vec3 kOcclusionDirs[14] = {{1, 0, 0},   {-1, 0, 0},  {0, 1, 0},      {0, -1, 0},
+                                 {0, 0, 1},   {0, 0, -1},  {kDiag, kDiag, kDiag},
+                                 {kDiag, kDiag, -kDiag},   {kDiag, -kDiag, kDiag},
+                                 {kDiag, -kDiag, -kDiag},  {-kDiag, kDiag, kDiag},
+                                 {-kDiag, kDiag, -kDiag},  {-kDiag, -kDiag, kDiag},
+                                 {-kDiag, -kDiag, -kDiag}};
+
+bool mirror_is_leaf(Op op) {
+    switch (op) {
+        case Op::Constant: case Op::Parameter: case Op::Coordinate: case Op::Radius:
+        case Op::Sphere: case Op::Box: case Op::Cylinder: case Op::Capsule: case Op::Torus:
+        case Op::Cone: case Op::Plane: case Op::Ellipsoid: case Op::Prism: case Op::Platonic:
+        case Op::Wedge: case Op::Stairs: case Op::Spiral: case Op::Fbm: case Op::Noise:
+        case Op::Ridged: case Op::Rasp: case Op::Cells: case Op::CellEdge: case Op::Sine:
+        case Op::Waves: case Op::Checker: case Op::Stripes: case Op::Bricks:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// What a one-child op does to its child's answer on the way out.
+f64 mirror_after(Op op, const f64* a, f64 v) {
+    switch (op) {
+        case Op::Shell: return std::abs(v) - a[0];
+        case Op::Round: return v - a[0];
+        case Op::Offset: return v + a[0];
+        case Op::Negate: return -v;
+        case Op::Abs: return std::abs(v);
+        case Op::Step: return (v > a[0]) ? 1.0 : 0.0;
+        case Op::Smoothstep: {
+            const f64 span = a[1] - a[0];
+            if (span == 0.0) return (v > a[0]) ? 1.0 : 0.0;
+            const f64 t = clamp((v - a[0]) / span, 0.0, 1.0);
+            return t * t * (3.0 - 2.0 * t);
+        }
+        case Op::Clamp: return clamp(v, a[0], a[1]);
+        case Op::Power: return (v < 0.0 ? -1.0 : 1.0) * std::pow(std::abs(v), a[0]);
+        case Op::Remap: {
+            const f64 span = a[1] - a[0];
+            const f64 t = (span == 0.0) ? 0.0 : clamp((v - a[0]) / span, 0.0, 1.0);
+            return a[2] + (a[3] - a[2]) * t;
+        }
+        default: return v;
+    }
+}
+
+// ...and how a many-child op folds the next child into the answer so far.
+f64 mirror_fold(Op op, const f64* a, f64 acc, f64 v) {
+    switch (op) {
+        case Op::Union: case Op::Min: return std::min(acc, v);
+        case Op::Intersection: case Op::Max: return std::max(acc, v);
+        case Op::Difference: return std::max(acc, -v);
+        case Op::SmoothUnion: return smooth_min(acc, v, a[0]);
+        case Op::SmoothIntersection: return smooth_max(acc, v, a[0]);
+        case Op::SmoothDifference: return smooth_max(acc, -v, a[0]);
+        case Op::Add: return acc + v;
+        case Op::Multiply: return acc * v;
+        default: return v;
+    }
+}
+
+bool mirror_op_known(Op op) {
+    if (mirror_is_leaf(op)) return true;
+    switch (op) {
+        case Op::Revolve: case Op::Translate: case Op::Rotate: case Op::Scale: case Op::Mirror:
+        case Op::PolarRepeat: case Op::Twist: case Op::Bend: case Op::Shell: case Op::Round:
+        case Op::Offset: case Op::Negate: case Op::Abs: case Op::Step: case Op::Smoothstep:
+        case Op::Clamp: case Op::Power: case Op::Remap: case Op::Curvature: case Op::Occlusion:
+        case Op::Facing: case Op::Displace: case Op::Blend: case Op::Union: case Op::Intersection:
+        case Op::Difference: case Op::SmoothUnion: case Op::SmoothIntersection:
+        case Op::SmoothDifference: case Op::Add: case Op::Multiply: case Op::Min: case Op::Max:
+        case Op::Repeat:
+            return true;
+        default:
+            return false;
+    }
+}
+
+}  // namespace
+
+bool Field::mirror_covers(u32 at, Op* missing) const {
+    if (at >= nodes_.size()) return false;
+    // Iterative, because a checker that recurses to ask whether something recurses is a poor joke.
+    u32 stack[kMirrorStack];
+    u32 top = 0;
+    stack[top++] = at;
+    std::vector<u8> seen(nodes_.size(), 0);
+    while (top > 0) {
+        const u32 index = stack[--top];
+        if (index >= nodes_.size() || seen[index]) continue;
+        seen[index] = 1;
+        const Node& n = nodes_[index];
+        if (!mirror_op_known(n.op)) {
+            if (missing != nullptr) *missing = n.op;
+            return false;
+        }
+        for (u32 c = 0; c < n.children && c < 4; ++c) {
+            if (top < kMirrorStack) stack[top++] = n.child[c];
+        }
+    }
+    return true;
+}
+
+bool Field::mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest) const {
+    if (at >= nodes_.size()) return false;
+    MirrorFrame stack[kMirrorStack];
+    u32 top = 0;
+    f64 ret = 0.0;   // what the child that just finished came back with
+    u32 low_water = 0;
+
+    stack[top].node = at;
+    stack[top].step = 0;
+    stack[top].p = p;
+    ++top;
+
+    while (top > 0) {
+        if (top > low_water) low_water = top;
+        MirrorFrame& f = stack[top - 1];
+        const Node& n = nodes_[f.node];
+        const f64* a = n.a;
+
+        // A child to push, worked out by the op and the step. `push` is the only way down and
+        // `finish` the only way up, so a case that forgets to do one of them cannot silently
+        // return the previous node's answer -- it loops, and the test catches a loop.
+        const auto push = [&](u32 child, Vec3 where) -> bool {
+            if (child >= nodes_.size() || top >= kMirrorStack) return false;
+            stack[top].node = child;
+            stack[top].step = 0;
+            stack[top].p = where;
+            stack[top].acc = 0.0;
+            stack[top].neighbours = 0;
+            ++top;
+            return true;
+        };
+        const auto finish = [&](f64 value) {
+            ret = value;
+            --top;
+        };
+
+        if (mirror_is_leaf(n.op)) {
+            // A leaf has no children, so the recursive evaluator does not recurse on
+            // one either: for these the two evaluators are the same code by
+            // construction, and what is being proved here is the WALK.
+            finish(eval(f.node, f.p));
+            continue;
+        }
+
+        switch (n.op) {
+            // ---- one child, the point changed on the way in -------------------------------
+            case Op::Revolve: {
+                if (f.step == 0) {
+                    f.step = 1;
+                    const u32 axis = static_cast<u32>(a[3]);
+                    u32 u = 0, v = 0;
+                    other_axes(axis, u, v);
+                    const Vec3 q = f.p - Vec3{a[0], a[1], a[2]};
+                    const f64 r = std::hypot(axis_of(q, u), axis_of(q, v));
+                    Vec3 flat{0, 0, 0};
+                    flat = with_axis(flat, u, r);
+                    flat = with_axis(flat, axis, axis_of(q, axis));
+                    if (!push(n.child[0], flat)) return false;
+                    continue;
+                }
+                finish(ret);
+                continue;
+            }
+            case Op::Translate: {
+                if (f.step == 0) {
+                    f.step = 1;
+                    if (!push(n.child[0], f.p - Vec3{a[0], a[1], a[2]})) return false;
+                    continue;
+                }
+                finish(ret);
+                continue;
+            }
+            case Op::Rotate: {
+                if (f.step == 0) {
+                    f.step = 1;
+                    const f64 cx = std::cos(-a[0] * kTau), sx = std::sin(-a[0] * kTau);
+                    const f64 cy = std::cos(-a[1] * kTau), sy = std::sin(-a[1] * kTau);
+                    const f64 cz = std::cos(-a[2] * kTau), sz = std::sin(-a[2] * kTau);
+                    Vec3 q = f.p;
+                    q = {q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx};
+                    q = {q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy};
+                    q = {q.x * cz - q.y * sz, q.x * sz + q.y * cz, q.z};
+                    if (!push(n.child[0], q)) return false;
+                    continue;
+                }
+                finish(ret);
+                continue;
+            }
+            case Op::Scale: {
+                const Vec3 s{a[0] != 0.0 ? a[0] : 1.0, a[1] != 0.0 ? a[1] : 1.0,
+                             a[2] != 0.0 ? a[2] : 1.0};
+                if (f.step == 0) {
+                    f.step = 1;
+                    if (!push(n.child[0], {f.p.x / s.x, f.p.y / s.y, f.p.z / s.z})) return false;
+                    continue;
+                }
+                // ...and the smallest factor applied on the way OUT, which is the half of this op
+                // a transliteration is most likely to drop.
+                const f64 smallest =
+                    std::min(std::abs(s.x), std::min(std::abs(s.y), std::abs(s.z)));
+                finish(ret * smallest);
+                continue;
+            }
+            case Op::Mirror: {
+                if (f.step == 0) {
+                    f.step = 1;
+                    const u32 axis = static_cast<u32>(a[0]);
+                    if (!push(n.child[0], with_axis(f.p, axis, std::abs(axis_of(f.p, axis)))))
+                        return false;
+                    continue;
+                }
+                finish(ret);
+                continue;
+            }
+            case Op::PolarRepeat: {
+                if (f.step == 0) {
+                    f.step = 1;
+                    const u32 count = std::max(1u, static_cast<u32>(a[0]));
+                    const u32 axis = static_cast<u32>(a[1]);
+                    u32 u = 0, v = 0;
+                    other_axes(axis, u, v);
+                    const f64 x = axis_of(f.p, u), y = axis_of(f.p, v);
+                    const f64 sector = kTau / static_cast<f64>(count);
+                    f64 angle = std::atan2(y, x);
+                    angle -= sector * std::round(angle / sector);
+                    const f64 r = std::hypot(x, y);
+                    Vec3 q = f.p;
+                    q = with_axis(q, u, std::cos(angle) * r);
+                    q = with_axis(q, v, std::sin(angle) * r);
+                    if (!push(n.child[0], q)) return false;
+                    continue;
+                }
+                finish(ret);
+                continue;
+            }
+            case Op::Twist:
+            case Op::Bend: {
+                if (f.step == 0) {
+                    f.step = 1;
+                    const u32 axis = static_cast<u32>(a[1]);
+                    u32 u = 0, v = 0;
+                    other_axes(axis, u, v);
+                    const f64 along = (n.op == Op::Twist) ? axis_of(f.p, axis) : axis_of(f.p, u);
+                    const f64 angle = -a[0] * kTau * along;
+                    const f64 c = std::cos(angle), sn = std::sin(angle);
+                    const f64 x = axis_of(f.p, u), y = axis_of(f.p, v);
+                    Vec3 q = f.p;
+                    q = with_axis(q, u, x * c - y * sn);
+                    q = with_axis(q, v, x * sn + y * c);
+                    if (!push(n.child[0], q)) return false;
+                    continue;
+                }
+                finish(ret);
+                continue;
+            }
+
+            // ---- one child, the ANSWER changed on the way out -----------------------------
+            case Op::Shell: case Op::Round: case Op::Offset: case Op::Negate: case Op::Abs:
+            case Op::Step: case Op::Smoothstep: case Op::Clamp: case Op::Power:
+            case Op::Remap: case Op::Curvature: case Op::Occlusion: case Op::Facing: {
+                // The three re-entrant ones share this block deliberately: they differ only in how
+                // many times they ask and where, which is the `step` counter's whole job.
+                if (n.op == Op::Curvature) {
+                    const f64 r = (a[0] > 0.0) ? a[0] : 0.05;
+                    // step 0 asks the centre; steps 1..6 ask the six axes. `lean[0]` holds the
+                    // centre and `acc` the sum around it, because the answer needs both.
+                    if (f.step == 1) f.lean[0] = ret;
+                    else if (f.step > 1) f.acc += ret;
+                    if (f.step == 7) {
+                        finish((f.acc / 6.0 - f.lean[0]) / r);
+                        continue;
+                    }
+                    Vec3 where = f.p;
+                    switch (f.step) {
+                        case 1: where.x += r; break;
+                        case 2: where.x -= r; break;
+                        case 3: where.y += r; break;
+                        case 4: where.y -= r; break;
+                        case 5: where.z += r; break;
+                        case 6: where.z -= r; break;
+                        default: break;   // step 0 is the centre, asked at f.p
+                    }
+                    ++f.step;
+                    if (!push(n.child[0], where)) return false;
+                    continue;
+                }
+                if (n.op == Op::Occlusion) {
+                    const f64 r = (a[0] > 0.0) ? a[0] : 0.15;
+                    if (f.step > 0 && ret < 0.0) f.acc += 1.0;
+                    if (f.step == 14) {
+                        finish(f.acc / 14.0);
+                        continue;
+                    }
+                    const Vec3 where = f.p + kOcclusionDirs[f.step] * r;
+                    ++f.step;
+                    if (!push(n.child[0], where)) return false;
+                    continue;
+                }
+                if (n.op == Op::Facing) {
+                    const f64 step = (a[1] > 0.0) ? a[1] : 0.02;
+                    if (f.step > 0) {
+                        // +x -x +y -y +z -z, differenced in pairs exactly as normal_at does.
+                        if (f.step % 2 == 1) f.lean[(f.step - 1) / 2] = ret;
+                        else f.lean[(f.step - 1) / 2] -= ret;
+                    }
+                    if (f.step == 6) {
+                        const Vec3 normal = normalise({f.lean[0], f.lean[1], f.lean[2]});
+                        const u32 axis = static_cast<u32>(a[0]);
+                        finish((axis == 0) ? normal.x : (axis == 1) ? normal.y : normal.z);
+                        continue;
+                    }
+                    Vec3 where = f.p;
+                    const f64 sign = (f.step % 2 == 0) ? step : -step;
+                    if (f.step / 2 == 0) where.x += sign;
+                    else if (f.step / 2 == 1) where.y += sign;
+                    else where.z += sign;
+                    ++f.step;
+                    if (!push(n.child[0], where)) return false;
+                    continue;
+                }
+                if (f.step == 0) {
+                    f.step = 1;
+                    if (!push(n.child[0], f.p)) return false;
+                    continue;
+                }
+                finish(mirror_after(n.op, a, ret));
+                continue;
+            }
+
+            // ---- two children at the same point --------------------------------------------
+            case Op::Displace: {
+                if (f.step == 0) {
+                    f.step = 1;
+                    if (!push(n.child[0], f.p)) return false;
+                    continue;
+                }
+                if (f.step == 1) {
+                    f.acc = ret;
+                    f.step = 2;
+                    if (n.children < 2) { finish(f.acc); continue; }
+                    if (!push(n.child[1], f.p)) return false;
+                    continue;
+                }
+                finish(f.acc + a[0] * ret);
+                continue;
+            }
+            case Op::Blend: {
+                if (f.step == 0) {
+                    f.step = 1;
+                    if (!push(n.child[0], f.p)) return false;
+                    continue;
+                }
+                if (f.step == 1) {
+                    f.acc = ret;
+                    f.step = 2;
+                    if (n.children < 2) { finish(f.acc); continue; }
+                    if (!push(n.child[1], f.p)) return false;
+                    continue;
+                }
+                finish(f.acc * (1.0 - a[0]) + ret * a[0]);
+                continue;
+            }
+
+            // ---- every child at the same point, folded together ---------------------------
+            case Op::Union: case Op::Intersection: case Op::Difference:
+            case Op::SmoothUnion: case Op::SmoothIntersection: case Op::SmoothDifference:
+            case Op::Add: case Op::Multiply: case Op::Min: case Op::Max: {
+                if (f.step > 0) {
+                    f.acc = (f.step == 1) ? ret : mirror_fold(n.op, a, f.acc, ret);
+                    // `multiply` stops at the first factor that is nought, and the mirror has to
+                    // stop in the same place or it is a different amount of work with the same
+                    // answer -- which is the kind of difference that only shows up as a timing.
+                    if (n.op == Op::Multiply && f.acc == 0.0) { finish(0.0); continue; }
+                }
+                if (f.step >= n.children) { finish(f.acc); continue; }
+                const u32 child = n.child[f.step];
+                ++f.step;
+                if (!push(child, f.p)) return false;
+                continue;
+            }
+
+            // ---- the point folded into a cell, then the leaning neighbours ------------------
+            case Op::Repeat: {
+                if (f.step == 0) {
+                    Vec3 q = f.p;
+                    f.neighbours = 0;
+                    for (u32 axis = 0; axis < 3; ++axis) {
+                        const f64 period = a[axis];
+                        if (period <= 0.0) continue;
+                        const f64 limit = a[3 + axis];
+                        const f64 value = axis_of(f.p, axis);
+                        f64 cell = std::round(value / period);
+                        if (limit > 0.0) cell = clamp(cell, -limit, limit);
+                        const f64 folded = value - period * cell;
+                        q = with_axis(q, axis, folded);
+                        f64 other = cell + ((folded >= 0.0) ? 1.0 : -1.0);
+                        if (limit > 0.0) other = clamp(other, -limit, limit);
+                        if (other != cell) {
+                            f.axes[f.neighbours] = axis;
+                            f.lean[f.neighbours] = value - period * other;
+                            ++f.neighbours;
+                        }
+                    }
+                    f.fold = q;
+                    f.step = 1;
+                    if (!push(n.child[0], q)) return false;
+                    continue;
+                }
+                const u32 done = f.step - 1;   // how many points have come back
+                f.acc = (done == 0) ? ret : std::min(f.acc, ret);
+                const u32 combinations = 1u << f.neighbours;
+                if (f.step >= combinations) { finish(f.acc); continue; }
+                const u32 mask = f.step;       // 1..combinations-1, exactly the recursive loop
+                Vec3 shifted = f.fold;
+                for (u32 i = 0; i < f.neighbours; ++i) {
+                    if ((mask >> i) & 1u) shifted = with_axis(shifted, f.axes[i], f.lean[i]);
+                }
+                ++f.step;
+                if (!push(n.child[0], shifted)) return false;
+                continue;
+            }
+
+            default:
+                return false;   // an op the mirror has not learned. Never a number.
+        }
+    }
+
+    if (deepest != nullptr) *deepest = low_water;
+    out = ret;
+    return true;
 }
 
 Vec3 Field::normal_at(u32 at, Vec3 p, f64 step) const {

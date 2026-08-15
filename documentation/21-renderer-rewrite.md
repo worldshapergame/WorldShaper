@@ -2025,8 +2025,17 @@ shader without changing."*
   The facility has one of each, so getting it wrong gives a building that is correct everywhere
   except its weathering.
 
+  **The CPU half is BUILT (D644).** `Field::mirror_eval` walks the same nodes with an explicit
+  stack of 64 and no recursion, and `Field::mirror_covers` names an op it has not learned rather
+  than answering anyway. It agrees with `eval` to **one ulp**, and the first time it was run it
+  disagreed on 128 points of 64,000 — because **the box cull in `eval` is unsound**: four
+  primitives answer less than the distance to their own box (cone 0.53, ellipsoid 0.59, platonic
+  0.58, prism 0.87), and an intersection cannot vouch for its own overlap box either. Both fixes
+  were built and reverted at 6.8× and 45× the sampling cost for a byte-identical building; the hole
+  is 58 points in 64,000, worst 0.139 m. See D644 for the right fix.
+
   **The open question this stage still owns is whether `f32` is enough**, and it is the reason the
-  mirror exists: no property of the graph can answer it.
+  mirror exists: no property of the graph can answer it. The mirror is now the place to ask.
 - **R12c — the marcher derives rather than stops.** A descent that reaches a node the pool has not
   built evaluates the field there instead of reporting a miss. R2d's stand-in stops being what a
   player waits behind and becomes what is drawn for the one frame a derivation costs.

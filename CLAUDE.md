@@ -77,9 +77,15 @@ otherwise.
 ## Say it in terms of the build
 
 The person this is for does not read code and does not run the measurements. What they have is the
-build. So: say what you are about to do and **how they will see it in game** before starting; commit
-before every report; **say what you did not do**; and end with the next step in the same terms —
-what to do, what should change, what would mean it failed.
+build. So: commit before every report, and then **the report to them is a very short list of what
+they should see in game. Nothing else.**
+
+**Asked for directly on 2026-08-15, and it is firm: do NOT write a "what I did not do" section, and
+do not pad the report with method, measurements, refutations or caveats.** Those belong in
+`13-decision-log.md` and in `22-rewrite-handover.md`, where the next session reads them — not in the
+reply. A caveat only reaches the report when it changes what they should look at in the build. The
+same goes for the next step: put it in the handover, and mention it only if it needs a decision from
+them.
 
 ## Where things are written down
 

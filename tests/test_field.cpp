@@ -1101,3 +1101,101 @@ TEST_CASE("culling a wide union changes no answer, whichever way it is culled") 
         }
     }
 }
+
+TEST_CASE("the mirror evaluator reaches the same answer as the recursive one") {
+    // R12b: a compute shader cannot recurse, so `mirror_eval` walks the same nodes with an
+    // explicit stack. It exists to be COMPARED — two evaluators of one world that disagree is
+    // D204's fault in its worst form — and it is written on the CPU first because every mistake
+    // this shape can make is one a test can catch here and nothing can catch in a shader.
+    Field f;
+    const u32 wall = f.box({0, 1.0, 0}, {3.0, 1.0, 0.4});
+    const u32 hole = f.sphere({0.5, 1.2, 0}, 0.7);
+    const u32 carved = f.subtract({wall, hole});
+    const u32 post = f.cylinder({-2.0, 0.8, 0}, 0.25, 0.8, 1);
+    const u32 run = f.repeat(post, {1.3, 0, 0}, {3, 0, 0});
+    const u32 turned = f.rotate(f.unite({carved, run}), {0.0, 0.125, 0.0});
+    const u32 moved = f.translate(turned, {0.4, 0, 0.2});
+    const u32 root = f.unite({moved, f.torus({0, 2.4, 0}, 0.9, 0.2, 1)});
+    f.build_bounds();
+
+    REQUIRE(f.mirror_covers(root));
+    u32 deepest = 0;
+    for (int i = -8; i <= 8; ++i) {
+        for (int j = -5; j <= 9; ++j) {
+            for (int k = -6; k <= 6; ++k) {
+                const Vec3 p{i * 0.55, j * 0.43, k * 0.61};
+                f64 mine = 0.0;
+                u32 used = 0;
+                REQUIRE(f.mirror_eval(root, p, mine, &used));
+                deepest = std::max(deepest, used);
+                CHECK(mine == f.eval(root, p));
+            }
+        }
+    }
+    // ...and it stayed inside the stack a shader would have (D643: the facility's deepest is 41).
+    CHECK(deepest < Field::kMirrorStack);
+}
+
+TEST_CASE("the mirror says which op it does not know, rather than answering anyway") {
+    // Trap 7 in the second evaluator: "I could not" and "the answer is nought" must never be the
+    // same reply. Every op the facility's solid reaches is mirrored, and one that is not says so
+    // by name, once, instead of failing a voxel at a time.
+    Field f;
+    const u32 shape = f.unite({f.sphere({0, 0, 0}, 1.0), f.box({2, 0, 0}, {0.5, 0.5, 0.5})});
+    f.build_bounds();
+    forge::Op missing = forge::Op::Constant;
+    CHECK(f.mirror_covers(shape, &missing));
+
+    // A value node the mirror has no case for is refused, and named.
+    Field odd;
+    const u32 pattern = odd.cells(0.5, 7);
+    const u32 with_cells = odd.displace(odd.sphere({0, 0, 0}, 1.0), pattern, 0.1);
+    odd.build_bounds();
+    f64 out = 0.0;
+    if (!odd.mirror_covers(with_cells, &missing)) {
+        CHECK(std::string(op_name(missing)) != "?");
+        CHECK(!odd.mirror_eval(with_cells, {0.3, 0.2, 0.1}, out));
+    }
+}
+
+TEST_CASE("four primitives answer less than the distance to their own box") {
+    // D644, and it is pinned here because it is invisible from every direction except this one.
+    // The box cull in `eval` assumes a node outside its box answers at least the distance to it.
+    // These four are bounded approximations and do not, so a union can skip the nearest thing
+    // there is. Refusing them the cull is sound and measured 12.3 s against 83.7 s on the
+    // facility, so the cull still reads their boxes and this test records why that is a choice.
+    CHECK(op_reports_true_distance(forge::Op::Sphere));
+    CHECK(op_reports_true_distance(forge::Op::Box));
+    CHECK(op_reports_true_distance(forge::Op::Cylinder));
+    CHECK(op_reports_true_distance(forge::Op::Torus));
+    CHECK(op_reports_true_distance(forge::Op::Capsule));
+    CHECK_FALSE(op_reports_true_distance(forge::Op::Ellipsoid));
+    CHECK_FALSE(op_reports_true_distance(forge::Op::Cone));
+    CHECK_FALSE(op_reports_true_distance(forge::Op::Prism));
+    CHECK_FALSE(op_reports_true_distance(forge::Op::Platonic));
+
+    // And the fault itself, so that fixing it changes this test rather than nothing.
+    Field f;
+    const u32 egg = f.ellipsoid({0, 0, 0}, {2.0, 0.6, 1.1});
+    f.build_bounds();
+    const Field::Aabb box = f.bounds_of(egg);
+    REQUIRE(!box.infinite());
+    // Swept rather than pointed at: the under-statement is worst away from the major axis, and a
+    // single hand-picked point is how this would quietly stop testing anything.
+    bool found_under_report = false;
+    f64 worst_ratio = 1.0;
+    for (int i = -10; i <= 10 && !found_under_report; ++i) {
+        for (int j = -10; j <= 10; ++j) {
+            for (int k = -10; k <= 10; ++k) {
+                const Vec3 p{i * 0.9, j * 0.9, k * 0.9};
+                const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
+                const f64 dy = std::max(std::max(box.low.y - p.y, p.y - box.high.y), 0.0);
+                const f64 dz = std::max(std::max(box.low.z - p.z, p.z - box.high.z), 0.0);
+                const f64 away = std::sqrt(dx * dx + dy * dy + dz * dz);
+                if (away <= 0.01) continue;
+                worst_ratio = std::min(worst_ratio, f.eval(egg, p) / away);
+            }
+        }
+    }
+    CHECK(worst_ratio < 0.99);   // under-reports: the cull's assumption, broken
+}

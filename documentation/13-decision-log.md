@@ -7157,3 +7157,80 @@ the hot path keeps nothing, exactly as D639's visit counter did.
 | D643 | **31 ops reach the facility's solid, listed with counts** | instrument | The shader's op surface, known before the first compile error |
 | D643 | **curvature, occlusion and facing are re-entrant** | finding | 7 and 14 sub-evaluations; a push-children stack machine is wrong on exactly these |
 | D643 | **Whether f32 suffices is still unknown** | honesty | It cannot be answered without the mirror, which is R12b's own gate |
+
+## D644 — R12b's mirror is in, and the first thing it found was the box cull skipping the nearest thing
+
+R12b asks for a second evaluator: `shaders/field.glsl` cannot recurse, so the field must be walkable
+with an explicit stack, and the plan holds it to R1a's standard — a `mirror_field` asserted against
+the CPU sampler, because *"a second evaluator that disagrees with the first by one voxel is D204's
+fault in its worst form, two renderers computing the same world."* The CPU half of that is in:
+`Field::mirror_eval`, one loop over a fixed stack of 64, no recursion, no allocation, reading the
+same flat node array; and `Field::mirror_covers`, which names an op it has not learned rather than
+answering anyway (trap 7 in the second evaluator).
+
+**Its first run disagreed on 128 points of 64,000, and it was right and `eval` was wrong.**
+
+**The cull's assumption, stated plainly for the first time.** `eval`'s union skips a child when the
+running answer is already nearer than the child's box — sound only if a node asked at a point
+outside its box answers **at least** the distance to that box. Measured over every primitive:
+
+| | worst answer ÷ box distance |
+|---|---|
+| sphere, box, cylinder, capsule, torus, wedge, stairs, spiral | 1.0000 |
+| union, difference, round, translate, repeat, uniform scale | 1.0000 |
+| smooth union | 1.0412 |
+| **prism** | **0.8660** |
+| **ellipsoid** | **0.5877** |
+| **platonic** | **0.5774** |
+| **cone** | **0.5300** |
+
+Those four are bounded approximations, not exact distances: an ellipsoid has no closed form (its
+own comment says "the standard bounded approximation"), and a cone, a prism and a platonic solid
+are built as intersections of half planes, which under-state out past a corner by up to root three.
+**Under-stating is the safe direction everywhere else in this engine** — a march that steps short is
+slow, one that steps long goes through the wall — and the cull is the one place that assumes the
+opposite. `build_bounds` already refuses a box to a non-uniform scale in a comment that describes
+this fault exactly, without knowing four primitives had it too.
+
+**And a second cause, which is structural rather than approximate.** An intersection's shape sits in
+the OVERLAP of its children's boxes and `bounds_` says so rightly — but its answer is `max` over the
+children, which is only ever as large as one child's own distance, and a child's box is bigger than
+the overlap. So a parent culling an intersection against the overlap can skip the nearest thing
+there is.
+
+**Both were built, both were measured, and both are REVERTED. The measurement is why.**
+
+| arm | facility at metre 8 | content hash |
+|---|---|---|
+| what ships | **11.8–12.5 s** | `67ff8caeeb38a34f` |
+| the four primitives refused the cull | **83.7 s** (6.8×) | `67ff8caeeb38a34f` — **identical** |
+| ...and intersections refused too | **over nine minutes**, killed | not reached |
+
+**The hash does not move.** The over-statements happen far from any surface, where no voxel decision
+turns on them, so the fault is real in the evaluator and invisible in the building. Six point eight
+times the sampling cost for a world that is voxel-for-voxel the same is not a trade, and forty-five
+times is not a discussion. The honesty flag propagates through an AND, so twenty-six ellipsoids and
+four cones take every union above them with them — that is where the 6.8× comes from.
+
+**What is kept.** `mirror_eval` and `mirror_covers`; `op_reports_true_distance`, which is the
+measured fact rather than an opinion, exposed and asserted in a test; and a test that pins the
+under-statement itself, so that fixing it changes a test rather than nothing. The mirror now agrees
+with `eval` to **one ulp** (worst 1.39e-16) once the cull is taken out of the comparison, and
+differs on **58 points in 64,000, worst 0.139 m**, with it in — which is now a documented number
+rather than an unknown.
+
+**The right fix, for whoever wants it.** Propagate a SECOND set of boxes — the same `build_bounds`
+switch reading children's cull boxes instead of their shape boxes — so an intersection keeps a box
+its answer can vouch for and its ancestors inherit one too. `cull_bounds_` was built for the
+intersection alone and took 128 differences to 58; it does not fix the grandparent case, because a
+union's box is built from shape boxes. That is a bigger change than this session had room for, and
+it is worth nothing until a clip exists where the hash actually moves.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D644 | **`mirror_eval` is in: one loop, a stack of 64, no recursion** | build | R12b's CPU half, written where a test can catch what a shader cannot |
+| D644 | **The box cull assumes a property four primitives do not have** | finding | 0.53 to 0.87 answer-to-box on cone, ellipsoid, platonic, prism |
+| D644 | **An intersection cannot vouch for its own box either** | finding | Its shape is the overlap; its answer is one child's distance |
+| D644 | **Both fixes measured and REVERTED** | decision | 6.8× and 45× slower for a byte-identical building |
+| D644 | **The hole is 58 points in 64,000, worst 0.139 m** | honesty | A number where there was an unknown, pinned by a test |
+| D644 | **The mirror agrees to one ulp otherwise** | gate | The walk is faithful; what is left for the shader is transliteration |

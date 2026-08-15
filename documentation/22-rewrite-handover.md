@@ -109,10 +109,16 @@ what they can tell you is what it looks like. All three exist to keep that loop 
    report is about something nobody can go back to. It also means the ledger in
    `21-renderer-rewrite.md` §8.0 and the entries in `13-decision-log.md` land at the same time as
    the code they describe, which is what makes the log usable at all.
-3. **Say what you did not do.** Which half of a sub-step landed, what was measured and came out
-   neutral, and what is blocked on something else. Half of this file's value is the things that were
-   built, measured and reverted.
-4. **End every report with the NEXT step and what it will look like in game.** The same test as rule
+3. **Write what you did not do HERE, never in the reply.** Which half of a sub-step landed, what was
+   measured and came out neutral, and what is blocked on something else — half of this file's value
+   is the things that were built, measured and reverted, so none of it may be lost. **But the user
+   asked on 2026-08-15, firmly, that it never appear in a report to them**: the reply is a very
+   short list of what they should see in game and nothing else. Method, refutations and caveats go
+   in this file and in the decision log. A caveat reaches the reply only when it changes what they
+   should look at.
+4. **Keep the next step HERE too — §5's opening — rather than in the reply** (2026-08-15).
+   **The rule this replaced, kept because the reasoning still holds for this file:** end with the
+   next step and what it will look like in game. The same test as rule
    1, applied one step ahead: name what is next and say what they should expect to see when it
    lands, in the same terms — what to do, what should change, what would mean it failed. That is
    what makes it possible to say *"do that one first"* or *"that is not what bothers me"* before a
@@ -576,6 +582,14 @@ a step-bounded ray is not a bound. Not carried. D361.
 numbers are already taken and are three blocks down, under *ASKED FOR NEXT*. Its first step is
 reading rather than writing — `face_light_seed` and `face_reseed` may already be half of it — and
 that reading is **not done**.
+
+**R12b's mirror is BUILT (D644)** — `mirror_eval`, one loop over a stack of 64, no recursion,
+agreeing with `eval` to one ulp — and the first thing it did was find the box cull skipping the
+nearest child: four primitives answer less than the distance to their own box, and an intersection
+cannot vouch for its overlap. Both fixes were built, measured at **6.8× and 45×** the sampling cost
+for a **byte-identical** facility, and reverted. **The next card-free step is to run the mirror in
+`f32` and count the voxels that move** — that is R12's last unknown and the mirror is now the place
+to ask it.
 
 **R12's groundwork is measured (D643), and it is the only stage left with card-free work in it.**
 The stack a shader would need is **41** (bounded) and **36** (observed over 302 M visits), so 64 is

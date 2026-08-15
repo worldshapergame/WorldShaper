@@ -177,6 +177,22 @@ enum class Op : u8 {
 // can act on without the header open beside it.
 const char* op_name(Op op);
 
+// Whether an op's answer can be trusted as at least the distance to its own bounding box.
+//
+// **Measured, not reasoned (D644).** Sampling each primitive outside its own box, the worst ratio
+// of answer to box distance is 1.0000 for the sphere, box, cylinder, capsule, torus, wedge, stairs
+// and spiral -- and **0.5877 for the ellipsoid, 0.5300 for the cone, 0.8660 for the prism and
+// 0.5774 for the platonic**, because those four are bounded approximations rather than exact
+// distances (an ellipsoid has no closed form; the other three are intersections of half planes,
+// which under-state out past a corner).
+//
+// Under-stating a distance is otherwise the SAFE direction and this engine prefers it everywhere:
+// a march that steps short is slow, one that steps long goes through the wall. The box cull in
+// `eval` is the one place that assumes the opposite, and `build_bounds` already refuses a box to a
+// non-uniform scale in a comment that describes this exactly without knowing four primitives had
+// it too. **The cull still reads these boxes** -- see D644 for what fixing that measured at.
+bool op_reports_true_distance(Op op);
+
 struct Node {
     Op op = Op::Constant;
     f64 a[8]{};
@@ -449,6 +465,38 @@ public:
     // top, soot under the arch" — and for nothing else, so its cost is paid only where a rule
     // asks for it.
     Vec3 normal_at(u32 at, Vec3 p, f64 step = 0.01) const;
+
+    // ---- R12b: the same answer, walked the way a shader must walk it ---------------------------
+    //
+    // `eval` above is recursive, and a compute shader cannot be. So this is the second evaluator
+    // the plan asks for: **one loop over an explicit stack of fixed depth**, reading the same flat
+    // pointerless node array, reaching the same number. It exists to be COMPARED — `mirror_field`
+    // in R12b is held to R1a's standard, and a second evaluator that disagrees with the first by
+    // one voxel is D204's fault in its worst form, two renderers computing one world.
+    //
+    // Written on the CPU first, deliberately. The shader is the part that cannot be debugged, and
+    // every mistake this shape of evaluator can make — a frame that forgets which child it was on,
+    // a transform applied on the way out instead of on the way in, an op that evaluates its child
+    // more than once — is a mistake it can make here too, where a test can catch it. What is left
+    // for `shaders/field.glsl` is a transliteration of something already proved.
+    //
+    // **Three ops make this more than a push-the-children loop, and they are the reason it is
+    // worth writing carefully** (D643): `curvature` evaluates its child seven times, `occlusion`
+    // fourteen and `facing` six, each at a different point, and `repeat` evaluates its child up to
+    // eight times to check the leaning neighbours. So a frame carries a step counter over SAMPLE
+    // POINTS, not over children, and the two cases share one mechanism.
+    //
+    // Returns false rather than a wrong number when it meets an op it does not mirror or runs out
+    // of stack: "I could not" and "the answer is nought" must never be the same reply (trap 7).
+    // `kMirrorStack` is 64 because the deepest path in the facility's field is 41 and the deepest
+    // any evaluation actually went is 36 (D643).
+    static constexpr u32 kMirrorStack = 64;
+    bool mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest = nullptr) const;
+
+    // Whether every node reachable from `at` is one `mirror_eval` implements. The point of asking
+    // separately is that a clip using an op the mirror has not learned yet should say so once, by
+    // name, rather than fail one voxel at a time.
+    bool mirror_covers(u32 at, Op* missing = nullptr) const;
 
     usize size() const { return nodes_.size(); }
     const Node& node(u32 index) const { return nodes_[index]; }
