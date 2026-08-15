@@ -2929,3 +2929,43 @@ on the weathering rules for a week.
 the slower high-precision kind. That one genuinely cannot be answered without writing the second
 copy of the maths and comparing them voxel by voxel, which is the next piece of work and the one the
 plan already asks for.
+
+## The game builds on a machine with no graphics card now, and it settled the loading-screen question
+
+Two things happened today and the first one is why the second was possible.
+
+**The game had been "impossible to build" on a machine with no graphics card, and it was three
+small things.** Every session run from such a machine — several of them now — has started by
+writing off two thirds of the work as untouchable. That turned out to be wrong: the other compiler
+was complaining about three harmless details, one of which was a piece of code that had been dead
+for days and that the usual compiler is simply unable to notice. Fixing them takes the whole
+program from "will not build" to "builds and runs", which means the building can be made, measured
+and checked anywhere. What still needs a graphics card is anything about the *picture* — speckle,
+lighting, frame rates. Those are untouched by this and still wait for your machine.
+
+**And with that, the loading screen question got a real answer instead of a plan.** The last note
+said the remaining blocker was one line away: as the world sharpens piece by piece, let it keep a
+running tally of the speckled paint it sees, and the tally becomes the judgement that decides which
+weathering coats are deliberate — no whole-building measurement, no loading bar. I built the way to
+test that and ran it on the facility.
+
+- **The idea is sound, and exactly sound.** Done properly, the running tally is not *close* to the
+  whole-building measurement — it is **identical**, every material, to the voxel, and it protects
+  exactly the same six weathering coats the game protects today.
+- **Doing it properly means asking for slightly more than each piece.** To judge the paint on the
+  edge of a piece you have to be able to see one voxel past the edge, into the piece next door.
+- **And that is what makes it not worth doing this way.** Asking for that one extra voxel all round
+  makes each piece **twice** as expensive to work out — measured at 2.02 times, and 2.13 at full
+  detail. The building's sharpening work would go from six seconds to twelve, to save the two and
+  three quarter seconds of loading bar. Worse, the six seconds is time you spend *inside the game*
+  waiting for what you are looking at to sharpen, and the two and three quarters is a bar before
+  you arrive.
+- **The free version was tried too, and it fails in the way that matters.** Judge only the middle of
+  each piece and ignore its edges: costs nothing, and it wrongly cleans away **two of the six
+  deliberate weathering coats**. That is the exact fault this whole judgement exists to prevent.
+
+So the step is refused, and the reason is written down with numbers rather than left as an opinion.
+There is a third way — take the extra voxel from the world that has *already been built* next door,
+instead of working it out again — which costs a memory lookup instead of a calculation. That is what
+the next attempt should be, and unlike these two it cannot be measured without a graphics card,
+because it only happens while the game is running.
