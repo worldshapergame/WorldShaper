@@ -221,7 +221,7 @@ written for the person the work is for, so it is the one to keep current.
 | R3 the face pass | XL | **R3d done** — the per-pixel light path is deleted. | **a, b, c done** — the store, its mirror, the producer, the shading pass and the composite that reads it. Sun (D290–D303), sky and ambient occlusion (R10, D325–D400), and now **lamps** (D401–D409): a fitting is aimed at from the face, one per face per frame, and it converges and stops. Bounce is R9's. **R3d not started** |
 | R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
-| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a is done, both halves (D582, D583, D591), **R4c** is in (D591, D592) and so is **R4b's ray** (D594). A face resolves what it is made of once; the composite then splits what leaves it by metalness, so the metals stop being Lambertian — bronze, gilt, lead and copper read as metal rather than chalk. The sun comes back through a GGX lobe with no storage; the environment out of **sixteen outgoing bins** in a pool of 65,536 blocks (8.7 MB) that faces HOLD, filled by the gathering ray they were already casting. A face that holds a lobe then casts its own ray, aimed into the cone each bin gathers from, which is what fills the grazing bins a reflection is read out of — bronze reads as deep metal with panel structure where it was a flat wash, and the glass gains a sky-coloured sheen. Costs **nothing measurable settled** and **1.5 ms flying**. **What is still owed**: the bin count does not follow pixel coverage, and the lobe is visibly mottled face to face at 24 samples a bin, which is R5's `face_denoise` and is the next thing this stage wants. **R4d is HALF in — transmission, not refraction** (D601–D604): a face resolves what it lets past and stores it, the sun and sky rays stop being blocked by a pane and are tinted per METRE rather than per voxel, and the primary ray marches on behind the glass so a window is fifteen glazed lights with the bars across them instead of one milky panel. **+0.246 ms (+4.8%) at a camera facing a window**, nothing measurable outdoors or enclosed. **Refraction itself is not started**: `ior` is carried and read by no ray, nothing is displaced, there is no Beer-Lambert over the true path and no dispersion |
+| R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a is done, both halves (D582, D583, D591), **R4c** is in (D591, D592) and so is **R4b's ray** (D594). A face resolves what it is made of once; the composite then splits what leaves it by metalness, so the metals stop being Lambertian — bronze, gilt, lead and copper read as metal rather than chalk. The sun comes back through a GGX lobe with no storage; the environment out of **sixteen outgoing bins** in a pool of 65,536 blocks (8.7 MB) that faces HOLD, filled by the gathering ray they were already casting. A face that holds a lobe then casts its own ray, aimed into the cone each bin gathers from, which is what fills the grazing bins a reflection is read out of — bronze reads as deep metal with panel structure where it was a flat wash, and the glass gains a sky-coloured sheen. Costs **nothing measurable settled** and **1.5 ms flying**. **What is still owed**: the bin count does not follow pixel coverage, and the lobe is visibly mottled face to face at 24 samples a bin, which is R5's `face_denoise` and is the next thing this stage wants. **R4d is HALF in — transmission, not refraction** (D601–D604): a face resolves what it lets past and stores it, the sun and sky rays stop being blocked by a pane and are tinted per METRE rather than per voxel, and the primary ray marches on behind the glass so a window is fifteen glazed lights with the bars across them instead of one milky panel. **+0.246 ms (+4.8%) at a camera facing a window**, nothing measurable outdoors or enclosed. **R4d is now WHOLE bar dispersion** (D652): the primary ray bends entering the medium, is stopped at the face where it leaves by the marcher's `kThroughExit`, bends again and marches on, so a pane DISPLACES what is behind it — 4.1 cm at 45° through the facility's glazing — and a basin reads as shallower than it is because over water the two interfaces do not cancel. Absorption is `exp(-absorb·metres)` over the true path, using three bytes of `VisualRecord` nothing had ever read; total internal reflection reflects rather than returning a zero direction. Its arithmetic is pinned against trigonometry (`tests/test_refraction.cpp`) and **its PICTURE IS OWED** — `clips/refraction_small.clip` is the gate, two runs and `--no-refraction`. Dispersion is not built and belongs to the face pass. **And R4e is in and verified by picture** (D653): a translucent material lit from behind lets the sun through in proportion to the stone the light had to cross, measured by a ray in a new `kThroughSolid` mode rather than declared by any clip — settled, the five panels of `clips/translucency_test.clip` read **−1.1, +52.0, +23.4, +15.8, +7.1** in luma, strictly ordered by thickness, with the control panel not moving. The facility has written `translucent=110` on its marble since the building existed and nothing read it. **Owed for both: what they cost** |
 | R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
 | R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
@@ -579,7 +579,40 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — 2026-08-15: marble glows, refraction owes a picture, and a card-free picture IS possible
+#### START HERE — where it stands on 2026-08-15, and the first three things to do
+
+**What landed today, in the order a player would notice it:**
+
+| | state |
+|---|---|
+| **R4e — translucency.** Marble glows where it is thin, and the renderer works out which parts those are by counting the stone a ray crosses | **in, and VERIFIED by picture** (D653) |
+| **R4d — refraction.** Glass and water displace what is behind them; absorption over the true path; total internal reflection | **in, arithmetic tested, PICTURE OWED** (D652) |
+| the node payload was bound at 512 MB against a driver limit of 128, with nothing anywhere reading `maxStorageBufferRange` — and the Deck is the stated floor | **clamped** (D651) |
+| R11d's incremental stipple verdict — the step D647 called "one argument away" | **measured and refused on price**; the surviving route is D628's world-read skirt (D649) |
+
+**The first three things to do, in this order:**
+
+1. **Take R4d's picture.** It is the only shipped change to what a player looks at that nobody has
+   looked at. The scene is written and in the repository, and it is two runs and one flag:
+   ```powershell
+   WorldShaper --clip-file clips\refraction_small.clip --cam "-0.9,1.05,-1.9,64,0"
+   WorldShaper --clip-file clips\refraction_small.clip --cam "-0.9,1.05,-1.9,64,0" --no-refraction
+   ```
+   The two-colour wall's vertical edge should step sideways where the pane covers it and stay put
+   where it does not; the green pane should deepen with the angle it is crossed at; the basin bottom
+   should sit higher than it is. `clips/glass_test.clip --cam 0,1.4,-3.0,90,0` is the fuller scene.
+2. **Price them both.** R4d casts two segments where a glass pixel cast one; R4e casts a ray a whole
+   class of faces was not casting. Neither has a number, the faces pass has a **4.40 ms** budget, and
+   `--no-refraction` / `--no-translucency` make each a one-flag A/B rather than two builds.
+3. **Then R5b**, which is what the user asked for next. **Its opening instruction below is stale and
+   this is the correction**: the reading it says is "not done" IS done — `face_light_seed` is called
+   at claim time (`shade_faces.comp`, the `samples == 0` branch), gated on `!provisional_face`, so a
+   newly claimed face already starts from the coarse face over it. What is missing is the temporal
+   half, and R5b's numbers three blocks down still stand.
+
+---
+
+#### 2026-08-15 in detail: marble glows, and a card-free picture IS possible
 
 **R4e is in and it is VERIFIED BY PICTURE (D653)** — the first light change in this rewrite checked
 without a graphics card. A translucent material lit from behind now lets the sun through in
@@ -629,7 +662,7 @@ WorldShaper --clip-file clips\refraction_small.clip --cam "-0.9,1.05,-1.9,64,0" 
 The edge should step sideways where the pane covers it and not where it does not; the green pane
 should deepen with the angle it is crossed at; the basin bottom should sit higher than it is.
 
-#### 2026-08-15, earlier: refraction is in and the frame-11 crash was ours
+##### ...and earlier the same day: refraction is in, and the frame-11 crash was ours
 
 **R4d's refraction is built and has never been seen (D652).** The primary ray now bends where it
 enters glass or water, is stopped at the face where it leaves by the marcher's new `kThroughExit`,
@@ -662,7 +695,7 @@ to frame 33. D650's reading — "the fault is in llvmpipe's JIT'd code, so it is
 wrong, and wrong in the most expensive direction: the stack was in driver code because that is where
 undefined behaviour lands.
 
-#### 2026-08-15, earlier: the tree builds off Windows, and R11d's step is refuted by its price
+##### ...and before that: the tree builds off Windows, and R11d's step is refuted by its price
 
 **Read these two first; everything below them was written when neither was known.**
 
@@ -695,9 +728,12 @@ rather than a field evaluation. Its cost is the one number D649 could not take, 
 only runs inside the game.
 
 **R5b, noise and speckle, is what the user asked for next and nothing has been built for it.** Its
-numbers are already taken and are three blocks down, under *ASKED FOR NEXT*. Its first step is
-reading rather than writing — `face_light_seed` and `face_reseed` may already be half of it — and
-that reading is **not done**.
+numbers are already taken and are three blocks down, under *ASKED FOR NEXT*. It said its first step
+was reading rather than writing — whether `face_light_seed` is half of it already — and **that
+reading is now done: it is, and it is wired.** `shade_faces.comp` calls it in the `samples == 0`
+branch, gated on `!provisional_face`, so a face claimed this frame starts from the coarse face
+standing over it rather than from nothing. The seeding half exists; the temporal half is what R5b
+still owes.
 
 **R12b's mirror is BUILT (D644)** — `mirror_eval`, one loop over a stack of 64, no recursion,
 agreeing with `eval` to one ulp — and the first thing it did was find the box cull skipping the
