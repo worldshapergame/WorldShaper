@@ -7490,3 +7490,50 @@ that read costs.
 | D649 | **The free version repaints two dithers** | finding | −455 and −554, judged and got wrong, not merely unseen |
 | D649 | **A material the counts never SEE is a third outcome** | method | Absent from the verdict means despeckled by default; it had been printed as if it were a wrong judgement |
 | D649 | **The surviving route is the skirt read from the WORLD** | plan | D628 named it; per node at paste time, and its cost is the one number this could not take |
+
+## D650 — the game RUNS off Windows too, for eleven frames, and then the software rasteriser faults
+
+D648 said the tree builds off Windows and that the windowed path *"links, which is not the same
+claim"*. It has now been run, and the claim can be made precisely.
+
+**It runs.** `Xvfb :99 -screen 0 1280x800x24` and Mesa's **lavapipe** — a software Vulkan
+implementation — with SDL reconfigured for X11 (`-DSDL_X11=ON`, which needs `libx11-dev`,
+`libxext-dev`, `libxrandr-dev`, `libxcursor-dev`, `libxi-dev`, `libxfixes-dev`, `libxss-dev` and
+`libxtst-dev`). The log reads `llvmpipe (LLVM 20.1.2, 256 bits) | Vulkan 1.4.318 | subgroup 8`, and
+from there the game does everything the first minute of a load does: swapchain, shelves, the coarse
+build, **the stipple verdict at metre 8 with its six dithers**, the despeckler, and **the ladder**,
+which delivers batches of 128 nodes at metre 32 in about 120 ms of sampling each.
+
+**And at frame 11 it segfaults, reproducibly.** Three runs, the same frame every time, and the third
+with `LP_NUM_THREADS=1` — so it is not a race between the rasteriser's own workers, and something
+about frame 12 specifically is what to look at next. The shape of it is the same each time: the
+faulting thread is one of llvmpipe's own workers, its program counter is in **JIT-compiled code with
+no symbols** and its stack is `0x0001c38c0001c38c` repeated — the signature of executing generated
+code, not of a C++ frame. The main thread is inside `Swapchain::end_frame` presenting. So the
+evidence says the fault is in the software driver's generated shader code; it does **not** say the
+renderer is at fault, and it does not say the driver is either, since a shader can hand a JIT
+anything. What it does say is where the boundary is.
+
+**So what a machine with no card can and cannot do, exactly:**
+
+| | |
+|---|---|
+| build everything, run 543 of 545 tests | **yes** (D648) |
+| `run_clip_tool` — sampling, the field, the mirror, `--stipple-tiled` | **yes**, and D649 was measured that way |
+| start the game, build the world, watch the ladder deliver | **yes**, at about 300 ms a frame at 320×200 |
+| run to `--settle`, take a content hash, read the settle line | **no** — it dies at frame 11 |
+| anything about the PICTURE — speckle, faces, frame times | **no**, and this does not move that at all |
+
+Two things to know before trying to push it further. The title screen takes **200 seconds** to become
+ready, all of it LLVM compiling shaders, so every attempt costs three and a half minutes before the
+first frame. And **the ladder is pixel-driven**, so a world settled at 320×200 is not the world
+settled at 1280×800 — a hash taken here would need its own baseline and could not be compared with
+any figure in this repository.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D650 | **The game runs under Xvfb and lavapipe** | finding | World, verdict, despeckler and ladder all exercised with no card |
+| D650 | **It dies at frame 11, reproducibly** | finding | Three runs, same frame, in llvmpipe's JIT'd code and not in a WorldShaper frame |
+| D650 | **Not a race in the rasteriser** | finding | `LP_NUM_THREADS=1` dies at the same frame, so the next question is what frame 12 does |
+| D650 | **A card-free `--settle` is therefore not available** | honesty | Which is what D649's next step would need to measure |
+| D650 | **A world settled at 320×200 is a different world** | method | The ladder is pixel-driven; such a hash has no comparable baseline here |

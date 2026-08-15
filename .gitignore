@@ -18,6 +18,11 @@ STOP-LOOP
 
 renders/
 
+# The game's own user folder. On Windows it lives under %LOCALAPPDATA%; off Windows there is no
+# such place, so `local_app_data_dir` puts it beside the binary and a run from the repository root
+# creates it there. The names inside are ignored below in their own right; this is the folder.
+WorldShaper/
+
 # How long each stage of a load took last run, so the next one can weight its bar by what
 # things actually cost here. Per-machine, like the built-world cache beside it.
 *.clip.load

@@ -654,9 +654,16 @@ recycle bin is a Windows shell call and `send_to_recycle_bin` returns false ever
 
 What runs there is everything `run_clip_tool` reaches — `--clip-file`, `--sample-cost`,
 `--stipple-tiled` — so the sampler, the field, the mirror and the ladder's arithmetic are all
-measurable. What does NOT run is the renderer: there is no card, the windowed path has never been
-started here, and **R5b is still not startable off Windows.** A load figure taken this way is a
-prediction and says so.
+measurable. A load figure taken that way is a prediction and says so.
+
+**And the game itself runs, for eleven frames (D650).** `Xvfb :99 -screen 0 1280x800x24` plus Mesa's
+lavapipe, with SDL reconfigured `-DSDL_X11=ON` (needs `libx11-dev libxext-dev libxrandr-dev
+libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev`). It builds the world, takes the
+stipple verdict, despeckles and runs the ladder at about 300 ms a frame — and then **segfaults at
+frame 11, three runs out of three, inside llvmpipe's own JIT-compiled code**. So there is no
+card-free `--settle`, no content hash and no settle line, and **R5b is still not startable off
+Windows**. The title screen also costs 200 seconds of shader compilation before the first frame,
+which is what every attempt has to pay.
 
 #### CLEARED FIRST: the ladder now stands down (D627)
 
