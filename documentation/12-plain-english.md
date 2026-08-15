@@ -2894,3 +2894,38 @@ made at coarse detail, and *there* those five coats do have stray voxels. Under 
 cleaned. Whether the weathering looks different at a distance is a thing to look at, and I have no
 screen. That is the one open question, and it is a small and specific one — everything close enough
 to matter is the 154 voxels.
+
+## Measuring the last stage before anybody builds it
+
+With the card-free work on the loading time done, the only stage left in the plan that can be
+touched from a machine with no graphics card is the last one: **moving the shape maths onto the
+card**. That is the step that makes "no loading" total rather than merely fast — the card works out
+the shape of the world where it needs it, instead of asking the processor and waiting.
+
+I cannot build that here. What I could do is measure the three things that stage will run into on
+its first day, all of which were assumptions until today.
+
+- **"A shallow stack."** The plan assumes the shape maths can be walked with a small fixed-size
+  working area, which is what a graphics card needs — it cannot grow one on demand. Nobody had put a
+  number on it. It is **41**: that is the longest possible chain of nested shapes in the building,
+  and over three hundred million measurements the deepest it ever actually went was **36**. So a
+  fixed working area of 64 is comfortable. The assumption holds, and now it holds with a number
+  against it.
+- **How much has to be sent to the card.** The entire description of the building — every shape,
+  every pattern, every paint rule — is **351 kilobytes**. Smaller than a photograph. There is no
+  streaming problem to solve and nothing to be clever about.
+- **What the card has to be able to do.** Thirty-one distinct operations, listed with counts, so
+  whoever writes it knows the whole job in advance instead of discovering it one error at a time.
+
+**And one finding that will save somebody a bad day.** Three of those thirty-one — the ones that
+work out whether a surface is a sharp edge, how enclosed a spot is, and which way it faces — do not
+work like the others. They ask the *same* shape question seven or fourteen times at slightly
+different places, and build their answer from the spread. Written the obvious way, a card program
+gets those three wrong — and the facility uses exactly one of each. The building would come out
+correct everywhere except its **weathering**, which is precisely the kind of fault that gets blamed
+on the weathering rules for a week.
+
+**What is still unknown:** whether the card can use ordinary lower-precision arithmetic, or needs
+the slower high-precision kind. That one genuinely cannot be answered without writing the second
+copy of the maths and comparing them voxel by voxel, which is the next piece of work and the one the
+plan already asks for.

@@ -7096,3 +7096,64 @@ cannot. Everything close enough to matter is the 154 voxels above.
 | D642 | **The coarse verdict spares by OMISSION** | fault | 372 and 483 have no metre-8 specks, so 222 authored specks are left alone by accident |
 | D642 | **R11d's blocker is answered** | decision | The verdict has another source, so the up-front sample can go |
 | D642 | **The far field is what needs looking at** | honesty | A distant node built at metre 8 has real specks in those coats |
+
+## D643 — R12's shallow stack is 41, its field is 351 KB, and three of its ops are re-entrant
+
+R12 is the last stage of the plan and the one it calls the highest-risk piece left. Its two first
+sub-steps are the only work in the whole remaining plan that needs no graphics card — R12a is the
+field as an uploadable array, and R12b is `shaders/field.glsl` plus a `mirror_field` "held to R1a's
+standard". Three of the things that stage will hit on its first day are measurable now, and one of
+them is an assumption the plan states without a number.
+
+**"A switch and a shallow stack" — the stack is 41, and that is a bound rather than a sample.**
+Children always have a lower index than their parent, so the longest path from a root to a leaf
+settles in one forward pass: **41 for the facility's solid subtree, 39 for the deepest paint
+expression, 41 for the deepest node anywhere in the field.** Instrumented at run time as a control,
+one thread, metre 4, **302,561,232 node visits**: the deepest the recursion ever actually went is
+**36**, and 99.76% of visits are at depth 32 or less. So a shader stack of **48 is enough for this
+clip with seven to spare, and 64 is comfortable** — and the plan's assumption survives contact with
+the building it will be run on. Worth knowing before writing the shader rather than after.
+
+D639's *61.5 union nodes visited per evaluation* is not a contradiction of a depth of 36: that is a
+count of union nodes ENTERED, and the chain is walked and unwound repeatedly rather than descended
+once. The two numbers measure different things and it would be easy to read the first as the second.
+
+**The field is 351 KB.** 3,744 nodes at 96 bytes each — the whole thing, shape and paint together,
+uploaded once per clip. With the arguments narrowed to `f32` it is nearer 220 KB. There is no
+streaming problem here and no reason for R12a to be clever: one small buffer, rewritten when the
+clip changes.
+
+**The op surface is 31, and it is listed so nobody has to discover it one compile error at a time.**
+The facility's solid reaches 2,505 nodes over 31 distinct ops: `union` 437, `translate` 219,
+`intersection` 217, `box` 634, `cylinder` 203, `mirror` 148, `difference` 142, `rotate` 120,
+`scale` 113, `plane` 59, `repeat` 55, `capsule` 32, `ellipsoid` 26, `revolve` 16, `sphere` 14,
+`torus` 14, `offset` 8, `round` 8, `smooth-union` 6, `constant` 5, `multiply` 5, `spiral` 5, `cone`
+4, `smoothstep` 4, `displace` 3, `fbm` 2, `negate` 2, and one each of `add`, `curvature`,
+`occlusion` and `facing`.
+
+**And three of those ops are RE-ENTRANT, which is the finding that changes how R12b is written.**
+`curvature` evaluates its child **seven** times (the centre and six axes), `occlusion` **fourteen**
+(six axes and eight diagonals), and `facing` takes a normal by central differences. They are not
+"visit my children in order" nodes: each one runs several complete sub-evaluations of the same
+subtree at different points. A recursive CPU evaluator gets that for free; **a stack machine needs a
+per-frame counter saying which of the seven or fourteen samples it is on**, and the loop is over
+sample POINTS rather than over children. Any transliteration written as "push the children, pop the
+results" will be wrong on exactly these three, and the facility has one of each, so a shader that
+gets them wrong will produce a building that is right everywhere except its weathering.
+
+**What is still unknown, and it is the one that needs the mirror to answer**: whether `f32` is
+enough. Every number above is a property of the graph and holds at any precision; the question of
+whether a chain of forty transformed points in single precision lands on the same side of a surface
+as the double-precision original cannot be answered without the second evaluator, and that is R12b's
+own gate — `mirror_field` exact against the CPU sampler over the whole building.
+
+**Nothing was built.** The depth instrument was a counter in `Field::eval`, read once and reverted;
+the hot path keeps nothing, exactly as D639's visit counter did.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D643 | **The evaluation stack is bounded at 41, measured at 36** | finding | The plan says "shallow" and now says how shallow; 48 is enough, 64 comfortable |
+| D643 | **The whole field is 351 KB** | finding | One buffer uploaded once; R12a needs no cleverness |
+| D643 | **31 ops reach the facility's solid, listed with counts** | instrument | The shader's op surface, known before the first compile error |
+| D643 | **curvature, occlusion and facing are re-entrant** | finding | 7 and 14 sub-evaluations; a push-children stack machine is wrong on exactly these |
+| D643 | **Whether f32 suffices is still unknown** | honesty | It cannot be answered without the mirror, which is R12b's own gate |

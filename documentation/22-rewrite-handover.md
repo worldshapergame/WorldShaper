@@ -577,6 +577,13 @@ numbers are already taken and are three blocks down, under *ASKED FOR NEXT*. Its
 reading rather than writing — `face_light_seed` and `face_reseed` may already be half of it — and
 that reading is **not done**.
 
+**R12's groundwork is measured (D643), and it is the only stage left with card-free work in it.**
+The stack a shader would need is **41** (bounded) and **36** (observed over 302 M visits), so 64 is
+comfortable; the whole field is **351 KB**, one buffer; the op surface is **31 ops**, listed; and
+**`curvature`, `occlusion` and `facing` are re-entrant** — seven and fourteen sub-evaluations of the
+same subtree — so a push-the-children stack machine is wrong on exactly those three. What is left of
+R12b is the mirror itself, which is where the one real unknown lives: whether `f32` is enough.
+
 **R11d's blocker is answered (D642).** The stipple verdict does not need the up-front whole-clip
 sample: route 1b's world verdict is already built, and the measured cost of using it is 154 voxels
 in 3.8 M. That was the first and largest of the three things keeping `--no-coarse-paste` opt-in, so

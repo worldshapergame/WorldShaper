@@ -2007,10 +2007,26 @@ shader without changing."*
 
 - **R12a — the field as an array**, the same fixed-size pointerless records `forge/field.cpp` walks,
   uploaded once per clip and re-uploaded when it changes. `src/gpu/field_buffers.*`.
+  **Sized, D643: the whole field is 351 KB** — 3,744 nodes at 96 bytes, shape and paint together,
+  nearer 220 KB with `f32` arguments. One small buffer; there is nothing here to be clever about.
 - **R12b — `shaders/field.glsl`, the evaluator.** One function, a switch and a shallow stack, held
   to R1a's standard: a `mirror_field` that walks it exactly as the shader will, asserted against the
   CPU sampler voxel for voxel over the whole facility. A second evaluator that disagrees with the
   first by one voxel is D204's fault in its worst form — two renderers computing the same world.
+
+  **How shallow, measured (D643): 41.** The longest path from a root to a leaf is 41 for the
+  facility's solid and 39 for its deepest paint expression, and over 302 M node visits the recursion
+  never went past **36**. A fixed stack of 48 is enough for this clip and 64 is comfortable.
+
+  **The op surface is 31**, listed with counts in D643, and **three of them are RE-ENTRANT**:
+  `curvature` evaluates its child seven times, `occlusion` fourteen, and `facing` takes a normal by
+  central differences. A stack machine written as "push the children, pop the results" is wrong on
+  exactly those three — each needs a per-frame counter over sample POINTS rather than over children.
+  The facility has one of each, so getting it wrong gives a building that is correct everywhere
+  except its weathering.
+
+  **The open question this stage still owns is whether `f32` is enough**, and it is the reason the
+  mirror exists: no property of the graph can answer it.
 - **R12c — the marcher derives rather than stops.** A descent that reaches a node the pool has not
   built evaluates the field there instead of reporting a miss. R2d's stand-in stops being what a
   player waits behind and becomes what is drawn for the one frame a derivation costs.
