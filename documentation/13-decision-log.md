@@ -7354,3 +7354,18 @@ once over everything at the end. That is the next step and it is card-free.
 | D647 | **The sample skips when nothing needs it** | build | Verified compiling and passing on Windows by the new CI |
 | D647 | **It needs both flags, and one of them costs 19 s** | honesty | `--no-coarse-paste` alone still pays the 2,754 ms |
 | D647 | **The missing piece is an incremental world verdict** | next | Neither a whole-clip sample nor D630's clean at the end |
+
+**And most of it is already wired, which is the useful part of this entry.** `refine_stipple_counts_`
+is accumulated per refined region as the ladder runs — `refine_stipple_counts_.add(job.stipple)` in
+`pump_refinement` — and it is read today only as a comparison instrument. It cannot be the verdict as
+it stands, and `main.cpp:2738` is why: `job.stipple = forge::stipple_counts(job.result->clip)` is
+called with **no margin**, which is route 1 exactly as D628 built and refuted it. `paint_specks`
+reads outside its clip as air, so every voxel on a region's own face counts as surface and as a
+speck, and D628 measured that summing those destroys two of the facility's six deliberate dithers.
+
+**So the step is one argument, not a new pass: give that call the skirt.** `stipple_counts(clip,
+margin)` already takes one and D629 built it for this — the interiors then tile the world exactly
+once and the sum is the same population a whole-clip count would see. The gate is D628's own: the
+settle line reading **0 DIFFER** against the whole-clip verdict on the facility. If that holds, the
+verdict comes from the ladder for free, the up-front sample skips itself through the condition D647
+already added, and the loading bar goes without D630's 19 s.
