@@ -7802,3 +7802,61 @@ designing a scene first.
 | D655 | **Not see-through and not near geometry either** | finding | Both tested; both arms die identically |
 | D655 | **`refraction_small.clip` is kept as the gate** | build | A hard vertical edge seen through glass and past it in one frame |
 | D655 | **Chasing the rasteriser further is refused** | decision | It is one driver, and the picture it is standing in for takes two runs on a card |
+
+## D656 — the card-free crash is the LOBE POOL, and it is the material and not the size
+
+D654 said a card-free picture is available up to about a five-metre scene and D655 refuted that with
+a four-metre scene that dies anyway, leaving *"something about this scene that one software
+rasteriser cannot survive"* and a decision to stop looking. **It took five runs to name, it is one
+flag, and it is not about the scene at all.**
+
+| arm, `clips/refraction_small.clip`, 320x200, lavapipe | reaches |
+|---|---|
+| as it ships | **frame 9** — frames 1-8 complete, the segfault is entering 9 |
+| `--validation` | frame 9, and **the validation layer reports nothing at all** |
+| `robustBufferAccess` forced on in `device.cpp` | frame 9 — so it is not a plain out-of-range read |
+| **`--no-lobe-ray`** — R4b's march goes, the pool and the bins stay | **frame 9** |
+| **`--no-face-lobe`** — no face holds a block of bins and no pixel probes for one | **frame 40+, and the picture is whole** |
+
+**So it is R4c's lobe pool, and not R4b's ray.** `--no-lobe-ray` removes the reflection march and
+changes nothing; `--no-face-lobe` removes the block claim, the bins and the per-pixel probe and the
+crash goes with it. What is left in between is `node_face_lobe`'s claim in `node.glsl`, the bin
+writes in `shade_faces.comp` and the four-way probe in `resolve.comp`.
+
+**And that is why one clip survives and every other one dies.** `clips/translucency_test.clip` is
+marble and stone — `rough=140` to `rough=225`, no metal — and its own audit line reads **0 faces
+holding a block** over 120 frames: nothing in it is smooth enough to ask the pool for anything.
+Every scene that dies has glass, water or metal in it. **D654's rule was measuring the material and
+calling it the size**, which is why a smaller scene refuted it and why cutting `glass_test.clip`
+down four ways never helped: all four cuts kept the panes.
+
+**What the fault looks like**, kept because the next reader will want to know it was chased: a
+SIGSEGV at address **0x8** with a null base register, inside llvmpipe's JIT'd code, on four of its
+worker threads at once. A null pointer plus a small offset is not the shape of an index walking off
+the end of a 38 MB buffer, and forcing `robustBufferAccess` on did not move it. **Whether the defect
+is ours or the driver's is not settled** — D650 called a crash the driver's and D651 proved it ours,
+so the honest state is that it is unattributed and reproducible in one command.
+
+**What it buys immediately: R4d's picture, on a machine with no graphics card.** `--no-face-lobe` is
+R4c's own control arm — it takes directional reflection off metals and leaves refraction, the world,
+the sun and everything else alone — so the glass gate can be shot here as
+`--no-face-lobe` against `--no-face-lobe --no-refraction`.
+
+**A second thing was silently wrong and it is worse than the crash.** The card-free recipe in the
+handover carries no `--max-seconds`, and the default deadline is **180 s** while the shell's shaders
+take **268 s** to compile on this container from a cold cache. So the run photographs **frame 1 of
+the 120 it was asked for**, writes the file, and exits 0. The first translucency shot taken this
+session was an empty sky that looked exactly like a successful run, and two such arms would have
+agreed perfectly — trap 15, in the harness rather than in a shader. The recipe now carries
+`--max-seconds 0`, and `save_image_png`'s caller now prints **which frame the file is of** beside the
+file, as a WARN when it is short of the frame asked for.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D656 | **The card-free crash is R4c's lobe pool** | finding | `--no-face-lobe` reaches frame 40+; `--no-lobe-ray` dies at 9 |
+| D656 | **D654's size rule is explained, not just refuted** | correction | The one clip that survives is the one whose materials never ask for a block |
+| D656 | **It is not an out-of-range buffer read** | finding | `robustBufferAccess` forced on changes nothing; the fault is null + 8 |
+| D656 | **Attribution is left open** | honesty | D650 called one of these the driver's and D651 proved it ours |
+| D656 | **R4d's gate is shot with `--no-face-lobe`** | build | R4c's control arm leaves refraction untouched |
+| D656 | **The card-free recipe needs `--max-seconds 0`** | correction | 180 s deadline against a 268 s shader compile: a frame-1 picture that exits 0 |
+| D656 | **A screenshot says which frame it is of** | build | Trap 15 in the harness; the warning was thirty lines from the file name |

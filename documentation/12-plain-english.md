@@ -3041,3 +3041,26 @@ In the building itself this is the mouldings, the balusters, the statues' hands,
 every cornice: with the sun behind them they now carry light instead of going flat dark.
 
 What I still cannot tell you is what it costs in frame rate — that needs your machine.
+
+## The glass got looked at, and it does what glass does
+
+Last time I wrote that glass now bends what is behind it — and then had to admit nobody had ever
+looked at it. The maths was tested; the picture was not. That is the wrong way round for a change to
+something you look at, and it stayed that way because every scene with glass in it crashed on this
+machine after eight frames, while the one marble scene ran fine.
+
+**Eight frames looked like a limit on how big a scene this machine could draw. It is not — it is one
+feature.** The thing that dies is the part of the renderer that gives shiny surfaces a *direction*
+to reflect in: metal, polished stone, glass, water. Marble and rough stone never ask for it, which is
+why the marble scene was the only one that ran. Turn that one feature off and every scene runs here,
+all the way to a settled picture.
+
+So I turned it off and took the glass picture. **A pane of glass moves what is behind it.** In the
+test scene there is a wall of two colours with a pane over part of it: where the pane covers the
+wall, the line where red meets blue and the wall's bottom edge both step sideways; where the pane
+stops, they run straight again. The pane's own top edge cuts a step into the top of the wall behind
+it. That is refraction, and it is the whole of what the change was supposed to do.
+
+**Two things are still owed.** Glass with its reflections switched back on — that is what a real
+window is, and it needs your machine. And the frame-rate cost of both this and the marble, which
+also needs your machine.

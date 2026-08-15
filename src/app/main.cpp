@@ -8462,6 +8462,25 @@ int Application::play(const Options& options) {
                                                                  : render_target_,
                            options_.screenshot);
 
+            // Which frame the file is OF, printed beside the file itself.
+            //
+            // The deadline above already warns, and that warning is thirty lines away from the
+            // line naming the picture — so a run that photographed frame 1 of the 120 it was asked
+            // for looks, at the bottom of the log and in the file, exactly like one that got there.
+            // A whole session took two such shots as an A/B: both arms were an empty sky, both
+            // exited 0, and the pair agreed perfectly. Trap 15 is that shape, and the cure is the
+            // same one: make the instrument say what it actually did, in the place the reader is
+            // already looking.
+            if (measured < options_.screenshot_frame) {
+                WS_LOG_WARN("gpu",
+                            "...and it is frame {} of the {} asked for. This picture is NOT the "
+                            "one the run was for and must not be compared with one that is",
+                            measured, options_.screenshot_frame);
+            } else {
+                WS_LOG_INFO("gpu", "...at frame {} of the {} asked for", measured,
+                            options_.screenshot_frame);
+            }
+
             // A figure taken while the world is still being built is not comparable to anything,
             // and nothing said so.
             //

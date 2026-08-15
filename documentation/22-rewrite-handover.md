@@ -529,6 +529,16 @@ failure, not a compile error.
     proof (the visit count unchanged either side of the fix). It is fifty times slower, so run it
     at a coarse metre. D638.
 
+30. **A run that ran out of time still writes the screenshot, and the file does not say so.**
+    `--max-seconds` defaults to **180**, and the shell's shaders take **268 s** to compile on a
+    software rasteriser from a cold cache — so the card-free recipe in §5, which passes no deadline,
+    photographed **frame 1 of the 120 it asked for**, wrote the file and exited 0. The picture was an
+    empty sky and looked like a working run; two arms of it would have agreed to the pixel. The
+    deadline does warn, thirty lines above the line naming the file, which is not where anybody
+    comparing two pictures is looking. **Pass `--max-seconds 0` for any card-free shot**, and the
+    screenshot line now names the frame it is of and warns when that is short of the frame asked
+    for. Trap 15 living in the harness rather than in a shader. D656.
+
 ---
 
 ## 4b. The bug that was open here — closed, and what it teaches
@@ -586,29 +596,79 @@ a step-bounded ray is not a bound. Not carried. D361.
 | | state |
 |---|---|
 | **R4e — translucency.** Marble glows where it is thin, and the renderer works out which parts those are by counting the stone a ray crosses | **in, and VERIFIED by picture** (D653) |
-| **R4d — refraction.** Glass and water displace what is behind them; absorption over the true path; total internal reflection | **in, arithmetic tested, PICTURE OWED** (D652) |
+| **R4d — refraction.** Glass and water displace what is behind them; absorption over the true path; total internal reflection | **in, and now LOOKED AT** — card-free, at 640×400 settled to frame 120 (D652, D656) |
+| the crash that made every card-free picture but one impossible | **named: it is R4c's lobe pool, not the size of the scene and not refraction** (D656) |
 | the node payload was bound at 512 MB against a driver limit of 128, with nothing anywhere reading `maxStorageBufferRange` — and the Deck is the stated floor | **clamped** (D651) |
 | R11d's incremental stipple verdict — the step D647 called "one argument away" | **measured and refused on price**; the surviving route is D628's world-read skirt (D649) |
 
 **The first three things to do, in this order:**
 
-1. **Take R4d's picture.** It is the only shipped change to what a player looks at that nobody has
-   looked at. The scene is written and in the repository, and it is two runs and one flag:
+1. **Take R4d's picture with the lobes ON.** The picture is taken and the answer is yes — a pane
+   displaces what is behind it, and `clips/refraction_small.clip` shows it plainly: the wall's
+   vertical seam and its bottom edge step sideways where the pane covers them and stay put where it
+   does not, and the pane's own top edge cuts a step into the wall's top line. **But it was shot
+   with `--no-face-lobe`**, because the lobe pool is what kills a card-free run (D656), so the one
+   thing still unseen is refraction and directional reflection in the same frame — which is what a
+   window actually is. Two runs on the first machine with a card:
    ```powershell
    WorldShaper --clip-file clips\refraction_small.clip --cam "-0.9,1.05,-1.9,64,0"
    WorldShaper --clip-file clips\refraction_small.clip --cam "-0.9,1.05,-1.9,64,0" --no-refraction
    ```
-   The two-colour wall's vertical edge should step sideways where the pane covers it and stay put
-   where it does not; the green pane should deepen with the angle it is crossed at; the basin bottom
-   should sit higher than it is. `clips/glass_test.clip --cam 0,1.4,-3.0,90,0` is the fuller scene.
+   The green pane should also deepen with the angle it is crossed at and the basin bottom should sit
+   higher than it is; neither was legible at 640×400 on a software rasteriser.
+   `clips/glass_test.clip --cam 0,1.4,-3.0,90,0` is the fuller scene.
 2. **Price them both.** R4d casts two segments where a glass pixel cast one; R4e casts a ray a whole
    class of faces was not casting. Neither has a number, the faces pass has a **4.40 ms** budget, and
    `--no-refraction` / `--no-translucency` make each a one-flag A/B rather than two builds.
+   **The lobe crash is worth an hour of the same machine's time before that**: `--no-face-lobe`
+   reaches frame 40+ where the shipped build dies at frame 9, and it is the difference between a
+   card-free session that can see its own work and one that cannot. What is left to bisect is inside
+   `node_face_lobe` (`node.glsl`), the bin writes in `shade_faces.comp` and the four-way probe in
+   `resolve.comp` — `--no-lobe-ray` does NOT help, so the march is not it.
 3. **Then R5b**, which is what the user asked for next. **Its opening instruction below is stale and
    this is the correction**: the reading it says is "not done" IS done — `face_light_seed` is called
    at claim time (`shade_faces.comp`, the `samples == 0` branch), gated on `!provisional_face`, so a
    newly claimed face already starts from the coarse face over it. What is missing is the temporal
    half, and R5b's numbers three blocks down still stand.
+
+---
+
+#### LATEST, 2026-08-15 evening: the card-free crash is the LOBE POOL, and R4d has been looked at
+
+**Everything below this block that says the software rasteriser "cannot reach" a scene was written
+before this was known, and the rule it inferred is wrong.** D654 said card-free pictures work up to
+about a five-metre scene; D655 refuted the size rule with a four-metre scene that dies anyway and
+stopped there. It is neither. **It is one flag** (D656):
+
+| arm, `clips/refraction_small.clip`, 320×200, lavapipe | reaches |
+|---|---|
+| as it ships | **frame 9** — frames 1–8 complete, the segfault is entering 9 |
+| `--validation` | frame 9, and the validation layer reports **nothing at all** |
+| `robustBufferAccess` forced on in `device.cpp` | frame 9 — so it is not a plain out-of-range read |
+| `--no-lobe-ray` — R4b's march goes, the pool and the bins stay | **frame 9** |
+| **`--no-face-lobe`** — no face holds a block of bins, no pixel probes for one | **frame 40, 120, whole picture** |
+
+So the crash is **R4c's lobe pool**, and the reason one clip survives is that
+`clips/translucency_test.clip` is stone and marble with no metal: its own audit line reads **0 faces
+holding a block** over 120 frames, so it never touches the pool. Every scene that dies has glass,
+water or metal in it — which is why cutting `glass_test.clip` down four ways never helped, since all
+four cuts kept the panes. The fault itself is a SIGSEGV at address **0x8** with a null base register,
+inside llvmpipe's JIT'd code on four of its worker threads. **Whether it is ours or the driver's is
+not settled**, and D650/D651 are the reason to leave that open rather than guess.
+
+**R4d's picture is therefore taken (D656)**, `--no-face-lobe` on both arms, 640×400, frame 120, both
+scenes hashing `0fcdedc147df45a4` so the two are comparable. What it shows, and this is a picture
+somebody has actually looked at rather than a number: the red wall's bottom edge and the seam where
+it meets the blue wall **step sideways where a pane covers them and run straight where it does not**,
+and the pane's own top edge cuts a step into the wall's top line. Glass displaces what is behind it.
+**What is still unseen is refraction with the lobes ON**, which is what a real window is, and that
+needs a card.
+
+**And the recipe below is missing a flag that made a whole measurement a lie.** `--max-seconds`
+defaults to 180 s and the shell's shaders take 268 s to compile here from a cold cache, so the run
+photographs **frame 1 of the 120 it was asked for**, writes the file and exits 0 — an empty sky that
+looks exactly like a working run. **Every card-free shot needs `--max-seconds 0`.** Trap 30, and the
+screenshot line now names the frame it is of.
 
 ---
 
@@ -627,10 +687,14 @@ lavapipe, a SMALL clip, and a screenshot: the facility dies on the software rast
 
 ```powershell
 Xvfb :99 -screen 0 1280x800x24 &
-DISPLAY=:99 WorldShaper --no-title --clip-file clips/translucency_test.clip \
+DISPLAY=:99 WorldShaper --no-title --max-seconds 0 --clip-file clips/translucency_test.clip \
     --cam "-1.5,0.62,-0.8,0,2" --width 320 --height 200 \
     --screenshot on.png --screenshot-frame 120
 ```
+
+**`--max-seconds 0` is not optional and was missing here** — without it the 180 s deadline fires
+during the 268 s shader compile and the file is a picture of frame 1 that exits 0 (trap 30, D656).
+Add `--no-face-lobe` for any scene with glass, water or metal in it, or the run dies at frame 9.
 
 ...and the same with the control flag, then compare the two by luma per column. A pure-Python PNG
 reader is forty lines and needs no packages (`python3-pil` in this container is broken). **A light
@@ -646,8 +710,10 @@ BOTH arms, so it is the load and not the feature.
 that works — `clips/refraction_small.clip`, **313 k solid voxels against the 0.4 M that converges** —
 and it dies at frame 8 as well. So it is not the size; `--no-see-through` and moving the camera
 outside the scene were tested too, and neither is it. Both arms die identically, so it is not
-refraction. **Do not plan work around a size rule: `translucency_test.clip` renders here and, so
-far, nothing else does.**
+refraction. ~~**Do not plan work around a size rule: `translucency_test.clip` renders here and, so
+far, nothing else does.**~~ **Answered the same evening by D656: it is the lobe pool, and
+`translucency_test.clip` is the one clip whose materials never ask it for a block. Every scene runs
+here under `--no-face-lobe`.**
 
 **`clips/refraction_small.clip` is R4d's gate and is worth two runs on the first machine with a
 card**: a wall of two colours meeting on a hard vertical edge, a clear pane over the LEFT half of it
