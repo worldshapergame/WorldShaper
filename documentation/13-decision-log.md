@@ -7732,3 +7732,35 @@ renderer is required to err in.
 | D653 | **Settled, the row is strictly ordered by thickness** | gate | +52.0, +23.4, +15.8, +7.1 down the row, and −1.1 on the control |
 | D653 | **Unmeasured: the cost** | honesty | A ray a class of faces was not casting, against a 4.40 ms budget |
 | D653 | **A glowing panel does not light the room** | honesty | A second read on the hottest path; the same refusal D591 made for the mirror |
+
+## D654 — how big a scene a card-free picture can be, measured on both sides
+
+D653 took the first picture of a light change on a machine with no graphics card, and immediately
+raised the question it could not answer: is that a trick that works, or did that one clip get lucky?
+
+**Both sides are now measured, and it is the world size.** After D651's clamp the software
+rasteriser still dies under load with no validation error behind it, and where it dies scales with
+how much world there is:
+
+| clip | solid voxels | reaches |
+|---|---|---|
+| `clips/translucency_test.clip` | ~0.4 M | **frame 120+, converged** |
+| `clips/glass_test.clip`, box cut to the panes | 2.9 M | frame 11 |
+| `clips/glass_test.clip` at half resolution | 0.4 M in a 12 m box | frame 11 |
+| `clips/glass_test.clip`, whole | 3.4 M | frame 8 |
+| the facility | 125 M | frame 11 (D650, D651) |
+
+The middle row is the useful one: **halving the resolution did not help**, so it is not voxels alone
+— it is the extent of the world the pool has to hold nodes over. glass_test is a 12 m room and
+translucency_test is a 5 m bench.
+
+**So the rule for a card-free session:** a picture is available for a scene about the size of
+`translucency_test.clip`, and R4d's glass gate is not, however it is cut. Somebody wanting that gate
+before they next have a card should write the scene for it — one pane, one post, four metres — rather
+than trying to shrink the one that exists, which has now failed four ways.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D654 | **Card-free pictures work up to about a five-metre scene** | finding | 0.4 M voxels converge past frame 120; 2.9 M dies at 11 |
+| D654 | **It is the world's EXTENT, not its voxel count** | finding | Half resolution on the same 12 m room died at the same frame |
+| D654 | **The glass gate needs a card or a new scene** | plan | Four ways of cutting `glass_test.clip` down all failed |

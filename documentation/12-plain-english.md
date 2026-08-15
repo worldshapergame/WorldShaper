@@ -3011,3 +3011,33 @@ as a crash in somebody's driver with nothing to point at.
 
 It now asks, and takes what it is given. That is not a fix for anything you can see today; it is a
 crash report you will never receive.
+
+## Marble glows now, and the game worked out which bits of it are thin
+
+Marble is not a grey stone with light bouncing off it. Hold a thin piece up against a window and it
+lights up from inside; the thick parts of the same block stay stone. That difference is most of what
+makes marble look like marble rather than like painted concrete — and this game has been drawing all
+of it as painted concrete.
+
+The odd part: **the building has always said its marble was marble.** There is a number in every
+material for how far light gets inside it, the facility set it years ago, and no part of the
+renderer ever read it.
+
+It reads it now, and the way it does is the part I'd want you to know about. **Nothing anywhere says
+which parts of the building are thin.** A moulding's lip is thin and the block behind it is not, and
+no file records that — so the game finds out by firing a ray *into* the stone toward the sun and
+counting how much stone it has to cross before the light is used up. Thin: the light gets through
+and the surface glows. Thick: it doesn't, and the surface stays stone.
+
+**And this time I could check it.** There is a test scene somebody built for exactly this — the same
+stone as five panels, from one voxel thick to a hand's breadth, with the sun behind them, plus one
+panel with the effect deliberately switched off as a control. I got the game running on this machine
+without a graphics card (slowly — four frames a second) and photographed that scene with the feature
+on and off. The five panels come out in order: the thinnest brightens most, each thicker one less,
+and **the control panel does not move at all**. That last one is the result that matters — it means
+the game is responding to the actual thickness of the stone rather than to the word "marble".
+
+In the building itself this is the mouldings, the balusters, the statues' hands, the thin lip on
+every cornice: with the sun behind them they now carry light instead of going flat dark.
+
+What I still cannot tell you is what it costs in frame rate — that needs your machine.

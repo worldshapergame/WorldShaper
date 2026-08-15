@@ -605,8 +605,16 @@ change on a small clip is now checkable here. A light change on the facility is 
 
 **What is still owed a picture: R4d's refraction (D652).** Nothing about glass has been looked at,
 and the gate is one flag: `--clip-file clips\glass_test.clip --cam 0,1.4,-3.0,90,0` against
-`--no-refraction`. That clip is small too, so **the trick above should work on it** — it was written
-before the trick was found, and nobody has run it.
+`--no-refraction`. **That was tried here four ways and the software rasteriser cannot reach it** —
+the full clip, half resolution, and the box cut down to the panes alone all die at frame 8 to 11, in
+BOTH arms, so it is the load and not the feature.
+
+**Which gives the boundary, and it is worth having before somebody spends an hour on it:** a world of
+about **0.4 M solid voxels survives past frame 120** — converged, which is what
+`clips/translucency_test.clip` is — and one of **2.9 M dies at frame 11**, which is
+`clips/glass_test.clip` however it is cut down. Whatever is left after D651's clamp scales with the
+world. So card-free pictures are available for a clip small enough, and the glass gate needs a card
+or a smaller scene written for it.
 
 #### 2026-08-15, earlier: refraction is in and the frame-11 crash was ours
 
