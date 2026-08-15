@@ -6925,3 +6925,65 @@ print its voxel count.
 | D640 | **`run.bat` always builds** | fix | It built only when the executable was missing, so updates did nothing |
 | D640 | **`build.bat` finds VS's CMake and names the Vulkan SDK** | fix | The two first-build failures, both previously reported as cryptic |
 | D640 | **None of the three scripts was run** | honesty | No Windows here; the C++ was compiled only as an extracted block |
+
+## D641 — the release workflow was never crashing the C++ compiler, and now it can build a release
+
+D640 fixed the download and left the person who needs it unable to make one: the fix is on `main`,
+the only machine that can build Windows is theirs, and they are on a phone. The release workflow is
+the only other way to a zip, and this repository's own notes said it "has never once succeeded --
+the runner crashes its own compiler with an access violation". **That sentence sent three releases
+down the hand-built path and it is wrong.**
+
+**What the v0.7.0 log actually says.** Every C++ translation unit in the run compiled. What failed
+was one line:
+
+```
+[341/407] glslc clouds.comp
+FAILED: [code=3221225477] bin/shaders/clouds.comp.spv
+  C:\VulkanSDK\Bin\glslc.exe --target-env=vulkan1.3 -g -O ... clouds.comp
+ninja: build stopped: subcommand failed.
+Access violation
+```
+
+`3221225477` is `0xC0000005`, and the process that took it is **glslc — the SHADER compiler, out of
+the Vulkan SDK this workflow installs.** "Access violation" was printed by CMake reporting the
+subcommand's exit code, and reading it as MSVC put the blame on the one part of the toolchain that
+was working. Two shaders after it compiled fine, so it is that shader and that glslc.
+
+**And the workflow asked for `latest`.** `https://sdk.lunarg.com/sdk/download/latest/windows/...`,
+so the compiler was whatever LunarG was serving on the morning of the run and no two runs need agree.
+A build tool that changes under you between runs is not a build tool. It is pinned to **1.4.341.0**,
+which is the generation the project already targets — `cmake/Dependencies.cmake` pins volk to
+`vulkan-sdk-1.4.341.0` — so this is the workflow agreeing with the source rather than a fourth
+number to keep in step. The step now prints `glslc --version`, so the next time this breaks the log
+says which one it was.
+
+**One of the three failures was not a failure at all.** v0.6.1's run was **cancelled** after fifteen
+minutes. It went into the record as a crash because nobody looked.
+
+**The workflow also had D640's bug**, in its own copy: its Package step staged the executable, the
+DLL, the shaders and the licence, and no clips. Fixed the same way, from `build\bin\clips`.
+
+**And it now has a gate that can catch that without a graphics card.** `package.ps1` unpacks the zip
+and starts the game, which a runner cannot do. It does not need to: **`--clip-file` with no
+`--screenshot` is the clip tool**, and that parses the manifest, splices in the twenty-two fragments,
+samples the building and reports its volume entirely on the CPU. So the workflow opens its own zip
+somewhere else, checks the four things that must be in it by name, and then makes the **shipped**
+facility build at metre 4 and reports a voxel count above nought. A zip with no clips in it fails
+that on the first step; a zip whose clips do not parse fails it on the second.
+
+**What is not known yet.** Whether 1.4.341.0's glslc compiles `clouds.comp` — that is the hypothesis
+this run tests, and it is testable only by running it. If it still crashes, the next arms in order
+are dropping `-g` from the glslc line (debug info in SPIR-V is the usual suspect in a shaderc crash,
+and nothing in the game reads it) and then `-O0` for that one shader. **Neither has been tried, and
+both change the shipped SPIR-V, so neither should be reached for while a pinned compiler is
+untested.**
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D641 | **The crash is glslc, not MSVC** | finding | Every .obj compiled; the shader compiler took the access violation |
+| D641 | **The Vulkan SDK is pinned to 1.4.341.0** | decision | `latest` made the build tool a different tool on every run |
+| D641 | **The SDK version is printed** | instrument | The log should name the compiler that broke |
+| D641 | **v0.6.1 was cancelled, not crashed** | honesty | It went into the record as a third crash because nobody read it |
+| D641 | **The workflow stages the clips too** | fix | It carried D640's bug in its own copy |
+| D641 | **The zip is opened and made to BUILD the facility** | gate | No graphics card needed: the clip tool is CPU-only |

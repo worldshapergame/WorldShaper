@@ -58,16 +58,36 @@ jobs:
 
       # The SDK is a build tool: it provides the headers, the loader stub and glslc. None of
       # it is redistributed with the game, which loads Vulkan through volk at runtime.
+      #
+      # PINNED, and that is what this workflow failed on for three releases.
+      #
+      # It asked for `latest`, so the version was whatever LunarG was serving on the morning of
+      # the run, and on v0.7.0 that glslc **crashed with an access violation compiling
+      # clouds.comp** — `FAILED: [code=3221225477]`, which is 0xC0000005. Ninja stopped, CMake
+      # said "build tool execution failed", and the failure was written down here as the runner
+      # crashing its own C++ compiler. It was not: every .obj in that run compiled, and the
+      # thing that died was the SHADER compiler out of the SDK this step installs. A build tool
+      # that changes under you between runs is not a build tool, it is weather.
+      #
+      # 1.4.341.0 because that is the SDK generation the project already targets — volk is
+      # pinned to `vulkan-sdk-1.4.341.0` in cmake/Dependencies.cmake — so this is the workflow
+      # agreeing with the source rather than a new number to keep in step.
+      #
+      # The version is PRINTED. When this next breaks, the log should say which glslc it was.
       - name: Install the Vulkan SDK
         shell: pwsh
+        env:
+          WS_VULKAN_SDK: 1.4.341.0
         run: |
-          $url = 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe'
+          $url = "https://sdk.lunarg.com/sdk/download/$env:WS_VULKAN_SDK/windows/vulkan-sdk.exe"
+          Write-Host "Vulkan SDK $env:WS_VULKAN_SDK from $url"
           Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\vulkan-sdk.exe"
           $args = @('--root', 'C:\VulkanSDK', '--accept-licenses',
                     '--default-answer', '--confirm-command', 'install')
           Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList $args -Wait
           "VULKAN_SDK=C:\VulkanSDK" >> $env:GITHUB_ENV
           "C:\VulkanSDK\Bin" >> $env:GITHUB_PATH
+          & C:\VulkanSDK\Bin\glslc.exe --version
 
       - uses: ilammy/msvc-dev-cmd@v1
 
@@ -122,6 +142,14 @@ jobs:
           Copy-Item build\bin\WorldShaper.exe "package\$name\"
           Copy-Item build\bin\SDL3.dll "package\$name\"
           Copy-Item build\bin\shaders "package\$name\shaders" -Recurse
+          # The clips, which this step did not copy and which are the entire game. Everything
+          # about a world is read from the folder the executable is in: the worlds shelf seeds
+          # itself from there, an include that is not beside its own file is looked for there,
+          # and the facility is a manifest plus twenty-two fragments that live there. Without
+          # this a download opens on an empty shelf and says it did not build anything. D640.
+          # From build\bin\clips because that copy has already had the built worlds dropped out
+          # of it — the facility's is over half a gigabyte.
+          Copy-Item build\bin\clips "package\$name\clips" -Recurse
           Copy-Item LICENSE, README.md "package\$name\"
           Compress-Archive -Path "package\$name\*" -DestinationPath "package\$name.zip"
           "package=package/$name.zip" >> $env:GITHUB_ENV
@@ -132,6 +160,53 @@ jobs:
           $hash = (Get-FileHash "package\$name.zip" -Algorithm SHA256).Hash
           $hash | Out-File "package\$name.zip.sha256" -Encoding ascii
           "sha256=$hash" >> $env:GITHUB_ENV
+
+      # The download is opened somewhere else and made to build the world it ships with.
+      #
+      # This is the gate v0.7.0 needed and did not have. Everything above this line tests the
+      # BUILD TREE, where every path resolves because the source is sitting right there — and
+      # the release that shipped without any clips in it passed all of it. `tools/package.ps1`
+      # has a gate of this shape for the same reason (a shader path baked to the build machine
+      # at v0.6.0), but it starts the game, and a runner has no graphics card.
+      #
+      # It does not need one. `--clip-file` with no `--screenshot` is the clip tool: it parses
+      # the manifest, splices in the twenty-two fragments, samples the building and reports it,
+      # entirely on the CPU. If the clips are missing from the zip it exits non-zero, and if
+      # they are there it prints how many voxels the facility came to. At metre 4 rather than
+      # the authored 32 because what is being tested is that the download HAS a game in it.
+      - name: Check the download has a game in it
+        shell: pwsh
+        run: |
+          $name = "WorldShaper-${{ steps.version.outputs.tag }}-windows-x64"
+          $out = Join-Path $env:RUNNER_TEMP "unpacked"
+          Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path "package\$name.zip" -DestinationPath $out -Force
+
+          # Named one at a time, so a missing one says which.
+          foreach ($needed in @('WorldShaper.exe', 'SDL3.dll',
+                                'shaders\visibility.comp.spv', 'clips\facility.clip')) {
+            if (-not (Test-Path (Join-Path $out $needed))) {
+              throw "the zip has no $needed in it"
+            }
+          }
+
+          Push-Location $out
+          try {
+            $log = & .\WorldShaper.exe --clip-file clips\facility.clip --clip-metre 4 2>&1 |
+                   Out-String
+            Write-Host $log
+            if ($LASTEXITCODE -ne 0) {
+              throw "the shipped facility did not build (exit $LASTEXITCODE)"
+            }
+          } finally {
+            Pop-Location
+          }
+          $volume = [regex]::Match($log, "volume\s+(\d+) voxels")
+          if (-not $volume.Success) { throw "the clip tool reported no volume at all" }
+          if ([int64]$volume.Groups[1].Value -le 0) {
+            throw "the shipped facility built to nothing"
+          }
+          Write-Host "the unpacked download built the facility: $($volume.Groups[1].Value) voxels"
 
       # Signs a statement, in GitHub's name, that this exact file came out of this exact
       # commit through this exact workflow. Free, and verifiable with `gh attestation verify`.

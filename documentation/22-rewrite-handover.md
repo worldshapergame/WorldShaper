@@ -144,9 +144,13 @@ what they can tell you is what it looks like. All three exist to keep that loop 
    **`--ff-only`**, because a rewrite branch that has diverged from `main` is something to find out
    about deliberately rather than by watching git invent a merge commit.
 
-   **A release is the same loop with a tag on the end, and it is hand-built.** `.github/workflows/
-   release.yml` has never once succeeded on this repository — the runner crashes its own compiler
-   with an access violation, at v0.6.0, v0.6.1 and v0.7.0 alike. So `tools/package.ps1` is the path,
+   **A release is the same loop with a tag on the end.** `.github/workflows/release.yml` had never
+   once succeeded on this repository, and **the diagnosis recorded here was wrong**: not the runner
+   crashing its own C++ compiler, but `glslc` — the SHADER compiler out of the Vulkan SDK the
+   workflow installed as `latest` — dying on `clouds.comp` with an access violation while every
+   `.obj` in the same run compiled. v0.6.1 was not even that; it was cancelled. The SDK is pinned
+   now and the workflow builds the facility out of its own zip before publishing (D641). Until that
+   has gone green at least once, `tools/package.ps1` is the path,
    its own header says so, and the release notes have to say the download carries **no provenance
    attestation**. `package.ps1` cannot currently invoke `build.bat` either (`vswhere` does not
    resolve through it), so its steps are run against an already-gated build: stage, zip, **unpack to

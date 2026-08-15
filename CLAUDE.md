@@ -31,9 +31,14 @@ Three things that make this a rule rather than a habit:
   deliberately, not by watching git invent a merge commit.
 
 **A release is the same loop with a tag on the end, and it is hand-built.**
-`.github/workflows/release.yml` has never once succeeded here — the runner crashes its own compiler
-with an access violation, at v0.6.0, v0.6.1 and v0.7.0 alike. `tools/package.ps1` is the path and its
-own header says so; the notes must say the download carries **no provenance attestation**. That
+`.github/workflows/release.yml` had never once succeeded here, and **the reason written down was
+wrong**: it was read as the runner crashing its own C++ compiler, and the v0.7.0 log says every
+`.obj` compiled and **`glslc` died on `clouds.comp` with an access violation** — the SHADER compiler,
+out of a Vulkan SDK the workflow asked for as `latest`, so the build tool changed under the build
+between runs. It is pinned now (D641), and the workflow opens its own zip and makes the shipped
+facility build before publishing. **If CI has not yet produced a green run, `tools/package.ps1` is
+still the path** and its notes must say the download carries **no provenance attestation**; a CI
+release carries one. That
 script cannot currently invoke `build.bat` either (`vswhere` does not resolve through it), so run its
 steps against an already-gated build: stage, zip, **unpack to a clean directory and run it there**,
 hash. That last gate is the one that caught v0.6.0 shipping with a shader path hard-coded to the
