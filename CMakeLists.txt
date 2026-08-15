@@ -40,7 +40,15 @@ if(MSVC)
     target_compile_definitions(ws_options INTERFACE
         NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 else()
-    target_compile_options(ws_options INTERFACE -Wall -Wextra -Wpedantic -Werror)
+    # `-Wno-missing-field-initializers` and nothing else is turned off, for a reason that is about
+    # the language rather than about taste. Every Vulkan struct in `src/gpu` is written as a C++20
+    # designated initialiser -- `VkBlitImageInfo2 info{.sType = ...}` -- and the standard says every
+    # member not named is value-initialised, which is the zero these calls want. GCC's -Wextra warns
+    # once per unnamed member anyway: 316 errors across five files, none of them a fault. MSVC, the
+    # compiler the game ships from, has no equivalent warning, so the gate that actually guards the
+    # release is unchanged by this line.
+    target_compile_options(ws_options INTERFACE
+        -Wall -Wextra -Wpedantic -Werror -Wno-missing-field-initializers)
 endif()
 
 if(WS_SANITIZE AND MSVC)

@@ -579,7 +579,37 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — where it stands on 2026-08-14, and what the last session could not do
+#### START HERE — 2026-08-15: the tree builds off Windows, and R11d's step is refuted by its price
+
+**Read these two first; everything below them was written when neither was known.**
+
+**The game builds and runs headless on Linux (D648).** The line further down saying it *"does not
+build at all off Windows"* was wrong, and it had shaped what three sessions attempted. Three GCC
+diagnostics were all it needed — two report helpers with no caller off Windows, one function dead
+since D638 that MSVC cannot see, one enum in a conditional — plus
+`-Wno-missing-field-initializers` for GCC only, which is 316 hits on Vulkan structs written as
+designated initialisers and not one of them a fault. `ws_tests` runs (**543 of 545**, the two
+recycle-bin ones fail by design), and so does the whole of `run_clip_tool`: **the facility samples at
+metre 8 in 9.6 s on a four-core container**. There is still no card, so nothing about frames, faces
+or speckle can be touched — but the forge, the field, the sampler and the clip ladder's arithmetic
+are all measurable anywhere now.
+
+**R11d's next step was measured and it does not pay (D649).** D647 said the ladder could carry the
+stipple verdict for the price of one argument. `--stipple-tiled` tiles a clip into the node boxes the
+ladder samples and counts them three ways against a whole-clip reference:
+
+| arm | verdict against the whole clip | what a node costs to sample |
+|---|---|---|
+| bare — what ships today | 50 DIFFER, 35 never seen | 3.31 ms |
+| inner — free, the node's own sample counted one voxel in | **2 DIFFER: −455 −554**, both dithers | 3.31 ms |
+| **skirted — a box one voxel larger** | **0 DIFFER, and the counts are EXACT: 81 of 81 materials, surface and specks off by zero** | **6.69 ms (2.02×)** |
+
+So the method is proved at the ladder's own geometry and the price is the sampler: doubling the
+ladder's **6,322 ms** to remove the **2,754 ms** bar is three and a half seconds the wrong way, paid
+on the nodes a player is waiting for. **The route that survives is the one D628 named and nobody has
+built: read the skirt out of the WORLD after the paste**, where the neighbours cost a memory read
+rather than a field evaluation. Its cost is the one number D649 could not take, because the ladder
+only runs inside the game.
 
 **R5b, noise and speckle, is what the user asked for next and nothing has been built for it.** Its
 numbers are already taken and are three blocks down, under *ASKED FOR NEXT*. Its first step is
@@ -615,15 +645,18 @@ finished with almost no code — the histogram it asked for first says there is 
 the union hierarchy that was supposed to be its other half turned out to cost a fifth of the sample
 and reject nothing, so it is off. **Step 3, R12, is the next of the three with work in it.**
 
-**A session ran on a machine with no card in it, and that shaped what got done.** The forge, the
-tests and the tools build and run headless; the game does not build at all off Windows and there is
-no Vulkan. So the sample timings above are real and the *load* they imply is a prediction, and
-nothing about the renderer — speckle, faces, frames — could be touched at all. **If you are on such
-a machine, R5b is not startable and step 2's kind of work is.** `build.bat` needs Windows; a
-headless configure for the tests alone is
-`cmake -S . -B build -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_UNIX_CONSOLE_BUILD=ON` with
-`libvulkan-dev` and `glslc` present, and two of the 540 tests fail there by design — the recycle bin
-is a Windows shell call and `send_to_recycle_bin` returns false everywhere else.
+**On a machine with no card — corrected 2026-08-15 by D648, and the correction is the useful part.**
+The whole tree builds there, game included: `cmake -S . -B build -G Ninja
+-DCMAKE_BUILD_TYPE=RelWithDebInfo -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_UNIX_CONSOLE_BUILD=ON`,
+with `libvulkan-dev` and `glslc` present (`apt-get install libvulkan-dev glslc`), then
+`cmake --build build`. `build.bat` still needs Windows. Two of the 545 tests fail by design — the
+recycle bin is a Windows shell call and `send_to_recycle_bin` returns false everywhere else.
+
+What runs there is everything `run_clip_tool` reaches — `--clip-file`, `--sample-cost`,
+`--stipple-tiled` — so the sampler, the field, the mirror and the ladder's arithmetic are all
+measurable. What does NOT run is the renderer: there is no card, the windowed path has never been
+started here, and **R5b is still not startable off Windows.** A load figure taken this way is a
+prediction and says so.
 
 #### CLEARED FIRST: the ladder now stands down (D627)
 
@@ -654,13 +687,16 @@ eight metres. Five gates were run and it passes all five.
 
 **Three things keep it opt-in, and none of them is the ladder.**
 
-1. **The loading bar does NOT go with this flag — and this is the one D642 has now cleared.** The
-   up-front *sample* still runs, 2,760 ms of it, and was said to be unavoidable "until the stipple
-   verdict has another source". **It has one**: route 1b's world verdict, already built and wired,
-   at a measured cost of 154 voxels in 3.8 M (D642). So the sample can go, and with it the bar. Not pasting saves 959 ms and removes the
-   blocky first pass. **D629 and D630 are why the verdict cannot move**, and D630's option 2 is built
-   behind `--stipple-from-world` and measured at **+19 s and a verdict that protects nothing from a
-   real camera**.
+1. **The loading bar does NOT go with this flag, and after D647 and D649 the reason is precise.** The
+   up-front *sample* still runs, 2,760 ms of it. The condition that skips it is built and needs two
+   flags to be false (D647); the only other verdict source wired today is `--stipple-from-world`,
+   which is D630's option 2 at **+19 s and a verdict that protects nothing from a real camera**.
+   D642 cleared the ARGUMENT — the coarse verdict protects four materials that have nothing to
+   protect at authored detail — and **D649 measured the two obvious ways to source it incrementally
+   and refused both**: the free one repaints two dithers, the exact one doubles what a node costs to
+   sample. What is left to build is the skirt read from the WORLD after the paste. Not pasting saves
+   959 ms and removes the blocky first pass on its own. **D629 and D630 are why the verdict cannot
+   move.**
 2. **The far chisel is unmeasured** — sixty metres into a surface never approached, where the
    proximity radius has to hold *sampling* rather than *residency* (R2c, D199). That is R11h's
    remaining half.
@@ -3692,6 +3728,23 @@ is not a test.**
 .\tools\_flybench.ps1 -Rounds 3      # the MOVING case, which the grid cannot see (D410)
 .\tools\_flybench.ps1 -Chisel 8,16   # ...and the WORST case: moving while editing (D413)
 ```
+
+**And the card-free ones, which run anywhere the tree builds — including Linux, since D648.** None
+of these opens a window or touches Vulkan:
+
+```powershell
+WorldShaper --clip-file clips\facility.clip --clip-metre 8    # sample it and say what it is
+WorldShaper --sample-cost                                     # what ONE node costs, per level (R11a)
+WorldShaper --stipple-tiled                                   # can the ladder carry the verdict? (D649)
+WorldShaper --stipple-tiled --stipple-level 3 --clip-bounds "-4,0,-8,0,4,-4"   # ...at authored detail
+WorldShaper --ticks 20000                                     # the headless world audit
+```
+
+`--stipple-tiled` exits non-zero if the skirted sum stops reproducing the whole-clip count, so it is
+a gate and not only a report. It takes a whole-clip reference of its own, so the level it is given
+sets the resolution too — level 5 is the metre 8 the shipped verdict is taken at, level 3 the
+authored metre 32, and at level 3 the whole facility will not fit, which is what `--clip-bounds` is
+for.
 
 **The two arms of an A/B on the light pass are two flags, never two builds** (D407, and now D420
 for what happens when the harness itself gets it wrong):

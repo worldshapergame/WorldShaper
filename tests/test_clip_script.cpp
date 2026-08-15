@@ -645,3 +645,120 @@ TEST_CASE("despeckle repaints a lone voxel and leaves a deliberate stipple alone
     const DespeckleReport again = despeckle(clip);
     CHECK(again.repainted == 0);
 }
+
+// D649, and it is the arithmetic half of R11d's blocker: can a verdict taken box by box be the
+// verdict taken over the whole thing?
+//
+// The ladder samples one node at a time and the stipple verdict is a ratio per material over the
+// WHOLE building, so R11d's question is whether the per-box counts sum to the whole-box counts.
+// D628 measured that they do not: `paint_specks` reads outside the box it is given as air, so every
+// voxel on a box's own face is counted as surface and as a speck, and 296 of a node's 512 cells are
+// its own face. `stipple_counts(clip, margin)` is the repair -- count only the interior and let the
+// neighbours come out of a shell -- and this is the claim it has to hold up:
+//
+//   the interiors tile the region exactly once, so the sum over them is the same population the
+//   whole region would count, voxel for voxel.
+//
+// Asserted here with no sampler in the way, because the claim is about counting and not about
+// fields; `--stipple-tiled` is the same question asked of the facility, where the boxes come from
+// the sampler and the answer cost 2.02x to obtain (D649).
+TEST_CASE("counts summed over boxes with a one-voxel skirt are the whole region's counts") {
+    constexpr i32 kEdge = 32;
+    constexpr i32 kTile = 8;
+    const VoxelTypeId stone = 21;
+    const VoxelTypeId moss = 23;
+    const VoxelTypeId bronze = 24;
+
+    Clip whole;
+    whole.size[0] = whole.size[1] = whole.size[2] = kEdge;
+    whole.voxels.assign(static_cast<usize>(kEdge) * kEdge * kEdge, kAir);
+    whole.inside.assign(whole.voxels.size(), 1);
+
+    // A slab with a top face, a dither over that face, and a one-voxel rib standing on it. The rib
+    // is the case that matters: a material whose every voxel is on some box's face is the one a
+    // naive sum invents specks for and a shrunken population loses altogether.
+    for (i32 z = 0; z < kEdge; ++z) {
+        for (i32 x = 0; x < kEdge; ++x) {
+            for (i32 y = 8; y < 13; ++y) whole.voxels[whole.index(x, y, z)] = stone;
+        }
+    }
+    for (i32 z = 1; z < kEdge; z += 2) {
+        for (i32 x = 1; x < kEdge; x += 2) whole.voxels[whole.index(x, 12, z)] = moss;
+    }
+    for (i32 z = 0; z < kEdge; ++z) whole.voxels[whole.index(16, 13, z)] = bronze;
+    whole.build_coarse();
+
+    // The reference: the same cells the interior boxes hold, counted in one pass. A margin of one
+    // tile is exactly "everything but the outer shell of boxes".
+    const StippleCounts reference = stipple_counts(whole, kTile);
+    REQUIRE(reference.any());
+
+    // Every interior box, copied out with a one-voxel skirt, counted one voxel in.
+    const auto box_at = [&](i32 tx, i32 ty, i32 tz, i32 skirt) {
+        const i32 edge = kTile + 2 * skirt;
+        Clip out;
+        out.size[0] = out.size[1] = out.size[2] = edge;
+        out.voxels.assign(static_cast<usize>(edge) * edge * edge, kAir);
+        out.inside.assign(out.voxels.size(), 1);
+        for (i32 z = 0; z < edge; ++z) {
+            for (i32 y = 0; y < edge; ++y) {
+                for (i32 x = 0; x < edge; ++x) {
+                    out.voxels[out.index(x, y, z)] = whole.at(tx * kTile - skirt + x,
+                                                              ty * kTile - skirt + y,
+                                                              tz * kTile - skirt + z);
+                }
+            }
+        }
+        out.build_coarse();
+        return out;
+    };
+
+    StippleCounts skirted;
+    StippleCounts bare;
+    for (i32 tz = 1; tz + 1 < kEdge / kTile; ++tz) {
+        for (i32 ty = 1; ty + 1 < kEdge / kTile; ++ty) {
+            for (i32 tx = 1; tx + 1 < kEdge / kTile; ++tx) {
+                skirted.add(stipple_counts(box_at(tx, ty, tz, 1), 1));
+                bare.add(stipple_counts(box_at(tx, ty, tz, 0), 0));
+            }
+        }
+    }
+
+    // Exact, material for material, both counts. "Close" is not an answer to whether a sum is a
+    // sum: the verdict is a ratio with a floor on the numerator, so a few voxels either way can
+    // move which materials are spared.
+    CHECK(skirted.by_type.size() == reference.by_type.size());
+    for (const auto& [type, want] : reference.by_type) {
+        const auto found = skirted.by_type.find(type);
+        REQUIRE(found != skirted.by_type.end());
+        CHECK(found->second.surface == want.surface);
+        CHECK(found->second.specks == want.specks);
+    }
+
+    // And the same verdict, which is the thing that reaches the world.
+    const StippleVerdict from_whole = stipple_verdict(reference, 0.05);
+    const StippleVerdict from_boxes = stipple_verdict(skirted, 0.05);
+    CHECK(from_whole.allowed.size() == from_boxes.allowed.size());
+    for (const auto& [type, may] : from_whole.allowed) {
+        const auto found = from_boxes.allowed.find(type);
+        REQUIRE(found != from_boxes.allowed.end());
+        CHECK(found->second == may);
+    }
+    // The dither survives both readings, which is what the whole pass exists for.
+    CHECK_FALSE(from_whole.allowed.at(moss));
+    CHECK_FALSE(from_boxes.allowed.at(moss));
+
+    // The control, and it must stay broken. Summing the boxes with no skirt is what the ladder
+    // does today, and D628 refuted it: the invented air on every box face turns interior voxels
+    // into surface and lone voxels into specks. If this ever starts agreeing, the margin path has
+    // stopped doing anything and the test above has stopped testing it.
+    bool bare_agrees = bare.by_type.size() == reference.by_type.size();
+    for (const auto& [type, want] : reference.by_type) {
+        const auto found = bare.by_type.find(type);
+        if (found == bare.by_type.end() || found->second.surface != want.surface ||
+            found->second.specks != want.specks) {
+            bare_agrees = false;
+        }
+    }
+    CHECK_FALSE(bare_agrees);
+}

@@ -63,7 +63,12 @@ void emit(const char* fmt, ...) {
     }
 }
 
-void emit_context_lines() {
+// `maybe_unused` on both of these, and it is not decoration: the only caller of either is
+// `build_report`, which lives inside `#if defined(_WIN32)` further down. Off Windows they compile
+// and nothing calls them, and this repository builds with warnings as errors -- so without the
+// attribute `-Wunused-function` stops the build before a single test has been compiled. That is
+// the whole reason the headless configure the handover documents did not actually work.
+[[maybe_unused]] void emit_context_lines() {
     const int count = g_context_count.load(std::memory_order_acquire);
     if (count <= 0) return;
     emit("\nContext\n");
@@ -72,7 +77,7 @@ void emit_context_lines() {
     }
 }
 
-void emit_recent_log() {
+[[maybe_unused]] void emit_recent_log() {
     emit("\nLast log lines\n");
     // Reuse the tail of the report buffer as scratch, then append. Nothing else is running.
     static char tail[128 * 1024];

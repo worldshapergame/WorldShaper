@@ -7369,3 +7369,124 @@ once and the sum is the same population a whole-clip count would see. The gate i
 settle line reading **0 DIFFER** against the whole-clip verdict on the facility. If that holds, the
 verdict comes from the ladder for free, the up-front sample skips itself through the condition D647
 already added, and the loading bar goes without D630's 19 s.
+
+## D648 — the game builds off Windows, and three diagnostics were all that stood in the way
+
+The handover has said since D643 that *"the game does not build at all off Windows"*, and every
+session run on a machine without a card has taken that as the boundary of what it could do. It is
+wrong, and the correction is worth more than the three lines it took: **the whole tree — game,
+tests, tools — compiles and links with GCC on Linux**, and the headless clip tool runs there.
+
+Three diagnostics, and MSVC does not raise any of them:
+
+- **`crash.cpp`: two report helpers with no caller off Windows.** `emit_context_lines` and
+  `emit_recent_log` are called only from `build_report`, which lives inside `#if defined(_WIN32)`.
+  GCC's `-Wunused-function` is an error here. Marked `[[maybe_unused]]` rather than moved inside
+  the guard, because everything they call would then be unused in turn.
+- **`field.cpp`: `distance_to` had been dead since D638** and nobody could see it. D638 moved the
+  last caller to `squared_distance_to`; MSVC does not diagnose an unused function in an anonymous
+  namespace and GCC does, so a dead function survived four sessions of work on that file because
+  only one compiler had ever read it. Deleted.
+- **`node_pool.cpp`: an enum and a `u8` in one conditional**, which `-Wextra` calls out. Cast.
+- **And 316 of one warning that is not a fault**: `-Wmissing-field-initializers` fires on every
+  Vulkan struct in `src/gpu` written as a C++20 designated initialiser, where the standard already
+  says the unnamed members are value-initialised. Turned off for non-MSVC only; the compiler the
+  release is built by keeps `/W4 /WX` exactly as it was.
+
+**What it buys, precisely.** `ws_tests` runs: **543 of 545 pass** (544 before D649 added its own),
+and the two that fail are the two the handover already names — the recycle bin is a Windows shell call. `--clip-file`,
+`--sample-cost` and everything else `run_clip_tool` reaches now run on Linux: the facility samples
+at metre 8 in **9.6 s** on a four-core container. So sampling, the field, the forge, the world and
+the clip ladder's arithmetic are all measurable on a machine with no card.
+
+**What it does not buy, and this has not moved.** There is no GPU, so nothing about frames, faces,
+speckle or the renderer can be measured, and the windowed path has never been *run* here — it
+links, which is not the same claim. R5b is still not startable off Windows.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D648 | **The tree builds off Windows** | finding | Three diagnostics, none of them a fault MSVC could see |
+| D648 | **`distance_to` had been dead since D638** | finding | An unused function in an anonymous namespace is invisible to MSVC |
+| D648 | **`-Wmissing-field-initializers` off for GCC only** | decision | 316 hits, all on designated initialisers the standard already zero-fills |
+| D648 | **The headless clip tool is a card-free instrument** | plan | The facility at metre 8 in 9.6 s, so R11's arithmetic can be measured anywhere |
+| D648 | **The renderer is still not measurable off Windows** | honesty | It links; it has never been run here, and there is no card to run it on |
+
+## D649 — the ladder CAN carry the verdict, exactly; and the skirt it needs doubles the sampling
+
+D647 ended by naming the next step as *"one argument, not a new pass"*: give the ladder's per-node
+`stipple_counts` call the margin `stipple_counts(clip, margin)` already takes, and the sum becomes
+the whole-clip verdict for free. **Half of that is now measured and true, and the half that decides
+it is false.**
+
+`--stipple-tiled` is the instrument. It tiles a clip into the node boxes the ladder actually samples
+— `node_sample_settings` over every `NodeKey` at a level — and takes the same counts three ways
+against ONE whole-clip reference of its own:
+
+- **bare**, `stipple_counts(clip)` with no margin, which is what `main.cpp` does today;
+- **inner**, `stipple_counts(clip, 1)` over the node's OWN sample — free, because the sample already
+  exists, and it gives up the node's face: 296 of its 512 cells;
+- **skirted**, a box one voxel larger all round, counted with margin 1 — D629's method at the
+  ladder's own geometry, and the only one that costs another sample.
+
+The gate is taken over the INTERIOR tiles only, against `stipple_counts(whole, kNodeVoxels)` — the
+same cells counted in one pass. The outer shell of the box is not comparable and is excluded rather
+than fudged: a whole-clip count reads outside its box as air and a skirted tile on the edge reads
+the field, which carries on past the bounds.
+
+### The facility, at metre 8, tiles of level-5 nodes — the resolution the shipped verdict is at
+
+| arm | counts, material for material | verdict, against the whole clip |
+|---|---|---|
+| bare (what ships) | 81 of 81 differ; surface −319,987, specks +1,419 | **50 DIFFER**, 35 of them never seen at all |
+| inner (free) | 81 of 81 differ; surface −188,176, specks −1,015 | **2 DIFFER: −455 −554** |
+| **skirted** | **81 of 81 exact; surface +0, specks +0** | **0 DIFFER** |
+
+**The skirted sum is not close, it is identical** — every material's surface and speck totals to the
+voxel — and the verdict it produces is the shipped one, `27 358 392 455 509 554`, material for
+material. D629 proved the method on a chunk tiling of the world; this proves it on the boxes the
+ladder samples, which is what R11d needs.
+
+**And the free arm misses by exactly two, both of them dithers.** −455 and −554 are two of the six
+weathering coats the verdict exists to protect, and they are REPAINTED, not merely unseen (the
+instrument now separates those: `?` is a material the sum never saw, `-` is one it judged and got
+wrong). One quarter of D628's damage is still D628's failure.
+
+### What it costs, and this is what refutes the step as written
+
+| | per interior solid tile | over 6,228 tiles |
+|---|---|---|
+| bare sample | 3.31 ms | 20,641 core-ms |
+| **skirted sample** | **6.69 ms** | **41,678 core-ms** |
+
+**2.02×**, repeated three times, and **2.13×** at the authored metre 32 on a four-metre slice
+(3.79 → 8.10 ms a node, with the same exact-agreement result: 22 of 22 materials, 0 DIFFER). A node
+is eight voxels a side and a skirted node is ten, which is 1.95× the cells — so the sampler's cost
+here tracks cells almost exactly, and there is no fixed overhead to hide the skirt in.
+
+The facility's ladder spends **6,322 ms** sampling on a cold load (D622). Doubling that is **+6.3 s**
+to remove the **2,754 ms** up-front sample — a net loss of three and a half seconds, and the loss
+lands on the nodes the player is waiting for rather than on a bar before the world appears.
+
+### So the route that survives is the one D628 named and nobody has built
+
+**Read the skirt out of the WORLD after the paste, instead of sampling it.** The neighbours across a
+node's face are unknown only while the node is alone; once it is pasted they are in `World` and cost
+a memory read rather than a field evaluation. D628 wrote that down as *"the only candidate left
+standing"* and D629 built it at CHUNK granularity for the fixed-point verdict, where it works and is
+the 19 s of D630 only because it re-captures everything at the end. Per node, incrementally, it is
+the same walk over cells the ladder has just written.
+
+Two things to know before building it, both from D628: the world at that moment holds a mixture of
+resolutions, so a node's neighbours may be coarser than it is; and the count has to be taken at
+paste time on the main thread, which is where the cost would land. Neither is measurable off
+Windows — the ladder only runs inside the game — so the number this entry could not take is what
+that read costs.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D649 | **A skirted per-node sum IS the whole-clip count** | finding | 81 of 81 materials exact, surface and specks both off by zero, 0 DIFFER |
+| D649 | **The skirt costs 2.02× to sample** | finding | 3.31 → 6.69 ms a node, and 2.13× at the authored resolution |
+| D649 | **D647's step is refuted by cost** | decision | +6.3 s of ladder to remove 2.75 s of bar, on the nodes a player waits for |
+| D649 | **The free version repaints two dithers** | finding | −455 and −554, judged and got wrong, not merely unseen |
+| D649 | **A material the counts never SEE is a third outcome** | method | Absent from the verdict means despeckled by default; it had been printed as if it were a wrong judgement |
+| D649 | **The surviving route is the skirt read from the WORLD** | plan | D628 named it; per node at paste time, and its cost is the one number this could not take |

@@ -1259,8 +1259,8 @@ const NodeUploadBatch& NodePool::update(const World& world, const f64 camera_vox
     for (usize asked = 0; asked < requested_.size(); ++asked) {
         const NodeKey& key = requested_[asked];
         if (!seen_requests_.insert(key).second) continue;
-        const u8 source =
-            (asked < requested_source_.size()) ? requested_source_[asked] : kRequestRay;
+        const u8 source = (asked < requested_source_.size()) ? requested_source_[asked]
+                                                             : static_cast<u8>(kRequestRay);
 
         // Instrument: is this a node this pool threw away a moment ago?
         //

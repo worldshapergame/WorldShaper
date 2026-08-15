@@ -300,6 +300,16 @@ struct Options {
     // measure it: two flags of one build rather than two builds (D407).
     bool sample_cost_replan = false;
 
+    // Whether the ladder could carry the stipple verdict, and what the skirt it needs costs.
+    //
+    // R11d's blocker, and the reason it is a flag rather than a test: the answer is a property of
+    // a real building at a real resolution -- D628's summed nodes agree perfectly on
+    // `clips/sampler.clip` and destroy two of the facility's six dithers. `stipple_level` is the
+    // node level the tiles are taken at and it sets the resolution too: 5 is eight voxels a metre,
+    // which is what the shipped verdict is taken at, and 3 is the authored thirty-two.
+    bool stipple_tiled = false;
+    u64 stipple_level = 5;
+
     // Deliberately crash, to prove reporting works on this machine before it is needed.
     // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
     std::string crash_test;
@@ -621,7 +631,7 @@ struct Options {
                !orbit.empty() || !cuts.empty() || chisel_every > 0 || ticks > 0 ||
                !crash_test.empty() || benchmark || !edit.empty() ||
                !preview.empty() || !clip.empty() || !clip_file.empty() || sample_cost ||
-               max_seconds > 0.0;
+               stipple_tiled || max_seconds > 0.0;
     }
 
     // Air that is not empty: --fog "extinction,albedo,g,scale-height,base".
@@ -763,6 +773,10 @@ Options parse_options(int argc, char** argv) {
             if (i + 1 < argc) options.sample_cost_csv = argv[++i];
         } else if (arg == "--sample-cost-replan") {
             options.sample_cost_replan = true;
+        } else if (arg == "--stipple-tiled") {
+            options.stipple_tiled = true;
+        } else if (arg == "--stipple-level") {
+            options.stipple_level = next_number(5);
         } else if (arg == "--refine-all") {
             options.refine_all = true;
         } else if (arg == "--clip-at") {
@@ -1102,6 +1116,13 @@ void print_help() {
         "  --sample-cost-nodes N  nodes with matter timed per reference box (24)\n"
         "  --sample-cost-boxes N  reference boxes when the whole clip will not fit at once (3)\n"
         "  --sample-cost-csv F   write a row per level for documentation/baselines/\n"
+        "  --stipple-tiled       whether the ladder could carry the stipple verdict: the same\n"
+        "                        counts summed over node-sized tiles, with and without the\n"
+        "                        one-voxel skirt, against one whole-clip reference. Headless.\n"
+        "                        R11d's blocker; exits non-zero if the skirted sum disagrees\n"
+        "  --stipple-level N     the node level the tiles are taken at, which sets the\n"
+        "                        resolution too: 5 is eight voxels a metre (default, and what\n"
+        "                        the shipped verdict is taken at), 3 is the authored thirty-two\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
@@ -9865,6 +9886,332 @@ int run_sample_cost(const Options& options, const forge::Script& script, JobSyst
     return (disagreed == 0) ? 0 : 1;
 }
 
+// Can the ladder carry the stipple verdict? R11d's blocker, asked of the arithmetic.
+//
+// # What this is for
+//
+// The up-front coarse build is 3.7 s of a 17.1 s load and the loading bar is the visible half of
+// it. R11d deletes it, and the ONE thing only that build produces is the stipple verdict: which
+// materials are a deliberate weathering dither and must never be despeckled (`forge::
+// StippleVerdict`). D647 named the way out -- let the ladder accumulate the counts as it sharpens
+// -- and D628 is why it is not obvious: summing the ladder's per-node counts as they stand moved
+// the verdict on 11 of the facility's 35 materials and destroyed two of its six dithers, because
+// `paint_specks` reads outside the box it is given as AIR and 296 of a node's 512 cells are on its
+// own face.
+//
+// The repair D629 built for the world tiling is a one-voxel SKIRT: sample a box one voxel larger
+// all round, count only the interior, and let the neighbours come out of the shell. Then the
+// interiors tile the region exactly once and the sum is the same population a whole-clip count
+// would see, voxel for voxel. Whether that is TRUE of the ladder's node boxes -- and what the
+// skirt costs to sample -- are two numbers, and this is the instrument that takes them.
+//
+// # Why it is a tiling of NODES and not of anything else
+//
+// A ladder job is `node_sample_settings` over one `NodeKey`, so the tiles here are exactly that:
+// every node at `level` covering the clip's box, sampled the way the ladder samples one. What is
+// compared is per-material `surface` and `specks`, not the verdict alone -- D625's lesson is that
+// a verdict agreeing on how many materials it saw can still disagree about which, and counts that
+// agree exactly leave nothing for a threshold to hide in.
+//
+// # The two things the comparison has to be honest about
+//
+// **The outer shell of the box is not comparable and is left out of the gate.** The whole-clip
+// count reads outside its own box as air; a skirted tile on the box's edge reads the field, which
+// carries on past the bounds -- the facility's ground plane runs to the horizon. So the gate is
+// taken over the INTERIOR tiles, and the reference for it is `stipple_counts(whole, kNodeVoxels)`
+// -- the same walk over the same cells, one tile's thickness in from every face. The whole-box
+// figures are printed beside it rather than hidden.
+//
+// **A tile with no matter in it is not sampled.** It cannot contribute a surface voxel or a speck
+// however it is counted, and which tiles those are is known exactly from the reference clip. That
+// is an affordance of this instrument and NOT what the ladder does -- the ladder pays for a node
+// before it knows what is in it -- so the per-tile cost below is a cost per SOLID tile and says so.
+int run_stipple_tiled(const Options& options, const forge::Script& script, JobSystem& jobs) {
+    const u32 level = static_cast<u32>(std::clamp<u64>(options.stipple_level,
+                                                       static_cast<u64>(kLeafLevel),
+                                                       forge::kCoarsestSampledLevel));
+    const i32 per = forge::node_voxels_per_metre(level);
+    // The resolution is the level's, not the file's and not `--clip-metre`'s. A node at level 5
+    // is eight voxels a side over one metre, and a reference sampled at any other resolution is a
+    // different question -- D629: the verdict is a property of the resolution it is asked at.
+    const f64 node_m = static_cast<f64>(forge::kNodeVoxels) / static_cast<f64>(per);
+
+    forge::SampleSettings whole = script.settings;
+    whole.voxels_per_metre = per;
+    // Out to node boundaries, so the tiles cover the box exactly rather than nearly. Both arms see
+    // the same enlarged box, so nothing is being compared across two different volumes.
+    const auto down = [&](f64 v) { return std::floor(v / node_m) * node_m; };
+    const auto up = [&](f64 v) { return std::ceil(v / node_m) * node_m; };
+    whole.low = {down(script.settings.low.x), down(script.settings.low.y),
+                 down(script.settings.low.z)};
+    whole.high = {up(script.settings.high.x), up(script.settings.high.y),
+                  up(script.settings.high.z)};
+
+    std::printf("stipple tiled %s at %d voxels a metre, tiles are level-%u nodes (%.4f m, %d "
+                "voxels a side)\n",
+                options.clip_file.empty() ? default_clip_path().c_str()
+                                          : options.clip_file.c_str(),
+                per, level, node_m, forge::kNodeVoxels);
+
+    const forge::SamplePlan plan = forge::plan_sample(script.field, script.solid, script.paint);
+
+    const u64 whole_began = now_ns();
+    const forge::SampleResult reference = forge::sample(plan, whole, &jobs);
+    const f64 whole_ms = ns_to_ms(now_ns() - whole_began);
+    if (reference.clip.empty()) {
+        std::printf("the reference sample is empty; there is nothing to compare\n");
+        return 1;
+    }
+    const i32 tiles_x = reference.clip.size[0] / forge::kNodeVoxels;
+    const i32 tiles_y = reference.clip.size[1] / forge::kNodeVoxels;
+    const i32 tiles_z = reference.clip.size[2] / forge::kNodeVoxels;
+    if (tiles_x * forge::kNodeVoxels != reference.clip.size[0] ||
+        tiles_y * forge::kNodeVoxels != reference.clip.size[1] ||
+        tiles_z * forge::kNodeVoxels != reference.clip.size[2] || tiles_x < 3 || tiles_y < 3 ||
+        tiles_z < 3) {
+        std::printf("the reference box is %d x %d x %d voxels, which is not a whole number of "
+                    "tiles at least three across; nothing can be compared\n",
+                    reference.clip.size[0], reference.clip.size[1], reference.clip.size[2]);
+        return 1;
+    }
+    std::printf("reference     %d x %d x %d voxels in %.0f ms, %d x %d x %d tiles\n",
+                reference.clip.size[0], reference.clip.size[1], reference.clip.size[2], whole_ms,
+                tiles_x, tiles_y, tiles_z);
+
+    const forge::StippleCounts whole_all = forge::stipple_counts(reference.clip, 0);
+    // The gate's reference: the same cells the interior tiles hold, counted in one pass with real
+    // neighbours. `kNodeVoxels` is one tile's thickness, so this is exactly "everything but the
+    // outer shell of tiles".
+    const forge::StippleCounts whole_core =
+        forge::stipple_counts(reference.clip, forge::kNodeVoxels);
+
+    // Which tiles hold matter, and which of those are interior. A tile's own cells, read straight
+    // out of the reference, so no extra sampling is done to find out.
+    struct Tile {
+        NodeKey key;
+        bool interior = false;
+    };
+    std::vector<Tile> tiles;
+    const i64 base_node[3] = {reference.origin_voxel[0] / forge::kNodeVoxels,
+                              reference.origin_voxel[1] / forge::kNodeVoxels,
+                              reference.origin_voxel[2] / forge::kNodeVoxels};
+    u64 solid_interior = 0;
+    for (i32 tz = 0; tz < tiles_z; ++tz) {
+        for (i32 ty = 0; ty < tiles_y; ++ty) {
+            for (i32 tx = 0; tx < tiles_x; ++tx) {
+                bool any = false;
+                for (i32 z = 0; z < forge::kNodeVoxels && !any; ++z) {
+                    for (i32 y = 0; y < forge::kNodeVoxels && !any; ++y) {
+                        for (i32 x = 0; x < forge::kNodeVoxels && !any; ++x) {
+                            any = reference.clip.at(tx * forge::kNodeVoxels + x,
+                                                    ty * forge::kNodeVoxels + y,
+                                                    tz * forge::kNodeVoxels + z) != kAir;
+                        }
+                    }
+                }
+                if (!any) continue;
+                Tile tile;
+                tile.key = NodeKey{base_node[0] + tx, base_node[1] + ty, base_node[2] + tz, level};
+                tile.interior = tx > 0 && ty > 0 && tz > 0 && tx + 1 < tiles_x &&
+                                ty + 1 < tiles_y && tz + 1 < tiles_z;
+                if (tile.interior) ++solid_interior;
+                tiles.push_back(tile);
+            }
+        }
+    }
+    std::printf("tiles         %zu of %d hold matter, %llu of those are interior\n", tiles.size(),
+                tiles_x * tiles_y * tiles_z, static_cast<unsigned long long>(solid_interior));
+    if (solid_interior == 0) {
+        std::printf("no interior tile holds matter; there is nothing to compare\n");
+        return 1;
+    }
+
+    // Both arms, tile by tile, in one pass so the two see identical scheduling. `nullptr` inside,
+    // for R11a's reason: a node is eight voxels a side, and handing the same pool to concurrent
+    // samples is the collision D511-D514 is about. This is exactly how `refine_worker` runs.
+    std::vector<forge::StippleCounts> bare(tiles.size());
+    std::vector<forge::StippleCounts> inner(tiles.size());
+    std::vector<forge::StippleCounts> skirted(tiles.size());
+    std::vector<u64> bare_ns(tiles.size(), 0);
+    std::vector<u64> skirt_ns(tiles.size(), 0);
+    std::vector<u8> skirt_shaped(tiles.size(), 0);
+    const f64 voxel = 1.0 / static_cast<f64>(per);
+    const auto take = [&](usize begin, usize end) {
+        for (usize i = begin; i < end; ++i) {
+            const forge::SampleSettings one = forge::node_sample_settings(whole, tiles[i].key);
+            const u64 bare_began = now_ns();
+            const forge::SampleResult alone = forge::sample(plan, one, nullptr);
+            bare_ns[i] = now_ns() - bare_began;
+            bare[i] = forge::stipple_counts(alone.clip, 0);
+            // The third arm, and it costs nothing: the node's OWN sample, counted one voxel in.
+            // Every voxel it counts has six real neighbours because they are all inside the node,
+            // so there is no invented air anywhere -- what it gives up is the node's face, which is
+            // 296 of its 512 cells. The counts therefore CANNOT match; the question is whether the
+            // verdict does, because a verdict is a ratio and a ratio survives a smaller population
+            // as long as the population is not biased.
+            inner[i] = forge::stipple_counts(alone.clip, 1);
+
+            forge::SampleSettings around = one;
+            around.low = {one.low.x - voxel, one.low.y - voxel, one.low.z - voxel};
+            around.high = {one.high.x + voxel, one.high.y + voxel, one.high.z + voxel};
+            const u64 skirt_began = now_ns();
+            const forge::SampleResult wider = forge::sample(plan, around, nullptr);
+            skirt_ns[i] = now_ns() - skirt_began;
+            // A skirted box that did not come back exactly two voxels larger is not the node's
+            // own cells plus a shell, and counting it would compare two different populations.
+            const i32 want = forge::kNodeVoxels + 2;
+            if (wider.clip.size[0] == want && wider.clip.size[1] == want &&
+                wider.clip.size[2] == want) {
+                skirt_shaped[i] = 1;
+                skirted[i] = forge::stipple_counts(wider.clip, 1);
+            }
+        }
+    };
+    const u64 tiles_began = now_ns();
+    jobs.parallel_for(tiles.size(), 1, take);
+    const f64 tiles_ms = ns_to_ms(now_ns() - tiles_began);
+
+    forge::StippleCounts sum_bare;
+    forge::StippleCounts sum_inner;
+    forge::StippleCounts sum_skirted;
+    u64 bare_core_ns = 0;
+    u64 skirt_core_ns = 0;
+    usize misshapen = 0;
+    for (usize i = 0; i < tiles.size(); ++i) {
+        if (!skirt_shaped[i]) ++misshapen;
+        if (!tiles[i].interior) continue;
+        sum_bare.add(bare[i]);
+        sum_inner.add(inner[i]);
+        sum_skirted.add(skirted[i]);
+        bare_core_ns += bare_ns[i];
+        skirt_core_ns += skirt_ns[i];
+    }
+    if (misshapen > 0) {
+        std::printf("WARNING       %zu tiles came back the wrong size with a skirt and were left "
+                    "out of the skirted sum\n",
+                    misshapen);
+    }
+
+    // The counts, material for material. Exact equality is the claim; anything else is the size of
+    // the error and which way it goes, because "close" is not an answer to whether a sum is a sum.
+    const auto compare = [&](const char* what, const forge::StippleCounts& mine) {
+        u64 same = 0;
+        u64 differ = 0;
+        i64 surface_off = 0;
+        i64 specks_off = 0;
+        for (const auto& [type, want] : whole_core.by_type) {
+            const auto found = mine.by_type.find(type);
+            const forge::StippleCounts::Pair got =
+                (found == mine.by_type.end()) ? forge::StippleCounts::Pair{} : found->second;
+            if (got.surface == want.surface && got.specks == want.specks) {
+                ++same;
+                continue;
+            }
+            ++differ;
+            surface_off += static_cast<i64>(got.surface) - static_cast<i64>(want.surface);
+            specks_off += static_cast<i64>(got.specks) - static_cast<i64>(want.specks);
+        }
+        usize invented = 0;
+        for (const auto& [type, got] : mine.by_type) {
+            (void)got;
+            if (whole_core.by_type.find(type) == whole_core.by_type.end()) ++invented;
+        }
+        std::printf("%-13s %llu materials counted exactly, %llu differ, %llu the sum saw and the "
+                    "whole clip did not; surface off by %+lld, specks off by %+lld\n",
+                    what, static_cast<unsigned long long>(same),
+                    static_cast<unsigned long long>(differ),
+                    static_cast<unsigned long long>(invented), static_cast<long long>(surface_off),
+                    static_cast<long long>(specks_off));
+        return differ == 0 && invented == 0;
+    };
+
+    // And the verdict, which is the thing that actually reaches the world. Named materials, in the
+    // settle line's notation with one mark it does not have: `-` is the sum repainting a dither the
+    // whole clip spares, which is a weathering coat being cleaned away, `+` is the harmless
+    // direction, and `?` is a material the sum NEVER SAW. The third is not a rounding of the first
+    // and had to be split out of it -- a material whose every voxel lies on some node's face is
+    // absent from the counts rather than judged by them, and an absent verdict despeckles by
+    // default, so `?` on a dither does the same damage as `-` and for a different reason.
+    const forge::StippleVerdict verdict_core = forge::stipple_verdict(whole_core, 0.05);
+    const auto verdicts = [&](const char* what, const forge::StippleCounts& mine) {
+        const forge::StippleVerdict theirs = forge::stipple_verdict(mine, 0.05);
+        usize agree = 0;
+        usize differ = 0;
+        usize unseen = 0;
+        std::string wrong;
+        for (const auto& [type, may] : verdict_core.allowed) {
+            const auto found = theirs.allowed.find(type);
+            if (found != theirs.allowed.end() && found->second == may) {
+                ++agree;
+                continue;
+            }
+            ++differ;
+            if (!wrong.empty()) wrong += ' ';
+            if (found == theirs.allowed.end()) {
+                ++unseen;
+                wrong += '?';
+            } else {
+                wrong += found->second ? '-' : '+';
+            }
+            wrong += std::to_string(static_cast<u64>(type));
+        }
+        std::printf("%-13s %zu materials agree, %zu DIFFER of which %zu were never seen%s%s\n",
+                    what, agree, differ, unseen, wrong.empty() ? "; " : "; ", wrong.c_str());
+        return differ == 0;
+    };
+
+    usize spared = 0;
+    std::string dithers;
+    for (const auto& [type, may] : verdict_core.allowed) {
+        if (may) continue;
+        ++spared;
+        if (!dithers.empty()) dithers += ' ';
+        dithers += std::to_string(static_cast<u64>(type));
+    }
+    // The two counts are NOT two views of one number and the difference is a property of
+    // `stipple_counts` worth stating: with no margin it is `paint_specks` rebuilt, which lists only
+    // materials that have at least one speck, and recovers each surface total by dividing the count
+    // by the fraction. With a margin it walks the cells itself and lists every material that has a
+    // surface at all. Hence 35 against 81 on the facility, from the same voxels.
+    std::printf("whole clip    %zu materials have a speck over the whole box; %zu have a surface "
+                "over the interior; %zu kept as a deliberate dither: %s\n",
+                whole_all.by_type.size(), whole_core.by_type.size(), spared, dithers.c_str());
+
+    const bool counts_bare = compare("bare tiles", sum_bare);
+    const bool counts_inner = compare("inner cells", sum_inner);
+    const bool counts_skirt = compare("skirted", sum_skirted);
+    const bool verdict_bare = verdicts("bare verdict", sum_bare);
+    const bool verdict_inner = verdicts("inner verd", sum_inner);
+    const bool verdict_skirt = verdicts("skirted verd", sum_skirted);
+    (void)counts_inner;
+
+    // What the skirt costs, which is the other half of the decision. Core-milliseconds rather than
+    // wall clock: the tiles ran across every worker, and what a ladder pays is the work, not the
+    // wall.
+    const f64 bare_core_ms = ns_to_ms(bare_core_ns);
+    const f64 skirt_core_ms = ns_to_ms(skirt_core_ns);
+    std::printf("cost          whole clip %.0f ms; %llu interior solid tiles took %.0f core-ms "
+                "bare and %.0f skirted (%.2fx), %.3f and %.3f ms each; both arms %.0f ms of wall "
+                "clock\n",
+                whole_ms, static_cast<unsigned long long>(solid_interior), bare_core_ms,
+                skirt_core_ms,
+                (bare_core_ms > 0.0) ? skirt_core_ms / bare_core_ms : 0.0,
+                (solid_interior > 0) ? bare_core_ms / static_cast<f64>(solid_interior) : 0.0,
+                (solid_interior > 0) ? skirt_core_ms / static_cast<f64>(solid_interior) : 0.0,
+                tiles_ms);
+
+    // The gate is the skirted arm and nothing else. The bare arm is the control -- D628 measured
+    // it wrong once and a control that has stopped being wrong is a control that has stopped
+    // controlling anything.
+    const bool passed = counts_skirt && verdict_skirt;
+    std::printf("verdict       the skirted sum %s the whole-clip count over the interior; the "
+                "bare sum %s; the inner-cell sum, which costs nothing extra, %s the verdict\n",
+                passed ? "REPRODUCES" : "does NOT reproduce",
+                (counts_bare && verdict_bare) ? "does too" : "does not",
+                verdict_inner ? "REACHES" : "does not reach");
+    return passed ? 0 : 1;
+}
+
 }  // namespace
 
 // Build a clip from its file and say what it is, without opening a window.
@@ -9926,6 +10273,11 @@ int run_clip_tool(const Options& options) {
     // and paying for a whole-building sample at the authored resolution first would be minutes
     // spent measuring the thing this stage exists to stop doing.
     if (options.sample_cost) return run_sample_cost(options, script, jobs);
+
+    // R11d, and it returns for the same reason as the line above: what it measures is a tiling of
+    // node-sized samples against ONE whole-clip reference it takes itself, at the resolution the
+    // level implies rather than at the file's.
+    if (options.stipple_tiled) return run_stipple_tiled(options, script, jobs);
 
     const u64 parsed = now_ns();
     // Always counted here. This is the measuring tool; a build it measures should be able to say
@@ -10344,7 +10696,8 @@ int main(int argc, char** argv) {
         ws::print_help();
         return 0;
     }
-    if ((!options.clip_file.empty() || options.sample_cost) && options.screenshot.empty()) {
+    if ((!options.clip_file.empty() || options.sample_cost || options.stipple_tiled) &&
+        options.screenshot.empty()) {
         return ws::run_clip_tool(options);
     }
     // A modal dialog in an automated run is a hang, so scripted modes get the stderr line

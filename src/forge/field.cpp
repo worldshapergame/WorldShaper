@@ -49,19 +49,13 @@ f64 smooth_min(f64 a, f64 b, f64 k) {
 
 f64 smooth_max(f64 a, f64 b, f64 k) { return -smooth_min(-a, -b, k); }
 
-// How far a point is from a box, or zero inside it. A lower bound on the distance to anything
-// the box contains, which is exactly what a union needs to decide whether to look further.
-f64 distance_to(const Field::Aabb& box, Vec3 p) {
-    if (box.infinite()) return 0.0;
-    const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
-    const f64 dy = std::max(std::max(box.low.y - p.y, p.y - box.high.y), 0.0);
-    const f64 dz = std::max(std::max(box.low.z - p.z, p.z - box.high.z), 0.0);
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-// The same, squared, for the cull test — which compares against a distance it already has and so
-// never needs the root. One square root per child per evaluation is not much; a hundred million
-// evaluations with thirty children each is a hundred million square roots too many.
+// How far a point is from a box, SQUARED, for the cull test — which compares against a distance it
+// already has and so never needs the root. One square root per child per evaluation is not much; a
+// hundred million evaluations with thirty children each is a hundred million square roots too many.
+//
+// The un-squared form stood beside this one until D638 moved the last caller across, and then sat
+// here uncalled: MSVC does not diagnose an unused function in an anonymous namespace and GCC does,
+// which is why it survived to be found by the first build off Windows.
 f64 squared_distance_to(const Field::Aabb& box, Vec3 p) {
     if (box.infinite()) return 0.0;
     const f64 dx = std::max(std::max(box.low.x - p.x, p.x - box.high.x), 0.0);
