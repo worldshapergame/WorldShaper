@@ -609,12 +609,25 @@ and the gate is one flag: `--clip-file clips\glass_test.clip --cam 0,1.4,-3.0,90
 the full clip, half resolution, and the box cut down to the panes alone all die at frame 8 to 11, in
 BOTH arms, so it is the load and not the feature.
 
-**Which gives the boundary, and it is worth having before somebody spends an hour on it:** a world of
-about **0.4 M solid voxels survives past frame 120** — converged, which is what
-`clips/translucency_test.clip` is — and one of **2.9 M dies at frame 11**, which is
-`clips/glass_test.clip` however it is cut down. Whatever is left after D651's clamp scales with the
-world. So card-free pictures are available for a clip small enough, and the glass gate needs a card
-or a smaller scene written for it.
+**And the obvious explanation is refuted (D655).** A four-metre scene was written to fit the size
+that works — `clips/refraction_small.clip`, **313 k solid voxels against the 0.4 M that converges** —
+and it dies at frame 8 as well. So it is not the size; `--no-see-through` and moving the camera
+outside the scene were tested too, and neither is it. Both arms die identically, so it is not
+refraction. **Do not plan work around a size rule: `translucency_test.clip` renders here and, so
+far, nothing else does.**
+
+**`clips/refraction_small.clip` is R4d's gate and is worth two runs on the first machine with a
+card**: a wall of two colours meeting on a hard vertical edge, a clear pane over the LEFT half of it
+only so the same edge is seen through glass and past it in one frame, a green pane beside it, and a
+basin of water over a pale floor.
+
+```powershell
+WorldShaper --clip-file clips\refraction_small.clip --cam "-0.9,1.05,-1.9,64,0"
+WorldShaper --clip-file clips\refraction_small.clip --cam "-0.9,1.05,-1.9,64,0" --no-refraction
+```
+
+The edge should step sideways where the pane covers it and not where it does not; the green pane
+should deepen with the angle it is crossed at; the basin bottom should sit higher than it is.
 
 #### 2026-08-15, earlier: refraction is in and the frame-11 crash was ours
 

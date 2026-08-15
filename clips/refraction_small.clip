@@ -1,0 +1,69 @@
+# Glass and water, in a scene small enough to photograph without a graphics card.
+#
+# `clips/glass_test.clip` is the proper one and it cannot be reached from a machine with no card:
+# it is a twelve-metre room, and D654 measured where the software rasteriser gives up — about half
+# a million solid voxels, which is a scene of five metres and not of twelve. R4d's refraction
+# therefore shipped (D652) with its arithmetic tested and its picture owed, which is the wrong way
+# round for a change to what a player looks at.
+#
+# So: the same question in four metres. Everything here exists to make the ONE thing refraction does
+# measurable rather than merely visible — glass puts what is behind it somewhere else.
+#
+#   a wall of two colours meeting on a hard vertical edge, which is the thing that moves;
+#   a pane over the LEFT half of it only, so the same edge is seen through glass and past it in one
+#     frame, and the step between the two halves is the whole measurement;
+#   a green pane beside the clear one, because absorption over the true path is the other half of
+#     D652 and a slanted look through it should be deeper in colour than a square one;
+#   a basin of water with a pale floor under it, which is the case where the two interfaces do not
+#     cancel: the bottom should read as shallower than it is.
+#
+# The cameras, both of which fit inside what a software rasteriser can hold:
+#   --cam "-0.9,1.05,-1.9,64,0"    the panes, crossed at an angle so the shift is at its largest
+#   --cam "0,1.5,-1.9,90,-38"      down into the basin
+
+metre 32
+bounds -2.0 -0.4 -2.0   2.0 2.0 2.0
+
+material floorstone rgb=176,172,166 rough=210
+material redwall    rgb=170,58,50   rough=200
+material bluewall   rgb=48,74,160   rough=200
+material clearglass rgb=232,240,244 rough=14 opacity=26 ior=1.5
+material greenglass rgb=120,210,160 rough=14 opacity=52 ior=1.5 absorb=6,1,4
+material deepwater  rgb=90,150,180  rough=10 opacity=40 ior=1.33 absorb=5,2,1
+material palefloor  rgb=214,208,196 rough=200
+
+let rs_floor = box -2.0 -0.4 -2.0   2.0 0 2.0 round=0.02
+
+# The wall behind, in two colours meeting at x = 0. That edge is the ruler.
+let rs_backr = box -2.0 0 1.55  0    1.7 1.75
+let rs_backb = box  0    0 1.55  2.0  1.7 1.75
+
+# The pane, over the left half only. Twelve centimetres, which is the facility's own glazing, so
+# the offset here is the offset there.
+let rs_pane_c = box -1.7 0.25 0.40  -0.15 1.55 0.52
+# ...and a green one beside it, to carry the absorption half.
+let rs_pane_g = box  0.15 0.25 0.40   1.7 1.55 0.52
+
+# The basin: a kerb, hollowed, with a pale floor under the water so the bottom is easy to see.
+let rs_basin  = box -1.5 0    -1.7   1.5 0.42 -0.55 round=0.03
+let rs_hollow = box -1.35 0.10 -1.55  1.35 0.50 -0.70 round=0.02
+let rs_pan    = box -1.35 0.10 -1.55  1.35 0.16 -0.70
+
+let rs_solid = union { rs_floor rs_backr rs_backb rs_pane_c rs_pane_g rs_basin }
+let rs_all   = difference { rs_solid rs_hollow }
+let rs_all   = union { rs_all rs_pan }
+
+# The water itself, filling the hollow to within a few centimetres of the kerb. Thirty centimetres
+# deep, which is ten voxels: enough that the bend has somewhere to show.
+let rs_water = box -1.35 0.16 -1.55  1.35 0.38 -0.70
+let rs_all   = union { rs_all rs_water }
+
+paint floorstone
+paint redwall    where=rs_backr below=0.02
+paint bluewall   where=rs_backb below=0.02
+paint palefloor  where=rs_pan   below=0.02
+paint clearglass where=rs_pane_c below=0.02
+paint greenglass where=rs_pane_g below=0.02
+paint deepwater  where=rs_water below=0.02
+
+solid rs_all

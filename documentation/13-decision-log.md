@@ -7755,12 +7755,50 @@ The middle row is the useful one: **halving the resolution did not help**, so it
 translucency_test is a 5 m bench.
 
 **So the rule for a card-free session:** a picture is available for a scene about the size of
-`translucency_test.clip`, and R4d's glass gate is not, however it is cut. Somebody wanting that gate
-before they next have a card should write the scene for it — one pane, one post, four metres — rather
-than trying to shrink the one that exists, which has now failed four ways.
+`translucency_test.clip`, and R4d's glass gate is not, however it is cut.
+
+**That rule is wrong, and D655 is the correction — it is not the size.** A four-metre scene written
+to fit it dies at the same frame. Read D655 before planning any work around this.
 
 | # | Decision | Kind | Why |
 |---|---|---|---|
-| D654 | **Card-free pictures work up to about a five-metre scene** | finding | 0.4 M voxels converge past frame 120; 2.9 M dies at 11 |
-| D654 | **It is the world's EXTENT, not its voxel count** | finding | Half resolution on the same 12 m room died at the same frame |
-| D654 | **The glass gate needs a card or a new scene** | plan | Four ways of cutting `glass_test.clip` down all failed |
+| D654 | **Card-free pictures work up to about a five-metre scene** | ~~finding~~ | **Refuted by D655**: a four-metre scene dies too |
+| D654 | **It is the world's EXTENT, not its voxel count** | ~~finding~~ | **Refuted by D655** |
+| D654 | **The glass gate needs a card or a new scene** | plan | Four ways of cutting `glass_test.clip` down all failed; a new scene did not help either |
+
+## D655 — the refraction gate has a scene now, and D654's rule for why pictures work is refuted
+
+D654 said a card-free picture is available for a scene about the size of `translucency_test.clip`
+and concluded it was the world's extent. **So a scene was written to that size and it does not
+work**, which refutes the rule rather than confirming it.
+
+`clips/refraction_small.clip` is R4d's gate in four metres: a wall of two colours meeting on a hard
+vertical edge — the thing that moves — with a clear pane over the LEFT half of it only, so the same
+edge is seen through glass and past it in one frame; a green pane beside it for the absorption half;
+and a basin of water over a pale floor, which is the case where the two interfaces do not cancel.
+**313,448 solid voxels**, against `translucency_test.clip`'s 0.4 M — smaller than the scene that
+converges past frame 120.
+
+**It dies at frame 8**, and three hypotheses were tested and refuted in doing so:
+
+| hypothesis | test | result |
+|---|---|---|
+| it is the world's size | 313 k voxels against the 0.4 M that survives | **refuted** — dies at frame 8 |
+| it is the transmissive second march (R4d, D604) | `--no-see-through` | **refuted** — frame 8 |
+| it is geometry close to the camera | camera moved outside the box, nothing within 1.5 m | **refuted** — frame 8 |
+
+Both arms die identically, so it is not refraction and not any flag under test. What is left is
+something about this scene that one software rasteriser cannot survive, and bisecting a driver is
+not what this project is for.
+
+**What is kept: the scene.** It is the right gate on a real card — one flag, `--no-refraction`, one
+camera, and a straight edge whose displacement is the measurement rather than an impression. It is
+in the repository so that the first session with a card can take that picture in two runs instead of
+designing a scene first.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D655 | **D654's size rule is refuted** | correction | A smaller scene dies at the same frame |
+| D655 | **Not see-through and not near geometry either** | finding | Both tested; both arms die identically |
+| D655 | **`refraction_small.clip` is kept as the gate** | build | A hard vertical edge seen through glass and past it in one frame |
+| D655 | **Chasing the rasteriser further is refused** | decision | It is one driver, and the picture it is standing in for takes two runs on a card |
