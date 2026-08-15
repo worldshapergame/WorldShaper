@@ -438,6 +438,14 @@ struct Options {
     // room behind a window is lit through it. `--no-see-through` is the control arm and a window
     // blocks the sun exactly as a wall does, which is what this renderer has always done.
     bool see_through = true;
+    // R4d's other half: the primary ray BENDS where it crosses into glass or water and bends back
+    // where it leaves, and what it crossed absorbs over the true distance rather than per voxel.
+    // `--no-refraction` is the control arm and restores D604's straight ray exactly.
+    bool refraction = true;
+    // How much of the node pool's payload buffer to use, in megabytes. 0 takes the budget's own
+    // figure, clamped to what the driver will bind. There to make a small pool reachable without a
+    // rebuild -- the same reason `--face-budget` exists.
+    u64 node_payload_mb = 0;
     // R9f's fold: a coarse face's sky and bounce are the average of the four faces under it rather
     // than its own rays at its own scale.
     //
@@ -914,6 +922,12 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--no-see-through") {
             // R4d's control arm: transmissive matter stops a light ray dead, as it always has.
             options.see_through = false;
+        } else if (arg == "--no-refraction") {
+            // R4d's other control arm: the ray behind the glass carries straight on, which is
+            // what D604 built and what every figure before this was taken in.
+            options.refraction = false;
+        } else if (arg == "--node-payload") {
+            options.node_payload_mb = next_number(0);
         } else if (arg == "--lobe-coverage") {
             // R4b's second size class on. Off by default -- see the option for the measurement.
             options.lobe_coverage = true;
@@ -6849,7 +6863,8 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.face_lobe ? kProbeLobe : 0u) |
                               (options_.lobe_ray ? kProbeLobeRay : 0u) |
                               (options_.lobe_coverage ? kProbeLobeCoverage : 0u) |
-                              (options_.see_through ? kProbeSeeThrough : 0u);
+                              (options_.see_through ? kProbeSeeThrough : 0u) |
+                              (options_.refraction ? kProbeRefract : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),
@@ -7450,6 +7465,31 @@ int Application::play(const Options& options) {
     // path nobody notices has stopped compiling.
     {
         NodePoolBudget node_budget;
+        // What the DRIVER will let a storage buffer be bound over, which is not a formality.
+        //
+        // The payload is half a gigabyte and it is bound as one storage buffer. A desktop driver
+        // answers four gigabytes to `maxStorageBufferRange` and the question never comes up; a
+        // software one answers 128 MB, and binding past the limit is undefined behaviour -- which
+        // showed up as a segfault inside the driver's own generated shader code at the frame the
+        // pool first grew past it, with no engine frame anywhere in the stack (D651).
+        //
+        // Clamped rather than refused, and clamped HERE rather than in `node_buffers`, because the
+        // pool and its buffers must agree about how much room there is: the CPU side allocates out
+        // of this same number, and a pool that hands out an offset the buffer does not cover is the
+        // same fault one layer up.
+        if (device_.caps().max_storage_buffer_bytes > 0 &&
+            node_budget.payload_bytes > device_.caps().max_storage_buffer_bytes) {
+            WS_LOG_WARN("gpu",
+                        "the node payload wants {} MB and this driver binds at most {} MB of a "
+                        "storage buffer; clamped, so the pool holds less world at once",
+                        node_budget.payload_bytes >> 20,
+                        device_.caps().max_storage_buffer_bytes >> 20);
+            node_budget.payload_bytes = device_.caps().max_storage_buffer_bytes;
+        }
+        if (options_.node_payload_mb > 0) {
+            node_budget.payload_bytes =
+                std::min<u64>(node_budget.payload_bytes, options_.node_payload_mb << 20);
+        }
         WS_LOG_INFO("load", "type tables {:.0f} ms  [t+{:.0f} ms]",
                 ns_to_ms(now_ns() - t_tables), ns_to_ms(now_ns() - load_began_ns_));
         const u64 t_pool = now_ns();

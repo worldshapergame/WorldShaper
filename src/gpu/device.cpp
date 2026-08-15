@@ -500,6 +500,7 @@ void Device::query_capabilities() {
     caps_.subgroup_size = subgroup.subgroupSize;
     caps_.timestamp_period_ns = props2.properties.limits.timestampPeriod;
     caps_.min_uniform_offset = props2.properties.limits.minUniformBufferOffsetAlignment;
+    caps_.max_storage_buffer_bytes = props2.properties.limits.maxStorageBufferRange;
 
     VkPhysicalDeviceMemoryProperties memory{};
     vkGetPhysicalDeviceMemoryProperties(physical_, &memory);

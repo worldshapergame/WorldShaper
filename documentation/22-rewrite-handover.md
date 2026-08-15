@@ -579,7 +579,40 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — 2026-08-15: the tree builds off Windows, and R11d's step is refuted by its price
+#### START HERE — 2026-08-15: refraction is in and OWES A PICTURE; the frame-11 crash was ours
+
+**R4d's refraction is built and has never been seen (D652).** The primary ray now bends where it
+enters glass or water, is stopped at the face where it leaves by the marcher's new `kThroughExit`,
+bends again there and marches on — so a pane displaces what is behind it instead of drawing it where
+it would be with no pane, and a basin reads as shallower than it is. Absorption is
+`exp(-absorb·metres)` over the true path, using three bytes of `VisualRecord` that had never been
+read. Total internal reflection reflects. `tests/test_refraction.cpp` pins the arithmetic against
+trigonometry — the pane's no-deviation property, the 4.1 cm offset at 45°, the 48.75° critical angle
+— and that is ALL it pins: it says nothing about whether the marcher hands the formula the right
+normal.
+
+**So the first thing to do on a machine with a card is look at it**, and the gate is one flag:
+
+```powershell
+WorldShaper --clip-file clips\glass_test.clip --cam 0,1.4,-3.0,90,0     # the panes, the posts behind
+WorldShaper --clip-file clips\glass_test.clip --cam 0,1.4,-3.0,90,0 --no-refraction
+```
+
+The brass post behind the clear pane should sit slightly to one side of where the control arm puts
+it and step back as you strafe; the green pane should darken with the thickness of glass the ray
+crosses rather than uniformly; the basin should look shallower than its 44 cm. **And the cost is
+unmeasured** — a glass pixel now casts two segments where it cast one, and D604's own figure for the
+straight version was +0.246 ms at a camera facing a window.
+
+**The frame-11 crash was ours, not the driver's (D651).** One validation run named it: the node
+payload is 512 MB bound as one storage buffer and this driver's `maxStorageBufferRange` is 128 MB.
+Nothing in this engine had ever read that limit, and the Steam Deck is the stated floor. It is
+clamped now, `--node-payload N` forces it lower, and it took the software rasteriser from frame 11
+to frame 33. D650's reading — "the fault is in llvmpipe's JIT'd code, so it is not ours" — was
+wrong, and wrong in the most expensive direction: the stack was in driver code because that is where
+undefined behaviour lands.
+
+#### 2026-08-15, earlier: the tree builds off Windows, and R11d's step is refuted by its price
 
 **Read these two first; everything below them was written when neither was known.**
 
@@ -656,14 +689,21 @@ What runs there is everything `run_clip_tool` reaches — `--clip-file`, `--samp
 `--stipple-tiled` — so the sampler, the field, the mirror and the ladder's arithmetic are all
 measurable. A load figure taken that way is a prediction and says so.
 
-**And the game itself runs, for eleven frames (D650).** `Xvfb :99 -screen 0 1280x800x24` plus Mesa's
+**And the game itself runs — for thirty-three frames, once its own bug was out of the way (D650,
+D651).** `Xvfb :99 -screen 0 1280x800x24` plus Mesa's
 lavapipe, with SDL reconfigured `-DSDL_X11=ON` (needs `libx11-dev libxext-dev libxrandr-dev
 libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev`). It builds the world, takes the
-stipple verdict, despeckles and runs the ladder at about 300 ms a frame — and then **segfaults at
-frame 11, three runs out of three, inside llvmpipe's own JIT-compiled code**. So there is no
-card-free `--settle`, no content hash and no settle line, and **R5b is still not startable off
-Windows**. The title screen also costs 200 seconds of shader compilation before the first frame,
-which is what every attempt has to pay.
+stipple verdict, despeckles and runs the ladder at about 300 ms a frame. It used to die at frame 11
+and **that was this engine binding 512 MB of storage buffer against a 128 MB driver limit** (D651),
+now clamped. What remains after the clamp is a fault with no validation error behind it, at frame 33
+from a distant camera and frame 8 from one three metres from the glass — one software rasteriser's
+problem, and unexplained.
+
+**So a picture IS available here, up to about frame 30 at 320×200, and it is not worth much**: at
+frame 30 the world has barely streamed and the light has not converged, so what comes out is
+blocky silhouettes. There is no card-free `--settle`, no content hash, no settle line, and
+**R5b is still not startable off Windows**. The title screen also costs 200 seconds of shader
+compilation before the first frame, which every attempt has to pay.
 
 #### CLEARED FIRST: the ladder now stands down (D627)
 

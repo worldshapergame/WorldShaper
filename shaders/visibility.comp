@@ -261,7 +261,7 @@ void main() {
         // omission: a face is claimed where a pixel lands, so a window that a pixel passed through
         // would have no face, no light of its own and no reflection. See node_march.
         NodeHit halo = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), false,
-                                  false, true, true, false, false, kNodeUnbounded);
+                                  false, true, true, false, kThroughStop, kNodeUnbounded);
         if (halo.hit && halo.face_level != kNoFaceLevel) {
             node_face_seen(node_face_lookup(halo.face_node, halo.face_level, halo.face_dir));
         }
@@ -269,7 +269,7 @@ void main() {
     }
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
-                             report_used, report_face, true, false, false, kNodeUnbounded);
+                             report_used, report_face, true, false, kThroughStop, kNodeUnbounded);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {
@@ -323,11 +323,94 @@ void main() {
     if (hit.hit && hit.level == 0 && probe_see_through()) {
         const vec3 medium = node_medium_through(hit.type_id);
         if (medium.r + medium.g + medium.b > 0.0) {
-            NodeHit far = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
-                                     report_used, report_face, true, false, true, kNodeUnbounded);
+            // ---- R4d's other half: the ray BENDS, twice ---------------------------------------
+            //
+            // The march above answers "what is behind the pane", drawn exactly where it would be if
+            // the pane were not there. That is a hole in the wall, not a window: the whole of what
+            // glass and water look like is that they put what is behind them somewhere else.
+            //
+            // So three segments instead of one. Into the medium at the face the pixel landed on,
+            // through it to the face where it comes out -- which is what `kThroughExit` is for --
+            // and on from there in the direction the second interface bends it to. Two interfaces
+            // rather than one because a pane refracts twice and the second undoes most of the
+            // first: a flat pane seen square on displaces nothing, seen at an angle it slides what
+            // is behind it sideways, and that behaviour falls out of doing both rather than being
+            // tuned in. A water surface is the case where they do not cancel, because the second
+            // interface is the opaque bottom and the ray never reaches it -- which is why a basin
+            // reads as shallower than it is, exactly as a real one does.
+            //
+            // What is deliberately NOT here: dispersion. It needs a march per wavelength, and the
+            // plan's own note says a hero wavelength per face sample -- which belongs with the face
+            // pass rather than with the primary ray. `ior` is one number here for all three
+            // channels.
+            NodeHit far;
+            bool bent = false;
+            vec3 refract_through = vec3(1.0);
+            if (probe_refract()) {
+                const float ior = node_medium_ior(hit.type_id);
+                const vec3 face_normal = normalize(vec3(hit.normal));
+                const vec3 into = refract(dir, face_normal, 1.0 / max(ior, 1.0));
+                // A zero from `refract` is total internal reflection, which cannot happen entering a
+                // denser medium and can happen leaving one. Both are handled the same way -- keep
+                // the straight ray -- because the alternative at an entry face is a direction that
+                // does not exist.
+                if (dot(into, into) > 0.0) {
+                    const vec3 entry = push.origin.xyz + dir * hit.t + into * 1e-3;
+                    NodeHit inside = node_march(entry, into, pixel_angle, node_bayer(pixel), false,
+                                                false, false, true, false, kThroughExit,
+                                                kNodeUnbounded);
+                    if (inside.left_medium) {
+                        const float path_m = inside.exit_t * (1.0 / kVoxelsPerMetreF);
+                        const vec3 exit_normal = normalize(vec3(inside.exit_normal));
+                        vec3 out_dir = refract(into, exit_normal, ior);
+                        // Total internal reflection at the far face is a real answer and not an
+                        // error: past the critical angle a water surface is a mirror from
+                        // underneath. Reflecting keeps the ray in the world rather than dropping
+                        // the pixel to the straight-through fallback.
+                        if (dot(out_dir, out_dir) <= 0.0) out_dir = reflect(into, exit_normal);
+                        // The LAST segment carries the reporting, and that is not a detail: this
+                        // is the ray that lands on the surface a player is looking at through the
+                        // window, so it is the one that has to claim that surface's face and tell
+                        // residency about it. Cast it silently and the far surface has no face, no
+                        // light of its own and nothing to stream it in -- which is D604's whole
+                        // reason for reporting on the second march, arriving one segment later.
+                        // The two segments before it say nothing: the pane's own face was claimed
+                        // by the primary hit, and the glass is what they cross rather than land on.
+                        const vec3 leaving = entry + into * inside.exit_t + out_dir * 1e-3;
+                        NodeHit beyond = node_march(leaving, out_dir, pixel_angle,
+                                                    node_bayer(pixel), report, report_used,
+                                                    report_face, true, false, kThroughPass,
+                                                    kNodeUnbounded);
+                        // The distance the composite reads has to be the whole path, or a window
+                        // fogs as though what is behind it were at the pane.
+                        beyond.t += hit.t + inside.exit_t;
+                        beyond.through *= inside.through;
+                        far = beyond;
+                        bent = true;
+                        // Beer-Lambert over the TRUE path, which only a ray that knows where it
+                        // entered and where it left can take. `node_medium_through` above is a
+                        // product over voxels crossed -- exact along an axis and short on a
+                        // diagonal -- and this is the term the plan asked for beside it. Materials
+                        // that never wrote `absorb` come back at zero and this is exactly 1.0.
+                        refract_through = exp(-node_medium_absorb(hit.type_id) * path_m);
+                    }
+                }
+            }
+            // The straight ray, which is what a pane with no index of refraction on it gets, what
+            // `--no-refraction` gets, and what a ray that never found its way out of the medium
+            // falls back to. One march either way: the bent path replaces this one rather than
+            // being cast beside it, so a glass pixel pays for two segments or for one and never
+            // for both. The fallback matters as much as the feature -- a body of glass whose far
+            // side is a brick with nothing in it has no exit face to bend at, and drawing it as
+            // D604 did is right where guessing a direction would not be.
+            if (!bent) {
+                far = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
+                                 report_used, report_face, true, false, kThroughPass,
+                                 kNodeUnbounded);
+            }
             // Refusing a march that came back unattenuated is the second half of the same guard:
             // whatever the reason, a far surface with nothing taken out of it is the near one.
-            const vec3 lets_past = far.through;
+            const vec3 lets_past = far.through * refract_through;
             if (max(max(lets_past.r, lets_past.g), lets_past.b) < 0.999) {
                 uint far_slot = kNoFace;
                 if (far.hit && far.face_level != kNoFaceLevel) {

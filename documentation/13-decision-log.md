@@ -7537,3 +7537,114 @@ any figure in this repository.
 | D650 | **Not a race in the rasteriser** | finding | `LP_NUM_THREADS=1` dies at the same frame, so the next question is what frame 12 does |
 | D650 | **A card-free `--settle` is therefore not available** | honesty | Which is what D649's next step would need to measure |
 | D650 | **A world settled at 320×200 is a different world** | method | The ladder is pixel-driven; such a hash has no comparable baseline here |
+
+## D651 — the crash at frame 11 was ours: half a gigabyte bound against a 128 MB limit
+
+D650 recorded the game running off Windows for eleven frames and then segfaulting inside llvmpipe's
+JIT-compiled code, and said the evidence did not blame the renderer. **It should have blamed us**,
+and one run with the validation layers said so in one line:
+
+```
+VUID-VkWriteDescriptorSet-descriptorType-00333: node payload, range is VK_WHOLE_SIZE, but the
+effective range 536870912 is greater than maxStorageBufferRange (134217728)
+```
+
+`NodePoolBudget::payload_bytes` is **512 MB** and it is bound as one storage buffer. A desktop
+driver answers four gigabytes to `maxStorageBufferRange` and the question never arises; this one
+answers 128 MB. Binding past the limit is undefined behaviour, and what it does here is exactly what
+D650 saw: nothing at all until the pool grows past 128 MB, and then a fault in generated code with
+no engine frame anywhere in the stack. **The frame number was the tell and nobody read it that way**
+— frame 11 is when the payload crosses the limit, which is why pinning the quality changed nothing.
+
+**Fixed by reading the limit and clamping to it.** `DeviceCapabilities::max_storage_buffer_bytes`
+carries `maxStorageBufferRange`, and the budget is clamped in `main.cpp` **before** the pool and its
+buffers are created — deliberately there and not in `node_buffers`, because the CPU side allocates
+out of the same number, and a pool handing out an offset the buffer does not cover is the same fault
+one layer up. It warns when it bites. `--node-payload N` forces it smaller without a rebuild, the
+same way `--face-budget` does.
+
+**Measured, glass_test at 320×200 on the software rasteriser: frame 11 → frame 33**, and the
+validation log is silent afterwards.
+
+**It is not the whole story and the rest is honestly unexplained.** With the clamp in and validation
+clean, a run still dies later under load — frame 33 with a distant camera, frame 8 with one three
+metres from the glass. No VUID fires, so whatever that is, it is not an API misuse this layer knows
+about. It is one software rasteriser's problem and it is not on the path to a card.
+
+**And this matters beyond a machine with no card, which is why it is a fix rather than a workaround.
+Nothing in this engine had ever read that limit.** The Steam Deck is the stated performance floor;
+any device that answers less than 512 MB was getting undefined behaviour with no diagnostic, and the
+first symptom would have been a crash report from a player with a stack in a driver.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D651 | **The frame-11 fault was an over-large storage bind** | finding | 512 MB against a 128 MB `maxStorageBufferRange`, named by one validation line |
+| D651 | **D650's reading was wrong** | correction | It looked like a driver bug because the fault lands in driver code; the cause was ours |
+| D651 | **The budget is clamped to the device limit** | build | Before the pool and its buffers both, so the two cannot disagree about how much room there is |
+| D651 | **Nothing had ever read `maxStorageBufferRange`** | risk | The Deck is the floor and a device under 512 MB had no diagnostic at all |
+| D651 | **A residue remains on the software rasteriser** | honesty | Validation-clean and still dying under load; not on the path to a card |
+
+## D652 — R4d's refraction: the ray bends twice, and the pane stops being a hole in the wall
+
+R4d has been half done since D604: a face knows what it lets through, the light rays stop being
+blocked by a pane, the tint is taken per metre, and the primary ray casts a second march so what is
+behind the glass is drawn at all. **What it did not do is put that second march anywhere different
+from where the first one went** — the far surface was drawn exactly where it would be with no pane
+there, which is a hole in the wall rather than a window. `ior` was carried by `VisualRecord`, packed
+into `face_medium`, and read by nothing.
+
+**Built: three segments instead of one.**
+
+1. Into the medium at the face the pixel landed on, bent by `refract(dir, N, 1/ior)`.
+2. Through it to the face where it comes OUT — which is what the marcher's new `kThroughExit` is
+   for: it multiplies `through` as it goes and stops at the interface instead of at a surface.
+3. On from there, bent again by `refract(into, N_exit, ior)`, and this is the segment that reports
+   and claims the face — because it is the one that lands on what the player is looking at.
+
+**Two interfaces rather than one, and that is the design rather than a refinement.** A flat pane
+does not deviate a ray at all; it *displaces* it, and the displacement is what glass looks like.
+Bending only where the pixel landed — the cheap version — turns every window into a lens and smears
+the room behind it at a grazing angle. `tests/test_refraction.cpp` pins that property against
+trigonometry rather than against the expression under test: a pane comes out with the entry
+direction to one part in a billion, and at 45° through the facility's 12 cm glazing the sideways
+offset is **4.1 cm**, a voxel and a quarter at authored detail. Water is the case where the two do
+*not* cancel, because the second interface is the opaque bottom the ray never reaches — which is
+exactly why a basin reads as shallower than it is.
+
+**Total internal reflection is handled rather than avoided.** `refract` returns a zero vector past
+the critical angle — 48.75° for water — and a zero direction handed to a marcher is trap 7 in its
+arithmetic form: "no answer" and "straight ahead" must not be the same reply. It reflects instead,
+which is what a water surface does when you look up at it from underneath.
+
+**And the absorption is now over the true path.** `node_medium_through` is a product over the voxels
+crossed, which is exact along an axis and short on a diagonal; a refracted ray knows where it
+entered and where it left, so `exp(-absorb * metres)` can be taken over the distance itself, using
+the three `absorb` bytes that have been in `VisualRecord` unread. Materials that never wrote them
+come back at exactly 1.0, so this is safe to apply everywhere.
+
+**Not built, deliberately: dispersion.** It needs a march per wavelength, and the plan's own note
+puts it on a hero wavelength per face sample — which belongs to the face pass and not to the primary
+ray. `ior` is one number for all three channels here.
+
+**A second fault, and it is the more valuable half of this entry.** The three-segment path made the
+old second march redundant, and writing it as *"cast the straight one, then maybe cast the bent
+ones"* had every glass pixel paying for both. It is now one or the other. Beside it, the first
+version of the last segment was cast with reporting off — which would have left every surface seen
+through a window with no face, no light of its own and nothing to stream it in, undoing D604 while
+looking like it was extending it.
+
+**What is NOT measured, and it has to be said plainly.** No cost, no picture. The machine this was
+written on has no graphics card, so the gate this stage deserves — the glass test clip photographed
+with the flag on and off — is owed and needs the user's machine. `--no-refraction` restores D604's
+straight ray exactly, which is what makes that a one-flag comparison rather than two builds.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D652 | **The primary ray refracts at both interfaces** | build | A pane displaces rather than deviates, and one interface would make it a lens |
+| D652 | **`kThroughExit`: a march that stops where the medium ends** | build | The third state a bool could not hold; the exit face is what a ray bends at |
+| D652 | **Beer-Lambert over the true path** | build | The `absorb` bytes have been in the record unread since the record existed |
+| D652 | **Total internal reflection reflects** | build | A zero direction is "no answer", not "straight on" |
+| D652 | **The bent path REPLACES the straight one** | efficiency | Written the obvious way, every glass pixel paid for both |
+| D652 | **The last segment carries the reporting** | correctness | Otherwise what is behind the window has no face and never gets lit |
+| D652 | **Dispersion is not built** | honesty | It is a march per wavelength and belongs to the face pass |
+| D652 | **Unmeasured: cost and picture** | honesty | Owed on a machine with a card; `--no-refraction` is the control arm |

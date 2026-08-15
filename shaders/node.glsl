@@ -624,6 +624,11 @@ const uint kProbeLobeCoverage = 1u << 7;
 // this renderer has always done and is the state every figure before this was taken in.
 // `--no-see-through` clears it.
 const uint kProbeSeeThrough = 1u << 8;
+// R4d's second half: the PRIMARY ray bends where it crosses into glass or water and bends back
+// where it comes out, instead of carrying straight on. Off, what is behind a pane is drawn exactly
+// where it would be with no pane there, which is what D604 built and is a window with no glass in
+// it. `--no-refraction` clears it.
+const uint kProbeRefract = 1u << 9;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -682,6 +687,7 @@ bool probe_lobe() { return (light_probe.words[0] & kProbeLobe) != 0u; }
 bool probe_lobe_ray() { return (light_probe.words[0] & kProbeLobeRay) != 0u; }
 bool probe_lobe_big() { return (light_probe.words[0] & kProbeLobeCoverage) != 0u; }
 bool probe_see_through() { return (light_probe.words[0] & kProbeSeeThrough) != 0u; }
+bool probe_refract() { return (light_probe.words[0] & kProbeRefract) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
@@ -2395,7 +2401,28 @@ struct NodeHit {
     // the product of what each pane let through otherwise. It is a COLOUR because glass is coloured:
     // a green pane turns white sun green on its way in, and the tint is the medium's own albedo.
     vec3 through;
+
+    // R4d's refraction: the interface where the ray came OUT of transmissive matter, if it did.
+    //
+    // `left_medium` is the whole reason this is three fields rather than one: a march asked to stop
+    // at the far side of the glass comes back with `hit == false`, and so does a ray that reached
+    // open sky. Those are not the same fact and the caller has to be able to tell them apart, which
+    // is trap 7 in the shape it always takes here. `exit_normal` points back the way the ray came,
+    // which is the convention GLSL's own `refract` wants.
+    bool left_medium;
+    float exit_t;
+    ivec3 exit_normal;
 };
+
+// ---- R4d: the three things a ray can do about matter it can see through -------------------------
+//
+// A bool held two of these and the third is what refraction needs. A light ray must carry ON to the
+// far side, because what a shadow ray wants to know is whether the sun reaches; a refracted primary
+// ray must STOP at the far face of the pane, because that is the interface it bends at. Neither is
+// a shade of the other.
+const uint kThroughStop = 0u;   // transmissive matter stops the ray dead, as it always did
+const uint kThroughPass = 1u;   // the ray carries on, multiplying `through` by what each voxel let by
+const uint kThroughExit = 2u;   // ...and stops where it LEAVES the medium, for the caller to bend
 
 const uint kNoFaceLevel = 0xFFFFFFFFu;
 
@@ -2428,6 +2455,39 @@ vec3 node_medium_through(uint type_id) {
     // passes by a quarter, not paint it its own colour. At opacity nought it is clear glass.
     const vec3 metre = mix(vec3(1.0), tint, opacity) * (1.0 - opacity);
     return pow(max(metre, vec3(1e-4)), vec3(1.0 / kVoxelsPerMetreF));
+}
+
+// The index of refraction the author wrote, as a ratio to vacuum.
+//
+// `VisualRecord::ior` is stored as the offset from vacuum in 128ths -- 0 is vacuum and 64 is 1.5 --
+// so a material that never mentions it comes back as 1.0 and bends nothing, which is what every
+// opaque surface in the building wants and is why this needs no flag of its own to be safe.
+float node_medium_ior(uint type_id) {
+    const uint type_at = min(type_id, uint(types.items.length()) - 1u);
+    const uint visual_at = min(types.items[type_at].x, uint(visuals.items.length()) - 1u);
+    const uint word = visuals.items[visual_at].y;
+    return 1.0 + float((word >> 16u) & 0xFFu) * (1.0 / 128.0);
+}
+
+// Beer-Lambert absorption, PER METRE, which is how `VisualRecord` documents the three bytes.
+//
+// This is the other quantity `node_medium_through` above could not use. That one is a product over
+// the voxels a ray crossed, which is exact along an axis and drifts on a diagonal, and it is all a
+// straight ray could ever have -- a ray that does not know where it entered the medium cannot know
+// how far it went through it. A refracted ray does know both, so the absorption can be taken over
+// the true distance, which is what the plan asks for and what makes a deep look through water
+// darker than a glancing one.
+//
+// The bytes are an amount per metre in the same units the author writes: `absorb=6,1,4` on the
+// green glass means six units of red taken out per metre. A sixteenth of a byte per metre puts a
+// useful range in a byte -- 255 is a metre of near-black and 1 is a pane you can barely tell from
+// clear.
+vec3 node_medium_absorb(uint type_id) {
+    const uint type_at = min(type_id, uint(types.items.length()) - 1u);
+    const uint visual_at = min(types.items[type_at].x, uint(visuals.items.length()) - 1u);
+    const uint word = visuals.items[visual_at].z;
+    return vec3(float(word & 0xFFu), float((word >> 8u) & 0xFFu),
+                float((word >> 16u) & 0xFFu)) * (1.0 / 16.0);
 }
 
 // Coverage along one face direction, out of the six bytes a node carries.
@@ -2559,17 +2619,20 @@ const uint kNodeMaxSteps = 512u;
 // and the two counts are kept apart in the record so neither can be read as the other.
 const float kNodeUnbounded = 3.4e38;
 
-// `see_through` is R4d's first half: a ray that meets transmissive matter carries on through it,
-// multiplying `result.through` by what it let past, instead of stopping dead.
+// `through_mode` is R4d: what the ray does when it meets matter it can see through, out of the
+// three states above.
 //
-// It is off for the PRIMARY ray and on for the light rays, and that division is the whole design.
-// The primary ray has to stop on the glass, because a face is claimed where a pixel lands and the
-// window's own surface -- its sun, its sky, its lamps and its reflection -- exists only if it is
-// claimed. The light rays have no such need: what a shadow ray wants to know is whether the sun
-// reaches, and a window does not stop the sun.
+// `kThroughStop` for the primary ray and `kThroughPass` for the light rays, and that division is
+// the original design. The primary ray has to stop on the glass, because a face is claimed where a
+// pixel lands and the window's own surface -- its sun, its sky, its lamps and its reflection --
+// exists only if it is claimed. The light rays have no such need: what a shadow ray wants to know
+// is whether the sun reaches, and a window does not stop the sun.
+//
+// `kThroughExit` is the refraction segment: it enters the glass, attenuates through it, and stops
+// at the face where it comes out so the caller can bend it there and march on.
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
                    bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
-                   bool see_through, float max_t) {
+                   uint through_mode, float max_t) {
     NodeHit result;
     result.hit = false;
     result.unknown = false;
@@ -2579,6 +2642,9 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     result.colour = 0u;
     result.coverage = 255u;
     result.through = vec3(1.0);
+    result.left_medium = false;
+    result.exit_t = 0.0;
+    result.exit_normal = ivec3(0, 1, 0);
     result.face_node = ivec3(0);
     result.face_level = kNoFaceLevel;
     result.face_dir = 0u;
@@ -2593,6 +2659,11 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     ivec3 origin_voxel = push.camera_chunk.xyz * 256;
 
     float t = 0.0;
+
+    // Whether the ray is currently INSIDE transmissive matter, which has to outlive the brick it
+    // entered in: a pane is four voxels thick and a brick is eight, so a ray crossing one at an
+    // angle enters in one brick and comes out in the next often enough to matter.
+    bool in_medium = false;
 
     // Clipped to the extent of the world, and this is not slack.
     //
@@ -2752,7 +2823,27 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
 
             for (int inner_step = 0; inner_step < 3 * 8; ++inner_step) {
                 if (any(lessThan(inner, ivec3(0))) || any(greaterThanEqual(inner, ivec3(8)))) break;
-                if (leaf_voxel_solid(leaf, inner)) {
+                const bool solid = leaf_voxel_solid(leaf, inner);
+                // ---- R4d: the face where the ray comes OUT of the glass -----------------------
+                //
+                // Read one cell at a time like everything else here, and detected on the cell AFTER
+                // the medium rather than on the last cell of it, because that is the only way to
+                // know the medium has ended: a transmissive voxel with another behind it is the
+                // middle of a pane and a transmissive voxel with air behind it is its far face.
+                //
+                // `inner_normal` at this point is the boundary just crossed and points back against
+                // the ray, into the medium -- which is the sign `refract` wants at an exit.
+                if (in_medium && !solid) {
+                    in_medium = false;
+                    result.left_medium = true;
+                    result.exit_t = max(t_inner, 0.0);
+                    result.exit_normal = inner_normal;
+                    if (through_mode == kThroughExit) {
+                        node_flush(report, has_pending, pending);
+                        return result;
+                    }
+                }
+                if (solid) {
                     // ---- R4d: matter a ray can see through -------------------------------
                     //
                     // Asked at the LEAF and only at the leaf, because a coarse node stands over as
@@ -2763,10 +2854,12 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     // What it costs when it fires is one table lookup and one more step of a DDA
                     // that was already running. What it costs when it does not fire is a branch on
                     // a uniform.
-                    if (see_through && level == 0) {
+                    if (through_mode != kThroughStop && level == 0) {
                         const vec3 past = node_medium_through(leaf_voxel_type(leaf, inner));
                         if (past.r + past.g + past.b > 0.0) {
                             result.through *= past;
+                            // Inside it now, so the next cell that is not glass is the far face.
+                            in_medium = true;
                             // Bounded, or a ray down the length of a pane would multiply a hundred
                             // times and a ray inside a solid block of glass would never stop at all.
                             // Below this the medium has taken everything and the ray has its answer.
@@ -2970,6 +3063,22 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     node_flush_used(report_used, g_node_block);
                     node_flush_read(report_used, found.slot);
                     node_face_hit(result, report_face, voxel, outer_level, stand_normal);
+                    return result;
+                }
+            }
+
+            // R4d, and it is the other half of the exit test in the leaf loop: the medium can also
+            // end where the BRICK does, when the cell on the far side of the pane holds nothing at
+            // all and so has no leaf to step through. The interface is then the brick boundary the
+            // walk last crossed, which is a coarser normal than the voxel one and is the same face
+            // in every case that matters -- a pane's far side is flat and axis-aligned.
+            if (in_medium) {
+                in_medium = false;
+                result.left_medium = true;
+                result.exit_t = max(t, 0.0);
+                result.exit_normal = (last_normal == ivec3(0)) ? ivec3(0, 1, 0) : last_normal;
+                if (through_mode == kThroughExit) {
+                    node_flush(report, has_pending, pending);
                     return result;
                 }
             }

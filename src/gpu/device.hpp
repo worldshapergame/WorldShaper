@@ -27,6 +27,13 @@ struct DeviceCapabilities {
     bool has_int64_atomics = false;
     f32 timestamp_period_ns = 0.0f;
     u64 min_uniform_offset = 256;   // alignment for dynamic uniform buffer offsets
+    // The largest range this driver will let a storage buffer be bound over.
+    //
+    // Read because the node pool's payload is half a gigabyte and this is a real limit rather than
+    // a formality: a desktop driver answers four gigabytes and a software one answers 128 MB, and
+    // binding past it is undefined behaviour that reads as a fault inside the driver's own shader
+    // code with nothing to point at. D651. `NodePoolBudget::payload_bytes` is clamped to it.
+    u64 max_storage_buffer_bytes = 0;
 };
 
 class Device {

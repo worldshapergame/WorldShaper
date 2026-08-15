@@ -960,12 +960,21 @@ about coarse faces, which have no one material and say so.
   D591, D592.
 - **R4d — incoming bins**: refraction and translucency, one face-pass ray through the medium,
   Beer-Lambert over the exact voxel path, dispersion by hero wavelength per face sample.
+  **Refraction is IN (D652)**: the primary ray bends where it enters the medium, is stopped at the
+  face where it leaves by the marcher's new `kThroughExit`, bends again there, and marches on — so a
+  pane DISPLACES what is behind it (4.1 cm at 45° through the facility's 12 cm glazing) instead of
+  drawing it where it would be with no pane, and a basin reads as shallower than it is because the
+  two interfaces do not cancel over water. Total internal reflection reflects rather than returning
+  a zero direction, and absorption is `exp(-absorb·metres)` over the true path rather than a product
+  over voxels crossed. `--no-refraction` restores D604 exactly. **Owed: the picture and the cost** —
+  written on a machine with no card, so the glass-clip photograph with the flag on and off is the
+  gate this has not had. Dispersion is still not built and is a hero wavelength per face sample.
   **Transmission is in, in three commits** — the face learns what it lets through (D601), the light
   rays stop being blocked by a pane (D602), the tint is read and taken per METRE rather than per
   voxel (D603), and the primary ray now sees through as well (D604), so a window is fifteen glazed
-  lights with the bars across them instead of one milky panel. **What is left is the refraction
-  itself**: `ior` is carried and used by no ray, nothing is displaced, there is no Beer-Lambert over
-  the true path and no dispersion.
+  lights with the bars across them instead of one milky panel. **What is left after D652 is
+  dispersion alone**, and its cost has not been paid anywhere: it is a march per wavelength, which
+  the plan's own note puts on a hero wavelength per face sample rather than on the primary ray.
   *Gate: a mirror wall shows a recognisable image with no per-pixel ray; glass and water read as
   glass and water; frame time within 15% of R3 on a scene with no reflective material in it.*
 
