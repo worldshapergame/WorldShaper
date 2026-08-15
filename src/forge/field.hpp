@@ -493,6 +493,17 @@ public:
     static constexpr u32 kMirrorStack = 64;
     bool mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest = nullptr) const;
 
+    // The same walk with every point and every answer rounded to SINGLE precision as it crosses a
+    // node boundary — which is what a shader carrying `vec3` and `float` between nodes does.
+    //
+    // R12's last unknown is whether `f32` is enough, and no property of the graph can answer it:
+    // the facility is thirty-five metres across and forty nodes deep, so the question is whether a
+    // point that has been through forty transforms in single precision still lands on the same
+    // side of a surface. Each node's own arithmetic is still done in double here, so this is a
+    // LOWER BOUND on the error a real `float` evaluator would carry — if this moves voxels, `f32`
+    // is dead; if it moves none, the shader still has to be checked against the real thing.
+    bool mirror_eval_single(u32 at, Vec3 p, f64& out) const;
+
     // Whether every node reachable from `at` is one `mirror_eval` implements. The point of asking
     // separately is that a clip using an op the mirror has not learned yet should say so once, by
     // name, rather than fail one voxel at a time.

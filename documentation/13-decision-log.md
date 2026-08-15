@@ -7234,3 +7234,48 @@ it is worth nothing until a clip exists where the hash actually moves.
 | D644 | **Both fixes measured and REVERTED** | decision | 6.8× and 45× slower for a byte-identical building |
 | D644 | **The hole is 58 points in 64,000, worst 0.139 m** | honesty | A number where there was an unknown, pinned by a test |
 | D644 | **The mirror agrees to one ulp otherwise** | gate | The walk is faithful; what is left for the shader is transliteration |
+
+## D645 — single precision costs a micron, and about one surface voxel in ten thousand
+
+R12's last unknown, and the reason `mirror_field` exists at all: the facility is thirty-five metres
+across and forty nodes deep, so does a point carried through forty transforms in `float` still land
+on the same side of a surface? No property of the graph can say. The mirror can.
+
+`Field::mirror_eval_single` is the same walk with every point and every answer narrowed to `float`
+as it crosses a node boundary — which is what a shader carrying `vec3` and `float` between nodes
+does. Each node's own arithmetic is still double, so this is a **lower bound** on a real `float`
+evaluator's error.
+
+**Measured at voxel centres, because a point half way between two voxels is not a decision anything
+makes:**
+
+| | voxel centres | changed side | worst error |
+|---|---|---|---|
+| metre 32 — authored | 343,000 | **34 (0.0099%)** | 1.07 µm |
+| metre 8 | 343,000 | **60 (0.0175%)** | 1.10 µm |
+
+**The error is a micron and it does not grow with the building.** At the authored 31 mm voxel that
+is **thirty thousand times smaller than a voxel**, so even a real `float` evaluator carrying a
+hundred times more error would still be three hundred times inside one. Precision is not the
+problem, and R12b may be written in `float`.
+
+**What DOES change is a tie.** 428 of the 343,000 points sit within 0.1 mm of a surface, and 34 of
+those are near enough that a micron decides them. So the flips are not a precision failure; they are
+voxels sitting exactly on a surface, where any two evaluators that are not bit-identical will
+disagree.
+
+**And that is the finding R12c has to plan around, not the micron.** R12c has the marcher *derive*
+geometry where the pool has not built it, while the CPU sampler still writes what is edited (R12d).
+Two evaluators that disagree about one surface voxel in ten thousand means **a node derived on the
+card and the same node sampled on the CPU are not the same node** — and where they meet, that is a
+seam. It is D204's class in its quietest form: not a wrong picture, a picture that changes when the
+same place is answered by the other half of the engine. The choice is to make the CPU authoritative
+for anything that persists and let derived voxels be draw-only, which is R12d's line drawn one step
+earlier than it was written.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D645 | **Single precision costs about a micron** | finding | 1.07 µm worst over the facility, and it does not grow |
+| D645 | **`f32` is viable for the shader** | decision | 30,000× inside a voxel at authored detail |
+| D645 | **One surface voxel in ten thousand changes side** | finding | Ties, not precision: 428 points sit within 0.1 mm of a surface |
+| D645 | **A derived node and a sampled node are not identical** | risk | R12c meets R12d at a seam; the CPU must stay authoritative for what persists |

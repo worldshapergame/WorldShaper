@@ -2592,6 +2592,22 @@ bool Field::mirror_covers(u32 at, Op* missing) const {
     return true;
 }
 
+namespace {
+// One place where the narrowing happens, so the two entry points cannot drift apart.
+thread_local bool g_mirror_single = false;
+inline f64 narrow(f64 v) {
+    return g_mirror_single ? static_cast<f64>(static_cast<float>(v)) : v;
+}
+inline Vec3 narrow(Vec3 v) { return {narrow(v.x), narrow(v.y), narrow(v.z)}; }
+}  // namespace
+
+bool Field::mirror_eval_single(u32 at, Vec3 p, f64& out) const {
+    g_mirror_single = true;
+    const bool ok = mirror_eval(at, narrow(p), out, nullptr);
+    g_mirror_single = false;
+    return ok;
+}
+
 bool Field::mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest) const {
     if (at >= nodes_.size()) return false;
     MirrorFrame stack[kMirrorStack];
@@ -2617,14 +2633,14 @@ bool Field::mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest) const {
             if (child >= nodes_.size() || top >= kMirrorStack) return false;
             stack[top].node = child;
             stack[top].step = 0;
-            stack[top].p = where;
+            stack[top].p = narrow(where);
             stack[top].acc = 0.0;
             stack[top].neighbours = 0;
             ++top;
             return true;
         };
         const auto finish = [&](f64 value) {
-            ret = value;
+            ret = narrow(value);
             --top;
         };
 

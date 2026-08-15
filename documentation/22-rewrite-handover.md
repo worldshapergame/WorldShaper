@@ -587,9 +587,11 @@ that reading is **not done**.
 agreeing with `eval` to one ulp — and the first thing it did was find the box cull skipping the
 nearest child: four primitives answer less than the distance to their own box, and an intersection
 cannot vouch for its overlap. Both fixes were built, measured at **6.8× and 45×** the sampling cost
-for a **byte-identical** facility, and reverted. **The next card-free step is to run the mirror in
-`f32` and count the voxels that move** — that is R12's last unknown and the mirror is now the place
-to ask it.
+for a **byte-identical** facility, and reverted. **R12's last unknown is answered (D645): `f32` costs a micron**, thirty thousand times inside a
+voxel, so the shader may be written in single precision — but **one surface voxel in ten thousand
+changes side**, which is a tie rather than a precision failure and means a node derived on the card
+and the same node sampled on the CPU are not identical. Where R12c's derived geometry meets R12d's
+sampled geometry, that is a seam, so the CPU stays authoritative for anything that persists.
 
 **R12's groundwork is measured (D643), and it is the only stage left with card-free work in it.**
 The stack a shader would need is **41** (bounded) and **36** (observed over 302 M visits), so 64 is
