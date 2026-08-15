@@ -2969,3 +2969,45 @@ There is a third way — take the extra voxel from the world that has *already b
 instead of working it out again — which costs a memory lookup instead of a calculation. That is what
 the next attempt should be, and unlike these two it cannot be measured without a graphics card,
 because it only happens while the game is running.
+
+## Glass now bends what is behind it
+
+Windows and water in this game have been drawn as *transparent* for a while — you can see through
+them, the light comes through them, coloured glass tints what passes. What they have never done is
+the thing that actually makes glass look like glass: **move what is behind it**.
+
+Look through a real window at an angle and the wall behind it sits slightly to one side of where it
+would be without the glass. Look into a basin of water and the bottom is nearer than it really is.
+Until now this engine drew both exactly as if the glass were not there — a hole in the wall with a
+tint on it.
+
+**Now the ray bends.** It bends going into the glass, carries on through it, and bends back coming
+out the other side — two bends, not one, and that pair matters: a flat pane bends a ray one way and
+then unbends it, so what you get is a sideways *shift* rather than a distortion. Through the
+building's own 12 cm glazing at a slanted angle that shift is about four centimetres, which is a
+voxel and a bit — enough that a straight edge behind a window visibly steps sideways as you move.
+Water is the case where the two bends do not cancel, because the second one would be at the bottom
+of the basin and the ray stops there instead: that is exactly why a pool always looks shallower than
+it is, and now it does here.
+
+Two smaller things came with it. Coloured glass and water now darken by **how far the ray actually
+travelled through them** rather than by how many voxels it clipped, so looking into deep water is
+darker than glancing across it. And looking up at a water surface from underneath past a certain
+angle now shows a mirror, which is what really happens.
+
+**What I could not do is look at it.** This machine has no graphics card, so the picture is owed:
+the maths is tested against the textbook, but whether it looks right on your screen is your machine's
+answer to give. If it looks wrong, `--no-refraction` puts it back exactly as it was.
+
+## And a crash that was going to be somebody's bug report
+
+While getting the game to run at all on a machine with no graphics card, it kept dying after eleven
+frames. I recorded that as the software renderer's problem. **It was ours.** The game asks the
+graphics driver for half a gigabyte of one kind of memory, and it never once asked the driver
+whether that was allowed. Powerful desktop cards say yes to four gigabytes, so nobody ever found
+out — but the Steam Deck is the machine this project treats as its floor, and any device with a
+smaller limit was getting undefined behaviour with no warning and no error, of the kind that lands
+as a crash in somebody's driver with nothing to point at.
+
+It now asks, and takes what it is given. That is not a fix for anything you can see today; it is a
+crash report you will never receive.
