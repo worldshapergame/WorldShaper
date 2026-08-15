@@ -2032,7 +2032,9 @@ shader without changing."*
   primitives answer less than the distance to their own box (cone 0.53, ellipsoid 0.59, platonic
   0.58, prism 0.87), and an intersection cannot vouch for its own overlap box either. Both fixes
   were built and reverted at 6.8× and 45× the sampling cost for a byte-identical building; the hole
-  is 58 points in 64,000, worst 0.139 m. See D644 for the right fix.
+  is 58 points in 64,000, worst 0.139 m. **D644's proposed proper fix has since been built too and
+  refused at 45× (D646): a cull box an answer can vouch for is, on this building, a box that rejects
+  nothing. The cull is fast because it reads boxes tighter than the answers justify.**
 
   **The open question this stage still owns is whether `f32` is enough**, and it is the reason the
   mirror exists: no property of the graph can answer it. The mirror is now the place to ask.

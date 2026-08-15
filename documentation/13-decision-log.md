@@ -7279,3 +7279,51 @@ earlier than it was written.
 | D645 | **`f32` is viable for the shader** | decision | 30,000× inside a voxel at authored detail |
 | D645 | **One surface voxel in ten thousand changes side** | finding | Ties, not precision: 428 points sit within 0.1 mm of a surface |
 | D645 | **A derived node and a sampled node are not identical** | risk | R12c meets R12d at a seam; the CPU must stay authoritative for what persists |
+
+## D646 — D644's "right fix" is refuted too: a sound cull box rejects nothing
+
+D644 ended by naming the proper repair for the unsound distance cull — *"propagate a SECOND set of
+boxes, the same `build_bounds` switch reading children's cull boxes instead of their shape boxes"* —
+and said it was a bigger change than that session had room for. It has now been built. It works, and
+it is unusable.
+
+**Built:** `build_bounds` runs its switch twice over the same forward pass, once for the box a
+node's SHAPE sits in and once for the box its ANSWER can vouch for. The four bounded primitives get
+no cull box; an intersection gets the MERGE of its children's rather than the overlap; everything
+else takes the same formula over the cull boxes below it, so a translate of an ellipsoid inherits
+the ellipsoid's silence instead of quietly re-acquiring a box.
+
+**It is correct.** The mirror's disagreement with `eval` over the facility goes from 58 points of
+64,000 at 0.139 m to **26 points at 1.39e-16** — one ulp, which is floating-point rounding and not
+a difference of meaning. R12b's gate passes.
+
+**And it costs 45×.** The facility at metre 8: **11.8 s → 538.0 s**, and the content hash is
+`67ff8caeeb38a34f` in both arms, as it was in every other arm of D644.
+
+| arm | metre 8 | hash |
+|---|---|---|
+| what ships | **11.8 s** | `67ff8caeeb38a34f` |
+| four primitives refused a cull box (D644) | 83.7 s | identical |
+| ...and intersections refused as well (D644) | > 9 min, killed | not reached |
+| **two-pass cull boxes — the "right fix"** | **538.0 s** | identical |
+
+**Why the right fix is the worst of them.** A cull box that an answer can vouch for is, for this
+building, a box that rejects nothing: an intersection's honest box is the merge of its children's,
+which is most of the site, and the facility's solid is 217 intersections and 26 ellipsoids arranged
+so that the looseness reaches nearly every union above them. The cull is fast **because** it reads
+boxes tighter than the answers justify.
+
+**So the hole is not closable by better boxes, and that is the finding.** It would have to be closed
+by making the primitives report true distances — an exact ellipsoid, cone, prism and platonic — which
+is a different piece of work with its own cost, and the payoff on the only building this engine is
+judged against is **zero voxels**. Every arm of D644 and D646 samples to the same hash.
+
+**What is kept:** nothing but the knowledge, the mirror that found it, and the test that pins it.
+D644's closing paragraph is superseded — the fix it names is measured here and refused.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D646 | **Two-pass cull boxes built, measured, refused** | decision | Correct to one ulp and 45× slower, for a byte-identical building |
+| D646 | **A sound cull box rejects nothing on this clip** | finding | An intersection's honest box is the merge, which is most of the site |
+| D646 | **The cull is fast BECAUSE it reads boxes the answers do not justify** | finding | The speed and the unsoundness are the same property |
+| D646 | **The only remaining route is exact primitives** | honesty | And its payoff on the facility is zero voxels |
