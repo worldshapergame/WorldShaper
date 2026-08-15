@@ -7004,3 +7004,95 @@ dropping `-g`, then `-O0` — was needed or tried.
 input, deliberately: `softprops/action-gh-release` creates the tag when it publishes, so a failed
 run leaves nothing behind, where a pushed tag would have left `v0.7.1` pointing at a build that does
 not exist. That is now the documented way to cut a release.
+
+## D642 — the stipple verdict protects four things that are not there, and R11d's blocker is answered
+
+§5 says R11d cannot start until one question is answered: **where does the stipple verdict come from
+if the up-front whole-clip sample goes away?** D629 left three candidate answers and called the next
+move "a decision rather than a measurement". Two of the three turn out to be measurable, and both
+are refuted; the third is refuted by inspection; and what the measurements say about the verdict
+itself changes what the decision is.
+
+**The controls first, because every number below rests on them.** `stipple_counts` on a whole-clip
+sample, per resolution, on `clips/facility.clip`:
+
+| | materials with specks | materials spared |
+|---|---|---|
+| metre 4 | 31 | `188 358 386 392 483` |
+| **metre 8 — what ships** | **35** | **`27 358 392 455 509 554`** |
+| metre 16 | 25 | `27 383 509` |
+| metre 32 — authored | 27 | `27` |
+
+Metre 8's six and metre 32's one are D629's figures exactly; metre 4 sharing two of metre 8's six is
+D625's. Both overloads of `stipple_verdict` — the one the game calls on a Clip and the one a sweep
+calls on Counts — agree on every material at every resolution, so a sweep over the second is about
+what the game actually does.
+
+**Candidate: re-tune `stipple_share` / `kStippleFloor` until the authored verdict protects the same
+six. IMPOSSIBLE, and it is a proof rather than a failed search.** At metre 32, three of the six —
+**392, 455 and 509 — have no specks at all.** Both halves of the test are on the speck count
+(`specks/surface >= share` and `specks >= floor`), so a material with none fails both at every
+threshold there is. Of the three that remain, the weakest is 358 at 8 specks and a fraction of
+0.0005, and **fourteen** other materials beat that on both axes.
+
+**Candidate: derive it from the paint rules, which D629 records as "unknown and nobody has looked".
+Looked at, and refuted.** Walking every rule's test expression for a noise-family op
+(`noise fbm ridged rasp cells cell-edge`): ten materials are painted by a noise-keyed rule, and
+**only two of the six spared ones are among them** (392 and 554). Four of the six — 27, 358, 455,
+509 — are keyed on nothing of the sort, and eight noise-keyed materials are not spared. The overlap
+is 2 of 14. Being authored as noise and reading as a dither in a sample are close to independent.
+
+**Candidate: keep one whole-clip sample at the coarsest resolution whose verdict still agrees with
+metre 8. Dead, and now measured by WHICH materials rather than by how many** — which is what D625
+left owing. No resolution agrees with metre 8: it shares `358 392` with metre 4, `27 509` with metre
+16, and `27` with metre 32.
+
+**And here is what the four resolutions say about the verdict itself, which is the finding.**
+
+| material | metre 4 | metre 8 | metre 16 | metre 32 |
+|---|---|---|---|---|
+| **27** | 231 / 3.9% | 747 / 11.4% | 967 / 9.9% | 980 / 8.0% |
+| 358 | 32 / 100% | 40 / 6.9% | 56 / 1.8% | 8 / 0.05% |
+| 392 | 55 / 76% | 126 / 31% | 3 / 0.6% | **none** |
+| 455 | **none** | 92 / 17% | **none** | **none** |
+| 509 | **none** | 24 / 75% | 44 / 20% | **none** |
+| 554 | **none** | 16 / 6.3% | 6 / 2.1% | 10 / 0.9% |
+
+**Only material 27 is a dither.** It has a large, stable speck population at every resolution and a
+fraction that never leaves 4–11%. The other five are artefacts of one sampling resolution: 455
+exists at metre 8 and at no other; 509 at 8 and 16 and nowhere else; 392 is gone by metre 32. The
+shipped verdict is not protecting five weathering coats. It is protecting the **aliasing** of coats
+that resolve properly the moment the world is built at the detail a player stands in.
+
+**So D629's "five weathering coats stop being protected -- has to be LOOKED at" is, at authored
+detail, 154 voxels.** Despeckling the metre-32 world with each verdict in turn: the shipped one
+repaints **896**, the authored one repaints **1,050**, out of a building of 3.8 M solid voxels.
+
+**And part of that 154 is a fault rather than a trade.** 372 and 483 have **no specks at metre 8**,
+so they are absent from the shipped verdict's map entirely — and `despeckle` reads an absent
+material as *leave every speck alone* (D625). They carry 128 and 94 specks at authored detail, and
+they are untouched today because a coarse sample happened not to contain them. That is D625's fault
+arriving through a second door: not an empty verdict, but a verdict with a hole in it.
+
+**What this means for R11d.** The blocker was "the up-front sample is the only thing that can produce
+the verdict". It is not: route 1b's `stipple_counts_from_world` is built, wired and produces `{27}`,
+and `{27}` is the only material in the six that survives contact with the resolution the player sees.
+**The first of the three things keeping `--no-coarse-paste` opt-in is answered, and it was the big
+one** — the up-front sample can go, which is the 2,754 ms and the loading bar.
+
+**What still needs eyes, and it is one specific thing.** The ladder despeckles each node at the
+resolution that node was built at, and a distant node built at metre 8 has real specks in those
+coats — 40, 126, 92, 24 and 16 of them. Under a world verdict those get repainted. Whether that
+changes how the weathering reads *at a distance* is the question a screenshot answers and a counter
+cannot. Everything close enough to matter is the 154 voxels above.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D642 | **Re-tuning the thresholds cannot work** | finding | Three of the six have no specks at authored detail; both tests key on that count |
+| D642 | **The verdict is not recoverable from the paint rules** | finding | Only 2 of the 6 are noise-keyed; 8 noise-keyed materials are not spared |
+| D642 | **No resolution's verdict agrees with metre 8's** | finding | Shares 2, 2 and 1 material with metres 4, 16 and 32 |
+| D642 | **Only material 27 is a dither at every resolution** | finding | The other five vanish entirely at one resolution or more |
+| D642 | **Switching to the world verdict costs 154 voxels of 3.8 M** | measurement | 896 repainted against 1,050 on the authored world |
+| D642 | **The coarse verdict spares by OMISSION** | fault | 372 and 483 have no metre-8 specks, so 222 authored specks are left alone by accident |
+| D642 | **R11d's blocker is answered** | decision | The verdict has another source, so the up-front sample can go |
+| D642 | **The far field is what needs looking at** | honesty | A distant node built at metre 8 has real specks in those coats |

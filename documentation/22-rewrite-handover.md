@@ -577,6 +577,13 @@ numbers are already taken and are three blocks down, under *ASKED FOR NEXT*. Its
 reading rather than writing — `face_light_seed` and `face_reseed` may already be half of it — and
 that reading is **not done**.
 
+**R11d's blocker is answered (D642).** The stipple verdict does not need the up-front whole-clip
+sample: route 1b's world verdict is already built, and the measured cost of using it is 154 voxels
+in 3.8 M. That was the first and largest of the three things keeping `--no-coarse-paste` opt-in, so
+**what is left before it can be the default is the far chisel (R11h's other half) and the fact that
+flipping it re-bases every figure in this document** — plus one screenshot of the weathering at a
+distance, which is the only part of D642 a number could not settle.
+
 **Two things closed since, both of them measured (D636, D637):** step 2 of the chosen order is
 finished with almost no code — the histogram it asked for first says there is nothing to bound, and
 the union hierarchy that was supposed to be its other half turned out to cost a fifth of the sample
@@ -621,8 +628,10 @@ eight metres. Five gates were run and it passes all five.
 
 **Three things keep it opt-in, and none of them is the ladder.**
 
-1. **The loading bar does NOT go with this flag.** The up-front *sample* still runs — 2,760 ms — and
-   must, until the stipple verdict has another source. Not pasting saves 959 ms and removes the
+1. **The loading bar does NOT go with this flag — and this is the one D642 has now cleared.** The
+   up-front *sample* still runs, 2,760 ms of it, and was said to be unavoidable "until the stipple
+   verdict has another source". **It has one**: route 1b's world verdict, already built and wired,
+   at a measured cost of 154 voxels in 3.8 M (D642). So the sample can go, and with it the bar. Not pasting saves 959 ms and removes the
    blocky first pass. **D629 and D630 are why the verdict cannot move**, and D630's option 2 is built
    behind `--stipple-from-world` and measured at **+19 s and a verdict that protects nothing from a
    real camera**.
@@ -769,7 +778,33 @@ had to land first.
 **`a1f8bc6c656343b7`, 1,430,104 voxels**. The facility should lose 3.7 s of wall clock and must keep
 its content hash for a given camera, or `baseline.ps1` stops working (R11g).
 
-##### AND THE BLOCKER, found by reading before building: where does the STIPPLE VERDICT come from?
+##### THE BLOCKER IS ANSWERED (D642): the verdict comes from the world, and it costs 154 voxels
+
+**Read D642 before this section — it settles the question the rest of it is about, and it refutes
+two of the three candidate answers below by measurement and the third by inspection.**
+
+The short of it. Sampled at four resolutions, the facility's verdict spares `188 358 386 392 483` at
+metre 4, `27 358 392 455 509 554` at metre 8 (what ships), `27 383 509` at metre 16 and `27` at the
+authored metre 32. **Only material 27 is a dither at every resolution** — the other five vanish
+entirely at one resolution or more, so the shipped verdict is protecting the *aliasing* of coats
+that resolve properly at the detail a player stands in. Three of the six have **no specks at all**
+at metre 32, which is why no threshold can be tuned to protect them: both halves of the test are on
+the speck count.
+
+**So the answer is route 1b's world verdict, which is already built and wired**
+(`stipple_counts_from_world`), and the measured cost of it is **154 voxels of a 3.8 M-voxel
+building** — despeckling the authored world repaints 896 with the shipped verdict and 1,050 with the
+world one. Part of that 154 is a fault being fixed rather than a trade: 372 and 483 have no specks
+at metre 8, so they are absent from the shipped map, and an absent material is *left alone for ever*
+(D625).
+
+**What still needs eyes:** a distant node built at metre 8 has real specks in those coats (40, 126,
+92, 24 and 16 of them), and a world verdict repaints them. Whether the weathering reads differently
+*at a distance* is a screenshot question. **Everything close enough to matter is the 154 voxels.**
+
+---
+
+**What follows is the blocker as it stood before D642 answered it.**
 
 **R11d cannot start until this is answered, and it is not a detail.** The up-front sample is the only
 place in the engine that ever looks at the whole building at once, and one thing is taken from it

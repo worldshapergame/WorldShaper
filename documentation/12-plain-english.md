@@ -2845,3 +2845,52 @@ GitHub tying the file to the exact commit and build that produced it.
 proved the download contains the facility and that the facility builds from it — not that the game
 draws it. That last step is the one thing only you or your friend can do: unzip it, run
 `WorldShaper.exe`, and the facility should be on the shelf.
+
+## The thing blocking "no loading screen" turns out to be protecting four things that are not there
+
+The last big step you asked for — the world building itself around you with nothing loaded up front
+— has been sitting behind one question for four sessions. It is worth explaining, because the answer
+is a good one.
+
+**The question.** Before the game builds anything, it takes one look at the whole building to decide
+which materials are *deliberately speckled* — the weathering coats, where scattered single voxels of
+a different colour are the point. Everything else gets a cleaning pass that removes stray voxels.
+Get that decision wrong and the cleaning pass wipes the weathering off the building. That single
+look at the whole building is 2.8 seconds, and it is the last thing standing between you and no
+loading screen at all.
+
+**So: can that decision come from anywhere else?** There were three ideas. I tested all three today,
+on the real building, at four different levels of detail.
+
+- **Tune the thresholds until a full-detail look agrees with the current coarse one.** *Impossible* —
+  and I can prove it rather than just failing to find a setting. Three of the six protected materials
+  have **no stray voxels at all** at full detail, and the test is entirely about counting stray
+  voxels. Nothing you can set will protect something that isn't there.
+- **Work it out from the clip file instead of from a sample** — a dither is written as a rule keyed
+  on noise, so read the rules. *No.* Only two of the six protected materials are written that way,
+  and eight materials that *are* written that way aren't protected. The two things barely overlap.
+- **Take the look at some coarser level that still agrees.** *No.* I measured four levels; no two
+  agree. They share one or two materials out of six.
+
+**And then the finding that actually matters.** Laying the four levels side by side: **only one of
+the six is genuinely a dither.** Material 27 has a big, steady population of speckles at every level
+of detail — that is a real deliberate stipple. The other five appear at one level and vanish at
+others. One of them exists *only* at the coarse level the game currently takes its decision at.
+
+Which means the current decision is not protecting five weathering coats. It is protecting the
+**blurring** of coats that come out perfectly well once the building is made at the detail you
+actually stand in. It has been guarding ghosts.
+
+**What switching costs, measured.** Build the whole facility at full detail and run the cleaning pass
+both ways: the current decision leaves 896 voxels repainted, the new one 1,050. **A difference of 154
+voxels in a building of 3.8 million.** And part of that difference is a bug being fixed: two
+materials are currently left alone purely because the coarse look never happened to see them.
+
+**So the blocker is answered, and the 2.8 seconds can go.** The decision can come from the world as
+it is built — machinery that already exists in the game and is already switched on.
+
+**What I could not settle, and it needs your eyes, not a number.** Far-away parts of the building are
+made at coarse detail, and *there* those five coats do have stray voxels. Under the new rule they get
+cleaned. Whether the weathering looks different at a distance is a thing to look at, and I have no
+screen. That is the one open question, and it is a small and specific one — everything close enough
+to matter is the 154 voxels.
