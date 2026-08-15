@@ -12,11 +12,14 @@
 | The release tag and the zip's name | the workflow reads `CMakeLists.txt` and **fails if the tag disagrees** |
 | What the game compares against to decide it is out of date | the same generated header |
 
-So releasing is: bump the number, commit, tag `v<the same number>`, push the tag.
+So releasing is: bump the number, commit, push, and **dispatch** the workflow with the matching
+tag — `gh workflow run release.yml -f tag=v0.8.0`, or the Run workflow button.
 
-```bash
-git tag v0.6.0 && git push origin v0.6.0
-```
+**Dispatch rather than pushing the tag, and that is not a preference.** A pushed tag exists whether
+or not the build that was supposed to justify it ever succeeded, and this repository has three
+releases' worth of history in which it did not: a tag pointing at a build nobody can download is a
+promise the updater will keep making. On a dispatch the workflow creates the tag itself, in the same
+step that publishes the zip, so a failure leaves nothing behind to clean up.
 
 The workflow refuses to build a tag that does not match the source. That check is the whole
 point: the updater compares the latest release's tag against the version compiled into the
