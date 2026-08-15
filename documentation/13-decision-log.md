@@ -6987,3 +6987,20 @@ untested.**
 | D641 | **v0.6.1 was cancelled, not crashed** | honesty | It went into the record as a third crash because nobody read it |
 | D641 | **The workflow stages the clips too** | fix | It carried D640's bug in its own copy |
 | D641 | **The zip is opened and made to BUILD the facility** | gate | No graphics card needed: the clip tool is CPU-only |
+
+**IT WORKED, and v0.7.1 is the first release this repository has ever built in CI.** Run
+31853399573, five minutes eighteen seconds end to end, every step green including the new gate —
+which means the unpacked zip contained `WorldShaper.exe`, `SDL3.dll`, `shaders\visibility.comp.spv`
+and `clips\facility.clip`, and that the **shipped** facility parsed, spliced its twenty-two
+fragments and sampled to a positive volume. 4,286,094 bytes, SHA-256
+`12854e81a295bf2f9e98c59003bc14f65245cb77ecda3b99065bf68826da87a0`, with a GitHub provenance
+attestation. So the pinned glslc compiles `clouds.comp`, and neither of the two fallback arms —
+dropping `-g`, then `-O0` — was needed or tried.
+
+**The runner's own toolchain is worth recording, since `latest` is what caused this**: MSVC
+14.51.36231 (Visual Studio 18.8.2), Windows SDK 10.0.26100.0, Vulkan SDK 1.4.341.0 pinned here.
+
+**Dispatch, not a pushed tag.** The run was started with `workflow_dispatch` and the tag as an
+input, deliberately: `softprops/action-gh-release` creates the tag when it publishes, so a failed
+run leaves nothing behind, where a pushed tag would have left `v0.7.1` pointing at a build that does
+not exist. That is now the documented way to cut a release.

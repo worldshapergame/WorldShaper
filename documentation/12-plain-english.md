@@ -2818,3 +2818,30 @@ this project before, and ran the 541 tests. **The next thing to do is on your ma
 `build.bat`, then `tools\package.ps1`, and watch it print how many voxels the unpacked copy built.**
 If it prints a number, the download is fixed. If it stops with a complaint, it has caught something
 and the complaint will say what.
+
+## There is a new download, and this time the building is in it
+
+**https://github.com/worldshapergame/WorldShaper/releases/tag/v0.7.1** — `WorldShaper-v0.7.1-windows-x64.zip`.
+Send your friend that one.
+
+Getting there meant fixing the thing that has stopped every previous release: the automatic builder
+on GitHub, which has never once worked, so every download so far has been hand-made on your machine.
+**The reason it never worked was written down wrong in our own notes.** It was recorded as the build
+machine crashing its C++ compiler. It was not: every piece of the game compiled perfectly, and the
+thing that died was the *shader* compiler, which comes from a separate toolkit the builder installed
+fresh each time by asking for "the newest one". So the tool doing the work was a different tool every
+run, and one of them had a bug. It now asks for a specific version — the one the project already
+targets everywhere else — and the whole thing ran green in **five minutes**.
+
+**And it checks itself now.** Before publishing, it opens the zip it just made somewhere else
+entirely and makes the copy of the facility *inside that zip* actually build. A download with no
+building in it cannot get past that, which is precisely the fault your friend hit. It does this
+without a graphics card, because building a clip is pure arithmetic — no screen needed.
+
+So this release is checked in a way no previous one was, and it carries a signed statement from
+GitHub tying the file to the exact commit and build that produced it.
+
+**What I still have not done:** run the game. There is no graphics card on this machine, so I have
+proved the download contains the facility and that the facility builds from it — not that the game
+draws it. That last step is the one thing only you or your friend can do: unzip it, run
+`WorldShaper.exe`, and the facility should be on the shelf.

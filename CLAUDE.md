@@ -30,15 +30,20 @@ Three things that make this a rule rather than a habit:
 - **`--ff-only`.** A branch that has diverged from `main` is something to find out about
   deliberately, not by watching git invent a merge commit.
 
-**A release is the same loop with a tag on the end, and it is hand-built.**
-`.github/workflows/release.yml` had never once succeeded here, and **the reason written down was
-wrong**: it was read as the runner crashing its own C++ compiler, and the v0.7.0 log says every
-`.obj` compiled and **`glslc` died on `clouds.comp` with an access violation** — the SHADER compiler,
-out of a Vulkan SDK the workflow asked for as `latest`, so the build tool changed under the build
-between runs. It is pinned now (D641), and the workflow opens its own zip and makes the shipped
-facility build before publishing. **If CI has not yet produced a green run, `tools/package.ps1` is
-still the path** and its notes must say the download carries **no provenance attestation**; a CI
-release carries one. That
+**A release is the same loop with a tag on the end.**
+`.github/workflows/release.yml` **works, and v0.7.1 was built by it** — the first green run this
+repository has had. The reason it never worked was written down wrong: it was read as the runner
+crashing its own C++ compiler, and the v0.7.0 log says every `.obj` compiled and **`glslc` died on
+`clouds.comp`** — the SHADER compiler, out of a Vulkan SDK the workflow asked for as `latest`, so the
+build tool changed under the build between runs. It is pinned to 1.4.341.0 now (D641).
+
+**So a release is: bump `project(WorldShaper VERSION ...)`, commit, and dispatch the workflow with
+the matching tag.** Dispatch rather than pushing the tag, so a failure leaves no tag pointing at a
+build that does not exist; the workflow creates the tag when it publishes. It gates itself on what
+has actually gone wrong here — the tag must match the source, the tests must pass, and it **opens its
+own zip elsewhere and makes the shipped facility build** before publishing. `tools/package.ps1` is
+still the path for a zip you do not want published, and its notes must say that download carries
+**no provenance attestation**; a CI release carries one. That
 script cannot currently invoke `build.bat` either (`vswhere` does not resolve through it), so run its
 steps against an already-gated build: stage, zip, **unpack to a clean directory and run it there**,
 hash. That last gate is the one that caught v0.6.0 shipping with a shader path hard-coded to the
