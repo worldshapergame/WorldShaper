@@ -500,6 +500,20 @@ const uint kFaceMediumKnown = 1u << 31;
 uint face_medium_opacity(uint word) { return word & 0xFFu; }
 uint face_medium_ior(uint word) { return (word >> 8u) & 0xFFu; }
 uint face_medium_translucency(uint word) { return (word >> 16u) & 0xFFu; }
+
+// How deep light gets into this material before it is spent, in VOXELS. R4e.
+//
+// The byte the author writes is a depth and not a fraction, which is what makes a row of panels at
+// five thicknesses read as five different things out of one number. Four voxels at the top of the
+// range: `clips/translucency_test.clip` says marble "stops light in about a voxel" and writes 110
+// for it, which lands at 1.7 -- so a four-voxel lip passes about a tenth and the solid body behind
+// it passes nothing, which is the sentence that clip exists to make true. Alabaster at 220 reaches
+// 3.5 voxels and its four panels, from 1.3 to 12.8 voxels thick, come out at roughly 69%, 53%, 23%
+// and 2.5%. A material that never wrote the byte gets nought and no ray at all.
+const float kTranslucentDepthVoxels = 4.0;
+float face_medium_depth(uint word) {
+    return float(face_medium_translucency(word)) * (1.0 / 255.0) * kTranslucentDepthVoxels;
+}
 // How much of what arrives goes THROUGH, in [0, 1]. The one number the composite needs before it
 // can stop drawing a pane of glass as a wall.
 float face_medium_transmits(uint word) {
@@ -629,6 +643,11 @@ const uint kProbeSeeThrough = 1u << 8;
 // where it would be with no pane there, which is what D604 built and is a window with no glass in
 // it. `--no-refraction` clears it.
 const uint kProbeRefract = 1u << 9;
+// R4e: a face whose material is translucent and whose sun is BEHIND it casts the sun ray it would
+// otherwise have skipped, through the matter behind it, and is lit by what gets through. Off, a
+// marble panel with the sun on the far side is as dark as granite -- which is what this renderer has
+// always drawn. `--no-translucency` clears it.
+const uint kProbeTranslucent = 1u << 10;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -688,6 +707,7 @@ bool probe_lobe_ray() { return (light_probe.words[0] & kProbeLobeRay) != 0u; }
 bool probe_lobe_big() { return (light_probe.words[0] & kProbeLobeCoverage) != 0u; }
 bool probe_see_through() { return (light_probe.words[0] & kProbeSeeThrough) != 0u; }
 bool probe_refract() { return (light_probe.words[0] & kProbeRefract) != 0u; }
+bool probe_translucent() { return (light_probe.words[0] & kProbeTranslucent) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
@@ -2412,6 +2432,12 @@ struct NodeHit {
     bool left_medium;
     float exit_t;
     ivec3 exit_normal;
+
+    // R4e: how far the ray travelled THROUGH matter, in voxels. Filled by `kThroughSolid` and
+    // nought for every other mode. A ray that came back `hit == false` with a small `crossed` got
+    // to the other side through that much stone, which is the whole question a translucent surface
+    // asks.
+    float crossed;
 };
 
 // ---- R4d: the three things a ray can do about matter it can see through -------------------------
@@ -2423,6 +2449,23 @@ struct NodeHit {
 const uint kThroughStop = 0u;   // transmissive matter stops the ray dead, as it always did
 const uint kThroughPass = 1u;   // the ray carries on, multiplying `through` by what each voxel let by
 const uint kThroughExit = 2u;   // ...and stops where it LEAVES the medium, for the caller to bend
+// R4e, and it is about OPAQUE matter rather than transmissive: the ray crosses solid voxels of any
+// material, adding up how far it went through them, and gives up once it has crossed
+// `kCrossedMax`. Nothing is attenuated and nothing is bent -- what comes back is a distance.
+//
+// This is the measurement `clips/translucency_test.clip` was written around, in its author's own
+// words: *"the renderer has to find it out by counting the voxels a scattered ray crosses before it
+// is extinguished, which is the one measurement a voxel world can always make."* No clip says which
+// parts of a building are thin. A ray does.
+const uint kThroughSolid = 3u;
+
+// How far a ray in `kThroughSolid` may travel through matter before it counts as stopped, in
+// voxels. A metre, which is far past the point where any translucent material this engine can
+// describe has anything left: `absorb`-free marble at 110 extinguishes in under two voxels and the
+// most translucent thing describable, 255, in four. It is a bound on the WALK rather than a
+// physical constant -- the extinction is the caller's arithmetic, and this only stops a ray that
+// would otherwise walk the length of a building through solid stone.
+const float kCrossedMax = 32.0;
 
 const uint kNoFaceLevel = 0xFFFFFFFFu;
 
@@ -2645,6 +2688,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     result.left_medium = false;
     result.exit_t = 0.0;
     result.exit_normal = ivec3(0, 1, 0);
+    result.crossed = 0.0;
     result.face_node = ivec3(0);
     result.face_level = kNoFaceLevel;
     result.face_dir = 0u;
@@ -2854,6 +2898,41 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     // What it costs when it fires is one table lookup and one more step of a DDA
                     // that was already running. What it costs when it does not fire is a branch on
                     // a uniform.
+                    // ---- R4e: matter a ray can scatter through ---------------------------
+                    //
+                    // The same step, over voxels that are not transmissive at all. What separates
+                    // it from the branch below is what it accumulates: a distance rather than a
+                    // tint, and the ray gives up on a budget of MATTER rather than on one of
+                    // brightness. Everything else -- the leaf gate, the DDA, the cost when it does
+                    // not fire -- is the same.
+                    if (through_mode == kThroughSolid && level == 0) {
+                        const float was = t_inner;
+                        if (i_max.x < i_max.y && i_max.x < i_max.z) {
+                            t_inner = i_max.x; inner.x += step_dir.x; i_max.x += i_delta.x;
+                            inner_normal = ivec3(-step_dir.x, 0, 0);
+                        } else if (i_max.y < i_max.z) {
+                            t_inner = i_max.y; inner.y += step_dir.y; i_max.y += i_delta.y;
+                            inner_normal = ivec3(0, -step_dir.y, 0);
+                        } else {
+                            t_inner = i_max.z; inner.z += step_dir.z; i_max.z += i_delta.z;
+                            inner_normal = ivec3(0, 0, -step_dir.z);
+                        }
+                        result.crossed += max(t_inner - was, 0.0);
+                        // Out of matter to give: past this the ray is extinguished, and an
+                        // extinguished ray is a stopped one. Reported as a hit rather than as a
+                        // miss, because "I was swallowed by a metre of stone" and "I reached the
+                        // sky" are the two answers this mode exists to tell apart (trap 7).
+                        if (result.crossed >= kCrossedMax) {
+                            result.hit = true;
+                            result.t = max(t_inner, 0.0);
+                            result.normal = inner_normal;
+                            result.level = level;
+                            node_flush(report, has_pending, pending);
+                            return result;
+                        }
+                        if (t_inner > limit) break;
+                        continue;
+                    }
                     if (through_mode != kThroughStop && level == 0) {
                         const vec3 past = node_medium_through(leaf_voxel_type(leaf, inner));
                         if (past.r + past.g + past.b > 0.0) {

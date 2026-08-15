@@ -7648,3 +7648,87 @@ straight ray exactly, which is what makes that a one-flag comparison rather than
 | D652 | **The last segment carries the reporting** | correctness | Otherwise what is behind the window has no face and never gets lit |
 | D652 | **Dispersion is not built** | honesty | It is a march per wavelength and belongs to the face pass |
 | D652 | **Unmeasured: cost and picture** | honesty | Owed on a machine with a card; `--no-refraction` is the control arm |
+
+## D653 — R4e: marble stops being granite, and the renderer works out which parts are thin
+
+`VisualRecord::translucency` has been in the voxel record since the format was written, the facility
+has written **110** on its marble since the building existed, and until now the only thing that read
+the byte was a debug view. Every marble surface in the building — walls, floors, the statues, the
+lip of every moulding — rendered as painted stone.
+
+`clips/translucency_test.clip` was written by an earlier session to test exactly this and could not
+be used. **Its header is the specification**, and it is worth quoting because it rules out the
+obvious implementation: *"what makes marble marble is that the thin parts glow and the thick parts
+do not, and no clip says which is which — the renderer has to find it out by counting the voxels a
+scattered ray crosses before it is extinguished, which is the one measurement a voxel world can
+always make."*
+
+**So the ray does the measuring, and the ray was already being thrown away.** A face whose sun is
+BEHIND it casts no sun ray at all — `sun_possible` is false and the face books a miss without
+tracing anything, which is most of a building. That is precisely the case translucency is about. So
+a translucent face now casts that ray, in a new marcher mode:
+
+- **`kThroughSolid`** crosses solid voxels of any material, adds up how far it went through them,
+  and gives up after `kCrossedMax` — 32 voxels, a metre. A ray that comes back `hit == false` got to
+  the sky through that much stone; one that comes back `hit == true` was swallowed. Those are
+  different answers and the mode exists to tell them apart.
+- **The extinction is a coin, not a fraction.** `face_accumulate` counts whole samples, so a term
+  that is 43% transmitted has to arrive as 43% of samples reaching the sun. The ray is booked as a
+  hit weighted by `exp(-crossed / depth)`, which converges to exactly that in the counters that
+  already exist — no new buffer, no second convergence rule, and the penumbra machinery it shares
+  gives the glow the same soft edge the shadow beside it has.
+- **The depth is the byte**: `translucency / 255 × 4` voxels. Marble at 110 lands at 1.7 voxels,
+  which is the clip's own "stops light in about a voxel"; alabaster at 220 reaches 3.5.
+
+**Measured, and this is the first light change in this rewrite verified by a picture on a machine
+with no graphics card** — `clips/translucency_test.clip` at 320×200, frame 30, `--no-translucency`
+the control arm, luma per column band over the row of panels:
+
+| what | on | off | change |
+|---|---|---|---|
+| **the control panel** — the same stone with the byte at nought | 93–101 | 97–103 | **−3.5 to +2.7** |
+| the thinnest alabaster, 1.3 voxels | 169.5 | 96.8 | **+72.7** |
+| ...and the panel beside it | 169.6 | 93.6 | **+76.0** |
+| the sky above them | 157–161 | 163–169 | −3 to −12 |
+
+**The control panel not moving is the result.** The byte is nought on it, so no ray is cast and
+nothing can change; a feature that lit it anyway would be lighting by material identity, which R4's
+opening rule forbids in as many words. The sky darkening slightly is the light meter stopping down
+because the scene got brighter, which is the auto-exposure doing its job (D577).
+
+**And settled, at frame 120, the row comes out in order** — the panels found from the picture itself
+rather than guessed at, luma over the same rows:
+
+| the row, left to right | on | off | change |
+|---|---|---|---|
+| the control panel, byte at nought | 125.6 | 126.7 | **−1.1** |
+| alabaster, 1.3 voxels thick | 165.6 | 113.6 | **+52.0** |
+| ...2.2 voxels | 144.1 | 120.7 | **+23.4** |
+| ...5.1 voxels | 124.5 | 108.7 | **+15.8** |
+| ...12.8 voxels, with the moulding block behind it | 104.5 | 97.4 | **+7.1** |
+
+**Strictly decreasing, which is the whole of what the clip's row was built to ask.** No clip said
+which of those panels was thin; they are the same material at five thicknesses, and the ray found
+out. At frame 30 that ordering was still inside its own noise — the coin had a handful of samples a
+face — so the settled figure is the one to quote.
+
+**What is NOT claimed: the cost.** This is a ray a whole class of faces was not casting. It is
+bounded by the same stride and convergence as the sun's, and on this software rasteriser a frame is
+260 ms whatever it does, so what it costs against the 4.40 ms face-pass budget on the facility needs
+a card.
+
+**And what it deliberately does not do:** a glowing panel does not light the room. `bounce_face_light`
+would need a second buffer read on the pass's hottest path to see it, which is the same trade D591
+recorded for the mirror and refused for the same reason. It errs dark, which is the direction this
+renderer is required to err in.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D653 | **Translucency is read at last** | build | A byte in the record since the format existed, and the facility writes it on all its marble |
+| D653 | **The ray was already being discarded** | design | A back-lit face casts nothing today, so this class costs a ray nobody was paying for |
+| D653 | **`kThroughSolid`: a mode that measures matter** | build | The clip's author specified counting voxels crossed; nothing else can tell thin from thick |
+| D653 | **The extinction is a weighted coin** | method | It converges to the fraction in counters that already exist — no new storage, no new rule |
+| D653 | **Verified by picture, card-free** | finding | Control panel −3.5 to +2.7, thin alabaster +72.7, on a software rasteriser |
+| D653 | **Settled, the row is strictly ordered by thickness** | gate | +52.0, +23.4, +15.8, +7.1 down the row, and −1.1 on the control |
+| D653 | **Unmeasured: the cost** | honesty | A ray a class of faces was not casting, against a 4.40 ms budget |
+| D653 | **A glowing panel does not light the room** | honesty | A second read on the hottest path; the same refusal D591 made for the mirror |

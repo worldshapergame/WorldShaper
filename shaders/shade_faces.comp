@@ -1747,7 +1747,26 @@ void main() {
     // sun is currently lit by the entire sky dome regardless of what stands in front of it.
     const float facing = dot(vec3(normal), node_push.sun.xyz);
     const bool sun_possible = facing > 0.0;
-    if (!sun_possible && sun_due && may_cast) {
+
+    // ---- R4e: the sun THROUGH the surface, for a face whose material scatters it ---------------
+    //
+    // The medium word is read here rather than resolved here: it is filled once, by
+    // `node_face_material` further down, and it persists. A face whose word is not known yet takes
+    // the old answer this frame and asks again on the next visit, which is the same "ask again"
+    // idiom the material itself uses -- and the alternative, moving the resolve above the sun ray,
+    // reorders a block whose ordering three separate comments here are about.
+    //
+    // Nothing but a translucent material can reach this: `translucent=` is nought unless a clip
+    // wrote it, so every stone, metal and pane in the building takes the branch it always took.
+    const uint medium_word = (slot < face_medium.words.length()) ? face_medium.words[slot] : 0u;
+    const bool translucent = probe_translucent() && (medium_word & kFaceMediumKnown) != 0u &&
+                             face_medium_translucency(medium_word) > 0u;
+    // A face lit from behind through matter. The ray is the one `sun_possible` was ABOUT to throw
+    // away, so this class of face costs a ray it was not already paying for and no other class
+    // changes at all.
+    const bool sun_through = !sun_possible && translucent && facing < 0.0;
+
+    if (!sun_possible && !sun_through && sun_due && may_cast) {
         // Counted as a ray that did not reach the sun, which is what it is. The fraction then
         // falls as the samples come in rather than snapping to nought, and this is the same
         // arithmetic a lit face does with one term different.
@@ -1810,7 +1829,7 @@ void main() {
     // not carried, because it costs the smaller window a finer ray and buys nothing measurable. The
     // reasoning was sound and the answer was still no, which is D417's shape exactly.
     const float pixel_angle = 2.0 * push.lens.x / float(push.resolution.y);
-    if (sun_possible && sun_due && may_cast) {
+    if ((sun_possible || sun_through) && sun_due && may_cast) {
         const uint cone_seed = node_hash_mix(seed ^ 0x85EBCA6Bu);
         const vec2 disc = vec2(float(cone_seed & 0xFFFFu), float((cone_seed >> 16) & 0xFFFFu)) /
                           65536.0;
@@ -1826,13 +1845,37 @@ void main() {
                                    tangent * (sin_theta * cos(phi)) +
                                    bitangent * (sin_theta * sin(phi)));
 
+        // A back-lit translucent face sends the ray INTO itself, and the mode is what makes that a
+        // measurement rather than an immediate stop: it crosses matter, adds up how much, and gives
+        // up after a metre of it. Everything else about the ray -- the disc, the jitter, the
+        // widening, the reporting rules -- is the sun ray's and is shared deliberately, so a glow
+        // has the same soft edge the shadow beside it does.
         NodeHit hit = node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
-                                 probe_see_through() ? kThroughPass : kThroughStop, kNodeUnbounded);
+                                 sun_through ? kThroughSolid
+                                             : (probe_see_through() ? kThroughPass : kThroughStop),
+                                 kNodeUnbounded);
+
+        // What survives the stone, and it is a COIN rather than a fraction because the counter it
+        // lands in holds whole samples.
+        //
+        // `face_accumulate` counts rays that reached the sun, so a term that is 43% transmitted has
+        // to arrive as 43% of samples reaching it. Weighting the coin by the extinction over the
+        // distance this ray actually crossed converges to exactly that, in the same counters, over
+        // the same samples the penumbra is already using -- and it costs one hash. It also means a
+        // panel four voxels thick and one twelve voxels thick differ by their own geometry rather
+        // than by anything anybody wrote down about them.
+        bool lit = !hit.hit;
+        if (sun_through && lit) {
+            const float depth = face_medium_depth(medium_word);
+            const float survives = (depth > 0.0) ? exp(-hit.crossed / depth) : 0.0;
+            const uint coin = node_hash_mix(seed ^ 0xC2B2AE35u);
+            lit = (float(coin & 0xFFFFFFu) * (1.0 / 16777216.0)) < survives;
+        }
 
         // The penumbra resolves over samples on the FACE, which is what takes it off the pixel: a
         // soft edge costs the face a few frames instead of costing every pixel that looks at it a
         // ray of its own, every frame, for ever.
-        faces.items[slot].counters = face_accumulate(counters, !hit.hit);
+        faces.items[slot].counters = face_accumulate(counters, lit);
 
         // How far the ray got before it gave up, for the rays that reached nothing. `photons` is
         // GPU-owned and unwritten until the photon pass exists, so this borrows it rather than

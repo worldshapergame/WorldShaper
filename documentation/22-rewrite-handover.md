@@ -579,7 +579,36 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — 2026-08-15: refraction is in and OWES A PICTURE; the frame-11 crash was ours
+#### START HERE — 2026-08-15: marble glows, refraction owes a picture, and a card-free picture IS possible
+
+**R4e is in and it is VERIFIED BY PICTURE (D653)** — the first light change in this rewrite checked
+without a graphics card. A translucent material lit from behind now lets the sun through in
+proportion to how much of it the light had to cross, which is the byte the facility has written on
+its marble since the building existed with nothing reading it. Settled, `clips/translucency_test.clip`
+gives **−1.1, +52.0, +23.4, +15.8, +7.1** in luma down its row of five panels — strictly ordered by
+thickness, with the control panel (the same stone, byte at nought) not moving.
+
+**How that picture was taken, because it changes what a card-free session can do.** Xvfb plus
+lavapipe, a SMALL clip, and a screenshot: the facility dies on the software rasteriser at frame 11
+(D651) but a small world survives past **frame 120**, which is converged. So:
+
+```powershell
+Xvfb :99 -screen 0 1280x800x24 &
+DISPLAY=:99 WorldShaper --no-title --clip-file clips/translucency_test.clip \
+    --cam "-1.5,0.62,-0.8,0,2" --width 320 --height 200 \
+    --screenshot on.png --screenshot-frame 120
+```
+
+...and the same with the control flag, then compare the two by luma per column. A pure-Python PNG
+reader is forty lines and needs no packages (`python3-pil` in this container is broken). **A light
+change on a small clip is now checkable here. A light change on the facility is still not.**
+
+**What is still owed a picture: R4d's refraction (D652).** Nothing about glass has been looked at,
+and the gate is one flag: `--clip-file clips\glass_test.clip --cam 0,1.4,-3.0,90,0` against
+`--no-refraction`. That clip is small too, so **the trick above should work on it** — it was written
+before the trick was found, and nobody has run it.
+
+#### 2026-08-15, earlier: refraction is in and the frame-11 crash was ours
 
 **R4d's refraction is built and has never been seen (D652).** The primary ray now bends where it
 enters glass or water, is stopped at the face where it leaves by the marcher's new `kThroughExit`,

@@ -303,6 +303,10 @@ inline constexpr u32 kProbeSeeThrough = 1u << 8;
 // leaves it, and the medium absorbs over the true distance rather than once per voxel crossed.
 // Cleared by `--no-refraction`, which restores D604's straight ray exactly.
 inline constexpr u32 kProbeRefract = 1u << 9;
+// R4e: a translucent face with the sun behind it casts the ray `sun_possible` used to throw away,
+// through the matter behind it, and is lit by what survives the crossing. Cleared by
+// `--no-translucency`, which is the state every figure before it was taken in: marble as granite.
+inline constexpr u32 kProbeTranslucent = 1u << 10;
 
 // R4c's pool: how many blocks of outgoing bins there are and how many words each is. Must match
 // kLobeBlocks, kLobeBins and the layout in shaders/face_terms.glsl, which is the authority because

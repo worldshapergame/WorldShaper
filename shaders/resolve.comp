@@ -575,6 +575,33 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
     }
     lambert *= sun_visible;
 
+    // ---- R4e: and the sun that came THROUGH the surface, for a material that scatters it -------
+    //
+    // The face's counters say how much of the sun reaches its front, by whatever path. For a
+    // surface with the sun in front that is the shadow term above and this adds nothing at all --
+    // `lambert` is already the whole of it and the branch below cannot be entered.
+    //
+    // With the sun BEHIND it, and only if the material is translucent, the face pass has been
+    // casting a ray through the matter behind it and counting how much got through (R4e). What
+    // arrives is diffuse and takes the cosine at the face the light ENTERED, which is the back one
+    // -- so it is brightest looking straight at a panel with the sun directly behind it, exactly
+    // as a hand held over a torch is.
+    //
+    // The share is the byte itself and not the depth: how deep the light gets decides WHICH parts
+    // of a building glow, and how much of it scatters rather than being absorbed decides how
+    // strongly. Marble at 110 gives back 43% of what gets through, which is a stone that glows and
+    // is plainly still stone.
+    float through_lambert = 0.0;
+    if (face_slot < faces.items.length() && face_slot < face_medium.words.length()) {
+        const uint medium = face_medium.words[face_slot];
+        const uint translucency = face_medium_translucency(medium);
+        if ((medium & kFaceMediumKnown) != 0u && translucency > 0u) {
+            const float behind = max(dot(-normal, trace.sun.xyz), 0.0);
+            through_lambert = behind * sun_visible * (float(translucency) * (1.0 / 255.0));
+        }
+    }
+    lambert += through_lambert;
+
     // How much sky this surface can actually see, measured on the face (R10a).
     //
     // What was here decided it from which way the surface points and from nothing else:

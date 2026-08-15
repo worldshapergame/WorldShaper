@@ -978,6 +978,20 @@ about coarse faces, which have no one material and say so.
   *Gate: a mirror wall shows a recognisable image with no per-pixel ray; glass and water read as
   glass and water; frame time within 15% of R3 on a scene with no reflective material in it.*
 
+- **R4e — translucency: the sun THROUGH a surface, for a material that scatters it. Done (D653).**
+  Not in the original list, because when the list was written the byte looked like a shade of R4d's
+  transmission. It is not: transmission is light that goes STRAIGHT through and translucency is
+  light that scatters inside and comes out diffuse, and the facility has written `translucent=110`
+  on its marble since the building existed with nothing reading it.
+  The ray is the one a back-lit face was already throwing away, and the marcher gained
+  `kThroughSolid` to make it a measurement — it crosses matter, counts how far it went through, and
+  gives up after a metre. The extinction over that distance arrives as a coin weighted by
+  `exp(-crossed/depth)`, which converges in the counters that already exist. Verified by picture on
+  a machine with no card: settled, the test clip's five panels come out **−1.1, +52.0, +23.4, +15.8,
+  +7.1** in luma, strictly ordered by thickness, with the control panel — the same stone with the
+  byte at nought — not moving. **Owed: the cost**, which is a ray a whole class of faces was not
+  casting. `--no-translucency` is the control arm.
+
 ### R9 — The off-screen set, so light is world space and not screen space · L
 
 **Where this comes from.** The one rule says every ray starts on a voxel face, and R3 makes the

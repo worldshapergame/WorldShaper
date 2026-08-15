@@ -442,6 +442,10 @@ struct Options {
     // where it leaves, and what it crossed absorbs over the true distance rather than per voxel.
     // `--no-refraction` is the control arm and restores D604's straight ray exactly.
     bool refraction = true;
+    // R4e: a translucent material -- marble, alabaster -- lit from behind lets the sun through in
+    // proportion to how much of it the light had to cross. `--no-translucency` is the control arm
+    // and every such surface goes back to being as dark as granite when the sun is on the far side.
+    bool translucency = true;
     // How much of the node pool's payload buffer to use, in megabytes. 0 takes the budget's own
     // figure, clamped to what the driver will bind. There to make a small pool reachable without a
     // rebuild -- the same reason `--face-budget` exists.
@@ -922,6 +926,9 @@ Options parse_options(int argc, char** argv) {
         } else if (arg == "--no-see-through") {
             // R4d's control arm: transmissive matter stops a light ray dead, as it always has.
             options.see_through = false;
+        } else if (arg == "--no-translucency") {
+            // R4e's control arm: the byte stays unread, as it was until now.
+            options.translucency = false;
         } else if (arg == "--no-refraction") {
             // R4d's other control arm: the ray behind the glass carries straight on, which is
             // what D604 built and what every figure before this was taken in.
@@ -6864,7 +6871,8 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.lobe_ray ? kProbeLobeRay : 0u) |
                               (options_.lobe_coverage ? kProbeLobeCoverage : 0u) |
                               (options_.see_through ? kProbeSeeThrough : 0u) |
-                              (options_.refraction ? kProbeRefract : 0u);
+                              (options_.refraction ? kProbeRefract : 0u) |
+                              (options_.translucency ? kProbeTranslucent : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),

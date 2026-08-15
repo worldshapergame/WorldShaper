@@ -324,6 +324,7 @@ add_executable(ws_tests
     tests/test_op.cpp
     tests/test_raycast.cpp
     tests/test_refraction.cpp
+    tests/test_translucency.cpp
     tests/test_history.cpp
     tests/test_chisel.cpp
     tests/test_clip.cpp
