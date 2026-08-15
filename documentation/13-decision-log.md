@@ -7940,3 +7940,8 @@ neither is the interface this project is going to keep.
 | D658 | **Resolved once at palette time, not looked up per frame** | decision | The names live on a Script the ladder moves; that is a bug this project has already had |
 | D658 | **`type N` where nothing named it** | decision | A blank reads as a renderer fault, an id reads as an unnamed material |
 | D658 | **The position and count travel with it** | decision | `1/1` is the report "Q and E do not work" actually looks like |
+
+**Shipped as v0.8.1** — run 31909995186 against `8f72c23`, green on every step in six minutes nine,
+`WorldShaper-v0.8.1-windows-x64.zip`, 4,347,455 bytes, SHA-256
+`378CF82773B83856A388091DC5B211F641DE221A7E071EE4FF4068B195793D86`, attested. Third green run in a
+row, all three dispatched rather than tagged (D657).

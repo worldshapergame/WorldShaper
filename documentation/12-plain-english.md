@@ -3100,3 +3100,6 @@ Where a material was never given a name in the file, it shows its number instead
 would look like the game failing rather than like a material nobody named.
 
 This is on the temporary strip, not the real interface, and it goes when that arrives.
+
+**It is in v0.8.1**, which is the download on the releases page now — or press **F8** if the game is
+already telling you there is a newer one.
