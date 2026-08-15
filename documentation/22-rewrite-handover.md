@@ -116,7 +116,10 @@ what they can tell you is what it looks like. All three exist to keep that loop 
    short list of what they should see in game and nothing else. Method, refutations and caveats go
    in this file and in the decision log. A caveat reaches the reply only when it changes what they
    should look at.
-4. **Keep the next step HERE too — §5's opening — rather than in the reply** (2026-08-15).
+4. **Keep the next step HERE too — §5's opening — rather than in the reply, and never write "what
+   would mean it failed" to them** (2026-08-15, both asked for directly). The reply is what they
+   should SEE in the build: no failure modes, no things to watch for, no next step. Every one of
+   those belongs in this file.
    **The rule this replaced, kept because the reasoning still holds for this file:** end with the
    next step and what it will look like in game. The same test as rule
    1, applied one step ahead: name what is next and say what they should expect to see when it

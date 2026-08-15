@@ -80,8 +80,10 @@ The person this is for does not read code and does not run the measurements. Wha
 build. So: commit before every report, and then **the report to them is a very short list of what
 they should see in game. Nothing else.**
 
-**Asked for directly on 2026-08-15, and it is firm: do NOT write a "what I did not do" section, and
-do not pad the report with method, measurements, refutations or caveats.** Those belong in
+**Asked for directly on 2026-08-15, and it is firm: do NOT write a "what I did not do" section, do
+NOT write "what would mean it failed", and do not pad the report with method, measurements,
+refutations or caveats.** The list is what they should SEE, and nothing else — no failure modes to
+watch for, no things to check, no next steps. Those belong in
 `13-decision-log.md` and in `22-rewrite-handover.md`, where the next session reads them — not in the
 reply. A caveat only reaches the report when it changes what they should look at in the build. The
 same goes for the next step: put it in the handover, and mention it only if it needs a decision from

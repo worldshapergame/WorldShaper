@@ -7327,3 +7327,30 @@ D644's closing paragraph is superseded — the fix it names is measured here and
 | D646 | **A sound cull box rejects nothing on this clip** | finding | An intersection's honest box is the merge, which is most of the site |
 | D646 | **The cull is fast BECAUSE it reads boxes the answers do not justify** | finding | The speed and the unsoundness are the same property |
 | D646 | **The only remaining route is exact primitives** | honesty | And its payoff on the facility is zero voxels |
+
+## D647 — the up-front sample now skips itself, and it needs a verdict source that does not cost 19 s
+
+The sample is skipped when nothing needs it: `!no_coarse_paste || stipple_at_coarse`. Both of those
+have to be false, and **only one of them is cheap today**.
+
+- `--no-coarse-paste` is R11d and is measured (D631–D635).
+- The verdict is the other half, and the only flag that moves it off the coarse sample is
+  `--stipple-from-world`, which is **D630's option 2 and costs +19 s** — it cleans the world at the
+  fixed point, and a verdict taken from a partially refined world protects **nothing at all** (0
+  materials against the refined world's one and the metre-8 sample's six).
+
+So `--no-coarse-paste` on its own still pays the 2,754 ms, and the pair removes it only by paying
+more elsewhere. **The loading bar is not gone yet, and saying otherwise was wrong.**
+
+**What D642 actually unblocked** is the argument, not the wiring: the coarse verdict protects four
+materials that have nothing to protect at authored detail, and the fully-refined world verdict costs
+154 voxels of 3.8 M. What is missing is a verdict source that is neither the 2.75 s whole-clip sample
+nor D630's 19 s clean — the obvious one being the world verdict taken **incrementally as the ladder
+sharpens**, which is `stipple_counts_from_world` already summing per region rather than being run
+once over everything at the end. That is the next step and it is card-free.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D647 | **The sample skips when nothing needs it** | build | Verified compiling and passing on Windows by the new CI |
+| D647 | **It needs both flags, and one of them costs 19 s** | honesty | `--no-coarse-paste` alone still pays the 2,754 ms |
+| D647 | **The missing piece is an incremental world verdict** | next | Neither a whole-clip sample nor D630's clean at the end |
