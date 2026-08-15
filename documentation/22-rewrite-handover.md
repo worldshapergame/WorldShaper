@@ -600,6 +600,7 @@ a step-bounded ray is not a bound. Not carried. D361.
 | the crash that made every card-free picture but one impossible | **named: it is R4c's lobe pool, not the size of the scene and not refraction** (D656) |
 | the node payload was bound at 512 MB against a driver limit of 128, with nothing anywhere reading `maxStorageBufferRange` — and the Deck is the stated floor | **clamped** (D651) |
 | R11d's incremental stipple verdict — the step D647 called "one argument away" | **measured and refused on price**; the surviving route is D628's world-read skirt (D649) |
+| all of the above, as something the person this is for can actually run | **shipped as v0.8.0**, CI-built and attested, run 31908414130 (D657) |
 
 **The first three things to do, in this order:**
 

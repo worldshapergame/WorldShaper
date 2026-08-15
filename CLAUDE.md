@@ -31,8 +31,8 @@ Three things that make this a rule rather than a habit:
   deliberately, not by watching git invent a merge commit.
 
 **A release is the same loop with a tag on the end.**
-`.github/workflows/release.yml` **works, and v0.7.1 was built by it** — the first green run this
-repository has had. The reason it never worked was written down wrong: it was read as the runner
+`.github/workflows/release.yml` **works, and v0.7.1 and v0.8.0 were built by it** — v0.7.1 was the
+first green run this repository has had, v0.8.0 the second, in six minutes eleven (D657). The reason it never worked was written down wrong: it was read as the runner
 crashing its own C++ compiler, and the v0.7.0 log says every `.obj` compiled and **`glslc` died on
 `clouds.comp`** — the SHADER compiler, out of a Vulkan SDK the workflow asked for as `latest`, so the
 build tool changed under the build between runs. It is pinned to 1.4.341.0 now (D641).

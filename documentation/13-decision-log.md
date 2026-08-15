@@ -7860,3 +7860,37 @@ file, as a WARN when it is short of the frame asked for.
 | D656 | **R4d's gate is shot with `--no-face-lobe`** | build | R4c's control arm leaves refraction untouched |
 | D656 | **The card-free recipe needs `--max-seconds 0`** | correction | 180 s deadline against a 268 s shader compile: a frame-1 picture that exits 0 |
 | D656 | **A screenshot says which frame it is of** | build | Trap 15 in the harness; the warning was thirty lines from the file name |
+
+## D657 — v0.8.0 is out, and the release procedure in the documents now matches the one that works
+
+The user asked for the project merged and a new release. Both are done, and the release went green
+first time: **run 31908414130, six minutes eleven seconds, every step including the gate that opens
+the zip somewhere else and makes the shipped facility build.**
+
+| | |
+|---|---|
+| tag | **v0.8.0**, created by the workflow as it published, from a dispatch against `main` |
+| download | `WorldShaper-v0.8.0-windows-x64.zip`, **4,346,471 bytes** |
+| SHA-256 | `EE1F399D3067C0A494554C87A728A3AFDBB9498E9BEAAA96F6FB20C75283BCD9` |
+| provenance | attested by GitHub against commit `af4c3db` and this workflow |
+| signing | skipped, as it always is until the certificate secrets exist |
+
+**Why the minor number and not the patch.** Twenty commits since v0.7.1, and two of them are things a
+player looks at: glass bends what is behind it (R4d, D652, with its picture finally taken in D656)
+and marble glows where it is thin (R4e, D653). A third is a crash nobody would ever have reported —
+the node payload bound at 512 MB against drivers that allow 128, which is the Steam Deck's class of
+limit (D651). Features, so the minor moves.
+
+**And a document was corrected in the same change, which is the part worth keeping.**
+`documentation/15-releases.md` still said releasing is `git tag && git push origin <tag>`. CLAUDE.md
+has said *dispatch* since v0.7.1 went green, and the reason is this repository's own history: a
+pushed tag exists whether or not the build that was meant to justify it succeeded, and v0.6.0, v0.6.1
+and v0.7.0 all left exactly that behind — a tag the updater will happily offer players, pointing at a
+download that does not exist. On a dispatch the workflow creates the tag in the step that publishes
+the zip. The two documents disagreed for one release; now they do not.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D657 | **v0.8.0 published, CI-built** | build | Second green run; the gate opened the zip and built the shipped facility before publishing |
+| D657 | **Minor, not patch** | decision | Two player-visible features since v0.7.1 (D652, D653) and one silent crash fix (D651) |
+| D657 | **15-releases.md now says dispatch** | correction | It still described the tag-push that left three tags pointing at nothing |

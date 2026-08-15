@@ -3064,3 +3064,21 @@ it. That is refraction, and it is the whole of what the change was supposed to d
 **Two things are still owed.** Glass with its reflections switched back on — that is what a real
 window is, and it needs your machine. And the frame-rate cost of both this and the marble, which
 also needs your machine.
+
+## There is a new download: v0.8.0
+
+Everything above is in it. The two you will notice are the glass and the marble — a pane now moves
+what is behind it, and thin marble carries light through it where thick marble stays stone.
+
+Same as last time: get `WorldShaper-v0.8.0-windows-x64.zip` from the releases page, unzip it
+anywhere, run `WorldShaper.exe`. If you already have v0.7.1 open, it will tell you there is a newer
+one and **F8** installs it.
+
+Windows will still warn about it, because the file is not signed by a certificate authority — that
+part has not changed and is explained on the release page. What is on the page beside the download is
+a statement signed by GitHub tying that exact file to the exact code and the exact build that made
+it, plus its checksum, so "is this the real thing" is a question you can answer rather than trust.
+
+The build was made by the workflow rather than by hand, and before it published anything it unzipped
+its own download somewhere else and made the facility build out of it — the check that exists
+because v0.7.0 shipped without the building in it.
