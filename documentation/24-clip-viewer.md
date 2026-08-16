@@ -111,14 +111,25 @@ root, for two reasons:
 A fragment the manifest does not include yet still gets its own parse, so a brand new file is
 visible before the three lines that add it are written.
 
-**The parser could be made to end the process, and now cannot.** Baking fragments on their own hit
-a SIGSEGV inside `parse_clip_script`, with gdb showing hundreds of frames of
-`block → expression → call → block` and nothing else: that cycle recurses once per `{` and nothing
-bounded it, so a file whose braces have desynchronised is read through a stack as deep as the rest
-of the file is long. It does not reproduce from the same file in a fresh process, so the entry in
-the log says what was seen rather than claiming a diagnosis — but an unbounded recursion in a
-parser fed files a player writes is a fault whether or not that particular run can be repeated.
-`kMaxBlockDepth` is 64 and `tests/test_clip_script.cpp` holds it there.
+**The parser could be made to end the process, and the cause is now known.** Baking fragments on
+their own hit a SIGSEGV inside `parse_clip_script`, with gdb showing hundreds of frames of
+`block → expression → call → block`. That cycle recurses once per `{` with nothing bounding it, so
+`kMaxBlockDepth` = 64 went in as a bound, and this document said the crash "does not reproduce from
+a fresh process" and recorded what was seen rather than a diagnosis.
+
+**It is a heap read one past the last token, and the depth guard is what caused it** (D668). The
+guard abandons a hopeless file by setting `at_ = tokens_.size()`; `block()` had already checked
+`!done()` before calling `expression()`, and the next thing it does on failure is read `peek().text`
+to say which token it did not like. `peek()` was the only accessor here that did not test `done()`
+first. Because it is a heap read rather than a stack overflow, whether it crashes depends on what
+sits after the token array — nesting 90, 95, 96, 100, 104, 110 and 1000 deep all segfaulted while
+80, 120, 128 and 4000 came back clean, which is the whole of the "does not reproduce" mystery.
+AddressSanitizer names it in one line. Fixed at the accessor, so every reader past the end sees an
+empty token that no branch matches; the depth guard stays, because it was right.
+
+It was found by `ws_tests_headless`, which is the reason that target exists: the suite could not be
+run at all on a machine without a graphics stack, and every machine these clips are written from is
+one of those.
 
 **`origin` moves the solid and the paint rules and not the names.** `apply_origin` wraps the solid
 in a translate and shifts every paint rule; the nodes the file bound along the way are left where
