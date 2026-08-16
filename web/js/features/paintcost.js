@@ -62,6 +62,31 @@
 // is given the same one, so the two cuts compete on equal terms rather than one starving the other.
 export const FRAME_BUDGET_MS = 22;
 
+// What one node visit per pixel measured at, and it is a RECORD rather than a constant anything
+// reads.
+//
+// Taken on the ◉ view of `sampler.clip` at 648 x 504 with `u_paintProbe` standing in for the stack,
+// SwiftShader through ANGLE, four shared cores:
+//
+//     0 visits a pixel      132 ms a frame     (the flat grey, which is what the view costs already)
+//   256 visits a pixel      269 ms
+//  1024 visits a pixel      919 ms
+//
+// Linear at roughly 0.6 ms a frame per visit per pixel. `paintcheck` says `sampler.clip` is 238
+// visits a pixel, which predicts about a doubling of the frame — and the 256-visit row is exactly
+// that. A facility fragment is 348 RULES, each with a graph behind it.
+//
+// **This number is not transferable.** It is a software rasteriser on a shared box; a real GPU is
+// orders of magnitude away and in an unknown direction per-op. Nothing here multiplies by it. The
+// policy measures the machine it is on, every time, through `chooseRung` — which is the only honest
+// way to carry a performance decision across hardware nobody has.
+export const MEASURED = {
+    renderer: 'SwiftShader via ANGLE, 4 shared cores — NOT a phone, and not a GPU',
+    clip: 'sampler.clip, shapes view, 648x504',
+    msPerFrame: { 0: 132, 256: 269, 1024: 919 },
+    msPerVisitPerPixel: 0.6,
+};
+
 // The ladder, coarsest last. `far` is metres from the eye; `Infinity` means "everywhere".
 export const LADDER = [
     { name: 'full',     far: Infinity, maxRules: 4096, note: '' },

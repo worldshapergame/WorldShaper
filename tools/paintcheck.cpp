@@ -58,6 +58,24 @@
 // The last row is the honest prediction for a correct GLSL port. Everything above it is a bug that
 // can still be fixed in the port; the last step is not a bug at all.
 //
+// # `--place-check`, and the engine bug it settled
+//
+// `apply_origin` in src/forge/clip_script.cpp translates a paint rule's `test` and leaves its
+// `place` alone. `plan_sample` in src/forge/sample.cpp then culls the rule against
+// `bounds_of(place)`. Both of those are readable in the source, and reading the source is not an
+// instrument — so `--place-check` samples one clip three times through the real `forge::sample`:
+// as authored, with every `has_place` cleared, and with every `place` translated by the clip's own
+// `origin_shift`.
+//
+// The middle arm is the control and it needs no theory at all: `place` is documented as a cull and
+// nothing else, so it MUST NOT change the answer. It does. On `clips/estate/colonnade.clip` at 4/m
+// the authored clip has ten materials and the control has twelve — `moss` and `lichen` are absent
+// entirely, 17,623 voxels are painted differently, and shifting the place by the origin restores the
+// control exactly. On `facility` part `part_terrace` at 8/m it is `moss`, `lichen` and `bleached`,
+// 4,346 voxels. The solid voxel count is identical in all three arms, so it is paint and not
+// geometry. That is the game's own sampler, on the scene this project is judged against, and it is
+// silent: a coat that never fires paints nothing and produces no error.
+//
 // # And the export, checked without evaluating it
 //
 // `--wsc web/data/<id>.wsc` reads the `PANT` and `FLDG` chunks out of a baked file with this

@@ -531,6 +531,40 @@ uniform int u_paintMaxRules;
 bool paint_here(vec3 at, vec3 eye) {
     return u_paintMaxRules > 0 && distance(at, eye) <= u_paintFar;
 }
+
+// A STAND-IN for one field-node visit, so the cost of a stack can be measured before there is a
+// stack.
+//
+// u_paintProbe is how many node visits to charge this pixel. Nought is off and the shader is what it
+// was. It is not the paint stack and it is not pretending to be: it is one hash and a smoothstep
+// per iteration, which is the arithmetic of a value-noise node with the graph walk taken out, so it
+// UNDER-states a real node rather than over-stating one. What it measures is the slope -- how many
+// microseconds a frame costs per node visit per pixel on the machine actually running it -- and
+// that slope times the counts tools/paintcheck.sh reports is the prediction.
+//
+// The result is fed into the colour with a tiny weight because a loop whose answer nothing reads is
+// a loop the compiler deletes, and a benchmark of deleted code reads as free.
+uniform int u_paintProbe;
+const int MAX_PAINT_PROBE = 4096;
+
+float probe_hash(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float paint_probe(vec3 at) {
+    if (u_paintProbe <= 0) return 0.0;
+    float acc = 0.0;
+    vec3 p = at;
+    for (int i = 0; i < MAX_PAINT_PROBE; ++i) {
+        if (i >= u_paintProbe) break;
+        float h = probe_hash(p);
+        acc += smoothstep(0.4, 0.6, h);
+        p = p * 1.37 + vec3(h, acc * 0.001, float(i) * 0.017);
+    }
+    return acc;
+}
 // <<< paintcheck
 
 out vec4 o_colour;
@@ -678,10 +712,14 @@ void main() {
     vec3 albedo = vec3(0.62, 0.60, 0.56);
     // >>> paintcheck
     // The stone grey above is the honest fallback and it stays the fallback. Whatever evaluates the
-    // paint stack goes inside this branch — `paint_here` is the budget, and a pixel it says no to
-    // keeps the grey rather than getting a cheaper wrong colour.
+    // paint stack goes inside this branch: paint_here is the budget, and a pixel it says no to
+    // keeps the grey rather than getting a cheaper wrong colour. (No back-quotes in here.)
     if (paint_here(at, u_eye)) {
         // material_at(at, N) goes here.
+        // Until it does, the probe stands in for it so the cost can be measured. The weight is tiny
+        // and non-zero: zero would let the compiler delete the loop and the benchmark would report
+        // a hundred rules as free.
+        albedo += vec3(paint_probe(at) * 1e-6);
     }
     // <<< paintcheck
 
@@ -1091,6 +1129,7 @@ export class Renderer {
         // everything. Nothing here decides anything: the policy is one thing in one place.
         gl.uniform1f(u.u_paintFar, this.paint ? this.paint.u_paintFar : 1e9);
         gl.uniform1i(u.u_paintMaxRules, this.paint ? this.paint.u_paintMaxRules : 4096);
+        gl.uniform1i(u.u_paintProbe, this.paint ? (this.paint.u_paintProbe | 0) : 0);
         // <<< paintcheck
 
         gl.enable(gl.DEPTH_TEST);

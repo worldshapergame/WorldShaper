@@ -241,6 +241,113 @@ Three things it got wrong first, all of them visible immediately and none of the
   everywhere, and a two-billion-metre impostor flattens the depth buffer for everything else on
   screen. There are sixty-five planes in the facility.
 
+<!-- >>> paintcheck -->
+### 4a-i. Painting it, and how far that can be trusted
+
+Colouring the ◉ view means evaluating the paint stack at the hit point, in GLSL. That is a **second
+implementation of the paint stack, in a second language** — precisely the thing §1 says makes a
+viewer untrustworthy. So it is measured rather than asserted. `tools/paintcheck.sh` takes the baked
+voxels from **`forge::sample` itself** — the same call `bake_root` makes, with the same part
+handling, the same origin shift and the same despeckle — and compares them against the raw view's
+own model of painting, walked at every surface voxel. One arm is the real sampler; nothing about it
+comes through the export.
+
+The disagreement is not one thing, so the arms are a **ladder**, each adding one difference:
+
+| | `sampler.clip`, 32/m | `glass_test.clip`, 32/m |
+|---|---|---|
+| the stack walked at the voxel centre | 1.872 % | **0.000 %** |
+| …with the normal taken at the voxel step | 0.984 % | 0.000 % |
+| …against `plan_sample`'s widened bands | 1.872 % | 0.000 % |
+| …in `float` at every node boundary | 1.872 % | 0.000 % |
+| …at the point the ray actually lands | **34.737 %** | 0.112 % |
+
+**Single precision costs nothing** — 45,872 against 45,871 disagreements out of 132,055 — and the
+stack itself ports exactly: `glass_test`, whose rules are all keyed on shapes, agrees on all 151,218
+of its surface voxels. **What the raw view cannot agree about is WHERE it asks.** The sampler decides
+a voxel's material at the voxel's centre; a ray lands on the true surface, 0.37 of a voxel away on
+average. On a rule keyed on a pattern whose features are the size of a voxel — `sampler.clip` paints
+metal on a brick bond with a 2 cm mortar joint at a 3.1 cm voxel — that half-voxel flips a third of
+the surface. It is not a bug in the port and no port can remove it; it is the floor.
+
+The tool refuses to report a clean bill it did not earn: an arm that compared no points says
+`NOTHING COMPARED` and the process exits non-zero, and so does a clip whose whole compared surface is
+one material. A disagreement rate of 0 % over 0 points is the exact shape of a result this fleet has
+already produced once.
+
+### 4a-ii. What it costs, and the honest fallback
+
+`tools/paintcheck.sh` counts the work: `sampler.clip` is 4 rules and 238 node evaluations a pixel;
+a facility fragment is **348 rules**. Measured on the ◉ view with a calibrated per-pixel stand-in
+(`u_paintProbe` in `web/js/gl.js`), **on SwiftShader on a shared box, where the ratio is the number
+and the milliseconds are not a phone figure**:
+
+| node visits a pixel | frame, 648 x 504 |
+|---|---|
+| 0 (the flat grey) | 132 ms |
+| 256 | 269 ms |
+| 1024 | 919 ms |
+
+Linear, at roughly **0.6 ms a frame per node visit per pixel**. So `sampler.clip`'s 238 visits about
+double the frame.
+
+**And a facility fragment cannot be painted per pixel at all.** `facility` part `part_terrace`, 348
+rules, measured:
+
+| | |
+|---|---|
+| one walk of the whole stack | **2,018,075 field node evaluations** |
+| the worst single rule | **at least 200,000** nodes — `#338 weather on=<scope>`, which hit the tool's own visit cap |
+| after the per-rule box | **338.6 of 348 rules survive**, still **338,060 nodes** |
+
+The box cut takes almost nothing off, because only **11 of the 348 rules carry an `on=` place** at
+all — the cut works and there is nothing here for it to work on. 338,060 visits against a slope of
+0.6 ms is about **200 seconds a frame** on this renderer; a real GPU a thousand times faster is
+still 200 ms a frame for one fragment of one building. The same number the other way round:
+`paintcheck` spends **0.24 s per surface point per stack walk** in optimised C++ on four cores, and a
+frame is three hundred thousand pixels.
+
+So the honest answer is that **the full stack is not a per-pixel operation on any hardware**, and the
+question is not how to make it fast but which rules to leave out. The cuts are in
+`web/js/features/paintcost.js`, coarsest last: the **per-rule box** (free, and it must be the box
+SHIFTED by the clip's origin — see below), **back to front with an early exit** (exact: last match
+wins, so the first match found backwards is the answer), a **rule cap** (not exact — it drops the
+undercoats), a **distance fallback**, and flat grey. The fallback is visible by construction: near
+geometry is coloured, far geometry is grey, and the boundary is a thing you can walk towards.
+
+The one cut that would change the answer rather than trim it is not in that list and belongs in the
+BAKER: a rule whose test is the `occlusion` or `curvature` of a large solid costs a walk of that
+solid at every point, fourteen or seven times over. Those are the facility's weathering coats, and
+six of them were already 92 % of the sampler's own work (`src/forge/sample.hpp`). Nothing the shader
+does makes one affordable.
+
+### 4a-iii. `apply_origin` moves a rule's test and not its place — in the GAME
+
+`apply_origin` translates `PaintRule::test` and leaves `PaintRule::place` where it was.
+`plan_sample` then takes `bounds_of(place)` and culls the rule anywhere that box does not reach. A
+clip with an `origin` statement therefore culls its placed rules against a box out of position by
+the shift, and **the facility shifts by 3.50 m**. This is not the viewer. It is `src/forge`, on the
+scene the project is judged against, and it is silent: a coat that never fires paints nothing and
+produces no error.
+
+Measured with `tools/paintcheck.sh --place-check`, which samples the same clip three times through
+the real `forge::sample` — as authored, with every `has_place` cleared (the control, since `place`
+is a cull and nothing else and so *must* not change the answer), and with every `place` translated
+by the clip's own `origin_shift`:
+
+| | as authored | no place (control) | place shifted |
+|---|---|---|---|
+| `estate/colonnade`, 4/m | 10 materials | 12 | 12 |
+| — `moss` | **0** | 12,392 | 12,392 |
+| — `lichen` | **0** | 5,231 | 5,231 |
+| `facility` part `part_terrace`, 8/m | 19 materials | 22 | 22 |
+| — `moss` / `lichen` / `bleached` | **0** / **0** / **0** | 210 / 100 / 4,036 | 210 / 100 / 4,036 |
+
+Two whole weathering coats on the colonnade and three on the terrace never fire, 17,623 and 4,346
+voxels are painted differently, and shifting the place by the origin restores the control exactly.
+The solid voxel count is identical in all three arms, so this is paint and not geometry.
+<!-- <<< paintcheck -->
+
 ## 4b. A clip that has not changed is not baked again
 
 Every baked file carries, in two words of its header, the key of what produced it: the spliced
