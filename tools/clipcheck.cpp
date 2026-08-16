@@ -14,7 +14,9 @@
 //   errors        with the file and line the author actually wrote, through the include splice
 //   extent        and the worldbox, which is where the part really is
 //   components    1, or a list of what is floating and where
-//   materials     including THE RULES THAT NEVER FIRED, which is the failure that looks like success
+//   materials     including THE RULES THAT PAINTED NOTHING, which is the failure that looks like
+//                 success — and it is two failures, `never asked` and `never matched`, which the
+//                 one line this used to print could not tell apart
 //   spans         head height and doorway width, on request
 //   a slice       when a number will not do
 //   THE CUTS      what every `difference` actually removed, and whose matter it was
@@ -837,6 +839,123 @@ std::string cut_slice_text(const Clip& clip, const std::vector<u8>& mask, u8 bit
     return out;
 }
 
+// ============================================================================================
+// WHICH PAINT RULES ACTUALLY PAINTED SOMETHING
+// ============================================================================================
+//
+// `SampleResult::rule_evaluations` counts how often each rule was EVALUATED, because
+// `rule_cost[i]` is incremented immediately after `field.eval` and before the band is tested. So
+// the line this file used to print as "never fired" meant "never reached", and a rule that is
+// asked at four million voxels and matches none of them was reported as having fired. That is
+// exactly the dead rule the line exists to catch: `surface.clip`'s `paint granite` has no voxel
+// to land on anywhere in the facility and the report was silent about it.
+//
+// The two are different faults with different causes and both are worth saying:
+//
+//   never reached   the rule's box was culled everywhere, or the region it names is empty. The
+//                   rule costs nothing and does nothing.
+//   never matched   the rule was asked, at every solid voxel it could apply to, and its band
+//                   never contained the answer. This one costs the whole build and does nothing.
+//
+// Counting matches where they happen would be one line in `src/forge/sample.cpp` beside the
+// existing `rule_cost` increment, and that file belongs to another agent, so this is measured
+// from outside instead: re-test the FINISHED clip's solid voxels against the rules the descent
+// actually used, and stop as soon as every rule has matched once.
+//
+// # Why re-testing is faithful and which way it errs
+//
+// The per-voxel test in `paint_solid` is `value in [low, high]`, with an optional facing test, on
+// the rules of `SamplePlan::widened` — not on the author's rules, which are widened by whatever a
+// displacement can move a surface. So the plan is asked for here as well, and the same widened
+// rule is tested. `PaintRule::place` never appears in that test at all; it is only ever a bounding
+// box the descent culls with, so it is applied here as a box test too.
+//
+// Where the two cannot be identical, this one is deliberately the MORE PERMISSIVE:
+//
+//   the box cull      is a containment test grown by half a voxel diagonal rather than the
+//                     descent's own box-against-box distance
+//   the facing test   is NOT a gate here. A box that settles to "this rule applies" paints
+//                     without consulting facing at all — see `state[i] == 1` in `paint_solid` —
+//                     so gating on it here could call a rule dead that the sampler paints with.
+//                     Facing is reported separately instead.
+//
+// Permissive in that direction means this can MISS a dead rule. It cannot invent one, which is the
+// error that matters: a report that names a live rule as dead sends somebody to delete it.
+struct RuleLife {
+    bool matched = false;         // its band contained the answer at some solid voxel
+    bool matched_facing = false;  // ... and the facing test passed there too
+};
+
+bool near_box(const Aabb& box, Vec3 p, f64 reach) {
+    return p.x >= box.low.x - reach && p.x <= box.high.x + reach && p.y >= box.low.y - reach &&
+           p.y <= box.high.y + reach && p.z >= box.low.z - reach && p.z <= box.high.z + reach;
+}
+
+std::vector<RuleLife> rules_that_painted(const forge::Field& field, const forge::SamplePlan& plan,
+                                         const Clip& clip, const i64* origin, i32 per) {
+    std::vector<RuleLife> life(plan.widened.size());
+    if (plan.widened.empty() || clip.empty()) return life;
+    const f64 voxel = 1.0 / static_cast<f64>(per);
+    const f64 reach = voxel * 0.8660254037844386;   // half the diagonal of one voxel
+    usize outstanding = life.size();
+
+    for (i32 z = 0; z < clip.size[2] && outstanding > 0; ++z) {
+        const f64 pz = (static_cast<f64>(origin[2] + z) + 0.5) * voxel;
+        for (i32 y = 0; y < clip.size[1] && outstanding > 0; ++y) {
+            const f64 py = (static_cast<f64>(origin[1] + y) + 0.5) * voxel;
+            for (i32 x = 0; x < clip.size[0] && outstanding > 0; ++x) {
+                if (clip.at(x, y, z) == 0) continue;
+                const f64 px = (static_cast<f64>(origin[0] + x) + 0.5) * voxel;
+                const Vec3 p{px, py, pz};
+                Vec3 normal{0, 0, 0};
+                bool have_normal = false;
+                for (usize i = 0; i < plan.widened.size(); ++i) {
+                    if (life[i].matched && life[i].matched_facing) continue;
+                    const forge::PaintRule& rule = plan.widened[i];
+                    if (i < plan.rule_box.size() && !near_box(plan.rule_box[i], p, reach)) continue;
+                    if (i + 1 < plan.rule_piece_at.size() && !plan.rule_piece.empty()) {
+                        const u32 from = plan.rule_piece_at[i];
+                        const u32 to = plan.rule_piece_at[i + 1];
+                        if (from != to) {
+                            bool near_a_piece = false;
+                            for (u32 q = from; q < to && !near_a_piece; ++q) {
+                                near_a_piece = near_box(plan.rule_piece[q], p, reach);
+                            }
+                            if (!near_a_piece) continue;
+                        }
+                    }
+                    const f64 value = field.eval(rule.test, p);
+                    if (value < rule.low || value > rule.high) continue;
+                    if (!life[i].matched) {
+                        life[i].matched = true;
+                        if (rule.facing_axis >= 3) {
+                            life[i].matched_facing = true;
+                            --outstanding;
+                            continue;
+                        }
+                    }
+                    if (rule.facing_axis < 3) {
+                        if (!have_normal) {
+                            normal = field.normal_at(plan.root, p, voxel);
+                            have_normal = true;
+                        }
+                        const f64 component = (rule.facing_axis == 0)   ? normal.x
+                                              : (rule.facing_axis == 1) ? normal.y
+                                                                        : normal.z;
+                        const bool passes = (rule.facing_min >= 0.0) ? (component >= rule.facing_min)
+                                                                     : (component <= rule.facing_min);
+                        if (passes) {
+                            life[i].matched_facing = true;
+                            --outstanding;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return life;
+}
+
 // One base, one frame, and every cut that carves it. The voxel pass runs once per group rather
 // than once per cut, because the answer "which cuts claim this point" is one question.
 struct Group {
@@ -877,8 +996,27 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
     const f64 per = static_cast<f64>(script.settings.voxels_per_metre);
     const f64 litre = 1.0 / (per * per * per);
 
+    // The names, AND the nodes they had before `origin` moved them.
+    //
+    // `apply_origin` re-binds every entry of `script.parts` to a fresh `translate` wrapping the node
+    // the author bound — which is what makes `--part part_dome` sample the dome inside its own box.
+    // The SOLID is wrapped the same way, so the graph this walks is the unwrapped one, and looking
+    // the names up as they now stand finds none of it: the first run after that fix came back with
+    // 252 cuts, every one of them called `box#798` and `union#3674`, and not a single victim named.
+    // A tool whose whole output is names had lost all of them and still printed a full table.
+    //
+    // So both are mapped, and the wrapper is recognised by being a translate BY EXACTLY the origin
+    // shift rather than by position, so a clip with no `origin` is unaffected and a part the author
+    // themselves wrapped in a translate is not silently unwrapped.
     std::unordered_map<u32, std::string> names;
-    for (const auto& entry : script.parts) names.emplace(entry.second, entry.first);
+    for (const auto& entry : script.parts) {
+        names.emplace(entry.second, entry.first);
+        const forge::Node& n = field.node(entry.second);
+        if (n.op == Op::Translate && n.children == 1 && n.a[0] == script.origin_shift[0] &&
+            n.a[1] == script.origin_shift[1] && n.a[2] == script.origin_shift[2]) {
+            names.emplace(n.child[0], entry.first);
+        }
+    }
 
     Walk walk;
     {
@@ -1346,6 +1484,12 @@ int main(int argc, char** argv) {
         script.solid = piece;
     }
 
+    // Count how often each rule was reached. Off by default in the sampler, and rightly — it is an
+    // atomic increment beside every paint evaluation — but this tool exists to say WHICH rule did
+    // nothing, and without it `rule_evaluations` comes back empty and the whole diagnostic below
+    // was silently a no-op. It printed nothing on the facility for as long as it has existed.
+    script.settings.count_rule_cost = true;
+
     JobSystem jobs;
     const forge::SampleResult built =
         forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
@@ -1395,24 +1539,62 @@ int main(int argc, char** argv) {
         }
     }
 
-    // A paint rule that never fired is a coat somebody wrote and nothing wears. It costs nothing,
-    // paints nothing, produces no error, and is invisible in every other number here.
+    // A paint rule that paints nothing is a coat somebody wrote and nothing wears. It produces no
+    // error and is invisible in every other number here — and there are TWO ways to be one.
+    //
+    // This block used to print `never fired` off `rule_evaluations`, which counts evaluations and
+    // not matches (the counter is incremented before the band is tested), so the one word covered
+    // one of the two faults and quietly excused the other. Both are named now, and neither is
+    // called "fired".
     {
-        std::vector<usize> idle;
+        const std::string only_part =
+            part.empty() ? std::string() : std::string(" (one part only — most belong to other "
+                                                       "fragments)");
+        const usize rules = script.paint.size();
+        std::vector<usize> unreached;
         for (usize i = 0; i < built.rule_evaluations.size(); ++i) {
-            if (built.rule_evaluations[i] == 0) idle.push_back(i);
+            if (built.rule_evaluations[i] == 0) unreached.push_back(i);
         }
-        if (!idle.empty()) {
-            std::printf("never fired   %zu of %zu rules painted nothing%s\n", idle.size(),
-                        built.rule_evaluations.size(),
-                        part.empty() ? "" : " (one part only — most belong to other fragments)");
-            for (usize n = 0; n < idle.size() && n < 16; ++n) {
-                const usize i = idle[n];
-                std::printf("              %s\n", i < script.paint_source.size()
-                                                      ? script.paint_source[i].c_str()
+        const auto say = [&](const char* label, const std::vector<usize>& which, const char* what) {
+            if (which.empty()) return;
+            std::printf("%-13s %zu of %zu rules %s%s\n", label, which.size(), rules, what,
+                        only_part.c_str());
+            for (usize n = 0; n < which.size() && n < 40; ++n) {
+                std::printf("              %s\n", which[n] < script.paint_source.size()
+                                                      ? script.paint_source[which[n]].c_str()
                                                       : "?");
             }
+            if (which.size() > 40) std::printf("              ... and %zu more\n", which.size() - 40);
+        };
+        say("never asked", unreached, "were never EVALUATED — culled everywhere, cost nothing");
+
+        // And the other half: asked everywhere and matched nowhere. Measured by re-testing the
+        // finished clip, because the sampler counts evaluations and not matches; see
+        // `rules_that_painted` for exactly how faithful that is and which way it errs.
+        const forge::SamplePlan plan = forge::plan_sample(script.field, script.solid, script.paint);
+        const std::vector<RuleLife> life =
+            rules_that_painted(script.field, plan, built.clip, built.origin_voxel,
+                               script.settings.voxels_per_metre);
+        std::vector<usize> unmatched;
+        std::vector<usize> facing_only;
+        for (usize i = 0; i < life.size(); ++i) {
+            if (built.rule_evaluations.size() > i && built.rule_evaluations[i] == 0) continue;
+            if (!life[i].matched) unmatched.push_back(i);
+            else if (!life[i].matched_facing) facing_only.push_back(i);
         }
+        say("never matched", unmatched,
+            "were asked and MATCHED NO VOXEL — they cost the build and paint nothing");
+        if (!unmatched.empty()) {
+            // The same resolution trap the cut audit has: a rule keyed to a feature thinner than a
+            // voxel matches nothing here and everything a step finer. `windows_glass` is a 0.045 m
+            // pane and a voxel at metre 8 is 0.125 m.
+            std::printf("              (at metre %d — a rule keyed to something thinner than a "
+                        "voxel matches nothing here; re-ask finer before deleting one)\n",
+                        script.settings.voxels_per_metre);
+        }
+        say("facing never", facing_only,
+            "matched their band but never their facing=; the sampler may still paint them where a "
+            "whole box settles");
     }
 
     if (span.given) {
