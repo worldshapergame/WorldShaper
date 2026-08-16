@@ -8072,3 +8072,158 @@ traffic in two.
 | D661 | **It needs a face to be HOLDING a block** | finding | `--lobe-floor 1.0` reaches frame 40 |
 | D661 | **Attribution stays open** | honesty | D650 was wrong in exactly this direction; the remaining code is provably in bounds |
 | D661 | **The hunt is stopped here** | decision | The workaround costs one feature on a machine that has no card to reflect anything on |
+
+## D662 — the world's own stipple verdict is affordable, and the pass it replaces was not the rule it said it was
+
+D630 measured taking the stipple verdict from the WORLD instead of from the up-front whole-clip
+sample at **19.0 → 40.3 s** and kept `--stipple-from-world` off because of it. That price is what
+made D629's question — where the verdict comes from once R11d deletes the sample — a decision
+nobody could take. D630's own sentence names both halves of the cost, and both are now gone:
+
+> "68 chunks of 258³, **1.17 G cells walked twice, serial**."
+
+### What was built
+
+`forge/world_stipple.hpp`, which is the pass lifted out of `Application` so that it can be run and
+measured on a machine with no card. Two changes to it, and they are separate savings.
+
+**One walk instead of two.** The judging pass and the cleaning pass walk the same cells and apply
+the same six-neighbour test. They cannot be MERGED — the verdict is a property of the whole
+building, so nothing may be repainted until every chunk has been counted, and that is D629 and it
+is not negotiable. But the READ half is shareable, because **finding a speck does not need the
+verdict; only deciding what to do with one does.** So one walk records the counts and every speck it
+saw, with the material that speck would be repainted to; the verdict is taken from the complete
+counts afterwards; and the repaint is then a few hundred `World::set` calls over a list rather than
+a second `capture_clip` of every chunk in the world.
+
+**And it runs across the paste pool.** `paste_jobs_` and not the sampler's, because `parallel_for`
+queues a take-loop and a second submitter gets no workers until the first has finished — trap 17,
+D511. At the fixed point the ladder has stood down, so that pool has one submitter.
+
+Two smaller things came with it. A chunk is cut into **slabs of 64** and each is captured with its
+own skirt, because a whole chunk with a skirt is 258³ and about 86 MB of clip, and one of those per
+worker is 1.3 GB on a sixteen-core machine; the interiors still tile the world exactly once, which
+is the only property D629's method needs, so the counts are unchanged. And a slab whose interior
+holds nothing is never captured at all (`any_matter_in`, which is answered by brick pointer and is
+conservative in the safe direction) — on the facility that is **34 of 96 boxes at metre 16**.
+
+### What it costs, card-free, on the facility
+
+`--clean-world` is the instrument and it is a gate as well as a report: it samples the clip, pastes
+it into a `World` the way the game does, and runs the two arms over it one after the other,
+**rebuilding the world between them** — a cleaned world has no specks left in it, so a second arm
+over the first arm's world measures nothing and reports it as fast. The arms are alternated within
+one run because this container's clock drifts (trap 29), and every round is printed (trap 9).
+
+| facility, `--clean-world` | shipped: judge + clean | one walk, threaded | |
+|---|---|---|---|
+| metre 8, 8 chunks, 1,959,046 voxels | 1,199 + 4,043 = **5,242 ms** | **644 ms** | **8.1×** |
+| metre 16, 24 chunks, 15,708,421 voxels — quiet box | 2,661 + 10,637 = **13,185 ms** | **2,084 ms** | **6.3×** |
+| metre 16 — same command, busier box | 3,917 + 10,986 = **14,904 ms** | **2,727 ms** | **5.5×** |
+
+Three rounds each, alternated inside one run, best of each arm quoted. **The metre-16 measurement
+was taken twice, on two builds, hours apart, and the last row is why both are printed here**: every
+figure in it that is not a clock — 90 materials agreeing exactly, the two world hashes
+`4951edff9d5c4c01` and `c3aec8a070c03dd8`, 1,031 and 1,060 voxels repainted, 0 of 61 differences on
+a chunk face — **reproduced to the digit across the two runs**, and only the seconds moved, by 13%
+and 31%. That is trap 29 doing exactly what trap 29 says, on a four-core container shared with three
+other jobs. The ratio is the durable quantity; the absolute seconds are not.
+
+**AND THE SCALE D630 MEASURED AT WAS NOT REACHED, which has to be said plainly.** D630's 19.0 s is
+the ladder's own world at the authored metre 32 — 68 chunks and 125 M voxels, four times the
+metre-16 world above. Sampling the whole facility at metre 32 card-free is 582 M cells, about three
+gigabytes of clip and more than ten minutes on this container, and two attempts were abandoned:
+one because free memory on a shared four-core box fell to 1.8 GB with three other jobs on it, and
+one because it had not finished sampling after ten minutes. So **the seconds here are against worlds
+a quarter and a sixteenth of D630's, and only the RATIO transfers** — which it does at both sizes
+run, 6.3× and 8.1×. Anybody quoting a figure from this entry against D630's 19.0 s directly is
+making trap 8's mistake with a different quantity.
+
+**Where the saving comes from, out of numbers already in that table rather than a guess.** The
+shipped *judging* pass is the same capture and the same six-neighbour test over the same cells as
+the cleaning pass, and it has always been threaded — that is D630's "the loop is serial where the
+counting sibling is parallel". At metre 16 it costs **2,661 ms threaded against the cleaning pass's
+10,637 ms serial**, and those two numbers are the same work. So about **8 s of the 11.1 s saved is
+threading a pass that was not threaded, and about 2.6 s is not walking the world a second time.**
+Only three workers exist on this container (hardware minus two, plus the calling thread), so the
+threading half is worth more on any real machine and the sharing half is worth the same.
+
+### And the finding, which is worth more than the speed-up
+
+**The two arms do not leave the same world, and the obvious explanation is wrong.** The shipped pass
+writes a chunk back before it captures the next one, so a voxel within one voxel of a chunk face can
+be judged against a neighbour that has already been repainted — an obvious seam, and the reason the
+new pass defers every write until every box has been read. Measured on `clips/sampler.clip`: **11 of
+94.** The other 83 are in the middle of a chunk. On the facility at metre 16 it is **0 of 61.**
+
+The real cause is one line of `forge::despeckle`, and it is in that function's own comment:
+
+> "READ FROM A COPY AND WRITE TO THE CLIP, so that a repainted voxel cannot become one of the
+> neighbours the next voxel is judged against... It has to be one simultaneous step or it is not a
+> rule."
+
+Only `mine` is read out of the copy. The six neighbours go through `type_at`, which reads
+`clip.at()` — the array being written. **So the shipped despeckle is sequential within a chunk as
+well as between chunks, and has been since D610.** The shared walk, which reads the whole world
+before it writes any of it, is the simultaneous step that comment describes. That is why it repaints
+slightly more: a speck the shipped pass spares because its neighbour was repainted into its own
+material a moment earlier is still a speck when the whole world is judged at once. Facility, metre
+16: **1,031 against 1,060 repainted of 15.7 M solid voxels, 61 voxels of difference.**
+
+**Nothing here changes `forge::despeckle`.** The ladder despeckles every node it sharpens through
+it, on the default path, so a fix would move the world every load produces and re-base every content
+hash in the repository — which is a decision and not a tidy-up. What this change does instead is
+**pin the behaviour with a test that says which of the two the code does**, so the next person to
+read that comment finds out in one run and anybody who fixes it is told by a failing test exactly
+what they have changed.
+
+### Determinism, which is what a threaded pass has to earn
+
+Not by luck and not by a lock:
+
+- Nothing writes the world while the walk runs, so every box reads the same world whatever order
+  the workers take them in.
+- Each box's counts and specks land in a slot of their own indexed by the box; the merge runs on the
+  calling thread in box order.
+- `StippleCounts::add` is u64 addition into a map keyed by material, which is associative and
+  commutative, so the sum is bit-identical in any order — and there is **no floating point anywhere
+  in the accumulation**. The one division `stipple_verdict` does is over totals that are already
+  order-independent. This is exactly why the world walk passes a margin of 1: `stipple_counts`'s
+  margin-0 path reconstructs `surface` out of a `double` fraction, which is not a quantity anybody
+  should be summing.
+
+`tests/test_world_stipple.cpp` asserts the counts equal the shipped walk's material for material,
+and that four threaded runs give the same speck list and the same world hash as one thread.
+
+### Where the cost lands, which is still a compromise
+
+**It blocks the main thread.** Handing the walk to the pool and collecting it on a later frame was
+worked through and is not safe as the loop stands, and the reason is sharper than "a race": the
+ladder waking up again pastes into the world through `paste_clip`, a player's chisel writes it
+directly, and both go through `drop_brick_if_empty`, which **frees** a brick when its last voxel
+goes. A reader holding that brick is a use-after-free and not a stale read, so no epoch check taken
+afterwards can repair it — the fault has already happened by the time the check runs. The two
+schemes that would work are a world-wide read lock every writer respects, which turns the freeze
+into a stall for anybody who moves during it, and a snapshot, which is a copy of 125 million voxels.
+Neither is worth building before the blocking version has been measured, and this is that version.
+
+### What is NOT answered
+
+**D630's second objection is untouched.** A verdict taken from a partially refined world protects 0
+materials against the fully refined world's one, so it still depends on where the player walked.
+This entry removes the price; it does not remove that. `--stipple-from-world` stays off by default
+and so does `--no-coarse-paste`.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D662 | **The world clean is 5.5–8.1× cheaper and the price is off the decision** | measurement | Facility metre 16: 13,185 → 2,084 ms on a quiet box, 14,904 → 2,727 on a busy one |
+| D662 | **Everything that is not a clock reproduced across builds and hours** | method | Same hashes, same 1,031/1,060, same 0-of-61; only the seconds moved, by up to 31% |
+| D662 | **The two passes can share their READ half** | finding | Finding a speck needs no verdict; only deciding what to do with one does |
+| D662 | **The verdict still precedes every repaint** | decision | D629 is not negotiable; the walk records specks and repaints nothing |
+| D662 | **Order-independent by construction, not by luck** | method | u64 addition into a per-material map, no floating point in the accumulation |
+| D662 | **`forge::despeckle` is not the simultaneous step its comment claims** | fault | `mine` comes from the copy; the six neighbours are read live out of the clip being written |
+| D662 | **The seam explanation was refuted by its own check** | method | 11 of 94 on `sampler.clip`, 0 of 61 on the facility — the obvious cause was in the middle of a chunk |
+| D662 | **The behaviour is pinned rather than fixed** | decision | The ladder despeckles every node through it, so a fix moves every world and is a decision |
+| D662 | **It still blocks the main thread** | honesty | A background reader races a brick being FREED, which no epoch check can repair afterwards |
+| D662 | **`--clean-world` is card-free and is a gate** | build | Exits non-zero if either arm fails to reproduce itself |
+| D662 | **The camera dependence is untouched** | honesty | D630's other objection; a partial world still protects 0 materials |

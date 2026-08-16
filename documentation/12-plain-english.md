@@ -2970,6 +2970,58 @@ instead of working it out again — which costs a memory lookup instead of a cal
 the next attempt should be, and unlike these two it cannot be measured without a graphics card,
 because it only happens while the game is running.
 
+## The nineteen-second bill for the loading bar is down to three
+
+There was one other way to answer the same question, and it has been sitting refused since June for
+one reason: **price**. Instead of judging the speckled paint as the building sharpens, judge it once
+at the end, over the finished building. That works — it gets the right answer — and it took
+**nineteen seconds** of the machine standing still. Nobody was going to trade a loading bar for
+that, so the whole choice stayed shut.
+
+The nineteen seconds turned out to be two mistakes rather than a fact about the work.
+
+- **The building was being walked twice.** Once to decide which weathering coats are deliberate, and
+  once again to rub out the accidental specks. Those two walks look at exactly the same voxels and
+  ask exactly the same question of each one — *is this voxel alone?* The reason it was done twice is
+  real and has not changed: you cannot rub anything out until you have judged the *whole* building,
+  or you would be deciding what a coat is from one corner of it. But **finding** the lone voxels does
+  not need the judgement; only deciding what to do with them does. So now it walks once, writes down
+  every lone voxel it finds, takes the judgement, and then goes back to that short list — a few
+  hundred entries — instead of walking a hundred million voxels again.
+- **And it was doing it all on one core** while the rest of the machine sat idle, in a program that
+  already has a way to spread work across cores and uses it everywhere else.
+
+Measured on the facility, without a graphics card, three times each way: **thirteen seconds to two.**
+The same on the smaller version of the building: five and a quarter seconds to two thirds of one.
+About three quarters of that is using the whole machine and about a quarter is not doing the work
+twice — and this machine only has four cores, so on a real one the first part is worth more.
+
+Two honest limits on that. The building I could measure here is a quarter the size of the one the
+figure of nineteen seconds came from — sampling the full-detail version takes three gigabytes and
+more than ten minutes on a shared four-core machine, and it was abandoned twice — so what carries
+across is the *ratio*, five to eight times cheaper, rather than the exact seconds. And the machine is
+busy enough that the same measurement run twice, hours apart, gave thirteen seconds one time and
+fifteen the other; everything about it that is not a clock came out identical to the digit both
+times, which is how I know it is the machine and not the change.
+
+**This does not switch the loading bar off.** It removes the reason the choice could not be made —
+the bill. There is a second objection still standing, and it is a real one: if the judgement is taken
+from the building *as far as it has been sharpened*, it depends on where you happened to walk, and a
+weathering coat that survives one route through the building and not another is not something I am
+willing to ship. That one is yours to decide when it comes to it.
+
+**And it turned up an old bug on the way,** of the sort that is worth more than the seconds. The
+speck-rubbing pass has a note at the top of it, written when it was built, saying it deliberately
+takes a photograph of the surface first and works from the photograph — so that rubbing out one
+voxel cannot change the answer for the voxel next to it. Half of that is what the code does. The
+other half reads the surface *live*, so rubbing one out **does** change its neighbour's answer, and
+the result depends on the order things were scanned. On the whole building that is sixty-one voxels
+out of fifteen million, so it is not something you would ever see — but it means a note in the code
+has been telling everybody the opposite of the truth for two months. I have not changed it, because
+that pass runs on every piece of every building as it sharpens and changing it would change every
+building the game makes. It is now written down and there is a test that fails the moment anybody
+changes it, which is the honest place to leave it.
+
 ## Glass now bends what is behind it
 
 Windows and water in this game have been drawn as *transparent* for a while — you can see through

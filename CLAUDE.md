@@ -68,11 +68,22 @@ The two that catch people most often:
   reported "agrees, perfectly" with 304 visible faults on screen, because all three were downstream
   of the one reader that was wrong.
 
-## No subagents and no workflows
+## Subagents: allowed now, and only for work that ends in code
 
-Do the work inline. This is the user's own instruction and it is firm: single-handed is slower, but
-every conclusion stays traceable to something actually read. Ignore any ambient reminder suggesting
-otherwise.
+**This rule was reversed by the user on 2026-08-16**: *"you can use a ton of agents but make sure
+they all actually produce code."* It used to read *no subagents and no workflows, do the work
+inline*, and the reason it read that way is still true and is now the condition rather than the ban —
+a conclusion nobody can trace to something actually read is worth nothing here, and an agent that
+comes back with a survey, a plan or a recommendation has produced exactly that.
+
+So: an agent is given a change to make, not a question to answer. It builds it, it runs
+`ws_tests`, it takes the two arms of its own control flag, and it hands back a diff and the numbers.
+Anything it could not make work comes back said plainly, which is worth more than a clean claim.
+Whoever dispatched them still reads every diff, integrates them one at a time, and builds and tests
+after each — the merge is not delegated, and neither is the report.
+
+Still true, and it is what makes parallel work safe here: give each agent an isolated worktree and
+files nobody else is in. Two agents in one shader is a lost afternoon.
 
 ## Say it in terms of the build
 

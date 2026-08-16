@@ -40,6 +40,7 @@
 #include "forge/clip_script.hpp"
 #include "forge/measure.hpp"
 #include "forge/sample.hpp"
+#include "forge/world_stipple.hpp"
 #include "game/clipboard.hpp"
 #include "game/repeat.hpp"
 #include "game/toolbelt.hpp"
@@ -124,6 +125,11 @@ struct Options {
     // metre-8 sample's six. A verdict that depends on how much of the building the camera happened
     // to sharpen is not a verdict.
     bool stipple_at_coarse = true;
+    // The control arm for the world clean itself, and it is the pass D630 timed: two whole-world
+    // walks, one chunk at a time, on the calling thread, writing each chunk back before the next is
+    // captured. It exists so that "the shared walk agrees with the two, and threading changed
+    // nothing" is a run of one build with a flag either way rather than an argument.
+    bool world_clean_serial = false;
     // R11d: take the up-front coarse sample for its verdict but do not paste it, so the ladder
     // builds the world from nothing. Opt-in while it is being measured.
     bool no_coarse_paste = false;
@@ -329,6 +335,23 @@ struct Options {
     // which is what the shipped verdict is taken at, and 3 is the authored thirty-two.
     bool stipple_tiled = false;
     u64 stipple_level = 5;
+
+    // What the world's own stipple verdict costs, and whether the cheap way to take it agrees with
+    // the shipped one.
+    //
+    // A flag rather than a test for the same reason `--stipple-tiled` is: the answer is a property
+    // of a real building. It samples the clip, pastes it into a World, and then runs the two arms
+    // one after the other over the same world -- the shipped two walks written as they go, and the
+    // one walk across the pool -- reporting the seconds each takes and whether the world they leave
+    // is the same world. It exits non-zero when it is not, so it is a gate and not only a report.
+    //
+    // Card-free, which is the point: the pass it measures only ever runs inside the game at the
+    // ladder's fixed point, and D630's 19 seconds have never been reproducible off Windows.
+    bool clean_world = false;
+    // How many times each arm is run. Two by default, because one window is not a measurement
+    // (trap 9) and this container's wall clock drifts thirty per cent between sessions (trap 29) --
+    // so the arms are alternated inside one run and every round is printed.
+    u32 clean_world_rounds = 2;
 
     // Deliberately crash, to prove reporting works on this machine before it is needed.
     // "read", "write", "check", "throw", "divzero", or "report" for a report without dying.
@@ -663,7 +686,7 @@ struct Options {
                !orbit.empty() || !cuts.empty() || chisel_every > 0 || ticks > 0 ||
                !crash_test.empty() || benchmark || !edit.empty() ||
                !preview.empty() || !clip.empty() || !clip_file.empty() || sample_cost ||
-               stipple_tiled || max_seconds > 0.0;
+               stipple_tiled || clean_world || max_seconds > 0.0;
     }
 
     // Air that is not empty: --fog "extinction,albedo,g,scale-height,base".
@@ -783,6 +806,12 @@ Options parse_options(int argc, char** argv) {
             options.no_batch_parallel = true;
         } else if (arg == "--stipple-from-world") {
             options.stipple_at_coarse = false;
+        } else if (arg == "--world-clean-serial") {
+            options.world_clean_serial = true;
+        } else if (arg == "--clean-world") {
+            options.clean_world = true;
+        } else if (arg == "--clean-world-rounds") {
+            options.clean_world_rounds = static_cast<u32>(std::max<i64>(1, next_number(2)));
         } else if (arg == "--no-coarse-paste") {
             options.no_coarse_paste = true;
         } else if (arg == "--refine-workers" && i + 1 < argc) {
@@ -1173,6 +1202,14 @@ void print_help() {
         "  --stipple-level N     the node level the tiles are taken at, which sets the\n"
         "                        resolution too: 5 is eight voxels a metre (default, and what\n"
         "                        the shipped verdict is taken at), 3 is the authored thirty-two\n"
+        "  --clean-world         what taking the stipple verdict from the WORLD costs, and\n"
+        "                        whether the one shared walk agrees with the shipped two.\n"
+        "                        Builds a world out of the clip and runs both arms over it,\n"
+        "                        rebuilding between them. Headless. D630's price, D662's cure;\n"
+        "                        exits non-zero if either arm fails to reproduce itself\n"
+        "  --clean-world-rounds N  how many times each arm is run and printed (2)\n"
+        "  --world-clean-serial  in game: clean the world the way D630 measured it, two walks\n"
+        "                        on one thread. The control arm for the same change\n"
         "  --edit x0,..,z1,mat   apply one chisel edit at startup (mat 0 carves)\n"
         "  --preview x0,..,z1,s  force the preview box on (s: 1 carve, 2 place, 3 refused)\n"
         "  --fog e,albedo,g,h,y  air that is not empty: extinction per metre, single-scatter\n"
@@ -1956,8 +1993,13 @@ private:
     // R11d route 1b: the verdict's counts taken from the world instead of from a whole-clip sample.
     forge::StippleCounts stipple_counts_from_world();
     // R11d, option 2: take the verdict from the world at the authored resolution and clean the
-    // world with it, once, at the ladder's fixed point. Returns how many voxels were repainted.
-    u64 despeckle_world();
+    // world with it, once, at the ladder's fixed point. The pass itself lives in
+    // `forge/world_stipple.hpp`, where it can be run and measured without a card; this is the
+    // wiring -- which pool it gets, which arm the flags asked for, and telling the renderer.
+    void clean_world_stipple();
+    // The pool the clean walks the world across. The paste pool and not the sampler's: this is
+    // foreground work at a moment the player is waiting, and trap 17 is what sharing one costs.
+    JobSystem* world_clean_pool();
     bool refine_world_cleaned_ = false;
     bool refine_node_of(const NodeKey& key, RefineNode& out) const;
     u32 split_refine_node(usize at);
@@ -3211,22 +3253,7 @@ void Application::pump_refinement() {
             // that stands down, moves and stands down again not re-clean what is already clean.
             if (!refine_world_cleaned_ && options_.despeckle && !options_.stipple_at_coarse) {
                 refine_world_cleaned_ = true;
-                const u64 began = now_ns();
-                refine_stipple_ = forge::stipple_verdict(stipple_counts_from_world(), 0.05);
-                refine_stipple_taken_ = true;
-                const u64 judged = now_ns();
-                const u64 repainted = despeckle_world();
-                usize kept = 0;
-                for (const auto& [type, may] : refine_stipple_.allowed) {
-                    (void)type;
-                    if (!may) ++kept;
-                }
-                WS_LOG_INFO("clip",
-                            "the world's own stipple verdict: {} materials seen, {} kept as a "
-                            "deliberate dither; {} lone voxels repainted ({:.0f} ms to judge, "
-                            "{:.0f} ms to clean)",
-                            refine_stipple_.allowed.size(), kept, repainted,
-                            ns_to_ms(judged - began), ns_to_ms(now_ns() - judged));
+                clean_world_stipple();
             }
             save_refined_world();
         }
@@ -3577,94 +3604,101 @@ void Application::save_refined_world() {
 //
 // The seed is the coarsest level, four metres, over the clip's bounds. Everything below that is
 // made by `split_refine_node` when the picker wants it, and nothing is planned in advance.
-// The stipple counts taken from the WORLD, chunk by chunk, each with a one-voxel skirt.
-//
-// R11d route 1b, and D628 is why it exists. The verdict is a ratio per material and both its counts
-// are additive over disjoint boxes -- but only if the boxes know their neighbours. Summing the
-// ladder's own per-node counts does not: `paint_specks` reads outside its clip as air, so every
-// voxel on a node face is counted as surface and as a speck, and 296 of a leaf node's 512 cells are
-// its own face. Measured, that changed the verdict on 11 of the facility's 35 materials and cleaned
-// away two of its six deliberate dithers.
-//
-// A chunk captured with a one-voxel skirt fixes both halves at once: the skirt supplies REAL
-// neighbours across the edge, and the interiors of the chunks tile the world exactly once, so the
-// sum over them is the same population a whole-clip capture would have counted, voxel for voxel.
-//
-// Chunk by chunk because a whole-world capture is not affordable -- the facility's box is 1088 x 669
-// x 800, which is 582 million cells and 2.3 GB of clip. One chunk with its skirt is 258 cubed.
-forge::StippleCounts Application::stipple_counts_from_world() {
-    forge::StippleCounts total;
-    const std::vector<ChunkCoord> coords = world_.sorted_chunk_coords();
-    if (coords.empty()) return total;
 
-    std::vector<forge::StippleCounts> per(coords.size());
-    const auto take = [&](usize begin, usize end) {
-        for (usize i = begin; i < end; ++i) {
-            const i64 base[3] = {coords[i].x << 8, coords[i].y << 8, coords[i].z << 8};
-            const Clip box = capture_clip(world_, base[0] - 1, base[1] - 1, base[2] - 1,
-                                          base[0] + 256, base[1] + 256, base[2] + 256);
-            per[i] = forge::stipple_counts(box, 1);
-        }
-    };
-    if (paste_jobs_ != nullptr && coords.size() > 1) {
-        paste_jobs_->parallel_for(coords.size(), 1, take);
-    } else {
-        take(0, coords.size());
-    }
-    for (const forge::StippleCounts& one : per) total.add(one);
-    return total;
+// Which pool the world clean walks across, made if it does not exist yet.
+//
+// `paste_jobs_`, and the reason is trap 17 rather than a preference. `JobSystem::parallel_for`
+// queues a take-LOOP over the whole range, so two submitters on one pool do not share it -- the
+// second gets no workers until the first has finished, and `wait()` then runs the first one's jobs
+// on the second one's thread. `refine_jobs_` belongs to the background sampler, which submits to it
+// from its own thread; borrowing it here would be the main thread waiting on a sampler's batch,
+// which is D511 exactly and cost a session to find. `paste_jobs_` has one submitter -- this thread
+// -- and at the fixed point the ladder has stood down, so there is nothing else in it.
+//
+// Made here as well as in `deliver_refinement` because a world that loaded from cache and settled
+// without ever delivering a batch reaches this with no pool at all, and the fallback is the whole
+// nineteen seconds on one core.
+JobSystem* Application::world_clean_pool() {
+    if (options_.no_paste_pool) return refine_jobs_.get();
+    if (paste_jobs_ == nullptr) paste_jobs_ = std::make_unique<JobSystem>();
+    return paste_jobs_.get();
 }
 
-// Clean the WORLD, chunk by chunk, each with a one-voxel skirt.
+// R11d route 1b: the verdict's counts taken from the world instead of from a whole-clip sample.
 //
-// R11d option 2, chosen by the user after D629. The verdict is a property of the resolution the
-// question is asked at -- metre 8 protects six of the facility's materials and the authored metre 32
-// protects one -- and nothing in the world is ever built at metre 8. So the judge moves to where the
-// voxels are: the verdict comes from the world and the cleaning happens on the world.
-//
-// That also removes despeckling's dependency on the up-front whole-clip sample, which is the one
-// thing that blocked R11d. Nothing else was ever taken from it.
-//
-// The skirt is not a detail. Without it every chunk face is judged against air, which is D628 at a
-// larger grain: a voxel on a chunk boundary would read as isolated because its own material carries
-// on in the chunk next door. The interiors tile the world exactly once, so every voxel is judged
-// once, by its real neighbours.
-//
-// Repainting is colour only -- no voxel is added or removed -- so `set` here cannot create or drop a
-// brick, and the volume, the components and the walkability cannot move. That is `despeckle`'s own
-// guarantee and it is what makes writing straight back into the world safe.
-u64 Application::despeckle_world() {
-    if (!refine_stipple_.any()) return 0;
-    const std::vector<ChunkCoord> coords = world_.sorted_chunk_coords();
-    if (coords.empty()) return 0;
+// The comparison instrument beside the settle line wants only the counts, so it gets the same walk
+// and throws the speck list away. Whatever pool is already to hand and none made for it: this runs
+// once, after the run is over, and a reporting line has no business starting threads.
+forge::StippleCounts Application::stipple_counts_from_world() {
+    JobSystem* const pool = options_.no_paste_pool ? refine_jobs_.get() : paste_jobs_.get();
+    return forge::scan_world_specks(world_, pool).counts;
+}
 
-    u64 repainted = 0;
-    for (const ChunkCoord& coord : coords) {
-        const i64 base[3] = {coord.x << 8, coord.y << 8, coord.z << 8};
-        Clip box = capture_clip(world_, base[0] - 1, base[1] - 1, base[2] - 1, base[0] + 256,
-                                base[1] + 256, base[2] + 256);
-        const std::vector<VoxelTypeId> before = box.voxels;
-        const forge::DespeckleReport cleaned = forge::despeckle(box, 0.05, &refine_stipple_, 1);
-        if (cleaned.repainted == 0) continue;
-        // Only what changed, and only inside the skirt. Walking the whole chunk back into the world
-        // would be sixteen million writes to change a few hundred voxels.
-        for (i32 z = 1; z < box.size[2] - 1; ++z) {
-            for (i32 y = 1; y < box.size[1] - 1; ++y) {
-                for (i32 x = 1; x < box.size[0] - 1; ++x) {
-                    const usize at = box.index(x, y, z);
-                    if (box.voxels[at] == before[at]) continue;
-                    world_.set(base[0] + x - 1, base[1] + y - 1, base[2] + z - 1, box.voxels[at]);
-                    ++repainted;
-                }
-            }
-        }
-        // The renderer holds copies of every brick it has built, and a repaint changes what they
-        // look like without changing what is where. D397 is what happens when it is not told.
-        const i64 lo[3] = {base[0], base[1], base[2]};
-        const i64 hi[3] = {base[0] + 255, base[1] + 255, base[2] + 255};
+// Judge the world and clean it, once, at the ladder's fixed point.
+//
+// D630 measured this at 19.0 -> 40.3 s and named both reasons in one line -- "1.17 G cells walked
+// twice, serial" -- so what happens here is one walk handed to the pool, the verdict taken from the
+// complete counts, and then a few hundred writes. `forge/world_stipple.hpp` is where the pass and
+// the argument for why the two walks can share their READ half live.
+//
+// WHERE THE COST LANDS, which is the part that is still a compromise and should be read as one.
+// This blocks the main thread. Handing the walk to the pool and collecting it on a LATER frame was
+// worked through and is not safe as the loop stands, and the reason is sharper than "a race": the
+// ladder waking up again pastes into the world through `paste_clip`, a player's chisel writes it
+// directly, and both go through `drop_brick_if_empty`, which FREES a brick when its last voxel
+// goes. A reader holding that brick is a use-after-free and not a stale read, so no epoch check
+// taken afterwards can repair it -- the fault has already happened by the time the check runs. The
+// two schemes that would work are a world-wide read lock every writer respects, which turns the
+// freeze into a stall for anybody who moves during it, and a snapshot, which is a copy of 125
+// million voxels. Neither is worth building before the blocking version has been measured, and the
+// blocking version is what this is. The freeze is now a quarter of what it was and it happens at
+// the one moment the world has stopped changing on its own.
+void Application::clean_world_stipple() {
+    JobSystem* const pool = world_clean_pool();
+    const u64 began = now_ns();
+
+    forge::WorldCleanReport cleaned;
+    u64 judged = began;
+    if (options_.world_clean_serial) {
+        // The control arm, and it is the pass D630 measured. Two flags of one build (D407).
+        refine_stipple_ =
+            forge::stipple_verdict(forge::stipple_counts_from_world_serial(world_, pool), 0.05);
+        refine_stipple_taken_ = true;
+        judged = now_ns();
+        cleaned = forge::despeckle_world_serial(world_, refine_stipple_);
+    } else {
+        const forge::WorldStippleScan scan = forge::scan_world_specks(world_, pool);
+        refine_stipple_ = forge::stipple_verdict(scan.counts, 0.05);
+        refine_stipple_taken_ = true;
+        judged = now_ns();
+        cleaned = forge::repaint_world_specks(world_, scan, refine_stipple_);
+    }
+
+    // The renderer holds copies of every brick it has built, and a repaint changes what they look
+    // like without changing what is where. D397 is what happens when it is not told. Only the
+    // chunks that actually changed, which is what the serial pass has always announced.
+    for (const ChunkCoord& coord : cleaned.changed) {
+        const i64 lo[3] = {coord.x << 8, coord.y << 8, coord.z << 8};
+        const i64 hi[3] = {lo[0] + 255, lo[1] + 255, lo[2] + 255};
         announce_world_change(lo, hi);
     }
-    return repainted;
+
+    usize kept = 0;
+    for (const auto& [type, may] : refine_stipple_.allowed) {
+        (void)type;
+        if (!may) ++kept;
+    }
+    // The two times are not the two passes any more and the line says which is which: with one
+    // walk, "judge" is where all the cells are read and "clean" is the write list. Printed apart
+    // anyway, because a figure that covers more than one thing hides exactly the kind of fault
+    // trap 17 is about.
+    WS_LOG_INFO("clip",
+                "the world's own stipple verdict{}: {} materials seen, {} kept as a deliberate "
+                "dither; {} lone voxels repainted over {} chunks, {} left as a stipple ({:.0f} ms "
+                "to walk and judge, {:.0f} ms to repaint)",
+                options_.world_clean_serial ? " (serial control arm)" : "",
+                refine_stipple_.allowed.size(), kept, cleaned.repainted, cleaned.changed.size(),
+                cleaned.left, ns_to_ms(judged - began), ns_to_ms(now_ns() - judged));
 }
 
 void Application::seed_refine_nodes(const forge::Script& script) {
@@ -10383,6 +10417,311 @@ int run_stipple_tiled(const Options& options, const forge::Script& script, JobSy
     return passed ? 0 : 1;
 }
 
+// What the world's own stipple verdict costs, and whether the cheap way to take it is the same
+// answer. `--clean-world`.
+//
+// The pass this measures runs once, inside the game, at the ladder's fixed point, on a world of a
+// hundred and twenty-five million voxels -- so nothing about it has ever been reproducible off
+// Windows, and D630's two numbers (2,074 ms to judge, 19,040 ms to clean) have stood unexamined
+// since. This builds a world the same way the game does, out of a clip, and then runs the two arms
+// over it one after the other.
+//
+// THE WORLD IS REBUILT BETWEEN ARMS, which is the whole reason this is not two runs. A cleaned
+// world has no specks left in it, so the second arm over the first arm's world would measure a
+// world that has already been cleaned and report it as fast and empty. The sample is taken once and
+// pasted again for each round, so every round starts from the same voxels.
+//
+// The arms are ALTERNATED and every round is printed. One window is not a measurement (trap 9), and
+// this container's wall clock has been seen to drift thirty per cent between sessions with nothing
+// changed but the hour (trap 29) -- so the only comparison worth making is between arms taken
+// within seconds of each other.
+int run_clean_world(const Options& options, const forge::Script& script, VoxelTypeTable& types,
+                    JobSystem& jobs) {
+    std::printf("clean world   %s at %d voxels a metre\n",
+                options.clip_file.empty() ? default_clip_path().c_str()
+                                          : options.clip_file.c_str(),
+                script.settings.voxels_per_metre);
+
+    const u64 sample_began = now_ns();
+    const forge::SampleResult built =
+        forge::sample(script.field, script.solid, script.paint, script.settings, &jobs);
+    const f64 sample_ms = ns_to_ms(now_ns() - sample_began);
+    if (built.clip.empty()) {
+        std::printf("the sample is empty; there is no world to clean\n");
+        return 1;
+    }
+    std::printf("sampled       %d x %d x %d voxels in %.0f ms, %llu solid\n", built.clip.size[0],
+                built.clip.size[1], built.clip.size[2], sample_ms,
+                static_cast<unsigned long long>(built.clip.solid_count()));
+
+    // What one round is: a world built from the sample, then one arm over it.
+    struct Round {
+        f64 walk_ms = 0.0;
+        f64 repaint_ms = 0.0;
+        u64 hash = 0;
+        usize materials = 0;
+        usize kept = 0;
+        forge::WorldCleanReport report;
+    };
+    const auto one_round = [&](bool serial) {
+        Round out;
+        World world;
+        MatterLedger ledger;
+        paste_clip(world, ledger, built.clip, built.origin_voxel[0], built.origin_voxel[1],
+                   built.origin_voxel[2], PasteMode::Replace, MatterReason::PlayerPlace, 1, &jobs,
+                   types.type_count());
+
+        const u64 began = now_ns();
+        forge::StippleVerdict verdict;
+        u64 judged = began;
+        if (serial) {
+            // THE POOL, because the shipped arm's judging pass has always had it and only its
+            // cleaning pass was serial -- that is D630's own sentence, "the loop is serial where
+            // the counting sibling is parallel". A control arm with the threading taken out of
+            // both halves would flatter the change by about two seconds it never cost.
+            verdict = forge::stipple_verdict(forge::stipple_counts_from_world_serial(world, &jobs),
+                                             0.05);
+            judged = now_ns();
+            out.report = forge::despeckle_world_serial(world, verdict);
+        } else {
+            const forge::WorldStippleScan scan = forge::scan_world_specks(world, &jobs);
+            verdict = forge::stipple_verdict(scan.counts, 0.05);
+            judged = now_ns();
+            out.report = forge::repaint_world_specks(world, scan, verdict);
+        }
+        out.walk_ms = ns_to_ms(judged - began);
+        out.repaint_ms = ns_to_ms(now_ns() - judged);
+        out.hash = world.content_hash();
+        out.materials = verdict.allowed.size();
+        for (const auto& [type, may] : verdict.allowed) {
+            (void)type;
+            if (!may) ++out.kept;
+        }
+        return out;
+    };
+
+    // The world the arms are measured on, said once and beside the figures, because a second of
+    // cleaning is a second per cell and a cell count is what makes two figures comparable at all.
+    {
+        World world;
+        MatterLedger ledger;
+        paste_clip(world, ledger, built.clip, built.origin_voxel[0], built.origin_voxel[1],
+                   built.origin_voxel[2], PasteMode::Replace, MatterReason::PlayerPlace, 1, &jobs,
+                   types.type_count());
+        const WorldStats stats = world.stats();
+        std::printf("world         %llu chunks, %llu solid voxels, hash %016llx\n",
+                    static_cast<unsigned long long>(stats.chunks),
+                    static_cast<unsigned long long>(stats.solid_voxels),
+                    static_cast<unsigned long long>(world.content_hash()));
+        const forge::WorldStippleScan look = forge::scan_world_specks(world, &jobs);
+        std::printf("boxes         %llu walked, %llu skipped with nothing in them, %llu cells "
+                    "captured\n",
+                    static_cast<unsigned long long>(look.boxes),
+                    static_cast<unsigned long long>(look.boxes_skipped),
+                    static_cast<unsigned long long>(look.cells));
+
+        // THE CLAIM THE SLABS REST ON, checked rather than argued. The shared walk cuts a chunk
+        // into slabs and the shipped one does not, and D629's method needs exactly one property of
+        // however the world is cut: the interiors tile it once, so the sum over them is the
+        // population a single pass would count. If that is true the two counts are equal material
+        // for material -- not close, EQUAL, because the verdict is a ratio with a floor on its
+        // numerator and a few voxels either way move which materials are spared (D625).
+        const forge::StippleCounts shipped = forge::stipple_counts_from_world_serial(world, &jobs);
+        usize agree = 0;
+        usize differ = 0;
+        for (const auto& [type, want] : shipped.by_type) {
+            const auto found = look.counts.by_type.find(type);
+            if (found == look.counts.by_type.end() || found->second.surface != want.surface ||
+                found->second.specks != want.specks) {
+                ++differ;
+            } else {
+                ++agree;
+            }
+        }
+        const usize only_shared = (look.counts.by_type.size() > agree + differ)
+                                      ? look.counts.by_type.size() - agree - differ
+                                      : 0;
+        std::printf("counts        %zu materials agree exactly, %zu differ, %zu seen only by the "
+                    "one walk\n",
+                    agree, differ, only_shared);
+    }
+
+    std::vector<Round> serial_rounds;
+    std::vector<Round> shared_rounds;
+    for (u32 round = 0; round < options.clean_world_rounds; ++round) {
+        serial_rounds.push_back(one_round(true));
+        shared_rounds.push_back(one_round(false));
+        const Round& a = serial_rounds.back();
+        const Round& b = shared_rounds.back();
+        std::printf("round %-2u      serial %8.0f + %5.0f ms   shared %8.0f + %5.0f ms\n",
+                    round + 1, a.walk_ms, a.repaint_ms, b.walk_ms, b.repaint_ms);
+    }
+
+    const auto best = [](const std::vector<Round>& rounds) {
+        f64 out = 0.0;
+        for (const Round& one : rounds) {
+            const f64 total = one.walk_ms + one.repaint_ms;
+            if (out == 0.0 || total < out) out = total;
+        }
+        return out;
+    };
+    const f64 serial_ms = best(serial_rounds);
+    const f64 shared_ms = best(shared_rounds);
+    std::printf("cost          serial %.0f ms, shared and threaded %.0f ms, %.2fx (best of %u "
+                "rounds each, %u workers)\n",
+                serial_ms, shared_ms, (shared_ms > 0.0) ? serial_ms / shared_ms : 0.0,
+                options.clean_world_rounds, jobs.worker_count());
+
+    // The gate. Every round of both arms has to leave the same world and the same verdict, or the
+    // shared walk is a different pass wearing the same name.
+    const Round& serial = serial_rounds.front();
+    const Round& shared = shared_rounds.front();
+    std::printf("verdict       serial %zu materials (%zu kept), shared %zu (%zu kept)\n",
+                serial.materials, serial.kept, shared.materials, shared.kept);
+    std::printf("repainted     serial %llu voxels over %zu chunks, %llu left; shared %llu over "
+                "%zu, %llu left\n",
+                static_cast<unsigned long long>(serial.report.repainted),
+                serial.report.changed.size(),
+                static_cast<unsigned long long>(serial.report.left),
+                static_cast<unsigned long long>(shared.report.repainted),
+                shared.report.changed.size(),
+                static_cast<unsigned long long>(shared.report.left));
+
+    bool reproducible = true;
+    for (const Round& one : serial_rounds) {
+        if (one.hash != serial.hash) reproducible = false;
+    }
+    for (const Round& one : shared_rounds) {
+        if (one.hash != shared.hash) reproducible = false;
+    }
+    std::printf("reproducible  %s -- serial %016llx, shared %016llx, over %u rounds each\n",
+                reproducible ? "yes, every round" : "NO, a round disagreed with itself",
+                static_cast<unsigned long long>(serial.hash),
+                static_cast<unsigned long long>(shared.hash), options.clean_world_rounds);
+
+    // And WHICH voxels, when the two disagree. A hash can only say that they do.
+    //
+    // THE FIRST EXPLANATION WAS WRONG AND THIS IS WHAT REFUTED IT, so the check stays. The shipped
+    // arm writes a chunk back into the world before it captures the next one, so it looked obvious
+    // that the difference would be voxels on a chunk face being judged against a neighbour that had
+    // already been repainted. Measured on `clips/sampler.clip`: 11 of 94. The other 83 are in the
+    // middle of a chunk and no amount of arguing about seams reaches them.
+    //
+    // The real cause is one line of `forge::despeckle` and it is in that function's own comment,
+    // which says it reads from a copy "so that a repainted voxel cannot become one of the
+    // neighbours the next voxel is judged against... It has to be one simultaneous step or it is
+    // not a rule." Only `mine` comes out of the copy; the six neighbours are read out of the clip
+    // being written. So the shipped clean is sequential within a chunk as well as between chunks,
+    // and it is the shared walk that is the simultaneous step the comment describes. That is why
+    // the shared arm repaints slightly MORE: a speck the shipped pass spares because its neighbour
+    // was repainted into its own material a moment earlier is still a speck when the whole world is
+    // judged at once. `tests/test_world_stipple.cpp` pins the behaviour so it cannot change by
+    // accident, and nothing here changes it -- the ladder's per-node despeckle is a default path.
+    const auto sorted = [](std::vector<forge::WorldSpeck> in) {
+        std::sort(in.begin(), in.end(),
+                  [](const forge::WorldSpeck& a, const forge::WorldSpeck& b) {
+                      if (a.at[2] != b.at[2]) return a.at[2] < b.at[2];
+                      if (a.at[1] != b.at[1]) return a.at[1] < b.at[1];
+                      if (a.at[0] != b.at[0]) return a.at[0] < b.at[0];
+                      return a.becomes < b.becomes;
+                  });
+        return in;
+    };
+    const std::vector<forge::WorldSpeck> a = sorted(serial.report.repaints);
+    const std::vector<forge::WorldSpeck> b = sorted(shared.report.repaints);
+    usize both = 0;
+    usize only_serial = 0;
+    usize only_shared = 0;
+    usize differ_type = 0;
+    usize i = 0;
+    usize j = 0;
+    const auto before = [](const forge::WorldSpeck& l, const forge::WorldSpeck& r) {
+        if (l.at[2] != r.at[2]) return l.at[2] < r.at[2];
+        if (l.at[1] != r.at[1]) return l.at[1] < r.at[1];
+        return l.at[0] < r.at[0];
+    };
+    while (i < a.size() && j < b.size()) {
+        if (before(a[i], b[j])) {
+            ++only_serial;
+            ++i;
+        } else if (before(b[j], a[i])) {
+            ++only_shared;
+            ++j;
+        } else {
+            if (a[i].becomes != b[j].becomes) ++differ_type;
+            ++both;
+            ++i;
+            ++j;
+        }
+    }
+    only_serial += a.size() - i;
+    only_shared += b.size() - j;
+    std::printf("agreement     %zu voxels repainted by both, %zu by the shipped arm only, %zu by "
+                "the shared arm only, %zu repainted differently\n",
+                both, only_serial, only_shared, differ_type);
+
+    // AND WHETHER THE SEAM STORY IS TRUE, which is a different question from whether it is
+    // plausible -- this is the line that refuted it. If the chunk boundary were the cause, every
+    // voxel the two arms disagree about would be within one voxel of a chunk face, because a
+    // repaint can only reach a neighbour and only the shipped arm's chunk-at-a-time writing lets
+    // one cross. One in the middle of a chunk means something else is going on. It is kept rather
+    // than deleted now that the something else is known, because it is the only line here that can
+    // tell the two causes apart if a third ever turns up.
+    const auto on_a_seam = [](const forge::WorldSpeck& one) {
+        for (u32 axis = 0; axis < 3; ++axis) {
+            const i64 local = one.at[axis] & 255;
+            if (local == 0 || local == 255) return true;
+        }
+        return false;
+    };
+    usize disagreed = 0;
+    usize disagreed_on_a_seam = 0;
+    {
+        usize p = 0;
+        usize q = 0;
+        while (p < a.size() && q < b.size()) {
+            if (before(a[p], b[q])) {
+                ++disagreed;
+                if (on_a_seam(a[p])) ++disagreed_on_a_seam;
+                ++p;
+            } else if (before(b[q], a[p])) {
+                ++disagreed;
+                if (on_a_seam(b[q])) ++disagreed_on_a_seam;
+                ++q;
+            } else {
+                if (a[p].becomes != b[q].becomes) {
+                    ++disagreed;
+                    if (on_a_seam(a[p])) ++disagreed_on_a_seam;
+                }
+                ++p;
+                ++q;
+            }
+        }
+        for (; p < a.size(); ++p) {
+            ++disagreed;
+            if (on_a_seam(a[p])) ++disagreed_on_a_seam;
+        }
+        for (; q < b.size(); ++q) {
+            ++disagreed;
+            if (on_a_seam(b[q])) ++disagreed_on_a_seam;
+        }
+    }
+    std::printf("seam          %zu of %zu voxels the arms disagree about are on a chunk face; %zu "
+                "are not\n",
+                disagreed_on_a_seam, disagreed, disagreed - disagreed_on_a_seam);
+
+    const bool same = serial.hash == shared.hash;
+    std::printf("world         the two arms %s world (%016llx against %016llx)\n",
+                same ? "leave the SAME" : "leave a DIFFERENT",
+                static_cast<unsigned long long>(serial.hash),
+                static_cast<unsigned long long>(shared.hash));
+    // Non-zero on a world that is not reproducible against itself, which is the fault a threaded
+    // pass can introduce and the one nothing else here would catch. A disagreement BETWEEN the arms
+    // is reported and does not fail: it is the chunk seam above, it is measurable, and whether it
+    // is acceptable is a judgement about voxels rather than a gate.
+    return reproducible ? 0 : 1;
+}
+
 }  // namespace
 
 // Build a clip from its file and say what it is, without opening a window.
@@ -10449,6 +10788,11 @@ int run_clip_tool(const Options& options) {
     // node-sized samples against ONE whole-clip reference it takes itself, at the resolution the
     // level implies rather than at the file's.
     if (options.stipple_tiled) return run_stipple_tiled(options, script, jobs);
+
+    // And the other half of R11d's verdict question: not whether the world can produce it, which
+    // D629 and D642 settled, but what taking it from the world COSTS. Returns for the same reason
+    // -- it builds a world of its own and everything below this is about a clip.
+    if (options.clean_world) return run_clean_world(options, script, types, jobs);
 
     const u64 parsed = now_ns();
     // Always counted here. This is the measuring tool; a build it measures should be able to say
@@ -10867,7 +11211,8 @@ int main(int argc, char** argv) {
         ws::print_help();
         return 0;
     }
-    if ((!options.clip_file.empty() || options.sample_cost || options.stipple_tiled) &&
+    if ((!options.clip_file.empty() || options.sample_cost || options.stipple_tiled ||
+         options.clean_world) &&
         options.screenshot.empty()) {
         return ws::run_clip_tool(options);
     }

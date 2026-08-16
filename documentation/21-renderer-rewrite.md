@@ -1958,13 +1958,31 @@ constant in one place* applied to the one quantity this whole plan is about.
 
   **The gate above is NOT met, and that is the honest statement.** Time to first frame is
   **t+3,026 ms**, not under 500, because the up-front **sample** still runs — 2,760 ms of it — and
-  must, until the stipple verdict has another source. **D629 and D630 are why the verdict cannot
-  move**, and D630's option 2 is built behind `--stipple-from-world` and measured at **+19 s and a
-  verdict that protects nothing from a real camera**. What this flag removes is the 959 ms paste and
-  the blocky first pass; it does not remove the wait. **Three things keep it opt-in and none of them
-  is the ladder**: that wait, the far chisel being unmeasured (R11h's remaining half), and the fact
-  that flipping the default makes the shipped world camera-dependent and so changes every baseline
-  in the repository.
+  must, until the stipple verdict has another source. **D629 is why the verdict cannot move off a
+  whole-building measurement**, and D630's option 2 is built behind `--stipple-from-world` with two
+  objections against it: it cost 19 s, and the verdict it takes from a partly refined world protects
+  nothing. **D662 answers the first and leaves the second.** The two whole-world walks share their
+  READ half — finding a speck needs no verdict, only deciding what to do with one does — and what is
+  left runs across the paste pool: facility, card-free, **13,185 → 2,084 ms at metre 16** and
+  **5,242 → 644 ms at metre 8**, three rounds each, and 14,904 → 2,727 when the same metre-16 command
+  was repeated on a busier box with every non-clock figure identical. **D630's own metre-32 world was
+  not reached here** — three gigabytes and more than ten minutes to sample, abandoned twice — so the
+  ratio transfers and the seconds do not. `--clean-world` is the instrument and the gate.
+  **The verdict's camera dependence is untouched and is now the whole of the objection.** What this
+  flag removes is the 959 ms paste and the blocky first pass; it does not remove the wait. **Three
+  things keep it opt-in and none of them is the ladder**: that wait, the far chisel being unmeasured
+  (R11h's remaining half), and the fact that flipping the default makes the shipped world
+  camera-dependent and so changes every baseline in the repository.
+
+  **And D662 found something under it worth more than its seconds.** `forge::despeckle`'s own
+  comment says it reads from a copy "so that a repainted voxel cannot become one of the neighbours
+  the next voxel is judged against... It has to be one simultaneous step or it is not a rule" — and
+  only `mine` comes out of the copy, the six neighbours being read live out of the clip being
+  written. So the despeckler the ladder has run on every node since D610 is sequential, not
+  simultaneous. It is **pinned by a test rather than fixed**, because fixing it moves the world
+  every load produces. The first explanation for the difference was the chunk seam and it was
+  refuted by its own check: 11 of 94 differing voxels on `sampler.clip` are on a chunk face, 0 of 61
+  on the facility.
 
 - **R11e — a light path may not cause sampling.** R9h's rule, one level down and now with teeth: a
   gathering ray that may pull geometry out of the field is a dark room that samples the whole

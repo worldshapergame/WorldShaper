@@ -940,13 +940,42 @@ eight metres. Five gates were run and it passes all five.
 1. **The loading bar does NOT go with this flag, and after D647 and D649 the reason is precise.** The
    up-front *sample* still runs, 2,760 ms of it. The condition that skips it is built and needs two
    flags to be false (D647); the only other verdict source wired today is `--stipple-from-world`,
-   which is D630's option 2 at **+19 s and a verdict that protects nothing from a real camera**.
-   D642 cleared the ARGUMENT — the coarse verdict protects four materials that have nothing to
-   protect at authored detail — and **D649 measured the two obvious ways to source it incrementally
-   and refused both**: the free one repaints two dithers, the exact one doubles what a node costs to
-   sample. What is left to build is the skirt read from the WORLD after the paste. Not pasting saves
-   959 ms and removes the blocky first pass on its own. **D629 and D630 are why the verdict cannot
-   move.**
+   which is D630's option 2. D642 cleared the ARGUMENT — the coarse verdict protects four materials
+   that have nothing to protect at authored detail — and **D649 measured the two obvious ways to
+   source it incrementally and refused both**: the free one repaints two dithers, the exact one
+   doubles what a node costs to sample. Not pasting saves 959 ms and removes the blocky first pass on
+   its own. **D629 is why the verdict cannot move off a whole-building measurement.**
+
+   **D662 took most of the price off, and the price was the thing keeping the decision impossible.**
+   D630's own sentence named both halves of it — *"1.17 G cells walked twice, serial"* — and both are
+   gone: the judging walk and the cleaning walk share their READ half (finding a speck needs no
+   verdict; only deciding what to do with one does), and what is left runs across the paste pool.
+   Facility, card-free, three rounds of each arm alternated inside one run: **13,185 → 2,084 ms at
+   metre 16** (24 chunks, 15.7 M voxels) and **5,242 → 644 ms at metre 8**. The metre-16 run was
+   repeated on a busier box and read 14,904 → 2,727; every non-clock figure in it reproduced to the
+   digit and only the seconds moved. `--clean-world` is the
+   instrument and it is a gate as well as a report. **D630's 19.0 s was measured on the ladder's own
+   metre-32 world, which is 68 chunks and 125 M voxels — four times the metre-16 world here, and
+   that arm has not been run**: sampling the whole facility at authored detail is three gigabytes and
+   more than ten minutes on this container, and two attempts at it were abandoned — one when free
+   memory fell to 1.8 GB with three other jobs on the box, one after twelve minutes of sampling. The
+   ratio is what transfers, and it is 5.5–8.1× over every size and every box load that was run.
+   **What is left to decide is the verdict's camera dependence (D630's second objection), which is
+   untouched, and 61 voxels of 15.7 M** — the shared walk is the simultaneous step
+   `forge::despeckle`'s own comment describes and the shipped one is not, which D662 found by
+   measurement after the obvious explanation was refuted.
+
+   **Two things about the world clean that have NOT been run, and both need a card.** D662 is
+   card-free throughout: it measures the pass on a `World` built out of the clip, and the game's own
+   path — `Application::clean_world_stipple`, at the ladder's fixed point, with
+   `--stipple-from-world` — has not been executed since the change, because the only camera that
+   reaches that fixed point is the facility's enclosed one and this container renders at about a
+   frame a second. And reading the control flow raises a question nobody has answered with a run:
+   `refine_save_owed_` is set only by a STAND-DOWN, and a ladder that finishes every node tears
+   itself down in `deliver_refinement` first and resets `refine_script_`, after which
+   `start_refinement` returns before it can set the flag — **so a clip the ladder completes may never
+   clean its world at all**. That is a reading and not a measurement; the facility from the enclosed
+   camera settles at 32,712 of 40,436 nodes and does stand down, which is why D630 saw the pass run.
 2. **The far chisel is unmeasured** — sixty metres into a surface never approached, where the
    proximity radius has to hold *sampling* rather than *residency* (R2c, D199). That is R11h's
    remaining half.
@@ -3987,8 +4016,21 @@ WorldShaper --clip-file clips\facility.clip --clip-metre 8    # sample it and sa
 WorldShaper --sample-cost                                     # what ONE node costs, per level (R11a)
 WorldShaper --stipple-tiled                                   # can the ladder carry the verdict? (D649)
 WorldShaper --stipple-tiled --stipple-level 3 --clip-bounds "-4,0,-8,0,4,-4"   # ...at authored detail
+WorldShaper --clean-world --clip-file clips\facility.clip --clip-metre 32      # what the world verdict COSTS (D662)
 WorldShaper --ticks 20000                                     # the headless world audit
 ```
+
+`--clean-world` samples the clip, pastes it into a `World` the way the game does, and then runs the
+two arms of the world clean over it one after the other — the shipped pass (two walks, chunk at a
+time, written as it goes) and the shared walk across the pool. It **rebuilds the world between
+arms**, which is the reason it is one run and not two: a cleaned world has no specks left in it, so
+a second arm over the first arm's world measures nothing and reports it as fast. `--clean-world-rounds
+N` alternates them N times and prints every round, because one window is not a measurement (trap 9)
+and this container's clock drifts (trap 29). It exits non-zero if either arm fails to reproduce
+itself, which is the fault threading can introduce; a disagreement BETWEEN the arms is reported with
+its size and its location and does not fail, because it is a judgement about voxels (D662).
+**At metre 32 it needs about three gigabytes and ten minutes of sampling before it measures
+anything**; metre 16 is a minute and answers the same question a quarter the size.
 
 `--stipple-tiled` exits non-zero if the skirted sum stops reproducing the whole-clip count, so it is
 a gate and not only a report. It takes a whole-clip reference of its own, so the level it is given
