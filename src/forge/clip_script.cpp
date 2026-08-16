@@ -291,7 +291,31 @@ public:
 private:
     // --- token access ---------------------------------------------------------------------
     bool done() const { return at_ >= tokens_.size(); }
-    const Token& peek() const { return tokens_[at_]; }
+
+    // PAST THE END READS AS AN EMPTY TOKEN, and this is a fix for a crash rather than a courtesy.
+    //
+    // `peek()` was the one accessor here that did not test `done()` first -- `take`, `line` and
+    // `at_new_statement` all do -- and the caller cannot be relied on to have tested it either,
+    // because `at_` moves during the call it is checked around. The way it happened:
+    // `block()` enters its loop having checked `!done()`, calls `expression()`, and somewhere
+    // below that a nested `block()` hits the depth limit and sets `at_ = tokens_.size()` to
+    // abandon the file. `expression()` returns false, and the very next thing `block()` does is
+    // `peek().text` for the error message -- one element past the end of the vector.
+    //
+    // That is a heap READ out of bounds, not a stack overflow, which is why it looked like it did:
+    // AddressSanitizer names it exactly, but without ASan whether it crashes depends on what
+    // happens to sit after the token array. Nesting 90, 95, 96, 100, 104, 110 and 1000 deep all
+    // segfaulted while 80, 120, 128 and 4000 came back clean, and the same input in a different
+    // process was fine. D666 recorded it honestly as "seen rather than diagnosed" and left the
+    // depth guard in as a bound; the depth guard was right, and it was also what pushed `at_` off
+    // the end.
+    //
+    // Returning an empty token means every reader past the end sees a token with no text, which no
+    // branch matches, so the parser reports and stops instead of reading memory it does not own.
+    const Token& peek() const {
+        static const Token kEnd{};
+        return done() ? kEnd : tokens_[at_];
+    }
     bool at_new_statement() const { return done() || tokens_[at_].starts_line; }
     std::string take() { return done() ? std::string() : tokens_[at_++].text; }
     u32 line() const { return done() ? (tokens_.empty() ? 0 : tokens_.back().line) : peek().line; }

@@ -37,6 +37,21 @@ target_include_directories(ws_version INTERFACE "${CMAKE_BINARY_DIR}/generated")
 
 if(NOT WS_TOOLS_ONLY)
     include(cmake/Dependencies.cmake)
+else()
+    # doctest ON ITS OWN, because the headless configuration still has a test suite and doctest is
+    # a single header with no build of its own. The rest of Dependencies.cmake opens with
+    # `find_package(Vulkan REQUIRED)`, which is exactly what this configuration exists to avoid.
+    # The pin is the same as the one there; if the two ever disagree that is a bug, not a choice.
+    include(FetchContent)
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+    FetchContent_Declare(doctest
+        GIT_REPOSITORY https://github.com/doctest/doctest.git
+        GIT_TAG        v2.5.3
+        GIT_SHALLOW    TRUE
+        SOURCE_SUBDIR  no-cmake-here)
+    FetchContent_MakeAvailable(doctest)
+    add_library(ws_doctest INTERFACE)
+    target_include_directories(ws_doctest INTERFACE "${doctest_SOURCE_DIR}")
 endif()
 
 # --------------------------------------------------------------------------------------
@@ -162,6 +177,76 @@ target_link_libraries(ws_bake_web PRIVATE ws_core ws_world ws_game ws_forge)
 
 # Everything past here needs a window, a device or a shader compiler, and the headless
 # configuration has none of the three.
+# The unit suite, split by what it needs to LINK against rather than by subject.
+#
+# WS_TEST_SOURCES_HEADLESS is everything covering the field, the world, the game and the forge --
+# none of which knows what a graphics device is -- so it builds and RUNS with no Vulkan SDK and no
+# SDL. That is not a convenience. The clips and the sampler are worked on from machines that
+# cannot build the game at all, and a change to a cut or a shape that cannot be tested where it is
+# written is a change nobody checked. It is the suite that found the parser read past its last
+# token, which had been open since D666.
+#
+# One list used twice, so the two cannot drift: `ws_tests` is these plus the interface ones and
+# remains the suite that must pass.
+set(WS_TEST_SOURCES_HEADLESS
+    tests/test_main.cpp
+    tests/test_field.cpp
+    tests/test_clip_script.cpp
+    tests/test_weathering.cpp
+    tests/test_sample.cpp
+    tests/test_markup.cpp
+    tests/test_fixed.cpp
+    tests/test_hash.cpp
+    tests/test_arena.cpp
+    tests/test_block_pool.cpp
+    tests/test_dirty_set.cpp
+    tests/test_ring.cpp
+    tests/test_jobs.cpp
+    tests/test_tags.cpp
+    tests/test_property.cpp
+    tests/test_voxel_type.cpp
+    tests/test_brick.cpp
+    tests/test_chunk.cpp
+    tests/test_world.cpp
+    tests/test_op.cpp
+    tests/test_raycast.cpp
+    tests/test_refraction.cpp
+    tests/test_translucency.cpp
+    tests/test_sun_confidence.cpp
+    tests/test_history.cpp
+    tests/test_chisel.cpp
+    tests/test_clip.cpp
+    tests/test_clipboard.cpp
+    tests/test_toolbelt.cpp
+    tests/test_serialize.cpp
+    tests/test_hollow.cpp
+    tests/test_log_ring.cpp
+    tests/test_quality.cpp
+    tests/test_light_list.cpp
+    tests/test_pass_ledger.cpp
+    tests/test_node_pool.cpp
+    tests/test_world_cache.cpp
+    tests/test_world_stipple.cpp
+    tests/test_face_store.cpp)
+
+set(WS_TEST_SOURCES_UI
+    tests/test_font.cpp
+    tests/test_ink.cpp
+    tests/test_draw.cpp
+    tests/test_logo.cpp
+    tests/test_widgets.cpp
+    tests/test_dock.cpp
+    tests/test_library.cpp
+    tests/test_sound.cpp)
+
+enable_testing()
+add_executable(ws_tests_headless ${WS_TEST_SOURCES_HEADLESS})
+target_link_libraries(ws_tests_headless PRIVATE ws_core ws_world ws_game ws_forge ws_doctest)
+target_compile_definitions(ws_tests_headless PRIVATE
+    WS_ASSET_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    WS_SHADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+add_test(NAME unit_headless COMMAND ws_tests_headless)
+
 if(WS_TOOLS_ONLY)
     return()
 endif()
@@ -331,54 +416,7 @@ target_compile_definitions(ws_gpu PUBLIC WS_GLSLC_PATH="${Vulkan_GLSLC_EXECUTABL
 # Tests - these are the safety net, not an afterthought.
 # --------------------------------------------------------------------------------------
 enable_testing()
-add_executable(ws_tests
-    tests/test_main.cpp
-    tests/test_field.cpp
-    tests/test_clip_script.cpp
-    tests/test_weathering.cpp
-    tests/test_sample.cpp
-    tests/test_font.cpp
-    tests/test_markup.cpp
-    tests/test_fixed.cpp
-    tests/test_hash.cpp
-    tests/test_arena.cpp
-    tests/test_block_pool.cpp
-    tests/test_dirty_set.cpp
-    tests/test_ring.cpp
-    tests/test_jobs.cpp
-    tests/test_tags.cpp
-    tests/test_property.cpp
-    tests/test_voxel_type.cpp
-    tests/test_brick.cpp
-    tests/test_chunk.cpp
-    tests/test_world.cpp
-    tests/test_op.cpp
-    tests/test_raycast.cpp
-    tests/test_refraction.cpp
-    tests/test_translucency.cpp
-    tests/test_sun_confidence.cpp
-    tests/test_history.cpp
-    tests/test_chisel.cpp
-    tests/test_clip.cpp
-    tests/test_clipboard.cpp
-    tests/test_toolbelt.cpp
-    tests/test_serialize.cpp
-    tests/test_hollow.cpp
-    tests/test_log_ring.cpp
-    tests/test_quality.cpp
-    tests/test_light_list.cpp
-    tests/test_pass_ledger.cpp
-    tests/test_node_pool.cpp
-    tests/test_world_cache.cpp
-    tests/test_world_stipple.cpp
-    tests/test_face_store.cpp
-    tests/test_ink.cpp
-    tests/test_draw.cpp
-    tests/test_logo.cpp
-    tests/test_widgets.cpp
-    tests/test_dock.cpp
-    tests/test_library.cpp
-    tests/test_sound.cpp)
+add_executable(ws_tests ${WS_TEST_SOURCES_HEADLESS} ${WS_TEST_SOURCES_UI})
 target_link_libraries(ws_tests PRIVATE ws_core ws_world ws_game ws_forge ws_ui ws_doctest)
 # Where the assets a test reads actually live. A test that walks up from the working directory
 # passes when it is run from the build folder and fails from anywhere else, which makes it a test
