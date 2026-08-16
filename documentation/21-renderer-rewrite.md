@@ -1786,6 +1786,23 @@ makes the whole thing free, and R10g is what makes it survive eviction.
   *Original gate, still owed on a machine with a card: speckle down 4× against the R0 baseline on
   the enclosed-room camera; two identical frames are bit-identical; a slow dolly-out shows no
   transition.*
+- **R5c — deterministic two-level blend. First half in — D662.** The marcher's ordered dither is
+  KEPT and the colour is taken off it: a hit blends its folded colour towards the folded colour of
+  the level the dither did not pick for that pixel, by `fract(log2(footprint))`, so both members of
+  the pair aim at the same number. Deleting the dither is what this line used to ask for and it is
+  refused with a reason — the level decides the coverage byte and the face key as well as the
+  colour, and `node_march` records what moving those costs (43% of pixels). `--no-level-blend` is
+  the control arm, probe bit 11. Measured on world `2059a02689b7bf7c`, settled, quality pinned: the
+  colour word alone (debug view 14) moves **1,441 pixels of 16,000 at a mean of 24 of 255, against a
+  repeat-run floor of 160 at a mean of 196**; the geometry word (view 12) moves 320 against a floor
+  of 308 and **the coverage byte is identical in every comparison**. The shaded picture cannot
+  resolve it on this machine — two runs of one arm differ on 81.4% of pixels at 3.41 of 255.
+  **Two halves are still owed**: the level-0 arm of the (0, 1) pair, which needs the composite to
+  stop reading a type id there, and the composite's own `hash_u32` ordered dither, which is what the
+  gate's *no per-pixel random numbers* clause is about.
+- **R5d — analytic edge AA** from `face_coverage[6]`, compositing up to three partial hits.
+  *Gate: speckle down 4× against the R0 baseline on the enclosed-room camera; two identical frames
+  are bit-identical; a slow dolly-out shows no transition.*
 
 ### R6 — Post, rebuilt for high resolution · M
 

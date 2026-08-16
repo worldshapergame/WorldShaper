@@ -8362,3 +8362,121 @@ both halves of that so the next session finds it in a test rather than in a pict
 | D663 | **The face store grows 583 → 955** | honesty | The second march claims what it lands on. Owed a measurement on a real scene with a card |
 | D663 | **The frame COST is unresolved here** | honesty | Two pairs of arms minutes apart disagree on the sign; one of them alone would have read as a 9% regression (trap 29) |
 | D663 | **The fold's maximum limits how much this can do** | honesty | Above the brick a node over-reports coverage, so a wall's silhouette gets no blending; pinned in the tests |
+## D664 — R5c's first half: the level dither stops deciding the colour, and keeps deciding the shape
+
+The marcher picks how coarse a cell to stop on from the pixel's footprint, and the fraction between
+two levels is spent on a 4×4 ordered dither: `level = clamp(int(floor(log2(footprint) + dither)),
+0, 7)`. That is what lets it work with no temporal accumulation behind it — the level a pixel picks
+is a function of the pixel and never of the frame — and it is also why a surface halfway between two
+levels comes out as two flat tones in a fixed tile.
+
+**The dither is kept and the colour is taken off it.** `log2(footprint)` says exactly how far
+between the two levels a pixel sits, and it is in hand at the point the level is chosen and free.
+Both arms of the pair now aim at the same number:
+
+    base = floor(log2(footprint)),  frac = log2(footprint) - base
+    drawn = (1 - frac) · colour(base) + frac · colour(base + 1)
+
+A pixel that took `base` blends towards its parent by `frac`; one that took `base + 1` blends
+towards the child the ray entered by `1 - frac`. Where both fetches land the two pixels draw the
+same colour; where one cannot, that pixel keeps exactly what it drew before, so the pair is left
+closer than it was rather than further. `--no-level-blend` is the control arm and probe bit 11.
+
+**Deleting the dither instead is the thing this refuses to do, and the reason is written in
+`node_march`**: the level decides the coverage byte and the face key as well as the colour, so
+removing it moves which pixels report full coverage — a whole surface shifting a few per cent and
+43% of pixels different from the marcher it replaced. The blend is only meaningful because
+`NodePool::fold_children` folds a parent EXACTLY from its children, weighted by their coverage, so a
+point between the two is a point on a line between one picture at two scales rather than a guess
+(D149 is the refusal this is not).
+
+### What it cost to measure, which was most of the work
+
+The shaded picture cannot resolve it, and that is not the change's fault. **Two runs of ONE arm
+differ on 81.4% of pixels at a mean of 3.41 of 255** — the facility at 320×200, settled, quality
+pinned, one world — because the face store's light is still converging at the frame the shot is
+taken and the pool's build order is not reproducible (D233, trap 9). The two arms differ on 81.5% at
+3.42. There is no signal in that comparison in either direction.
+
+Three things had to be nailed down before any figure meant anything:
+
+- **The world.** A first pair at frame 60 came back on content `a5431ed48647bc18` and
+  `894b4cf0245912f9` — the facility was still sharpening, and the arm that renders slower gives the
+  background sampler more wall clock (trap 8). Cured by settling once to write the cache and then
+  loading it in both arms, which is also D244's rule. Every figure below is world
+  `2059a02689b7bf7c`, 70 chunks, 125,493,371 solid voxels, in eight runs that all printed it.
+- **The quality ladder.** A card-free frame is ~600 ms against a 16 ms budget, so auto-quality walks
+  down its rungs — and rung 0 is a detail bias of 1.6 and half the resolution, which moves every
+  level boundary in the picture. Pinned with `--no-auto-quality --quality 7`.
+- **The instrument.** Debug views 12–15 dump the visibility buffer's four words straight into a
+  PNG's four channels, losslessly. View 14 is `hit.colour` with no light in it at all; view 12 is
+  face | level | steps | coverage, which this change must not move by a bit. That is where the
+  measurement lives.
+
+### The figures, all at `0,2,-20,90,0` on `clips/facility.clip`, settled, quality 7
+
+| view | window | same arm twice (the floor) | blend against control |
+|---|---|---|---|
+| 14, the folded colour | 160×100 | **160 of 16,000 pixels (1.00%)**, mean 196 over those | **1,441 (9.01%)**, mean **24.4** over those |
+| 12, face/level/steps | 160×100 | 308 (1.925%), mean 248 over those | 320 (2.000%), mean 248 |
+| 12, the coverage byte | 160×100 | **0** | **0** |
+| 14, the folded colour | 320×200 | 316 (0.494%) | 328 (0.512%) |
+
+Read the two magnitudes rather than only the counts: the floor's differing pixels differ by ~196 of
+255 because they are pixels where the pool built something different — sky against geometry — while
+the blend's differ by 24, which is what a blend between two folded averages a fraction apart looks
+like. The geometry word moves by 12 pixels of 16,000 against a floor of 308 that moves the same way
+for the same reason, and **the coverage byte is identical in every comparison**, which is the claim
+that mattered: the dither still decides the shape.
+
+**At 320×200 the change has almost nothing to do, and the arithmetic says why before the measurement
+does.** The footprint is `t · 2 tan(fov/2) / height` in voxels, and the pool holds no node between a
+voxel (level 0) and a brick (level 3) — so `colour(1)`, `colour(2)` and `colour(3)` are all the same
+brick average, and a footprint anywhere between two and eight voxels has two members of a pair with
+the same colour in them. At 320×200 and a 90° lens the facility at twelve to thirty metres lands
+squarely in that band. At 160×100 the same camera doubles the footprint onto the (3, 4) pair — a
+brick's average against the first folded node above it — and the level histogram of the shot agrees:
+of 13,717 hit pixels, 3,405 at level 2, **7,765 at level 3, 1,607 at level 4**, and 105 at level 0.
+
+In the shaded picture at 160×100, with the floor measured beside it rather than assumed:
+
+| | blend, run A | blend, run B (the floor) | control |
+|---|---|---|---|
+| pixels differing from run A | — | 80.16% at mean 4.01 | 83.00% at mean **5.33** |
+| 4×4 phase-locked component | 3.866 | 3.812 | **3.980** |
+| neighbour gap, 1 column ÷ 4 columns | 0.6683 | 0.6757 | 0.6762 |
+
+The phase-locked component is the only one of the three that clears its own floor, and only by about
+twice it: the two arms are 0.14 apart where two runs of one arm are 0.054 apart. The gap ratio does
+not clear it at all — 0.0079 between the arms against 0.0074 between two runs of one. Everything
+moves the right way and the shaded frame is simply not where this can be demonstrated on a machine
+with no card; the colour word is.
+
+### What is deliberately not in it
+
+- **A level-0 hit.** The composite reads a type id at level 0 and a folded colour above it — one
+  payload field, two mutually exclusive readings — so the level-0 arm of the (0, 1) pair cannot be
+  moved from the marcher at all. The level-1 arm blends towards the voxel's own colour, which leaves
+  that pair `frac` of the step apart instead of the whole of it. Moving the other half means
+  changing what `visibility.comp` packs, and belongs with R5c's second half.
+- **A stand-in.** It already draws a cell coarser than the pixel asked for, because the pool has not
+  built the one it wants; blending it with its own parent would smooth a picture that is about to be
+  replaced wholesale, at a descent per unbuilt pixel.
+- **The light rays.** Ambient, shadow, gathering and lobe rays all go through `node_march` and all
+  pass `stand_in = false`; that flag is exactly "this ray's colour will be drawn", so it is the gate.
+  A lighting ray reads an average and divides it by π over dozens of samples, and it is 63% of a
+  moving frame — paying a descent per ray to smooth a number that is about to be averaged is the
+  wrong trade in both directions.
+- **Anything under a sixteenth.** `kNodeBlendDeadband` is the ordered dither's own step and not a
+  tuning constant: below a sixteenth of the way into a pair no pixel of the 4×4 tile picked the other
+  level at all, and the weight tested is the pixel's own, so the residual is bounded by a sixteenth
+  of the step between two folded averages at either end.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D664 | **Blend the two levels' colours, keep the dither** | decision | The dither decides coverage and the face key, and moving those is 43% of pixels |
+| D664 | **The parent is a locate, the child is one more turn of the descent in hand** | decision | The expensive direction is the one the deadband is for |
+| D664 | **Light rays do not pay it** | decision | `stand_in` is already "this colour will be drawn"; a lighting ray averages the error away |
+| D664 | **The shaded picture cannot resolve this on this machine** | finding | Two runs of one arm: 81.4% of pixels, mean 3.41 of 255 |
+| D664 | **Views 12–15 are the instrument** | finding | The colour word alone moves 9.01% against a 1.00% floor |
+| D664 | **Levels 1 to 3 are one colour, and always were** | finding | No node between a voxel and a brick, so a third of the log2 range has no dither in colour at all |

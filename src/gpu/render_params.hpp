@@ -316,6 +316,12 @@ inline constexpr u32 kProbeTranslucent = 1u << 10;
 // Cleared by `--no-edge-aa`, which is every build before this one: a node larger than a voxel drawn
 // as a solid block, so every distant silhouette is a hard stair-step.
 inline constexpr u32 kProbeEdgeAA = 1u << 11;
+// R5c's first half: a hit blends its folded colour towards the colour of the level the ordered
+// dither did not pick for that pixel. Cleared by `--no-level-blend`, which draws the cell's own
+// colour outright and is the two-tone 4x4 pattern this renderer has shown on middle-distance
+// surfaces since the marcher existed. The dither still picks the CELL in both arms, so the coverage,
+// the face key and the depth are identical and an image diff between the two arms is colour alone.
+inline constexpr u32 kProbeLevelBlend = 1u << 12;
 
 // R4c's pool: how many blocks of outgoing bins there are and how many words each is. Must match
 // kLobeBlocks, kLobeBins and the layout in shaders/face_terms.glsl, which is the authority because

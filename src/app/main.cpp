@@ -446,6 +446,16 @@ struct Options {
     // and takes the eight neighbour lookups out, so the two arms differ by the filter rather than by
     // a branch in the reader.
     bool face_denoise = true;
+    // R5c: a hit blends its folded colour towards the colour of the level the ordered dither did not
+    // pick for that pixel, by how far between the two levels the pixel's footprint sits.
+    // `--no-level-blend` is the control arm and is the two-tone 4x4 pattern this renderer has drawn
+    // on middle-distance surfaces since the marcher existed.
+    //
+    // The dither still chooses the CELL in both arms, deliberately: the level decides the coverage
+    // byte, the face key and what streams, and the note in node_march is the measurement of what
+    // moving that costs (43% of pixels different from the marcher it replaced). So the two arms
+    // differ by colour and by nothing else, which is what makes an image diff between them readable.
+    bool level_blend = true;
     // R4a: a face works out what the surface under it is MADE of and keeps the answer.
     // `--no-face-materials` is the control arm and no face ever asks, which is the renderer exactly
     // as it was before R4. It has to exist because the picture is identical in both arms by
@@ -964,6 +974,11 @@ Options parse_options(int argc, char** argv) {
             // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
             // is the state every figure taken before R5 was measured in.
             options.face_denoise = false;
+        } else if (arg == "--no-level-blend") {
+            // R5c's control arm. A hit draws the colour of the cell it stopped on outright, so the
+            // two levels a footprint sits between are two flat tones in a fixed 4x4 pattern -- which
+            // is the state every figure taken before this was measured in.
+            options.level_blend = false;
         } else if (arg == "--no-emitter-cache") {
             // R9g's control arm: rediscover every chunk's emitters on every announced change.
             options.emitter_cache = false;
@@ -1152,6 +1167,9 @@ void print_help() {
         "  --no-edge-aa          a node coarser than a voxel is drawn as a solid block whatever\n"
         "                        its coverage says, so a distant railing is a bar and every\n"
         "                        silhouette is a hard stair-step. R5d's control arm\n"
+        "  --no-level-blend      a hit draws the colour of the cell it stopped on outright, so a\n"
+        "                        surface between two levels of detail comes out as two tones in a\n"
+        "                        4x4 pattern. R5c's control arm; the geometry is the same in both\n"
         "  --halo                claim faces past the edge of the screen, over a margin sized by\n"
         "                        how fast the camera is turning, so they are measuring before they\n"
         "                        arrive. Off by default: it costs the sun's refresh rate (D586)\n"
@@ -7018,7 +7036,8 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.see_through ? kProbeSeeThrough : 0u) |
                               (options_.refraction ? kProbeRefract : 0u) |
                               (options_.translucency ? kProbeTranslucent : 0u) |
-                              (options_.edge_aa ? kProbeEdgeAA : 0u);
+                              (options_.edge_aa ? kProbeEdgeAA : 0u) |
+                              (options_.level_blend ? kProbeLevelBlend : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),

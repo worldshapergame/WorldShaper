@@ -3213,3 +3213,33 @@ every scene small enough to draw on a machine with no graphics card is four metr
 everything in it is close up. With one built at the right distance, the only part of the picture that
 changes between the old way and the new is the railing itself, down to the pixel — and, magnified,
 the posts stop being blocks. `--no-edge-aa` puts it back exactly as it was if you dislike it.
+## The stripes on a distant wall
+
+Look at a wall from far enough away and the renderer stops drawing it voxel by voxel — it draws the
+average of a bigger and bigger box, because at that distance a box is all a pixel can hold. That is
+what makes the whole building affordable to draw at once.
+
+The awkward part has always been the moment of changeover. A wall twenty-five metres away wants
+boxes half a metre across and a wall twenty-six metres away wants them a metre across, and the wall
+that runs between the two has to be both. What it did was alternate: a fixed four-by-four pattern of
+pixels, some drawn at one size and some at the other, which is an old and honest trick — it keeps
+the picture steady when you stand still, because a pixel always makes the same choice. But the two
+sizes are different average colours, so you could see the pattern, and walking towards the wall made
+it crawl across the surface.
+
+Now the two sizes are mixed instead of alternated. A pixel that is three quarters of the way from
+one size to the next draws three quarters of the way between the two colours, and both halves of the
+pattern arrive at the same answer — so there is nothing left to see a pattern in. The choice of
+which size of box to actually *hit* is untouched, and that is deliberate: that choice is also what
+decides how much of the pixel the wall covers and which patch of surface gets its own lighting, and
+those are not things to change while fixing a colour.
+
+**Two honest limits.** The first is that this only does something where the two sizes really are
+different colours, and on a building made mostly of one stone that is a narrower band than it
+sounds. The second is that this machine cannot show it to you: with no graphics card, two runs of
+the *same* build differ on four fifths of the picture, because the lighting is still settling when
+the photograph is taken. What could be measured is the colour the renderer chose, before any light
+touched it — nine per cent of the picture moved, by about a tenth of the way from black to white,
+and every number that describes the *shape* of what was hit came back identical. On your machine,
+at full resolution, the place to look is a large flat surface at middle distance while you walk
+slowly towards it.
