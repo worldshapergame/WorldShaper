@@ -355,19 +355,35 @@ void check_export(const std::string& path, const forge::Script& script,
             note(report, "PANT holds " + std::to_string(count) + " rules, the clip has " +
                              std::to_string(paint.size()));
         }
+        // 52 bytes a record, not the 28 the interface was first published with: the per-rule box
+        // `f32 lo[3]; f32 hi[3]` was appended after the fact. The stride is DERIVED from the chunk
+        // rather than assumed, so a third revision says "stride 64, this reader knows 52" instead of
+        // walking off into the middle of a record and reporting every field as wrong.
+        const u32 stride = (count > 0 && pant->size > 4) ? (pant->size - 4) / count : 52;
+        if (stride != 52) {
+            note(report, "PANT stride is " + std::to_string(stride) +
+                             " bytes; this reader knows 52");
+        }
         const u32 shared = std::min<u32>(count, static_cast<u32>(paint.size()));
+        u32 boxed = 0;
+        u32 box_too_tight = 0;
         for (u32 i = 0; i < shared; ++i) {
-            const usize at = base + 4 + static_cast<usize>(i) * 28;
-            if (at + 28 > bytes.size()) {
+            const usize at = base + 4 + static_cast<usize>(i) * stride;
+            if (at + std::min<u32>(stride, 52u) > bytes.size()) {
                 note(report, "PANT runs off the end at rule " + std::to_string(i));
                 break;
             }
             const u32 node = read_u32(bytes, at + 0);
-            const f32 below = read_f32(bytes, at + 4);
-            const f32 above = read_f32(bytes, at + 8);
+            // `below` is the HIGH edge and `above` the LOW one. Those are the clip file's words —
+            // `above=0.55` is a floor — and they are the opposite way round from `PaintRule::low`
+            // and `::high`. A reader that swaps them gets a symmetric band right by luck and every
+            // one-sided rule in the building wrong.
+            const f32 high_edge = read_f32(bytes, at + 4);
+            const f32 low_edge = read_f32(bytes, at + 8);
             const i32 facing_axis = read_i32(bytes, at + 12);
             const f32 facing_at = read_f32(bytes, at + 16);
             const u32 material = read_u32(bytes, at + 20);
+            const u32 flags = read_u32(bytes, at + 24);
             const PaintRule& rule = paint[i];
             const auto same = [](f64 a, f64 b) {
                 if (a <= -1e29 && b <= -1e29) return true;
@@ -378,13 +394,13 @@ void check_export(const std::string& path, const forge::Script& script,
                 note(report, "rule " + std::to_string(i) + ": PANT node " + std::to_string(node) +
                                  ", clip node " + std::to_string(rule.test));
             }
-            // `below` is the low edge and `above` the high one — the names the interface uses, which
-            // are the clip file's words ("above=0.55" is a low edge) and not the struct's.
-            if (!same(below, rule.low) || !same(above, rule.high)) {
-                note(report, "rule " + std::to_string(i) + ": PANT band [" + std::to_string(below) +
-                                 ", " + std::to_string(above) + "], clip band [" +
-                                 std::to_string(rule.low) + ", " + std::to_string(rule.high) + "]");
+            if (!same(low_edge, rule.low) || !same(high_edge, rule.high)) {
+                note(report, "rule " + std::to_string(i) + ": PANT band [" +
+                                 std::to_string(low_edge) + ", " + std::to_string(high_edge) +
+                                 "], clip band [" + std::to_string(rule.low) + ", " +
+                                 std::to_string(rule.high) + "]");
             }
+            // -1 for "does not ask", where PaintRule uses 3.
             if (static_cast<u32>(facing_axis < 0 ? 3 : facing_axis) != rule.facing_axis) {
                 note(report, "rule " + std::to_string(i) + ": PANT facing axis " +
                                  std::to_string(facing_axis) + ", clip " +
@@ -400,6 +416,36 @@ void check_export(const std::string& path, const forge::Script& script,
                                  std::to_string(material) + ", clip type " +
                                  std::to_string(static_cast<u32>(rule.type)));
             }
+            // The per-rule box, and only when BOXED (8) says it is real. A box the shader rejects on
+            // that is TIGHTER than where the rule can actually fire is a coat that vanishes and says
+            // nothing — the same fault as the place cull `--place-check` measures.
+            if (stride >= 52 && (flags & 8u) != 0u) {
+                ++boxed;
+                if (rule.has_place) {
+                    const Field::Aabb where = script.field.bounds_of(rule.place);
+                    const f32 lo[3] = {read_f32(bytes, at + 28), read_f32(bytes, at + 32),
+                                       read_f32(bytes, at + 36)};
+                    const f32 hi[3] = {read_f32(bytes, at + 40), read_f32(bytes, at + 44),
+                                       read_f32(bytes, at + 48)};
+                    if (!where.infinite()) {
+                        const f64 slack = 1e-2;
+                        if (static_cast<f64>(lo[0]) > where.low.x + slack ||
+                            static_cast<f64>(lo[1]) > where.low.y + slack ||
+                            static_cast<f64>(lo[2]) > where.low.z + slack ||
+                            static_cast<f64>(hi[0]) < where.high.x - slack ||
+                            static_cast<f64>(hi[1]) < where.high.y - slack ||
+                            static_cast<f64>(hi[2]) < where.high.z - slack) {
+                            ++box_too_tight;
+                        }
+                    }
+                }
+            }
+        }
+        if (boxed > 0) {
+            note(report, std::to_string(boxed) + " rules carry BOXED, " +
+                             std::to_string(box_too_tight) +
+                             " of them tighter than bounds_of(place) — and bounds_of(place) is "
+                             "itself the UNSHIFTED box, see PLACE CHECK");
         }
     }
 
@@ -424,12 +470,19 @@ void check_export(const std::string& path, const forge::Script& script,
                          std::to_string(script.field.size()));
     }
     const u32 shared = std::min<u32>(count, static_cast<u32>(script.field.size()));
+    // 80 bytes: u32 op, u32 childCount, u32 child[4], f32 a[8], f32 lo[3], f32 hi[3]. Derived from
+    // the chunk for the same reason PANT's stride is.
+    const u32 node_stride = (count > 0 && fldg->size > 4) ? (fldg->size - 4) / count : 80;
+    if (node_stride != 80) {
+        note(report, "FLDG stride is " + std::to_string(node_stride) +
+                         " bytes; this reader knows 80");
+    }
     u32 wrong_children = 0;
     u32 wrong_parameters = 0;
     u32 wrong_box = 0;
     for (u32 i = 0; i < shared; ++i) {
-        const usize at = base + 4 + static_cast<usize>(i) * 76;
-        if (at + 76 > bytes.size()) {
+        const usize at = base + 4 + static_cast<usize>(i) * node_stride;
+        if (at + std::min<u32>(node_stride, 80u) > bytes.size()) {
             note(report, "FLDG runs off the end at node " + std::to_string(i));
             break;
         }
@@ -464,14 +517,17 @@ void check_export(const std::string& path, const forge::Script& script,
         const Field::Aabb box = script.field.bounds_of(i);
         const f32 lo[3] = {read_f32(bytes, at + 56), read_f32(bytes, at + 60),
                            read_f32(bytes, at + 64)};
-        const f32 hi[3] = {read_f32(bytes, at + 68), read_f32(bytes, at + 72), 0.0f};
-        // Only the two that fit the 76-byte record are checked; the third high component follows in
-        // whatever the real layout turns out to be. A box that is TIGHTER than the field's is the
-        // dangerous direction — it culls a rule that should have fired — so that is what is counted.
-        (void)hi;
+        const f32 hi[3] = {read_f32(bytes, at + 68), read_f32(bytes, at + 72),
+                           read_f32(bytes, at + 76)};
+        // TIGHTER than the field's is the dangerous direction — it skips a node that should have
+        // been evaluated — so that is what is counted. Looser costs time and never correctness.
         if (!box.infinite() &&
-            (static_cast<f64>(lo[0]) > box.low.x + 1e-3 || static_cast<f64>(lo[1]) > box.low.y + 1e-3 ||
-             static_cast<f64>(lo[2]) > box.low.z + 1e-3)) {
+            (static_cast<f64>(lo[0]) > box.low.x + 1e-3 ||
+             static_cast<f64>(lo[1]) > box.low.y + 1e-3 ||
+             static_cast<f64>(lo[2]) > box.low.z + 1e-3 ||
+             static_cast<f64>(hi[0]) < box.high.x - 1e-3 ||
+             static_cast<f64>(hi[1]) < box.high.y - 1e-3 ||
+             static_cast<f64>(hi[2]) < box.high.z - 1e-3)) {
             ++wrong_box;
         }
     }
@@ -621,6 +677,7 @@ int main(int argc, char** argv) {
     std::string wsc;
     std::string csv;
     std::string detail;
+    bool place_check = false;
     i32 metre = 0;
     u64 max_points = 200000;
     bool quiet = false;
@@ -632,13 +689,15 @@ int main(int argc, char** argv) {
         else if (arg == "--wsc" && i + 1 < argc) wsc = argv[++i];
         else if (arg == "--csv" && i + 1 < argc) csv = argv[++i];
         else if (arg == "--detail" && i + 1 < argc) detail = argv[++i];
+        else if (arg == "--place-check") place_check = true;
         else if (arg == "--max-points" && i + 1 < argc) max_points = std::strtoull(argv[++i], nullptr, 10);
         else if (arg == "--quiet") quiet = true;
         else if (!arg.empty() && arg[0] != '-') path = arg;
     }
     if (path.empty()) {
         std::printf("usage: paintcheck <file.clip> [--part name] [--metre n] [--max-points n]\n"
-                    "                  [--wsc file.wsc] [--csv out.csv] [--detail arm] [--quiet]\n");
+                    "                  [--wsc file.wsc] [--csv out.csv] [--detail arm]\n"
+                    "                  [--place-check] [--quiet]\n");
         return 2;
     }
 
@@ -697,6 +756,114 @@ int main(int argc, char** argv) {
     }
 
     JobSystem jobs;
+
+    // ---- THE PLACE CULL, SETTLED AGAINST THE REAL SAMPLER --------------------------------------
+    //
+    // `apply_origin` in src/forge/clip_script.cpp translates a paint rule's `test` and leaves its
+    // `place` where it was. `plan_sample` in src/forge/sample.cpp then takes `bounds_of(place)` and
+    // culls the rule anywhere that box does not reach. If those two are both true, a clip with an
+    // `origin` statement culls its placed rules against a box that is out of position by the shift
+    // — and the facility shifts by 3.50 m.
+    //
+    // Reading the source says both are true. Reading the source is not the instrument: `place` is
+    // documented as a cull and nothing else, so the question is whether it is behaving as one, and
+    // that is answerable by running the sampler three ways and comparing what comes out.
+    //
+    //   as authored   the sampler exactly as the game calls it
+    //   no place      every rule's `has_place` cleared. A cull and nothing else, so this MUST
+    //                 produce the same voxels. It is the control arm, and it needs no theory about
+    //                 the origin at all — if it differs from `as authored`, the cull is dropping
+    //                 paint, whatever the reason turns out to be
+    //   place shifted every `place` translated by the clip's own `origin_shift`, which is what
+    //                 `apply_origin` does to `test`. If this agrees with `no place`, the missing
+    //                 shift is the reason
+    //
+    // Three sample calls of the real sampler, three histograms, one answer. Not a proof about the
+    // code; a measurement of what the code does.
+    if (place_check) {
+        u32 placed = 0;
+        for (const PaintRule& rule : script.paint) { if (rule.has_place) ++placed; }
+        std::printf("PLACE CHECK  %s%s%s\n", path.c_str(), is_part ? "  part " : "", part.c_str());
+        std::printf("             %zu rules, %u of them placed; origin shift %.3f %.3f %.3f\n",
+                    script.paint.size(), placed, script.origin_shift[0], script.origin_shift[1],
+                    script.origin_shift[2]);
+        if (placed == 0) {
+            std::printf("             nothing to check: no rule carries an on= place\n");
+            return 0;
+        }
+
+        std::vector<PaintRule> unplaced = script.paint;
+        for (PaintRule& rule : unplaced) rule.has_place = false;
+
+        std::vector<PaintRule> shifted = script.paint;
+        {
+            const Vec3 by{script.origin_shift[0], script.origin_shift[1], script.origin_shift[2]};
+            if (by.x != 0.0 || by.y != 0.0 || by.z != 0.0) {
+                for (PaintRule& rule : shifted) {
+                    if (rule.has_place) rule.place = script.field.translate(rule.place, by);
+                }
+                // The new nodes have no box until the boxes are built again, and `plan_sample` is
+                // about to read exactly those boxes. Without this the shifted arm culls nothing and
+                // agrees with `no place` for the wrong reason.
+                script.field.build_bounds();
+            }
+        }
+
+        const char* names[3] = {"as authored", "no place (control)", "place shifted by origin"};
+        const std::vector<PaintRule>* sets[3] = {&script.paint, &unplaced, &shifted};
+        std::map<VoxelTypeId, u64> counts[3];
+        for (i32 a = 0; a < 3; ++a) {
+            const forge::SampleResult result =
+                forge::sample(script.field, root, *sets[a], settings, &jobs);
+            Clip out = result.clip;
+            forge::despeckle(out);
+            for (i64 i = 0; i < static_cast<i64>(out.voxels.size()); ++i) {
+                if (out.voxels[static_cast<usize>(i)] != kAir) ++counts[a][out.voxels[static_cast<usize>(i)]];
+            }
+            u64 solid = 0;
+            for (const auto& entry : counts[a]) solid += entry.second;
+            std::printf("             %-26s %2zu materials, %llu solid voxels\n", names[a],
+                        counts[a].size(), static_cast<unsigned long long>(solid));
+        }
+
+        std::map<VoxelTypeId, u64> all;
+        for (i32 a = 0; a < 3; ++a) {
+            for (const auto& entry : counts[a]) all[entry.first] += entry.second;
+        }
+        std::printf("\n             %-22s %14s %14s %14s\n", "material", "as authored", "no place",
+                    "place shifted");
+        u64 missing_voxels = 0;
+        u32 missing_materials = 0;
+        for (const auto& entry : all) {
+            const u64 a = counts[0].count(entry.first) ? counts[0][entry.first] : 0;
+            const u64 b = counts[1].count(entry.first) ? counts[1][entry.first] : 0;
+            const u64 c = counts[2].count(entry.first) ? counts[2][entry.first] : 0;
+            const char* flag = "";
+            if (a == 0 && b > 0) {
+                flag = "   <-- ABSENT as authored";
+                ++missing_materials;
+                missing_voxels += b;
+            } else if (a != b) {
+                flag = "   <-- differs";
+            }
+            std::printf("             %-22s %14llu %14llu %14llu%s\n",
+                        type_name(script, entry.first).c_str(),
+                        static_cast<unsigned long long>(a), static_cast<unsigned long long>(b),
+                        static_cast<unsigned long long>(c), flag);
+        }
+        const bool control_differs = counts[0] != counts[1];
+        const bool shift_fixes = counts[1] == counts[2];
+        std::printf("\n             VERDICT  the place cull %s the sampler's answer\n",
+                    control_differs ? "CHANGES" : "does not change");
+        if (control_differs) {
+            std::printf("                      %u materials vanish entirely and %llu voxels are "
+                        "painted differently\n",
+                        missing_materials, static_cast<unsigned long long>(missing_voxels));
+            std::printf("                      shifting the place by the origin %s it\n",
+                        shift_fixes ? "restores" : "does NOT restore");
+        }
+        return 0;
+    }
 
     // ---- ARM ONE: forge::sample. The reference, and the only arm with an independent source. ----
     const forge::SampleResult built =
@@ -792,6 +959,50 @@ int main(int argc, char** argv) {
             if (rule.facing_axis < 3) ++facing_rules;
         }
         const u64 per_pixel = total.nodes + (facing_rules > 0 ? normal_cost.nodes * 6 : 0);
+
+        // ---- and what the per-rule box takes off it -------------------------------------------
+        //
+        // The whole affordability question is "how many of the hundreds of rules can a pixel skip
+        // without evaluating anything", and that is decided by the box, not by the cap. So it is
+        // measured over the same surface points the agreement arms use rather than reasoned about:
+        // for each point, how many rules' boxes actually contain it.
+        //
+        // The box used here is `bounds_of(place)` SHIFTED BY THE CLIP'S ORIGIN, which is what the
+        // exporter writes and what `plan_sample` does NOT do — see PLACE CHECK. Using the plan's own
+        // boxes would measure the bug rather than the cut.
+        u64 survivors_total = 0, survivor_nodes_total = 0, survivors_worst = 0;
+        {
+            const Vec3 by{script.origin_shift[0], script.origin_shift[1], script.origin_shift[2]};
+            std::vector<Field::Aabb> box(script.paint.size());
+            std::vector<bool> bounded(script.paint.size(), false);
+            for (usize i = 0; i < script.paint.size(); ++i) {
+                if (!script.paint[i].has_place) continue;
+                Field::Aabb where = script.field.bounds_of(script.paint[i].place);
+                if (where.infinite()) continue;
+                where.low = where.low + by;
+                where.high = where.high + by;
+                box[i] = where;
+                bounded[i] = true;
+            }
+            for (const Point& point : points) {
+                u64 alive = 0, nodes = 0;
+                for (usize i = 0; i < script.paint.size(); ++i) {
+                    if (bounded[i]) {
+                        const Vec3& p = point.centre;
+                        if (p.x < box[i].low.x || p.x > box[i].high.x || p.y < box[i].low.y ||
+                            p.y > box[i].high.y || p.z < box[i].low.z || p.z > box[i].high.z) {
+                            continue;
+                        }
+                    }
+                    ++alive;
+                    nodes += per_rule[i].nodes;
+                }
+                survivors_total += alive;
+                survivor_nodes_total += nodes;
+                survivors_worst = std::max(survivors_worst, alive);
+            }
+        }
+        const f64 points_f = static_cast<f64>(std::max<usize>(1, points.size()));
         if (!quiet) {
             std::printf("stack         %zu rules; one walk touches %llu field nodes and %llu "
                         "noise octaves\n",
@@ -806,13 +1017,22 @@ int main(int argc, char** argv) {
             // This is the number web/js/features/paintcost.js takes as its input, and the one the
             // phone question is decided on. Printed as a machine-readable line as well, so the
             // benchmark can be driven from the tool rather than from a number typed in twice.
-            std::printf("              per pixel, worst case: %llu node evaluations, %llu of them "
+            std::printf("              per pixel, no cuts: %llu node evaluations, %llu of them "
                         "noise\n",
                         static_cast<unsigned long long>(per_pixel),
                         static_cast<unsigned long long>(total.noise));
-            std::printf("COST %s|%s|%zu|%llu|%llu\n", path.c_str(), part.c_str(),
+            std::printf("              with the per-rule box: %.1f rules survive on average "
+                        "(worst %llu), %.0f nodes\n",
+                        static_cast<f64>(survivors_total) / points_f,
+                        static_cast<unsigned long long>(survivors_worst),
+                        static_cast<f64>(survivor_nodes_total) / points_f);
+            // The machine-readable line web/js/features/paintcost.js takes as its input:
+            // clip | part | rules | nodes with no cuts | noise | rules after the box | nodes after
+            std::printf("COST %s|%s|%zu|%llu|%llu|%.2f|%.1f\n", path.c_str(), part.c_str(),
                         script.paint.size(), static_cast<unsigned long long>(per_pixel),
-                        static_cast<unsigned long long>(total.noise));
+                        static_cast<unsigned long long>(total.noise),
+                        static_cast<f64>(survivors_total) / points_f,
+                        static_cast<f64>(survivor_nodes_total) / points_f);
         }
     }
 
@@ -937,6 +1157,15 @@ int main(int argc, char** argv) {
         const f64 share = tally.points > 0
                               ? 100.0 * static_cast<f64>(tally.disagree) / static_cast<f64>(tally.points)
                               : 0.0;
+        // "0.000%" over nought compared points is the failure this whole tool exists to not commit.
+        // The field evaluator's first run refused all 4,096 of its points and printed a perfect
+        // column of zeroes, and only a refusal counter caught it. An arm that compared nothing says
+        // NOTHING COMPARED, in those words, and the process exits non-zero at the end.
+        if (tally.points == 0) {
+            std::printf("            %-13s %-46s %8s %10s %9s\n", arms[a].name, arms[a].source,
+                        "0", "-", "NOTHING COMPARED");
+            continue;
+        }
         std::printf("            %-13s %-46s %8llu %10llu %8.3f%%   %llu of them despeckled\n",
                     arms[a].name, arms[a].source,
                     static_cast<unsigned long long>(tally.points),
@@ -1065,6 +1294,33 @@ int main(int argc, char** argv) {
         }
         for (const std::string& complaint : report.complaints) {
             std::printf("            %s\n", complaint.c_str());
+        }
+    }
+
+    // ---- the guard against a clean bill nobody earned ----------------------------------------
+    //
+    // Two ways this tool could report perfect agreement while measuring nothing, and both have been
+    // seen on this fleet today: an arm that compared no points at all, and a clip whose whole
+    // surface is one material, where every arm agrees by having nothing to disagree about.
+    {
+        std::map<VoxelTypeId, u64> distinct;
+        for (const Point& point : points) ++distinct[point.reference];
+        u64 empty_arms = 0;
+        for (usize a = 0; a < kArms; ++a) {
+            if (tallies[a].points == 0) ++empty_arms;
+        }
+        std::printf("\nSTANDING    %llu of %zu arms compared nothing; %zu distinct materials over "
+                    "the compared surface\n",
+                    static_cast<unsigned long long>(empty_arms), kArms, distinct.size());
+        if (empty_arms > 0) {
+            std::printf("            THIS RUN PROVES NOTHING for those arms — an agreement figure "
+                        "over nought points is not an agreement figure\n");
+            return 1;
+        }
+        if (distinct.size() < 2) {
+            std::printf("            THIS RUN PROVES LITTLE: the whole compared surface is one "
+                        "material, so every arm agrees by default\n");
+            return 1;
         }
     }
 
