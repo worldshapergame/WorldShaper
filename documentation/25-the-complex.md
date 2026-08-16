@@ -1,4 +1,4 @@
-# 24 — The complex: the estate, the state rooms, and what building them found
+# 25 — The complex: the estate, the state rooms, and what building them found
 
 *Written 2026-08-16, while a second line of work was in `shaders/`, `src/gpu/`, `src/app/main.cpp`
 and `src/forge/world_stipple.*` at the same time. **This file exists because `13-decision-log.md`
