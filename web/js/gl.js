@@ -300,9 +300,10 @@ ${GLSL_TRANSLUCENCY}
     // Beer-Lambert over a real path length, and what is behind the glass drawn where the glass
     // actually puts it. It used to be a flat tint over "a thickness nobody knows", which is a
     // coloured surface -- and _contract.clip's whole point about absorb is that a stained window
-    // (no back-quotes in here: this is inside a template string, and one closes it)
     // is a coloured VOLUME. See web/js/features/refract.js for what the path length is and for the
-    // three ways a screen-space sample is an approximation.
+    // three ways a screen-space sample is an approximation. (No back-quotes anywhere in here: this
+    // is inside a template string and one of them closes it, which reads as "Unexpected identifier"
+    // a hundred lines away.)
     //
     // The surface is tonemapped and encoded BEFORE the composite rather than after, because the
     // picture behind it has already been through both and must not go through them twice.

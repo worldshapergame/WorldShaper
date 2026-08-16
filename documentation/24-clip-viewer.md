@@ -154,6 +154,59 @@ page renders fewer pixels rather than fewer frames, down to 55%.
 of its own baked bytes. When the hash of the clip on screen changes it is refetched and swapped in
 **with the camera exactly where it was**, which is the only way to see what actually changed.
 
+<!-- >>> refract -->
+### Glass: what is behind it, bent, and what a metre of it takes out
+
+`web/js/features/refract.js`, and three marked blocks of `web/js/gl.js`. Transparent matter used to
+be a blended colour and nothing else, so the four things every clip has always declared about it —
+`ior`, `absorb`, `translucent`, `opacity` — reached the file, reached the material texture, and were
+read by nobody. Three of them are read now.
+
+**Refraction is screen-space and it is an approximation.** Before the first pane is drawn, the
+opaque picture is copied off the framebuffer into a texture; a glass fragment then samples that
+texture at an offset, and the offset is the refracted vector carried across the material's own
+thickness and projected back to the screen. It is what a phone can afford — no rays, no second view
+— and it is wrong in three ways that are worth knowing rather than discovering:
+
+- it can only show what is **on screen**, so a pane at the edge of the frame refracts what is beside
+  it in the picture rather than what is beside it in the world (the sample is clamped, so the edge
+  smears rather than tiles);
+- it has **no depth test** against the picture it samples, so something standing in front of a thick
+  refractor can be pulled a few pixels into it. The offset is clamped to 6% of the screen, which
+  bounds that rather than removing it;
+- the picture it samples was taken **before any transparent surface**, so glass behind glass shows
+  the stone behind both rather than the near pane's own tint.
+
+The copy is one full-screen `copyTexSubImage2D` per frame, and only for a clip that has a material
+with both an `ior` and an `opacity` — asked once at load, so a clip with no glass pays nothing.
+**It copies from whatever framebuffer is bound**, which is how it composes with an offscreen target
+somebody else adds rather than needing one of its own: bound to the canvas it copies the canvas,
+with the multisampling resolved on the way, so the picture keeps its antialiasing.
+
+**Absorption is not an approximation, and it is the half that is still owed a thickness field.**
+`exp(-absorb * path)` over a real path length, in the game's own units — the byte is sixteenths per
+metre, exactly what `shaders/node.glsl:node_medium_absorb` reads — and the path is the thickness
+crossed at the **refracted** angle, so a slanted look through a pane is deeper in colour than a
+square one. That is what makes a stained window a coloured **volume** rather than a coloured
+surface, which `clips/facility/_contract.clip` says is the whole point of the three coloured
+glasses. **The thickness is currently a constant** (0.12 m, the facility's own glazing). The
+material-volume bake (fourcc `THCK`, `tools/bake/matvol.hpp` and `web/js/features/matvol.js`) is
+what makes it real, and `refract_thickness` in `refract.js` is one line and one assumed signature —
+`float matvol_thickness(vec3 world, vec3 direction)`, metres of matter along the direction. Until
+it lands, every pane and every body of water in the viewer is 12 cm thick, so the *angle* half of
+the coloured volume is demonstrated and the *depth* half is not.
+
+**Translucency reads the light on the far side, which is the arrangement it exists for.** The one
+line that was here added a wrap term scaled by `sunVisible` — the sun's visibility **in front** of
+the surface, which is nought precisely when the sun is behind it. It now takes a second fetch of
+the same baked light volume at a point **behind** the surface, and carries it through the thickness
+with the game's own depth: six voxels at 32 to the metre, squared in the byte. Marble at 110 reaches
+under a voxel and stays stone; alabaster at 210 reaches four and a thin panel of it lights up. It
+is the sun and the sky that come through, because the sun and the sky are what the light grid holds
+— **a lamp behind alabaster does not glow through it**, and cannot until something bakes local
+light into that volume.
+<!-- <<< refract -->
+
 ## 4a. The clip before it was voxels
 
 The ◉ button draws the clip **as it was written**: every shape the author typed, ray-marched, with

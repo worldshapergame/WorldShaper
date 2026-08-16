@@ -11,20 +11,21 @@
 // # What this is, and what it is not
 //
 // **The refraction is screen-space and it is an approximation.** There are no rays here. The
-// surface takes the picture that was already on the framebuffer — everything opaque, drawn — and
-// samples it at an offset, and the offset is the refracted vector carried across the material's
-// own thickness and projected back to the screen. That is right for a phone and it is wrong in
-// three ways that are worth saying out loud rather than discovering:
+// surface takes the picture of the scene WITHOUT any glass in it and samples that at an offset,
+// and the offset is the refracted vector carried across the material's own thickness and projected
+// back to the screen. That is right for a phone and it is wrong in two ways that are worth saying
+// out loud rather than discovering:
 //
 //   - it can only show what is ON SCREEN. A pane at the edge of the view refracts what is beside
 //     it in the frame, not what is beside it in the world, and the sample is clamped rather than
 //     wrapped so the edge smears instead of tiling.
-//   - it has no depth test against the picture it samples, so a post standing IN FRONT of a thick
-//     refractor can be pulled a few pixels into it. The offset is clamped for exactly this reason
-//     (see `maxOffset`), which bounds the artefact rather than removing it. One line removes it if
-//     an offscreen target with a depth texture lands — see `capture` below.
-//   - the picture it samples was taken before ANY transparent surface was drawn, so glass behind
-//     glass shows the stone behind both rather than the near pane's own tint.
+//   - the picture it samples has no transparent surface in it, so glass behind glass shows the
+//     stone behind both rather than the near pane's own tint.
+//
+// The third fault a screen-space sample usually has — pulling in something that stands IN FRONT of
+// the refractor — is gone when the capture carries depth, which the shared scene target does: the
+// sample is refused where what it lands on is nearer than the glass, and the pixel straight behind
+// is used instead. Without depth the offset clamp bounds it and nothing removes it.
 //
 // **The absorption is not an approximation.** exp(-absorb * path) over a real path length is what
 // `shaders/node.glsl:node_medium_absorb` does in the game, in the same units — the byte is
@@ -33,13 +34,38 @@
 // Everything therefore turns on knowing the thickness, which is why `refract_thickness` below is
 // the one dependency this file has.
 //
+// # Where the picture behind the glass comes from, and why the encoding matters
+//
+// **It does not own a target.** `capture` takes whatever scene capture the renderer already has —
+// `features/ssr.js`'s `Ssr`, which draws sky and opaque into one offscreen target at half the
+// canvas and hands back `colour`, `depth`, `captured` — and uses that. Sky and opaque with no glass
+// and no cut cap is exactly what belongs behind a pane, and taking it makes refraction cost no
+// pass of its own at all. Only when there is no such capture does it fall back to copying the
+// framebuffer itself, and that fallback is a `copyTexSubImage2D` and still not a second target.
+//
+// **That capture is display-space — tonemapped and gamma-encoded — and Beer-Lambert does not
+// multiply in display space.** Transmittance attenuates RADIANCE, so the encoding has to come off
+// before the tint goes on and back on afterwards, or a stained window over a sunlit wall comes out
+// far too saturated: ACES has already compressed that wall towards white, and multiplying the
+// compressed value by exp(-k d) takes the colour out of a number the curve has already flattened.
+// Measured on a white wall at radiance 3 behind ruby glass, the two routes differ by about a fifth
+// of the green and blue channels. `refract_scene_radiance` therefore inverts both in closed form —
+// the same closed form as `ws_capture_radiance` in ssr.js, and when these two files meet, one of
+// them should be deleted in favour of the other.
+//
+// **A float target is not needed for this.** The inverse is exact and bounded (white decodes to
+// about 7 in radiance), and its only real cost is that 8 bits of an ACES-compressed highlight
+// carry fewer stops than 8 bits of a midtone, so a very bright background seen through strongly
+// absorbing glass can band. Nothing in the facility does that. `RGBA16F` would remove it and needs
+// `EXT_color_buffer_float`, which is exactly the extension a phone may not have.
+//
 // # Cost
 //
-// One full-screen copy of the framebuffer per frame, and only for a clip that has a material with
-// both an `ior` and an `opacity` — `wantedFor` decides that once, at load, so the facility's own
-// glass pays for it and a clip with no glass in it pays nothing at all. Per glass pixel it is one
-// `refract`, one matrix multiply and one texture fetch. There is no loop over layers anywhere in
-// here, which is the thing a phone cannot afford.
+// With the shared capture: no extra pass, and per glass pixel one `refract`, one matrix multiply
+// and two texture fetches (colour and depth). Without it: one full-screen `copyTexSubImage2D` per
+// frame, and only for a clip that has a material with both an `ior` and an `opacity` — `wantedFor`
+// decides that once, at load. There is no loop over layers anywhere in here, which is the thing a
+// phone cannot afford.
 
 // How thick a transparent or translucent surface is, in metres, until the thickness field lands.
 //
@@ -59,13 +85,19 @@ export const MAX_OFFSET = 0.06;
 
 // 1. Uniforms, the thickness stub, and the composite itself.
 export const GLSL_DECLARATIONS = `
-uniform sampler2D u_behind;    // the opaque picture, tonemapped and gamma-encoded, as it was drawn
-uniform vec2 u_behindScale;    // viewport / texture size, because the texture is rounded up
-uniform vec2 u_viewportInv;    // 1 / viewport in pixels, to turn gl_FragCoord into a uv
-uniform float u_refract;       // 0 is the control arm: no offset, no fetch, no copy
-uniform float u_thickness;     // metres of matter behind a surface, until THCK bakes the field
-uniform float u_maxOffset;     // how far a refracted sample may reach, in screen fractions
-uniform mat4 u_viewProj;       // the same matrix the vertex stage uses, to project the exit point
+uniform sampler2D u_behind;      // the scene with no glass in it, tonemapped and gamma-encoded
+uniform sampler2D u_behindDepth; // its depth, when the capture has one
+uniform float u_behindHasDepth;  // 1 when it does, and then the sample can be refused
+uniform vec2 u_behindScale;      // viewport / texture size, when the capture is not the whole one
+uniform vec2 u_viewportInv;      // 1 / viewport in pixels, to turn gl_FragCoord into a uv
+uniform float u_refract;         // 0 is the control arm: no offset, no fetch, no copy
+uniform float u_thickness;       // metres of matter behind a surface, until THCK bakes the field
+uniform float u_maxOffset;       // how far a refracted sample may reach, in screen fractions
+uniform mat4 u_viewProj;         // the same matrix the vertex stage uses, to project the exit point
+
+// Defined further down the shader this block is spliced into. Declared rather than moved, so that
+// this file can go in anywhere and does not care what order the other features arrive in.
+vec3 tonemap(vec3 x);
 
 // HOW THICK IS THE MATTER BEHIND THIS SURFACE?
 //
@@ -94,12 +126,26 @@ vec3 refract_absorption(vec3 absorbByte) {
     return absorbByte * (255.0 / 16.0);
 }
 
+// The capture, back to radiance. The scene target holds a tonemapped, gamma-encoded picture —
+// see the note at the top of this file for why a float one is not wanted — and transmittance
+// multiplies radiance, so both have to come off before the tint goes on.
+//
+// This is the closed-form inverse of \`tonemap\`: the ACES fit is a ratio of two quadratics, so
+// solving y = f(x) for x is one square root. It is the same function as \`ws_capture_radiance\` in
+// features/ssr.js and the two should become one when those files meet.
+vec3 refract_scene_radiance(vec2 uv) {
+    vec3 y = pow(texture(u_behind, uv).rgb, vec3(2.2));
+    vec3 disc = max(vec3(0.0), y * (1.3702 - 1.0127 * y) + 0.0009);
+    vec3 x = (vec3(0.03) - 0.59 * y - sqrt(disc)) / (2.0 * (2.43 * y - 2.51));
+    return max(x, vec3(0.0)) / max(u_exposure, 1e-4);
+}
+
 // What a transparent surface finally is: what is behind it, bent and absorbed, with its own lit
 // surface over the top in the proportion its opacity and its angle ask for.
 //
-// The gamma here is the file's own convention -- squared in, square-rooted out -- because the
-// picture being sampled has already been tonemapped and encoded and must not be tonemapped twice.
-// Transmittance multiplies in LIGHT and not in the encoding, so the decode is not optional.
+// `surface` arrives already tonemapped and encoded, because it is the same colour the opaque pass
+// would have written. What comes back through the glass makes the round trip instead — decoded to
+// radiance, attenuated, tonemapped again — for the reason at the top of this file.
 vec4 refract_composite(vec3 surface, float opacity, vec3 world, vec3 N, vec3 V,
                        float iorByte, vec3 absorbByte, float ndv) {
     // Glancing angles of a pane are more reflective and less see-through, which is the one thing
@@ -107,11 +153,12 @@ vec4 refract_composite(vec3 surface, float opacity, vec3 world, vec3 N, vec3 V,
     float alpha = clamp(opacity + (1.0 - opacity) * pow(1.0 - ndv, 4.0), 0.0, 1.0);
     vec3 k = refract_absorption(absorbByte);
 
-    // Nothing to bend with, or the control arm: the old blend, except that the tint is now a real
-    // Beer-Lambert over the thickness rather than a fraction of the byte.
+    // Nothing to bend with, or the control arm: the old blend, and what is behind is whatever the
+    // blender has already put in the framebuffer. The tint is a real Beer-Lambert over the
+    // thickness rather than a fraction of the byte, and it goes on in light like the other one.
     if (u_refract < 0.5 || iorByte < 0.5) {
         vec3 tint = exp(-k * refract_thickness(world, -N));
-        return vec4(surface * tint, alpha);
+        return vec4(pow(pow(surface, vec3(2.2)) * tint, vec3(1.0 / 2.2)), alpha);
     }
 
     float ior = 1.0 + iorByte / 128.0;      // as VisualRecord stores it: 0 is vacuum, 64 is 1.5
@@ -129,7 +176,9 @@ vec4 refract_composite(vec3 surface, float opacity, vec3 world, vec3 N, vec3 V,
 
     // Where the ray leaves the matter, projected back to the screen. This is the approximation:
     // the offset is the exit POINT rather than where the exiting ray finally lands, which is what
-    // a rasteriser can afford and is what everything on a phone does.
+    // a rasteriser can afford and is what everything on a phone does. A material that does not
+    // bend gives an exit point further along the eye ray, which projects to the same pixel, so
+    // the offset is purely the bend and nothing else.
     vec2 here = gl_FragCoord.xy * u_viewportInv;
     vec4 exitClip = u_viewProj * vec4(world + into * path, 1.0);
     vec2 there = (exitClip.xy / max(abs(exitClip.w), 1e-4) * sign(exitClip.w)) * 0.5 + 0.5;
@@ -138,10 +187,19 @@ vec4 refract_composite(vec3 surface, float opacity, vec3 world, vec3 N, vec3 V,
     if (reach > u_maxOffset) delta *= u_maxOffset / reach;
     vec2 uv = clamp(here + delta, vec2(0.0), vec2(1.0)) * u_behindScale;
 
-    vec3 behind = texture(u_behind, uv).rgb;
-    behind = behind * behind;                 // to light, where transmittance multiplies
-    behind *= exp(-k * path);                 // Beer-Lambert, over the path actually crossed
-    return vec4(mix(sqrt(behind), surface, alpha), 1.0);
+    // THE ONE THING A SCREEN-SPACE SAMPLE CANNOT ARGUE WITH, when the capture carries depth: the
+    // offset may land on something standing IN FRONT of the glass, and drawing that inside the
+    // pane is the artefact everybody recognises. Both depths are window space in the same
+    // projection -- the capture is drawn with the same camera and the same clip plane -- so it is
+    // one compare, and the answer when it fails is the pixel straight behind.
+    if (u_behindHasDepth > 0.5 && texture(u_behindDepth, uv).r < gl_FragCoord.z) {
+        uv = here * u_behindScale;
+    }
+
+    vec3 behind = refract_scene_radiance(uv);   // out of the encoding, into light
+    behind *= exp(-k * path);                   // Beer-Lambert, over the path actually crossed
+    vec3 encoded = pow(tonemap(behind * u_exposure), vec3(1.0 / 2.2));
+    return vec4(mix(encoded, surface, alpha), 1.0);
 }
 `;
 
@@ -222,13 +280,18 @@ export class Refraction {
             (typeof location !== 'undefined' && location.search) || '');
         this.thickness = STUB_THICKNESS;
         this.maxOffset = MAX_OFFSET;
-        this.unit = 2;    // 0 is the materials, 1 is the light volume
+        // 0 is the materials and 1 is the light volume; features/ssr.js has claimed 2 and 3 for
+        // the scene capture it owns. These two are this file's, and they hold either that capture
+        // or the fallback copy — whichever `capture` found.
+        this.colourUnit = 4;
+        this.depthUnit = 5;
+        this.scene = null;      // the shared capture, when there is one
         this.allocate(1, 1);
     }
 
     allocate(width, height) {
         const gl = this.gl;
-        gl.activeTexture(gl.TEXTURE0 + this.unit);
+        gl.activeTexture(gl.TEXTURE0 + this.colourUnit);
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
         // RGB8 AND NOT RGBA8, and it is not a preference. A copy out of a framebuffer may only
         // ask for components the framebuffer has, and the canvas is made with `alpha: false` — so
@@ -273,7 +336,7 @@ export class Refraction {
         const tw = roundUp(w, 64);
         const th = roundUp(h, 64);
         if (tw !== this.width || th !== this.height) this.allocate(tw, th);
-        gl.activeTexture(gl.TEXTURE0 + this.unit);
+        gl.activeTexture(gl.TEXTURE0 + this.colourUnit);
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
         gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
         gl.activeTexture(gl.TEXTURE0);
@@ -287,7 +350,7 @@ export class Refraction {
     // undefined and not merely unused.
     apply(uniforms, live) {
         const gl = this.gl;
-        gl.activeTexture(gl.TEXTURE0 + this.unit);
+        gl.activeTexture(gl.TEXTURE0 + this.colourUnit);
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
         gl.activeTexture(gl.TEXTURE0);
         if (uniforms.u_behind !== undefined) gl.uniform1i(uniforms.u_behind, this.unit);
