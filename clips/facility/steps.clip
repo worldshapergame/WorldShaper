@@ -1,7 +1,9 @@
 # steps — the great south steps: ten risers, cheek walls, raking copings, pedestals at the foot.
 #
 # The flight everything approaches the building by. x -9.45..9.45 (21 M either side of the centre
-# line), z -15.70 to -12.50 by the contract, ground y = 0.00 to the podium top y = 1.80.
+# line), z -16.25 to -13.05, ground y = 0.00 to the podium top y = 1.80. That z pair is 0.55 m
+# south of the contract's plan table and it is deliberate; the paragraph headed THE CONTRACT
+# CONFLICT below is why, and it is the one thing to read before moving anything in this file.
 #
 # ------------------------------------------------------------------------------------------------
 # WHAT THIS FILE PUTS UNDER LOAD — the WALKABILITY CHECK, and it is not a decoration on the side.
@@ -11,7 +13,7 @@
 # number is supposed to be: ten risers of EXACTLY 0.18, ten runs of EXACTLY 0.32, treads dead
 # level and dead identical, and nothing in this fragment allowed to beat them.
 #
-# "Nothing allowed to beat them" is a real constraint and it decided three things here. Read this
+# "Nothing allowed to beat them" is a real constraint and it decided four things here. Read this
 # before you add anything to this file, because it is very easy to break by accident:
 #
 #   main.cpp asks for max_step = per_metre * 20 / 100 voxels and counts a rise only when it is
@@ -40,15 +42,33 @@
 #      site fragment already stands the order's bronze urns on its gate piers 0.45 m outboard of
 #      these pedestals, which is where they belong and where they cost nothing.
 #
+#   4. THE WALL UNDER THE COPING OVERLAPS IT BY 0.09 AND USED TO ONLY TOUCH IT. Two shapes that
+#      meet on a plane are not joined — BRIEF.md rule 4 — and this pair proved it at metre 16 by
+#      reporting 3 components and 28 floating voxels, the north tip of each coping adrift. It is
+#      not a walkability fault but it is the same family: a join nobody measured.
+#
 # Secondary loads this part carries, all of them free riders on geometry that had to exist:
 #
 #   THE JOINTS. 0.0375 m wide (M/12) and 0.045 m deep (M/10) — one and a fifth voxels across at
 #   metre 32 — cut on the same 0.675 grid as the podium's terrace paving, so the stair and the
 #   floor it arrives at are jointed as one piece of masonry. They are cut by intersecting the
-#   joint slabs with a 0.045 SHELL of the flight (`offset by=-0.045`, then differenced), so one
+#   joint slabs with a 0.045 SHELL of the flight (`offset by=0.045`, then differenced), so one
 #   construction follows every tread, every riser and every nosing round without ten separate
 #   cutters. A groove is the hardest thin matter there is: a sampler stepping by its own reported
 #   distance can walk straight across the mouth of one. DO NOT WIDEN THEM.
+#
+#   THEY DID NOT EXIST UNTIL NOW AND NOTHING SAID SO. The sign on that `offset` was wrong — see
+#   the long note beside it — so the shell was empty, the joints were empty, and `steps_mass` and
+#   `steps_flight` measured the same 2,423,674 voxels at metre 32. A cut that removes nothing is
+#   the failure with no symptom: the report is clean, the component count is 1, the materials are
+#   right, and the picture is a smooth ramp of stone where the file says masonry.
+#
+#   THE NOSINGS AND THE WEAR, added with the joints and for the same reason. A tread cut as a
+#   plain box has no nosing, and a flight of them is one folded surface with no line of shadow on
+#   it. Each tread now oversails its riser by 0.045 (M/10) on a half-round, and each stone of each
+#   tread is dished 0.045 in the middle where feet fall, so the joints stand proud the way they do
+#   on a stair that has been used. Both are M/10 — one and a half voxels at metre 32 — and both
+#   are inset far enough from the nosing line that the walkability metric still sees one riser.
 #
 #   THE RUSTICATION. Both faces of both cheek walls are channelled to the podium's own numbers —
 #   0.045 wide (M/10) and 0.090 deep (M/5), courses of 0.45, blocks of 1.35 in running bond — and
@@ -85,20 +105,36 @@
 # WHERE THIS PART MEETS ITS NEIGHBOURS
 #
 #   the ground (site)   y = 0.00. Everything here is founded at y = -0.18, one riser into it.
-#   the podium          y = 1.80 terrace. The top landing runs north to z = -12.41, which is
-#                       0.09 (M/5) past the contract's -12.50, so the joint cannot open.
-#   the site's gate     piers stand at x 9.45..9.90, z -16.20..-15.75, immediately outboard of
-#                       these pedestals and 0.05 south of them. Nothing here reaches into them.
+#   the podium          y = 1.80 terrace, south face z = -13.05. The top nosing lands ON that
+#                       face and the top tread runs north to z = -12.96, which is 0.09 (M/5)
+#                       inside the podium, so the joint cannot open.
+#   the site            gravel forecourt, boundary balustrade at z -16.20..-15.75 and gate piers
+#                       at x 10.35..10.80. The flight is x +-9.45, so the whole 0.90 m way
+#                       through beside each cheek is clear and nothing here reaches a pier. The
+#                       bottom NOSING reaches -16.295, 0.095 south of where site.clip's gravel
+#                       coat stops; that strip of ground reads lawn and is asked for in
+#                       requests/steps.md, because a coat in somebody else's file is theirs.
 #
-# A CONFLICT YOU SHOULD KNOW ABOUT, written up in clips/facility/requests/steps.md: podium.clip
-# has moved the podium's south face to z = -13.05, 0.55 m south of the contract's -12.50, and
-# asks for the flight to run z -16.25..-13.05 instead. This file is built to the contract and to
-# its own brief, both of which say -15.70..-12.50. Until one of the two moves, the podium's
-# corona buries treads nine and ten and the top tread reads 0.09 deep instead of 0.32. The
-# risers are still 0.18 either way, so the load above survives it; the look does not.
+# THE CONTRACT CONFLICT IS SETTLED AND THIS FILE IS THE HALF THAT MOVED. It used to run
+# z -15.70..-12.50, the contract's numbers, while podium.clip put the podium's south face at
+# z = -13.05 — 0.55 m further south — and site.clip laid its gravel, its basins, its hedges and
+# its return plinths to that same -13.05. Two fragments of three were built to the podium's line
+# and one to the contract's, and the one was this one. The cost, measured before the move:
+#
+#   the podium's corona occupies y 1.50..1.80 for all z >= -13.05, so it swallowed tread ten
+#   whole and all but 0.09 m of tread nine; the flight read as eight treads of 0.32, one tread
+#   of 0.09, and then the terrace.
+#
+# So every z in this file is 0.55 m further south than it was: ten risers of 0.18 and ten runs of
+# 0.32 is 3.20 m, the flight runs z = -16.25 at the ground to z = -13.05 at the top nosing, and
+# the top tread IS the podium's own face. Nothing else about the part MOVED — the risers, the
+# runs, the section of the cheek and the pedestal are all what they were, only 0.55 further on.
+# `_contract.clip` still says -15.70..-12.50 in its plan table and should be corrected; that file
+# belongs to nobody in particular and is asked for in clips/facility/requests/steps.md.
 #
 # There is no `void_steps`. This part removes nothing from anybody, and the manifest's `hollowed`
-# difference does not ask for one.
+# difference does not ask for one. Every `difference` below takes matter out of one of this file's
+# own shapes and out of nothing else.
 
 include "_contract.clip"
 
@@ -107,9 +143,10 @@ include "_contract.clip"
 # ================================================================================================
 #
 # Ten nested boxes, each set back one run and raised one riser from the one below it, each running
-# north to z = -12.41 so that it is buried by everything above it. Written out rather than swept,
-# because the whole point of this part is that the ten treads are IDENTICAL and the ten risers are
-# IDENTICAL, and a box is the only thing in the language that cannot drift.
+# north to z = -12.96 so that it is buried by everything above it and the last one by the podium.
+# Written out rather than swept, because the whole point of this part is that the ten treads are
+# IDENTICAL and the ten risers are IDENTICAL, and a box is the only thing in the language that
+# cannot drift.
 #
 #   `stairs` would have been one line, and it is not used on purpose. sd_stairs returns
 #   max(box, y - top_of_the_tread_you_are_over), which for a point just south of a riser and well
@@ -117,11 +154,26 @@ include "_contract.clip"
 #   distance to the riser face a centimetre away. Over-stating is the dangerous direction: it says
 #   "nothing near here" where there is something near here. See requests/steps.md.
 #
-#   tread  1   z -15.70   top 0.18        tread  6   z -14.10   top 1.08
-#   tread  2   z -15.38   top 0.36        tread  7   z -13.78   top 1.26
-#   tread  3   z -15.06   top 0.54        tread  8   z -13.46   top 1.44
-#   tread  4   z -14.74   top 0.72        tread  9   z -13.14   top 1.62
-#   tread  5   z -14.42   top 0.90        tread 10   z -12.82   top 1.80
+#   tread  1   z -16.25   top 0.18        tread  6   z -14.65   top 1.08
+#   tread  2   z -15.93   top 0.36        tread  7   z -14.33   top 1.26
+#   tread  3   z -15.61   top 0.54        tread  8   z -14.01   top 1.44
+#   tread  4   z -15.29   top 0.72        tread  9   z -13.69   top 1.62
+#   tread  5   z -14.97   top 0.90        tread 10   z -13.37   top 1.80
+#
+# MEASURED at metre 32, on the centre line, off a 1:1 section — not read off the list above. On
+# `--part steps_treads`, the ten boxes with nothing added and nothing cut out of them:
+#
+#   ten goings   eight quantise to 0.3125 and two to 0.34375   mean 0.319, against 0.32 drawn
+#   nine risers  seven quantise to 0.1875 and two to 0.15625   mean 0.181, against 0.18 drawn
+#
+# Six voxels is what a 0.18 riser can be at metre 32 — 0.18 x 32 = 5.76 — and no placement of the
+# treads makes nine consecutive ones land on five every time.
+#
+# And on `--part steps_flight`, the finished thing with the joints, the nosings and the wear cut
+# into it, the largest step between neighbouring sample columns anywhere down the centre line is
+# 0.1875. One riser. Nothing this file adds beats the stair, which is the whole constraint above.
+#
+# The player is 1.80 tall, 0.60 across and climbs 0.55. This is a third of that.
 
 # THE TREADS RUN OUT TO 9.3375, NOT TO 9.45. That is the outer face of the cheek wall, and the
 # wall stands from the ground rather than on the steps, so the whole of each tread's end is buried
@@ -130,27 +182,65 @@ include "_contract.clip"
 # out round the pedestal at the foot, three of them stacked like a staircase nobody asked for. It
 # is obvious on a contact sheet and invisible in every number.
 
-let steps_tread_01 = box -9.3375 -0.18 -15.70   9.3375 0.18 -12.41 round=0.015
-let steps_tread_02 = box -9.3375 -0.18 -15.38   9.3375 0.36 -12.41 round=0.015
-let steps_tread_03 = box -9.3375 -0.18 -15.06   9.3375 0.54 -12.41 round=0.015
-let steps_tread_04 = box -9.3375 -0.18 -14.74   9.3375 0.72 -12.41 round=0.015
-let steps_tread_05 = box -9.3375 -0.18 -14.42   9.3375 0.90 -12.41 round=0.015
-let steps_tread_06 = box -9.3375 -0.18 -14.10   9.3375 1.08 -12.41 round=0.015
-let steps_tread_07 = box -9.3375 -0.18 -13.78   9.3375 1.26 -12.41 round=0.015
-let steps_tread_08 = box -9.3375 -0.18 -13.46   9.3375 1.44 -12.41 round=0.015
-let steps_tread_09 = box -9.3375 -0.18 -13.14   9.3375 1.62 -12.41 round=0.015
-let steps_tread_10 = box -9.3375 -0.18 -12.82   9.3375 1.80 -12.41 round=0.015
+let steps_tread_01 = box -9.3375 -0.18 -16.25   9.3375 0.18 -12.96 round=0.015
+let steps_tread_02 = box -9.3375 -0.18 -15.93   9.3375 0.36 -12.96 round=0.015
+let steps_tread_03 = box -9.3375 -0.18 -15.61   9.3375 0.54 -12.96 round=0.015
+let steps_tread_04 = box -9.3375 -0.18 -15.29   9.3375 0.72 -12.96 round=0.015
+let steps_tread_05 = box -9.3375 -0.18 -14.97   9.3375 0.90 -12.96 round=0.015
+let steps_tread_06 = box -9.3375 -0.18 -14.65   9.3375 1.08 -12.96 round=0.015
+let steps_tread_07 = box -9.3375 -0.18 -14.33   9.3375 1.26 -12.96 round=0.015
+let steps_tread_08 = box -9.3375 -0.18 -14.01   9.3375 1.44 -12.96 round=0.015
+let steps_tread_09 = box -9.3375 -0.18 -13.69   9.3375 1.62 -12.96 round=0.015
+let steps_tread_10 = box -9.3375 -0.18 -13.37   9.3375 1.80 -12.96 round=0.015
 
-let steps_mass = union {
+let steps_treads = union {
     steps_tread_01 steps_tread_02 steps_tread_03 steps_tread_04 steps_tread_05
     steps_tread_06 steps_tread_07 steps_tread_08 steps_tread_09 steps_tread_10
 }
 
-# The nosing round is 0.015 (M/30) and it is chosen against the voxel grid, not by eye. At metre 32
+# The arris round is 0.015 (M/30) and it is chosen against the voxel grid, not by eye. At metre 32
 # the first sample column north of a nosing sits between 0.006 and 0.028 from it, so the deepest
 # the round pulls a tread top down at a sample is 3.3 mm — a tenth of a voxel, and never enough to
 # move a tread into the voxel below. A 0.03 round would have cost a voxel on four of the ten
 # treads and made the reported rise 7 voxels instead of 6.
+
+# --- the nosings -------------------------------------------------------------------------------
+#
+# A tread cut as a plain box has no nosing at all: its front arris is the top of the riser below
+# it, and the whole flight is one folded surface with a 15 mm break on it. A stone step is not
+# that. The tread STONE oversails the riser and its front is worked to a half-round, so there is a
+# line of shadow under every nosing the length of the flight, and that line is most of what tells
+# a person at thirty metres that there are ten steps rather than a ramp.
+#
+# 0.045 out (M/10) and 0.045 deep, rounded 0.018 — the same M/10 as the rustication channel and
+# the joints, and for the same reason: at metre 32 it is one and a half voxels, which is the size
+# this building exists to sample. NOT 0.03, which is the projection a nosing this size would take
+# in stone: 0.03 x 32 is 0.96 of a voxel, and a lip that is under one voxel anywhere along its
+# length is a lip that dithers rather than one that reads.
+#
+# IT DOES NOT MOVE THE STAIR. The walkable top of tread k now runs from z_k - 0.045 to
+# z_(k+1) - 0.045, which is the same 0.32; the rise from tread to tread is the same 0.18; and the
+# undercut is 0.045 of overhang, far under the 0.1875 m the walkability metric can see.
+
+let steps_nose_01 = box -9.3375 0.135 -16.295   9.3375 0.18 -16.25 round=0.018
+let steps_nose_02 = box -9.3375 0.315 -15.975   9.3375 0.36 -15.93 round=0.018
+let steps_nose_03 = box -9.3375 0.495 -15.655   9.3375 0.54 -15.61 round=0.018
+let steps_nose_04 = box -9.3375 0.675 -15.335   9.3375 0.72 -15.29 round=0.018
+let steps_nose_05 = box -9.3375 0.855 -15.015   9.3375 0.90 -14.97 round=0.018
+let steps_nose_06 = box -9.3375 1.035 -14.695   9.3375 1.08 -14.65 round=0.018
+let steps_nose_07 = box -9.3375 1.215 -14.375   9.3375 1.26 -14.33 round=0.018
+let steps_nose_08 = box -9.3375 1.395 -14.055   9.3375 1.44 -14.01 round=0.018
+let steps_nose_09 = box -9.3375 1.575 -13.735   9.3375 1.62 -13.69 round=0.018
+let steps_nose_10 = box -9.3375 1.755 -13.415   9.3375 1.80 -13.37 round=0.018
+
+let steps_nosings = union {
+    steps_nose_01 steps_nose_02 steps_nose_03 steps_nose_04 steps_nose_05
+    steps_nose_06 steps_nose_07 steps_nose_08 steps_nose_09 steps_nose_10
+}
+
+# The flight in the rough: the treads and their nosings, before anything is cut out of them. This
+# is the control arm every cut below is measured against — see requests/steps-cuts-probe.clip.
+let steps_mass = union { steps_treads steps_nosings }
 
 # --- the joints ---------------------------------------------------------------------------------
 #
@@ -163,15 +253,100 @@ let steps_mass = union {
 # Cut against a shell of the flight rather than against the flight itself, so that one slab per
 # joint follows tread, nosing and riser alike and stops 0.045 in. A joint slab cut straight through
 # the mass would have sawn the stair into fourteen pieces.
+#
+# `by=0.045` AND NOT `by=-0.045`, AND UNTIL NOW IT WAS THE WRONG ONE. `Op::Offset` returns
+# `eval(child) + by` (src/forge/field.cpp:1314), so a POSITIVE `by` adds to the distance and pulls
+# the surface INWARD. `offset { steps_mass } by=-0.045` therefore grew the flight by 45 mm, the
+# "core" came out bigger than the mass it was carved from, `difference { mass core }` was
+# consequently EMPTY, and so was every joint. Measured at metre 32: `steps_mass` 2,423,674 voxels,
+# `steps_flight` 2,423,674 voxels — the cut removed nothing at all, and nothing said so. No error,
+# no floating component, no material missing from the report; the joints simply were not there and
+# the file's own header said they were.
+#
+# `clips/facility/BRIEF.md` line 227 still documents this as *"offset { a } by=-0.05  # shrinks or
+# grows without rounding"*, which is what put the sign here; requests/dome.md measured the truth
+# and asked for the wording to be changed to *POSITIVE SHRINKS*. Until that lands, check the sign
+# of every `offset` by measuring the volume of the thing it makes.
+#
+# The joints exist now and the simplest proof of it is two sections. `--slice x@4.05`, down the
+# middle of a stone, reads tread tops 1.8125, 1.625, 1.4375, 1.25; `--slice x@3.375`, down a
+# joint, reads 1.75, 1.5625, 1.4062, 1.2188 — one voxel lower, the whole way up the flight, with
+# the same 0.1875 between treads. That is a groove, cut to depth, following every tread and every
+# riser, and it was not there this morning.
 
-let steps_shell_core = offset { steps_mass } by=-0.045
+let steps_shell_core = offset { steps_mass } by=0.045
 let steps_shell      = difference { steps_mass steps_shell_core }
 
 let steps_joint_slab = box -0.01875 -1.00 -20.00   0.01875 3.00 20.00
 let steps_joint_grid = mirror { translate { repeat { steps_joint_slab } x=1.35 nx=7 } 0.675 0 0 } axis=x
 let steps_joints     = intersection { steps_joint_grid steps_shell }
 
-let steps_flight = difference { steps_mass steps_joints }
+# --- the wear -----------------------------------------------------------------------------------
+#
+# A stone stair that has been walked on for two hundred years is dished. Not smoothly and not
+# everywhere: each tread is laid as separate stones, each stone wears in its own middle, and the
+# joints between them stand slightly proud because nobody's foot lands on a joint. That is the
+# thing that most makes worked stone read as scanned rather than modelled, and it is free here
+# because the stones are already laid out — the wear grid is the JOINT grid, offset half a block.
+#
+# One hollow per stone per tread: 1.08 (2.4 M) across of a 1.35 block, so 0.135 of unworn margin
+# either side of it meets the joint; 0.1575 (0.35 M) of the 0.32 run, starting 0.045 (M/10) behind
+# the nosing; 0.045 (M/10) deep, coved 0.045 all round so the floor of it tapers up to the tread
+# rather than ending in a step.
+#
+# 0.045 IS UNDER THE WALKABILITY METRIC AND THE INSETS ARE WHY. `walkability()` reports the worst
+# rise between neighbouring columns that is <= max_step * 4 (0.75 m at metre 32), so ANY rise
+# between 0.1875 and 0.75 anywhere in the building becomes the number instead of the stair. A
+# hollow 0.045 deep is a quarter of that on its own — but a hollow that reaches the NEXT tread's
+# nosing puts 0.18 + 0.045 = 0.225 beside it, which is squarely in the window.
+#
+# IT DID. The first cut of this ran 0.045 to 0.27 of the run, which looked like 0.05 of clearance
+# from the riser at 0.32 — and it is not, because the tread above oversails its riser by 0.045, so
+# the real clearance was 0.005 m. The section at metre 32 came back with SEVEN-voxel rises
+# (0.2188) at five of the nine junctions, up from six. 0.2025 (0.45 M) leaves 0.0725 — better than
+# two voxels of untouched tread in front of every nosing — and the flight measures 0.1875 again.
+# Anything added to a tread has to answer this arithmetic: the walkable surface of tread k runs
+# from z_k - 0.045 to z_k + 0.275, and both ends of it belong to the nosings.
+#
+# nx=6, so the hollows run out to a stone centred on 8.10 and the last strip of tread — 8.775 out
+# to the cheek wall — is left plain. It is under the wall and never seen.
+
+let steps_dish     = box -0.54 -0.045 0.045   0.54 0.09 0.2025 round=0.045
+let steps_dish_row = repeat { steps_dish } x=1.35 nx=6
+
+let steps_wear = union {
+    translate { steps_dish_row } 0 0.18 -16.25
+    translate { steps_dish_row } 0 0.36 -15.93
+    translate { steps_dish_row } 0 0.54 -15.61
+    translate { steps_dish_row } 0 0.72 -15.29
+    translate { steps_dish_row } 0 0.90 -14.97
+    translate { steps_dish_row } 0 1.08 -14.65
+    translate { steps_dish_row } 0 1.26 -14.33
+    translate { steps_dish_row } 0 1.44 -14.01
+    translate { steps_dish_row } 0 1.62 -13.69
+    translate { steps_dish_row } 0 1.80 -13.37
+}
+
+let steps_flight = difference { steps_mass steps_joints steps_wear }
+
+# TWO CUTTERS IN ONE `difference`, AND HERE IS WHAT EACH OF THEM TAKES. Measured at metre 32
+# through clips/facility/requests/steps-cuts-probe.clip, which carries a binding that omits one
+# cut at a time so the arms can be subtracted:
+#
+#   steps_mass                                    2,426,648 voxels
+#   less the joints only  (probe_joints_only)     2,417,948      -8,700   0.2657 m3
+#   less the wear only    (probe_wear_only)       2,394,666     -31,982   0.9766 m3
+#   less both             (steps_flight)          2,385,966     -40,682 = the sum, to the voxel
+#
+# Additive means disjoint: the wear does not eat a joint and the joints do not deepen the wear.
+# One component in every arm, none floating.
+#
+# The joint cut is small in volume and that is the point of it — fourteen grooves one and a fifth
+# voxels wide, each following the whole folded length of the flight, 0.27 cubic metres out of 74.
+# What it buys is surface, which is the same trade the podium's grooves make. On the whole part at
+# metre 32: 234.79 m2 of surface before this change and 280.22 m2 after, for 79.73 m3 of stone
+# before and 78.97 after. Nineteen per cent more surface for one per cent less matter. If those
+# two figures ever converge, the grooves have started dissolving in the sampler.
 
 # ================================================================================================
 # THE CHEEK — built once on the east side about x = 9.00, folded at the end
@@ -192,10 +367,10 @@ let steps_flight = difference { steps_mass steps_joints }
 #
 # The coping's top plane is the line of the nosings raised 1.26 (2.8 M):
 #
-#     y = 0.5625 * (z + 15.70) + 1.26        0.5625 = 0.18 / 0.32, the stair's own slope
+#     y = 0.5625 * (z + 16.25) + 1.26        0.5625 = 0.18 / 0.32, the stair's own slope
 #
-# which is y = 1.80 at z = -14.74 (the pedestal's north face, three runs up) and y = 3.06 at
-# z = -12.50 (the podium face, where it stands 1.26 above the terrace).
+# which is y = 1.80 at z = -15.29 (the pedestal's north face, three runs up) and y = 3.06 at
+# z = -13.05 (the podium face, where it stands 1.26 above the terrace).
 #
 # Built as a straight section along z about the origin and turned about x by the rake angle. The
 # ANGLE IS NEGATIVE: `rotate` moves the shape, so a positive turn about x carries local +z toward
@@ -203,21 +378,30 @@ let steps_flight = difference { steps_mass steps_joints }
 # not a dimension, in the same way the order's entasis radius is.
 #
 # Local y = 0 is the top of the coping and local z runs along the rake. The origin of the turned
-# section is carried to (9.00, 3.06, -12.50), a point on the top plane, so every other number in
+# section is carried to (9.00, 3.06, -13.05), a point on the top plane, so every other number in
 # the section is measured from a face rather than from an arbitrary datum.
 #
 #   local  0.00 .. -0.18   the coping proper, 0.45 out (M)
 #   local -0.18 .. -0.27   a cavetto splay back to the wall face, 0.09 (M/5) of it
-#   local -0.27 .. -2.97   the wall, 0.3375 out, carried far enough down to be trimmed flat
+#   local -0.18 .. -2.97   the wall, 0.3375 out, carried far enough down to be trimmed flat
+#
+# THE WALL'S TOP IS AT LOCAL -0.18 AND NOT AT -0.27, WHICH IS WHERE THE COPING'S UNDERSIDE IS.
+# It used to be -0.27 — the two met on a plane and touched without overlapping, which BRIEF.md
+# rule 4 forbids in as many words. It does not fail loudly: at metre 32 the pair still voxelizes
+# as one solid. At metre 16 it does not, and `--part part_steps` reported **3 components, 28
+# floating voxels** — fourteen at each of (+-9.44, 3.06, -12.44), the north tip of each coping,
+# cut adrift from the wall it sits on by a joint that was exactly zero thick. Raising the wall to
+# -0.18 buries it 0.09 (M/5) inside the coping's own core, which occupies the identical 0.675
+# width, so nothing about the finished section changes and the two are one piece at any metre.
 
 let steps_cope_band  = box -0.45 -0.18 -3.60   0.45 0.00 3.60 round=0.015
 let steps_cope_core  = box -0.3375 -0.27 -3.60   0.3375 -0.18 3.60
 let steps_cope_splay = mirror { cavetto 0.3375 -0.18 -3.60   0.45 -0.27 3.60 run=z } axis=x
 let steps_cope_sec   = union { steps_cope_band steps_cope_core steps_cope_splay }
-let steps_wall_sec   = box -0.3375 -2.97 -3.60   0.3375 -0.27 3.60 round=0.012
+let steps_wall_sec   = box -0.3375 -2.97 -3.60   0.3375 -0.18 3.60 round=0.012
 
-let steps_cope_laid = translate { rotate { steps_cope_sec } x=-0.08154932 } 9.00 3.06 -12.50
-let steps_wall_laid = translate { rotate { steps_wall_sec } x=-0.08154932 } 9.00 3.06 -12.50
+let steps_cope_laid = translate { rotate { steps_cope_sec } x=-0.08154932 } 9.00 3.06 -13.05
+let steps_wall_laid = translate { rotate { steps_wall_sec } x=-0.08154932 } 9.00 3.06 -13.05
 
 # The two are trimmed to different lengths on purpose. The coping stops dead at the pedestal's
 # north face and dies into it; the wall runs 0.48 further south, into the middle of the pedestal,
@@ -226,11 +410,49 @@ let steps_wall_laid = translate { rotate { steps_wall_sec } x=-0.08154932 } 9.00
 #
 # The frames themselves are only a knife: -0.45 to 4.05 in y and 8.10 to 9.90 in x are clear of
 # everything they cut by at least 0.45.
-let steps_cope_zone = box 8.10 -0.45 -14.74   9.90 4.05 -12.41
-let steps_wall_zone = box 8.10 -0.18 -15.22   9.90 4.05 -12.41
+#
+# THEIR NORTH FACE IS AT -12.875 AND IT IS THERE BECAUSE OF THE VOXEL GRID, not because of the
+# module. -12.875 is 0.175 inside the podium's face, so the coping and the wall end buried in that
+# slab rather than stopped against it — and 12.875 is a whole number of voxels at metre 8, 16 and
+# 32 alike (it is 103/8), which the treads' own -12.96 is not.
+#
+# That matters here and nowhere else in the file, because this is the only RAKING top in the part.
+# The sampler decides a cell by its centre with a thin-feature rescue, not by coverage, so a trim
+# plane that lands mid-cell leaves one partial slice in which only the rescued voxels survive. On
+# a raking coping the surviving voxel is the single one at the top of the rake, and it is
+# DIAGONALLY adjacent to the run in the slice behind it — which is not adjacency. Measured at
+# metre 32 with the trim at -12.96: `steps_cope_solid` came back as 2 components, 28 voxels
+# floating at (8.56, 3.09, -12.97), one row of them along the whole width of the coping's tip. The
+# wall under it had the same fault, 22 voxels. Neither is visible in the building — both are
+# inside the podium — and both are exactly the kind of thing the component count exists to catch.
+let steps_cope_zone = box 8.10 -0.45 -15.29   9.90 4.05 -12.875
+let steps_wall_zone = box 8.10 -0.18 -15.77   9.90 4.05 -12.875
 
-let steps_coping_e = intersection { steps_cope_laid steps_cope_zone }
-let steps_wall_cut = intersection { steps_wall_laid steps_wall_zone }
+let steps_cope_solid = intersection { steps_cope_laid steps_cope_zone }
+let steps_wall_cut   = intersection { steps_wall_laid steps_wall_zone }
+
+# --- the coping's own joints ---------------------------------------------------------------------
+#
+# 2.41 m of raking coping in one piece is an extruded plastic handrail, not four stones. So the
+# same groove the treads get — 0.0375 wide (M/12), 0.045 deep (M/10) — is cut across it every two
+# runs, 0.64 m, on planes of constant z. A mason cuts a raking coping's joints square to the bed
+# and not square to the rake, and a vertical plane is what that is.
+#
+# Cut against a 0.045 SHELL of the coping and not through it, for the same reason as the treads:
+# a slab straight through would leave four loose stones and a component count of eight. The sign
+# on `by` is the one the treads' note is about — POSITIVE SHRINKS.
+#
+# The phase is set from the top: joints at -13.37 + 0.64k, which puts one on the top tread's own
+# nosing line and reads as four stones of 0.64, 0.64, 0.64 and 0.50. Measured at metre 32, the
+# coping is 20,178 voxels before the joints and 19,716 after — 462 voxels, 0.0141 m3, one
+# component either way.
+let steps_cope_shell  = difference { steps_cope_solid offset { steps_cope_solid } by=0.045 }
+let steps_cope_jslab  = box 8.00 -1.00 -0.01875   10.00 5.00 0.01875
+let steps_cope_joints = intersection { translate { repeat { steps_cope_jslab } z=0.64 nz=3 }
+                                       0 0 -13.37
+                                       steps_cope_shell }
+
+let steps_coping_e = difference { steps_cope_solid steps_cope_joints }
 
 # RUSTICATION. The outer face of a cheek wall is 2.30 m long and up to 2.80 m tall with nothing on
 # it, which at that size reads as a poured retaining wall rather than as masonry — and it stands
@@ -254,8 +476,14 @@ let steps_wall_cut = intersection { steps_wall_laid steps_wall_zone }
 # step. DO NOT WIDEN IT. Below metre 24 it will not show at all, and that is the sampler's
 # resolution rather than a fault in the wall.
 #
-# The whole thing stops at z = -14.74 so it never reaches the pedestal, which is a dressed block
+# The whole thing stops at z = -15.29 so it never reaches the pedestal, which is a dressed block
 # and has no courses; 0.09 into a 0.675 wall leaves 0.495 of it, so nothing is cut through.
+#
+# AND IT CANNOT REACH ANYTHING BUT THE WALL, whatever the zone says. `steps_rust_zone` runs north
+# to -12.55, which is half a metre INSIDE the podium — but this shape is only ever the second
+# operand of `difference { steps_wall_cut steps_rustic }`, so the most it can do is fail to cut
+# the wall. Measured: the cheek wall is 135,936 voxels before the channels and 130,618 after, and
+# the podium is the same 6,369,428 voxels either way.
 
 let steps_chan_h  = box 0.2475 -0.0225 -4.00    0.50 0.0225 4.00
 let steps_chan_v  = box 0.2475  0.0000 -0.0225  0.50 0.4500 0.0225
@@ -265,8 +493,8 @@ let steps_perps_a = repeat { repeat { steps_chan_v } z=1.35 nz=3 } y=0.90 ny=4
 let steps_perps_b = translate { steps_perps_a } 0 0.45 0.675
 
 let steps_rust_sec  = union { steps_beds steps_perps_a steps_perps_b }
-let steps_rust_zone = box 8.10 -0.50 -14.74   9.90 4.05 -12.00
-let steps_rustic    = intersection { translate { mirror { steps_rust_sec } axis=x } 9.00 0.45 -12.60
+let steps_rust_zone = box 8.10 -0.50 -15.29   9.90 4.05 -12.55
+let steps_rustic    = intersection { translate { mirror { steps_rust_sec } axis=x } 9.00 0.45 -13.15
                                      steps_rust_zone }
 
 let steps_wall_e = difference { steps_wall_cut steps_rustic }
@@ -276,7 +504,7 @@ let steps_wall_e = difference { steps_wall_cut steps_rustic }
 # 0.90 (D) across and 0.96 (three runs) deep, top at 1.80 — the podium's own datum, and the height
 # the raking coping arrives at, so the two meet flush and the walkability check sees no rise there
 # at all. The bottom three treads run into it from behind and are entirely inside it.
-# Drawn about its own centre so that the mouldings can be mitred, then carried to (9.00, -15.22).
+# Drawn about its own centre so that the mouldings can be mitred, then carried to (9.00, -15.77).
 #
 #   -0.180 .. 0.2250   plinth        M/2 of it above ground, one riser below
 #    0.225 .. 0.3375   cavetto       M/4, plinth face in to the die face
@@ -331,7 +559,7 @@ let steps_panels   = union { steps_panel_s mirror { steps_panel_e } axis=x }
 let steps_ped_head = union { steps_ped_bed steps_ped_cap }
 let steps_ped_body = union { steps_ped_plinth steps_ped_base steps_ped_die }
 let steps_ped_east = translate { difference { union { steps_ped_body steps_ped_head } steps_panels } }
-                     9.00 0 -15.22
+                     9.00 0 -15.77
 
 # --- folded ---------------------------------------------------------------------------------------
 #
@@ -350,20 +578,39 @@ let part_steps = union { steps_flight steps_copings steps_walls steps_pedestals 
 #
 # Granite for everything that is walked on, rained on and kicked; marble for the copings and the
 # pedestal caps, which is the dressing a granite stair is given; porphyry in the sunk panels.
-# Every rule keys on one of this file's own shapes and every one says below=0.02, because the
-# manifest displaces the whole building by 12 mm at the end and a test at zero leaves a rind of
-# the base coat over every outward-facing voxel of the part that painted it.
+# Every rule keys on one of this file's own shapes, never on a coordinate.
+#
+# 0.02 FOR THE FLIGHT AND 0.035 FOR EVERYTHING ELSE, which is BRIEF.md rule 5 exactly. The 0.02 is
+# for the manifest's 12 mm of grain, which pushes a voxel outside the shape its rule names. The
+# 0.035 is for the other thing that does: a voxel is decided solid by COVERAGE and painted by a
+# rule tested at the cell's CENTRE, and for a shape put where it is by `rotate` or `translate` the
+# two do not agree. The flight is ten boxes drawn where they stand and takes 0.02; the cheek walls
+# and the copings are a section turned about x and carried, and the pedestals, their caps and
+# their inlays are all translated, so all five take 0.035.
+#
+# MEASURED, both arms, same geometry to the voxel (2,587,798), metre 32, on
+# requests/steps-cuts-probe.clip — only the six thresholds differ:
+#
+#                       granite      marble    porphyry   base coat
+#   all six at 0.02   2,515,774      67,788       4,212          24
+#   five at 0.035     2,511,470      70,808       5,520           0
+#
+# The 24 is the visible half and the small half. The other 4,328 voxels did not fall through to the
+# base coat at all — they were caught by the granite rule, which is written first and keyed on the
+# whole cheek, so a voxel of a coping or an inlay that its own rule could not reach came out
+# granite. A rind of pale limestone is obvious on a contact sheet; polished marble quietly coming
+# out as rough granite along the edge of every coping is not.
 #
 # Later coats cover earlier ones, so this reads bottom upward: the whole cheek in granite first,
 # then marble over the parts of it that are dressed, then the panels.
 
 paint granite  where=steps_flight    below=0.02
-paint granite  where=steps_walls     below=0.02
-paint granite  where=steps_pedestals below=0.02
+paint granite  where=steps_walls     below=0.035
+paint granite  where=steps_pedestals below=0.035
 
-let steps_caps  = mirror { translate { steps_ped_head } 9.00 0 -15.22 } axis=x
-paint marble   where=steps_copings   below=0.02
-paint marble   where=steps_caps      below=0.02
+let steps_caps  = mirror { translate { steps_ped_head } 9.00 0 -15.77 } axis=x
+paint marble   where=steps_copings   below=0.035
+paint marble   where=steps_caps      below=0.035
 
 # The panel key is not the cutter: it is pushed 0.045 further into the stone so that it reaches the
 # floor of the recess, and pulled 0.0225 (M/20) in from its edges so that the 0.02 test does not
@@ -371,5 +618,5 @@ paint marble   where=steps_caps      below=0.02
 let steps_inlay_s = box -0.2025 0.6525 -0.50    0.2025 1.1475 -0.2775
 let steps_inlay_e = box  0.2475 0.6525 -0.2325  0.50   1.1475  0.2325
 let steps_inlays  = mirror { translate { union { steps_inlay_s mirror { steps_inlay_e } axis=x } }
-                             9.00 0 -15.22 } axis=x
-paint porphyry where=steps_inlays    below=0.02
+                             9.00 0 -15.77 } axis=x
+paint porphyry where=steps_inlays    below=0.035
