@@ -73,10 +73,14 @@ jobs:
         id: pick
         run: |
           set -euo pipefail
+          # A push says LOOK AGAIN. It does not say what to bake.
+          #
+          # Taking the pushed branch was the obvious reading and it is wrong every time it matters:
+          # a push to `main` bakes `main`, a push to the viewer's own branch bakes the viewer's own
+          # branch, and neither is where the new clips are. The site's whole job is to show the
+          # newest clip work, so the answer does not depend on which branch happened to move --
+          # only an explicit dispatch overrides it.
           chosen="${{ github.event.inputs.ref }}"
-          if [ -z "$chosen" ] && [ "${{ github.event_name }}" = "push" ]; then
-            chosen="$GITHUB_REF_NAME"
-          fi
           if [ -z "$chosen" ]; then
             best=""; best_at=0
             for ref in $(git for-each-ref --format='%(refname:short)' \
@@ -87,8 +91,23 @@ jobs:
             done
             chosen="${best:-main}"
           fi
-          git checkout --detach "origin/$chosen" 2>/dev/null || git checkout --detach "$chosen"
-          sha="$(git rev-parse --short HEAD)"
+          # A GRAFT, not a checkout, and the difference is the whole reason this works.
+          #
+          # A branch that is only writing clips does not have this workflow, does not have
+          # `tools/bake_web.cpp`, does not have a CMakeLists that knows what `ws_bake_web` is, and
+          # does not have `web/` at all -- the viewer was added on `main` after that branch was
+          # cut. Checking it out wholesale leaves nothing to build and nothing to publish.
+          #
+          # So: stay on `main` for the machinery and the site, and take `clips/` and `src/` from the
+          # branch. `src/` because the clips and the forge are one thing -- `arc_test.clip` uses an
+          # `arc` shape that exists only on the branch that added it, and a parser from `main`
+          # reports it as unknown. Anything the graft cannot compile fails here, loudly, which is
+          # the right place for it to fail.
+          sha="$(git rev-parse --short "origin/$chosen" 2>/dev/null || git rev-parse --short "$chosen")"
+          if [ "$chosen" != "main" ]; then
+            git checkout "origin/$chosen" -- clips/ src/ 2>/dev/null \
+              || git checkout "$chosen" -- clips/ src/
+          fi
           echo "ref=$chosen" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Baking $chosen at $sha"
