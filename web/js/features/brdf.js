@@ -75,11 +75,19 @@
 //     `v·h` for a hemisphere; in the game a velvet in a room with no sun still gets its sheen
 //     because every bounce ray evaluates `surface_response`, and this viewer has no bounce rays.
 //     `n·v` is that integral's grazing shape and nothing more.
-//   - THE COAT REFLECTS THE SKY. The game's face path gives the environment to the BASE lobe only;
-//     the coat's share of it arrives through bounces. Without an environment term a lacquer here
-//     would be a sun highlight and nothing else, and `porcelain` and `lacquer_red` indoors would
-//     lose the lobe entirely. So the coat takes `sky_colour` along the reflection at its own
-//     Fresnel and dims what is under it by the same amount — the same split as the direct term.
+//   - WHAT A SURFACE REFLECTS INDOORS IS THE ROOM, AND THE ROOM HERE IS THE AMBIENT. In the game a
+//     metal's environment comes out of the face's own lobe bins, which hold the room it is standing
+//     in. This viewer has no such measurement, and reflecting the SKY attenuated by how much sky
+//     the lattice can see gives a gilt cornice four metres inside the ballroom almost nothing — so
+//     every gold in the building was drawn as its twelve per cent of diffuse, which is mustard
+//     paint. So a surface reflects the sky where the sky reaches it and the ambient the light grid
+//     already carries where it does not, at the same occlusion the diffuse gets. That last part
+//     matters: handing it the UNOCCLUDED ambient makes every gold four times brighter than the
+//     wall beside it and flattens a whole enfilade.
+//   - THE COAT REFLECTS THE SAME THING. The game's face path gives the environment to the BASE lobe
+//     only; the coat's share of it arrives through bounces. Without an environment term a lacquer
+//     here would be a sun highlight and nothing else, and — worse — the dimming the game applies to
+//     what is under the coat would be a straight loss, which drew the salon's parquet as slate.
 //   - F0 FOR A DIELECTRIC COMES FROM THE RECORD'S `ior`, where the game uses a flat 0.04. The two
 //     agree at ior 1.5, which is glass; this is the viewer's existing behaviour and it is kept
 //     because `crystal` at 1.62 and `water` at 1.33 are declared and mean something.
