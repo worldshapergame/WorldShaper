@@ -181,9 +181,13 @@ export class Budget {
         // Every frame on the clock, one in six on the card. A timer query per pass every frame is
         // itself a cost and a queue to drain; a performance.now() is neither, and on a scene slow
         // enough to matter a cadence of six can mean no sample at all inside a settle window.
+        // ...and on a slow scene, every frame the queue has room for. A cadence of six is six
+        // frames, and six frames of a clip that takes a third of a second each is two seconds
+        // before the readout says anything — on exactly the scene somebody is watching it for.
         this.sampling = this.mode !== 'gpu'
             ? true
-            : ((this.frameIndex % this.cadence) === 0 && this.slots.length < 4);
+            : (this.slots.length < 4 &&
+               ((this.frameIndex % this.cadence) === 0 || this.frameMs > 50));
         this.readback();
     }
 

@@ -148,7 +148,13 @@ straight up and down.
 **Speed.** One instanced draw per face direction — twelve for a clip with glass in it, twenty-four
 while the slider is cutting. There is no per-frame work proportional to the size of the clip, which
 is what "no matter how big the clip is" means here. If the frame time still goes over 22 ms the
-page renders fewer pixels rather than fewer frames, down to 55%.
+page renders fewer pixels rather than fewer frames.
+
+<!-- >>> post -->
+That last sentence used to end "down to 55%", and 55% was the whole of the answer: one lever, the
+crudest one available, so a phone that could not hold the frame at 55% simply stuttered at 55%. It
+is now the fine lever inside a rung of a ladder — see §4c.
+<!-- <<< post -->
 
 **Watching.** `data/index.json` is re-read every five seconds and every clip in it carries a hash
 of its own baked bytes. When the hash of the clip on screen changes it is refetched and swapped in
@@ -283,6 +289,191 @@ About 3.6x per doubling -- sub-linear in voxels, because the field evaluation an
 dominate -- which puts 32 at roughly seventeen minutes for that one clip. A shard holding two like
 it is an hour, and that is why `bake` has three hours rather than ninety minutes, and why `index`
 runs even when a shard did not.
+
+<!-- >>> post -->
+## 4c. The end of the frame, and what the frame costs
+
+`web/js/features/post.js` and `web/js/features/budget.js`.
+
+### One tone map, not four
+
+Every pass used to finish with its own copy of `pow(tonemap(colour * u_exposure), 1/2.2)` — the
+surface shader, the sky, the cap and the shapes view, four times, and **the cap's copy had no
+`clamp` on the end**, which made it a fourth opinion about what bright means on the one surface that
+meets every other surface in the clip along an edge. They are one function now, injected into all
+four, and when there is a floating-point target **none of them tone map at all**: they write linear
+radiance and the composite applies the curve once for the whole frame.
+
+### Bloom is thresholded on the emissive term, not on luminance
+
+The usual bright-pass keeps what is over 1.0 in the final image. In a scene lit by a sun at three
+times its sky that is a sunlit limestone wall, so the building glows and the candle — three voxels
+across, and losing most of its pixels to the stone beside it — does not.
+
+So the surface shader writes the emissive contribution to a **second render target**, and the bloom
+chain reads only that. A white wall has no emission and cannot bloom however bright the sun is; a
+taper is nothing but emission and blooms at whatever size it is on screen. `R11F_G11F_B10F` where
+the browser has it, four bytes a pixel. The sun's disc and its glow are written there too, because
+**the sun is an emitter and the sky gradient it stands in is not**.
+
+### The air
+
+`ws_fog` in `web/js/gl.js`, and the numbers are `src/app/main.cpp`'s rather than a taste:
+extinction `3.912 / 8000` per metre from Koschmieder's law at eight kilometres of visibility — the
+top of the WMO's haze band and the bottom of its clear one — a single-scattering albedo of 0.90, a
+Henyey-Greenstein `g` of 0.80, and a 400 m scale height. The optical depth of an exponential
+atmosphere along a segment is integrated in closed form, so it costs two exponentials rather than a
+march.
+
+It is a **fragment term and not a post pass**, because aerial perspective wants the distance to the
+surface and the direction of the ray and every one of these shaders is already holding both; doing
+it afterwards would mean a depth texture and a reconstructed world position to arrive at what was
+in a register. Over the two-hundred-metre courtyard `main.cpp` reasons about it is about five per
+cent; over a clip the size of the facility, thirty-odd metres across, it is under one. **It is
+deliberately not exaggerated to make it visible in a screenshot** — it is the game's own air, and
+what it is for is that the viewer and the game agree about what distance looks like.
+
+### The frame budget
+
+**Nobody else in this viewer measures the whole frame.** `budget.js` is that instrument:
+`EXT_disjoint_timer_query_webgl2` where the browser has it, `performance.now()` where it does not,
+and a `sync` mode that puts a one-pixel `readPixels` inside every pass bracket. **Whichever source
+produced a number is printed with it**, because a GPU millisecond and a submission millisecond are
+not the same quantity. `G` shows the breakdown; `[` and `]` walk the ladder by hand.
+
+`gl.finish()` alone is not a flush in a browser — it was measured returning in a tenth of a
+millisecond inside a frame that took a hundred. The commands are drained by another process and
+finish queues a fence. A one-pixel `readPixels` cannot be deferred, because the answer has to come
+back.
+
+### The quality ladder
+
+Six rungs. Resolution is **inside** a rung rather than beside it: two controllers pulling on frame
+time oscillate against each other, so this one cascades — the scale moves between the rung's floor
+and ceiling, and the rung changes only when the scale is pinned and still wrong. Falls after half a
+second, climbs after three. The number driving it is a **median of the last forty frames**, because
+a clip swapping in is one slow frame and not a regression.
+
+| | scale | what it stops doing |
+|---|---|---|
+| 0 everything | 0.85–1.00 | — |
+| 1 high | 0.75–0.90 | bloom starts at a quarter resolution, five mips |
+| 2 balanced | 0.65–0.80 | four mips; clearcoat, sheen and the brushed-metal anisotropy |
+| 3 lean | 0.55–0.70 | three mips; FXAA; the reflected sky becomes flat ambient |
+| 4 low | 0.45–0.60 | bloom entirely; the cap's voxel lattice; translucency; 48 march steps |
+| 5 minimum | 0.40–0.50 | the light grid stops being filtered; 32 march steps |
+
+**Rung 4 links a second build of the surface and cap programs with those lobes compiled out** rather
+than branched around, and the ladder swaps the program object so nothing downstream knows there are
+two. See below for whether that is worth anything.
+
+### The measurements, and they are NOT phone numbers
+
+**SwiftShader — a software rasteriser — inside headless Chromium on four cores shared with fourteen
+other agents.** Absolute milliseconds here mean nothing about a phone. Ratios between arms of the
+same run mean something, and that is all that is claimed.
+
+Two things had to be got right before any of it meant anything.
+
+**The timer queries do work here — the cadence was wrong.** They were first read as "advertised and
+never completing", which was a conclusion from an empty readout: the breakdown was sampled one frame
+in six, and six frames of a clip that takes three seconds each is longer than the settle window, so
+nothing ever completed *inside the measurement*. It samples every frame the queue has room for once
+a frame is over 50 ms, and the numbers below are real GPU time.
+
+**Forcing a readback per pass is not.** `sync` mode took the facility from 100 ms a frame to 5.7 s,
+so what it measures is the stall and not the pass. It stays for the browser with no timer queries at
+all, labelled.
+
+**And the frame time cannot come from `requestAnimationFrame` here.** Headless Chromium throttles it
+the moment a frame goes long: a ten-second window came back with three samples spread from 16 ms to
+4 s. So the whole-frame figures are **throughput** — N frames driven back to back with one
+`readPixels` at the end, total over N, **best of five batches**, because under contention the
+minimum is the batch that got the cores.
+
+Orbit view, 904×704, `--slice` where stated.
+
+**The per-pass breakdown, from the timer queries.** Median of ~29 samples per arm.
+
+| | facility (unsliced) | | many_lamps (sliced) | |
+|---|---|---|---|---|
+| pass | baseline | post on | baseline | post on |
+| sky | 50.6 | 106.4 | 68.9 | 114.1 |
+| opaque | 1721.8 | 1501.4 | 305.6 | 246.7 |
+| parity (slicing only) | — | — | 336.7 | 249.8 |
+| cap | — | — | 10.5 | 10.3 |
+| glass | 13.6 | 11.4 | — | — |
+| bloom | — | 68.5 | — | 69.3 |
+| composite + FXAA | — | 154.0 | — | 153.2 |
+| **total** | **1786** | **1842** | **721.7** | **843.4** |
+
+Three things in that table are worth more than the totals:
+
+- **The facility's frame is 96% one pass.** Everything the ladder can switch off lives in the other
+  4%, and its biggest lever — pixels — bought 1.6x for a 4x cut. What would actually help a big
+  clip is fewer quads, and nothing in this viewer has that lever.
+- **The stencil parity pass costs as much as the whole opaque pass it repeats.** It is a second
+  walk of the mesh with culling and depth writes off, so it is pure overdraw, and it runs on every
+  frame the slider is off its stop. Slicing a clip therefore roughly doubles its cost, which is not
+  what "one extra pass" sounds like.
+- **Post is cheaper than it looks, because it pays for itself in MSAA.** The chain costs 222 ms of
+  new work at this resolution — bloom 69, composite and FXAA 154, and it is a fixed cost per pixel
+  rather than per quad. But compositing means the default framebuffer no longer needs
+  multisampling, and dropping it took 220 ms off the opaque pass of the facility and 60 ms off
+  many_lamps. Net, on the facility, the entire post chain costs **3%**. The sky is the one pass
+  that gets dearer either way: it is a full-screen fill and the HDR target with its second
+  attachment is more bandwidth than an RGBA8 backbuffer.
+
+| scene | arm | best ms/frame |
+|---|---|---|
+| facility, 64,250 quads | baseline (`?post=0`, rung 0) | 3706 / 3542 *(same arm twice)* |
+| | post on, rung 0 | 3701 |
+| | rung 5, 448×352 | 2256 |
+| many_lamps, 1,950 quads, sliced | baseline (`?post=0`, rung 0) | 359 / 464 *(same arm twice)* |
+| | post on, rung 0 | 718 |
+| | post on, rung 2 | 425 |
+| | post on, rung 5 | 144 |
+| sampler, 28,612 quads | baseline, rung 0 | 1246 |
+| | rung 4, 544×424 | 858 / 838 |
+
+Two things fall out of that and they are the useful part:
+
+- **The facility's frame is its mesh, not its pixels and not its shading.** A quarter of the pixels
+  bought 1.6x, and the entire post chain — an HDR target, a second attachment, six mips of bloom, a
+  composite and FXAA — is at or under the repeat spread of the baseline arm. The ladder's levers are
+  all pixel levers and none of them is a geometry lever, so on the biggest clips the ladder has less
+  to give than it looks like it has.
+- **On a small clip post is the whole cost.** many_lamps doubles. That is a full-screen cost and it
+  is roughly fixed, which is why it dominates a clip with no mesh in it and disappears behind one
+  with a mesh in it.
+
+### Does a feature nobody switched on still cost something?
+
+It was reported from another feature's measurements that a fragment shader containing a branched-off
+feature ran 1.8x slower than one without it at all — which, if it holds, means every clip pays for
+every feature in the viewer whether it uses one or not.
+
+**It does not reproduce here.** `?fat=1` keeps the full surface program on every rung, so the same
+shader can be run with its lobes compiled out and with them merely branched around, at identical
+resolution on the identical scene:
+
+    sampler, rung 4, 544x424        lean (lobes compiled out)   858    838
+                                    fat  (lobes branched round) 830    789
+
+The lean build is if anything the slower of the two, by less than the 4.6% the baseline arm moved
+between the start and the end of the same facility run. Four branched-around lighting lobes and a
+fog function cost nothing measurable on this rasteriser.
+
+That is **not a refutation of the original observation** — the change that produced it added two
+texture-sampling loops and a `mat4`, which is a far larger register footprint than four branches —
+and **SwiftShader is not a mobile compiler**, so neither result transfers. What can be said is that
+the general claim is not supported by a control taken with a tighter instrument, and that the fix
+for it, if a real device ever shows it, belongs in the ladder as program variants and is already
+built: the mechanism is `withShared(..., lean)` and rung 4 uses it.
+
+Settling it properly needs a real mobile GPU, an unloaded machine, and the same throughput harness.
+
+<!-- <<< post -->
 
 ## 5. Publishing
 
