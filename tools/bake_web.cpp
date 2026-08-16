@@ -120,6 +120,14 @@ struct Options {
     // `tools/bake_web.cpp`; change either and every clip is rebaked, which is what has to happen
     // when the sampler or the format moves under them.
     std::string code_hash;
+    // Which slice of the clips this run is responsible for, as `index/count`.
+    //
+    // A cold bake is one runner sampling sixty-three clips in series, and the work divides
+    // perfectly: no clip needs any other clip's output. Twelve runners each taking every twelfth
+    // file turns half an hour into however long the single slowest clip takes, which is the real
+    // floor and is the building itself.
+    i32 shard = 0;
+    i32 shards = 1;
     bool force = false;   // bake everything, whatever the keys say
     bool verbose = false;
 };
@@ -1435,6 +1443,15 @@ int main(int argc, char** argv) {
             options.branch = next("--branch");
         } else if (arg == "--commit") {
             options.commit = next("--commit");
+        } else if (arg == "--shard") {
+            const std::string value = next("--shard");
+            const usize slash = value.find('/');
+            if (slash == std::string::npos) {
+                std::printf("--shard wants INDEX/COUNT, like 3/12\n");
+                return 2;
+            }
+            options.shard = std::stoi(value.substr(0, slash));
+            options.shards = std::max(1, std::stoi(value.substr(slash + 1)));
         } else if (arg == "--code-hash") {
             options.code_hash = next("--code-hash");
         } else if (arg == "--force") {
@@ -1453,7 +1470,8 @@ int main(int argc, char** argv) {
                 "  --branch NAME    what the index should say these clips came from\n"
                 "  --commit SHA     and at which commit\n"
                 "  --code-hash H    a hash of the sampler's own sources; changing it rebakes all\n"
-                "  --force          bake every clip even if its key says it is unchanged\n");
+                "  --force          bake every clip even if its key says it is unchanged\n"
+                "  --shard I/N      bake only every Nth clip, starting at I, for a parallel bake\n");
             return 0;
         } else {
             std::printf("unknown argument %s\n", arg.c_str());
@@ -1481,6 +1499,20 @@ int main(int argc, char** argv) {
         files.push_back(entry.path());
     }
     std::sort(files.begin(), files.end());
+
+    // After the sort, so every runner splits the same list the same way whatever order the
+    // directory happened to be walked in.
+    if (options.shards > 1) {
+        std::vector<fs::path> mine;
+        for (usize i = 0; i < files.size(); ++i) {
+            if (static_cast<i32>(i % static_cast<usize>(options.shards)) == options.shard) {
+                mine.push_back(files[i]);
+            }
+        }
+        std::printf("shard %d of %d: %zu of %zu clips\n", options.shard, options.shards,
+                    mine.size(), files.size());
+        files.swap(mine);
+    }
 
     // Every core, not every core minus two. That default leaves room for a main thread and a
     // simulation thread, which is right in the game and is two idle cores in a job that does
@@ -1622,7 +1654,10 @@ int main(int argc, char** argv) {
     // Anything in the output that is no longer a clip. The cache carries files between runs, so a
     // clip that was deleted or renamed would otherwise sit in the published site forever, absent
     // from the index and downloadable by anybody who still had its URL.
-    {
+    //
+    // Never while sharding: a shard's output directory holds one twelfth of the clips by design,
+    // and a sweep there would delete the other eleven twelfths as soon as they were merged.
+    if (options.shards == 1) {
         std::vector<std::string> keep;
         for (const Baked& baked : done) keep.push_back(baked.id);
         std::error_code walk;

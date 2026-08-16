@@ -22,6 +22,17 @@
 # baker needs the field, the sampler and the type table, and none of those know what a GPU is. It
 # also means this workflow cannot be broken by a graphics dependency moving under it, which is
 # exactly how the release workflow was broken for months (D641).
+#
+# # Four jobs, because a cold bake in series is half an hour
+#
+#   plan     picks the ref once, so twelve runners cannot each pick a different one
+#   bake     twelve runners, each taking every twelfth clip. No clip needs another clip's output,
+#            so the work divides perfectly and the wall clock becomes the SLOWEST SINGLE CLIP,
+#            which is the building itself. Each keeps its own slice's cache, so a warm shard
+#            reuses its files and finishes in seconds.
+#   index    merges the twelve slices, writes the one index.json -- which costs nothing, because
+#            every file carries the key of what made it and is read back rather than rebuilt
+#   deploy   publishes
 name: pages
 
 on:
@@ -69,10 +80,11 @@ permissions:
   id-token: write
 
 jobs:
-  bake:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
     outputs:
+      ref: ${{ steps.pick.outputs.ref }}
+      sha: ${{ steps.pick.outputs.sha }}
       skip: ${{ steps.pick.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
@@ -90,6 +102,10 @@ jobs:
           # branch, and neither is where the new clips are. The site's whole job is to show the
           # newest clip work, so the answer does not depend on which branch happened to move --
           # only an explicit dispatch overrides it.
+          #
+          # Picked ONCE, here, and handed to every shard: twelve runners each asking the question
+          # for themselves is twelve chances to disagree if somebody pushes mid-run, and half a
+          # building from one commit beside half from another is the one failure nobody could see.
           chosen="${{ github.event.inputs.ref }}"
           if [ -z "$chosen" ]; then
             best=""; best_at=0
@@ -101,29 +117,11 @@ jobs:
             done
             chosen="${best:-main}"
           fi
-          # A GRAFT, not a checkout, and the difference is the whole reason this works.
-          #
-          # A branch that is only writing clips does not have this workflow, does not have
-          # `tools/bake_web.cpp`, does not have a CMakeLists that knows what `ws_bake_web` is, and
-          # does not have `web/` at all -- the viewer was added on `main` after that branch was
-          # cut. Checking it out wholesale leaves nothing to build and nothing to publish.
-          #
-          # So: stay on `main` for the machinery and the site, and take `clips/` and `src/` from the
-          # branch. `src/` because the clips and the forge are one thing -- `arc_test.clip` uses an
-          # `arc` shape that exists only on the branch that added it, and a parser from `main`
-          # reports it as unknown. Anything the graft cannot compile fails here, loudly, which is
-          # the right place for it to fail.
           sha="$(git rev-parse --short "origin/$chosen" 2>/dev/null || git rev-parse --short "$chosen")"
-          if [ "$chosen" != "main" ]; then
-            git checkout "origin/$chosen" -- clips/ src/ 2>/dev/null \
-              || git checkout "$chosen" -- clips/ src/
-          fi
           echo "ref=$chosen" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Baking $chosen at $sha"
 
-          # What is already up there? A twenty-minute sweep that rebakes an unchanged building is
-          # twenty minutes of a runner and a redeploy nobody asked for.
           published=""
           if [ "${{ github.event_name }}" = "schedule" ]; then
             published="$(curl -fsS --max-time 20 \
@@ -138,72 +136,133 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Ninja
-        if: steps.pick.outputs.skip != 'true'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+  bake:
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # Keyed on the sources it compiles, so a push that only edits a clip relinks and goes straight
-      # to baking.
+      # A GRAFT, not a checkout, and the difference is the whole reason this works.
+      #
+      # A branch that is only writing clips does not have this workflow, does not have
+      # `tools/bake_web.cpp`, does not have a CMakeLists that knows what `ws_bake_web` is, and does
+      # not have `web/` at all -- the viewer was added on `main` after that branch was cut.
+      # Checking it out wholesale leaves nothing to build and nothing to publish. So: stay on
+      # `main` for the machinery and the site, and take `clips/` and `src/` from the branch. `src/`
+      # because the clips and the forge are one thing -- `arc_test.clip` uses an `arc` shape that
+      # exists only on the branch that added it, and a parser from `main` reports it as unknown.
+      - name: Graft the clips being worked on
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.plan.outputs.ref }}" != "main" ]; then
+            git checkout "origin/${{ needs.plan.outputs.ref }}" -- clips/ src/
+          fi
+
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+
       - name: Cache the build
-        if: steps.pick.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: build-web
           key: pages-build-${{ runner.os }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**', 'tools/bake_web.cpp') }}
           restore-keys: pages-build-${{ runner.os }}-
 
-      # The clips baked last time. Nothing else in this job is worth caching and this is worth a
-      # great deal: a clip whose key still holds is read back from here instead of sampled, so a
-      # push that touches one test clip republishes in under a second instead of half an hour.
-      # Keyed on the run so it always saves, restored from the newest previous one.
-      - name: The clips baked last time
-        if: steps.pick.outputs.skip != 'true'
+      # This shard's own clips from last time. Its own, and not everybody's: a shard that restored
+      # the whole site would upload the whole site, twelve times over.
+      - name: The clips this shard baked last time
         uses: actions/cache@v4
         with:
           path: web/data
-          key: pages-data-${{ github.run_id }}
-          restore-keys: pages-data-
+          key: pages-data-${{ matrix.shard }}-${{ github.run_id }}
+          restore-keys: pages-data-${{ matrix.shard }}-
 
       - name: Build the baker
-        if: steps.pick.outputs.skip != 'true'
         run: |
           cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
           cmake --build build-web --target ws_bake_web
 
-      # A WHOLE CLIP AT THE RESOLUTION IT WAS AUTHORED AT -- 32 voxels to the metre, 3.125 cm, the
-      # game's own -- and its PARTS at half that.
-      #
-      # It was 16 for everything, and the answer to that was "it doesn't show the clips at full
-      # detail level", which is fair: half resolution is where a 4.5 cm bead stops being a bead.
-      # Then 32 for everything, which does not fit in a runner. The numbers, measured on the
-      # overhauled facility, are that sampling costs about six times as much per doubling:
-      #
-      #     8 / metre      21.7 s     196,076 quads     4.7 MB
-      #    16 / metre     131.2 s     562,008 quads    10.3 MB
-      #    32 / metre     ~13 min   ~1,700,000 quads   ~20 MB
-      #
-      # Sixty-three clips at 32 is about two and a half hours, because a fragment is sampled with
-      # the whole building's paint and intersected with the whole building's solid and so costs
-      # like a small facility. The building at 32 with its parts at 16 is about thirty-five
-      # minutes, and is the right split anyway: the whole clip is the thing you look at, a
-      # fragment answers "is my morning's work the right shape".
-      - name: Bake every clip
-        if: steps.pick.outputs.skip != 'true'
+      # A whole clip at the resolution it was authored at -- 32 voxels to the metre, 3.125 cm, the
+      # game's own -- and its parts at half that. Everything at 32 is hours, because a fragment is
+      # sampled with the whole building's paint and intersected with its solid and so costs like a
+      # small facility, and there are twenty-eight of them.
+      - name: Bake this shard
         run: |
-          # What the sampler itself is. Change the forge or the baker and every key moves, which
-          # is the one case where reusing a file would serve something quietly wrong.
+          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
+          ./build-web/bin/ws_bake_web --clips clips --out web/data \
+                                      --budget 700000000 --max-metre 32 --part-metre 16 \
+                                      --shard ${{ matrix.shard }}/12 \
+                                      --code-hash "$code" \
+                                      --branch "${{ needs.plan.outputs.ref }}" \
+                                      --commit "${{ needs.plan.outputs.sha }}"
+          du -sh web/data
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-${{ matrix.shard }}
+          path: web/data
+          retention-days: 1
+
+  index:
+    needs: [plan, bake]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Graft the clips being worked on
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.plan.outputs.ref }}" != "main" ]; then
+            git checkout "origin/${{ needs.plan.outputs.ref }}" -- clips/ src/
+          fi
+
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: build-web
+          key: pages-build-${{ runner.os }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**', 'tools/bake_web.cpp') }}
+          restore-keys: pages-build-${{ runner.os }}-
+
+      - name: Build the baker
+        run: |
+          cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
+          cmake --build build-web --target ws_bake_web
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: data-*
+          merge-multiple: true
+          path: web/data
+
+      # The same command the shards ran, over all of them at once. It bakes nothing: every file
+      # carries the key of what produced it, so all sixty-three are read back and the only output
+      # is the one index.json the viewer reads. Anything that somehow did not survive its shard is
+      # baked here rather than published missing.
+      - name: One index over all of them
+        run: |
           code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
           ./build-web/bin/ws_bake_web --clips clips --out web/data \
                                       --budget 700000000 --max-metre 32 --part-metre 16 \
                                       --code-hash "$code" \
-                                      --branch "${{ steps.pick.outputs.ref }}" \
-                                      --commit "${{ steps.pick.outputs.sha }}"
+                                      --branch "${{ needs.plan.outputs.ref }}" \
+                                      --commit "${{ needs.plan.outputs.sha }}"
           du -sh web/data
 
       # A compressed copy beside each file, which the viewer asks for first. Pages will not compress
       # an unknown extension itself and the quads come down about four to one.
       - name: Compress
-        if: steps.pick.outputs.skip != 'true'
         run: |
           for f in web/data/*.wsc; do
             if [ ! -f "$f.gz" ] || [ "$f" -nt "$f.gz" ]; then gzip -9 -kf "$f"; fi
@@ -211,27 +270,20 @@ jobs:
           du -sh web/data
 
       # The viewer routes on the URL fragment, so there is one page and nothing for Jekyll to build.
-      - name: Not a Jekyll site
-        if: steps.pick.outputs.skip != 'true'
-        run: touch web/.nojekyll
+      - run: touch web/.nojekyll
 
       # `enablement` turns Pages on for a repository that has never had it, rather than failing and
-      # asking somebody to go and click it. Without it the first run got all the way through --
-      # forty clips baked in four minutes seventeen -- and then stopped on "Get Pages site failed:
-      # Not Found", which is a whole bake thrown away over a setting.
+      # asking somebody to go and click it.
       - uses: actions/configure-pages@v5
-        if: steps.pick.outputs.skip != 'true'
         with:
           enablement: true
 
       - uses: actions/upload-pages-artifact@v3
-        if: steps.pick.outputs.skip != 'true'
         with:
           path: web
 
-  publish:
-    needs: bake
-    if: needs.bake.outputs.skip != 'true'
+  deploy:
+    needs: index
     runs-on: ubuntu-latest
     environment:
       name: github-pages
