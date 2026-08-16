@@ -60,6 +60,11 @@
 #include <unordered_map>
 #include <vector>
 
+// >>> matvol
+// The material volume and the thickness field. Header-only, and it lives beside this file rather
+// than in src/ because it is the viewer's format and nothing the game builds knows about it.
+#include "bake/matvol.hpp"
+// <<< matvol
 #include "core/jobs.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -691,7 +696,13 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 // the resolved solid, so the header grew to 208 and the version says so. A version 1 file in the
 // cache beside a version 2 viewer is a real state and it must produce a clear error rather than a
 // wrong picture: `reuse` refuses it and rebakes, and `web/js/format.js` throws on it.
-constexpr u32 kFormatVersion = 2;
+//
+// Version 3 spends the last eight bytes of the header on a CHUNK DIRECTORY, so that everything
+// added after this is added without moving a single existing offset again. `u32` at 200 is where
+// the directory is and `u32` at 204 is how many entries it has; an entry is a four-character tag,
+// an offset, a size and a spare word. A reader that does not know a tag skips it, which is the
+// whole point: a viewer one commit behind its data draws what it understands instead of throwing.
+constexpr u32 kFormatVersion = 3;
 constexpr usize kHeaderBytes = 208;
 // 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
 // 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
@@ -700,6 +711,47 @@ constexpr usize kShapeBytes = 120;
 // floats carry meaning and two are padding, because a texel is four.
 constexpr usize kCutterFloats = 24;
 constexpr usize kCutterBytes = kCutterFloats * sizeof(f32);
+
+// >>> matvol
+// The chunk directory, which is how everything after version 3 is added to a `.wsc`.
+//
+// The header is full. Every block in the file is at an offset some reader has written down twice,
+// and version 2 exists because version 1 had no spare bytes and adding the cutter pool moved all
+// of them. So the last eight bytes are spent on an INDIRECTION instead of on a block: a directory
+// of (tag, offset, size), appended after everything else, with the header saying where it is.
+// Adding a block after this moves nothing and needs no version bump, and a viewer that has never
+// heard of a tag skips it rather than mis-reading the file.
+//
+// Collect into `chunks` and call `append_chunks` once, last.
+struct Chunk {
+    char tag[4]{' ', ' ', ' ', ' '};
+    std::vector<u8> bytes;
+};
+
+void append_chunks(std::vector<u8>& out, const std::vector<Chunk>& chunks) {
+    std::vector<u32> offsets;
+    offsets.reserve(chunks.size());
+    for (const Chunk& chunk : chunks) {
+        // Four-byte aligned, because every reader of these is a typed array and JavaScript will
+        // not make a Uint32Array over an odd offset.
+        while ((out.size() & 3u) != 0) out.push_back(0);
+        offsets.push_back(static_cast<u32>(out.size()));
+        out.insert(out.end(), chunk.bytes.begin(), chunk.bytes.end());
+    }
+    while ((out.size() & 3u) != 0) out.push_back(0);
+    const u32 directory = static_cast<u32>(out.size());
+    for (usize i = 0; i < chunks.size(); ++i) {
+        for (const char c : chunks[i].tag) out.push_back(static_cast<u8>(c));
+        const usize at = out.size();
+        out.resize(at + 12, 0);
+        put_u32(out, at + 0, offsets[i]);
+        put_u32(out, at + 4, static_cast<u32>(chunks[i].bytes.size()));
+        put_u32(out, at + 8, 0);   // spare
+    }
+    put_u32(out, 200, directory);
+    put_u32(out, 204, static_cast<u32>(chunks.size()));
+}
+// <<< matvol
 
 void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
     for (const Quad& q : quads) {
@@ -1565,6 +1617,32 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         }
     }
 
+    // >>> matvol
+    // What the stone inside a wall is made of, and how far a ray travels through it.
+    //
+    // On the collision grid's own cells, so the viewer already has the pitch; built HERE, before
+    // the header is written, because asking for a voxel's material interns it and a stone that
+    // only ever exists inside a wall has no palette index until this asks for one. Building it
+    // after `put_u32(out, 48, palette.size())` would write a material count the material block
+    // then disagrees with. See tools/bake/matvol.hpp.
+    const u64 matvol_began = ws::now_ns();
+    const ws::bake::matvol::Volume volume = ws::bake::matvol::build(
+        clip.size, metre, collision.voxels_per_metre, mesher.palette(),
+        [&mesher](i32 x, i32 y, i32 z) { return mesher.solid(x, y, z); },
+        [&mesher](i32 x, i32 y, i32 z) {
+            const ws::VoxelTypeId type = mesher.type_at(x, y, z);
+            if (type == ws::kAir) return -1;
+            return static_cast<i32>(mesher.material_of(type));
+        });
+    const f64 matvol_seconds = static_cast<f64>(ws::now_ns() - matvol_began) / 1e9;
+    if (volume.dropped_materials > 0) {
+        WS_LOG_WARN("bake_web", "%s: %zu materials past the material volume's 255, %zu cells "
+                                "painted as the nearest kept stone",
+                    relative.generic_string().c_str(), volume.dropped_materials,
+                    volume.remapped_cells);
+    }
+    // <<< matvol
+
     const f64 origin[3] = {settings.low.x, settings.low.y, settings.low.z};
     const f64 size_metres[3] = {static_cast<f64>(clip.size[0]) / static_cast<f64>(metre),
                                 static_cast<f64>(clip.size[1]) / static_cast<f64>(metre),
@@ -1714,6 +1792,22 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         for (const f32 value : walk.pool) put(value);
     }
 
+    // >>> matvol
+    // Everything past the cutter pool is a chunk, and the directory goes on the end. `MVOL` is the
+    // material volume and its block index; `THCK` is the thickness field, which is the second
+    // channel of MVOL's own pages and is meaningless without it.
+    {
+        std::vector<Chunk> chunks;
+        std::vector<u8> material_bytes = ws::bake::matvol::material_chunk(volume);
+        std::vector<u8> thickness_bytes = ws::bake::matvol::thickness_chunk(volume);
+        if (!material_bytes.empty()) {
+            chunks.push_back(Chunk{{'M', 'V', 'O', 'L'}, std::move(material_bytes)});
+            chunks.push_back(Chunk{{'T', 'H', 'C', 'K'}, std::move(thickness_bytes)});
+        }
+        append_chunks(out, chunks);
+    }
+    // <<< matvol
+
     baked.id = identifier(relative);
     baked.source = relative.generic_string();
     {
@@ -1757,6 +1851,30 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                 clip.size[0], clip.size[1], clip.size[2], baked.quads, walk.shapes.size(),
                 walk.cutter_count(), mesher.palette().size(),
                 static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
+    // >>> matvol
+    // The volume's real size against its dense size, per clip, every bake. This is the number the
+    // decision to ship it rests on and it is not an estimate: a dense byte-pair per occupancy cell
+    // is what the brief asked for and what the facility cannot afford, and the ratio here is what
+    // says the block index earns its complexity.
+    if (!volume.empty()) {
+        std::printf("      matvol: %d x %d x %d cells  %zu materials  %zu solid  "
+                    "%zu uniform + %zu paged blocks  %.2f MB packed vs %.2f MB dense (%.1f%%)  "
+                    "%.1f s\n",
+                    volume.dims[0], volume.dims[1], volume.dims[2], volume.palette.size(),
+                    volume.solid_cells, volume.uniform_blocks, volume.page_blocks,
+                    static_cast<f64>(volume.packed_bytes()) / (1024.0 * 1024.0),
+                    static_cast<f64>(volume.dense_bytes()) / (1024.0 * 1024.0),
+                    volume.dense_bytes() > 0 ? 100.0 * static_cast<f64>(volume.packed_bytes()) /
+                                                   static_cast<f64>(volume.dense_bytes())
+                                             : 0.0,
+                    matvol_seconds);
+        if (volume.dropped_materials > 0 || volume.clamped_cells > 0) {
+            std::printf("      matvol: %zu materials dropped past 255 (%zu cells remapped)  "
+                        "%zu cells thicker than 255 voxels, held there\n",
+                        volume.dropped_materials, volume.remapped_cells, volume.clamped_cells);
+        }
+    }
+    // <<< matvol
     // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
     // "it worked", which is the whole reason these are counted at all.
     if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||

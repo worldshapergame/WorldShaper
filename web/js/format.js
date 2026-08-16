@@ -8,7 +8,16 @@
 // Every offset here has a matching one in bake_web.cpp. If you change one, change both — the file
 // carries a version and a magic so a mismatch says so instead of drawing nonsense.
 
-export const FORMAT_VERSION = 2;
+// >>> matvol
+// Version 3: the last eight bytes of the header became a CHUNK DIRECTORY.
+//
+// Version 1 filled 192 bytes exactly and version 2 exists because adding one block to it moved
+// every offset in the file. That cannot keep happening, and the fix is one indirection: `u32` at
+// 200 says where a directory of (tag, offset, size) entries is, `u32` at 204 says how many, and
+// every block added from here on is appended and listed there. Nothing already in the file moves,
+// and a viewer that has never heard of a tag skips it instead of mis-reading the bytes after it.
+export const FORMAT_VERSION = 3;
+// <<< matvol
 export const HEADER_BYTES = 208;
 export const QUAD_BYTES = 16;
 export const MATERIAL_BYTES = 16;
@@ -34,7 +43,8 @@ export function parseClip(buffer) {
     const version = view.getUint32(4, true);
     // Version 1 packed the header into exactly 192 bytes with nothing spare, so version 2 — which
     // adds the cutter pool that makes the shapes view show holes rather than red ghosts — moved
-    // every block offset. There is no reading one as the other, and a stale file in a cache beside
+    // every block offset. Version 3 spends the last spare word on a chunk directory so that never
+    // has to happen again. There is no reading one as the other, and a stale file in a cache beside
     // a fresh viewer is a real state: it says so here rather than drawing nonsense.
     if (version !== FORMAT_VERSION) {
         throw new Error('clip file version ' + version + ', this viewer reads ' + FORMAT_VERSION +
@@ -64,8 +74,33 @@ export function parseClip(buffer) {
         shapeCount: view.getUint32(188, true),
         cutterCount: view.getUint32(192, true),
         cutterOffset: view.getUint32(196, true),
-        // 200..207 is spare.
+        // >>> matvol
+        // 200 is where the chunk directory is, 204 is how many entries it has. Filled in below.
+        chunks: new Map(),
+        // <<< matvol
     };
+    // >>> matvol
+    // The chunk directory. Everything added to the format after version 3 is a tagged block listed
+    // here rather than an offset written into the header twice, so a reader takes what it knows
+    // and steps over what it does not. A bad offset is clamped rather than trusted: this file came
+    // over a network and a Uint8Array over the end of the buffer throws somewhere unhelpful.
+    {
+        const at = view.getUint32(200, true);
+        const count = view.getUint32(204, true);
+        if (at >= HEADER_BYTES && count > 0 && at + count * 16 <= buffer.byteLength) {
+            for (let i = 0; i < count; ++i) {
+                const entry = at + i * 16;
+                const tag = String.fromCharCode(
+                    view.getUint8(entry), view.getUint8(entry + 1),
+                    view.getUint8(entry + 2), view.getUint8(entry + 3));
+                const offset = view.getUint32(entry + 4, true);
+                const size = view.getUint32(entry + 8, true);
+                if (offset + size > buffer.byteLength) continue;
+                clip.chunks.set(tag, new Uint8Array(buffer, offset, size));
+            }
+        }
+    }
+    // <<< matvol
     // Seven entries: six starts and the end, so a range is start[i]..start[i + 1] everywhere.
     for (let i = 0; i < 7; ++i) {
         clip.opaqueFace.push(view.getUint32(60 + i * 4, true));
