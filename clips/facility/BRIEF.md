@@ -48,9 +48,25 @@ let portico_capital = ...
 let part_portico    = union { portico_shaft portico_capital ... }
 ```
 
-**3. Symmetry is not optional.** This building is symmetric about x = 0. Build one side and
-`mirror` it, or place things at ±x, but never let the two halves drift apart. Use `mirror { x }
+**3. Symmetry is not optional — OUTSIDE.** This building is symmetric about x = 0. Build one side
+and `mirror` it, or place things at ±x, but never let the two halves drift apart. Use `mirror { x }
 axis=x` — it folds the coordinate, so a shape built on the +x side appears on both.
+
+*Outside*, and the qualifier was added on 2026-08-16 when the interiors stopped being able to obey
+it. This rule was written when the only rooms were a vestibule, a rotunda and two halls, and all
+four are symmetric because they are the same room twice or a room on the axis. The state rooms
+added since are not: a mirror salon in the south-east corner and an oval chapel in the south-west,
+a ballroom over one and a library over the other. Mirroring them would mean two salons and no
+chapel, which is not a building anybody has ever built.
+
+So the rule now reads: **the shell is symmetric and the plan of the rooms is symmetric; what is
+inside a room is not required to be.** A wing, a window, a pilaster, a cornice, a stair and the
+walls that divide the floor are all the shell. The room's own contents are not. Real buildings of
+this century are exactly this — a symmetrical envelope with a chapel on one side and a library on
+the other — and the eye that catches a part sized by taste rather than by the module does not
+catch a chapel where it expected a salon, because it cannot see both at once.
+
+Nothing else about the rule changes. If your part is any of the shell, mirror it.
 
 **4. Everything must touch something.** No part may float. If your piece sits on the podium, it
 must overlap the podium by at least a voxel (0.03 m); do not butt it exactly, because a surface
