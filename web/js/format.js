@@ -8,7 +8,16 @@
 // Every offset here has a matching one in bake_web.cpp. If you change one, change both — the file
 // carries a version and a magic so a mismatch says so instead of drawing nonsense.
 
-export const FORMAT_VERSION = 2;
+// >>> lights
+// Version 3 spends the last eight spare bytes of the header on a CHUNK DIRECTORY: a u32 offset at
+// 200 and a u32 count at 204, pointing at a table of 16-byte entries — four characters of code,
+// an offset, a size and a spare word. A block can be added to the format without every reader
+// having to know what it is, which is what lets several people add one to the same file at once.
+// `clip.chunks` below is a Map from the code to a Uint8Array, and anything that is not understood
+// is simply not looked up.
+export const FORMAT_VERSION = 3;
+export const CHUNK_ENTRY_BYTES = 16;
+// <<< lights
 export const HEADER_BYTES = 208;
 export const QUAD_BYTES = 16;
 export const MATERIAL_BYTES = 16;
@@ -64,7 +73,11 @@ export function parseClip(buffer) {
         shapeCount: view.getUint32(188, true),
         cutterCount: view.getUint32(192, true),
         cutterOffset: view.getUint32(196, true),
-        // 200..207 is spare.
+        // >>> lights
+        // 200..207 is the chunk directory: where the table is, and how many entries it has.
+        chunkOffset: view.getUint32(200, true),
+        chunkCount: view.getUint32(204, true),
+        // <<< lights
     };
     // Seven entries: six starts and the end, so a range is start[i]..start[i + 1] everywhere.
     for (let i = 0; i < 7; ++i) {
@@ -110,6 +123,27 @@ export function parseClip(buffer) {
         ? new Uint8Array(buffer, at, cutterBytes)
         : new Uint8Array(0);
     if (clip.cutters.length === 0) clip.cutterCount = 0;
+
+    // >>> lights
+    // The chunks, by their four-character code. Every one is a plain view into the same buffer, so
+    // reading them costs nothing and a code nobody understands costs nothing either — which is the
+    // point of a directory rather than a fixed layout.
+    clip.chunks = new Map();
+    if (clip.chunkCount > 0 &&
+        clip.chunkOffset + clip.chunkCount * CHUNK_ENTRY_BYTES <= buffer.byteLength) {
+        for (let i = 0; i < clip.chunkCount; ++i) {
+            const entry = clip.chunkOffset + i * CHUNK_ENTRY_BYTES;
+            const code = String.fromCharCode(view.getUint8(entry), view.getUint8(entry + 1),
+                                             view.getUint8(entry + 2), view.getUint8(entry + 3));
+            const offset = view.getUint32(entry + 4, true);
+            const size = view.getUint32(entry + 8, true);
+            if (offset + size > buffer.byteLength) {
+                throw new Error('chunk "' + code + '" runs past the end of the file');
+            }
+            clip.chunks.set(code, new Uint8Array(buffer, offset, size));
+        }
+    }
+    // <<< lights
 
     clip.size = [
         clip.dims[0] / clip.metre, clip.dims[1] / clip.metre, clip.dims[2] / clip.metre,

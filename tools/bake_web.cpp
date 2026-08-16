@@ -72,6 +72,10 @@
 #include "world/tags.hpp"
 #include "world/voxel_type.hpp"
 
+// >>> lights
+#include "bake/lights.hpp"
+// <<< lights
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -691,8 +695,51 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 // the resolved solid, so the header grew to 208 and the version says so. A version 1 file in the
 // cache beside a version 2 viewer is a real state and it must produce a clear error rather than a
 // wrong picture: `reuse` refuses it and rebakes, and `web/js/format.js` throws on it.
-constexpr u32 kFormatVersion = 2;
+// >>> lights
+// Version 3 fills the last eight spare bytes of the header with a CHUNK DIRECTORY, so that a block
+// can be added to this format without every reader having to know what it is. `chunkOffset` at 200
+// and `chunkCount` at 204 point at a table of 16-byte entries — a four-character code, an offset, a
+// size and a spare word — appended after the blocks. A reader looks up the codes it understands and
+// steps over the rest, which is what lets several people add a block to one file at once.
+constexpr u32 kFormatVersion = 3;
+// <<< lights
 constexpr usize kHeaderBytes = 208;
+
+// >>> lights
+// One entry in that directory. `write_chunks` appends the payloads, then the table, then fills in
+// the two header words. Adding a block is one `chunks.push_back` and nothing else.
+constexpr usize kChunkEntryBytes = 16;
+
+struct Chunk {
+    char fourcc[4]{' ', ' ', ' ', ' '};
+    std::vector<u8> payload;
+};
+
+void write_chunks(std::vector<u8>& out, const std::vector<Chunk>& chunks) {
+    if (chunks.empty()) return;
+    std::vector<u32> offsets;
+    std::vector<u32> sizes;
+    offsets.reserve(chunks.size());
+    sizes.reserve(chunks.size());
+    for (const Chunk& chunk : chunks) {
+        offsets.push_back(static_cast<u32>(out.size()));
+        sizes.push_back(static_cast<u32>(chunk.payload.size()));
+        out.insert(out.end(), chunk.payload.begin(), chunk.payload.end());
+    }
+    const usize table = out.size();
+    out.resize(table + chunks.size() * kChunkEntryBytes, 0);
+    for (usize i = 0; i < chunks.size(); ++i) {
+        const usize entry = table + i * kChunkEntryBytes;
+        for (i32 c = 0; c < 4; ++c) out[entry + static_cast<usize>(c)] =
+            static_cast<u8>(chunks[i].fourcc[c]);
+        put_u32(out, entry + 4, offsets[i]);
+        put_u32(out, entry + 8, sizes[i]);
+        put_u32(out, entry + 12, 0);
+    }
+    put_u32(out, 200, static_cast<u32>(table));
+    put_u32(out, 204, static_cast<u32>(chunks.size()));
+}
+// <<< lights
 // 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
 // 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
 constexpr usize kShapeBytes = 120;
@@ -1571,6 +1618,13 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                                 static_cast<f64>(clip.size[2]) / static_cast<f64>(metre)};
     const LightGrid light = bake_light(coarse, origin, size_metres, jobs);
 
+    // >>> lights
+    // The emitters, as LIGHTS rather than as bright paint: where each fitting is, how big, what
+    // colour, how strong, and a baked cube of visibility per light so a sconce in one hall does not
+    // light the hall next door. tools/bake/lights.hpp is the whole of it.
+    const ws::web::LightBake lights = ws::web::bake_lights(clip, types, origin, metre, jobs);
+    // <<< lights
+
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
     walk.field = &script.field;
@@ -1714,6 +1768,21 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         for (const f32 value : walk.pool) put(value);
     }
 
+    // >>> lights
+    // Everything past here is a CHUNK, found through the directory at 200. Push one entry per
+    // block; the order is the order they land in the file and nothing else depends on it.
+    {
+        std::vector<Chunk> chunks;
+        if (!lights.lights.empty()) {
+            Chunk chunk;
+            chunk.fourcc[0] = 'L'; chunk.fourcc[1] = 'G'; chunk.fourcc[2] = 'T'; chunk.fourcc[3] = 'S';
+            chunk.payload = ws::web::write_lights(lights);
+            chunks.push_back(std::move(chunk));
+        }
+        write_chunks(out, chunks);
+    }
+    // <<< lights
+
     baked.id = identifier(relative);
     baked.source = relative.generic_string();
     {
@@ -1757,6 +1826,30 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                 clip.size[0], clip.size[1], clip.size[2], baked.quads, walk.shapes.size(),
                 walk.cutter_count(), mesher.palette().size(),
                 static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
+    // >>> lights
+    // What the light list found, said out loud for the same reason as everything below it: a cap
+    // that bites silently reads as "there were only that many". `unshadowed` is the number the
+    // report has to carry, because an unshadowed lamp is the one that lights the room next door.
+    if (!lights.lights.empty() || lights.clusters > 0) {
+        f64 area = 0.0;
+        f64 brightest = 0.0;
+        for (const ws::web::Light& one : lights.lights) {
+            area += static_cast<f64>(one.area);
+            brightest = std::max(brightest, one.power());
+        }
+        const usize unshadowed = lights.lights.size() - lights.shadowed;
+        std::printf("      lights: %zu from %zu clusters  %zu shadowed  %zu NOT  %.3f m2 emitting  "
+                    "brightest %.2f  atlas %d x %d (%.0f kB)  %.1f s\n",
+                    lights.lights.size(), lights.clusters, lights.shadowed, unshadowed, area,
+                    brightest, lights.atlas_w, lights.atlas_h,
+                    static_cast<f64>(lights.atlas.size()) / 1024.0, lights.seconds);
+        if (lights.dropped > 0 || lights.dark > 0) {
+            std::printf("      lights: %zu past the %zu cap were dropped, %zu clusters emit from no "
+                        "face at all\n",
+                        lights.dropped, ws::web::kMaxLights, lights.dark);
+        }
+    }
+    // <<< lights
     // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
     // "it worked", which is the whole reason these are counted at all.
     if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||
