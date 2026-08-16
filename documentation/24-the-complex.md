@@ -219,9 +219,51 @@ Beside it: **`round=` on a box does not grow the box**, which contradicts what `
   file is about matter — extents, volumes, components, material shares, head heights and slices.
   How any of it LOOKS is unverified, and the one acceptance test this project has is a player
   going to look for a bug and not finding it.
-- **The whole building has not been measured at metre 32.** It is 582 M cells, about 6.4 GB in the
-  measuring tool, on a shared machine that was running fifteen agents. Metre 8 and metre 16 agree
-  on volume to three parts in a thousand, which is the cross-check that matters most, but the
-  contract's own resolution is unchecked for the assembled building.
+- ~~The whole building has not been measured at metre 32.~~ **Done — with a control arm, and §4
+  below is what it says.**
 - **`BRIEF.md` still says `below=0.02`.** It is wrong for transformed geometry and the correction
   is named in §2 but not yet made, because two of the fifteen agents were still reading that file.
+
+
+---
+
+## 4. The assembled building at metre 32, against the building this work started from
+
+Taken last, on an idle machine, at the contract's own resolution — the only one where a book
+spine, a glazing bar, a grating bar, an armillary hoop and a crystal drop exist at all. **Both
+arms measured on the same binary**: the "before" arm is `clips/facility.clip` as of `aa39c99`,
+the commit this work began at, built from the same fragments minus the six new rooms. A counter
+taken from inside a change is not a control, and this project has a rule about that.
+
+| | before | after | |
+|---|---|---|---|
+| volume | 3885.06 m³ | **3715.76 m³** | −169.30, and it is meant to fall |
+| exposed surface | 9550.16 m² | **11,860.33 m²** | **+2310 m², a quarter again** |
+| faces | 9,779,366 | 12,144,980 | |
+| distinct material records | 92 | **203** | |
+| components | 1088 | **1122** | **+34** |
+| floating voxels | 2482 | **2576** | **+94** |
+| solid voxels | 127,305,669 | 121,758,182 | |
+
+No errors in either arm, and — in both — **not one paint rule in the building fired on nothing**.
+
+**The volume falls and that is the crypt.** It hollows 597 m³ out of a podium that had been solid
+stone since the day it was drawn and puts about 114 m³ of columns, ceiling and sarcophagi back. A
+build whose volume ROSE here would mean the undercroft had not cut, which is exactly the kind of
+failure that leaves every other number looking right.
+
+**The surface rises by a quarter**, which is the six rooms being made of matter rather than of
+paint. `exposed faces` is the only measurement in this project that notices texture, and 2310 m²
+of new face inside a building whose footprint did not change is what two thousand book spines,
+1630 crystal drops, 576 porcelain vessels, forty crypt columns and three iron gratings actually
+cost.
+
+**The number that matters most is +94.** Six new rooms, containing some thousands of features that
+are one voxel through at this resolution and do not exist below it, added **ninety-four stray
+voxels** and thirty-four components to the assembled building. The residue was already 2482 before
+any of this work. That is the answer to "did the new rooms break the building", and it is the one
+claim in this whole day that could not have been made honestly without building the other arm.
+
+**What it does not say.** Nothing here is about how any of it LOOKS. Not one frame has been
+rendered, and the acceptance test this project actually has is a player going to look for a bug
+and not finding it.
