@@ -284,7 +284,12 @@ jobs:
     needs: plan
     if: needs.plan.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # Three hours, because ninety minutes was measured against the wrong building. `estate/campanile`
+    # is 1002 root shapes and 88 x 288 x 88 at eight voxels to the metre; timed here on four cores it
+    # is 4.9 s, 22.4 s and 81.2 s at 2, 4 and 8 per metre -- about 3.6x per doubling, so 32 is
+    # roughly seventeen minutes for that clip alone. A shard holding two of those and a facility
+    # fragment was at sixty-two minutes and still going.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -354,10 +359,18 @@ jobs:
           path: web/data
           retention-days: 1
 
+  # ELEVEN GOOD SHARDS ARE NOT WASTED BY THE TWELFTH. `needs: bake` alone means one shard failing
+  # or running out of its clock skips this job, skips the deploy, and publishes nothing -- so the
+  # site stays exactly as stale as it was, and the eleven runners that did their work are thrown
+  # away. `always()` lets it merge what arrived. Whatever is missing it bakes here, and whatever it
+  # still cannot build is simply left out of the index: the viewer shows a smaller true site rather
+  # than a broken big one, which is the same rule the baker already follows for a clip somebody is
+  # halfway through editing.
   index:
     needs: [plan, bake]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     outputs:
       fresh: ${{ steps.gate.outputs.fresh }}
     steps:

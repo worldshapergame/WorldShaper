@@ -205,6 +205,21 @@ twenty-eight of them:
 | 16 / metre | 131.2 s | 562,008 |
 | 32 / metre | ~13 min | ~1,700,000 |
 
+**A whole clip can cost more than the building.** `estate/campanile` is 1002 root shapes in a tower
+88 x 288 x 88 at eight voxels to the metre, and it is baked whole, so it gets 32. Timed on four
+cores:
+
+| | time |
+|---|---|
+| 2 / metre | 4.9 s |
+| 4 / metre | 22.4 s |
+| 8 / metre | 81.2 s |
+
+About 3.6x per doubling -- sub-linear in voxels, because the field evaluation and the light rays
+dominate -- which puts 32 at roughly seventeen minutes for that one clip. A shard holding two like
+it is an hour, and that is why `bake` has three hours rather than ninety minutes, and why `index`
+runs even when a shard did not.
+
 ## 5. Publishing
 
 `.github/workflows/pages.yml`. Several things about it were wrong in ways that made the site look
