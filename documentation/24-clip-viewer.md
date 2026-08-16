@@ -24,6 +24,7 @@ clips/*.clip  ->  ws_bake_web  ->  web/data/*.wsc  ->  web/js  ->  a page
 | `tools/bake_web.cpp` | samples every clip, meshes it, bakes its light, writes one file each |
 | `web/js/format.js` | reads that file — a header, four typed-array views, nothing decoded |
 | `web/js/gl.js` | the rasteriser: instanced quads, one Cook-Torrance lobe, a stencil cap |
+| `web/js/features/shapeshade.js` | what a shape in the ◉ view is made of, shaded as the voxels are | <!-- // >>> shapeshade // <<< shapeshade -->
 | `web/js/controls.js` | orbit, and a body that walks, crouches, jumps and flies |
 | `web/js/app.js` | the page, and the loop that watches the index for changes |
 | `.github/workflows/pages.yml` | bakes on every push that can change a clip, and publishes |
@@ -203,7 +204,84 @@ cutter is its op, its `a[8]`, its 3×4 matrix and its scale — 22 floats padded
 well as the dynamic one because GLSL ES wants one.
 
 **Nothing is drawn red any more.** Red only ever meant "this one is a hole"; once holes are holes it
-has nothing left to say, and every shape is one opaque stone colour.
+has nothing left to say.
+
+<!-- // >>> shapeshade -->
+### It is shaded with the clip's own materials
+
+Every shape used to be one flat grey — `vec3(0.62, 0.60, 0.56)`, a fixed sun term of 0.7, no light
+grid at all. That answers *what shape is this*. It cannot answer *will it be that colour in game*,
+which is what the view was asked next. So the hit point asks which material it is and is shaded
+with that record, and the rule the answer has to satisfy is: **switching between ◉ and the voxel
+view changes the resolution and nothing else.**
+
+Which means the same everything. `web/js/features/shapeshade.js` holds one GLSL chunk, spliced into
+`SHAPE_FRAGMENT`, and every constant in it is the surface shader's own: the same four RGBA8 rows of
+the `VisualRecord` — colour, opacity, roughness, metallic, index of refraction, emission and its
+RGB565 tint, Beer-Lambert absorption, translucency, the brush-grain axis, clearcoat and sheen, all
+of it, because §2 says nothing is quantised on the way out precisely so a viewer can show what
+these materials are — the same Cook-Torrance lobe, the same sun and sky, the same ACES curve, the
+same exposure, and the same light grid.
+
+**Measured, with the material forced the same in both views.** `?shapemat=N` paints every shape in
+the ◉ view with material N and nothing else, which is the only way to ask the question honestly:
+put the same material on the same surface in both views and the pixels either agree or they do not.
+Same camera, same pixel, sRGB out of the framebuffer:
+
+| | voxel | ◉ |
+|---|---|---|
+| `glass_test` slab, top, material 0 | 238 237 235 | 238 237 235 |
+| `glass_test` slab, rim, material 0 | 180 177 174 | 181 178 175 |
+| `mirror_test` slab, top, material 6 | 237 236 235 | 237 236 235 |
+| `mirror_test` slab, rim, material 6 | 183 181 180 | 184 182 181 |
+| `mirror_test` slab, top, material 8 (glossy, part metal) | 237 237 239 | 238 238 239 |
+
+**The bias, and it is the third time this trap has been walked into in this viewer.** A lattice
+point buried in stone has no light of its own and is filled in from its brightest neighbour at half
+strength, so a trilinear fetch *at* a surface blends the air in front with the stone behind and
+comes out dark. The surface shader answers it with one whole light cell along the normal; the slice
+cap answers it with half a voxel out of the cut; both were black first.
+
+This view has that trap **and one more**, because its hit points are not the voxels'. The march
+lands on the true analytic surface and the grid was cast against the voxelised copy, whose surface
+is up to a voxel away and may be on either side — so a hit point can be *inside* the matter the grid
+knows about, which is the darkest place in it. The bias is therefore `lightCell + half a voxel`:
+0.4 m as the surface shader uses, plus the largest disagreement there can be between the two
+surfaces. `sampler`, same pixel, the naive fetch against it:
+
+| | bias 0 | bias `lightCell` + ½ voxel |
+|---|---|---|
+| a vertical box face | 131 131 133 | 203 200 194 |
+| sunlit ground | 222 220 217 | 241 240 238 |
+| inside the doorway | 68 76 92 | 68 77 93 |
+
+The vertical face is the whole of it: at bias 0 it reads the wall it is the surface of and loses
+half its light, and the doorway shows the extra bias is not simply brightening everything — what is
+genuinely dark stays dark.
+
+**The rim light is kept, at 0.18 where it was 0.5.** It is not light, the voxel view does not have
+it, and anything the two views do not share is a thing that makes them disagree — but this view has
+no ambient occlusion of any kind, because there are no voxel corners to take it from, so two walls
+of the same marble meeting at a right angle have nothing whatever between them and read as one
+lump. At 0.5 it was a fog that lifted the whole silhouette; at 0.18 it is an edge. Its albedo is
+the shaded colour rather than a constant, so it brightens what is there instead of washing
+everything towards grey.
+
+**Glass is the one place one pass cannot reach.** The pane's own colour, its opacity, its
+absorption tint and the glancing-angle Fresnel are the surface shader's lines unchanged, so a pane
+is the same colour and the same opacity in both views. What differs is what is *behind* it: the
+voxel view composites over the stone actually there, and this view has no second sorted pass to do
+that with — sorting one instanced draw of ray-marched boxes would double the march on the biggest
+clips — so what shows through is the sky along the refracted direction. Over open ground the two
+are the same picture; over a wall the ◉ view shows sky where the voxel view shows the wall.
+
+**Which material is at a hit point is `material_at(p, n)`**, from `web/js/features/paint.js` — the
+clip's paint rules evaluated at a world point. Until that lands there is a stub in
+`shapeshade.js` that hashes each shape's own placement into the material table, so several
+materials are on screen and every field of a real record is exercised by something; the console
+says which of the two is live on every load, because "the colours are wrong" and "the colours are a
+hash" look identical in a screenshot.
+<!-- // <<< shapeshade -->
 
 ### The cap, and the one place this is not exact
 

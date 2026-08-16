@@ -60,6 +60,18 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> shapeshade
+// The ◉ view's shading: the material record at a hit point, and the surface shader's own lighting
+// applied to it. Everything about what a shape LOOKS like lives in that file; this one splices its
+// GLSL into SHAPE_FRAGMENT and feeds it uniforms. See web/js/features/shapeshade.js.
+import { SHAPE_SHADING_GLSL, SHAPE_SHADE_HIT_GLSL, materialAtSource, lightingSource }
+    from './features/shapeshade.js';
+// Said once, out loud, because "the colours are wrong" and "the colours are a hash of the shape"
+// look identical in a screenshot. A 404 for features/paint.js or features/brdf.js in the console
+// beside this line is the probe for them, not a fault.
+console.info('shapes view: lighting from ' + lightingSource + '; material_at is ' +
+             materialAtSource);
+// <<< shapeshade
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -485,6 +497,11 @@ void main() {
 
 const SHAPE_FRAGMENT = `#version 300 es
 precision highp float;
+// >>> shapeshade
+// The light grid is a 3D texture and GLSL ES gives sampler3D no default precision in a fragment
+// shader, so it has to be said or the shader does not compile.
+precision highp sampler3D;
+// <<< shapeshade
 
 in vec3 v_world;
 flat in mat3 v_linear;
@@ -496,10 +513,11 @@ flat in vec3 v_low;
 flat in vec3 v_high;
 
 uniform vec3 u_eye;
-uniform vec3 u_sun;
-uniform vec3 u_sunColour;
-uniform vec3 u_skyUp;
-uniform vec3 u_skyDown;
+// >>> shapeshade
+// u_sun, u_sunColour, u_skyUp and u_skyDown were declared here. They are declared by the shading
+// chunk spliced in below instead, so that the sun and sky this view lights with and the sun and
+// sky it shades with cannot drift apart into two declarations.
+// <<< shapeshade
 uniform float u_exposure;
 uniform vec4 u_clip;
 uniform mat4 u_viewProj;
@@ -604,6 +622,15 @@ vec3 tonemap(vec3 x) {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+// >>> shapeshade
+// The material record at a hit point, the light grid read at it, and the surface shader's own
+// lobe applied to the two. Spliced rather than written here because the whole judgement — which
+// material, which BRDF, how far along the normal the light is fetched — is one file, and this view
+// agreeing with the voxel view depends on there being exactly one copy of it.
+${SHAPE_SHADING_GLSL}
+${SHAPE_SHADE_HIT_GLSL}
+// <<< shapeshade
+
 void main() {
     if (dot(v_world, u_clip.xyz) + u_clip.w > 0.0) discard;
 
@@ -645,16 +672,23 @@ void main() {
     vec3 V = normalize(u_eye - at);
     if (dot(N, V) < 0.0) N = -N;
 
-    // One colour. Red used to mean "a difference takes this away", and it had a job when a
-    // subtrahend was drawn as a solid of its own; now that a hole is a hole there is nothing left
-    // for it to say.
-    vec3 albedo = vec3(0.62, 0.60, 0.56);
+    // >>> shapeshade
+    // It was one flat grey — vec3(0.62, 0.60, 0.56) — for every shape in every clip, with a sun
+    // term of a fixed 0.7 and no light grid at all. That answered "what shape is this"; it could
+    // not answer "will it be that colour in game", which is what the view was next asked. So the
+    // hit point now asks the paint stack which material it is and is shaded with that record, by
+    // the surface shader's own lighting, out of the same light grid: switching between ◉ and the
+    // voxel view changes the resolution and nothing else.
+    vec3 colour = ws_shade_hit(at, N, V);
 
-    vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
-    float ndl = max(dot(N, u_sun), 0.0);
-    vec3 colour = albedo * (ambient + u_sunColour * ndl * 0.7);
-    // A rim, because a construction view is read by its silhouettes.
-    colour += albedo * pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.5;
+    // The rim is KEPT, at 0.18 where it was 0.5, and it is the one thing here the voxel view does
+    // not have. It is not light and it is not pretending to be: this view has no ambient occlusion
+    // of any kind — no voxel corners to take it from — so a column standing against a wall of the
+    // same marble has nothing whatever between them and the two read as one lump. The rim is what
+    // keeps the column a column. Its albedo is the shaded colour rather than a constant, so it
+    // brightens what is there instead of washing everything towards grey.
+    colour += colour * pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.18;
+    // <<< shapeshade
 
     vec4 clipPos = u_viewProj * vec4(at, 1.0);
     gl_FragDepth = (clipPos.z / clipPos.w) * 0.5 + 0.5;
@@ -1050,6 +1084,38 @@ export class Renderer {
         gl.bindTexture(gl.TEXTURE_2D, this.cutters);
         gl.uniform1i(u.u_cutters, 0);
         gl.uniform1i(u.u_cutterWidth, this.cutterWidth);
+
+        // >>> shapeshade
+        // The material table and the light grid, on the same two units the surface shader uses so
+        // that nothing has to be rebound between the two views. Unit 0 is the cutter pool here.
+        const clip = this.clip;
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_3D, this.light);
+        gl.uniform1i(u.u_light, 1);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, this.materials);
+        gl.uniform1i(u.u_materials, 2);
+        gl.uniform1i(u.u_materialCount, clip.materialCount);
+
+        // The same mapping into the light volume the surface shader uses, term for term, because
+        // two points in the same place in the two views have to fetch the same texel.
+        const size = [clip.lightDims[0] * clip.lightCell, clip.lightDims[1] * clip.lightCell,
+                      clip.lightDims[2] * clip.lightCell];
+        gl.uniform3fv(u.u_lightOrigin, clip.origin);
+        gl.uniform3fv(u.u_lightScale, [1 / size[0], 1 / size[1], 1 / size[2]]);
+        gl.uniform3fv(u.u_lightTexel, [0.5 / clip.lightDims[0], 0.5 / clip.lightDims[1],
+                                       0.5 / clip.lightDims[2]]);
+        // ...and the ONE thing that differs, deliberately, sitting next to what it differs from.
+        //
+        // setShared gives the surface shader `clip.lightCell`: one whole lattice cell along the
+        // normal, because a fetch AT a surface trilinearly blends the air in front of it with the
+        // buried point behind it, and buried points are nearly black. That trap is in this view
+        // too, plus a second one — these hit points are on the TRUE analytic surface and the grid
+        // was cast against the voxelised copy, so the point the march landed on can be up to a
+        // voxel inside the matter the grid knows about. Half a voxel more of bias covers that and
+        // costs an eighth of a cell of blur on a term that is smooth over metres.
+        gl.uniform1f(u.u_shapeLightBias, clip.lightCell + 0.5 / clip.metre);
+        // <<< shapeshade
 
         gl.enable(gl.DEPTH_TEST);
         gl.depthMask(true);
