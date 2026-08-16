@@ -624,8 +624,10 @@ a step-bounded ray is not a bound. Not carried. D361.
    **The lobe crash is worth an hour of the same machine's time before that**: `--no-face-lobe`
    reaches frame 40+ where the shipped build dies at frame 9, and it is the difference between a
    card-free session that can see its own work and one that cannot. What is left to bisect is inside
-   `node_face_lobe` (`node.glsl`), the bin writes in `shade_faces.comp` and the four-way probe in
-   `resolve.comp` — `--no-lobe-ray` does NOT help, so the march is not it.
+   `node_face_lobe` (`node.glsl`) and nothing else: D661 removed the denoise, the composite's
+   per-pixel read, the bin zeroing, the compare-and-swap and every deposit into a bin, one arm at a
+   time, and the crash survived all five — while `--lobe-floor 1.0`, where no face holds a block at
+   all, reaches frame 40. `--no-lobe-ray` does not help either, so the march is not it.
 3. **Then R5b**, and the first step of it is now a flag rather than a stage: `--sun-seed 3` against
    the default 0, at **1280×800 quality 7, settled, the enclosed and close cameras**, which is where
    R5's gate lives. Six card-free runs could not resolve it (D660) and the numbers are in this

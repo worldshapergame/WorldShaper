@@ -8032,3 +8032,43 @@ with a card, against the same scene, and the arithmetic is already in the build.
 | D660 | **The lever lives in the probe buffer** | decision | The push block is full to the byte and D553 forbids re-meaning a field |
 | D660 | **Default OFF** | decision | Six runs, two metrics, and the arms interleave — R9c's precedent |
 | D660 | **The repeat arm is what made it a measurement** | method | One arm's three runs spread wider than the gap between arms (trap 9) |
+
+## D661 — the lobe crash, bisected to the claim itself, and it is not any reader or writer of the bins
+
+D656 named R4c's lobe pool as what kills a run on the software rasteriser and left the attribution
+open. Six more arms narrow it, each one a run of `clips/refraction_small.clip` at 320×200 asking for
+frame 40, and each one a single edit to the shipped build:
+
+| arm | what it removes | reaches |
+|---|---|---|
+| `--lobe-floor 1.0` | nobody asks the pool for a block at all | **frame 40** |
+| `face_lobe_denoise` skipped | the 3×3 blend over neighbours' blocks | frame 9 |
+| `lobe_block_of` returns `kNoLobe` in `resolve.comp` | the composite's per-pixel read of a block | frame 6 |
+| the bin-zeroing loop skipped at claim | 36 bins and 36 weights written on a fresh block | frame 9 |
+| the `atomicCompSwap` replaced by a plain store | the only atomic in the claim | frame 9 |
+| `face_lobe_add` returns at once | every deposit into a bin, from any ray | frame 9 |
+
+**So it is not the bins.** Every reader and every writer of the 288-byte body of a block is off in
+one arm or another and the crash is unmoved; the one arm that survives is the one where no face ever
+holds a block. What is left is the claim's own traffic in `node_face_lobe`: the eight-way header
+probe, the frame stamp, the eviction scan, and the four header words of a block — indices under
+524,288 in a buffer of **9,961,472** words, which is not an overrun by any arithmetic available.
+
+**Which moves the balance of evidence towards the driver, and that is worth saying carefully.** D650
+called a crash llvmpipe's and D651 proved it ours, so "not ours" is the reading this project has
+been wrong about before, and the honest state is still *unattributed*. What has changed is that the
+suspects with an obvious way to be wrong — an index into a block, a stale size class, a race on a
+header — have each been removed on their own and the fault survived all of them.
+
+**Nothing about the workaround changes**, and it is not a bad one: `--no-face-lobe` is R4c's own
+control arm, it costs directional reflection and nothing else, and with it the facility renders here
+to frame 120 (D659). The next thing to try, for whoever wants it, is the arm this session did not
+run: `node_face_lobe` cut down to its read loop with no writes at all, which splits the header
+traffic in two.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D661 | **Not the bins, in any of their four accessors** | finding | Four arms remove them one at a time; all die at frame 9 |
+| D661 | **It needs a face to be HOLDING a block** | finding | `--lobe-floor 1.0` reaches frame 40 |
+| D661 | **Attribution stays open** | honesty | D650 was wrong in exactly this direction; the remaining code is provably in bounds |
+| D661 | **The hunt is stopped here** | decision | The workaround costs one feature on a machine that has no card to reflect anything on |
