@@ -66,6 +66,18 @@ import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
 import {
     PAINT_GLSL, FIELD_EVAL_STUB_GLSL, paintFromClip, paintMode, uploadRules,
 } from './features/paint.js';
+// The evaluator the stack calls. It lives in its own module; while that module is not here, the
+// stub in paint.js stands in for it and the page says so in the console rather than drawing a
+// picture that claims to be the clip's own field.
+let FIELD_GLSL = FIELD_EVAL_STUB_GLSL;
+try {
+    const field = await import('./features/field.js');
+    if (field && typeof field.fieldGlsl === 'function') FIELD_GLSL = field.fieldGlsl();
+} catch (error) {
+    console.warn('paint: no features/field.js — the shapes view is using a STUB field, so its ' +
+                 'colours are the clip\'s own materials in the clip\'s own order but not in the ' +
+                 'clip\'s own places');
+}
 // <<< paintstack
 
 const VERTEX_SOURCE = `#version 300 es
@@ -614,10 +626,15 @@ vec3 tonemap(vec3 x) {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 // >>> paintstack
-// The paint stack, and — until web/js/features/field.js lands — a stand-in for the field
-// evaluator it calls. Drop FIELD_EVAL_STUB_GLSL and put field.js's own source here; nothing else
-// in this shader changes.
-` + FIELD_EVAL_STUB_GLSL + PAINT_GLSL + `
+// The field evaluator, then the paint stack that calls it. The stack needs two functions and does
+// not care which file wrote them: `float field_eval(uint, vec3)` and
+// `bool field_eval_ok(uint, vec3, out float)`, where false means the evaluator refused — it ran out
+// of depth — and the stack reads that as "no match" and goes on to the rule underneath.
+//
+// FIELD_GLSL is web/js/features/field.js's `fieldGlsl()` when that module is present, and
+// paint.js's stub — deterministic noise, and NOT the clip's field — when it is not. Nothing else in
+// this shader changes between the two.
+` + FIELD_GLSL + PAINT_GLSL + `
 // <<< paintstack
 // >>> paintstack
 // The clip's palette, so a material index becomes a colour. It is the material's base colour only
@@ -684,6 +701,10 @@ void main() {
     // ?paint=cover flags every fragment the shapes view shades, so "cost per pixel" is divided by a
     // counted number rather than by a guess at how much of the window the clip fills.
     if (u_paintDebug == 2) { o_colour = vec4(1.0, 0.0, 1.0, 1.0); gl_FragDepth = 0.0; return; }
+    // ?paint=evals writes the number of field walks this pixel paid for into red, and marks itself
+    // covered in green. It is the honest currency of this shader: a millisecond on a software
+    // rasteriser shared with fifteen other jobs varies by a factor of three between two runs of the
+    // same arm, and a field walk per pixel does not vary at all.
     // <<< paintstack
 
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
@@ -695,6 +716,9 @@ void main() {
     vec4 clipPos = u_viewProj * vec4(at, 1.0);
     gl_FragDepth = (clipPos.z / clipPos.w) * 0.5 + 0.5;
     o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
+    // >>> paintstack
+    if (u_paintDebug == 3) o_colour = vec4(float(g_paintEvals) / 255.0, 1.0, 0.0, 1.0);
+    // <<< paintstack
 }`;
 
 function compile(gl, type, source, name) {
@@ -1023,7 +1047,7 @@ export class Renderer {
         // code that caused it.
         {
             const paint = paintFromClip(clip, { mode: this.paintMode });
-            const uploaded = uploadRules(gl, this.rules, paint.rules, paint.bounds);
+            const uploaded = uploadRules(gl, this.rules, paint.rules);
             this.ruleCount = uploaded.count;
             this.ruleWidth = uploaded.width;
             this.paintStats = {
@@ -1122,7 +1146,8 @@ export class Renderer {
         gl.uniform1i(u.u_ruleWidth, this.ruleWidth);
         gl.uniform1i(u.u_ruleCount, this.ruleCount);
         gl.uniform1i(u.u_paintDebug,
-                     this.paintMode === 'cap' ? 1 : (this.paintMode === 'cover' ? 2 : 0));
+                     this.paintMode === 'cap' ? 1
+                     : (this.paintMode === 'cover' ? 2 : (this.paintMode === 'evals' ? 3 : 0)));
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, this.materials);
         gl.uniform1i(u.u_shapeMaterials, 2);

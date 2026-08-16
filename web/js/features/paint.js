@@ -72,15 +72,16 @@ export const CHUNK_DIRECTORY_AT = 200;
 export const CHUNK_ENTRY_BYTES = 16;
 
 // PANT: `u32 ruleCount`, then one of these each.
-export const RULE_BYTES = 28;
-// FLDG: `u32 nodeCount`, then one of these each — op, childCount, child[4], a[8], lo[3], hi[3].
-// op 4, childCount 4, child[4] 16, a[8] 32, and then the box: 56 and 68 into an 80-byte record.
-// Getting this wrong reads the last two of `a[8]` as a corner and gives every rule a box round the
-// origin, which rejects the rule everywhere and paints the whole clip in the first coat — no error
-// anywhere, just a building that lost its paint. It is why `boxed` is reported rather than assumed.
-export const NODE_BYTES = 80;
-export const NODE_LO_AT = 4 + 4 + 16 + 32;
-export const NODE_HI_AT = NODE_LO_AT + 12;
+//
+// **52 bytes, not 28.** The first 28 are the record as it was first published — node, below, above,
+// facingAxis, facingAt, material, flags — and the last 24 are `f32 lo[3]; f32 hi[3]`, the box
+// outside which the rule cannot apply, which the published record had nowhere to put. Reading the
+// stride as 28 does not fail: it reads rule i out of the middle of an earlier rule and paints a
+// building out of numbers that were somebody else's box.
+export const RULE_BYTES = 52;
+export const RULE_BOX_AT = 28;
+// FLDG is the field graph, 80 bytes a node, and it is `web/js/features/field.js`'s to read: the
+// boxes this file rejects against come down in the rule itself now, so nothing here opens it.
 
 // Four RGBA32F texels a rule. WebGL2 has no storage buffers, so this is the same trick the cutter
 // pool uses. The order is chosen so the common path — a rule whose box the point is nowhere near —
@@ -93,23 +94,31 @@ export const NODE_HI_AT = NODE_LO_AT + 12;
 export const RULE_TEXELS = 4;
 
 // A constant loop bound, because GLSL ES wants one even where the driver would take a dynamic one.
-// The facility carries 133 rules. When a clip carries more than this the FIRST coat and the LAST
-// 255 are kept, because the end of the stack is the end that wins — truncating the other way
+// A facility fragment carries 348 rules. When a clip carries more than this the FIRST coat and the
+// LAST 511 are kept, because the end of the stack is the end that wins — truncating the other way
 // throws away exactly the rules that decide the picture.
-export const PAINT_MAX_RULES = 256;
+export const PAINT_MAX_RULES = 512;
 
 // The budget, in field evaluations per pixel, after box rejection.
 export const PAINT_MAX_EVALS = 32;
 
-// How far past its own threshold a rule's box is grown, in metres.
-//
-// `plan_sample` grows it by the threshold plus the test's own Lipschitz slack, because a `scale`
-// node multiplies the distance it reports and a point can therefore be further away in the world
-// than the number suggests. That slack is not in the format, so this stands in for it. It is
-// generous on purpose: the boxes it guards are metres across on a real clip, so a quarter of a
-// metre of halo costs almost none of the rejection and a box that is too tight is a wrong colour
-// on screen rather than a slow frame.
-export const PAINT_BOX_GROW = 0.25;
+// What the exporter says about a rule. Only BOXED matters here, and it matters a great deal: it is
+// the promise that `lo`/`hi` are a real box outside which the rule cannot apply. Rejecting on a box
+// that was never filled in would paint a whole clip in its first coat, with nothing to see but a
+// building that lost its paint, so the box is used only when this bit says it is there.
+export const RULE_METRIC = 1;
+export const RULE_BOUNDED = 2;
+export const RULE_FACING = 4;
+export const RULE_BOXED = 8;
+export const RULE_PLACED = 16;
+export const RULE_COSTLY = 32;
+export const RULE_UNDERCOAT = 64;
+
+// `facingAxis` is -1 when the rule does not ask for a normal. The engine's own PaintRule writes 3
+// for that, and the exporter normalises it to -1; a shader testing `axis < 3` reads -1 as "yes, ask
+// about axis -1" and indexes a normal with it, which is every rule suddenly caring which way a
+// surface points. The test here is `axis >= 0`.
+export const FACING_NONE = -1;
 
 const INFINITE = 1e29;
 
@@ -140,7 +149,8 @@ export function readChunks(buffer) {
 }
 
 // The stack, in file order. `node` indexes the field graph, `above`/`below` are the ends of the
-// accepted band, `facingAxis` of 3 means "do not ask for a normal".
+// accepted band, `facingAxis` is -1 when the rule does not ask for a normal, and `lo`/`hi` are a
+// box that means anything only when `flags` has RULE_BOXED in it.
 export function readRules(buffer, chunk) {
     if (!chunk || chunk.size < 4) return [];
     const view = new DataView(buffer, chunk.offset, chunk.size);
@@ -157,55 +167,32 @@ export function readRules(buffer, chunk) {
             facingAt: view.getFloat32(at + 16, true),
             material: view.getUint32(at + 20, true),
             flags: view.getUint32(at + 24, true),
+            low: [view.getFloat32(at + RULE_BOX_AT, true),
+                  view.getFloat32(at + RULE_BOX_AT + 4, true),
+                  view.getFloat32(at + RULE_BOX_AT + 8, true)],
+            high: [view.getFloat32(at + RULE_BOX_AT + 12, true),
+                   view.getFloat32(at + RULE_BOX_AT + 16, true),
+                   view.getFloat32(at + RULE_BOX_AT + 20, true)],
         });
     }
     return rules;
 }
 
-// Only the part of the field graph this file needs: where each node ends up in the world. The
-// evaluator itself is `web/js/features/field.js`; this reads the boxes so a rule can be rejected
-// without calling it.
-export function readNodeBounds(buffer, chunk) {
-    if (!chunk || chunk.size < 4) return [];
-    const view = new DataView(buffer, chunk.offset, chunk.size);
-    const count = view.getUint32(0, true);
-    if (4 + count * NODE_BYTES > chunk.size) return [];
-    const bounds = [];
-    for (let i = 0; i < count; ++i) {
-        const at = 4 + i * NODE_BYTES;
-        bounds.push({
-            low: [view.getFloat32(at + NODE_LO_AT, true),
-                  view.getFloat32(at + NODE_LO_AT + 4, true),
-                  view.getFloat32(at + NODE_LO_AT + 8, true)],
-            high: [view.getFloat32(at + NODE_HI_AT, true),
-                   view.getFloat32(at + NODE_HI_AT + 4, true),
-                   view.getFloat32(at + NODE_HI_AT + 8, true)],
-        });
-    }
-    return bounds;
-}
-
-// Where a rule could possibly say yes, or null when that cannot be said.
+// Where a rule could possibly say yes, or null when nothing can be said.
 //
-// This mirrors `plan_sample` exactly, including which rules it refuses to box. **Only a rule
-// bounded ABOVE can be placed**: `where=<shape> below=0.02` accepts a small distance, so it accepts
-// only inside that shape or just outside it. A rule bounded below instead — `above=0.55` on a
-// noise, "where the grain is high" — is the complement of a shape and can be true anywhere the
-// shape is not, which is most of the world. Those get no box and are asked at every pixel, and
-// that is correct rather than lazy.
-export function ruleBox(rule, bounds) {
-    if (!(rule.below < INFINITE) || !(rule.above <= -INFINITE)) return null;
-    const node = bounds[rule.node];
-    if (!node) return null;
+// The exporter has already done the thinking `plan_sample` does — which rules can be placed at all
+// (`where=<shape> below=0.02` accepts a small signed distance, so it accepts only inside that shape
+// or just outside it; `above=0.55` on a noise is the complement of a shape and can be true
+// anywhere) — and says so with RULE_BOXED. So this trusts the flag and checks the numbers, rather
+// than deriving a second opinion that could be tighter than the exporter's and reject a rule that
+// should have fired.
+export function ruleBox(rule) {
+    if (!rule || (rule.flags & RULE_BOXED) === 0 || !rule.low || !rule.high) return null;
     for (let k = 0; k < 3; ++k) {
-        if (!(Math.abs(node.low[k]) < INFINITE) || !(Math.abs(node.high[k]) < INFINITE)) return null;
-        if (!(node.low[k] <= node.high[k])) return null;
+        if (!(Math.abs(rule.low[k]) < INFINITE) || !(Math.abs(rule.high[k]) < INFINITE)) return null;
+        if (!(rule.low[k] <= rule.high[k])) return null;
     }
-    const reach = Math.max(0, rule.below) + PAINT_BOX_GROW;
-    return {
-        low: [node.low[0] - reach, node.low[1] - reach, node.low[2] - reach],
-        high: [node.high[0] + reach, node.high[1] + reach, node.high[2] + reach],
-    };
+    return { low: rule.low, high: rule.high };
 }
 
 // Everything the shader needs for one clip. Reads the chunks out of whatever ArrayBuffer the clip
@@ -213,22 +200,18 @@ export function ruleBox(rule, bounds) {
 // and nothing here needs `format.js` changed to reach the new chunks.
 export function paintFromClip(clip, options) {
     const mode = (options && options.mode) || 'auto';
-    if (mode === 'off') return { rules: [], bounds: [], source: 'off' };
+    if (mode === 'off') return { rules: [], source: 'off' };
     // A reader that lands after this one may put the chunks on the clip itself. Prefer that.
     if (clip && clip.paintRules && clip.paintRules.length > 0) {
-        return { rules: clip.paintRules, bounds: clip.fieldBounds || [], source: 'clip' };
+        return { rules: clip.paintRules, source: 'clip' };
     }
     const buffer = bufferOf(clip);
     const chunks = buffer ? readChunks(buffer) : null;
     if (chunks && chunks.has('PANT')) {
-        return {
-            rules: readRules(buffer, chunks.get('PANT')),
-            bounds: chunks.has('FLDG') ? readNodeBounds(buffer, chunks.get('FLDG')) : [],
-            source: 'PANT',
-        };
+        return { rules: readRules(buffer, chunks.get('PANT')), source: 'PANT' };
     }
     if (mode === 'demo') return samplerFixture(clip);
-    return { rules: [], bounds: [], source: 'none' };
+    return { rules: [], source: 'none' };
 }
 
 function bufferOf(clip) {
@@ -247,20 +230,23 @@ function bufferOf(clip) {
 // The same decision the shader makes, and the reason it exists twice is that this one can be
 // tested against hand-worked cases without a GPU. `evalField(node, p)` stands in for the field.
 // Returns a material index, or -1 when the clip has no paint at all.
-export function decideMaterial(rules, evalField, p, normal, boxes) {
+export function decideMaterial(rules, evalField, p, normal) {
     if (!rules || rules.length === 0) return -1;
     // Backwards, because the last match is the answer: the first one found walking from the end is
     // the one every earlier rule would have been painted over by.
     for (let i = rules.length - 1; i >= 1; --i) {
         const rule = rules[i];
-        const box = boxes ? boxes[i] : null;
+        const box = ruleBox(rule);
         if (box && (p[0] < box.low[0] || p[1] < box.low[1] || p[2] < box.low[2] ||
                     p[0] > box.high[0] || p[1] > box.high[1] || p[2] > box.high[2])) {
             continue;
         }
         const v = evalField(rule.node, p);
+        // The evaluator refuses past a graph depth of 64, and a refusal is no match — the walk goes
+        // on to the rule underneath rather than stopping on a number nobody produced.
+        if (v === null || v === undefined || !Number.isFinite(v)) continue;
         if (v < rule.above || v > rule.below) continue;   // above is the low end, below the high
-        if (rule.facingAxis < 3) {
+        if (rule.facingAxis >= 0) {
             const c = normal[rule.facingAxis];
             // The sign of the threshold picks the direction of the test. sample.cpp, verbatim.
             if (rule.facingAt >= 0) { if (c < rule.facingAt) continue; }
@@ -276,8 +262,8 @@ export function decideMaterial(rules, evalField, p, normal, boxes) {
 // ---------------------------------------------------------------------------------------------
 
 // Four texels a rule, in the order the shader reads them. Rules past PAINT_MAX_RULES are dropped
-// from the MIDDLE of the stack, keeping the first coat and the last 255.
-export function packRules(rules, bounds) {
+// from the MIDDLE of the stack, keeping the first coat and the last 511.
+export function packRules(rules) {
     let use = rules;
     if (rules.length > PAINT_MAX_RULES) {
         use = [rules[0]].concat(rules.slice(rules.length - (PAINT_MAX_RULES - 1)));
@@ -288,7 +274,7 @@ export function packRules(rules, bounds) {
     let boxed = 0;
     for (let i = 0; i < use.length; ++i) {
         const rule = use[i];
-        const box = ruleBox(rule, bounds || []);
+        const box = ruleBox(rule);
         const at = i * RULE_TEXELS * 4;
         if (box) {
             boxed += 1;
@@ -314,8 +300,8 @@ export function packRules(rules, bounds) {
 // One RGBA32F texture, `texelFetch` only, exactly like the cutter pool. There is always a texture
 // even when there are no rules, because a sampler bound to nothing is undefined behaviour rather
 // than a blank hole.
-export function uploadRules(gl, texture, rules, bounds) {
-    const packed = packRules(rules || [], bounds || []);
+export function uploadRules(gl, texture, rules) {
+    const packed = packRules(rules || []);
     const texels = Math.max(1, packed.count * RULE_TEXELS);
     // A multiple of RULE_TEXELS so a rule never straddles a row, which keeps the shader's index
     // arithmetic to one divide and one modulo. 1020 is 4 x 255.
@@ -346,10 +332,13 @@ export function uploadRules(gl, texture, rules, bounds) {
 //                something seen rather than assumed.
 // `?paint=cover` paints every shaded fragment magenta, so the pixels the shapes view actually
 //                costs anything for can be counted rather than estimated.
+// `?paint=evals` writes the field walks this pixel paid for into red and marks it covered in
+//                green, which is the one cost figure that does not move with the machine.
 export function paintMode() {
     try {
         const value = new URLSearchParams(location.search).get('paint');
-        if (value === 'off' || value === 'demo' || value === 'cap' || value === 'cover') {
+        if (value === 'off' || value === 'demo' || value === 'cap' || value === 'cover' ||
+            value === 'evals') {
             return value;
         }
     } catch (error) {
@@ -395,6 +384,14 @@ float field_eval(uint node, vec3 p) {
     float seed = float(node);
     float scale = 1.4 + mod(seed, 4.0) * 1.7;
     return ws_stub_noise(p * scale + seed * 13.0) * 2.0 - 1.0;
+}
+
+// The real evaluator's second entry point: false means it refused — it ran out of depth at 64 —
+// and the stack must read that as "this rule does not match here" rather than as a value. The stub
+// never refuses, but it has to present the same two functions or swapping it out is not one line.
+bool field_eval_ok(uint node, vec3 p, out float value) {
+    value = field_eval(node, p);
+    return true;
 }
 // <<< paintstack
 `;
@@ -446,12 +443,19 @@ int paint_material(vec3 p, vec3 n) {
         if (g_paintEvals >= PAINT_MAX_EVALS) { g_paintCapped = true; break; }
 
         vec4 t2 = rule_texel(base + 2);   // above (low end), below (high end), facing axis, at
-        float v = field_eval(uint(t1.w + 0.5), p);
+        float v;
+        bool answered = field_eval_ok(uint(t1.w + 0.5), p, v);
         g_paintEvals += 1;
+        // A refusal — the evaluator ran out of depth at 64 — is NO MATCH, and the walk carries on
+        // to the rule underneath. Reading it as a match paints whatever the deepest graph in the
+        // clip happens to be over everything below it.
+        if (!answered) continue;
         if (v < t2.x || v > t2.y) continue;
 
-        int axis = int(t2.z + 0.5);       // 3 means "do not ask for a normal"
-        if (axis < 3) {
+        // floor, not a truncating cast: facingAxis is -1 when the rule does not ask for a normal,
+        // and int(-1.0 + 0.5) truncates to 0, which is "ask about x" for every rule in the clip.
+        int axis = int(floor(t2.z + 0.5));
+        if (axis >= 0) {
             float c = (axis == 0) ? n.x : ((axis == 1) ? n.y : n.z);
             // The SIGN of the threshold is the direction of the test. An abs() here paints the
             // ceiling with the floor's moss.
@@ -509,7 +513,7 @@ export const PAINT_GLSL = paintMode() === 'off' ? PAINT_OFF_GLSL : PAINT_STACK_G
 // declaration order would paint the moss rule's material onto metal and read as a bug in the stack.
 function samplerFixture(clip) {
     const count = clip ? clip.materialCount : 0;
-    if (count < 4 || !clip.materials) return { rules: [], bounds: [], source: 'none' };
+    if (count < 4 || !clip.materials) return { rules: [], source: 'none' };
     const find = (r, g, b) => {
         for (let i = 0; i < count; ++i) {
             const at = i * 16;
@@ -525,13 +529,13 @@ function samplerFixture(clip) {
     const metal = find(170, 172, 178);
     const moss = find(64, 112, 54);
     if (stone < 0 || pale < 0 || metal < 0 || moss < 0) {
-        return { rules: [], bounds: [], source: 'none' };   // not the sampler
+        return { rules: [], source: 'none' };   // not the sampler
     }
     const rules = [
-        { node: 0, above: -1e30, below: 1e30, facingAxis: 3, facingAt: 0.5, material: stone, flags: 0 },
-        { node: 1, above: 0.15, below: 1e30, facingAxis: 3, facingAt: 0.5, material: pale, flags: 0 },
-        { node: 2, above: 0.4, below: 1e30, facingAxis: 1, facingAt: 0.55, material: moss, flags: 0 },
-        { node: 3, above: 0.0, below: 1e30, facingAxis: 3, facingAt: 0.5, material: metal, flags: 0 },
+        { node: 0, above: -1e30, below: 1e30, facingAxis: FACING_NONE, facingAt: 0.5, material: stone, flags: RULE_UNDERCOAT },
+        { node: 1, above: 0.15, below: 1e30, facingAxis: FACING_NONE, facingAt: 0.5, material: pale, flags: 0 },
+        { node: 2, above: 0.4, below: 1e30, facingAxis: 1, facingAt: 0.55, material: moss, flags: RULE_FACING },
+        { node: 3, above: 0.0, below: 1e30, facingAxis: FACING_NONE, facingAt: 0.5, material: metal, flags: 0 },
     ];
-    return { rules, bounds: [], source: 'fixture' };
+    return { rules, source: 'fixture' };
 }
