@@ -184,7 +184,11 @@ vec4 probeReflection(vec3 world, vec3 normal, vec3 reflectDir, float roughness) 
         if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, u_probeGridDims))) continue;
         vec3 axis = mix(1.0 - frac, frac, step);
         float w = axis.x * axis.y * axis.z;
-        if (w < 0.002) continue;
+        // Two per-corner texture fetches is the whole cost of this function, so a corner carrying
+        // two per cent of the answer is not worth two of them. The sum is renormalised by the
+        // weight that survives, so dropping one changes the direction the blend leans and not the
+        // brightness -- typically four of the eight do any work at all.
+        if (w < 0.02) continue;
 
         uvec2 packed = texelFetch(u_probeIndex, cell, 0).rg;
         int id = int(packed.x) + int(packed.y) * 256;
