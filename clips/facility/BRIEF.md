@@ -82,21 +82,31 @@ Two rules in one, and both were learned the hard way.
 *Only your own shapes*, because painting by a bare coordinate paints a third of the building the
 wrong colour. That happened.
 
-*`below=0.02` and not `below=0`*, because the manifest displaces the whole building by 12 mm of
-grain at the very end. A voxel that only exists because the grain pushed the surface outward sits
-**outside** the shape its rule names, so `below=0` misses it, no rule matches, and it falls back
-to the first coat — leaving a rind of pale limestone-coloured voxels over every outward-facing
-surface of your part. It looks like weathering and it is not; it is your paint failing to reach
-the surface of your own geometry. Displacement moves a surface; it does not move which part a
-voxel belongs to, and the test has to say so. 0.02 is comfortably past the 12 mm.
+*`below=0.02` and not `below=0`*, because a voxel can end up **outside** the shape its own rule
+names, and then no rule matches and it falls back to the first coat — leaving a rind of pale
+limestone-coloured voxels over every outward-facing surface of your part. It looks like weathering
+and it is not; it is your paint failing to reach the surface of your own geometry.
+
+**The reason this rule used to give is no longer true, and the rule is still right.** It said the
+manifest displaces the whole building by 12 mm of grain at the end, and that the grain pushes
+voxels outside the shape their rule names. **The sampler drops that displacement.** Anything under
+half a voxel is dither rather than deformation and is thrown away, and 12 mm is 0.38 of a voxel at
+metre 32 and 0.10 at metre 8 — so there is no resolution this building is ever sampled at where
+that grain does anything, and the build log has said so in a WARN line every single time. The long
+comment at the `displace` line in `clips/facility.clip` now records it properly.
+
+What actually pushes a voxel outside its own shape is **coverage against centre** — a voxel is
+solid if any part of it is inside, and painted by a rule tested at its centre — which is the same
+mechanism as the transform case below and is why that one needs 0.035. Keep 0.02 as the floor
+anyway: it costs nothing, and a rule keyed on its own shape has nothing beside it to bleed onto.
 
 ***0.035 and not 0.02 for anything you placed with a transform***, and this is new — found on
 2026-08-16 while the ballroom was being built, and it is the reason that rule now names two
 numbers instead of one.
 
-The 12 mm of grain is not the only thing that pushes a voxel outside the shape its rule names. A
-voxel is decided **solid by coverage** — any part of the cell in the shape — and **painted by a
-rule tested at the cell's centre**. For a shape sitting square on the grid those two nearly agree.
+This is the same mechanism as the paragraph above and the larger half of it. A voxel is decided
+**solid by coverage** — any part of the cell in the shape — and **painted by a rule tested at the
+cell's centre**. For a shape sitting square on the grid those two nearly agree.
 For a shape put where it is by `translate`, `rotate`, `around` or `repeat` they do not, because the
 surface no longer lies anywhere near a voxel boundary, and **3 to 16 per cent of that shape's own
 solid voxels fall outside its own test.**

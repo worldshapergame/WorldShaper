@@ -43,9 +43,14 @@ warnings-as-errors bar; a tool that builds there builds in the game.
 
 ## 2. What is in a `.wsc`
 
-A 192-byte header, then four blocks, in the layout the card wants so that loading a clip is a fetch
-and four `subarray` views. Every offset is written down in both `tools/bake_web.cpp` and
+A 208-byte header, then the blocks, in the layout the card wants so that loading a clip is a fetch
+and a handful of `subarray` views. Every offset is written down in both `tools/bake_web.cpp` and
 `web/js/format.js`, and the file carries a magic and a version so a mismatch says so.
+
+**The version is 2.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
+of §4a moved every block offset; there is no reading one as the other. `reuse` in the baker refuses
+a version 1 file and rebakes it, and `parseClip` throws on one rather than drawing a wrong picture —
+a cached `web/data` from before the change is a real state and it has to say so.
 
 **Materials.** Every `VisualRecord` used, verbatim, sixteen bytes each. Colour, opacity,
 roughness, metallic, index of refraction, emission and its tint, Beer-Lambert absorption,
@@ -152,16 +157,75 @@ of its own baked bytes. When the hash of the clip on screen changes it is refetc
 ## 4a. The clip before it was voxels
 
 The ◉ button draws the clip **as it was written**: every shape the author typed, ray-marched, with
-no resolution at all. A shape a `difference` takes away is drawn in red, because the hole somebody
-cut is as much a part of the description as the stone it was cut from and is usually the thing you
-came to look at.
+no resolution at all. It shows the shapes **as the clip resolves them** — a box a `difference` has
+cut has a real hole through it, at infinite resolution.
 
 The baker walks the field from the solid and carries three things down: a 3×4 matrix mapping world
 to each node's own space — which is exactly what `eval` does to the point as it descends, so it is
-accumulated rather than inverted — the factor `Op::Scale` multiplies a distance by, and whether an
-odd number of `difference` subtrahends is above it. `mirror` folds space rather than moving it, so
-it emits its child twice; `repeat` is expanded to a cap; `twist`, `bend` and `revolve` have no
-honest affine placement for their children and are left out.
+accumulated rather than inverted — the factor `Op::Scale` multiplies a distance by, and **the
+cutters in scope**. `mirror` folds space rather than moving it, so it emits its child twice;
+`repeat` is expanded to a cap; `twist`, `bend` and `revolve` have no honest affine placement for
+their children and are left out.
+
+### It used to draw the ingredients, and now it draws the result
+
+It flattened the tree into independent leaves, each with a `sign` of +1 or −1, and marched every
+leaf **alone** inside its own box. So a `difference` was not a hole: the subtrahend was drawn as a
+solid, in red, standing in front of the stone it was supposed to go through. On `sampler.clip` that
+was a red rectangle floating on the face of the left box where a doorway should be, and a red disc
+on the middle box where a cylinder should be bored into it. Every overlap anybody had ever written
+was on screen at once as raw overlapping primitives. Reported as *"make the sdf raw view mode be the
+processed sdfs already cut so that it doesn't show a bunch of overlapping sdfs that some cut another
+etc"*, which is the whole of it.
+
+The fix is **not** to evaluate the whole CSG tree per march step. The facility is 15,190 shapes and
+no phone will walk that at every step of every ray. Instead it is **local CSG by scope**:
+
+- on `Op::Difference` and `Op::SmoothDifference`, child 0 is walked with `inherited` **plus every
+  leaf of children 1..n, flattened with its placement**, and children 1..n are **not emitted as
+  shapes of their own**;
+- a leaf's cutters are therefore exactly the subtrahends of every `difference` above it, which is
+  the correct scope and is what stops two unrelated shapes that merely happen to overlap in space
+  from cutting each other;
+- they are then filtered to the ones whose **world box actually overlaps** the leaf's, which on a
+  real clip leaves almost every leaf with none, one or two;
+- the survivors go into a **flat pool** and the shape carries `cut_start` and `cut_count` into it.
+  Identical runs are shared, so every leaf of one wall points at that wall's one run of windows.
+
+In the shader that is `d = max(d_self, -d_cutter)` for each cutter in the shape's range, at each
+march step. That is exact subtraction. The normal is a world-space gradient of the same combined
+distance, because the surface under the ray may belong to a cutter rather than to the shape — the
+jamb of a doorway has the doorway's normal, not the wall's.
+
+WebGL2 has no storage buffers, so the pool is an **RGBA32F texture** read with `texelFetch`: a
+cutter is its op, its `a[8]`, its 3×4 matrix and its scale — 22 floats padded to 24, so six texels.
+`cut_start` and `cut_count` are instanced attributes, and the loop has a constant upper bound as
+well as the dynamic one because GLSL ES wants one.
+
+**Nothing is drawn red any more.** Red only ever meant "this one is a hole"; once holes are holes it
+has nothing left to say, and every shape is one opaque stone colour.
+
+### The cap, and the one place this is not exact
+
+**Sixteen cutters to a shape.** Over that, the ones with the biggest box overlap are kept — a wall
+keeps its doorway and loses a corner bead rather than the other way round — and the baker
+`WS_LOG_WARN`s with the count and the clip and prints a summary line in the per-clip output. A
+silent truncation reads as "it worked". Measured on the facility fragments, one or two shapes per
+fragment are over it: a wall slab in `facility/walls` wants at least 62 and one in
+`facility/vestibule` wants 25, and everything else in those clips wants nothing or a handful.
+(The reported worst is itself bounded by the collection guard at four times the cap, so a number at
+or near 64 means "at least that many".) The cap is 16 because 64 was measured and costs three times
+the frame on `facility/walls` for the sake of those one or two shapes.
+
+**Flattening a subtrahend subtree treats it as a UNION of its leaves.** That is exact when the
+subtrahend is a union, which is nearly always what a clip's `difference` takes away, and it
+**over-cuts** when the subtrahend is itself an `intersection` (a union of the parts is bigger than
+their intersection, so more is taken away than the clip takes) or a nested `difference` (whose own
+subtrahend should be putting matter back and instead joins the union that removes it). Both are
+counted while baking and printed per clip. On the fragments looked at: `facility/windows` has 18
+subtrahend subtrees containing an intersection, `facility/halls` has 2, and `walls`, `vestibule` and
+`portico` have one nested difference each. This is a known inexactness in the *viewer*, not in the
+clip — the voxels are sampled by the game's own `forge::sample` and are unaffected.
 
 Three things it got wrong first, all of them visible immediately and none of them a crash:
 
