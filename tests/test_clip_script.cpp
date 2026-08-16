@@ -271,6 +271,34 @@ solid b
     CHECK(mentions_material);
 }
 
+// The parser's whole contract is that it collects errors and carries on, and braces were where it
+// could not: `block` -> `expression` -> `call` -> `block` recursed once per `{` with no bound, so a
+// file whose braces have desynchronised is read through a stack as deep as the rest of the file is
+// long. The clip viewer's baker died in exactly that cycle, and a parser fed files a player writes
+// must not be able to end a process however wrong the file is.
+//
+// Sixty-four is the limit. Nothing anybody writes nests eight deep.
+TEST_CASE("a file whose braces do not balance is an error rather than a crash") {
+    // Nested, not repeated: `let a = union {` four thousand times is four thousand statements the
+    // parser recovers from one at a time and never nests through, which is what the first version
+    // of this test asserted against and is why it passed while proving nothing.
+    std::string text = "metre 8\nbounds 0 0 0  1 1 1\nlet a = ";
+    for (int i = 0; i < 4000; ++i) text += "union { ";
+    text += "sphere 0 0 0 r=0.5\n";
+
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(text, types, tags);
+
+    CHECK(!script.errors.empty());
+    CHECK_FALSE(script.ok());
+    bool mentions_braces = false;
+    for (const ScriptError& e : script.errors) {
+        if (e.message.find("unbalanced") != std::string::npos) mentions_braces = true;
+    }
+    CHECK(mentions_braces);
+}
+
 TEST_CASE("every cell of a clip with no region belongs to it, however empty") {
     // The mask says which cells are the clip's business, separately from which hold matter, and
     // with no region that is all of them. It matters for stamping: an empty cell *inside* the

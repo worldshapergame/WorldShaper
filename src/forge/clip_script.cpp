@@ -389,6 +389,14 @@ private:
 
     // --- expressions -----------------------------------------------------------------------
 
+    struct DepthGuard {
+        explicit DepthGuard(u32& counter) : counter_(counter) { ++counter_; }
+        ~DepthGuard() { --counter_; }
+        DepthGuard(const DepthGuard&) = delete;
+        DepthGuard& operator=(const DepthGuard&) = delete;
+        u32& counter_;
+    };
+
     // A name already bound by `let`, or a fresh call.
     bool expression(u32& out) {
         if (done()) return false;
@@ -405,9 +413,30 @@ private:
     }
 
     // The children of a `{ ... }` block.
+    //
+    // How deep braces may nest, and it is here because nothing bounded it.
+    //
+    // `block` calls `expression` calls `call` calls `block`, once per `{`, and a file whose braces
+    // have desynchronised nests one level for every `{` left in it. The clip viewer's baker died
+    // this way — SIGSEGV while parsing a fragment on its own, with gdb showing hundreds of frames
+    // of exactly that cycle and nothing else on the stack. It was reproducible in that run and it
+    // does NOT reproduce from the same file in a fresh process, so what is written down here is
+    // what was seen rather than a diagnosis: the recursion had no bound, and a parser whose whole
+    // contract is that it collects errors and carries on must not be able to end a process.
+    //
+    // Sixty-four because nothing anybody writes nests eight deep, so this is a limit only a
+    // mistake can reach, and reaching it says which mistake in the author's own terms.
+    static constexpr u32 kMaxBlockDepth = 64;
+
     std::vector<u32> block() {
         std::vector<u32> parts;
         if (done() || peek().text != "{") return parts;
+        if (depth_ >= kMaxBlockDepth) {
+            fail("blocks nested more than 64 deep -- the braces above this are unbalanced");
+            at_ = tokens_.size();   // there is nothing left to say about this file
+            return parts;
+        }
+        const DepthGuard guard(depth_);
         ++at_;
         while (!done() && peek().text != "}") {
             u32 child = 0;
@@ -432,6 +461,7 @@ private:
     VoxelTypeTable& types_;
     const TagRegistry& tags_;
     usize at_ = 0;
+    u32 depth_ = 0;   // how many `{ }` blocks deep the parser is; see kMaxBlockDepth
     std::map<std::string, u32> bindings_;
     std::map<std::string, VoxelTypeId> materials_;
     std::map<std::string, bool> parameters_;

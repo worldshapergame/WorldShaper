@@ -529,6 +529,12 @@ u32 NodePool::build_leaf(const World& world, const NodeKey& key, u32& budget) {
     // Coverage per face direction, from the occupancy bits: for each direction, how much of the
     // 8x8 face-on projection has any matter behind it. This is what an edge is anti-aliased
     // against, and it is exact.
+    //
+    // R5d reads it now, which it did not when this was written: `visibility.comp` casts a second
+    // march past any coarse node whose byte is under full and the composite draws the two surfaces
+    // in proportion (D662). So this loop is on the frame's critical path for how a silhouette
+    // LOOKS, not only for how it is summarised — and `fold_children` below is where its accuracy
+    // stops, because that folds by taking a maximum rather than by projecting.
     u32 faces[6]{};
     for (u32 axis = 0; axis < 3; ++axis) {
         u32 covered = 0;
@@ -604,6 +610,17 @@ void NodePool::fold_children(u32 slot) {
         // takes the largest of what its children present. That errs towards *present*, which is
         // the same choice as the coverage floor and made for the same reason: a thing slightly
         // too solid at a distance is still the thing, and a thing that rounded away is not.
+        //
+        // **This is where R5d's edge anti-aliasing stops being able to help, and it is worth
+        // knowing before wondering why** (D662). A maximum is not a projection: four children of
+        // which two are solid wall and two are air have a true projected coverage of a half, and
+        // this hands back the solid one's 255. So a thin railing keeps its low byte all the way up
+        // and gets blended, while the silhouette of a solid wall reads as fully covered at every
+        // level above the brick and gets nothing. The exact fold is available and is not large —
+        // each quadrant of the parent's projection is the max of the TWO children in line along the
+        // axis, and the parent is the mean of the four quadrants — but it changes what the byte
+        // means, so it belongs with a measurement rather than beside this comment.
+        // `tests/test_node_pool.cpp` pins the behaviour as it is, both halves of it.
         for (u32 f = 0; f < 6; ++f) faces[f] = std::max(faces[f], child_faces[f]);
     }
 

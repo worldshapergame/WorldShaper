@@ -17,13 +17,27 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(WS_SANITIZE "Enable address/UB sanitizers in debug builds" OFF)
 
+# Configure only the headless half: core, world, game, forge, and the tools built on them.
+#
+# The clip viewer's baker (tools/bake_web.cpp) needs the field, the sampler and the type table and
+# nothing else -- no window, no device, no shader compiler. Without this option a Linux runner that
+# only wants to sample a clip has to install a Vulkan SDK and build SDL first, which is four
+# minutes of a six-minute job spent on libraries the tool never links.
+#
+# It is a switch on WHAT IS CONFIGURED and not on how anything is compiled: the libraries it does
+# build are the same libraries, from the same sources, with the same warning bar. A tool that
+# builds here builds in the game.
+option(WS_TOOLS_ONLY "Configure only the headless libraries and the tools built on them" OFF)
+
 # The version, and the Windows resources that carry it, generated from one source.
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/core/version.hpp.in"
                "${CMAKE_BINARY_DIR}/generated/core/version.hpp" @ONLY)
 add_library(ws_version INTERFACE)
 target_include_directories(ws_version INTERFACE "${CMAKE_BINARY_DIR}/generated")
 
-include(cmake/Dependencies.cmake)
+if(NOT WS_TOOLS_ONLY)
+    include(cmake/Dependencies.cmake)
+endif()
 
 # --------------------------------------------------------------------------------------
 # Compile options shared by all of our own targets.
@@ -135,6 +149,22 @@ add_library(ws_forge STATIC
     src/forge/clip_script.cpp)
 target_include_directories(ws_forge PUBLIC src)
 target_link_libraries(ws_forge PUBLIC ws_core ws_world ws_game)
+
+# --------------------------------------------------------------------------------------
+# ws_bake_web - the clip viewer's baker.
+#
+# Samples a clip, meshes its surface, bakes its light, and writes what a browser can draw. It is
+# the same sampler the game builds its world with, so what the viewer shows is what the clip is
+# and not a second reading of the file. documentation/24-clip-viewer.md.
+# --------------------------------------------------------------------------------------
+add_executable(ws_bake_web tools/bake_web.cpp)
+target_link_libraries(ws_bake_web PRIVATE ws_core ws_world ws_game ws_forge)
+
+# Everything past here needs a window, a device or a shader compiler, and the headless
+# configuration has none of the three.
+if(WS_TOOLS_ONLY)
+    return()
+endif()
 
 # --------------------------------------------------------------------------------------
 # ws_platform - window, input, event pump.
@@ -326,6 +356,7 @@ add_executable(ws_tests
     tests/test_raycast.cpp
     tests/test_refraction.cpp
     tests/test_translucency.cpp
+    tests/test_sun_confidence.cpp
     tests/test_history.cpp
     tests/test_chisel.cpp
     tests/test_clip.cpp

@@ -65,7 +65,13 @@
 // buffer. The filter is a display of an estimate, not part of the estimator.
 //   19    R4b: which WAY the lamps are, as one octahedral direction in sixteen bits. See
 //         kFaceLampDir.
-const uint kFaceLightWords = 20u;
+//   20    R5b: the SUN VISIBILITY OF THE COARSE FACE STANDING OVER THIS ONE, in sixteen bits with
+//         a known bit above them, or nought while this face has enough of its own rays not to
+//         need it. It is the only word here that is a measurement of a DIFFERENT face, which is
+//         why it is the last one and why it is not called a filtered anything: words 12-18 are
+//         this face's own answer smoothed, and this is somebody else's answer standing by. See
+//         kFaceSunStandIn.
+const uint kFaceLightWords = 21u;
 const uint kFaceFilteredSky = 12u;      // the filtered far field
 const uint kFaceFilteredBounce = 13u;   // ...and the three words of filtered bounce after it
 const uint kFaceFilteredLamp = 16u;     // ...and the three of filtered lamp irradiance after that
@@ -115,6 +121,111 @@ vec3 face_oct_unpack(uint packed) {
     n.x += n.x >= 0.0 ? -t : t;
     n.y += n.y >= 0.0 ? -t : t;
     return normalize(n);
+}
+
+// ---- R5b: how far a face's own sun ratio is worth believing ------------------------------------
+//
+// **`kFaceSettled` is ONE, so the composite reads a face that has cast a single shadow ray, and one
+// ray is binary.** That is the right rule and it is deliberate — node.glsl's comment on the constant
+// works through the alternative and refutes it, because what four samples show INSTEAD is full sun,
+// and indoors full sun is not a cautious answer but the worst answer available. What it leaves is
+// variance: in a room whose true answer is 0.05, nineteen faces in twenty read black on their first
+// ray and the twentieth reads white, and neighbours that have each cast one ray disagree completely.
+// Measured at the close camera, **135,071 faces of 589,870 — 23% — have fewer than four samples**,
+// and that population is what a player sees as speckle on any surface they have just turned towards,
+// walked up to, or revealed by carving. The grain is faces still measuring, not converged faces
+// disagreeing.
+//
+// R9d already built what should stand in for a face with nothing: `visibility.comp` hands the
+// composite the coarse face `kFaceAncestorStep` levels up, which five hundred and twelve faces share
+// and which is therefore smooth. But it is a HARD SWITCH — no samples at all, or your own
+// one-sample answer believed outright, with nothing in between. This is the ramp.
+//
+// So the reader believes a face's own ratio in proportion to how well measured it is and takes the
+// rest from the stand-in, exactly as `bounce_confidence` in resolve.comp already does for the bounce
+// and for the whole of R4c's energy split. That constant's own reasoning applies here word for word:
+// confidence rises SMOOTHLY, because a threshold puts a discontinuity at the sample count on every
+// face that straddles it, and D387 is the standing measurement of what a hard per-face decision does
+// — neighbours either side of it disagree by more than the noise ever did.
+//
+// **It costs no rays at all**, which is the constraint D394 imposes on anything in this class: three
+// ways of metering the ambient burst were built and all three made the transient worse, because what
+// this pass spends on an unconverged face is mostly the face and not the ray. Nothing here casts,
+// paces or reschedules anything. It is a different reading of rays that were already taken.
+//
+// **And it is not `--sun-seed`** (D660), which gives a newly claimed face three samples of the same
+// ancestor's ratio ONCE, at claim time, inside its own counters. The two land on different parts of
+// one axis: a seed moves where the estimator STARTS, and this decides how far the estimator is
+// BELIEVED while it is still short. **They cannot double-count, and the arithmetic says so rather
+// than the intent**: a seeded face arrives holding the ancestor's own ratio at three samples, so
+// what this blends is three quarters of that ratio with one quarter of the same ratio, which is the
+// ratio. The seed simply carries a face over the first two rungs of the ramp. Both on is a face that
+// starts at its ancestor's answer and is fully its own after one ray of its own instead of four.
+//
+// # Four, and it is kFaceEager's number rather than a figure with room to be tuned
+//
+// It must match `kFaceEager` in node.glsl (and `kFaceEager` in src/world/face_store.hpp, which
+// mirrors it for the audit). It cannot be SPELLED as that constant here, because the include runs
+// the other way — node.glsl includes this file — so what holds the three copies together is a test
+// rather than a comment: `tests/test_sun_confidence.cpp` reads this line out of this file and fails
+// if it and the store's have drifted apart. Four rather than a number chosen against the variance,
+// for four reasons, and the last one is the gate:
+//
+//   - it is where this renderer ALREADY stops treating a face as new. Below `kFaceEager` a face is
+//     exempt from the shading stride and casts a ray every frame; at or above it drops to one frame
+//     in `face_stride`. So the ramp is exactly co-extensive with the every-frame phase, and the
+//     stand-in it blends towards is refreshed on every single frame it is used;
+//   - it is the count the audit already calls settled (`sun on the card: N of M settled` counts
+//     `face_samples < kFaceEager`), so the population this touches is precisely the 23% the
+//     measurement above names, and neither number has to be inferred from the other;
+//   - an edit reseeds a face to `kFaceEditSeed` = 8 samples at the ratio it held (D373). Any figure
+//     above eight would blend every face inside an edit box towards a stand-in the same edit has
+//     just reseeded — a prior taken from a record that is no better informed than the face reading
+//     it, which is `kSunSeedMin`'s whole argument arriving through a different door;
+//   - **a settled shadow edge is untouched, by construction rather than by tuning.** The sun is
+//     deliberately not filtered by R5a's a-trous pass because a shadow edge is a real
+//     high-frequency feature, and this must not become that filter by another route. A face in a
+//     penumbra reaches four samples within four frames, because a face under `kFaceEager` casts
+//     every frame; from there confidence is exactly one and `face_sun_believed` is the identity, to
+//     the bit. What a longer ramp would buy is smoothness on faces that are no longer new, and what
+//     it would cost is the edge.
+const uint kFaceSunStandIn = 20u;    // where the stand-in's ratio lives; see the record above
+const uint kFaceSunBelieve = 4u;     // must match kFaceEager in node.glsl
+
+// The stand-in's ratio, packed. Sixteen bits of a quantity whose own estimator tops out at
+// `kFaceWindow` = 256 samples, so this is sixty times finer than the number it is storing can ever
+// be, and the top bit says it was written at all.
+//
+// A known bit rather than "nought means none", because nought is a legal sun visibility — it is what
+// every face in a sealed room reads — and trap 7 is that "nothing here" and "I could not answer"
+// must never be the same value. The word is zeroed with the rest of the record when a slot is handed
+// to a new face, so the bit is what tells a reader the difference between a stand-in of nought and a
+// slot whose light words have not been visited yet.
+const uint kFaceSunKnown = 1u << 31;
+uint face_sun_pack(float visible) {
+    return uint(clamp(visible, 0.0, 1.0) * 65535.0 + 0.5) | kFaceSunKnown;
+}
+float face_sun_unpack(uint word) { return float(word & 0xFFFFu) * (1.0 / 65535.0); }
+
+// How far a face of `samples` shadow rays is its own answer, in [0, 1].
+float face_sun_confidence(uint samples) {
+    return clamp(float(samples) / float(kFaceSunBelieve), 0.0, 1.0);
+}
+
+// ...and the read itself. **One arithmetic, two readers**, which is the sentence at the top of this
+// file: the composite draws a surface with this and a gathering ray landing on the same surface
+// integrates it with this, and if the two weighted an under-measured face differently the room would
+// be lit by one renderer and drawn by another (D420).
+//
+// `stand_in` is word `kFaceSunStandIn` of this face's light record, straight out of the buffer. It is
+// nought — no known bit — in four cases and all four mean the same thing to a reader: this face has
+// enough of its own rays, nothing above it had a measurement worth taking, the face IS a stand-in, or
+// the control arm is on. In every one of them what comes back is the face's own ratio, and it comes
+// back BIT-EXACTLY: `mix(x, own, 1.0)` is `x * 0.0 + own * 1.0`, which is `own` for any finite x. So
+// `--no-sun-confidence` is not a near-enough control arm, it is the same number.
+float face_sun_believed(float own, uint samples, uint stand_in) {
+    if ((stand_in & kFaceSunKnown) == 0u) return own;
+    return mix(face_sun_unpack(stand_in), own, face_sun_confidence(samples));
 }
 
 // The two occlusion terms a face carries, combined the one way that does not darken a crease twice.

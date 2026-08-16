@@ -3183,3 +3183,147 @@ build, switched off. Six runs — three each way, same building, same camera, sa
 tell the two apart: the difference between the two versions was smaller than the difference between
 two runs of the *same* version. On your machine, at full resolution, it may well be visible. Here it
 is not, and the honest thing is to leave it off until somebody can see it.
+
+## Distant railings stop being staircases
+
+Stand a long way from a railing and each post is thinner than a single dot on your screen. The game
+had one answer to that and it was the wrong one: a dot either was the post or it wasn't. So a far-off
+railing came out as a row of solid bars with hard jagged edges, and every one of those edges crawled
+and shimmered as you moved — the same effect as an old photograph of a fence taken through a
+window blind.
+
+The reason it was the wrong answer is that the game already knew better. When it builds its
+summaries of the world — the coarse blocks it draws distant things out of — it works out, for each
+of the six directions you could look at a block from, **exactly what fraction of it is solid from
+that side**. That number has been sitting in the file for two years with nothing reading it, because
+the note explaining what it was for described a different number that used to be there.
+
+Now a distant block that is only half solid is drawn as half solid: the ray carries on past it, finds
+whatever is behind — another part of the building, or the sky — and the two are mixed in the right
+proportion. A thin post covering a third of a dot contributes a third of its colour, and the dot
+keeps two thirds of the sky.
+
+**What you should see:** distant railings, window bars, cornices and crate edges look like thin
+things rather than like blocky ones, and the edge where a far-off building meets the sky stops
+crawling when you walk. Nothing within about twenty metres of you changes at all — up close each dot
+is one cube and there was never anything to smooth.
+
+I could check this one here, which the last few could not be. It needed a new test scene, because
+every scene small enough to draw on a machine with no graphics card is four metres across and
+everything in it is close up. With one built at the right distance, the only part of the picture that
+changes between the old way and the new is the railing itself, down to the pixel — and, magnified,
+the posts stop being blocks. `--no-edge-aa` puts it back exactly as it was if you dislike it.
+## The stripes on a distant wall
+
+Look at a wall from far enough away and the renderer stops drawing it voxel by voxel — it draws the
+average of a bigger and bigger box, because at that distance a box is all a pixel can hold. That is
+what makes the whole building affordable to draw at once.
+
+The awkward part has always been the moment of changeover. A wall twenty-five metres away wants
+boxes half a metre across and a wall twenty-six metres away wants them a metre across, and the wall
+that runs between the two has to be both. What it did was alternate: a fixed four-by-four pattern of
+pixels, some drawn at one size and some at the other, which is an old and honest trick — it keeps
+the picture steady when you stand still, because a pixel always makes the same choice. But the two
+sizes are different average colours, so you could see the pattern, and walking towards the wall made
+it crawl across the surface.
+
+Now the two sizes are mixed instead of alternated. A pixel that is three quarters of the way from
+one size to the next draws three quarters of the way between the two colours, and both halves of the
+pattern arrive at the same answer — so there is nothing left to see a pattern in. The choice of
+which size of box to actually *hit* is untouched, and that is deliberate: that choice is also what
+decides how much of the pixel the wall covers and which patch of surface gets its own lighting, and
+those are not things to change while fixing a colour.
+
+**Two honest limits.** The first is that this only does something where the two sizes really are
+different colours, and on a building made mostly of one stone that is a narrower band than it
+sounds. The second is that this machine cannot show it to you: with no graphics card, two runs of
+the *same* build differ on four fifths of the picture, because the lighting is still settling when
+the photograph is taken. What could be measured is the colour the renderer chose, before any light
+touched it — nine per cent of the picture moved, by about a tenth of the way from black to white,
+and every number that describes the *shape* of what was hit came back identical. On your machine,
+at full resolution, the place to look is a large flat surface at middle distance while you walk
+slowly towards it.
+
+## The speckle on anything you have just turned towards
+
+This is the other half of the sun's guess three sections up — the one that is in the build and
+switched off. This half is in and switched on.
+
+When a surface comes into view the renderer fires one ray at the sun to find out whether the sun can
+reach it. One ray has only two possible answers — yes or no — so a wall that is really nine tenths in
+shadow comes out as a scatter of black and white faces, each of them wrong, until enough rays have
+been fired to average them out. That takes a few frames, and it is a few frames on **every** surface
+you turn towards, walk up to, or reveal by cutting something away. Measured on the close camera of
+the facility: **135,071 of its 589,870 surfaces, twenty-three per cent, had not yet fired the four
+rays it takes to have an opinion**. That is what the speckle is made of. It is not the shadows being
+wrong; it is the shadows not having been measured yet.
+
+What has changed is that the renderer now knows the difference between an answer and a guess. Every
+small surface sits under a bigger one — one coarse surface covers five hundred and twelve of them —
+and that bigger one was measured long before its children were even found. So a surface with one ray
+to its name is now drawn mostly as its parent, a surface with two is drawn half and half, and by the
+fourth ray it is entirely its own. Nothing extra is traced: it is the same rays, read more honestly.
+
+**The number four matters and it is not a dial.** Four is where the renderer already stops treating a
+surface as new. Stopping there means a real shadow edge — the soft edge under a cornice, which takes
+about four frames to resolve — is left exactly as it was, to the last decimal place. A longer blend
+would have smoothed the speckle further and taken the edges of your shadows with it, which is the
+trade this deliberately refuses.
+
+**And it was nearly shipped doing a third less than it should**, which is worth saying because the
+thing that caught it was not a picture. Measured on the small test scene here, the change moved so
+little that it could have been switched off and nobody would have known: the difference between
+having it and not having it was smaller than the difference between two runs of the *same* version.
+Rather than look at the pictures again, the renderer was made to COUNT what it was doing — how many
+surfaces asked for a parent to lean on, and how many were turned away. The answer was that **sixty-four
+per cent of them were being turned away**, because the parent has to be reasonably well measured
+itself and the test for that had been copied from somewhere it meant something different. Loosened to
+the honest test — is the parent better measured than the surface asking? — it now serves a third more
+of them. The remainder are the first two or three frames after you spin round, where nothing above is
+any better informed either, and those fill in immediately afterwards.
+
+**What could not be checked here is the building itself.** The machine these sessions run on shares
+its memory with several others, a picture of the facility needs about nine gigabytes, and three
+attempts were killed by the system part way through — one of them sixteen minutes in. The facility is
+where the twenty-three per cent was measured and it is where this should show best, so that is the
+first thing to look at on a machine with a graphics card.
+
+## You can look at the clips on your phone now
+
+**<https://worldshapergame.github.io/WorldShaper/>**
+
+Every clip in the project — the whole facility, each of its twenty parts, and the little test
+scenes — is now a web page. Open it on a phone, pick one from the list, and drag to turn it round.
+The slider along the top cuts the clip in half, and you can slide the cut all the way through: the
+front wall goes and you are looking into the rooms, with the stone showing solid where it has been
+sliced rather than hollow. Press **Walk** and you are standing on the lawn at eye height. Walk up
+the steps and in through the bronze door. The up button jumps; tap it twice and you fly, and then
+the two buttons take you up and down.
+
+**It rebuilds itself.** The parts of the building are being worked on all the time, and the site
+follows: every time one is changed and pushed, it is rebuilt within a few minutes, and if you have
+that part open on the page it reloads itself with the camera exactly where you left it. So you can
+watch a piece of the building change while somebody is changing it.
+
+**And it opens straight away, even when it is busy rebuilding.** Working out a building of this size
+one voxel at a time is real work, and the first time it is done it takes minutes however it is
+arranged — so it is spread over twelve machines at once, each taking every twelfth clip, and none of
+them redoes a clip that has not changed since last time. Ahead of all of that, the page itself goes
+up within about half a minute, showing every clip that has been built before. The new ones appear on
+the list on their own as they finish. Nothing to reload, and never a blank site while it works.
+
+The materials are real — glass is see-through, bronze and gilt look like metal, the copper dome is
+green, the marble is polished. What it does *not* do is the light. The game traces light properly
+and no phone can, so the site draws the light in advance and paints it on: the inside of a room is
+dark because it has been worked out in advance that little sky reaches it, rather than because the
+light got there. It is the difference between a photograph and a very good drawing. Everything about
+*what the building is* is exact — it is built by the same code the game builds it with, from the
+same files — and everything about *how it is lit* is an approximation.
+
+**It found a real fault, and not in the website.** When each part of the building is drawn on its
+own, the dome came out as a twelve-metre saucer less than a metre tall, in the wrong colour. The
+building is written to be positioned by one line that moves the whole thing down 3.5 metres so that
+where you spawn is the middle of the rotunda floor; that line moved the building and the paint, and
+did not move the *names* of the parts. Nothing had ever asked for a part by name afterwards, so
+nothing had ever noticed. It is the kind of mistake that produces no error and no crash — just a
+wrong picture — and a picture is exactly what was missing until now.

@@ -8227,3 +8227,620 @@ and so does `--no-coarse-paste`.
 | D662 | **It still blocks the main thread** | honesty | A background reader races a brick being FREED, which no epoch check can repair afterwards |
 | D662 | **`--clean-world` is card-free and is a gate** | build | Exits non-zero if either arm fails to reproduce itself |
 | D662 | **The camera dependence is untouched** | honesty | D630's other objection; a partial world still protects 0 materials |
+## D663 — R5d's first half: a coarse node stops being a solid block, and the mechanism is R4d's
+
+Every primary hit in this renderer has been fully opaque. A node coarser than a voxel — which is
+everything past about twenty metres — was drawn as a solid block whatever fraction of it was really
+matter, so a distant railing was a bar, a window frame was a slab, and every silhouette against the
+sky was a hard stair-step that crawled as the camera moved.
+
+The number to fix it has been in the buffer the whole time and nothing read it. `NodePool::build_leaf`
+counts, for each of the six face directions, how much of the node's 8×8 face-on projection has matter
+behind it; `node_march` puts it in `NodeHit::coverage`; `visibility.comp` packs it into byte 3 of the
+visibility word. `resolve.comp` then ignored it, **and the comment saying why was stale**: it
+described the ALPHA of the filtered colour, which is a volumetric fill fraction that halves every
+level, and warned that blending by it dithered distant crates into the sky. That was true of a
+quantity this buffer stopped carrying before the rewrite began. The comment is corrected in the same
+change.
+
+**What is built.** When the primary ray stops on a node with `level > 0` and a coverage under full,
+the ray is cast again past that node and the far surface is packed into R4d's `in_behind` image —
+same wire format, same face-slot lookup, same folded colour, read by the same twenty lines of the
+composite. `through` is `1 - coverage/255` in all three channels.
+
+**One bit had to be added, and it is the part that would have been easy to get wrong.** R4d and R5d
+scale the NEAR surface differently and the difference is visible rather than pedantic:
+
+| | what `through` means | what it scales |
+|---|---|---|
+| glass (R4d) | how much of what is behind the pane arrives through it | the pane's **diffuse only** — its reflection and its emission happen AT the face and are not attenuated by the body of it |
+| an edge (R5d) | the share of the pixel the near surface does not occupy | **all of it** — diffuse, specular and emission, because over that share there is no surface to have a highlight |
+
+Reusing the glass path's asymmetry by accident would leave a distant railing's specular and a distant
+fitting's glow at full strength over a pixel they cover a third of, which sparkles along exactly the
+silhouettes this stage exists to settle. Bit 18 of the `in_behind` word says which question was
+asked; the composite passes `lets_past` of nought and scales the whole return instead.
+
+**Three things were built to make it right rather than merely present.**
+
+- `NodeHit::coverage_exit_t`, taken free from the DDA's own `t_max`, is where the ray leaves the cell
+  the coverage was read off — and it is **nought at the two other places `coverage` is set**. Both of
+  those read the byte off a node COARSER than the cell they draw: the in-brick march takes the
+  brick's byte for a pixel resolving two voxels, and the stand-in takes the parent's for a cell one
+  level under it. Blending a pixel by a fraction measured over eight times its footprint is trap 6 at
+  a different scale, so those two get no edge AA at all.
+- **`node_march` gained a `start_t`**, and this is the one that is not obvious. Launching the second
+  march from the far side of the node is the natural way to write it, and it silently RESTARTS THE
+  DETAIL CLOCK, because `footprint` is `t · pixel_angle` with `t` measured from wherever the ray
+  began. A ray launched from a silhouette a hundred metres out believes the eye is standing on the
+  silhouette and resolves the landscape behind it in bricks — eight times finer than the pixel can
+  show, and, far worse, eight times finer than what its miss reports then ask the pool to **build**.
+  Streaming the world behind every edge at a resolution nobody can see is the unbounded growth this
+  rewrite exists to stop. Keeping the eye as the origin and skipping forward in `t` keeps the
+  footprint, the world clip, the D156 nudge and the returned `t` all eye-relative. Nine call sites
+  pass `0.0`; R4d's two bent segments keep it deliberately, because a bent segment does not continue
+  the original ray and the eye-relative distance it would need is not a number that code has.
+- `kEdgeCoverageFull` = 251 skips the march for a node 63 of whose 64 projected columns hold matter,
+  where the blend is under the quantisation of the byte it would be packed into. **The threshold is
+  not the cost control and saying so matters**: a flat wall struck face on has every column covered,
+  reports 255, and pays nothing. The cost is proportional to the number of EDGE pixels rather than to
+  the number of coarse pixels, by construction.
+
+**Measured, card-free, one build and one flag.** No clip in this repository could take the picture:
+every scene small enough for the software rasteriser is four metres across and a pixel resolves a
+single voxel throughout, so `--no-edge-aa` and the default are bit-identical on all of them.
+`clips/edge_aa_test.clip` is written for this — two railings of twelve-centimetre posts at thirty and
+fifty metres, an open lattice at forty, and a solid wall behind the right-hand half so the same
+structure is seen against geometry on one side and against sky on the other, with no floor because a
+floor is three hundred thousand voxels on its own. 320×200, `--settle`, both arms settled at frame
+240 and shot at measured frame 40, both on scene `047acb7e41e2668b`, both `--no-face-lobe --quality 7
+--no-auto-quality --clip-coarse 1`, camera `0,14,-6,90,-20`.
+
+**Below the cloud deck — 42,880 pixels — exactly 402 differ, and every one of them is inside the
+40 columns and 25 rows the structure occupies (x 140–179, y 78–102).** Mean absolute difference over
+those 402 is **21.280 of 255**, worst channel **209**. The pair was taken twice, either side of a
+comment-only rebuild, and read 405 at 21.507 the first time — the wobble is the face store's own
+convergence and both arms sit in the same place. Everything outside that box is bit-identical,
+which is what says the flag reaches only what it is meant to. Looked at magnified, side by side: the
+control's posts and rails are hard blocks of full-strength colour with the sky cut square around
+them, and the same posts blended read as bars with weight rather than as steps.
+
+**The box gets DARKER, not lighter — 141.120 against 142.552 in mean luma — and that is the right
+sign.** The rails are pale stone against a sky darker than they are, so a rail that covers half a
+pixel now contributes half its brightness instead of all of it. A change that lightened everything
+would have been the composite blending towards the sky rather than towards what is actually behind.
+
+**Two things had to be controlled for, and the first attempt at this measurement was wrong in a way
+worth recording.**
+
+- **The light meter moved the whole frame.** The first pair differed on **99.877%** of the picture,
+  including sky the feature cannot touch, because letting sky through the structure raised the
+  frame's log-average and the meter chose **2.628× against 2.728×**. Every pixel then differs and the
+  measurement says nothing about edges. `--no-auto-exposure` is required for this A/B — and the
+  exposure shift is itself real, so it is a finding rather than only a nuisance.
+- **The cloud deck runs on the wall clock.** With the exposure pinned the pair still differed on
+  **26.8%**, in a band across the whole width, and the difference map is a photograph of the clouds:
+  `params.sky_cloud[1]` is `time_seconds · kGameSecondsPerSecond` in REAL seconds, so two runs of
+  different speeds photograph different weather at the same frame number. Trap 8's shape with a clock
+  instead of a sampler. Aiming the camera twenty degrees down puts the structure below the horizon
+  where the deck is not, and the frame outside it goes bit-identical.
+
+**Cost is UNRESOLVED here and the first attempt to state it was wrong.** Two pairs of arms,
+alternated within minutes of each other, disagree about the SIGN: visibility read **17.083 against
+15.724 ms** in one pair and **15.480 against 16.998** in the next, and resolve **14.783 against
+13.730** then **14.072 against 14.403**. This is a software rasteriser on a four-core container
+shared with three other builds, and trap 29 is exactly this. One pair would have been reported as a
+9% regression; the honest answer is that the milliseconds are not measurable from here at all, and a
+card has to give them.
+
+**What IS repeatable is the STORE, and it is the number to watch**: the second march claims the
+surfaces it lands on, so the face store holds **955 live against 583** (942 against 583 in the
+earlier pair) and the node pool **1,398 leaves against 1,329**. That is the cost of the far half of
+an edge pixel being lit at all rather than falling to the composite's full-sun fallback, and it is
+the same trade D604 took for the surface behind a window. On a scene with four objects in it that is
+a 64% growth in live faces; on the facility it wants measuring against the face budget before this
+is trusted at 4K.
+
+**What is not built.** The plan asks for up to three partial hits composited; `out_behind` carries
+one surface a pixel, so a partly covered node behind a partly covered node is drawn opaque — which
+errs towards the picture this replaces rather than past it. And the coverage FOLD is a maximum over
+children rather than a projection of its own (`NodePool::fold_children`, deliberate, errs towards
+*present*), so above the brick a node reads as more solid than it is: a railing gets its blend, and a
+silhouette across a node that is half solid wall gets none at all. `tests/test_node_pool.cpp` pins
+both halves of that so the next session finds it in a test rather than in a picture.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D663 | **Edge AA reuses R4d's second march and its image** | decision | The blend, the wire format, the face lookup and the composite already exist; a second mechanism would be a second thing to keep in step |
+| D663 | **A bit says which of the two blends it is** | decision | A pane scales the near diffuse alone; a share of a pixel scales all of it. Sharing the code without sharing the rule is a sparkling silhouette |
+| D663 | **`start_t` rather than a moved origin** | decision | A moved origin restarts the detail clock and asks the pool to build the world behind every edge at eight times the needed resolution |
+| D663 | **Only the coarse-node branch gets it** | decision | The other two coverage writers read the byte off a node coarser than the cell they draw — trap 6 at a different scale |
+| D663 | **251 is "solid"** | decision | The last sixty-fourth of an edge is under the quantisation of the byte it would be packed into |
+| D663 | **The stale comment in `resolve.comp` is corrected** | correction | It described the filtered colour's alpha, which this buffer stopped carrying before the rewrite began |
+| D663 | **`--no-auto-exposure` is required for this A/B** | finding | The meter reads 2.628× against 2.728× and moves 99.877% of the frame |
+| D663 | **The cloud deck is not comparable between two runs** | finding | It is driven by REAL seconds, so a slower arm photographs different weather. Keep the horizon out of the shot |
+| D663 | **The face store grows 583 → 955** | honesty | The second march claims what it lands on. Owed a measurement on a real scene with a card |
+| D663 | **The frame COST is unresolved here** | honesty | Two pairs of arms minutes apart disagree on the sign; one of them alone would have read as a 9% regression (trap 29) |
+| D663 | **The fold's maximum limits how much this can do** | honesty | Above the brick a node over-reports coverage, so a wall's silhouette gets no blending; pinned in the tests |
+## D664 — R5c's first half: the level dither stops deciding the colour, and keeps deciding the shape
+
+The marcher picks how coarse a cell to stop on from the pixel's footprint, and the fraction between
+two levels is spent on a 4×4 ordered dither: `level = clamp(int(floor(log2(footprint) + dither)),
+0, 7)`. That is what lets it work with no temporal accumulation behind it — the level a pixel picks
+is a function of the pixel and never of the frame — and it is also why a surface halfway between two
+levels comes out as two flat tones in a fixed tile.
+
+**The dither is kept and the colour is taken off it.** `log2(footprint)` says exactly how far
+between the two levels a pixel sits, and it is in hand at the point the level is chosen and free.
+Both arms of the pair now aim at the same number:
+
+    base = floor(log2(footprint)),  frac = log2(footprint) - base
+    drawn = (1 - frac) · colour(base) + frac · colour(base + 1)
+
+A pixel that took `base` blends towards its parent by `frac`; one that took `base + 1` blends
+towards the child the ray entered by `1 - frac`. Where both fetches land the two pixels draw the
+same colour; where one cannot, that pixel keeps exactly what it drew before, so the pair is left
+closer than it was rather than further. `--no-level-blend` is the control arm and probe bit 11.
+
+**Deleting the dither instead is the thing this refuses to do, and the reason is written in
+`node_march`**: the level decides the coverage byte and the face key as well as the colour, so
+removing it moves which pixels report full coverage — a whole surface shifting a few per cent and
+43% of pixels different from the marcher it replaced. The blend is only meaningful because
+`NodePool::fold_children` folds a parent EXACTLY from its children, weighted by their coverage, so a
+point between the two is a point on a line between one picture at two scales rather than a guess
+(D149 is the refusal this is not).
+
+### What it cost to measure, which was most of the work
+
+The shaded picture cannot resolve it, and that is not the change's fault. **Two runs of ONE arm
+differ on 81.4% of pixels at a mean of 3.41 of 255** — the facility at 320×200, settled, quality
+pinned, one world — because the face store's light is still converging at the frame the shot is
+taken and the pool's build order is not reproducible (D233, trap 9). The two arms differ on 81.5% at
+3.42. There is no signal in that comparison in either direction.
+
+Three things had to be nailed down before any figure meant anything:
+
+- **The world.** A first pair at frame 60 came back on content `a5431ed48647bc18` and
+  `894b4cf0245912f9` — the facility was still sharpening, and the arm that renders slower gives the
+  background sampler more wall clock (trap 8). Cured by settling once to write the cache and then
+  loading it in both arms, which is also D244's rule. Every figure below is world
+  `2059a02689b7bf7c`, 70 chunks, 125,493,371 solid voxels, in eight runs that all printed it.
+- **The quality ladder.** A card-free frame is ~600 ms against a 16 ms budget, so auto-quality walks
+  down its rungs — and rung 0 is a detail bias of 1.6 and half the resolution, which moves every
+  level boundary in the picture. Pinned with `--no-auto-quality --quality 7`.
+- **The instrument.** Debug views 12–15 dump the visibility buffer's four words straight into a
+  PNG's four channels, losslessly. View 14 is `hit.colour` with no light in it at all; view 12 is
+  face | level | steps | coverage, which this change must not move by a bit. That is where the
+  measurement lives.
+
+### The figures, all at `0,2,-20,90,0` on `clips/facility.clip`, settled, quality 7
+
+| view | window | same arm twice (the floor) | blend against control |
+|---|---|---|---|
+| 14, the folded colour | 160×100 | **160 of 16,000 pixels (1.00%)**, mean 196 over those | **1,441 (9.01%)**, mean **24.4** over those |
+| 12, face/level/steps | 160×100 | 308 (1.925%), mean 248 over those | 320 (2.000%), mean 248 |
+| 12, the coverage byte | 160×100 | **0** | **0** |
+| 14, the folded colour | 320×200 | 316 (0.494%) | 328 (0.512%) |
+
+Read the two magnitudes rather than only the counts: the floor's differing pixels differ by ~196 of
+255 because they are pixels where the pool built something different — sky against geometry — while
+the blend's differ by 24, which is what a blend between two folded averages a fraction apart looks
+like. The geometry word moves by 12 pixels of 16,000 against a floor of 308 that moves the same way
+for the same reason, and **the coverage byte is identical in every comparison**, which is the claim
+that mattered: the dither still decides the shape.
+
+**At 320×200 the change has almost nothing to do, and the arithmetic says why before the measurement
+does.** The footprint is `t · 2 tan(fov/2) / height` in voxels, and the pool holds no node between a
+voxel (level 0) and a brick (level 3) — so `colour(1)`, `colour(2)` and `colour(3)` are all the same
+brick average, and a footprint anywhere between two and eight voxels has two members of a pair with
+the same colour in them. At 320×200 and a 90° lens the facility at twelve to thirty metres lands
+squarely in that band. At 160×100 the same camera doubles the footprint onto the (3, 4) pair — a
+brick's average against the first folded node above it — and the level histogram of the shot agrees:
+of 13,717 hit pixels, 3,405 at level 2, **7,765 at level 3, 1,607 at level 4**, and 105 at level 0.
+
+In the shaded picture at 160×100, with the floor measured beside it rather than assumed:
+
+| | blend, run A | blend, run B (the floor) | control |
+|---|---|---|---|
+| pixels differing from run A | — | 80.16% at mean 4.01 | 83.00% at mean **5.33** |
+| 4×4 phase-locked component | 3.866 | 3.812 | **3.980** |
+| neighbour gap, 1 column ÷ 4 columns | 0.6683 | 0.6757 | 0.6762 |
+
+The phase-locked component is the only one of the three that clears its own floor, and only by about
+twice it: the two arms are 0.14 apart where two runs of one arm are 0.054 apart. The gap ratio does
+not clear it at all — 0.0079 between the arms against 0.0074 between two runs of one. Everything
+moves the right way and the shaded frame is simply not where this can be demonstrated on a machine
+with no card; the colour word is.
+
+### What is deliberately not in it
+
+- **A level-0 hit.** The composite reads a type id at level 0 and a folded colour above it — one
+  payload field, two mutually exclusive readings — so the level-0 arm of the (0, 1) pair cannot be
+  moved from the marcher at all. The level-1 arm blends towards the voxel's own colour, which leaves
+  that pair `frac` of the step apart instead of the whole of it. Moving the other half means
+  changing what `visibility.comp` packs, and belongs with R5c's second half.
+- **A stand-in.** It already draws a cell coarser than the pixel asked for, because the pool has not
+  built the one it wants; blending it with its own parent would smooth a picture that is about to be
+  replaced wholesale, at a descent per unbuilt pixel.
+- **The light rays.** Ambient, shadow, gathering and lobe rays all go through `node_march` and all
+  pass `stand_in = false`; that flag is exactly "this ray's colour will be drawn", so it is the gate.
+  A lighting ray reads an average and divides it by π over dozens of samples, and it is 63% of a
+  moving frame — paying a descent per ray to smooth a number that is about to be averaged is the
+  wrong trade in both directions.
+- **Anything under a sixteenth.** `kNodeBlendDeadband` is the ordered dither's own step and not a
+  tuning constant: below a sixteenth of the way into a pair no pixel of the 4×4 tile picked the other
+  level at all, and the weight tested is the pixel's own, so the residual is bounded by a sixteenth
+  of the step between two folded averages at either end.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D664 | **Blend the two levels' colours, keep the dither** | decision | The dither decides coverage and the face key, and moving those is 43% of pixels |
+| D664 | **The parent is a locate, the child is one more turn of the descent in hand** | decision | The expensive direction is the one the deadband is for |
+| D664 | **Light rays do not pay it** | decision | `stand_in` is already "this colour will be drawn"; a lighting ray averages the error away |
+| D664 | **The shaded picture cannot resolve this on this machine** | finding | Two runs of one arm: 81.4% of pixels, mean 3.41 of 255 |
+| D664 | **Views 12–15 are the instrument** | finding | The colour word alone moves 9.01% against a 1.00% floor |
+| D664 | **Levels 1 to 3 are one colour, and always were** | finding | No node between a voxel and a brick, so a third of the log2 range has no dither in colour at all |
+
+## D665 — the sun a face has barely measured is no longer believed as though it were measured
+
+**`kFaceSettled` is one, and one shadow ray is a coin toss.** D660 named the fault and fixed the
+wrong half of it. The composite reads a face the moment it has cast a single ray at the sun, so in a
+room whose true answer is 0.05 one face in twenty reads fully lit — scattered over every surface the
+camera has just turned towards, walked up to or revealed by carving. The close camera's own audit
+says how big that population is: **135,071 faces of 589,870, 23%, have fewer than `kFaceEager` = 4
+samples**, which is the same figure the handover quotes as *"the grain is faces that are still
+measuring, not converged faces disagreeing"*.
+
+R9d already built what should stand in for such a face — `visibility.comp` hands the composite the
+coarse face three levels up, which five hundred and twelve faces share and which is therefore
+smooth — **but it is a hard switch**: no samples at all, or your own one-sample answer believed
+outright, with nothing between. **D665 is the ramp.** A reader believes a face's own ratio in
+proportion to how well measured it is and takes the rest from that same stand-in, which is
+`bounce_confidence`'s shape applied to the one term that never had it.
+
+**It casts no rays.** D394 is the standing measurement that metering an unconverged face's burst
+makes the transient worse, because what this pass spends on such a face is mostly the face and not
+the ray, so anything in this class has to be a different reading of rays already taken. This is:
+one word a face, written where the counters are written, read by the composite and by a gathering
+ray out of a record both were already loading.
+
+**Four, and it is `kFaceEager`'s four rather than a figure with room to be tuned.** The argument is
+in `shaders/face_terms.glsl` above `kFaceSunStandIn` and has four parts, of which the last is the
+gate:
+
+- it is where this renderer already stops treating a face as new — below `kFaceEager` a face is
+  exempt from the shading stride and casts every frame — so the ramp is exactly co-extensive with
+  the every-frame phase and the stand-in it blends towards is refreshed on every frame it is used;
+- it is the count the audit already calls settled, so the population it touches is precisely the 23%
+  above and neither number has to be inferred from the other;
+- `kFaceEditSeed` is eight (D373), so any figure above eight would blend every face inside an edit
+  box towards a stand-in the same edit has just reseeded;
+- **a settled shadow edge is untouched, to the bit.** R5a deliberately does not filter the sun,
+  because a shadow edge is a real high-frequency feature, and this must not become that filter by
+  another route. A penumbral face reaches four samples within four frames — it is eager, so it casts
+  every frame — and from there `face_sun_believed` is the identity.
+
+**Where the number lives, and why it is stored rather than looked up where it is read.** The
+composite is the reader this exists for and the composite cannot do the ancestor walk: `resolve.comp`
+holds the face record and has no binding for the face hash table, no `NodeParams`, and no way to turn
+an ancestor key into a slot. Carrying a second slot in the face-slot image is a word a PIXEL — 66 MB
+a frame at 4K — to say what one word a FACE says, and there are two orders of magnitude fewer faces
+than pixels (D205). So `shade_faces.comp` publishes the stand-in's ratio into word 20 of the face
+light record on every visit while the face is short, and `kFaceLightWords` goes 20 → 21 (+4.2 MB,
+88,704 KB of face light against 84,480).
+
+**The control arm is spelled in the WRITER and not in the reader, and that is forced rather than
+chosen.** `resolve.comp` has no binding for the light probe buffer, so `--no-sun-confidence` cannot
+be a branch there. Cleared, the shading pass leaves word 20 at nought, the known bit is absent, and
+`face_sun_believed` returns the raw ratio — **bit-exactly**, by an early return rather than by
+`mix(x, own, 1.0)`. That is `kProbeDenoise`'s arrangement, reached from a harder direction.
+
+**It is not `--sun-seed` and the two cannot double-count.** D660's lever decides where a new face's
+estimator STARTS, once, at claim time; this decides how far that estimator is BELIEVED while it is
+still short. A seeded face arrives holding its ancestor's own ratio at three samples, so what this
+blends is three quarters of that ratio with one quarter of the same ratio, which is the ratio. With
+both on, a face starts at its ancestor's answer and is fully its own after one ray of its own instead
+of four.
+
+**The gate that is not a picture.** `tests/test_sun_confidence.cpp` reads `kFaceSunBelieve` out of
+`shaders/face_terms.glsl` and holds it against `kFaceEager` in `src/world/face_store.hpp` and against
+`kFaceEager` in `node.glsl`, then pins the ramp: 0.25/0.5/0.75/1 at one to four samples, the identity
+at four and above for every stand-in value, the edit reseed landing past the ramp, and the packed
+nought of a fully shadowed ancestor being a different word from a record nobody has written (trap 7
+in sixteen bits). Three copies of one number held together by a comment is the arrangement that rots
+in silence; a test that reads the file is not.
+
+**Measured card-free, and the first reading was wrong in the most useful way.** Not the facility —
+three attempts at it were killed, see below — but `clips/beam_test.clip`, a sealed dark room with one
+oculus, which is where *"the true answer is nought and one ray says otherwise"* is most of the
+picture. Both arms of every pair restored the same saved world, settled at frame 240, cut the camera
+through 180° at measured frame 60, and **every arm printed content `33ae49a68b94352f`**.
+
+**The pictures do not separate the arms, and three runs each is what says so.** Shaded, frame 72,
+`--no-secondary-light` in both arms:
+
+| arm | speckle | mean | roughness | mean |
+|---|---|---|---|---|
+| ramp on | 392.02, 395.78, 391.93 | **393.24** | 34.580, 35.005, 35.057 | **34.881** |
+| `--no-sun-confidence` | 395.83, 396.02, 395.35 | **395.73** | 35.064, 34.632, 35.181 | **34.959** |
+
+Every figure leans the right way and none of them clears its own spread: the ON arm's three speckle
+runs span **3.85** against a gap between the arms of 2.49. Two runs of ONE arm differ on 304 pixels
+where the two arms differ on 460. **Trap 9, and D660's shape exactly** — the repeat arm is what made
+it a measurement rather than a result.
+
+**What the pictures could not say, one counter said in a line.** The differences between the arms
+were not merely small, they were the WRONG SHAPE: bucketed by what the control read there, every
+differing pixel was a full flip between black and white — 252 pixels 0 → 255 and 212 pixels 255 → 0
+on the sun term alone (`--debug-mode 16`). That is what a re-rolled coin toss looks like and it is
+the one thing a ramp never produces: a blended face reads a quarter of 255, not 255. So the ramp was
+doing nothing on the faces that differed, and no picture could show why. **Trap 16 is the rule that
+settles this — do not measure a suspect signal again, count the events that produced it** — and
+`kProbeSunRamped` and `kProbeSunNoStandIn` are that count. Two words rather than one, because
+"nothing was under-measured" and "everything was and every ancestor was refused" print the same
+nought (trap 7). Three frames after the cut:
+
+```
+the sun's confidence ramp: 4665 faces short of 4 samples this frame, 3006 of them
+found no ancestor with 16 rays of its own (64.4%), so 1659 were drawn part way
+towards a stand-in
+```
+
+**Sixty-four per cent of the population this change exists for was being refused a stand-in, and the
+reason was a constant inherited without being asked whether it was the same question.**
+`kSunSeedMin` = 16 guards a prior written ONCE into a face's own counters at claim: that prior is
+believed for the rest of the face's life, so a thin ancestor there is noise that has to be measured
+back out, and refusing costs nothing — the face starts from nothing, which is what it did before
+D660. The ramp re-decides every frame and throws the blend away the moment the face has four rays of
+its own, so refusing is not free: it is the feature not happening, on exactly the faces it was built
+for. And the case that separates the two is the one that matters most — a camera turning into
+geometry it has never faced, where the coarse face is exactly as new as the fine one under it and
+takes about forty frames to reach sixteen samples.
+
+**So the read-time floor is its own constant, `kSunStandInMin` = 4, and it is `kFaceSunBelieve`
+again rather than a third number**: the honest test is whether the ancestor is better measured than
+the face reading it, and the face is under four by construction there. Measured on the same frame of
+the same world, the refusal falls **64.4% → 54.4%** and the population served goes **1,659 → 2,128**,
+a 28% increase for no rays and no extra walk.
+
+**The 54% that remain are structural and are not a bug.** Three frames after a hard cut into unseen
+geometry there is genuinely nothing better up the tree — the ancestor was claimed on the same frame.
+The ramp reaches those faces a few frames later, and the population it was measured against on the
+facility (23% of a SETTLED close camera) is the opposite case: there the coarse pyramid is long
+converged and the fine faces are the ones churning.
+
+**And the facility, which is where R5's gate lives and where the 23% comes from, could not be
+reached.** Every agent session on this container shares ONE memory cgroup of 13.3 GB; a card-free
+facility run peaks at **9.2 GB**; neighbouring sessions were holding 8 to 12 GB of it. Three attempts
+were OOM-killed, one of them sixteen minutes in. A kill writes no screenshot and leaves a log that
+stops mid-frame, which is at least loud — trap 30 one level out.
+
+**Two more arms were thrown away before any of this, and both are traps already in the list.** The
+first pair ran without `--settle` and the second arm resumed from the world cache the first had just
+written: content `900f16ba75a264f3` against `33ae49a68b94352f`, 4,242 nodes sharpened against 6,732.
+Two pictures of two different buildings, and only the `scene:` line said so (trap 8). And the first
+localised roughness figure applied the same black-pixel floor the whole-frame figure uses — the arms
+are black in slightly different places, so it summed **540 windows against 612** and reported the
+ratio as one comparison (trap 10, in the instrument).
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D665 | **The ramp is on by default** | decision | It costs no rays, it cannot touch a settled face, and its control arm is bit-exact |
+| D665 | **Four, and it is `kFaceEager`'s four** | decision | Where the renderer already stops treating a face as new, and early enough that a settled shadow edge is untouched to the bit |
+| D665 | **The stand-in is STORED, not looked up in the composite** | decision | `resolve.comp` has no face hash table; a second slot in the face-slot image is a word a pixel against a word a face |
+| D665 | **The control arm is in the WRITER** | decision | The composite has no binding for the probe buffer, so `--no-sun-confidence` cannot be a branch there |
+| D665 | **`kSunStandInMin` = 4 is NOT `kSunSeedMin` = 16** | decision | A prior written once and a blend re-decided every frame are different questions; at 16, 64.4% of the population was refused |
+| D665 | **Two counters, not one** | method | "Nothing was under-measured" and "every ancestor was refused" printed the same nought, and that is what hid the fault |
+| D665 | **The pictures do not resolve it here** | honesty | Three runs an arm; the within-arm spread is wider than the gap. D660's shape, and trap 9 |
+| D665 | **The counter is what found the fault** | method | Trap 16: count the events that produced a suspect signal rather than reading the signal again |
+| D665 | **The facility could not be reached from here** | honesty | Shared 13.3 GB cgroup, a 9.2 GB run, three OOM kills |
+
+## D666 — every clip is a web page, baked by the game's own sampler
+
+**The person this is for cannot look at a clip.** The game path traces on a desktop card; the
+facility is now built by many hands at once, a fragment at a time; and the only way to see whether
+this morning's fragment is any good has been to be at that desk. So the clips have been going into
+`main` unlooked-at, which is the condition every trap in §4 was written under.
+
+`documentation/24-clip-viewer.md` is what was built. In one line: **every clip in the repository,
+sampled and meshed by `tools/bake_web.cpp` in CI and drawn in a browser** — turn it round, drag a
+slider through it and see the inside, or walk in through the door. Forty clips, about three
+minutes, and the page reloads a clip in place when its file changes.
+
+**The baker does not read a clip file.** `load_clip_script`, `sample`, `despeckle` — the same three
+calls the game makes, in that order. That is D204's rule and it is the only thing that makes a
+viewer like this worth anything: two things deriving one world from one description is the failure
+mode, so what the site can disagree with the game about is the shading and nothing else. It says so
+on the page.
+
+`-DWS_TOOLS_ONLY=ON` configures `ws_core`, `ws_world`, `ws_game`, `ws_forge` and the tools on them
+and nothing else, so the bake is a Linux job with no Vulkan SDK and no SDL — the two dependencies
+that have actually broken this repository's CI (D641). Same sources, same warnings-as-errors bar.
+
+### Three faults it found, and the first is the one that mattered
+
+**`origin` moves the solid and the paint rules and NOT the names the file bound.** `apply_origin`
+wraps the solid in a translate and shifts every rule; the intermediate bindings stay where they
+were, because until now nothing reached for one afterwards. The facility shifts 3.50 m, so
+`part_dome` sampled in a box 3.5 m below its own matter: **197 × 21 × 197 voxels — a twelve-metre
+saucer four fifths of a metre tall, cut off where the box ran out, wearing one material instead of
+six** because the paint it was tested against belonged to whatever is 3.5 m lower. It is not a
+crash, it is not an error, and nothing but a picture would have shown it. Anything else that reaches
+for a part by name has the same trap waiting.
+
+**A fragment cannot be parsed on its own, and should not be shown on its own either.** No fragment
+includes `_order.clip`, so `doors.clip` alone does not know what a dentil is. So fragments are baked
+out of the *manifest's* parse with their own part as the root — and then **intersected with the
+building's own solid**, which was the second half and the one that makes them worth looking at. A
+part as its file binds it is the part before the manifest has finished with it: `part_walls` before
+the doors and windows are punched through it, `part_rotunda` as the solid drum rather than the room.
+Intersecting needs to know nothing about which voids apply to which part — a distinction the
+manifest itself has got wrong twice, D608 among them — because whatever the building kept is what
+shows. Walls 32,253 → 72,631 quads; rotunda a blank cylinder → a room with its doorway.
+
+**The parser could be made to end the process.** `block → expression → call → block` recurses once
+per `{` with nothing bounding it, and baking fragments singly hit a SIGSEGV inside
+`parse_clip_script` with gdb showing hundreds of frames of exactly that cycle. **It does not
+reproduce from the same file in a fresh process**, so what is written down is what was seen rather
+than a diagnosis — but a parser whose contract is that it collects errors and carries on must not be
+able to end a process, and it is fed files a player writes. `kMaxBlockDepth` = 64, and a test holds
+it.
+
+### What the viewer does about being a rasteriser
+
+It does not pretend. No screen-space reflections, no ambient occlusion pass, no denoiser; a mirror
+is a rough metal with a sky in it. What it is faithful about is the **matter**: every material
+reaches the browser as its 16-byte `VisualRecord`, unquantised — opacity, roughness, metallic, IOR,
+emission and tint, Beer-Lambert absorption, translucency, clearcoat, sheen. *Rasterised* is a claim
+about the light transport, not about what things are made of.
+
+The light that a rasteriser cannot work out is baked into a **0.4 m lattice of (sun, sky)
+visibility**, ray cast in the baker, read as one trilinear fetch. It is a lattice and not a vertex
+colour because **baked light does not survive greedy meshing**: faces merge only when everything
+about them agrees, so a gradient across a wall makes every voxel face its own quad. Corner occlusion
+takes four values and merges; sky visibility is a gradient and does not. Split by that property, a
+wall stays one quad and still darkens as it goes into a room.
+
+**Light leaks through walls and the number is a half.** A lattice point inside stone is read by the
+surfaces on both sides of it, because a trilinear fetch near a wall blends the air in front with the
+stone behind, so buried points are filled from their brightest neighbour at half strength, twice. At
+three quarters, every soffit in the halls wore a pale band where the sky above the roof reached
+through 0.45 m of masonry.
+
+### And the slice, which is why a viewer beats a screenshot
+
+A clip plane through a voxel mesh leaves an open shell — a wall cut in half is a sheet of paper,
+because a surface has no inside. So the cut is filled: the geometry behind the plane is drawn with
+the stencil buffer inverting on every fragment, which leaves odd parity exactly where the plane is
+inside matter, and a quad on the plane is drawn through that stencil. The **body** is clipped by the
+same plane as the eye, so cutting the front off a building lets you walk in through the cut.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D666 | **The baker calls the game's own sampler** | decision | D204: two readers of one description is the failure mode. The shading may differ; the matter may not |
+| D666 | **`WS_TOOLS_ONLY` rather than a second CMake list** | decision | One source list, one warning bar, and a Linux bake that no graphics dependency can break |
+| D666 | **A fragment is the manifest's part, intersected with the solid** | decision | Alone it does not parse; as authored it is the part before the building finished with it |
+| D666 | **A part must be moved by `origin_shift` before it is sampled** | fault | 3.5 m, silently, with the wrong paint and the top cut off |
+| D666 | **Resolution is a budget that halves, not a per-clip list** | decision | Nobody has to edit a table when a fragment grows; halving keeps the coarse lattice a subset of the fine one |
+| D666 | **Light in a lattice, occlusion in the quad** | decision | A gradient cannot be merged and a four-valued corner can; splitting them is what keeps a wall one quad |
+| D666 | **Buried lattice points are filled at half, twice** | fault | Three quarters put a pale band of sky across every soffit indoors |
+| D666 | **The cut is capped with a stencil parity pass** | decision | Without it a sliced building is hollow, which is a lie about stone |
+| D666 | **`kMaxBlockDepth` = 64** | fault | An unbounded recursion in a parser fed files a player writes |
+| D666 | **The crash does not reproduce in isolation** | honesty | Reproducible in that run, three times, with a backtrace; not since. Written as seen, not as diagnosed |
+| D666 | **`web/data/` is not committed** | decision | Derived, tens of megabytes, and stale the moment somebody edits a fragment |
+
+## D667 — the site was right for three hours and nobody could see it, and the cause was a queue
+
+D666 built the viewer. This is about the part after that, which was harder and is worth more: **a
+bake that is correct and never reaches the page is indistinguishable, from the page, from no bake at
+all.** Between them, four theories were written down before the right one, and three of them were
+wrong in the same way — they explained the symptom without anybody checking the thing that produced
+it.
+
+### Three wrong diagnoses of one cancellation
+
+The runs kept ending `cancelled`. In order:
+
+1. **`cancel-in-progress: true` and two pushes.** True, and it was fixed, and it was not the cause.
+2. **`false`, then.** Still cancelled.
+3. **The right one, and it was in the run list the whole time: runs 12 to 16 ended cancelled with
+   ZERO JOBS and five minutes on the clock.** They never started. A concurrency group holds at most
+   *one* pending run, and the schedule then set to every twenty minutes kept arriving and displacing
+   the run that was queued — the backstop cancelling the thing it was a backstop for.
+
+So there is **no concurrency group at all**, and the schedule is hourly. Nothing here needs
+serialising: two bakes of one commit write the same bytes, and Pages serialises deployments itself.
+The lesson is not about concurrency. It is that *"cancelled" was read as a verdict on the run for
+three hours, and one look at its job count said it had never been a run.*
+
+### And one cancellation that was mine, wrongly
+
+A healthy run was cancelled on the belief it had hung. It had not: the container clock and GitHub
+agreed only twelve minutes had passed. The background sleeps had been launched and polled **in the
+same turn**, so nothing was ever waited on — the poll read the sleep's empty output as elapsed time.
+Written down because it is the exact shape of §4's rule about counters taken from inside the change.
+
+### What a bake costs, and the two things that made it stop mattering
+
+A cold bake of the overhauled facility at 32 voxels to the metre is minutes per clip and the
+building itself dominates. Two changes, in the order they were needed:
+
+- **Twelve runners, each taking every twelfth clip.** No clip needs another's output, so the wall
+  clock becomes the slowest single clip rather than the sum. Sixteen seconds for the lightest shard,
+  thirteen minutes for the one holding the building.
+- **Every file carries the key of what made it** — spliced-source hash, settings, code hash, in the
+  header. A clip whose key still matches is read back rather than resampled, which is what makes a
+  warm shard finish in seconds and a bake incremental without a manifest to keep honest.
+
+### The early deploy, and the harm it could have done
+
+`--index-only` writes an index over whatever files are on disk and samples nothing, so the page can
+be published in half a minute out of the last run's clips while the new ones bake behind it. The
+first version of that job would have done real damage on its very first run: with no cache to
+restore it would have indexed an empty directory and published **a site with no clips on it, over a
+live site that had some**. It now starts from the published site itself, fetching every clip the
+cache did not carry, and it will not deploy an empty index nor overwrite a real bake that landed
+while it was fetching.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D667 | **No concurrency group on the pages workflow** | fault | A group holds one pending run; the schedule kept cancelling the queued run it existed to back up |
+| D667 | **"Cancelled" was read for three hours without reading the job count** | honesty | Runs 12–16 had zero jobs. They were never runs. Two fixes were shipped against the wrong cause first |
+| D667 | **A healthy run was cancelled on a hunch it had hung** | honesty | Sleeps launched and polled in one turn: nothing was waited on, and twelve minutes was read as an hour |
+| D667 | **Twelve shards, one clip in twelve each** | decision | No clip needs another's output, so the cold bake becomes the slowest clip and not their sum |
+| D667 | **The key of what made a file lives in the file** | decision | Incremental without a manifest that can go stale; a warm shard is seconds |
+| D667 | **The early deploy may only add** | fault | As first written it would have published an empty site over a populated one, on its first run |
+| D667 | **The viewer's own branch does not trigger the workflow** | decision | It is mirrored to `main` commit for commit; the two pushes were two identical runs and two racing deploys |
+
+## D668 — the Windows build had not compiled for as long as CI had existed, and the cause was a compiler limit
+
+`ci.yml` (D665's neighbour, added 2026-08-15) had never once been green. Every run failed the same
+way and the message was exact:
+
+```
+main.cpp(1106): fatal error C1061: compiler limit: blocks nested too deeply
+```
+
+**MSVC counts every `else if` as another nested block and gives up at 128.** `parse_options` had
+grown one branch at a time to 126, and with the `for` around it and the function body that is the
+limit precisely. The job compiled 405 of its 414 objects and stopped, so `ws_tests` never ran and
+neither did the headless audit — **a red CI that said nothing whatever about the code it exists to
+test**, for a day, while the facility overhaul and the clip viewer both landed on `main`.
+
+It is worth being plain about why it sat there: it was seen, it was named "pre-existing", and it was
+offered as something that could be fixed rather than fixed. A build that does not build is not a
+background condition.
+
+### The fix, and why it was checked rather than asserted
+
+Three functions of 42 branches. Each takes the argument and returns whether it recognised it; `i` is
+a reference because a flag carrying a value advances it. **The split points are arbitrary** — the
+chain is ordered by the history of the project, not by theme, and the comment says so rather than
+inventing a taxonomy for it. The *order* is not arbitrary and is preserved exactly: the chain is
+first-match-wins, and several branches carry `&& i + 1 < argc` in their own condition, so a flag
+missing its value has to keep falling through to the same warning.
+
+Rearranging 350 lines of a parser nobody can run here is exactly the shape of change that looks
+right and is not, so it was measured. `Options` is 117 fields of nothing but `bool`, `u32`,
+`std::string` and `std::vector<std::string>`, and `parse_options` touches nothing else — so both
+arrangements compile in isolation out of the real source, and both were run against **326
+invocations**: all 127 flag spellings on their own, every value-taking flag with a good value, a
+non-numeric one and a negative one, and every flag at once with and without values, dumping all 117
+fields each time. **Byte for byte identical**, both clean under `-Wall -Wextra -Werror`.
+
+### A hang, found by the harness in the code the harness was measuring
+
+`--light-read-period -3` never returns. The value casts to a `u32` near the top of the range,
+`period` doubles past 2^31 to zero, and `0 < asked` stays true for ever — the game hangs before it
+draws a frame, on a flag a person could plausibly mistype. Clamped to [0, 2^30] before the doubling.
+It was found only because the corpus fed every value-taking flag a negative number, which is worth
+remembering the next time a control arm feels like too much trouble.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D668 | **The argument chain is three functions** | fault | 126 `else if` is past MSVC's 128-block limit; the Windows build had never compiled |
+| D668 | **A build that does not build is not a background condition** | honesty | It was named "pre-existing" and left, so the tests did not run for a day while two large changes landed |
+| D668 | **Both arrangements were run against 326 invocations and compared field by field** | decision | A 350-line rearrangement of a parser is the shape of change that looks right and is not |
+| D668 | **The split points are arbitrary and the comment says so** | decision | There is no seam in the chain; a false taxonomy in a comment is worse than none |
+| D668 | **`--light-read-period` clamps before it doubles** | fault | A negative value hung the game before the first frame; found by feeding every flag a negative |
+| D668 | **`ci.yml` cancels superseded runs, per ref** | decision | Safe here in the way it was not in `pages.yml` (D667): nothing is scheduled, so nothing displaces a queued run |

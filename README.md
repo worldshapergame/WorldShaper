@@ -5,6 +5,21 @@ shapes at runtime — at **32 voxels to the metre**, which is a little over 3 cm
 
 Written from scratch in C++20 and Vulkan 1.3. No engine.
 
+## Look at the clips in your browser
+
+### **[worldshapergame.github.io/WorldShaper](https://worldshapergame.github.io/WorldShaper/)**
+
+Every clip in this repository, drawn in a browser and made for a phone. Pick one, turn it
+round, drag the slider along the top to cut it in half and see inside, or switch to **Walk**
+and go up the steps and in through the door. Tap the up button twice to fly.
+
+It is baked from the clip files by the game's own sampler and rebuilt on every push, so a
+fragment somebody changed ten minutes ago is what you are looking at — and a clip open on the
+page reloads itself, in place, when it changes. The materials are the clips' own; the light is
+baked and rasterised rather than path traced, because a phone cannot path trace.
+
+`documentation/24-clip-viewer.md` is how it works.
+
 ## What is actually built
 
 Stages 0–4 are complete and measured; Stage 5 is most of the way there. In the current

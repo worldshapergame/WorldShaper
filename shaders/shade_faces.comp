@@ -527,6 +527,32 @@ bool face_fold(uint slot, uint light_at, ivec3 node, uint level, uint dir) {
     return true;
 }
 
+// The counters of the nearest ancestor with a sun answer worth taking, or nought if there is none.
+//
+// Nought is unambiguous rather than a sentinel that could collide: a record whose counters are
+// nought has nought samples, and nought is below `kSunSeedMin`, so such an ancestor is refused by
+// the loop before it could be returned.
+//
+// It is a function because R5b's two halves ask this same question at two different moments, and
+// they ask it with different floors: `face_sun_seed` asks ONCE, on the frame a slot is handed out,
+// to decide what the estimator starts from, and takes `kSunSeedMin` = 16; `face_sun_stand_in` asks
+// on every visit while the face is short, to decide how far that estimator is believed, and takes
+// `kSunStandInMin` = 4. The whole argument for why one number could not serve both is on
+// kSunStandInMin in node.glsl, and it was measured rather than reasoned: at sixteen, **64.4% of the
+// faces the ramp exists for were refused a stand-in**. The floor is the ARGUMENT and the walk is the
+// function, so the two callers cannot disagree about what an ancestor is or about which one is
+// nearest.
+uint face_sun_ancestor(ivec3 node, uint level, uint dir, uint least) {
+    for (int step = 1; step <= kFaceAncestorStep; ++step) {
+        const uint found = node_face_lookup(node >> step, level + uint(step), dir);
+        if (found == kNoFace || found == kFaceTombstone) continue;
+        const uint anc = faces.items[found].counters;
+        if (face_samples_of(anc) < least) continue;
+        return anc;
+    }
+    return 0u;
+}
+
 // R5b: the sun's own prior, from the same ancestor the light terms take theirs from.
 //
 // A separate walk rather than a branch inside `face_light_seed`, and that is an ordering fact
@@ -545,16 +571,69 @@ bool face_fold(uint slot, uint light_at, ivec3 node, uint level, uint dir) {
 uint face_sun_seed(ivec3 node, uint level, uint dir) {
     const uint want = probe_sun_seed();
     if (want == 0u) return 0u;   // the control arm: --sun-seed 0
-    for (int step = 1; step <= kFaceAncestorStep; ++step) {
-        const uint found = node_face_lookup(node >> step, level + uint(step), dir);
-        if (found == kNoFace || found == kFaceTombstone) continue;
-        const uint anc = faces.items[found].counters;
-        if (face_samples_of(anc) < kSunSeedMin) continue;
-        // The ratio, at the confidence a prior is worth. `face_reseed` rounds rather than
-        // truncates, so a parent at 255 of 256 arrives as 3 of 3 and not as 2 of 3.
-        return face_reseed(anc, want);
+    const uint anc = face_sun_ancestor(node, level, dir, kSunSeedMin);
+    // The ratio, at the confidence a prior is worth. `face_reseed` rounds rather than truncates, so
+    // a parent at 255 of 256 arrives as 3 of 3 and not as 2 of 3.
+    return anc == 0u ? 0u : face_reseed(anc, want);
+}
+
+// R5b: the ratio a reader should fall back towards while this face is still measuring, published on
+// the face for the two passes that read it.
+//
+// # Why the stand-in is stored rather than looked up where it is read
+//
+// The composite is the reader this exists for, and the composite cannot do the walk: `resolve.comp`
+// has the face record — its key, its level and its counters — and no binding for the face hash
+// table, no `NodeParams`, and no way to turn an ancestor key into a slot. Widening the face-slot
+// image to carry a second slot is a word a pixel, which is 66 MB a frame at 4K to say what one word
+// a FACE says, and there are two orders of magnitude fewer faces than pixels (D205). So the walk
+// happens once per under-measured face per visit, here, and both readers take one word out of a
+// record they were already reading.
+//
+// # Why it is written on every visit and not only at claim
+//
+// A stand-in read once at claim time is a prior about the past. The ancestor is itself converging
+// while its children are being discovered, and a child claimed on the frame its ancestor had fifteen
+// samples would be refused a prior for ever (`kSunSeedMin` is sixteen) although the ancestor is
+// answerable one frame later. That is D554's lesson — a record whose value is FOR LATER will always
+// look idle to a clock stamped by use — and the cure is the same one: ask on the frames the answer
+// is used.
+//
+// # What that costs, and why it is not the ray D394 forbids
+//
+// Up to `kFaceAncestorStep` hash probes, on a face that is under `kFaceEager` and is therefore
+// already casting an unbounded shadow march this very frame. Three scattered thirty-two-byte reads
+// beside a march is not a cost this pass can see, and it is bounded to the eager population — 23% of
+// the store at the close camera, transient by construction, four frames per face. **No ray is cast,
+// paced or rescheduled**, which is the whole of what D394 rules out.
+//
+// The word is written on EVERY visit including the ones that clear it, rather than only when it
+// becomes non-zero. A face can fall back under `kFaceSunBelieve` after being over it — a sample that
+// contradicts a unanimous history drops it to two (`face_accumulate`) — so a write skipped on the
+// way up would leave a stale stand-in on the way back down, which is a face believing an ancestor it
+// has long since outmeasured.
+void face_sun_stand_in(uint slot, uint light_at, ivec3 node, uint level, uint dir,
+                       bool provisional_face) {
+    const uint samples = face_samples_of(faces.items[slot].counters);
+    // A card-claimed face IS the coarse stand-in, so what it would read is `kFaceAncestorStep`
+    // levels above itself and six above the geometry — almost never claimed, and a measurement of a
+    // place this face is only a part of. Excluded for the reason `face_light_seed`'s call site
+    // excludes it, in the same words.
+    if (probe_sun_confidence() && !provisional_face && samples < kFaceSunBelieve) {
+        // Counted before the walk, so the denominator is how many faces WANTED a stand-in rather
+        // than how many got one. See kProbeSunRamped: with one counter, a frame where nothing was
+        // under-measured and a frame where every under-measured face was refused print the same
+        // nought, and this change was read as doing nothing before the two were separated.
+        probe_add(kProbeSunRamped);
+        const uint anc = face_sun_ancestor(node, level, dir, kSunStandInMin);
+        if (anc != 0u) {
+            face_light.words[light_at + kFaceSunStandIn] =
+                face_sun_pack(float(face_lit_of(anc)) / float(face_samples_of(anc)));
+            return;
+        }
+        probe_add(kProbeSunNoStandIn);
     }
-    return 0u;
+    face_light.words[light_at + kFaceSunStandIn] = 0u;
 }
 
 void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
@@ -776,8 +855,15 @@ vec3 bounce_face_light(uint slot, NodeHit hit, uint material) {
                              float((hit.colour >> 16) & 0xFFu)) / 255.0;
 
     // Its sun, which is a fraction of the disc it can see, times the cosine at ITS normal.
+    //
+    // Believed in proportion to how many rays that fraction is of, exactly as the composite believes
+    // it, and out of the same word (R5b). The two readers share `face_sun_believed` for the reason
+    // face_terms.glsl exists at all: a face the light pass integrated as three quarters shadowed and
+    // the composite drew as fully lit would light a room by one renderer and draw it by another. It
+    // costs one word out of a record this line is already reading.
     const vec3 normal = vec3(face_normal(hit.face_dir));
-    const float visible = float(face_lit_of(counters)) / float(samples);
+    const float visible = face_sun_believed(float(face_lit_of(counters)) / float(samples), samples,
+                                            face_light.words[at + kFaceSunStandIn]);
     const float lambert = max(dot(normal, node_push.sun.xyz), 0.0) * visible;
 
     // Its sky and its near field, gated on having been measured, exactly as the composite gates
@@ -952,7 +1038,7 @@ SkySample sky_cast(uint index, float max_t) {
 
     const NodeHit hit =
         node_march(origin, dir, g_sky_pixel_angle, 0.0, false, false, false, false, true,
-                   probe_see_through() ? kThroughPass : kThroughStop, max_t);
+                   probe_see_through() ? kThroughPass : kThroughStop, max_t, 0.0);
 
     s.unknown = hit.hit && hit.unknown;
     s.sky = !hit.hit;
@@ -1199,7 +1285,7 @@ void lobe_cast(uint block, uint bin, uint bins, uint side, uint index, float pix
         face_point(corner, across, down, g_sky_normal, size, at) - chunk_origin;
     const NodeHit hit =
         node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
-                   probe_see_through() ? kThroughPass : kThroughStop, kNodeUnbounded);
+                   probe_see_through() ? kThroughPass : kThroughStop, kNodeUnbounded, 0.0);
 
     probe_add(1u);
     probe_add(kProbeLobeRays);
@@ -1527,7 +1613,7 @@ vec3 lamp_cast(uint index, out bool unknown, out vec3 to_lamp) {
 
     const NodeHit hit =
         node_march(from, dir, g_sky_pixel_angle, 0.0, false, false, false, false, true,
-                   probe_see_through() ? kThroughPass : kThroughStop, reach);
+                   probe_see_through() ? kThroughPass : kThroughStop, reach, 0.0);
     if (hit.hit) {
         unknown = hit.unknown;
         return vec3(0.0);
@@ -1903,7 +1989,7 @@ void main() {
         NodeHit hit = node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
                                  sun_through ? kThroughSolid
                                              : (probe_see_through() ? kThroughPass : kThroughStop),
-                                 kNodeUnbounded);
+                                 kNodeUnbounded, 0.0);
 
         // What survives the stone, and it is a COIN rather than a fraction because the counter it
         // lands in holds whole samples.
@@ -2128,6 +2214,22 @@ void main() {
             face_light_seed(light_at, ivec3(face.x, face.y, face.z), level, direction);
         }
     }
+
+    // ---- R5b: and how far a reader should believe the sun ray this face has just cast -----------
+    //
+    // Here, and the position is load-bearing in both directions. It is BELOW the sun's accumulation,
+    // so the counters it reads back include this frame's own sample and the two can never be a frame
+    // apart — which is the whole reason this quantity is affordable on the face at all: `counters`
+    // changes in exactly one place, so a word written beside it is exactly as fresh as it is. And it
+    // is below the reset block, because that block zeroes every word of the record for a slot the
+    // store has just handed out, and a stand-in published above it would be wiped by the line that
+    // is there to wipe the last occupant's.
+    //
+    // It is also ABOVE every early return under this point — the ambient term returns as soon as it
+    // finds itself converged — so there is no path on which a visited face updates its sun and does
+    // not update how far that sun is to be believed.
+    face_sun_stand_in(slot, light_at, ivec3(face.x, face.y, face.z), level, direction,
+                      provisional_face);
 
     // ---- what this face is made of (R4a) ------------------------------------------------------
     //

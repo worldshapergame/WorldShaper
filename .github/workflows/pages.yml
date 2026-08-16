@@ -1,0 +1,576 @@
+# The clip viewer: bake the clips somebody is actually working on, and publish the site.
+#
+# documentation/24-clip-viewer.md says what the site is. This is how it stays current, and the
+# awkward part is which COMMIT to bake.
+#
+# The obvious answer -- bake `main` on every push to `main` -- produced a site that was correct and
+# useless. The facility's overhaul lived on `claude/facility-building-overhaul-deuuxo` for a day:
+# sixteen commits, fourteen thousand lines, a ballroom, a chapel, a crypt, a library and a whole
+# estate, none of it on `main`. The site showed `main`, faithfully, and read as simply out of date.
+#
+# Nor is "also trigger on the branch" enough on its own, and this is the part that is easy to get
+# wrong: **GitHub runs the workflow file from the branch being pushed.** A branch cut before this
+# file existed does not have it, so pushing to that branch runs nothing at all. The push triggers
+# below therefore only help branches made from now on.
+#
+# So the job PICKS its own ref: the branch whose most recent commit to `clips/` is the newest, out
+# of `main` and every `claude/**`. It then checks that branch out and builds the baker from it too,
+# which is not fussiness -- `arc_test.clip` uses an `arc` shape that exists only on the branch that
+# added it, and a baker built from `main` cannot read that file.
+#
+# It is a LINUX job with no Vulkan SDK and no SDL, which is what `-DWS_TOOLS_ONLY=ON` is for: the
+# baker needs the field, the sampler and the type table, and none of those know what a GPU is. It
+# also means this workflow cannot be broken by a graphics dependency moving under it, which is
+# exactly how the release workflow was broken for months (D641).
+#
+# # Four jobs, because a cold bake in series is half an hour
+#
+#   plan     picks the ref once, so twelve runners cannot each pick a different one
+#   bake     twelve runners, each taking every twelfth clip. No clip needs another clip's output,
+#            so the work divides perfectly and the wall clock becomes the SLOWEST SINGLE CLIP,
+#            which is the building itself. Each keeps its own slice's cache, so a warm shard
+#            reuses its files and finishes in seconds.
+#   index    merges the twelve slices, writes the one index.json -- which costs nothing, because
+#            every file carries the key of what made it and is read back rather than rebuilt
+#   deploy   publishes
+name: pages
+
+on:
+  push:
+    # The viewer's own branch is excluded because it is mirrored to `main` commit for commit, and
+    # the two pushes were making two identical runs -- twenty-six runners drawing the same bytes
+    # from the same commit, and two deploys racing each other at the end of it. The job picks its
+    # own ref regardless of which branch moved, so the second run could never have said anything
+    # the first did not.
+    branches: [main, 'claude/**', '!claude/clip-viewer-website-iukadp']
+    paths:
+      - 'clips/**'
+      - 'src/forge/**'
+      - 'src/world/**'
+      - 'src/game/**'
+      - 'src/core/**'
+      - 'tools/bake_web.cpp'
+      - 'web/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/pages.yml'
+  # A sweep for the branches that cannot trigger anything themselves, hourly. It was every twenty
+  # minutes, which turned out to be often enough to keep cancelling the queued run it was meant to
+  # be a backstop for. It costs almost nothing when nothing has changed: the job asks the published
+  # site what commit it is already showing and stops.
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch to bake (blank picks the newest clip work)'
+        required: false
+        default: ''
+
+# NO CONCURRENCY GROUP AT ALL, and this is the third attempt at the same problem.
+#
+# `cancel-in-progress: true` meant a commit landing on a branch and on `main` was two runs and the
+# second killed the first. Setting it to false did not fix it: a group holds at most one PENDING
+# run, so with a schedule arriving every twenty minutes the queued run was cancelled before it was
+# ever given a runner. Runs 12 to 16 all ended `cancelled` with **zero jobs** and five minutes on
+# the clock -- never started, just queued and then dropped. From the page it is indistinguishable
+# from a site that simply does not update, which is what it looked like for three hours.
+#
+# Nothing here needs serialising. Two bakes racing write the same bytes from the same commit, and
+# GitHub serialises Pages deployments itself. So the group is gone, every run starts immediately,
+# and nothing can cancel anything.
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.pick.outputs.ref }}
+      sha: ${{ steps.pick.outputs.sha }}
+      skip: ${{ steps.pick.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # every branch, because the job chooses between them
+
+      - name: Which clips are the newest
+        id: pick
+        run: |
+          set -euo pipefail
+          # A push says LOOK AGAIN. It does not say what to bake.
+          #
+          # Taking the pushed branch was the obvious reading and it is wrong every time it matters:
+          # a push to `main` bakes `main`, a push to the viewer's own branch bakes the viewer's own
+          # branch, and neither is where the new clips are. The site's whole job is to show the
+          # newest clip work, so the answer does not depend on which branch happened to move --
+          # only an explicit dispatch overrides it.
+          #
+          # Picked ONCE, here, and handed to every shard: twelve runners each asking the question
+          # for themselves is twelve chances to disagree if somebody pushes mid-run, and half a
+          # building from one commit beside half from another is the one failure nobody could see.
+          chosen="${{ github.event.inputs.ref }}"
+          if [ -z "$chosen" ]; then
+            best=""; best_at=0
+            for ref in $(git for-each-ref --format='%(refname:short)' \
+                         'refs/remotes/origin/main' 'refs/remotes/origin/claude/**'); do
+              at=$(git log -1 --format=%ct "$ref" -- clips/ 2>/dev/null || true)
+              [ -z "${at:-}" ] && at=0
+              if [ "$at" -gt "$best_at" ]; then best_at="$at"; best="${ref#origin/}"; fi
+            done
+            chosen="${best:-main}"
+          fi
+          sha="$(git rev-parse --short "origin/$chosen" 2>/dev/null || git rev-parse --short "$chosen")"
+          echo "ref=$chosen" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Baking $chosen at $sha"
+
+          published=""
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            published="$(curl -fsS --max-time 20 \
+              "https://worldshapergame.github.io/WorldShaper/data/index.json?ci=$GITHUB_RUN_ID" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' \
+              2>/dev/null || true)"
+          fi
+          if [ -n "$published" ] && [ "$published" = "$sha" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$sha is already published; nothing to do"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # THE SITE BEFORE THE CLIPS. A cold bake of the building is ten minutes and the page itself is
+  # ready in thirty seconds, so it is published straight away out of the last run's clips and then
+  # published again when the new ones land. `--index-only` writes an index over whatever files are
+  # actually present and samples nothing: a clip that is missing or stale is left OUT of the index
+  # rather than half-written into it, so the site is always a smaller true thing and never a
+  # broken big one. The viewer re-reads the index every five seconds, so clips appear as they are
+  # baked without anybody reloading anything.
+  early:
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      have: ${{ steps.gate.outputs.have }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Graft the clips being worked on
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.plan.outputs.ref }}" != "main" ]; then
+            git checkout "origin/${{ needs.plan.outputs.ref }}" -- clips/ src/
+          fi
+
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: build-web
+          key: pages-build-${{ runner.os }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**', 'tools/bake_web.cpp') }}
+          restore-keys: pages-build-${{ runner.os }}-
+
+      - name: Whatever the site had last time
+        uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-site-none
+          restore-keys: pages-site-
+
+      # AND EVERY SHARD'S OWN CLIPS, which is what makes this job worth having during a cold bake
+      # rather than only after one. The shards save their slice as each finishes, so while the one
+      # holding `estate/campanile` is still sampling -- an hour and a quarter of it -- the other
+      # eleven twelfths are already sitting in a cache. Restoring them all into one directory
+      # reassembles the site from work that has finished, and the clips are disjoint by
+      # construction, so they merge by simply landing in the same place.
+      #
+      # Twelve steps because a job cannot loop. If the shard count changes, this list changes with
+      # it; the bake matrix is the one that decides.
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-0-none
+          restore-keys: pages-data-0-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-1-none
+          restore-keys: pages-data-1-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-2-none
+          restore-keys: pages-data-2-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-3-none
+          restore-keys: pages-data-3-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-4-none
+          restore-keys: pages-data-4-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-5-none
+          restore-keys: pages-data-5-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-6-none
+          restore-keys: pages-data-6-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-7-none
+          restore-keys: pages-data-7-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-8-none
+          restore-keys: pages-data-8-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-9-none
+          restore-keys: pages-data-9-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-10-none
+          restore-keys: pages-data-10-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-11-none
+          restore-keys: pages-data-11-
+
+      # And whatever the site has RIGHT NOW, for anything the cache did not carry. This is the
+      # difference between an early deploy that helps and one that does harm: the first run after
+      # this job existed had no cache to restore, so it would have indexed an empty directory and
+      # published a site with no clips on it -- over the top of a live site that had some. The early
+      # deploy must only ever ADD, so it starts from the published site and fills in the gaps.
+      - name: And whatever the site has right now
+        id: live
+        run: |
+          set -uo pipefail
+          mkdir -p web/data
+          base="https://worldshapergame.github.io/WorldShaper"
+          if ! curl -fsS --max-time 30 "$base/data/index.json?ci=$GITHUB_RUN_ID" -o /tmp/live.json; then
+            echo "nothing published yet"
+            echo "commit=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "commit=$(python3 -c 'import json;print(json.load(open("/tmp/live.json")).get("commit",""))')" \
+            >> "$GITHUB_OUTPUT"
+          for id in $(python3 -c 'import json;[print(c["id"]) for c in json.load(open("/tmp/live.json"))["clips"]]'); do
+            [ -f "web/data/$id.wsc" ] && continue
+            if curl -fsS --max-time 120 "$base/data/$id.wsc.gz" -o "web/data/$id.wsc.gz"; then
+              gzip -df "web/data/$id.wsc.gz" || rm -f "web/data/$id.wsc.gz"
+            elif ! curl -fsS --max-time 120 "$base/data/$id.wsc" -o "web/data/$id.wsc"; then
+              rm -f "web/data/$id.wsc"
+            fi
+          done
+          ls web/data | wc -l
+
+      - name: Build the baker
+        run: |
+          cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
+          cmake --build build-web --target ws_bake_web
+
+      - name: Index what is already there
+        run: |
+          mkdir -p web/data
+          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
+          ./build-web/bin/ws_bake_web --clips clips --out web/data --index-only \
+                                      --budget 700000000 --max-metre 32 --part-metre 16 \
+                                      --code-hash "$code" \
+                                      --branch "${{ needs.plan.outputs.ref }}" \
+                                      --commit "${{ needs.plan.outputs.sha }}"
+          du -sh web/data || true
+
+      - run: |
+          for f in web/data/*.wsc; do
+            [ -e "$f" ] || continue
+            if [ ! -f "$f.gz" ] || [ "$f" -nt "$f.gz" ]; then gzip -9 -kf "$f"; fi
+          done
+      - run: touch web/.nojekyll
+
+      # Three ways this deploy is not worth making, and every one of them is a way it would LOSE
+      # something: an index with nothing in it, a real bake that finished while this job was
+      # fetching, and a run newer than this one having already published.
+      - name: Is this deploy still worth making
+        id: gate
+        run: |
+          set -uo pipefail
+          echo "${{ github.run_number }}" > web/data/run.txt
+          n=$(python3 -c 'import json;print(len(json.load(open("web/data/index.json"))["clips"]))' 2>/dev/null || echo 0)
+          now="$(curl -fsS --max-time 20 \
+            "https://worldshapergame.github.io/WorldShaper/data/index.json?ci=$GITHUB_RUN_ID-b" \
+            | python3 -c 'import json,sys;print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)"
+          ahead="$(curl -fsS --max-time 20 \
+            "https://worldshapergame.github.io/WorldShaper/data/run.txt?ci=$GITHUB_RUN_ID-b" \
+            2>/dev/null | tr -dc '0-9' || true)"
+          if [ "$n" -eq 0 ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"; echo "no clips to show yet"
+          elif [ -n "$now" ] && [ "$now" != "${{ steps.live.outputs.commit }}" ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"; echo "the site moved to $now while this ran"
+          elif [ -n "$ahead" ] && [ "$ahead" -gt "${{ github.run_number }}" ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"; echo "run $ahead is newer than this one"
+          else
+            echo "have=true" >> "$GITHUB_OUTPUT"; echo "$n clips are walkable now"
+          fi
+
+      - if: steps.gate.outputs.have == 'true'
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - if: steps.gate.outputs.have == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: pages-early
+          path: web
+
+  deploy-early:
+    needs: early
+    if: needs.early.outputs.have == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-early
+
+  bake:
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    # Three hours, because ninety minutes was measured against the wrong building. `estate/campanile`
+    # is 1002 root shapes and 88 x 288 x 88 at eight voxels to the metre; timed here on four cores it
+    # is 4.9 s, 22.4 s and 81.2 s at 2, 4 and 8 per metre -- about 3.6x per doubling, so 32 is
+    # roughly seventeen minutes for that clip alone. A shard holding two of those and a facility
+    # fragment was at sixty-two minutes and still going.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A GRAFT, not a checkout, and the difference is the whole reason this works.
+      #
+      # A branch that is only writing clips does not have this workflow, does not have
+      # `tools/bake_web.cpp`, does not have a CMakeLists that knows what `ws_bake_web` is, and does
+      # not have `web/` at all -- the viewer was added on `main` after that branch was cut.
+      # Checking it out wholesale leaves nothing to build and nothing to publish. So: stay on
+      # `main` for the machinery and the site, and take `clips/` and `src/` from the branch. `src/`
+      # because the clips and the forge are one thing -- `arc_test.clip` uses an `arc` shape that
+      # exists only on the branch that added it, and a parser from `main` reports it as unknown.
+      - name: Graft the clips being worked on
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.plan.outputs.ref }}" != "main" ]; then
+            git checkout "origin/${{ needs.plan.outputs.ref }}" -- clips/ src/
+          fi
+
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: build-web
+          key: pages-build-${{ runner.os }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**', 'tools/bake_web.cpp') }}
+          restore-keys: pages-build-${{ runner.os }}-
+
+      # This shard's own clips from last time. Its own, and not everybody's: a shard that restored
+      # the whole site would upload the whole site, twelve times over.
+      - name: The clips this shard baked last time
+        uses: actions/cache@v4
+        with:
+          path: web/data
+          key: pages-data-${{ matrix.shard }}-${{ github.run_id }}
+          restore-keys: pages-data-${{ matrix.shard }}-
+
+      - name: Build the baker
+        run: |
+          cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
+          cmake --build build-web --target ws_bake_web
+
+      # A whole clip at the resolution it was authored at -- 32 voxels to the metre, 3.125 cm, the
+      # game's own -- and its parts at half that. Everything at 32 is hours, because a fragment is
+      # sampled with the whole building's paint and intersected with its solid and so costs like a
+      # small facility, and there are twenty-eight of them.
+      - name: Bake this shard
+        run: |
+          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
+          ./build-web/bin/ws_bake_web --clips clips --out web/data \
+                                      --budget 700000000 --max-metre 32 --part-metre 16 \
+                                      --shard ${{ matrix.shard }}/12 \
+                                      --code-hash "$code" \
+                                      --branch "${{ needs.plan.outputs.ref }}" \
+                                      --commit "${{ needs.plan.outputs.sha }}"
+          du -sh web/data
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-${{ matrix.shard }}
+          path: web/data
+          retention-days: 1
+
+  # ELEVEN GOOD SHARDS ARE NOT WASTED BY THE TWELFTH. `needs: bake` alone means one shard failing
+  # or running out of its clock skips this job, skips the deploy, and publishes nothing -- so the
+  # site stays exactly as stale as it was, and the eleven runners that did their work are thrown
+  # away. `always()` lets it merge what arrived. Whatever is missing it bakes here, and whatever it
+  # still cannot build is simply left out of the index: the viewer shows a smaller true site rather
+  # than a broken big one, which is the same rule the baker already follows for a clip somebody is
+  # halfway through editing.
+  index:
+    needs: [plan, bake]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      fresh: ${{ steps.gate.outputs.fresh }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Graft the clips being worked on
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.plan.outputs.ref }}" != "main" ]; then
+            git checkout "origin/${{ needs.plan.outputs.ref }}" -- clips/ src/
+          fi
+
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: build-web
+          key: pages-build-${{ runner.os }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**', 'tools/bake_web.cpp') }}
+          restore-keys: pages-build-${{ runner.os }}-
+
+      - name: Build the baker
+        run: |
+          cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
+          cmake --build build-web --target ws_bake_web
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: data-*
+          merge-multiple: true
+          path: web/data
+
+      # The same command the shards ran, over all of them at once. It bakes nothing: every file
+      # carries the key of what produced it, so all sixty-three are read back and the only output
+      # is the one index.json the viewer reads. Anything that somehow did not survive its shard is
+      # baked here rather than published missing.
+      - name: One index over all of them
+        run: |
+          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
+          ./build-web/bin/ws_bake_web --clips clips --out web/data \
+                                      --budget 700000000 --max-metre 32 --part-metre 16 \
+                                      --code-hash "$code" \
+                                      --branch "${{ needs.plan.outputs.ref }}" \
+                                      --commit "${{ needs.plan.outputs.sha }}"
+          du -sh web/data
+
+      # A compressed copy beside each file, which the viewer asks for first. Pages will not compress
+      # an unknown extension itself and the quads come down about four to one.
+      - name: Compress
+        run: |
+          for f in web/data/*.wsc; do
+            if [ ! -f "$f.gz" ] || [ "$f" -nt "$f.gz" ]; then gzip -9 -kf "$f"; fi
+          done
+          du -sh web/data
+
+      # The viewer routes on the URL fragment, so there is one page and nothing for Jekyll to build.
+      - run: touch web/.nojekyll
+
+      # THE RUN NUMBER, PUBLISHED, so that a run can tell whether it would put the site backwards.
+      #
+      # Removing the concurrency group (D667) fixed runs being cancelled before they ever started,
+      # and took away the only thing stopping an older run from deploying last. That is not
+      # hypothetical: four runs from three older commits were still going when the run carrying the
+      # merged facility was nearly finished, and every one of them would have published its own
+      # older `web/` -- a viewer without the shapes button -- on top of it. Two of those had been
+      # running for over half an hour, which is exactly how a stale run comes to finish last.
+      #
+      # So the site carries the number of the run that made it, and no run publishes over a number
+      # higher than its own. Cheap, and it does not serialise anything.
+      - name: Would this put the site backwards
+        id: gate
+        run: |
+          set -uo pipefail
+          echo "${{ github.run_number }}" > web/data/run.txt
+          ahead="$(curl -fsS --max-time 20 \
+            "https://worldshapergame.github.io/WorldShaper/data/run.txt?ci=$GITHUB_RUN_ID" \
+            2>/dev/null | tr -dc '0-9' || true)"
+          if [ -n "$ahead" ] && [ "$ahead" -gt "${{ github.run_number }}" ]; then
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+            echo "run $ahead has already published; this one is ${{ github.run_number }} and stops here"
+          else
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Kept whole whatever the gate said, because the clips are good even when the deploy is not
+      # wanted -- and it is what lets the NEXT run publish a page in thirty seconds.
+      - name: Keep the whole site for next time
+        uses: actions/cache/save@v4
+        with:
+          path: web/data
+          key: pages-site-${{ github.run_id }}
+
+      # `enablement` turns Pages on for a repository that has never had it, rather than failing and
+      # asking somebody to go and click it.
+      - if: steps.gate.outputs.fresh == 'true'
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - if: steps.gate.outputs.fresh == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  # `needs: deploy-early` is ORDERING and not a requirement -- the real deploy must land after the
+  # early one, never before it, or the site would end on the older copy. `always()` is what keeps
+  # that from turning into a dependency: a skipped early deploy skips everything downstream of it
+  # otherwise, and the run that has nothing to show early is exactly the run whose real deploy
+  # matters most.
+  deploy:
+    needs: [index, deploy-early]
+    if: always() && needs.index.result == 'success' && needs.index.outputs.fresh == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

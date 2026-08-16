@@ -582,17 +582,27 @@ layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
 //   [29] R4b: how many of the faces holding a block are holding the EXPENSIVE class, which is four
 //        blocks and a hundred and forty-four bins. Read against [24] -- what it says is how much of
 //        the pool the sharp surfaces are taking.
-//   [30] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
-//   [31] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
+//   [30] R5b: faces under `kFaceSunBelieve` samples that were handed a stand-in to be believed
+//        against this frame -- the ramp's own convergence figure.
+//   [31] ...and how many of them found NOTHING up the tree worth taking, so were left believing
+//        their own one or two rays outright. **Two words and not one**, and the reason is that this
+//        change was built, measured, and read as doing nothing at all: every differing pixel
+//        between the two arms was a full flip between black and white, which is what the ramp
+//        NEVER produces and is exactly what a re-rolled coin toss looks like. With one counter,
+//        "no face wanted a stand-in" and "every face wanted one and `kSunSeedMin` refused it" print
+//        the same nought -- trap 7, and trap 16's rule that a suspect signal is settled by counting
+//        the events that produced it rather than by measuring the signal again.
+//   [32] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
+//   [33] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
 //        arm -- the dispatch is then exactly the screen and this stage does not exist.
-//   [32] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
-//   [33] R5b's SUN SEED, host-written: how many samples of the coarse face above it a newly
+//   [34] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
+//   [35] R5b's SUN SEED, host-written: how many samples of the coarse face above it a newly
 //        claimed face starts its sun term from. 0 is the control arm and is every build before it.
 //        Here rather than in the push block because that block is exactly the 128 bytes Vulkan
 //        guarantees, and the three words above it are the standing precedent for a host-written
 //        number that will not fit -- D553's warning is against giving an existing field a second
 //        meaning, not against this.
-const uint kLightProbeWords = 34u;
+const uint kLightProbeWords = 36u;
 const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 const uint kProbeLobeHeld = 24u;
 const uint kProbeLobeDeclined = 25u;
@@ -654,6 +664,32 @@ const uint kProbeRefract = 1u << 9;
 // marble panel with the sun on the far side is as dark as granite -- which is what this renderer has
 // always drawn. `--no-translucency` clears it.
 const uint kProbeTranslucent = 1u << 10;
+// R5d: a primary ray that stops on a COARSE node only part of which is matter marches on past it,
+// and the composite draws the two surfaces in proportion. Off, every hit is fully opaque and a node
+// larger than a voxel is a solid block whatever is really inside it -- which is what this renderer
+// has always done, and is why a distant railing is a stair-stepped bar that crawls as the camera
+// moves. `--no-edge-aa` clears it.
+const uint kProbeEdgeAA = 1u << 11;
+// R5c's first half: a hit blends its folded colour towards the folded colour of the level the
+// ordered dither did NOT pick for this pixel, by how far between the two the pixel's footprint sits.
+// Off, a hit draws the colour of the cell it stopped on outright, so two neighbours a level apart
+// differ by the whole step between two folded averages in a fixed 4x4 pattern -- which is what this
+// renderer has drawn since the marcher existed and is the state every figure before this was taken
+// in. `--no-level-blend` clears it. The GEOMETRY is identical in both arms by construction: the
+// dither still picks the cell, so the coverage byte, the face key and the depth do not move and the
+// two arms differ by colour alone.
+const uint kProbeLevelBlend = 1u << 12;
+// R5b: a face that has cast fewer than `kFaceSunBelieve` shadow rays is drawn part way towards the
+// coarse face standing over it, in proportion to how many it has. Off, its own ratio is believed the
+// moment it has one sample — which is every build up to this one, and is what a player sees as
+// speckle over everything the camera has just revealed. `--no-sun-confidence` clears it.
+//
+// The dial is read where the stand-in is WRITTEN and never where it is read, which is the same
+// arrangement kProbeDenoise sets out and is not a preference: the composite has no binding for this
+// buffer, so a control arm spelled in the reader is not available to it at all. Off, the shading
+// pass leaves word `kFaceSunStandIn` at nought, both readers take the branch that returns the face's
+// own ratio unchanged, and the two arms differ by the ramp rather than by a branch in the reader.
+const uint kProbeSunConfidence = 1u << 13;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -670,7 +706,7 @@ const uint kProbeTranslucent = 1u << 10;
 // ordering between them, so a host word inside the zeroed span would be a race whose loser is
 // whichever the driver ran second -- and a stride that reads nought half the time is a class that
 // silently stops casting.
-const uint kProbeSecondaryStride = 30u;
+const uint kProbeSecondaryStride = 32u;
 
 // ---- R9c, the halo: how far past the screen the primary pass claims ---------------------------
 //
@@ -694,10 +730,14 @@ const uint kProbeSecondaryStride = 30u;
 // rays, it moves them EARLIER -- so over a pan the total is unchanged and what changes is how many
 // faces are mid-burst at any instant. The honest risk is therefore the peak rather than the total,
 // and the honest measurement is the faces pass while panning, beside the convergence gate.
-const uint kProbeHaloMargin = 31u;
-const uint kProbeHaloStride = 32u;
+const uint kProbeHaloMargin = 33u;
+const uint kProbeHaloStride = 34u;
 // R5b's sun seed, host-written. See the word map above, and kSunSeedSamples for the figure.
-const uint kProbeSunSeed = 33u;
+const uint kProbeSunSeed = 35u;
+// R5b's ramp, counted where it is decided: how many faces wanted a stand-in this frame and how many
+// of them were refused one. See the word map above for why it is two words rather than one.
+const uint kProbeSunRamped = 30u;
+const uint kProbeSunNoStandIn = 31u;
 
 uint probe_halo_margin() { return light_probe.words[kProbeHaloMargin]; }
 uint probe_halo_stride() { return max(light_probe.words[kProbeHaloStride], 1u); }
@@ -716,6 +756,9 @@ bool probe_lobe_big() { return (light_probe.words[0] & kProbeLobeCoverage) != 0u
 bool probe_see_through() { return (light_probe.words[0] & kProbeSeeThrough) != 0u; }
 bool probe_refract() { return (light_probe.words[0] & kProbeRefract) != 0u; }
 bool probe_translucent() { return (light_probe.words[0] & kProbeTranslucent) != 0u; }
+bool probe_edge_aa() { return (light_probe.words[0] & kProbeEdgeAA) != 0u; }
+bool probe_level_blend() { return (light_probe.words[0] & kProbeLevelBlend) != 0u; }
+bool probe_sun_confidence() { return (light_probe.words[0] & kProbeSunConfidence) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 uint probe_sun_seed() { return light_probe.words[kProbeSunSeed]; }
 
@@ -965,6 +1008,13 @@ const uint kFaceSettled = 1u;
 // And how long a face is exempt from the shading stride, which is a different question with a
 // different answer: a face that may be read at one sample is still converging at four, so it keeps
 // its ray every frame until it has enough of them to be worth refreshing rather than finishing.
+//
+// R5b's confidence ramp is written against this same four and calls it `kFaceSunBelieve`
+// (shaders/face_terms.glsl), because "may be READ at one sample" and "is BELIEVED at one sample"
+// turned out to be the two halves of one sentence and only the first was ever decided. The figure
+// cannot be spelled as this constant there, since node.glsl includes face_terms.glsl and not the
+// other way about; the comment on kFaceSunBelieve carries the whole argument for why the two are one
+// number rather than two that happen to agree.
 const uint kFaceEager = 4u;
 const uint kFaceWindow = 256u;   // where both counts halve, so the sun may move
 
@@ -1411,6 +1461,38 @@ const uint kSunSeedSamples = 3u;
 // level coarser. Sixteen rather than kSkySeedMin's 64 because the sun's window is 256 where the
 // ambient term's is 2,048: the same fraction of the same estimator.
 const uint kSunSeedMin = 16u;
+
+// ...and the same question asked at READ time, which turns out to have a different answer — this is
+// FOUR, and the sixteen above was inherited into it once and measured as being most of why R5b's
+// ramp did nothing.
+//
+// **The measurement, card-free, three frames after a camera cut through 180 degrees** (D662): of
+// 4,665 faces short of `kFaceSunBelieve` samples, **3,006 — 64.4% — found no ancestor holding
+// sixteen rays of its own**, so two thirds of the population the ramp exists for went on believing
+// one shadow ray outright. Nothing in any picture said so, and it could not have been read out of
+// one: every pixel that differed between the two arms was a full flip between black and white,
+// which is what a re-rolled coin toss looks like and is the one thing the ramp never produces.
+// `kProbeSunRamped` and `kProbeSunNoStandIn` are what answered it, and they are two counters rather
+// than one for exactly that reason.
+//
+// **Why the two thresholds differ is the whole of it, and it is not a relaxation.** `kSunSeedMin`
+// guards a prior written ONCE, into a face's own counters, at claim: it will be believed for the
+// rest of that face's life against every ray the face takes afterwards, so a thin ancestor there is
+// noise that has to be measured back out, and refusing costs nothing — the face simply starts from
+// nothing, which is what it did before D660. This guards a blend re-decided EVERY FRAME and thrown
+// away the moment the face has four rays of its own, so refusing is not free: it is the feature not
+// happening, on the faces it was built for. And the case that makes the two diverge is the one that
+// matters most — a camera turning into geometry it has never faced, where the coarse face is exactly
+// as new as the fine one under it and takes forty frames to reach sixteen samples, because it is
+// eager for four and then on `face_stride` for the rest.
+//
+// Four, and it is `kFaceSunBelieve` again rather than a third number: the honest test is whether the
+// ancestor is better measured than the face reading it, and the face is under four by construction
+// here. So the ancestor has to be worth at least what this renderer calls its own answer. Below
+// that the two are both coin tosses and there is nothing to be gained by mixing them; at four and
+// above the ancestor is drawing on five hundred and twelve faces' worth of geometry at four times
+// the confidence of the face asking.
+const uint kSunStandInMin = 4u;   // must match kFaceSunBelieve in face_terms.glsl
 
 // A pair of counts scaled down to at most `seed` samples, keeping the ratio. The same arithmetic
 // face_light_seed already does to a stand-in's history, applied to a face's own.
@@ -2478,6 +2560,19 @@ struct NodeHit {
     // to the other side through that much stone, which is the whole question a translucent surface
     // asks.
     float crossed;
+
+    // R5d: where the ray leaves the cell whose `coverage` this is, so a caller that wants to know
+    // what is BEHIND a partly covered node can start a second march past it rather than into it.
+    //
+    // Nought unless the coverage above describes exactly the cell that was drawn, and that gate is
+    // the whole reason this is a distance rather than a bool. Three places set `coverage`; only the
+    // coarse-node branch reads it off the very node whose box the pixel landed in. The other two
+    // read it off a node COARSER than the cell they draw -- the in-brick march takes the brick's
+    // byte for a pixel resolving two voxels, and the stand-in takes the parent's for a cell one
+    // level under it -- and blending a pixel by a fraction measured over eight times its footprint
+    // is trap 6 again at a different scale. So those two leave this at nought and get no edge AA,
+    // which is exactly what they had before this existed.
+    float coverage_exit_t;
 };
 
 // ---- R4d: the three things a ray can do about matter it can see through -------------------------
@@ -2584,6 +2679,13 @@ vec3 node_medium_absorb(uint type_id) {
 // Stage 4 hit the same wall from the other side and recorded it: a brick on the surface of the
 // ground is about an eighth full and completely opaque when you look at it, and the two quantities
 // coincide only for a node seen edge-on. Per direction, folded at build time, this is exact.
+//
+// One caution about "exact", which R5d is what it matters to: it is exact at the LEAF and a maximum
+// above it. `NodePool::fold_children` takes the largest of a node's eight children rather than
+// projecting them, which errs towards *present* on the same argument as the floor of one that stops
+// a single voxel rounding away. So a coarse node reads as more solid than it is, the edge
+// anti-aliasing it gets is conservative rather than excessive, and a silhouette across a node that
+// is half solid wall gets none at all. `tests/test_node_pool.cpp` pins both halves of that.
 uint node_face_coverage(uint slot, ivec3 normal) {
     uint xy = nodes.items[slot].coverage_xy;
     uint z = nodes.items[slot].coverage_z;
@@ -2591,6 +2693,23 @@ uint node_face_coverage(uint slot, ivec3 normal) {
     if (normal.y != 0) return (normal.y > 0) ? ((xy >> 16u) & 0xFFu) : ((xy >> 24u) & 0xFFu);
     return (normal.z > 0) ? (z & 0xFFu) : ((z >> 8u) & 0xFFu);
 }
+
+// R5d: at or above this, a coarse node is treated as solid and no second march is cast for it.
+//
+// What it trades is the last sixty-fourth of an edge against a march. The byte is
+// `covered * 255 / 64` over an 8x8 projection, so the only values it can take are multiples of
+// 255/64 and 251 is "sixty-three of the sixty-four columns have matter in them". Blending that
+// pixel 1.6% towards what is behind it is under the quantisation of the byte itself and well under
+// the quantisation of the `through` byte the answer is packed into -- so the picture is unchanged
+// and the march is saved.
+//
+// The saving that matters is not this threshold, though, and that is worth saying because the
+// threshold looks like the cost control and is not. A flat wall seen face on has EVERY column of
+// its projection covered along the direction the ray struck it, so it reports 255 and pays nothing
+// at all. What pays is silhouettes and open structure, which is the set that needed anti-aliasing
+// in the first place -- the cost of this stage is proportional to the number of edge pixels rather
+// than to the number of coarse pixels, by construction rather than by a dial.
+const uint kEdgeCoverageFull = 251u;
 
 // The bounds in the parameter block are in chunks, which the renderer still uses as the unit it
 // reports the world's extent in. Nothing else here knows what a chunk is.
@@ -2612,6 +2731,156 @@ const int kNodeMaxDetail = 7;
 float node_bayer(ivec2 pixel) {
     const int table[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
     return float(table[(pixel.y & 3) * 4 + (pixel.x & 3)]) / 16.0;
+}
+
+// ---- R5c: what the dither decides, and what it stops deciding ---------------------------------
+//
+// The dither above is not a mistake to be deleted. `log2(footprint)` is a continuous number and a
+// level is an integer, so SOMETHING has to choose between the two levels a pixel sits between, and
+// choosing per pixel from a fixed table is what lets this marcher work with no temporal
+// accumulation behind it. What is wrong with it is not the choice but its consequence: the two
+// levels are drawn with their own folded colours, whole, so a surface halfway between them comes out
+// as two flat tones in a 4x4 pattern that swims as the camera walks.
+//
+// So the dither goes on deciding the SHAPE -- which cell the ray stops on, and therefore the
+// coverage byte, the face key, the depth and everything the composite keys off them -- and the
+// COLOUR becomes a continuous function of the same fraction the dither is quantising. Both arms of
+// the pair aim at the same number:
+//
+//     base = floor(log2(footprint)),  frac = log2(footprint) - base
+//     drawn = (1 - frac) * colour(base) + frac * colour(base + 1)
+//
+// A pixel that took `base` blends towards its PARENT by `frac`; a pixel that took `base + 1` blends
+// towards the child the ray entered by `1 - frac`. Where both fetches land, the two pixels draw the
+// same colour and the pattern is gone; where one cannot, that pixel keeps exactly what it draws
+// today and the pair is left closer than it was rather than further. That is why this is a blend and
+// not a deletion -- the comment in `node_march` records what deleting the dither costs, and it is
+// the shape rather than the colour: which pixels report full coverage and which report the node's
+// filtered fraction, 43% of pixels different from the marcher this replaces.
+//
+// The blend is only meaningful because the pool folds a parent EXACTLY from its children --
+// `NodePool::fold_children` averages the children's colour weighted by their own coverage -- so a
+// point between the two is a point on a line whose ends are the same picture at two scales, not a
+// guess. D149's refusal (summarising a region by sampling it) is the thing this is not.
+//
+// # What this deliberately does not touch
+//
+// A level-0 hit. The composite reads a TYPE ID at level 0 and a folded colour above it (one payload
+// field, two mutually exclusive readings -- see visibility.comp), so the level-0 arm of the 0/1 pair
+// cannot be moved from here at all: it would mean changing what the visibility buffer packs. The
+// level-1 arm still blends towards the voxel's own colour, which leaves the pair `frac` of the step
+// apart instead of the whole of it -- better everywhere and exact nowhere. Moving the other half is
+// the composite's business and belongs with R5c's second half.
+//
+// A stand-in. That branch already draws a cell COARSER than the pixel asked for, because the pool
+// has not built the one it wants; blending it with its own parent would be smoothing a picture that
+// is about to be replaced wholesale when the node arrives, and paying a descent per unbuilt pixel to
+// do it.
+//
+// And levels 1 to 3 blended against each other. The pool has no node between a voxel and a brick, so
+// `colour(1)`, `colour(2)` and `colour(3)` are all the same brick average -- which is what the
+// marcher already reports at those levels. A pixel whose footprint is between two and eight voxels
+// therefore shows no dither today, and there is nothing there for this to remove. Worth knowing
+// before hunting for a change in that band: at 320x200 and a 90 degree lens that is everything
+// between six and twenty-five metres.
+const float kNodeBlendDeadband = 1.0 / 16.0;
+
+// The pair a pixel sits between, resolved once at the hit.
+//
+// `want` is the level of the OTHER member -- one above when this pixel took the finer of the two,
+// one below when it took the coarser -- and `w` is how much of that member's colour to take.
+struct NodeBlend {
+    bool on;
+    int want;
+    float w;
+};
+
+NodeBlend node_level_blend(float detail, int level, bool drawn) {
+    NodeBlend blend;
+    blend.on = false;
+    blend.want = level;
+    blend.w = 0.0;
+    if (!drawn || !probe_level_blend()) return blend;
+
+    const int base = int(floor(detail));
+    const float frac = detail - float(base);
+    // Both arms of the dither clamp to the same cell up here, so there is no pair and nothing to
+    // blend -- the same clamp `level` is taken through.
+    if (base + 1 > kNodeMaxDetail) return blend;
+
+    if (level == base) {
+        blend.want = level + 1;
+        blend.w = frac;
+    } else if (level == base + 1) {
+        blend.want = level - 1;
+        blend.w = 1.0 - frac;
+    } else {
+        // Unreachable as the clamp above `level` is written -- the footprint floors at one voxel so
+        // the low end never bites, and the high end is the test two lines up. It is here so that
+        // moving either end of that clamp cannot silently blend a pixel against a level it never sat
+        // between, which is the one way this could go wrong without looking wrong.
+        return blend;
+    }
+
+    // The deadband, and it is the ordered dither's own step rather than a tuning constant. The
+    // table holds sixteenths, so below a sixteenth of the way into a pair NO pixel of the 4x4 tile
+    // picked the other level and the tile is already one flat tone; above fifteen sixteenths the
+    // one pixel that did not is the only one with a correction left worth making, and it makes it,
+    // because this weight is the pixel's OWN and not the tile's. What it trades is a descent per
+    // hit against a residual of at most a sixteenth of the step between two folded averages -- four
+    // levels of 255 on the worst pair in the building, which is under what the byte it is quantised
+    // into can hold apart.
+    blend.on = blend.w >= kNodeBlendDeadband;
+    return blend;
+}
+
+// Two packed rgba8 colours mixed, keeping the first one's alpha.
+//
+// The alpha is a volumetric fill fraction that halves per level and nothing downstream of the
+// marcher reads it -- the composite takes its coverage from the node's per-direction bytes (see
+// node_face_coverage) -- so it is left exactly as it was rather than interpolated into a third
+// meaning. Rounded rather than truncated: a truncation is a half-level bias downwards on every
+// blended pixel and a whole surface drifting a fraction of a per cent darker is precisely the class
+// of shift the dither comment warns about.
+uint node_colour_mix(uint from, uint towards, float w) {
+    const vec3 a = vec3(float(from & 0xFFu), float((from >> 8u) & 0xFFu),
+                        float((from >> 16u) & 0xFFu));
+    const vec3 b = vec3(float(towards & 0xFFu), float((towards >> 8u) & 0xFFu),
+                        float((towards >> 16u) & 0xFFu));
+    const uvec3 mixed = uvec3(round(clamp(mix(a, b, w), vec3(0.0), vec3(255.0))));
+    return (from & 0xFF000000u) | mixed.x | (mixed.y << 8u) | (mixed.z << 16u);
+}
+
+// A node's folded colour, or false where there is nothing worth blending with.
+//
+// The refusals are the ones the stand-in branch of `node_march` already makes, for the same reasons
+// and in the same order: a descent that did not reach the level asked for is answering about a
+// differently sized cell, a shell has never been folded from anything so its colour is nought, and a
+// node the fold gave up on carries no coverage. "I could not find out" must not become a colour
+// (trap 7) -- here it means this pixel keeps exactly the colour it draws today, which is the arm
+// this change is measured against.
+bool node_folded_colour(Found found, int want, out uint colour) {
+    colour = 0u;
+    if (found.state != kFoundHere || found.slot == kNoNode || found.level != want) return false;
+    const uint packed = nodes.items[found.slot].packed;
+    if ((node_flags_of(packed) & kNodeLeaf) == 0 && nodes.items[found.slot].children == kNoNode) {
+        return false;
+    }
+    colour = nodes.items[found.slot].colour;
+    return (colour >> 24u) != 0u;
+}
+
+// One voxel's own colour, which is what `colour(0)` means where the folded ladder runs out.
+//
+// The same two clamped table reads as node_medium_through beside it, and the same reason for the
+// clamps: an out-of-range index into an SSBO is not a wrong colour, it is whatever the driver
+// decides out of bounds means. The low three bytes of the first visual word are the red, green and
+// blue `filtered_colour` averages to build every folded colour above this, so the two ends of the
+// blend are the same quantity at two scales rather than two conventions.
+uint node_type_colour(uint type_id) {
+    const uint type_at = min(type_id, uint(types.items.length()) - 1u);
+    const uint visual_at = min(types.items[type_at].x, uint(visuals.items.length()) - 1u);
+    return visuals.items[visual_at].x & 0xFFFFFFu;
 }
 
 // Where this frame's sparse-sample lattice sits, for a power-of-two stride.
@@ -2713,9 +2982,24 @@ const float kNodeUnbounded = 3.4e38;
 //
 // `kThroughExit` is the refraction segment: it enters the glass, attenuates through it, and stops
 // at the face where it comes out so the caller can bend it there and march on.
+//
+// `start_t` is where along the ray the walk begins, in voxels from `origin`, and it is R5d's. A
+// caller that wants to know what is BEHIND something could always have moved the origin forward
+// instead -- and that is what R4d's refracted segments do -- but moving the origin also RESTARTS THE
+// DETAIL CLOCK, because `footprint` is `t * pixel_angle` and `t` is measured from wherever the ray
+// began. A second march launched from a silhouette a hundred metres out would then resolve the
+// landscape behind it as though the eye were standing on the silhouette: bricks where the pixel
+// resolves half a metre, which is eight times finer than anything can be seen and, far worse, eight
+// times finer than what the miss reports would then ask the pool to BUILD. Streaming the world
+// behind every edge at a resolution nobody can see is exactly the unbounded growth this rewrite
+// exists to stop.
+//
+// Keeping the eye as the origin and skipping forward in `t` keeps every distance in this function
+// eye-relative -- the footprint, the world clip, the D156 nudge and the `t` that comes back -- so
+// the caller has nothing to add on afterwards and nothing to get wrong.
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
                    bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
-                   uint through_mode, float max_t) {
+                   uint through_mode, float max_t, float start_t) {
     NodeHit result;
     result.hit = false;
     result.unknown = false;
@@ -2729,6 +3013,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     result.exit_t = 0.0;
     result.exit_normal = ivec3(0, 1, 0);
     result.crossed = 0.0;
+    result.coverage_exit_t = 0.0;
     result.face_node = ivec3(0);
     result.face_level = kNoFaceLevel;
     result.face_dir = 0u;
@@ -2781,6 +3066,11 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
         limit = min(limit, exit);
     }
 
+    // R5d's near bound, applied after the clip so a start past the world is a miss rather than a
+    // walk. A ray asked to begin beyond `limit` runs no steps at all and comes back as it would
+    // from open sky, which is what it is: everything this ray was allowed to look at is behind it.
+    t = max(t, start_t);
+
     // This ray treats an unbuilt cell as an occluder, which is exactly the property that makes it
     // need the geometry to exist -- so it is also the ray that must say it is using it. The two
     // are one fact and are deliberately not two flags: a ray that reads ignorance as matter and
@@ -2808,8 +3098,16 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
         // different - it changes which pixels report full coverage and which report the node's
         // filtered fraction, so a whole surface shifts a few per cent and 43% of pixels differ
         // from the marcher this replaces.
+        //
+        // R5c keeps every word of that and takes the COLOUR off the choice: `detail` is the
+        // continuous level, the dither still picks which cell the ray stops on, and the hit blends
+        // its folded colour towards the other member of the pair by the fraction between them. See
+        // node_level_blend, and note that `detail` is named here rather than recomputed at the hit
+        // so the two cannot drift apart -- the pair the colour blends between has to be the pair the
+        // level was chosen from.
         float footprint = max(t * pixel_angle * push.lens.z, 1.0);
-        int level = clamp(int(floor(log2(footprint) + dither)), 0, kNodeMaxDetail);
+        float detail = log2(footprint);
+        int level = clamp(int(floor(detail + dither)), 0, kNodeMaxDetail);
         int march_level = max(level, kLeafLevel);
 
         if (march_level != outer_level) {
@@ -2859,6 +3157,18 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 result.normal = last_normal;
                 result.colour = nodes.items[found.slot].colour;
                 result.coverage = node_face_coverage(found.slot, last_normal);
+                // R5d: and where the ray comes out the other side of this same cell, which costs
+                // two compares because the DDA has already worked it out. `t_max` holds the t of
+                // the next boundary on each axis for the cell being tested, so the smallest of the
+                // three is where the ray leaves it -- and it is the cell the coverage was read off,
+                // because a node that is not a leaf can only be reached here at exactly the level
+                // the walk asked for (node_descend breaks above `target` only on a LEAF, which the
+                // line above has already excluded).
+                //
+                // Computed unconditionally rather than under `coverage < 255`, because a branch on
+                // a value this late costs more than the two compares it would save on a path that
+                // runs at most once per ray.
+                result.coverage_exit_t = min(min(t_max.x, t_max.y), t_max.z);
                 // Clamped into the range the visibility buffer's level field means. A node level
                 // and a detail level are the same units - both a power of two in voxels - but the
                 // field stops at seven, and a node fourteen levels up is a cell nobody is looking
@@ -2869,6 +3179,47 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 node_flush_read(report_used || node_light_due(keeps_geometry, found.slot),
                                 found.slot);
                 node_face_hit(result, report_face, voxel, outer_level, last_normal);
+
+                // ---- R5c: and towards the colour of the level this pixel did NOT take ------
+                //
+                // Last, after everything that has to be reported, and that is not tidiness. The
+                // locate below can re-seed this invocation's entry-block cache, and `g_node_block`
+                // is what `node_flush_used` sends to residency -- so a blend placed above it would
+                // change which root a sampled pixel says it is using, and the two arms of the A/B
+                // would differ by a residency report as well as by a colour.
+                //
+                // `outer_level` is `level` here -- a hit on a node that is not a leaf is above the
+                // brick level, where the two are equal by construction -- so the pair the dither
+                // chose from is the pair this blends between.
+                //
+                // The two directions cost very different things and that is why they are written
+                // out rather than folded into one lookup. The parent is a fresh `node_locate` from
+                // whatever ancestor this invocation has cached, which is the price this change
+                // actually has, and it is why the deadband exists. The CHILD is one more turn of
+                // the descent that has already been made, entered at the node in hand -- two loads
+                // and a mask test -- so the arm that carries the greater weight is the cheap one.
+                //
+                // The child is taken at the point the ray ENTERED the cell rather than at its
+                // corner, clamped back into the cell so a nudge at ninety thousand voxels cannot
+                // leave it (D156 is the same arithmetic on the skip step). It is not the child a
+                // finer marcher would have stopped on -- that one is only knowable by marching
+                // finer, which is the whole cost this level exists to avoid -- but it is a child of
+                // this cell, and the fold means the parent is the average of exactly these.
+                const NodeBlend blend = node_level_blend(detail, level, stand_in);
+                if (blend.on) {
+                    uint other;
+                    bool have;
+                    if (blend.want > level) {
+                        have = node_folded_colour(node_locate(voxel, blend.want), blend.want, other);
+                    } else {
+                        const vec3 inside = origin + dir * (t + max(1e-3, t * 1e-5));
+                        const ivec3 at = clamp(origin_voxel + ivec3(floor(inside)), voxel,
+                                               voxel + (1 << outer_level) - 1);
+                        have = node_folded_colour(node_descend(at, blend.want, found.slot, level),
+                                                  blend.want, other);
+                    }
+                    if (have) result.colour = node_colour_mix(result.colour, other, blend.w);
+                }
                 return result;
             }
 
@@ -3040,6 +3391,41 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                     // above this shifts to exactly what it shifted to before -- the refinement is
                     // in the near field and nothing else moves.
                     node_face_hit(result, report_face, voxel + inner, level, inner_normal);
+
+                    // ---- R5c, inside the brick, where the ladder has two rungs and no more ----
+                    //
+                    // After the reports, for the reason the coarse hit above records: the locate
+                    // can re-seed the entry-block cache `node_flush_used` has just sent.
+                    //
+                    // The pool holds a voxel and it holds a brick and it holds nothing in between,
+                    // so of the pairs a footprint under eight voxels can sit in, only two have two
+                    // different colours in them at all: (0, 1), whose fine end is the voxel's own
+                    // colour, and (3, 4), whose coarse end is the first folded node above the
+                    // brick. Between them `colour(1)`, `colour(2)` and `colour(3)` are one number
+                    // -- this brick's average -- so a blend there would fetch a colour in order to
+                    // mix a colour with itself. Skipped by naming the two levels rather than by
+                    // comparing the colours afterwards, because the fetch is the whole cost.
+                    //
+                    // The voxel is the one the ray STOPPED on, which is the voxel a level-0 pixel
+                    // of the same tile stopped on: the inner walk marches single voxels whatever
+                    // the level, so the two arms of the (0, 1) pair differ in colour and in
+                    // coverage and never in which voxel they found (D132). That is what makes this
+                    // end of the blend exact rather than representative.
+                    //
+                    // A level-0 hit is left alone and cannot be anything else from here -- the
+                    // composite reads a type id at that level and this word is not what it draws.
+                    if (level > 0) {
+                        const NodeBlend near = node_level_blend(detail, level, stand_in);
+                        uint other;
+                        if (near.on && near.want == 0) {
+                            other = node_type_colour(leaf_voxel_type(leaf, inner));
+                            result.colour = node_colour_mix(result.colour, other, near.w);
+                        } else if (near.on && near.want > kLeafLevel &&
+                                   node_folded_colour(node_locate(voxel, near.want), near.want,
+                                                      other)) {
+                            result.colour = node_colour_mix(result.colour, other, near.w);
+                        }
+                    }
                     return result;
                 }
                 if (i_max.x < i_max.y && i_max.x < i_max.z) {

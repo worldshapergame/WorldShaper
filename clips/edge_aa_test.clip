@@ -1,0 +1,120 @@
+# R5d's gate: thin structure far enough away that the marcher draws it as coarse nodes.
+#
+# Edge anti-aliasing only exists above the leaf. Inside about twenty metres a pixel resolves a
+# single voxel, every hit reports full coverage and this stage cannot fire at all — so a scene that
+# proves it has to put its detail at a distance, and that is the whole of what this clip is for.
+# `clips/refraction_small.clip` and `clips/translucency_test.clip` are both four metres across,
+# which is the size a software rasteriser can hold, and neither of them contains one coarse pixel.
+#
+# The arithmetic that sets the distances. A pixel's footprint is `t * 2 * tan(fov/2) / height`
+# voxels, so at the default 90° field of view and a 200-pixel-high window a pixel spans eight voxels
+# at 800 voxels — twenty-five metres — which is where the marcher stops stepping bricks and starts
+# reading nodes. Everything worth looking at here is therefore beyond twenty-five metres and most of
+# it beyond forty.
+#
+# What is in it, and why each piece is here:
+#
+#   two RAILINGS, of posts twelve centimetres square. At forty metres a post is a third of a pixel
+#     wide, which is the case the whole stage exists for: the node it lives in is mostly air, its
+#     coverage says so, and without this change it is drawn as a solid bar with hard stepped sides.
+#   a LATTICE, which is the same question in two directions at once — an open grille whose coverage
+#     is low everywhere rather than only at its silhouette.
+#   a WALL behind the right-hand half, so the same railing is seen against geometry on one side and
+#     against open sky on the other. Those are the two things the second march can find and they
+#     are packed the same way, so having both in one frame is what stops a wrong one looking right.
+#
+# Nothing here has a floor. A floor twenty metres deep is three hundred thousand voxels on its own
+# and the software rasteriser gives up around half a million (D654); the structure matters and the
+# ground it stands on does not, so the ground is what was cut.
+#
+# The camera, looking straight down the scene with the near railing at about thirty metres:
+#   --cam "0,2.2,-6,90,0"
+#
+# And the two arms, which differ by one flag:
+#   WorldShaper --clip-file clips/edge_aa_test.clip --cam "0,2.2,-6,90,0"
+#   WorldShaper --clip-file clips/edge_aa_test.clip --cam "0,2.2,-6,90,0" --no-edge-aa
+
+metre 32
+bounds -12.0 -1.0 -8.0   12.0 12.0 62.0
+
+material postiron  rgb=104,108,112 rough=170
+material railstone rgb=196,190,178 rough=200
+material backwall  rgb=132,96,72   rough=210
+
+# ---- the near railing, at thirty metres ---------------------------------------------------------
+#
+# Written out post by post rather than by a repeat, because the clip language has no loop and a
+# railing with a gap in it would be indistinguishable from a railing this stage had eaten.
+let ea_p1  = box -7.20 0.0 29.94  -7.08 3.0 30.06
+let ea_p2  = box -6.00 0.0 29.94  -5.88 3.0 30.06
+let ea_p3  = box -4.80 0.0 29.94  -4.68 3.0 30.06
+let ea_p4  = box -3.60 0.0 29.94  -3.48 3.0 30.06
+let ea_p5  = box -2.40 0.0 29.94  -2.28 3.0 30.06
+let ea_p6  = box -1.20 0.0 29.94  -1.08 3.0 30.06
+let ea_p7  = box  0.00 0.0 29.94   0.12 3.0 30.06
+let ea_p8  = box  1.20 0.0 29.94   1.32 3.0 30.06
+let ea_p9  = box  2.40 0.0 29.94   2.52 3.0 30.06
+let ea_p10 = box  3.60 0.0 29.94   3.72 3.0 30.06
+let ea_p11 = box  4.80 0.0 29.94   4.92 3.0 30.06
+let ea_p12 = box  6.00 0.0 29.94   6.12 3.0 30.06
+let ea_p13 = box  7.20 0.0 29.94   7.32 3.0 30.06
+let ea_posts = union { ea_p1 ea_p2 ea_p3 ea_p4 ea_p5 ea_p6 ea_p7 ea_p8 ea_p9 ea_p10 ea_p11 ea_p12
+                       ea_p13 }
+
+# The rail across the top of them, and a second one at waist height. A horizontal edge and a
+# vertical one step differently, and a change that fixed only one of the two would look right on a
+# picture of only the other.
+let ea_rail_hi = box -7.30 3.00 29.94   7.42 3.16 30.06
+let ea_rail_lo = box -7.30 1.40 29.94   7.42 1.52 30.06
+let ea_near = union { ea_posts ea_rail_hi ea_rail_lo }
+
+# ---- the far railing, at fifty metres, half again as thin -----------------------------------
+#
+# At fifty metres a pixel spans thirteen voxels, so this one is drawn out of nodes two levels above
+# the brick and is the coarsest thing in the frame that is still a recognisable shape.
+let ea_q1  = box -6.00 0.0 49.94  -5.92 2.4 50.06
+let ea_q2  = box -4.50 0.0 49.94  -4.42 2.4 50.06
+let ea_q3  = box -3.00 0.0 49.94  -2.92 2.4 50.06
+let ea_q4  = box -1.50 0.0 49.94  -1.42 2.4 50.06
+let ea_q5  = box  0.00 0.0 49.94   0.08 2.4 50.06
+let ea_q6  = box  1.50 0.0 49.94   1.58 2.4 50.06
+let ea_q7  = box  3.00 0.0 49.94   3.08 2.4 50.06
+let ea_q8  = box  4.50 0.0 49.94   4.58 2.4 50.06
+let ea_q9  = box  6.00 0.0 49.94   6.08 2.4 50.06
+let ea_far_rail = box -6.10 2.40 49.94   6.18 2.52 50.06
+let ea_far = union { ea_q1 ea_q2 ea_q3 ea_q4 ea_q5 ea_q6 ea_q7 ea_q8 ea_q9 ea_far_rail }
+
+# ---- the lattice, at forty metres -------------------------------------------------------------
+#
+# Open in both directions, so its coverage is low across the whole of it rather than only where it
+# meets the sky. A silhouette is one edge pixel deep; this is a panel of them.
+let ea_l_v1 = box -3.00 4.0 39.95  -2.90 8.0 40.05
+let ea_l_v2 = box -1.80 4.0 39.95  -1.70 8.0 40.05
+let ea_l_v3 = box -0.60 4.0 39.95  -0.50 8.0 40.05
+let ea_l_v4 = box  0.60 4.0 39.95   0.70 8.0 40.05
+let ea_l_v5 = box  1.80 4.0 39.95   1.90 8.0 40.05
+let ea_l_v6 = box  3.00 4.0 39.95   3.10 8.0 40.05
+let ea_l_h1 = box -3.10 4.00 39.95   3.20 4.10 40.05
+let ea_l_h2 = box -3.10 5.20 39.95   3.20 5.30 40.05
+let ea_l_h3 = box -3.10 6.40 39.95   3.20 6.50 40.05
+let ea_l_h4 = box -3.10 7.60 39.95   3.20 7.70 40.05
+let ea_lattice = union { ea_l_v1 ea_l_v2 ea_l_v3 ea_l_v4 ea_l_v5 ea_l_v6
+                         ea_l_h1 ea_l_h2 ea_l_h3 ea_l_h4 }
+
+# ---- and something solid behind the right-hand half -------------------------------------------
+#
+# Twenty-five centimetres thick and six metres by five, which is a quarter of a million voxels and
+# most of this clip's whole cost. It is here so that half the railing in front of it has SOMETHING
+# behind it and half has sky: the second march packs both into the same words, and a frame with only
+# one of the two in it cannot tell a working composite from one that always draws the sky.
+let ea_wall = box 1.0 0.0 59.75   7.0 5.0 60.00
+
+let ea_all = union { ea_near ea_far ea_lattice ea_wall }
+
+paint postiron
+paint railstone where=ea_rail_hi below=0.02
+paint railstone where=ea_rail_lo below=0.02
+paint railstone where=ea_far_rail below=0.02
+paint backwall  where=ea_wall below=0.02
+
+solid ea_all
