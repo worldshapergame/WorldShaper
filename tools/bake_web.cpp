@@ -684,7 +684,22 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 // Writing the file
 // --------------------------------------------------------------------------------------
 
-constexpr usize kHeaderBytes = 192;
+// The header, and the number that says which header it is.
+//
+// Version 1 filled all 192 bytes exactly -- there was no spare room to put anything in. Version 2
+// carries the cutter pool that turns the shapes view from a pile of overlapping primitives into
+// the resolved solid, so the header grew to 208 and the version says so. A version 1 file in the
+// cache beside a version 2 viewer is a real state and it must produce a clear error rather than a
+// wrong picture: `reuse` refuses it and rebakes, and `web/js/format.js` throws on it.
+constexpr u32 kFormatVersion = 2;
+constexpr usize kHeaderBytes = 208;
+// 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
+// 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
+constexpr usize kShapeBytes = 120;
+// Six RGBA32F texels: three matrix rows, eight parameters, then (op, scale, pad, pad). Twenty-two
+// floats carry meaning and two are padding, because a texel is four.
+constexpr usize kCutterFloats = 24;
+constexpr usize kCutterBytes = kCutterFloats * sizeof(f32);
 
 void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
     for (const Quad& q : quads) {
@@ -717,19 +732,58 @@ void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
 //   a 3x4 matrix   world -> this node's own space, which is exactly what `eval` does to the point
 //                  as it descends, so it is accumulated rather than inverted
 //   a scale        what `Op::Scale` multiplies a distance by, so a scaled shape marches safely
-//   a polarity     whether an odd number of `difference` subtrahends is above it -- a shape that
-//                  is CUT AWAY is as much a part of the description as one that is added
+//   the cutters    every leaf of every `difference` subtrahend standing above this shape, in the
+//                  same world space it is in
 //
 // `mirror` folds space rather than moving it, so it emits its child twice, once through the fold.
 // `repeat` is expanded up to a cap. Ops that bend the space they contain -- twist, bend, revolve,
 // displace -- have no honest affine placement for their children and are counted rather than
 // drawn, and the viewer says how many were left out.
+//
+// # Local CSG by scope, which is what makes a hole a hole
+//
+// This used to flatten the tree into independent leaves, each with a `sign` of +1 or -1, and the
+// viewer marched each one ALONE. So a doorway was not a hole: it was a red slab standing in front
+// of the wall it was supposed to go through, and every overlap anybody had ever written was on
+// screen as raw overlapping primitives. Reported as "make the sdf raw view mode be the processed
+// sdfs already cut", and that is exactly the fault.
+//
+// The fix is not to evaluate the whole tree per march step -- the facility is 15,190 shapes and no
+// phone will walk that at every step of every ray. Instead each leaf carries the SUBTRAHENDS THAT
+// APPLY TO IT: on a `difference`, child 0 is walked with `inherited + every leaf of children 1..n`,
+// and children 1..n are not emitted as shapes at all. That scope is what stops two unrelated
+// shapes that merely happen to overlap in space from cutting each other, and it is small: the
+// cutters are then filtered to the ones whose world box actually touches the leaf's, which for
+// almost every leaf leaves none, one or two.
+//
+// The viewer does `d = max(d_self, -d_cutter)` per cutter at each step, which is exact subtraction.
+//
+// **The one place it is not exact, said plainly.** Flattening a subtrahend subtree to a list of
+// leaves treats that subtree as a UNION of them. That is right when the subtrahend is a union,
+// which is nearly always what a `difference` in a clip takes away, and it OVER-CUTS when the
+// subtrahend is itself an `intersection` or another `difference`. Both are counted while baking
+// and reported per clip, so a wrong picture has a number next to it rather than being silent.
 // --------------------------------------------------------------------------------------
 
+// A leaf, and the slice of the cutter pool that is subtracted from it. `cut_start` and `cut_count`
+// index `ShapeWalk::pool`, which the viewer uploads as one float texture.
 struct Shape {
     u32 op = 0;
-    f32 sign = 1.0f;      // -1 where a difference takes it away
+    u32 cut_start = 0;
     f32 scale = 1.0f;     // what a distance in this shape's space is worth in metres
+    f32 world_to_local[12]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    f32 a[8]{};
+    f32 low[3]{0, 0, 0};
+    f32 high[3]{0, 0, 0};
+    u32 cut_count = 0;
+};
+
+// One thing taken away, in world space. The box is the baker's own -- it is what decides whether
+// this cutter is in range of a given leaf -- and is not written to the file; the viewer only ever
+// needs enough to evaluate the distance.
+struct Cutter {
+    u32 op = 0;
+    f32 scale = 1.0f;
     f32 world_to_local[12]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
     f32 a[8]{};
     f32 low[3]{0, 0, 0};
@@ -739,7 +793,6 @@ struct Shape {
 struct Placement {
     f64 m[12]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};   // rows of [L | t], world -> local
     f64 scale = 1.0;
-    f64 sign = 1.0;
 };
 
 // A(p) = L p + t, then whatever the node does to the result.
@@ -790,16 +843,160 @@ bool is_shape_leaf(ws::forge::Op op) { return web_op(op) != kShapeUnknown; }
 
 struct ShapeWalk {
     const ws::forge::Field* field = nullptr;
+    std::string clip;
     std::vector<Shape> shapes;
+    std::vector<f32> pool;                              // kCutterFloats per cutter
+    std::unordered_map<std::string, u32> pool_runs;     // a run of cutters -> where it already is
     f64 low[3]{-1e9, -1e9, -1e9};
     f64 high[3]{1e9, 1e9, 1e9};
-    usize skipped = 0;      // subtrees under an op with no affine placement
-    usize capped = 0;       // instances a repeat would have made past the cap
+    usize skipped = 0;             // subtrees under an op with no affine placement
+    usize capped = 0;              // instances a repeat would have made past the cap
+    usize cutters_skipped = 0;     // the same, inside a subtrahend: a hole that came out too small
+    usize over_cap = 0;            // shapes wanting more cutters than one shape may have
+    usize over_cap_worst = 0;      // and the most any one of them wanted
+    usize pool_full = 0;           // cutters dropped because the pool itself filled
+    usize sub_intersections = 0;   // subtrahend subtrees holding an intersection -- over-cuts
+    usize sub_differences = 0;     // subtrahend subtrees holding a difference   -- over-cuts
+    usize warned = 0;
     static constexpr usize kMaxShapes = 20000;
     static constexpr i32 kMaxRepeat = 24;
+    // Sixteen is what one shape may subtract. A wall with more windows than that loses the
+    // smallest of them and says so rather than quietly drawing a wall with no window in it.
+    static constexpr usize kMaxCutters = 16;
+    // And a ceiling on the whole pool, because it becomes a texture on a phone. 65,536 cutters is
+    // 6 MB of RGBA32F.
+    static constexpr usize kMaxPool = 65536;
+
+    usize cutter_count() const { return pool.size() / kCutterFloats; }
 };
 
-void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
+// Where a leaf lands in world space, so the viewer has a box to march inside and the baker has one
+// to test cutters against. The field knows the shape's box in its OWN space; the corners of that
+// box come back out through the placement, which is inverted here, once, for eight corners.
+enum class BoxResult { Ok, Singular, Outside };
+
+BoxResult leaf_world_box(const ShapeWalk& walk, u32 node, const Placement& at, f32 low[3],
+                         f32 high[3]) {
+    const ws::forge::Field::Aabb local = walk.field->bounds_of(node);
+    if (local.infinite()) {
+        for (i32 axis = 0; axis < 3; ++axis) {
+            low[axis] = static_cast<f32>(walk.low[axis]);
+            high[axis] = static_cast<f32>(walk.high[axis]);
+        }
+        return BoxResult::Ok;
+    }
+
+    f64 inv[12];
+    const f64 det = at.m[0] * (at.m[5] * at.m[10] - at.m[6] * at.m[9]) -
+                    at.m[1] * (at.m[4] * at.m[10] - at.m[6] * at.m[8]) +
+                    at.m[2] * (at.m[4] * at.m[9] - at.m[5] * at.m[8]);
+    if (std::abs(det) < 1e-12) return BoxResult::Singular;
+    const f64 s = 1.0 / det;
+    inv[0] = (at.m[5] * at.m[10] - at.m[6] * at.m[9]) * s;
+    inv[1] = (at.m[2] * at.m[9] - at.m[1] * at.m[10]) * s;
+    inv[2] = (at.m[1] * at.m[6] - at.m[2] * at.m[5]) * s;
+    inv[4] = (at.m[6] * at.m[8] - at.m[4] * at.m[10]) * s;
+    inv[5] = (at.m[0] * at.m[10] - at.m[2] * at.m[8]) * s;
+    inv[6] = (at.m[2] * at.m[4] - at.m[0] * at.m[6]) * s;
+    inv[8] = (at.m[4] * at.m[9] - at.m[5] * at.m[8]) * s;
+    inv[9] = (at.m[1] * at.m[8] - at.m[0] * at.m[9]) * s;
+    inv[10] = (at.m[0] * at.m[5] - at.m[1] * at.m[4]) * s;
+    const f64 tx = at.m[3], ty = at.m[7], tz = at.m[11];
+    inv[3] = -(inv[0] * tx + inv[1] * ty + inv[2] * tz);
+    inv[7] = -(inv[4] * tx + inv[5] * ty + inv[6] * tz);
+    inv[11] = -(inv[8] * tx + inv[9] * ty + inv[10] * tz);
+
+    f64 lo[3] = {1e30, 1e30, 1e30};
+    f64 hi[3] = {-1e30, -1e30, -1e30};
+    for (i32 corner = 0; corner < 8; ++corner) {
+        const f64 c[3] = {(corner & 1) ? local.high.x : local.low.x,
+                          (corner & 2) ? local.high.y : local.low.y,
+                          (corner & 4) ? local.high.z : local.low.z};
+        for (i32 axis = 0; axis < 3; ++axis) {
+            const f64 v = inv[axis * 4 + 0] * c[0] + inv[axis * 4 + 1] * c[1] +
+                          inv[axis * 4 + 2] * c[2] + inv[axis * 4 + 3];
+            lo[axis] = std::min(lo[axis], v);
+            hi[axis] = std::max(hi[axis], v);
+        }
+    }
+    for (i32 axis = 0; axis < 3; ++axis) {
+        low[axis] = static_cast<f32>(std::max(lo[axis] - 0.01, walk.low[axis]));
+        high[axis] = static_cast<f32>(std::min(hi[axis] + 0.01, walk.high[axis]));
+        if (low[axis] >= high[axis]) return BoxResult::Outside;
+    }
+    return BoxResult::Ok;
+}
+
+// What one `difference` takes away, flattened. See the header comment for where this is exact and
+// where it over-cuts; `intersections` and `differences` are what say which of the two happened.
+struct Subtrahend {
+    std::vector<Cutter> list;
+    usize skipped = 0;
+    usize intersections = 0;
+    usize differences = 0;
+};
+
+void collect_cutters(ShapeWalk& walk, Subtrahend& out, u32 node, const Placement& at, i32 depth);
+
+void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth,
+                 const std::vector<Cutter>& inherited);
+
+// Do two world boxes touch? Cutters that do not are not this leaf's business, and dropping them is
+// what keeps the per-shape list at nothing or one or two on a real clip.
+bool boxes_overlap(const f32 a_low[3], const f32 a_high[3], const f32 b_low[3],
+                   const f32 b_high[3]) {
+    for (i32 axis = 0; axis < 3; ++axis) {
+        if (a_high[axis] < b_low[axis] || b_high[axis] < a_low[axis]) return false;
+    }
+    return true;
+}
+
+f64 overlap_volume(const f32 a_low[3], const f32 a_high[3], const f32 b_low[3],
+                   const f32 b_high[3]) {
+    f64 volume = 1.0;
+    for (i32 axis = 0; axis < 3; ++axis) {
+        const f64 span = std::min(a_high[axis], b_high[axis]) - std::max(a_low[axis], b_low[axis]);
+        volume *= std::max(span, 0.0);
+    }
+    return volume;
+}
+
+// A run of cutters into the pool, deduplicated: every leaf of one wall shares that wall's windows,
+// so the same run is written once and pointed at many times.
+void place_run(ShapeWalk& walk, const std::vector<Cutter>& run, Shape& shape) {
+    if (run.empty()) return;
+    std::string key;
+    key.reserve(run.size() * kCutterFloats * sizeof(f32));
+    std::vector<f32> payload;
+    payload.reserve(run.size() * kCutterFloats);
+    for (const Cutter& cutter : run) {
+        f32 record[kCutterFloats]{};
+        for (i32 i = 0; i < 12; ++i) record[i] = cutter.world_to_local[i];
+        for (i32 i = 0; i < 8; ++i) record[12 + i] = cutter.a[i];
+        record[20] = static_cast<f32>(cutter.op);
+        record[21] = cutter.scale;
+        payload.insert(payload.end(), record, record + kCutterFloats);
+    }
+    key.assign(reinterpret_cast<const char*>(payload.data()), payload.size() * sizeof(f32));
+
+    const auto found = walk.pool_runs.find(key);
+    if (found != walk.pool_runs.end()) {
+        shape.cut_start = found->second;
+        shape.cut_count = static_cast<u32>(run.size());
+        return;
+    }
+    if (walk.cutter_count() + run.size() > ShapeWalk::kMaxPool) {
+        walk.pool_full += run.size();
+        return;   // no cutters rather than the wrong ones; the count says it happened
+    }
+    shape.cut_start = static_cast<u32>(walk.cutter_count());
+    shape.cut_count = static_cast<u32>(run.size());
+    walk.pool.insert(walk.pool.end(), payload.begin(), payload.end());
+    walk.pool_runs.emplace(std::move(key), shape.cut_start);
+}
+
+void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth,
+                 const std::vector<Cutter>& inherited) {
     using ws::forge::Op;
     if (depth > 64 || walk.shapes.size() >= ShapeWalk::kMaxShapes) return;
     const ws::forge::Node& n = walk.field->node(node);
@@ -808,64 +1005,42 @@ void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
     if (is_shape_leaf(n.op)) {
         Shape shape;
         shape.op = static_cast<u32>(web_op(n.op));
-        shape.sign = static_cast<f32>(at.sign);
         shape.scale = static_cast<f32>(at.scale);
         for (i32 i = 0; i < 12; ++i) shape.world_to_local[i] = static_cast<f32>(at.m[i]);
         for (i32 i = 0; i < 8; ++i) shape.a[i] = static_cast<f32>(a[i]);
 
-        // Where it ends up, so the viewer has a box to march inside. The field knows the shape's
-        // box in its OWN space; the corners of that box go back out through the placement.
-        const ws::forge::Field::Aabb local = walk.field->bounds_of(node);
-        if (local.infinite()) {
-            for (i32 axis = 0; axis < 3; ++axis) {
-                shape.low[axis] = static_cast<f32>(walk.low[axis]);
-                shape.high[axis] = static_cast<f32>(walk.high[axis]);
-            }
-        } else {
-            // The placement maps world -> local, so it is inverted here, once, for eight corners.
-            f64 inv[12];
-            const f64 det =
-                at.m[0] * (at.m[5] * at.m[10] - at.m[6] * at.m[9]) -
-                at.m[1] * (at.m[4] * at.m[10] - at.m[6] * at.m[8]) +
-                at.m[2] * (at.m[4] * at.m[9] - at.m[5] * at.m[8]);
-            if (std::abs(det) < 1e-12) {
-                walk.skipped += 1;
-                return;
-            }
-            const f64 s = 1.0 / det;
-            inv[0] = (at.m[5] * at.m[10] - at.m[6] * at.m[9]) * s;
-            inv[1] = (at.m[2] * at.m[9] - at.m[1] * at.m[10]) * s;
-            inv[2] = (at.m[1] * at.m[6] - at.m[2] * at.m[5]) * s;
-            inv[4] = (at.m[6] * at.m[8] - at.m[4] * at.m[10]) * s;
-            inv[5] = (at.m[0] * at.m[10] - at.m[2] * at.m[8]) * s;
-            inv[6] = (at.m[2] * at.m[4] - at.m[0] * at.m[6]) * s;
-            inv[8] = (at.m[4] * at.m[9] - at.m[5] * at.m[8]) * s;
-            inv[9] = (at.m[1] * at.m[8] - at.m[0] * at.m[9]) * s;
-            inv[10] = (at.m[0] * at.m[5] - at.m[1] * at.m[4]) * s;
-            const f64 tx = at.m[3], ty = at.m[7], tz = at.m[11];
-            inv[3] = -(inv[0] * tx + inv[1] * ty + inv[2] * tz);
-            inv[7] = -(inv[4] * tx + inv[5] * ty + inv[6] * tz);
-            inv[11] = -(inv[8] * tx + inv[9] * ty + inv[10] * tz);
-
-            f64 lo[3] = {1e30, 1e30, 1e30};
-            f64 hi[3] = {-1e30, -1e30, -1e30};
-            for (i32 corner = 0; corner < 8; ++corner) {
-                const f64 c[3] = {(corner & 1) ? local.high.x : local.low.x,
-                                  (corner & 2) ? local.high.y : local.low.y,
-                                  (corner & 4) ? local.high.z : local.low.z};
-                for (i32 axis = 0; axis < 3; ++axis) {
-                    const f64 v = inv[axis * 4 + 0] * c[0] + inv[axis * 4 + 1] * c[1] +
-                                  inv[axis * 4 + 2] * c[2] + inv[axis * 4 + 3];
-                    lo[axis] = std::min(lo[axis], v);
-                    hi[axis] = std::max(hi[axis], v);
-                }
-            }
-            for (i32 axis = 0; axis < 3; ++axis) {
-                shape.low[axis] = static_cast<f32>(std::max(lo[axis] - 0.01, walk.low[axis]));
-                shape.high[axis] = static_cast<f32>(std::min(hi[axis] + 0.01, walk.high[axis]));
-                if (shape.low[axis] >= shape.high[axis]) return;   // entirely outside the clip
-            }
+        const BoxResult box = leaf_world_box(walk, node, at, shape.low, shape.high);
+        if (box == BoxResult::Singular) {
+            walk.skipped += 1;
+            return;
         }
+        if (box == BoxResult::Outside) return;   // entirely outside the clip
+
+        // Only the subtrahends that actually reach this leaf. Over the cap, the biggest overlaps
+        // are kept -- a wall keeps its doorway and loses a corner bead, rather than the other way
+        // round -- and the count is warned about, because a silent truncation reads as "it worked".
+        std::vector<Cutter> mine;
+        for (const Cutter& cutter : inherited) {
+            if (boxes_overlap(shape.low, shape.high, cutter.low, cutter.high)) mine.push_back(cutter);
+        }
+        if (mine.size() > ShapeWalk::kMaxCutters) {
+            walk.over_cap += 1;
+            walk.over_cap_worst = std::max(walk.over_cap_worst, mine.size());
+            if (walk.warned < 4) {
+                walk.warned += 1;
+                // std::format, not printf: this logger takes {} and a "%zu" reaches the console
+                // verbatim, which is a warning that says nothing.
+                WS_LOG_WARN("bake_web", "{}: a shape is cut by {} shapes and the cap is {}",
+                            walk.clip, mine.size(), ShapeWalk::kMaxCutters);
+            }
+            std::stable_sort(mine.begin(), mine.end(),
+                             [&shape](const Cutter& x, const Cutter& y) {
+                                 return overlap_volume(shape.low, shape.high, x.low, x.high) >
+                                        overlap_volume(shape.low, shape.high, y.low, y.high);
+                             });
+            mine.resize(ShapeWalk::kMaxCutters);
+        }
+        place_run(walk, mine, shape);
         walk.shapes.push_back(shape);
         return;
     }
@@ -877,20 +1052,37 @@ void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
         case Op::SmoothIntersection:
         case Op::Min:
         case Op::Max:
-            for (u32 c = 0; c < n.children; ++c) walk_shapes(walk, n.child[c], at, depth + 1);
+            for (u32 c = 0; c < n.children; ++c) {
+                walk_shapes(walk, n.child[c], at, depth + 1, inherited);
+            }
             return;
 
         case Op::Difference:
         case Op::SmoothDifference: {
-            if (n.children > 0) walk_shapes(walk, n.child[0], at, depth + 1);
-            Placement cut = at;
-            cut.sign = -at.sign;
-            for (u32 c = 1; c < n.children; ++c) walk_shapes(walk, n.child[c], cut, depth + 1);
+            // The subtrahends become CUTTERS on everything under child 0, and are not shapes of
+            // their own. That is the whole of the fix: a hole is a hole and nothing is drawn red.
+            Subtrahend sub;
+            for (u32 c = 1; c < n.children; ++c) {
+                collect_cutters(walk, sub, n.child[c], at, depth + 1);
+            }
+            walk.cutters_skipped += sub.skipped;
+            if (sub.intersections > 0) walk.sub_intersections += 1;
+            if (sub.differences > 0) walk.sub_differences += 1;
+
+            if (n.children == 0) return;
+            if (sub.list.empty()) {
+                walk_shapes(walk, n.child[0], at, depth + 1, inherited);
+                return;
+            }
+            std::vector<Cutter> scope = inherited;
+            scope.insert(scope.end(), sub.list.begin(), sub.list.end());
+            walk_shapes(walk, n.child[0], at, depth + 1, scope);
             return;
         }
 
         case Op::Translate:
-            walk_shapes(walk, n.child[0], after_translate(at, a[0], a[1], a[2]), depth + 1);
+            walk_shapes(walk, n.child[0], after_translate(at, a[0], a[1], a[2]), depth + 1,
+                        inherited);
             return;
 
         case Op::Rotate: {
@@ -904,7 +1096,8 @@ void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
             const f64 ry[9] = {cy, 0, sy, 0, 1, 0, -sy, 0, cy};
             const f64 rz[9] = {cz, -sz, 0, sz, cz, 0, 0, 0, 1};
             walk_shapes(walk, n.child[0],
-                        after_linear(after_linear(after_linear(at, rx), ry), rz), depth + 1);
+                        after_linear(after_linear(after_linear(at, rx), ry), rz), depth + 1,
+                        inherited);
             return;
         }
 
@@ -915,7 +1108,7 @@ void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
             const f64 diag[9] = {1.0 / sx, 0, 0, 0, 1.0 / sy, 0, 0, 0, 1.0 / sz};
             Placement out = after_linear(at, diag);
             out.scale = at.scale * std::min(std::abs(sx), std::min(std::abs(sy), std::abs(sz)));
-            walk_shapes(walk, n.child[0], out, depth + 1);
+            walk_shapes(walk, n.child[0], out, depth + 1, inherited);
             return;
         }
 
@@ -924,8 +1117,8 @@ void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
             const u32 axis = static_cast<u32>(a[0]) % 3u;
             f64 flip[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
             flip[axis * 3 + axis] = -1.0;
-            walk_shapes(walk, n.child[0], at, depth + 1);
-            walk_shapes(walk, n.child[0], after_linear(at, flip), depth + 1);
+            walk_shapes(walk, n.child[0], at, depth + 1, inherited);
+            walk_shapes(walk, n.child[0], after_linear(at, flip), depth + 1, inherited);
             return;
         }
 
@@ -949,7 +1142,8 @@ void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
                             (count[1] > 1) ? (y - count[1] / 2) * period[1] : 0.0,
                             (count[2] > 1) ? (z - count[2] / 2) * period[2] : 0.0};
                         walk_shapes(walk, n.child[0],
-                                    after_translate(at, step[0], step[1], step[2]), depth + 1);
+                                    after_translate(at, step[0], step[1], step[2]), depth + 1,
+                                    inherited);
                     }
                 }
             }
@@ -965,13 +1159,143 @@ void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
             // facility is `displace { furnished grain_fine }`, so skipping it returned nothing at
             // all for the one clip anybody opens first. Its second child is the pattern, which is
             // not a shape and is not descended into.
-            walk_shapes(walk, n.child[0], at, depth + 1);
+            walk_shapes(walk, n.child[0], at, depth + 1, inherited);
             return;
 
         default:
             // Everything else either bends the space its children live in, or is a pattern rather
             // than a shape. Counted, and the viewer says so.
             if (n.children > 0) walk.skipped += 1;
+            return;
+    }
+}
+
+// The same descent, but everything it reaches becomes something TAKEN AWAY rather than something
+// drawn. It is deliberately the same set of ops with the same placement arithmetic, so a cutter
+// lands exactly where the shape it mirrors would have.
+void collect_cutters(ShapeWalk& walk, Subtrahend& out, u32 node, const Placement& at, i32 depth) {
+    using ws::forge::Op;
+    // A subtrahend past the per-shape cap can be stopped here: nothing beyond it can be kept.
+    if (depth > 64 || out.list.size() >= ShapeWalk::kMaxCutters * 4) return;
+    const ws::forge::Node& n = walk.field->node(node);
+    const f64* a = n.a;
+
+    if (is_shape_leaf(n.op)) {
+        Cutter cutter;
+        cutter.op = static_cast<u32>(web_op(n.op));
+        cutter.scale = static_cast<f32>(at.scale);
+        for (i32 i = 0; i < 12; ++i) cutter.world_to_local[i] = static_cast<f32>(at.m[i]);
+        for (i32 i = 0; i < 8; ++i) cutter.a[i] = static_cast<f32>(a[i]);
+        const BoxResult box = leaf_world_box(walk, node, at, cutter.low, cutter.high);
+        if (box == BoxResult::Singular) {
+            out.skipped += 1;
+            return;
+        }
+        if (box == BoxResult::Outside) return;   // cuts nothing inside the clip
+        out.list.push_back(cutter);
+        return;
+    }
+
+    switch (n.op) {
+        case Op::Union:
+        case Op::SmoothUnion:
+        case Op::Min:
+            for (u32 c = 0; c < n.children; ++c) collect_cutters(walk, out, n.child[c], at, depth + 1);
+            return;
+
+        case Op::Intersection:
+        case Op::SmoothIntersection:
+        case Op::Max:
+            // The honest limitation. A union of these leaves is bigger than their intersection, so
+            // taking it away removes more than the clip does. Counted, and written down in
+            // documentation/24-clip-viewer.md rather than hidden.
+            out.intersections += 1;
+            for (u32 c = 0; c < n.children; ++c) collect_cutters(walk, out, n.child[c], at, depth + 1);
+            return;
+
+        case Op::Difference:
+        case Op::SmoothDifference:
+            // A hole inside a hole. Same family, same over-cut: the subtrahend's own subtrahend
+            // should be putting matter back and instead joins the union that takes it away.
+            out.differences += 1;
+            for (u32 c = 0; c < n.children; ++c) collect_cutters(walk, out, n.child[c], at, depth + 1);
+            return;
+
+        case Op::Translate:
+            collect_cutters(walk, out, n.child[0], after_translate(at, a[0], a[1], a[2]), depth + 1);
+            return;
+
+        case Op::Rotate: {
+            const f64 tau = 6.283185307179586;
+            const f64 cx = std::cos(-a[0] * tau), sx = std::sin(-a[0] * tau);
+            const f64 cy = std::cos(-a[1] * tau), sy = std::sin(-a[1] * tau);
+            const f64 cz = std::cos(-a[2] * tau), sz = std::sin(-a[2] * tau);
+            const f64 rx[9] = {1, 0, 0, 0, cx, -sx, 0, sx, cx};
+            const f64 ry[9] = {cy, 0, sy, 0, 1, 0, -sy, 0, cy};
+            const f64 rz[9] = {cz, -sz, 0, sz, cz, 0, 0, 0, 1};
+            collect_cutters(walk, out, n.child[0],
+                            after_linear(after_linear(after_linear(at, rx), ry), rz), depth + 1);
+            return;
+        }
+
+        case Op::Scale: {
+            const f64 sx = (a[0] != 0.0) ? a[0] : 1.0;
+            const f64 sy = (a[1] != 0.0) ? a[1] : 1.0;
+            const f64 sz = (a[2] != 0.0) ? a[2] : 1.0;
+            const f64 diag[9] = {1.0 / sx, 0, 0, 0, 1.0 / sy, 0, 0, 0, 1.0 / sz};
+            Placement scaled = after_linear(at, diag);
+            scaled.scale = at.scale * std::min(std::abs(sx), std::min(std::abs(sy), std::abs(sz)));
+            collect_cutters(walk, out, n.child[0], scaled, depth + 1);
+            return;
+        }
+
+        case Op::Mirror: {
+            const u32 axis = static_cast<u32>(a[0]) % 3u;
+            f64 flip[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+            flip[axis * 3 + axis] = -1.0;
+            collect_cutters(walk, out, n.child[0], at, depth + 1);
+            collect_cutters(walk, out, n.child[0], after_linear(at, flip), depth + 1);
+            return;
+        }
+
+        case Op::Repeat: {
+            const f64 period[3] = {a[0], a[1], a[2]};
+            const f64 limit[3] = {a[3], a[4], a[5]};
+            i32 count[3] = {1, 1, 1};
+            for (i32 axis = 0; axis < 3; ++axis) {
+                if (period[axis] > 1e-9) {
+                    count[axis] = (limit[axis] > 0.0)
+                                      ? static_cast<i32>(limit[axis]) * 2 + 1
+                                      : ShapeWalk::kMaxRepeat;
+                    count[axis] = std::min(count[axis], ShapeWalk::kMaxRepeat);
+                }
+            }
+            for (i32 z = 0; z < count[2]; ++z) {
+                for (i32 y = 0; y < count[1]; ++y) {
+                    for (i32 x = 0; x < count[0]; ++x) {
+                        const f64 step[3] = {
+                            (count[0] > 1) ? (x - count[0] / 2) * period[0] : 0.0,
+                            (count[1] > 1) ? (y - count[1] / 2) * period[1] : 0.0,
+                            (count[2] > 1) ? (z - count[2] / 2) * period[2] : 0.0};
+                        collect_cutters(walk, out, n.child[0],
+                                        after_translate(at, step[0], step[1], step[2]), depth + 1);
+                    }
+                }
+            }
+            return;
+        }
+
+        case Op::Shell:
+        case Op::Round:
+        case Op::Offset:
+        case Op::Displace:
+            collect_cutters(walk, out, n.child[0], at, depth + 1);
+            return;
+
+        default:
+            // A subtrahend nobody can place: the hole it should have cut is simply not cut, so this
+            // is counted separately from the shapes that go missing for the same reason.
+            if (n.children > 0) out.skipped += 1;
             return;
     }
 }
@@ -1019,7 +1343,10 @@ bool reuse(const Options& options, const fs::path& relative, u64 key, Baked& bak
     if (!stream.read(reinterpret_cast<char*>(bytes.data()), size)) return false;
 
     if (bytes[0] != 'W' || bytes[1] != 'S' || bytes[2] != 'C' || bytes[3] != 'V') return false;
-    if (read_u32(bytes, 4) != 1) return false;
+    // A file from an older format is not stale-but-usable, it is unreadable: the offsets moved.
+    // Refusing it here is what makes a cached web/data from before the cutter pool rebake itself
+    // instead of being served to a viewer that would throw on it.
+    if (read_u32(bytes, 4) != kFormatVersion) return false;
     const u64 stored = read_u32(bytes, 180) | (read_u32(bytes, 184) << 32);
     if (stored != key) return false;
 
@@ -1247,6 +1574,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
     walk.field = &script.field;
+    walk.clip = relative.generic_string();
     // Nothing may claim a box bigger than the clip. A `plane` is a half space, its bounds are
     // everywhere, and a two-billion-metre impostor flattens the depth buffer for everything else
     // on screen -- there are sixty-five planes in the facility.
@@ -1254,7 +1582,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         walk.low[axis] = origin[axis] - 0.05;
         walk.high[axis] = origin[axis] + size_metres[axis] + 0.05;
     }
-    walk_shapes(walk, shapes_from, Placement{}, 0);
+    walk_shapes(walk, shapes_from, Placement{}, 0, {});
 
     // Where the matter actually is, which is what the viewer frames on. The sampled box is nearly
     // always bigger, and framing on it puts a building in the corner of the screen.
@@ -1277,7 +1605,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     out[1] = 'S';
     out[2] = 'C';
     out[3] = 'V';
-    put_u32(out, 4, 1);
+    put_u32(out, 4, kFormatVersion);
     for (i32 axis = 0; axis < 3; ++axis) put_i32(out, 8 + static_cast<usize>(axis) * 4, clip.size[axis]);
     put_i32(out, 20, metre);
     for (i32 axis = 0; axis < 3; ++axis) put_f32(out, 24 + static_cast<usize>(axis) * 4, origin[axis]);
@@ -1336,6 +1664,12 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     put_u32(out, 180, static_cast<u32>(baked.key & 0xFFFFFFFFull));
     put_u32(out, 184, static_cast<u32>(baked.key >> 32));
     put_u32(out, 188, static_cast<u32>(walk.shapes.size()));
+    // The cutter pool: how many, and where it starts. The offset is derivable from everything
+    // above it, and it is written down anyway -- a reader that computes it agrees with a reader
+    // that reads it, or one of the two is wrong and says so.
+    put_u32(out, 192, static_cast<u32>(walk.cutter_count()));
+    // 196 is filled in below, once the blocks in front of it have been appended.
+    // 200..207 is spare.
 
     for (const ws::VisualRecord& record : mesher.palette()) {
         const u8* bytes = reinterpret_cast<const u8*>(&record);
@@ -1359,15 +1693,25 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
             std::memcpy(&bits, &value, sizeof(bits));
             push_u32(bits);
         };
+        const usize shapes_at = out.size();
         for (const Shape& shape : walk.shapes) {
-        push_u32(shape.op);
-        put(shape.sign);
-        put(shape.scale);
-        for (i32 i = 0; i < 12; ++i) put(shape.world_to_local[i]);
-        for (i32 i = 0; i < 8; ++i) put(shape.a[i]);
-        for (i32 i = 0; i < 3; ++i) put(shape.low[i]);
-        for (i32 i = 0; i < 3; ++i) put(shape.high[i]);
+            push_u32(shape.op);
+            push_u32(shape.cut_start);
+            put(shape.scale);
+            for (i32 i = 0; i < 12; ++i) put(shape.world_to_local[i]);
+            for (i32 i = 0; i < 8; ++i) put(shape.a[i]);
+            for (i32 i = 0; i < 3; ++i) put(shape.low[i]);
+            for (i32 i = 0; i < 3; ++i) put(shape.high[i]);
+            push_u32(shape.cut_count);
         }
+        if (out.size() - shapes_at != walk.shapes.size() * kShapeBytes) {
+            std::printf("  ! shape record is %zu bytes, not %zu\n",
+                        walk.shapes.size() ? (out.size() - shapes_at) / walk.shapes.size() : 0,
+                        kShapeBytes);
+            return false;
+        }
+        put_u32(out, 196, static_cast<u32>(out.size()));
+        for (const f32 value : walk.pool) put(value);
     }
 
     baked.id = identifier(relative);
@@ -1407,10 +1751,23 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     std::error_code gone;
     fs::remove(options.out / (baked.id + ".wsc.gz"), gone);
 
-    std::printf("  %d/m  %d x %d x %d  %u quads  %zu shapes  %zu materials  %.1f MB  %.1f s\n",
+    std::printf("  %d/m  %d x %d x %d  %u quads  %zu shapes  %zu cutters  %zu materials  %.1f MB  "
+                "%.1f s\n",
                 metre,
                 clip.size[0], clip.size[1], clip.size[2], baked.quads, walk.shapes.size(),
-                mesher.palette().size(), static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
+                walk.cutter_count(), mesher.palette().size(),
+                static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
+    // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
+    // "it worked", which is the whole reason these are counted at all.
+    if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||
+        walk.sub_differences > 0 || walk.cutters_skipped > 0) {
+        std::printf("      shapes view: %zu over the %zu-cutter cap (worst %zu)  "
+                    "%zu dropped, pool full  %zu subtrahends with an intersection  "
+                    "%zu with a difference  %zu unplaceable  pool %.2f MB\n",
+                    walk.over_cap, ShapeWalk::kMaxCutters, walk.over_cap_worst, walk.pool_full,
+                    walk.sub_intersections, walk.sub_differences, walk.cutters_skipped,
+                    static_cast<f64>(walk.cutter_count() * kCutterBytes) / (1024.0 * 1024.0));
+    }
     if (options.verbose) {
         std::printf("      box  %.2f %.2f %.2f  ..  %.2f %.2f %.2f      matter  %.2f %.2f %.2f  "
                     ".. %.2f %.2f %.2f\n",
