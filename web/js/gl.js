@@ -627,13 +627,14 @@ vec3 tonemap(vec3 x) {
 }
 // >>> paintstack
 // The field evaluator, then the paint stack that calls it. The stack needs two functions and does
-// not care which file wrote them: `float field_eval(uint, vec3)` and
-// `bool field_eval_ok(uint, vec3, out float)`, where false means the evaluator refused — it ran out
-// of depth — and the stack reads that as "no match" and goes on to the rule underneath.
+// not care which file wrote them: float field_eval(uint, vec3), and
+// bool field_eval_ok(uint, vec3, out float) where false means the evaluator refused -- it ran out
+// of depth at 64 -- and the stack reads that as "no match" and goes on to the rule underneath.
 //
-// FIELD_GLSL is web/js/features/field.js's `fieldGlsl()` when that module is present, and
-// paint.js's stub — deterministic noise, and NOT the clip's field — when it is not. Nothing else in
-// this shader changes between the two.
+// FIELD_GLSL is features/field.js's own fieldGlsl() when that module is present, and paint.js's
+// stub -- deterministic noise, and NOT the clip's field -- when it is not. Nothing else in this
+// shader changes between the two. (No back-quotes in here: this is inside a template string, and
+// putting three of them in this very comment is what broke it the first time.)
 ` + FIELD_GLSL + PAINT_GLSL + `
 // <<< paintstack
 // >>> paintstack
