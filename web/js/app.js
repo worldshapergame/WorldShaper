@@ -204,6 +204,11 @@ function describe() {
         ['materials', String(clip.materialCount)],
         ['download', (entry.bytes / (1024 * 1024)).toFixed(2) + ' MB'],
         ['baked', state.index ? state.index.built : ''],
+        // Which clips these are. The site follows whichever branch was pushed last, so without
+        // this line "the facility" is ambiguous between two very different buildings.
+        ['from', state.index && state.index.branch
+            ? state.index.branch + (state.index.commit ? ' @ ' + state.index.commit : '')
+            : 'unknown'],
     ];
     // Written as elements and filled with textContent rather than as one string of HTML: a clip's
     // own file name reaches this line, and a name is not markup.
@@ -219,7 +224,11 @@ async function poll() {
         const changed = !state.index || next.hash !== state.index.hash;
         state.index = next;
         if (changed) {
+            const wasFrom = state.index ? state.index.branch : null;
             buildList();
+            if (wasFrom && next.branch && next.branch !== wasFrom) {
+                toast('now showing ' + next.branch);
+            }
             if (state.current) {
                 const fresh = next.clips.find((c) => c.id === state.current.id);
                 if (fresh && fresh.hash !== state.current.hash) {
@@ -290,18 +299,23 @@ function setupInput() {
             const spread = Math.hypot(a.x - b.x, a.y - b.y);
             if (pinch > 0) controls.distance *= pinch / Math.max(1, spread);
             pinch = spread;
-            // Two fingers also pan, in the plane the camera is looking through.
-            const speed = controls.distance * 0.0016;
+            // Two fingers also pan, in the plane the camera is looking through, and the clip goes
+            // the way the fingers go. Same screen-right as the walker uses, for the same reason.
+            const speed = controls.distance * 0.0008;
             const forward = [Math.sin(controls.yaw), 0, Math.cos(controls.yaw)];
-            controls.target[0] -= (forward[2] * dx * 0.5) * speed;
-            controls.target[2] += (forward[0] * dx * 0.5) * speed;
-            controls.target[1] += dy * 0.5 * speed;
+            const right = [-forward[2], 0, forward[0]];
+            controls.target[0] -= right[0] * dx * speed;
+            controls.target[2] -= right[2] * dx * speed;
+            controls.target[1] += dy * speed;
             return;
         }
 
+        // The same sign in both modes, and it was not: orbit had a `+` that tipped the building
+        // the opposite way to the finger. Dragging down looks down and tips the top of a clip away
+        // from you, which is the one reading that means the same thing in both.
         const sensitivity = 0.005;
         controls.yaw -= dx * sensitivity;
-        controls.pitch += dy * sensitivity * (controls.mode === 'orbit' ? 1 : -1);
+        controls.pitch -= dy * sensitivity;
     });
 
     const release = (event) => {

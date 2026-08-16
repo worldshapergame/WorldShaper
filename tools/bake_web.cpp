@@ -98,6 +98,11 @@ struct Options {
     i64 budget = 6'000'000;
     i32 max_metre = 32;
     std::string only;   // bake just the clip whose id matches, for working on one
+    // Where these clips came from. The site follows whichever branch is being worked on, so the
+    // page has to be able to say which one it is showing -- otherwise "it is not showing the
+    // overhauled facility" and "it is showing the overhauled facility" look identical.
+    std::string branch;
+    std::string commit;
     bool verbose = false;
 };
 
@@ -963,6 +968,15 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     stream.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
     stream.close();
 
+    // And throw away any compressed copy left over from a previous bake.
+    //
+    // The viewer asks for `<id>.wsc.gz` first and only falls back to the plain file, so a stale
+    // `.gz` beside a fresh `.wsc` is not a slow path -- it is the OLD CLIP served in place of the
+    // new one, with the index's own hash on the URL saying it is current. A whole rebuild of the
+    // building was looked at and reported as unchanged because of exactly this.
+    std::error_code gone;
+    fs::remove(options.out / (baked.id + ".wsc.gz"), gone);
+
     std::printf("  %d/m  %d x %d x %d  %u quads  %zu materials  %.1f MB  %.1f s\n", metre,
                 clip.size[0], clip.size[1], clip.size[2], baked.quads, mesher.palette().size(),
                 static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
@@ -999,6 +1013,10 @@ int main(int argc, char** argv) {
             options.max_metre = std::stoi(next("--max-metre"));
         } else if (arg == "--only") {
             options.only = next("--only");
+        } else if (arg == "--branch") {
+            options.branch = next("--branch");
+        } else if (arg == "--commit") {
+            options.commit = next("--commit");
         } else if (arg == "--verbose") {
             options.verbose = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -1008,7 +1026,9 @@ int main(int argc, char** argv) {
                 "  --out DIR        where the .wsc files go (default web/data)\n"
                 "  --budget N       cells a sampled box may hold before the resolution halves\n"
                 "  --max-metre N    never sample finer than this\n"
-                "  --only ID        bake one clip, by its id (facility, facility-dome, ...)\n");
+                "  --only ID        bake one clip, by its id (facility, facility-dome, ...)\n"
+                "  --branch NAME    what the index should say these clips came from\n"
+                "  --commit SHA     and at which commit\n");
             return 0;
         } else {
             std::printf("unknown argument %s\n", arg.c_str());
@@ -1151,6 +1171,8 @@ int main(int argc, char** argv) {
         json += "  \"built\": \"" + std::string(stamp) + "\",\n";
     }
     json += "  \"hash\": \"" + hex64(combined) + "\",\n";
+    json += "  \"branch\": \"" + json_escape(options.branch) + "\",\n";
+    json += "  \"commit\": \"" + json_escape(options.commit) + "\",\n";
     json += "  \"clips\": [\n";
     for (usize i = 0; i < done.size(); ++i) {
         const Baked& baked = done[i];

@@ -188,7 +188,11 @@ export class Controls {
         this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch));
         const want = this.intent();
         const forward = [Math.sin(this.yaw), 0, Math.cos(this.yaw)];
-        const right = [forward[2], 0, -forward[0]];
+        // Screen-right is `forward x up`, and getting its sign wrong strafes you the wrong way.
+        // Facing north (yaw 0, forward +Z) with up +Y, that cross product is -X, which is what the
+        // view matrix's own right column holds -- so this is the same vector the camera uses and
+        // not a second guess at it. It was written negated and D and A were swapped.
+        const right = [-forward[2], 0, forward[0]];
 
         if (this.flying) {
             const lift = (this.up ? 1 : 0) - (this.down ? 1 : 0);

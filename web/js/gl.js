@@ -13,17 +13,15 @@
 // # Three passes and a cap
 //
 //   sky          a full-screen gradient with the sun in it
-//   opaque       front faces, depth written
-//   cap          the flat face the slice slider cuts, found with the stencil buffer
+//   opaque       depth written; back faces culled only when nothing is sliced
 //   transparent  blended, depth tested, depth not written
 //
-// The cap is the part worth explaining. Slicing is a clip plane, and a clip plane through a hollow
-// surface leaves an open shell — a wall cut in half looks like a sheet of paper because a voxel
-// mesh has no inside. So the cut is filled: the geometry BEHIND the plane is drawn with the
-// stencil buffer inverting on every fragment, which leaves odd parity exactly where the plane is
-// inside matter, and a quad on the plane is drawn through that stencil. It costs one extra pass
-// over the mesh and it is the difference between "the building is hollow" and "the building is
-// made of stone".
+// The slice is a clip plane and nothing is drawn on the cut. There WAS a third pass that filled
+// the cross-section with a flat quad, found by inverting the stencil over the geometry behind the
+// plane, so a sliced wall read as solid stone instead of as a sheet of paper. It went because it
+// paints over the one thing the slider exists to show. Cutting into a building now shows the
+// building's own faces, from behind, which is what the inside of a voxel clip actually looks
+// like.
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -302,51 +300,6 @@ void main() {
     o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
 }`;
 
-// The quad that fills the cut, drawn through the stencil the pass before it built.
-const CAP_VERTEX = `#version 300 es
-precision highp float;
-uniform mat4 u_viewProj;
-uniform vec3 u_capOrigin;
-uniform vec3 u_capU;
-uniform vec3 u_capV;
-out vec3 v_world;
-void main() {
-    vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
-    v_world = u_capOrigin + u_capU * corner.x + u_capV * corner.y;
-    gl_Position = u_viewProj * vec4(v_world, 1.0);
-}`;
-
-const CAP_FRAGMENT = `#version 300 es
-precision highp float;
-precision highp sampler3D;
-in vec3 v_world;
-uniform sampler3D u_light;
-uniform vec3 u_lightOrigin;
-uniform vec3 u_lightScale;
-uniform vec3 u_lightTexel;
-uniform vec3 u_normal;
-uniform vec3 u_sun;
-uniform vec3 u_sunColour;
-uniform vec3 u_skyUp;
-uniform vec3 u_skyDown;
-uniform vec3 u_capColour;
-uniform float u_exposure;
-out vec4 o_colour;
-vec3 tonemap(vec3 x) {
-    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
-void main() {
-    vec3 at = (v_world + u_normal * 0.25 - u_lightOrigin) * u_lightScale;
-    at = clamp(at + u_lightTexel, vec3(0.0), vec3(1.0));
-    vec2 visible = texture(u_light, at).rg;
-    vec3 ambient = mix(u_skyDown, u_skyUp, clamp(u_normal.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
-    float ndl = max(dot(u_normal, u_sun), 0.0);
-    vec3 colour = u_capColour * (ambient * mix(0.25, 1.0, visible.g) +
-                                 u_sunColour * ndl * visible.r * 0.6);
-    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
-}`;
-
 function compile(gl, type, source, name) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -475,7 +428,6 @@ export class Renderer {
 
         this.surface = link(gl, VERTEX_SOURCE, FRAGMENT_SOURCE, 'surface');
         this.sky = link(gl, SKY_VERTEX, SKY_FRAGMENT, 'sky');
-        this.cap = link(gl, CAP_VERTEX, CAP_FRAGMENT, 'cap');
 
         this.vao = gl.createVertexArray();
         this.buffer = gl.createBuffer();
@@ -672,84 +624,30 @@ export class Renderer {
         gl.enable(gl.DEPTH_TEST);
         gl.depthFunc(gl.LESS);
         gl.depthMask(true);
-        gl.enable(gl.CULL_FACE);
-        gl.cullFace(gl.BACK);
         gl.frontFace(gl.CCW);
+        gl.cullFace(gl.BACK);
+        // Back faces are what the inside of a clip IS. Unsliced, nothing can see one and culling
+        // them is free; sliced, every surface the cut opens up is seen from behind, and culling
+        // them is the difference between looking into a room and looking through the building.
+        if (slice) {
+            gl.disable(gl.CULL_FACE);
+        } else {
+            gl.enable(gl.CULL_FACE);
+        }
         this.drawFaces(this.surface.uniforms, clip.opaqueFace, 0, 0);
 
-        // --- the cut face ----------------------------------------------------------------------
+        // Nothing is drawn ON the cut, and that is the change the slider was asked for.
         //
-        // Only when the eye is on the side that survives. Standing inside the half that the slider
-        // has thrown away, the parity along the view ray is counted from the wrong end and the cap
-        // is inside out — so it is not drawn, which is honest and is also what a person walking
-        // through the cut expects.
-        const eyeSide = slice
-            ? camera.eye[0] * plane[0] + camera.eye[1] * plane[1] + camera.eye[2] * plane[2] +
-              plane[3]
-            : 1;
-        if (slice && eyeSide < 0 && clip.opaqueQuads > 0) {
-            gl.enable(gl.STENCIL_TEST);
-            gl.disable(gl.CULL_FACE);
-            gl.disable(gl.DEPTH_TEST);
-            gl.depthMask(false);
-            gl.colorMask(false, false, false, false);
-            gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
-            gl.stencilOp(gl.KEEP, gl.INVERT, gl.INVERT);
-            gl.stencilMask(0xFF);
-            gl.uniform1f(this.surface.uniforms.u_cutSide, 1);
-            this.drawFaces(this.surface.uniforms, clip.opaqueFace, 0, 0);
-            gl.uniform1f(this.surface.uniforms.u_cutSide, 0);
-
-            gl.colorMask(true, true, true, true);
-            gl.depthMask(true);
-            gl.enable(gl.DEPTH_TEST);
-            gl.stencilFunc(gl.EQUAL, 1, 1);
-            gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
-
-            gl.useProgram(this.cap.program);
-            const u = this.cap.uniforms;
-            gl.uniformMatrix4fv(u.u_viewProj, false, this.viewProj);
-            const a = (slice.axis + 1) % 3;
-            const b = (slice.axis + 2) % 3;
-            const pad = clip.reach * 0.05 + 0.5;
-            const origin = [0, 0, 0];
-            const spanA = [0, 0, 0];
-            const spanB = [0, 0, 0];
-            origin[slice.axis] = slice.at;
-            origin[a] = clip.low[a] - pad;
-            origin[b] = clip.low[b] - pad;
-            spanA[a] = clip.high[a] - clip.low[a] + pad * 2;
-            spanB[b] = clip.high[b] - clip.low[b] + pad * 2;
-            gl.uniform3fv(u.u_capOrigin, origin);
-            gl.uniform3fv(u.u_capU, spanA);
-            gl.uniform3fv(u.u_capV, spanB);
-            const normal = [0, 0, 0];
-            normal[slice.axis] = -slice.sign;
-            gl.uniform3fv(u.u_normal, normal);
-            gl.uniform3fv(u.u_sun, this.sun);
-            gl.uniform3fv(u.u_sunColour, this.sunColour);
-            gl.uniform3fv(u.u_skyUp, this.skyUp);
-            gl.uniform3fv(u.u_skyDown, this.skyDown);
-            gl.uniform1f(u.u_exposure, this.exposure);
-            gl.uniform3fv(u.u_capColour, [0.36, 0.34, 0.32]);
-            const size = [
-                clip.lightDims[0] * clip.lightCell,
-                clip.lightDims[1] * clip.lightCell,
-                clip.lightDims[2] * clip.lightCell,
-            ];
-            gl.uniform3fv(u.u_lightOrigin, clip.origin);
-            gl.uniform3fv(u.u_lightScale, [1 / size[0], 1 / size[1], 1 / size[2]]);
-            gl.uniform3fv(u.u_lightTexel, [
-                0.5 / clip.lightDims[0], 0.5 / clip.lightDims[1], 0.5 / clip.lightDims[2],
-            ]);
-            gl.activeTexture(gl.TEXTURE1);
-            gl.bindTexture(gl.TEXTURE_3D, this.light);
-            gl.uniform1i(u.u_light, 1);
-            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-            gl.disable(gl.STENCIL_TEST);
-
-            gl.useProgram(this.surface.program);
-        }
+        // It used to fill the cross-section with a flat grey quad, found with a stencil parity
+        // pass, so that a sliced wall read as solid stone rather than as a sheet of paper. That is
+        // a defensible picture of a building and it is the wrong one HERE: it paints over exactly
+        // the faces somebody dragged the slider to see, and what you get is a clean grey plane
+        // where the inside of the clip should be. Reported as "make the slicing show the inside of
+        // the clip, not culling the faces of sliced voxels", which is the whole of it.
+        //
+        // So the cut shows the mesh's own faces and the only thing that changes is that the pass
+        // above stops culling: see `render`'s cull decision. A wall cut through shows its two
+        // surfaces and the gap between them, because that is what the voxels are.
 
         // --- glass -----------------------------------------------------------------------------
         if (clip.transparentQuads > 0) {
@@ -757,7 +655,11 @@ export class Renderer {
             gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE,
                                  gl.ONE_MINUS_SRC_ALPHA);
             gl.depthMask(false);
-            gl.enable(gl.CULL_FACE);
+            if (slice) {
+                gl.disable(gl.CULL_FACE);
+            } else {
+                gl.enable(gl.CULL_FACE);
+            }
             this.drawFaces(this.surface.uniforms, clip.transparentFace, this.transparentBase, 1);
             gl.depthMask(true);
             gl.disable(gl.BLEND);

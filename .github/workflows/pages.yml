@@ -1,19 +1,32 @@
-# The clip viewer: bake every clip and publish the site.
+# The clip viewer: bake the clips somebody is actually working on, and publish the site.
 #
-# This runs on every push that can change what the site shows — a clip, the sampler under it, or
-# the viewer itself — so the page follows the work rather than a release. documentation/24 says
-# what the site is; this is how it gets there.
+# documentation/24-clip-viewer.md says what the site is. This is how it stays current, and the
+# awkward part is which COMMIT to bake.
 #
-# It is a LINUX job and it does not install a Vulkan SDK or build SDL, which is what
-# `-DWS_TOOLS_ONLY=ON` is for: the baker needs the field, the sampler and the type table, and none
-# of those know what a GPU is. That takes the job from about ten minutes to about five, and it also
-# means this workflow cannot be broken by a graphics dependency moving under it — which is exactly
-# how the release workflow was broken for months (D641).
+# The obvious answer -- bake `main` on every push to `main` -- produced a site that was correct and
+# useless. The facility's overhaul lived on `claude/facility-building-overhaul-deuuxo` for a day:
+# sixteen commits, fourteen thousand lines, a ballroom, a chapel, a crypt, a library and a whole
+# estate, none of it on `main`. The site showed `main`, faithfully, and read as simply out of date.
+#
+# Nor is "also trigger on the branch" enough on its own, and this is the part that is easy to get
+# wrong: **GitHub runs the workflow file from the branch being pushed.** A branch cut before this
+# file existed does not have it, so pushing to that branch runs nothing at all. The push triggers
+# below therefore only help branches made from now on.
+#
+# So the job PICKS its own ref: the branch whose most recent commit to `clips/` is the newest, out
+# of `main` and every `claude/**`. It then checks that branch out and builds the baker from it too,
+# which is not fussiness -- `arc_test.clip` uses an `arc` shape that exists only on the branch that
+# added it, and a baker built from `main` cannot read that file.
+#
+# It is a LINUX job with no Vulkan SDK and no SDL, which is what `-DWS_TOOLS_ONLY=ON` is for: the
+# baker needs the field, the sampler and the type table, and none of those know what a GPU is. It
+# also means this workflow cannot be broken by a graphics dependency moving under it, which is
+# exactly how the release workflow was broken for months (D641).
 name: pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
     paths:
       - 'clips/**'
       - 'src/forge/**'
@@ -24,10 +37,18 @@ on:
       - 'web/**'
       - 'CMakeLists.txt'
       - '.github/workflows/pages.yml'
+  # And a sweep, for the branches that cannot trigger anything themselves. It costs almost nothing
+  # when nothing has changed: the job asks the published site what it is already showing and stops.
+  schedule:
+    - cron: '*/20 * * * *'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch to bake (blank picks the newest clip work)'
+        required: false
+        default: ''
 
-# One deployment at a time, and a newer push wins. Two agents committing a minute apart should
-# publish the second one, not queue behind the first and then publish the first.
+# One deployment at a time, and a newer push wins.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -40,17 +61,62 @@ permissions:
 jobs:
   bake:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
+    outputs:
+      skip: ${{ steps.pick.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # every branch, because the job chooses between them
+
+      - name: Which clips are the newest
+        id: pick
+        run: |
+          set -euo pipefail
+          chosen="${{ github.event.inputs.ref }}"
+          if [ -z "$chosen" ] && [ "${{ github.event_name }}" = "push" ]; then
+            chosen="$GITHUB_REF_NAME"
+          fi
+          if [ -z "$chosen" ]; then
+            best=""; best_at=0
+            for ref in $(git for-each-ref --format='%(refname:short)' \
+                         'refs/remotes/origin/main' 'refs/remotes/origin/claude/**'); do
+              at=$(git log -1 --format=%ct "$ref" -- clips/ 2>/dev/null || true)
+              [ -z "${at:-}" ] && at=0
+              if [ "$at" -gt "$best_at" ]; then best_at="$at"; best="${ref#origin/}"; fi
+            done
+            chosen="${best:-main}"
+          fi
+          git checkout --detach "origin/$chosen" 2>/dev/null || git checkout --detach "$chosen"
+          sha="$(git rev-parse --short HEAD)"
+          echo "ref=$chosen" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Baking $chosen at $sha"
+
+          # What is already up there? A twenty-minute sweep that rebakes an unchanged building is
+          # twenty minutes of a runner and a redeploy nobody asked for.
+          published=""
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            published="$(curl -fsS --max-time 20 \
+              "https://worldshapergame.github.io/WorldShaper/data/index.json?ci=$GITHUB_RUN_ID" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin).get("commit",""))' \
+              2>/dev/null || true)"
+          fi
+          if [ -n "$published" ] && [ "$published" = "$sha" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$sha is already published; nothing to do"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Ninja
+        if: steps.pick.outputs.skip != 'true'
         run: sudo apt-get update && sudo apt-get install -y ninja-build
 
-      # The build is the same libraries the game is built from, from the same sources, with the
-      # same warnings-as-errors bar. Cached on the compiler and the sources it actually compiles,
-      # so a push that only edits a clip re-links and goes straight to baking.
+      # Keyed on the sources it compiles, so a push that only edits a clip relinks and goes straight
+      # to baking.
       - name: Cache the build
+        if: steps.pick.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: build-web
@@ -58,50 +124,59 @@ jobs:
           restore-keys: pages-build-${{ runner.os }}-
 
       - name: Build the baker
+        if: steps.pick.outputs.skip != 'true'
         run: |
           cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
           cmake --build build-web --target ws_bake_web
 
-      # Sixteen voxels to the metre is 6.25 cm, which is half the game's own resolution and is what
-      # a phone can hold: the whole facility comes to about 410,000 quads and 8 MB. The budget
-      # halves that for anything whose sampled box would be larger than 80 million cells, which is
-      # the number that keeps this job inside its time.
+      # THE RESOLUTION THE CLIP WAS AUTHORED AT, which for everything here is 32 voxels to the
+      # metre -- 3.125 cm, the game's own. It was 16 to keep the job short, and the answer to that
+      # was "it doesn't show the clips at full detail level", which is fair: half resolution is
+      # where a 4.5 cm bead stops being a bead.
+      #
+      # Measured on the facility, the worst case at 34 x 20.9 x 25 m: 582 million cells, 291 s to
+      # sample, 1,127,258 quads, 18.9 MB before compression, and a peak of 5.0 GB against the
+      # runner's 16. The budget sits above that cell count so nothing is halved; a clip large
+      # enough to exceed it still steps down rather than failing.
       - name: Bake every clip
+        if: steps.pick.outputs.skip != 'true'
         run: |
           ./build-web/bin/ws_bake_web --clips clips --out web/data \
-                                      --budget 80000000 --max-metre 16
-          echo "--- what was published ---"
-          ls -la web/data | head -50
+                                      --budget 700000000 --max-metre 32 \
+                                      --branch "${{ steps.pick.outputs.ref }}" \
+                                      --commit "${{ steps.pick.outputs.sha }}"
           du -sh web/data
 
-      # A compressed copy beside each file, which the viewer asks for first. GitHub Pages will not
-      # compress an unknown extension itself, and the quads are regular enough to come down about
-      # four to one -- the difference between a building arriving at once on a phone and arriving
-      # after a wait. The plain files stay for a browser without DecompressionStream.
+      # A compressed copy beside each file, which the viewer asks for first. Pages will not compress
+      # an unknown extension itself and the quads come down about four to one.
       - name: Compress
+        if: steps.pick.outputs.skip != 'true'
         run: |
           gzip -9 -k web/data/*.wsc
           du -sh web/data
 
-      # The viewer routes on the URL fragment, so there is one page and nothing for Jekyll to
-      # build; this stops Pages trying to.
+      # The viewer routes on the URL fragment, so there is one page and nothing for Jekyll to build.
       - name: Not a Jekyll site
+        if: steps.pick.outputs.skip != 'true'
         run: touch web/.nojekyll
 
       # `enablement` turns Pages on for a repository that has never had it, rather than failing and
-      # asking somebody to go and click it. Without this the first run got all the way through --
+      # asking somebody to go and click it. Without it the first run got all the way through --
       # forty clips baked in four minutes seventeen -- and then stopped on "Get Pages site failed:
       # Not Found", which is a whole bake thrown away over a setting.
       - uses: actions/configure-pages@v5
+        if: steps.pick.outputs.skip != 'true'
         with:
           enablement: true
 
       - uses: actions/upload-pages-artifact@v3
+        if: steps.pick.outputs.skip != 'true'
         with:
           path: web
 
   publish:
     needs: bake
+    if: needs.bake.outputs.skip != 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
