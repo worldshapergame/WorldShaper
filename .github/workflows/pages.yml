@@ -142,6 +142,18 @@ jobs:
           key: pages-build-${{ runner.os }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**', 'tools/bake_web.cpp') }}
           restore-keys: pages-build-${{ runner.os }}-
 
+      # The clips baked last time. Nothing else in this job is worth caching and this is worth a
+      # great deal: a clip whose key still holds is read back from here instead of sampled, so a
+      # push that touches one test clip republishes in under a second instead of half an hour.
+      # Keyed on the run so it always saves, restored from the newest previous one.
+      - name: The clips baked last time
+        if: steps.pick.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: web/data
+          key: pages-data-${{ github.run_id }}
+          restore-keys: pages-data-
+
       - name: Build the baker
         if: steps.pick.outputs.skip != 'true'
         run: |
@@ -168,8 +180,12 @@ jobs:
       - name: Bake every clip
         if: steps.pick.outputs.skip != 'true'
         run: |
+          # What the sampler itself is. Change the forge or the baker and every key moves, which
+          # is the one case where reusing a file would serve something quietly wrong.
+          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
           ./build-web/bin/ws_bake_web --clips clips --out web/data \
                                       --budget 700000000 --max-metre 32 --part-metre 16 \
+                                      --code-hash "$code" \
                                       --branch "${{ steps.pick.outputs.ref }}" \
                                       --commit "${{ steps.pick.outputs.sha }}"
           du -sh web/data
@@ -179,7 +195,9 @@ jobs:
       - name: Compress
         if: steps.pick.outputs.skip != 'true'
         run: |
-          gzip -9 -k web/data/*.wsc
+          for f in web/data/*.wsc; do
+            if [ ! -f "$f.gz" ] || [ "$f" -nt "$f.gz" ]; then gzip -9 -kf "$f"; fi
+          done
           du -sh web/data
 
       # The viewer routes on the URL fragment, so there is one page and nothing for Jekyll to build.

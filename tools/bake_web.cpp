@@ -56,6 +56,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -115,6 +116,11 @@ struct Options {
     // overhauled facility" and "it is showing the overhauled facility" look identical.
     std::string branch;
     std::string commit;
+    // A stand-in for "the code that turns a clip into a file". CI passes a hash of `src/` and
+    // `tools/bake_web.cpp`; change either and every clip is rebaked, which is what has to happen
+    // when the sampler or the format moves under them.
+    std::string code_hash;
+    bool force = false;   // bake everything, whatever the keys say
     bool verbose = false;
 };
 
@@ -249,6 +255,7 @@ struct Baked {
     u64 solid = 0;
     u32 quads = 0;
     u64 hash = 0;
+    u64 key = 0;        // what it was baked FROM; a match means the file is still right
     usize bytes = 0;
     std::vector<std::string> materials;   // names, for the viewer's material list
 };
@@ -679,6 +686,76 @@ void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
 }
 
 // --------------------------------------------------------------------------------------
+// Not baking it again
+//
+// Almost nothing changes between two runs. An agent edits one fragment and the other sixty-two
+// clips are byte for byte what they were, but each was being sampled from scratch anyway -- half
+// an hour of a runner to rebuild a building that had not moved, every time anybody pushed.
+//
+// So each file carries the key of what produced it, and a clip whose key still matches is read
+// back rather than rebuilt. Everything the index needs is already in the header, which is why this
+// needs no sidecar and no JSON to parse: the file IS the record of itself.
+//
+// The key covers the spliced source (so an edit to any included fragment invalidates it), the
+// resolution settings, and a hash of the sampler's own code. Miss any of those and the site serves
+// something stale with a current-looking hash on it, which is the worst failure this can have --
+// so when in doubt the key changes and the clip is rebaked.
+// --------------------------------------------------------------------------------------
+
+u64 read_u32(const std::vector<u8>& bytes, usize at) {
+    return static_cast<u64>(bytes[at]) | (static_cast<u64>(bytes[at + 1]) << 8) |
+           (static_cast<u64>(bytes[at + 2]) << 16) | (static_cast<u64>(bytes[at + 3]) << 24);
+}
+
+f32 read_f32(const std::vector<u8>& bytes, usize at) {
+    const u32 raw = static_cast<u32>(read_u32(bytes, at));
+    f32 value = 0.0f;
+    std::memcpy(&value, &raw, sizeof(value));
+    return value;
+}
+
+bool reuse(const Options& options, const fs::path& relative, u64 key, Baked& baked) {
+    if (options.force) return false;
+    const std::string id = identifier(relative);
+    const fs::path file = options.out / (id + ".wsc");
+
+    std::ifstream stream(file, std::ios::binary | std::ios::ate);
+    if (!stream) return false;
+    const std::streamsize size = stream.tellg();
+    if (size < static_cast<std::streamsize>(kHeaderBytes)) return false;
+    stream.seekg(0);
+    std::vector<u8> bytes(static_cast<usize>(size));
+    if (!stream.read(reinterpret_cast<char*>(bytes.data()), size)) return false;
+
+    if (bytes[0] != 'W' || bytes[1] != 'S' || bytes[2] != 'C' || bytes[3] != 'V') return false;
+    if (read_u32(bytes, 4) != 1) return false;
+    const u64 stored = read_u32(bytes, 180) | (read_u32(bytes, 184) << 32);
+    if (stored != key) return false;
+
+    baked.id = id;
+    baked.source = relative.generic_string();
+    const fs::path parent = relative.parent_path();
+    baked.group = parent.empty() ? std::string("clips") : parent.generic_string();
+    for (i32 axis = 0; axis < 3; ++axis) {
+        baked.dims[axis] = static_cast<i32>(read_u32(bytes, 8 + static_cast<usize>(axis) * 4));
+        baked.origin[axis] = read_f32(bytes, 24 + static_cast<usize>(axis) * 4);
+        baked.matter_low[axis] = read_f32(bytes, 148 + static_cast<usize>(axis) * 4);
+        baked.matter_high[axis] = read_f32(bytes, 160 + static_cast<usize>(axis) * 4);
+    }
+    baked.metre = static_cast<i32>(read_u32(bytes, 20));
+    baked.authored_metre = static_cast<i32>(read_u32(bytes, 172));
+    baked.solid = read_u32(bytes, 176);
+    baked.quads = static_cast<u32>(read_u32(bytes, 52) + read_u32(bytes, 56));
+    baked.key = key;
+    baked.hash = fnv1a(bytes.data(), bytes.size());
+    baked.bytes = bytes.size();
+
+    std::printf("  unchanged  %d/m  %u quads  %.1f MB\n", baked.metre, baked.quads,
+                static_cast<f64>(bytes.size()) / (1024.0 * 1024.0));
+    return true;
+}
+
+// --------------------------------------------------------------------------------------
 // One clip, end to end
 // --------------------------------------------------------------------------------------
 
@@ -702,6 +779,7 @@ struct Program {
 // dentil is.
 bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                const fs::path& relative, ws::JobSystem& jobs, Baked& baked) {
+    // `baked.key` is set by the caller before this runs; it is written into the header below.
     ws::forge::Script& script = program.script;
     ws::VoxelTypeTable& types = program.types;
 
@@ -943,6 +1021,11 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     }
     put_i32(out, 172, baked.authored_metre);
     put_u32(out, 176, static_cast<u32>(std::min<u64>(solid_voxels, 0xFFFFFFFFull)));
+    // What this file was made from, so the next bake can tell at a glance whether it still holds:
+    // the spliced source of the program that produced it, the settings it was sampled under, and
+    // the code that did the sampling, all in one number. See `reuse` in main.
+    put_u32(out, 180, static_cast<u32>(baked.key & 0xFFFFFFFFull));
+    put_u32(out, 184, static_cast<u32>(baked.key >> 32));
 
     for (const ws::VisualRecord& record : mesher.palette()) {
         const u8* bytes = reinterpret_cast<const u8*>(&record);
@@ -1034,6 +1117,10 @@ int main(int argc, char** argv) {
             options.branch = next("--branch");
         } else if (arg == "--commit") {
             options.commit = next("--commit");
+        } else if (arg == "--code-hash") {
+            options.code_hash = next("--code-hash");
+        } else if (arg == "--force") {
+            options.force = true;
         } else if (arg == "--verbose") {
             options.verbose = true;
         } else if (arg == "--help" || arg == "-h") {
@@ -1046,7 +1133,9 @@ int main(int argc, char** argv) {
                 "  --part-metre N   and never finer than this for one part of a manifest\n"
                 "  --only ID        bake one clip, by its id (facility, facility-dome, ...)\n"
                 "  --branch NAME    what the index should say these clips came from\n"
-                "  --commit SHA     and at which commit\n");
+                "  --commit SHA     and at which commit\n"
+                "  --code-hash H    a hash of the sampler's own sources; changing it rebakes all\n"
+                "  --force          bake every clip even if its key says it is unchanged\n");
             return 0;
         } else {
             std::printf("unknown argument %s\n", arg.c_str());
@@ -1075,7 +1164,10 @@ int main(int argc, char** argv) {
     }
     std::sort(files.begin(), files.end());
 
-    ws::JobSystem jobs;
+    // Every core, not every core minus two. That default leaves room for a main thread and a
+    // simulation thread, which is right in the game and is two idle cores in a job that does
+    // nothing else. On the four-core runner it is the difference between two workers and four.
+    ws::JobSystem jobs(std::max(1u, std::thread::hardware_concurrency()));
     std::vector<Baked> done;
     i32 failed = 0;
     const u64 began = ws::now_ns();
@@ -1092,6 +1184,22 @@ int main(int argc, char** argv) {
     //
     // A fragment the manifest has not been told to include yet still gets its own parse below, so
     // a brand new file is visible before the three lines that add it are written.
+    // What a clip is MADE of, hashed: its own text and every file it includes, spliced the way the
+    // parser splices them. An edit to `_contract.clip` moves this for every fragment that includes
+    // it, which is exactly the set that has to be rebaked.
+    const auto splice_hash = [&](const fs::path& path) -> u64 {
+        std::vector<ws::forge::SourceLine> origin;
+        std::vector<ws::forge::ScriptError> errors;
+        const std::string text =
+            ws::forge::expand_includes(path.string(), origin, errors, options.clips.string());
+        if (!errors.empty()) return 0;   // 0 never matches a stored key, so it rebakes
+        return fnv1a(reinterpret_cast<const u8*>(text.data()), text.size());
+    };
+    const u64 code_seed = options.code_hash.empty()
+                         ? 0x9e3779b97f4a7c15ull
+                         : fnv1a(reinterpret_cast<const u8*>(options.code_hash.data()),
+                                 options.code_hash.size());
+
     Program manifest;
     const fs::path manifest_path = options.clips / "facility.clip";
     if (fs::exists(manifest_path)) {
@@ -1106,6 +1214,8 @@ int main(int argc, char** argv) {
         }
     }
 
+    const u64 manifest_source = manifest.parsed ? splice_hash(manifest_path) : 0;
+
     for (const fs::path& file : files) {
         const fs::path relative = fs::relative(file, options.clips);
         const std::string id = identifier(relative);
@@ -1117,6 +1227,32 @@ int main(int argc, char** argv) {
         bool built = false;
 
         u32 root = 0;
+        const bool from_manifest =
+            manifest.parsed && (relative == fs::path("facility.clip") ||
+                                manifest.script.part("part_" + stem, root));
+
+        // A fragment's file is not what decides its voxels -- the whole manifest is, because the
+        // part is intersected with the building's own solid and painted with the building's own
+        // stack. So a fragment is keyed on the MANIFEST'S splice, and an edit to any fragment
+        // rebakes the building and all of its parts. That is not conservatism, it is the
+        // dependency: they really do all change.
+        const u64 source = from_manifest ? manifest_source : splice_hash(file);
+        u64 key = 0;
+        if (source != 0) {
+            char settings[160];
+            std::snprintf(settings, sizeof(settings), "%s|%d|%d|%lld|%d", id.c_str(),
+                          options.max_metre, options.part_metre,
+                          static_cast<long long>(options.budget), from_manifest ? 1 : 0);
+            key = fnv1a(reinterpret_cast<const u8*>(settings), std::strlen(settings), code_seed);
+            key = fnv1a(reinterpret_cast<const u8*>(&source), sizeof(source), key);
+        }
+        if (key != 0 && reuse(options, relative, key, baked)) {
+            done.push_back(baked);
+            continue;
+        }
+        baked.key = key;
+
+        root = 0;
         if (manifest.parsed && relative == fs::path("facility.clip")) {
             built = bake_root(options, manifest, manifest.script.solid, false, relative, jobs, baked);
         } else if (manifest.parsed && manifest.script.part("part_" + stem, root)) {
@@ -1163,6 +1299,29 @@ int main(int argc, char** argv) {
     if (!options.only.empty()) {
         std::printf("\n%zu clip baked; index.json left as it was (--only)\n", done.size());
         return done.empty() ? 1 : 0;
+    }
+
+    // Anything in the output that is no longer a clip. The cache carries files between runs, so a
+    // clip that was deleted or renamed would otherwise sit in the published site forever, absent
+    // from the index and downloadable by anybody who still had its URL.
+    {
+        std::vector<std::string> keep;
+        for (const Baked& baked : done) keep.push_back(baked.id);
+        std::error_code walk;
+        for (const fs::directory_entry& entry : fs::directory_iterator(options.out, walk)) {
+            const std::string name = entry.path().filename().string();
+            const std::string suffix = (name.size() > 7 && name.compare(name.size() - 7, 7, ".wsc.gz") == 0)
+                                           ? ".wsc.gz"
+                                           : ((name.size() > 4 && name.compare(name.size() - 4, 4, ".wsc") == 0)
+                                                  ? ".wsc"
+                                                  : "");
+            if (suffix.empty()) continue;
+            const std::string id = name.substr(0, name.size() - suffix.size());
+            if (std::find(keep.begin(), keep.end(), id) != keep.end()) continue;
+            std::error_code gone;
+            fs::remove(entry.path(), gone);
+            std::printf("dropped %s, which is no longer a clip\n", name.c_str());
+        }
     }
 
     // The index. The viewer reads only this to know what exists, and re-reads it every few seconds
