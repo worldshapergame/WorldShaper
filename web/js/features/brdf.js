@@ -120,6 +120,11 @@ function disabled() {
 
 // The GLSL. Written as one string so the surface shader is one splice, and it needs exactly one
 // thing from its host: `vec3 sky_colour(vec3)`, which gl.js defines above the splice point.
+//
+// NO BACK-QUOTES BELOW THIS LINE. The whole shader is a template string, so one back-quote in a
+// GLSL comment ends the string and the page dies on a JavaScript syntax error at the identifier
+// that happened to follow it — which reads like anything except a stray punctuation mark in a
+// comment. It has happened twice here. gl.js carries the same warning over its own shaders.
 export function brdfGlsl() {
     const off = disabled();
     const on = (name) => (off.has(name) ? '0' : '1');
@@ -337,13 +342,34 @@ vec3 ws_shade(WsMaterial m, vec3 n, vec3 v,
     // The sky, diffusely.
     colour += m.albedo * (1.0 - m.metal) * (vec3(1.0) - turnedAway) * ambient * occluded;
 
-    // The sky, specularly: the split-sum, with the environment blurred towards the flat ambient by
-    // the surface's own roughness. No PI — a prefiltered environment is already a radiance, and a
-    // mirror has to be exactly as bright as the sky it is reflecting.
+    // What this surface has around it to reflect, and THIS IS WHERE THE METALS WERE LOST.
+    //
+    // The environment used to be the sky along the reflection, multiplied by how much sky the
+    // baker's lattice found. Outdoors that is right. Indoors it is nearly zero — a gilt cornice
+    // four metres inside the ballroom sees a tenth of a sky it cannot see at all — so the whole
+    // specular of a metal went away and what was left was its twelve per cent of diffuse. That is
+    // mustard paint, and every gold in the building was drawn as it.
+    //
+    // The game does not have this problem because a face's lobe bins hold THE ROOM: what a metal
+    // reflects indoors is measured, and it is the room. This viewer has one stand-in for the room
+    // and it is the ambient the light grid already carries. So a surface reflects the sky where
+    // the sky reaches it and the room's own light where it does not, and a metal indoors is a
+    // metal rather than a hole.
+    //
+    // The room's share is the ambient AS THE DIFFUSE SEES IT — the same occluded — and not the
+    // raw ambient. A metal deep in a hall reflects a dim room and is dim; what tells it from paint
+    // is that it is dim IN ITS OWN COLOUR and gets brighter towards a window. Handing it the
+    // unoccluded ambient made every gold four times brighter than the wall beside it and flattened
+    // the whole enfilade.
     vec3 r = reflect(-v, n);
     vec3 env = sky_colour(r);
-    vec3 blurred = mix(env, ambient, m.roughness * m.roughness);
-    colour += ws_fresnel(f0, ndv) * blurred * shade;
+    vec3 around = mix(ambient * occluded, env, shade);
+
+    // The split-sum, with that blurred towards flat by the surface's own roughness. No PI — a
+    // prefiltered environment is already a radiance, and a mirror has to be exactly as bright as
+    // what it is reflecting.
+    vec3 blurred = mix(around, ambient, m.roughness * m.roughness);
+    colour += ws_fresnel(f0, ndv) * blurred;
 
 #if WS_LOBE_SHEEN
     // The dome's share of the fuzz. (1 - n·v)^5 rather than the half vector, because a hemisphere
@@ -354,14 +380,22 @@ vec3 ws_shade(WsMaterial m, vec3 n, vec3 v,
 #endif
 
 #if WS_LOBE_COAT
-    // The lacquer's own view of the sky, and the same dimming of what is under it that the direct
-    // term applies. The coat is smooth, so it takes the environment nearly unblurred — this is the
-    // sky in a polished parquet floor.
+    // The lacquer's own view of its surroundings, and the same dimming of what is under it that
+    // the direct term applies. This is the sky in a polished parquet floor.
+    //
+    // WHAT THE COAT SEES IS THE ROOM WHEN IT IS IN ONE, and getting that wrong made a lacquered
+    // floor DARKER than a bare one. The dimming is the game's and it is right: everything under a
+    // coat is seen through it. What the game gets back is the coat's own reflection of the room,
+    // out of a bounce this viewer does not have — so shading the sky term by skyVisible and
+    // leaving it at that took a fifth of the parquet's light away and returned a tenth of the sky.
+    // The salon's floor went from wood to slate. So what the coat reflects is the sky where the
+    // sky reaches it and the room's own ambient where it does not, which is the honest stand-in
+    // for the bounce and conserves roughly what the dimming took.
     if (m.clearcoat > 0.0) {
         float fc = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
         float take = m.clearcoat * fc;
-        vec3 coatEnv = mix(env, ambient, WS_COAT_ROUGH);
-        colour = colour * (1.0 - take) + coatEnv * (take * shade);
+        vec3 coatEnv = mix(ambient, env, shade);
+        colour = colour * (1.0 - take) + coatEnv * take;
     }
 #endif
 

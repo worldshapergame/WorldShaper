@@ -200,12 +200,11 @@ void main() {
     float translucency = mat.translucency;
     // <<< brdf
 
+    // >>> brdf
     vec3 N = u_normal;
     vec3 V = normalize(u_eye - v_world);
     if (dot(N, V) < 0.0) N = -N;                  // the far side of a pane, seen through the near
     vec3 L = u_sun;
-
-    float ndv = max(dot(N, V), 1e-4);
 
     // What the baker cast: how much of the sun and how much of the sky reach this place. Sampled
     // a little along the normal so that a face reads the air in front of it rather than the stone
@@ -218,11 +217,11 @@ void main() {
 
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
 
-    // >>> brdf
     // Every lobe the record declares, in one call: the base GGX (anisotropic where the record
     // named a grain), the sheen on the diffuse, the lacquer over the top, the metal's Fresnel and
     // the emission. web/js/features/brdf.js is where each of those comes from in the game's own
-    // shaders, and where the approximations are written down.
+    // shaders, and where the approximations are written down. Everything the half vector was
+    // needed for now happens in there.
     vec3 colour = ws_shade(mat, N, V, L, u_sunColour, sunVisible, ambient, skyVisible, v_ao);
 
     // Translucent matter lights from behind: leaves, thin marble, wax. One term, and it is the
@@ -235,6 +234,8 @@ void main() {
     }
 
     colour += mat.emission;
+
+    float ndv = max(dot(N, V), 1e-4);   // the pane's Fresnel alpha, below
     // <<< brdf
 
     // Beer-Lambert, over a thickness nobody knows. A rasteriser has no path length, so this takes

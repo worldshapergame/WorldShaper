@@ -23,7 +23,10 @@ clips/*.clip  ->  ws_bake_web  ->  web/data/*.wsc  ->  web/js  ->  a page
 |---|---|
 | `tools/bake_web.cpp` | samples every clip, meshes it, bakes its light, writes one file each |
 | `web/js/format.js` | reads that file — a header, four typed-array views, nothing decoded |
-| `web/js/gl.js` | the rasteriser: instanced quads, one Cook-Torrance lobe, a stencil cap |
+<!-- >>> brdf -->
+| `web/js/gl.js` | the rasteriser: instanced quads, a stencil cap |
+| `web/js/features/brdf.js` | the material model — every lobe a `VisualRecord` declares |
+<!-- <<< brdf -->
 | `web/js/controls.js` | orbit, and a body that walks, crouches, jumps and flies |
 | `web/js/app.js` | the page, and the loop that watches the index for changes |
 | `.github/workflows/pages.yml` | bakes on every push that can change a clip, and publishes |
@@ -126,6 +129,60 @@ they were, because nothing had ever asked for one afterwards. The facility shift
 `part_dome` came out sampled in a box 3.5 m below its own matter — a twelve-metre saucer four
 fifths of a metre tall with one material on it instead of six. The baker moves a part by the same
 vector before sampling it. Anything else that reaches for a part by name has the same trap waiting.
+
+<!-- >>> brdf -->
+## 3a. The material model
+
+The viewer shaded one Cook-Torrance lobe. A `VisualRecord` carries six more things, every one of
+them written by real clips, and each one it ignored was a material drawn as grey plastic: the three
+golds of `_contract.clip` — `ormolu` at rough 48, `gilt` at 64, `gold_leaf` at 40, put a stop apart
+so the question "is the metal right" becomes a comparison the eye can make inside one frame — came
+out as one yellow.
+
+`web/js/features/brdf.js` is the game's own shading, ported. `shaders/pt_material.glsl`'s
+`surface_response` is the reference for the lobes; `shaders/face_terms.glsl` and the composite in
+`shaders/resolve.comp` are the reference for the half a rasteriser has to do differently. The file
+itself carries the full list of what is matched term for term and what is approximated, and the
+short version is:
+
+- **`brush`** — the anisotropic base lobe at `kBrushStretch = 2.45`, narrow along the grain and
+  wide across it, the grain being a **world axis** projected into the face. A face the grain runs
+  straight out of has no grain, which is why the cut end of a brushed baluster has a round
+  highlight and its sides have a stretched one.
+- **`sheen`** — on the **diffuse** lobe, not the specular one, and grazing on the **half vector**.
+  That is what makes velvet brightest along the light rather than merely at the silhouette.
+- **`lacquer`** — a second lobe at a fixed roughness of 0.06 with its own dielectric Fresnel, and
+  everything underneath **dimmed by what the coat sent back**. That last part is what makes it read
+  as a coating rather than as a shinier material.
+- **`metal`**, **`ior`**, **`emit`** and its tint — `f0 = mix(dielectric, albedo, metallic)`, no
+  diffuse for a metal, and emission on the game's own `tint * emissive^2 * 64` curve.
+
+### The factor of PI, which is why the metals were dark
+
+The game writes a BRDF: `surface_response` returns `f * cos`, its diffuse is `albedo / PI`, and the
+composite multiplies by an irradiance. This viewer has never had the `/ PI` — its diffuse is
+`albedo * sunColour * n·l`, and its exposure, its sky colours and every screenshot ever taken of it
+are tuned around that. Both are defensible and they differ by PI **on the diffuse alone**, so the
+specular was PI times too weak relative to it. A factor of three on the specular of a metal is the
+whole difference between metal and paint.
+
+So the conversion is stated once, in `brdf.js`, and nothing else has to know it: **this viewer's
+surface term is `PI * (the game's surface_response) * irradiance`.** The diffuse comes out exactly
+what the shader drew before, so stone does not move, and the specular arrives at the strength the
+game gives it. The old code also carried `n·l` twice on the specular; that went with the same
+change.
+
+The **environment** term is deliberately not multiplied by PI. A prefiltered environment is already
+an outgoing radiance — `F(f0, n·v) * L_env` is what a mirror shows — and a mirror has to be exactly
+as bright as the sky it is reflecting or the reflection is brighter than the thing reflected.
+
+### What it costs, and how to find out
+
+Every lobe is behind a branch on the material's own bytes, and `coat` holds both the lacquer and the
+sheen nibble, so a plain stone surface pays **one integer compare** for both and a second for the
+brush. `?lobes=-sheen,-coat,-brush,-metal` in the page's URL compiles the named lobes out, which is
+the control arm for measuring any of them.
+<!-- <<< brdf -->
 
 ## 4. The viewer
 
