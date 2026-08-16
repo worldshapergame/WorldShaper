@@ -234,21 +234,27 @@ jobs:
           done
       - run: touch web/.nojekyll
 
-      # Two ways this deploy is not worth making, and both of them are ways it would LOSE something.
-      # An index with nothing in it, and a real bake that finished while this job was fetching --
-      # publishing a fetched copy over the top of that would put the site back an hour.
+      # Three ways this deploy is not worth making, and every one of them is a way it would LOSE
+      # something: an index with nothing in it, a real bake that finished while this job was
+      # fetching, and a run newer than this one having already published.
       - name: Is this deploy still worth making
         id: gate
         run: |
           set -uo pipefail
+          echo "${{ github.run_number }}" > web/data/run.txt
           n=$(python3 -c 'import json;print(len(json.load(open("web/data/index.json"))["clips"]))' 2>/dev/null || echo 0)
           now="$(curl -fsS --max-time 20 \
             "https://worldshapergame.github.io/WorldShaper/data/index.json?ci=$GITHUB_RUN_ID-b" \
             | python3 -c 'import json,sys;print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)"
+          ahead="$(curl -fsS --max-time 20 \
+            "https://worldshapergame.github.io/WorldShaper/data/run.txt?ci=$GITHUB_RUN_ID-b" \
+            2>/dev/null | tr -dc '0-9' || true)"
           if [ "$n" -eq 0 ]; then
             echo "have=false" >> "$GITHUB_OUTPUT"; echo "no clips to show yet"
           elif [ -n "$now" ] && [ "$now" != "${{ steps.live.outputs.commit }}" ]; then
             echo "have=false" >> "$GITHUB_OUTPUT"; echo "the site moved to $now while this ran"
+          elif [ -n "$ahead" ] && [ "$ahead" -gt "${{ github.run_number }}" ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"; echo "run $ahead is newer than this one"
           else
             echo "have=true" >> "$GITHUB_OUTPUT"; echo "$n clips are walkable now"
           fi
@@ -352,6 +358,8 @@ jobs:
     needs: [plan, bake]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      fresh: ${{ steps.gate.outputs.fresh }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -410,20 +418,49 @@ jobs:
       # The viewer routes on the URL fragment, so there is one page and nothing for Jekyll to build.
       - run: touch web/.nojekyll
 
-      # `enablement` turns Pages on for a repository that has never had it, rather than failing and
-      # asking somebody to go and click it.
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
+      # THE RUN NUMBER, PUBLISHED, so that a run can tell whether it would put the site backwards.
+      #
+      # Removing the concurrency group (D667) fixed runs being cancelled before they ever started,
+      # and took away the only thing stopping an older run from deploying last. That is not
+      # hypothetical: four runs from three older commits were still going when the run carrying the
+      # merged facility was nearly finished, and every one of them would have published its own
+      # older `web/` -- a viewer without the shapes button -- on top of it. Two of those had been
+      # running for over half an hour, which is exactly how a stale run comes to finish last.
+      #
+      # So the site carries the number of the run that made it, and no run publishes over a number
+      # higher than its own. Cheap, and it does not serialise anything.
+      - name: Would this put the site backwards
+        id: gate
+        run: |
+          set -uo pipefail
+          echo "${{ github.run_number }}" > web/data/run.txt
+          ahead="$(curl -fsS --max-time 20 \
+            "https://worldshapergame.github.io/WorldShaper/data/run.txt?ci=$GITHUB_RUN_ID" \
+            2>/dev/null | tr -dc '0-9' || true)"
+          if [ -n "$ahead" ] && [ "$ahead" -gt "${{ github.run_number }}" ]; then
+            echo "fresh=false" >> "$GITHUB_OUTPUT"
+            echo "run $ahead has already published; this one is ${{ github.run_number }} and stops here"
+          else
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      # Kept whole, so the NEXT run can publish the page out of it in thirty seconds.
+      # Kept whole whatever the gate said, because the clips are good even when the deploy is not
+      # wanted -- and it is what lets the NEXT run publish a page in thirty seconds.
       - name: Keep the whole site for next time
         uses: actions/cache/save@v4
         with:
           path: web/data
           key: pages-site-${{ github.run_id }}
 
-      - uses: actions/upload-pages-artifact@v3
+      # `enablement` turns Pages on for a repository that has never had it, rather than failing and
+      # asking somebody to go and click it.
+      - if: steps.gate.outputs.fresh == 'true'
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - if: steps.gate.outputs.fresh == 'true'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: web
 
@@ -434,7 +471,7 @@ jobs:
   # matters most.
   deploy:
     needs: [index, deploy-early]
-    if: always() && needs.index.result == 'success'
+    if: always() && needs.index.result == 'success' && needs.index.outputs.fresh == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
