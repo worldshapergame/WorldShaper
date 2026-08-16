@@ -221,6 +221,11 @@ export class LightSet {
         // `?nolamps` on the URL turns the whole term off and leaves everything else alone.
         this.enabled = !(typeof location !== 'undefined' &&
                          /(\?|&)nolamps\b/.test(location.search));
+        // And the same for the shadows alone, which is the arm that shows what the baked cubes are
+        // buying: with `?noshadow` every lamp lights through every wall, and many_lamps -- four
+        // quarters walled off from each other -- lights up as one room.
+        this.shadowsOn = !(typeof location !== 'undefined' &&
+                           /(\?|&)noshadow\b/.test(location.search));
         this.position = new Float32Array(MAX_LAMPS * 4);
         this.colour = new Float32Array(MAX_LAMPS * 4);
         this.atlas = gl.createTexture();
@@ -330,7 +335,7 @@ export class LightSet {
             this.colour[at + 1] = l.g;
             this.colour[at + 2] = l.b;
             // Where its shadow cube is, or -1. Carried as a float because it rides in a vec4.
-            this.colour[at + 3] = (this.hasAtlas && l.shadow >= 0) ? l.shadow : -1;
+            this.colour[at + 3] = (this.hasAtlas && this.shadowsOn && l.shadow >= 0) ? l.shadow : -1;
             this.active += 1;
         }
     }
