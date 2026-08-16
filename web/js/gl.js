@@ -60,6 +60,12 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> gi
+// The colour irradiance volume — the light that has BOUNCED, with the colour it bounced off. The
+// light grid above is a visibility term and cannot carry colour; this is what makes a white vault
+// go warm over a porphyry floor. web/js/features/gi.js is the whole of the browser's half of it.
+import { GI_FRAGMENT_UNIFORMS, GI_FRAGMENT_FUNCTION, IrradianceVolume } from './features/gi.js';
+// <<< gi
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -123,6 +129,9 @@ uniform float u_exposure;
 uniform vec4 u_clip;          // dot(world, xyz) + w > 0 is cut away
 uniform float u_cutSide;      // 1 draws only what the slice removes, for the stencil pass
 uniform float u_blended;      // 1 on the blended pass, where the material's opacity is used
+// >>> gi
+${GI_FRAGMENT_UNIFORMS}
+// <<< gi
 
 out vec4 o_colour;
 
@@ -148,6 +157,10 @@ vec3 fresnel(vec3 f0, float vdh) {
     float f = pow(1.0 - vdh, 5.0);
     return f0 + (vec3(1.0) - f0) * f;
 }
+
+// >>> gi
+${GI_FRAGMENT_FUNCTION}
+// <<< gi
 
 vec3 sky_colour(vec3 direction) {
     float up = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
@@ -225,7 +238,17 @@ void main() {
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
     vec3 direct = u_sunColour * ndl * sunVisible;
 
-    vec3 diffuse = albedo * (1.0 - metal) * (direct + ambient * occluded);
+    // >>> gi
+    // The bounce, in colour. It is ADDED to the sun and the flat ambient rather than replacing
+    // either: the two visibility bytes still carry the direct sun and the sky, and this volume
+    // holds only what has bounced off something, so nothing is counted twice.
+    //
+    // Modulated by the corner occlusion, and not by the sky term. A 0.8 m lattice cannot see a
+    // voxel crease, and indirect light really is scarcer in one — but it is scarcer more gently
+    // than direct sky is, which is why this is mix(0.5, 1) against the ambient's mix(0.35, 1).
+    vec3 bounced = gi_indirect(v_world, N) * mix(0.5, 1.0, v_ao);
+    vec3 diffuse = albedo * (1.0 - metal) * (direct + ambient * occluded + bounced);
+    // <<< gi
 
     // Translucent matter lights from behind: leaves, thin marble, wax. One term, and it is the
     // only place in this shader where light arrives through something.
@@ -802,6 +825,9 @@ export class Renderer {
         this.cutterWidth = 1;
         this.materials = gl.createTexture();
         this.light = gl.createTexture();
+        // >>> gi
+        this.gi = new IrradianceVolume(gl);
+        // <<< gi
         this.clip = null;
 
         this.viewProj = new Float32Array(16);
@@ -966,6 +992,12 @@ export class Renderer {
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+
+        // >>> gi
+        // Six more 3D textures, one per face of the ambient cube. A clip baked before this block
+        // existed has none, and draws exactly as it did.
+        this.gi.setClip(clip);
+        // <<< gi
     }
 
     attributesAt(byteOffset) {
@@ -990,6 +1022,11 @@ export class Renderer {
             gl.uniform3fv(uniforms.u_ev, f.ev);
             gl.uniform1f(uniforms.u_flip, f.flip);
             if (uniforms.u_blended) gl.uniform1f(uniforms.u_blended, blended);
+            // >>> gi
+            // The face of the ambient cube this draw call's normal wants. It is a uniform, so the
+            // right one is known here and the fragment shader has nothing to select.
+            this.gi.bindFace(face);
+            // <<< gi
             this.attributesAt(base + starts[face] * 16);
             gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
             this.stats.draws += 1;
@@ -1028,6 +1065,13 @@ export class Renderer {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_3D, this.light);
         gl.uniform1i(uniforms.u_light, 1);
+
+        // >>> gi
+        // The indirect volume's own origin is the clip's, exactly as the light grid's is; the
+        // texture itself is bound per face, in drawFaces.
+        this.gi.setUniforms(uniforms);
+        this.gi.setOrigin(uniforms, clip.origin);
+        // <<< gi
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each

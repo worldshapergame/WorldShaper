@@ -60,6 +60,9 @@
 #include <unordered_map>
 #include <vector>
 
+// >>> gi
+#include "bake/irradiance.hpp"
+// <<< gi
 #include "core/jobs.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -691,8 +694,25 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 // the resolved solid, so the header grew to 208 and the version says so. A version 1 file in the
 // cache beside a version 2 viewer is a real state and it must produce a clear error rather than a
 // wrong picture: `reuse` refuses it and rebakes, and `web/js/format.js` throws on it.
-constexpr u32 kFormatVersion = 2;
+// >>> gi
+// Version 3 spends the last eight bytes of the header on a CHUNK DIRECTORY, so that a baked block
+// can be added without moving any offset in front of it and without two people needing the same
+// spare word. `chunkOffset` at 200 says where the table is, `chunkCount` at 204 how many entries
+// it has, and an entry is sixteen bytes: a four-character tag, an offset, a size, and a word
+// spare. Everything before 200 is exactly what version 2 held.
+constexpr u32 kFormatVersion = 3;
+// <<< gi
 constexpr usize kHeaderBytes = 208;
+
+// >>> gi
+// One baked block that is not part of the fixed layout: a tag, and its bytes. They are appended
+// after every block version 2 knew about, and the table that points at them is written last.
+struct Chunk {
+    char fourcc[4]{};
+    std::vector<u8> bytes;
+};
+constexpr usize kChunkEntryBytes = 16;
+// <<< gi
 // 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
 // 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
 constexpr usize kShapeBytes = 120;
@@ -1571,6 +1591,30 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                                 static_cast<f64>(clip.size[2]) / static_cast<f64>(metre)};
     const LightGrid light = bake_light(coarse, origin, size_metres, jobs);
 
+    // >>> gi
+    // ...and the light that has BOUNCED, with the colour it bounced off. The grid above is a
+    // visibility term and cannot carry colour; this one is six RGB values a point at half its
+    // pitch, gathered against the same coarse copy of the clip, iterated twice so a wall lit by a
+    // floor lit by the sun is lit. tools/bake/irradiance.hpp is the whole of it.
+    ws::bakeweb::IrradianceSettings gi_settings;
+    for (i32 axis = 0; axis < 3; ++axis) {
+        gi_settings.origin[axis] = origin[axis];
+        gi_settings.size_metres[axis] = size_metres[axis];
+    }
+    {
+        const f64 length = std::sqrt(kSunDir[0] * kSunDir[0] + kSunDir[1] * kSunDir[1] +
+                                     kSunDir[2] * kSunDir[2]);
+        for (i32 axis = 0; axis < 3; ++axis) gi_settings.sun[axis] = kSunDir[axis] / length;
+    }
+    gi_settings.cell = light.cell * 2.0;
+    ws::bakeweb::IrradianceStats gi_stats;
+    const u64 gi_began = ws::now_ns();
+    const ws::bakeweb::IrradianceVolume gi = ws::bakeweb::bake_irradiance(
+        clip, types, coarse, light.texels, light.dims, light.cell, metre, gi_settings, jobs,
+        &gi_stats);
+    gi_stats.seconds = static_cast<f64>(ws::now_ns() - gi_began) / 1e9;
+    // <<< gi
+
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
     walk.field = &script.field;
@@ -1669,7 +1713,10 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     // that reads it, or one of the two is wrong and says so.
     put_u32(out, 192, static_cast<u32>(walk.cutter_count()));
     // 196 is filled in below, once the blocks in front of it have been appended.
-    // 200..207 is spare.
+    // >>> gi
+    // 200..207 is the chunk directory, and it is filled in below for the same reason 196 is: it
+    // points past every block in front of it. See `chunks`, at the end of this function.
+    // <<< gi
 
     for (const ws::VisualRecord& record : mesher.palette()) {
         const u8* bytes = reinterpret_cast<const u8*>(&record);
@@ -1713,6 +1760,42 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         put_u32(out, 196, static_cast<u32>(out.size()));
         for (const f32 value : walk.pool) put(value);
     }
+
+    // >>> gi
+    // The chunk directory, which is how fifteen people add a baked block to one format without
+    // fighting over an offset. Every chunk's bytes are appended after everything the fixed layout
+    // knows about, and then a table of (tag, offset, size, spare) is written last with the header
+    // pointing at it. A reader that does not know a tag skips it; a reader that wants one asks for
+    // it by name and never has to know what else is in the file.
+    {
+        std::vector<Chunk> chunks;
+        if (!gi.empty()) {
+            Chunk girr;
+            girr.fourcc[0] = 'G';
+            girr.fourcc[1] = 'I';
+            girr.fourcc[2] = 'R';
+            girr.fourcc[3] = 'R';
+            girr.bytes = gi.chunk();
+            chunks.push_back(std::move(girr));
+        }
+        std::vector<u32> chunk_at(chunks.size(), 0);
+        for (usize i = 0; i < chunks.size(); ++i) {
+            chunk_at[i] = static_cast<u32>(out.size());
+            out.insert(out.end(), chunks[i].bytes.begin(), chunks[i].bytes.end());
+        }
+        put_u32(out, 200, static_cast<u32>(out.size()));
+        put_u32(out, 204, static_cast<u32>(chunks.size()));
+        for (usize i = 0; i < chunks.size(); ++i) {
+            const usize entry = out.size();
+            out.resize(entry + kChunkEntryBytes, 0);
+            for (i32 c = 0; c < 4; ++c) out[entry + static_cast<usize>(c)] =
+                static_cast<u8>(chunks[i].fourcc[c]);
+            put_u32(out, entry + 4, chunk_at[i]);
+            put_u32(out, entry + 8, static_cast<u32>(chunks[i].bytes.size()));
+            put_u32(out, entry + 12, 0);
+        }
+    }
+    // <<< gi
 
     baked.id = identifier(relative);
     baked.source = relative.generic_string();
@@ -1768,6 +1851,15 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                     walk.sub_intersections, walk.sub_differences, walk.cutters_skipped,
                     static_cast<f64>(walk.cutter_count() * kCutterBytes) / (1024.0 * 1024.0));
     }
+    // >>> gi
+    // What the indirect volume cost, every time, so a lattice that has quietly grown to megabytes
+    // is a number somebody reads rather than a file that got bigger.
+    std::printf("      indirect: %d x %d x %d at %.2f m  %zu of %zu points lit  %zu surfaces "
+                "(%zu emitting)  %.0f KB  %.1f s\n",
+                gi.dims[0], gi.dims[1], gi.dims[2], static_cast<f64>(gi.cell), gi_stats.lit_points,
+                gi_stats.points, gi_stats.surface_cells, gi_stats.emissive_cells,
+                static_cast<f64>(gi_stats.bytes) / 1024.0, gi_stats.seconds);
+    // <<< gi
     if (options.verbose) {
         std::printf("      box  %.2f %.2f %.2f  ..  %.2f %.2f %.2f      matter  %.2f %.2f %.2f  "
                     ".. %.2f %.2f %.2f\n",
