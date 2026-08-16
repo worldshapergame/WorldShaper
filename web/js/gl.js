@@ -60,6 +60,12 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> shadow
+// The sun's own shadow: a map rasterised down the sun from the same quads, and a short
+// screen-space trace for the scale under its texel. The light grid's sun byte is a 0.4 m lattice
+// and cannot represent a 3 cm bar's shadow at all; see web/js/features/shadow.js.
+import { SunShadow, SHADOW_GLSL } from './features/shadow.js';
+// <<< shadow
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -123,6 +129,10 @@ uniform float u_exposure;
 uniform vec4 u_clip;          // dot(world, xyz) + w > 0 is cut away
 uniform float u_cutSide;      // 1 draws only what the slice removes, for the stencil pass
 uniform float u_blended;      // 1 on the blended pass, where the material's opacity is used
+
+// >>> shadow
+${SHADOW_GLSL}
+// <<< shadow
 
 out vec4 o_colour;
 
@@ -212,6 +222,14 @@ void main() {
     vec2 visible = texture(u_light, at).rg;
     float sunVisible = visible.r;
     float skyVisible = visible.g;
+
+    // >>> shadow
+    // ...and the sharp end of the same number. The lattice is 0.4 m and stays the SOFT, distant
+    // term; the map is the near one; the two are crossfaded on the distance to the blocker and
+    // never summed. The sky byte is untouched -- that is the light grid's own and its leak with
+    // it.
+    sunVisible = ws_sun(v_world, N, L, sunVisible, ndl);
+    // <<< shadow
 
     // Corner occlusion is a voxel's own shape and the light grid is the room it stands in; both
     // are needed, and neither substitutes for the other.
@@ -824,6 +842,10 @@ export class Renderer {
         this.exposure = 1.0;
 
         this.stats = { draws: 0, quads: 0 };
+
+        // >>> shadow
+        this.shadow = new SunShadow(gl);
+        // <<< shadow
     }
 
     // Everything that lands on the card for one clip: one vertex buffer, one material texture, one
@@ -966,6 +988,29 @@ export class Renderer {
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+
+        // >>> shadow
+        // The sun's map, rasterised once from these very quads. Neither the clip nor the sun
+        // moves, so it is never rendered again -- the only per-frame shadow cost is the depth
+        // pre-pass the contact trace reads and the fetches in the surface shader.
+        //
+        // The draw is handed over as a callback rather than the mesh, because the mesh is six
+        // ranges with a basis each and that loop already exists here. The stats are put back
+        // afterwards: a shadow pass is not a draw the viewer made of the clip.
+        this.shadow.setClip(clip, this.sun, (uniforms, matrix, plane) => {
+            const draws = this.stats.draws;
+            const quads = this.stats.quads;
+            gl.bindVertexArray(this.vao);
+            gl.uniformMatrix4fv(uniforms.u_viewProj, false, matrix);
+            gl.uniform3fv(uniforms.u_origin, clip.origin);
+            gl.uniform1f(uniforms.u_scale, 1 / clip.metre);
+            gl.uniform4fv(uniforms.u_clip, plane);
+            this.drawFaces(uniforms, clip.opaqueFace, 0, 0);
+            gl.bindVertexArray(null);
+            this.stats.draws = draws;
+            this.stats.quads = quads;
+        });
+        // <<< shadow
     }
 
     attributesAt(byteOffset) {
@@ -1028,6 +1073,11 @@ export class Renderer {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_3D, this.light);
         gl.uniform1i(uniforms.u_light, 1);
+
+        // >>> shadow
+        // Units 2, 3 and 4: the sun's map, its near cascade, and the depth of this frame.
+        this.shadow.bind(uniforms, camera);
+        // <<< shadow
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each
@@ -1120,6 +1170,15 @@ export class Renderer {
             this.drawShapes(camera, plane);
             return;
         }
+
+        // >>> shadow
+        // Before anything is shaded: the near cascade if the eye has walked out of the box it was
+        // rendered for, and the depth of the frame about to be drawn, which the contact trace
+        // reads. Both render to their own framebuffers and put this one back.
+        this.shadow.before({
+            viewProj: this.viewProj, eye: camera.eye, at: camera.at, plane, width, height,
+        });
+        // <<< shadow
 
         gl.bindVertexArray(this.vao);
         gl.useProgram(this.surface.program);
