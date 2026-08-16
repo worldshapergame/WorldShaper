@@ -60,6 +60,13 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> paintstack
+// A shape has no material — colour is the clip's own stack of paint rules evaluated at a point, so
+// the shapes view asks for it at the point the ray hit. See web/js/features/paint.js.
+import {
+    PAINT_GLSL, FIELD_EVAL_STUB_GLSL, paintFromClip, paintMode, uploadRules,
+} from './features/paint.js';
+// <<< paintstack
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -505,6 +512,9 @@ uniform vec4 u_clip;
 uniform mat4 u_viewProj;
 uniform highp sampler2D u_cutters;   // six RGBA32F texels a cutter, texelFetch only
 uniform int u_cutterWidth;           // texels across, so an index becomes a row and a column
+// >>> paintstack
+uniform sampler2D u_shapeMaterials;  // the clip's own palette, four RGBA8 texels each
+// <<< paintstack
 
 out vec4 o_colour;
 
@@ -603,6 +613,23 @@ vec3 tonemap(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
+// >>> paintstack
+// The paint stack, and — until web/js/features/field.js lands — a stand-in for the field
+// evaluator it calls. Drop FIELD_EVAL_STUB_GLSL and put field.js's own source here; nothing else
+// in this shader changes.
+` + FIELD_EVAL_STUB_GLSL + PAINT_GLSL + `
+// <<< paintstack
+// >>> paintstack
+// The clip's palette, so a material index becomes a colour. It is the material's base colour only
+// — roughness, metallic and the rest are the shading agent's, and this is the smallest thing that
+// makes the stack's answer visible.
+vec3 shape_albedo(int material) {
+    if (material < 0) return vec3(0.62, 0.60, 0.56);   // no paint in this clip: the old flat grey
+    int at = material * 4;
+    vec4 row = texelFetch(u_shapeMaterials, ivec2(at & 255, at >> 8), 0);
+    return pow(row.rgb, vec3(2.2));   // sRGB in the file, linear in the shader, like everything here
+}
+// <<< paintstack
 
 void main() {
     if (dot(v_world, u_clip.xyz) + u_clip.w > 0.0) discard;
@@ -645,10 +672,19 @@ void main() {
     vec3 V = normalize(u_eye - at);
     if (dot(N, V) < 0.0) N = -N;
 
-    // One colour. Red used to mean "a difference takes this away", and it had a job when a
-    // subtrahend was drawn as a solid of its own; now that a hole is a hole there is nothing left
-    // for it to say.
-    vec3 albedo = vec3(0.62, 0.60, 0.56);
+    // >>> paintstack
+    // It used to be one flat grey for everything, because a shape has no material. It has one
+    // here: the clip's own stack of paint rules, run at the point the ray hit, with the analytic
+    // normal — which is exactly the information the sampler runs it with at the centre of a voxel,
+    // only exact. Red is still gone; a hole is still a hole.
+    int material = paint_material(at, N);
+    vec3 albedo = shape_albedo(material);
+    // The walk has a budget, and a cap that bites silently reads as "it worked". ?paint=cap says.
+    if (u_paintDebug == 1 && g_paintCapped) albedo = vec3(1.0, 0.0, 1.0);
+    // ?paint=cover flags every fragment the shapes view shades, so "cost per pixel" is divided by a
+    // counted number rather than by a guess at how much of the window the clip fills.
+    if (u_paintDebug == 2) { o_colour = vec4(1.0, 0.0, 1.0, 1.0); gl_FragDepth = 0.0; return; }
+    // <<< paintstack
 
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
     float ndl = max(dot(N, u_sun), 0.0);
@@ -802,6 +838,13 @@ export class Renderer {
         this.cutterWidth = 1;
         this.materials = gl.createTexture();
         this.light = gl.createTexture();
+        // >>> paintstack
+        this.rules = gl.createTexture();
+        this.ruleCount = 0;
+        this.ruleWidth = 1;
+        this.paintMode = paintMode();
+        this.paintStats = { rules: 0, boxed: 0, source: 'none' };
+        // <<< paintstack
         this.clip = null;
 
         this.viewProj = new Float32Array(16);
@@ -966,6 +1009,28 @@ export class Renderer {
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+
+        // >>> paintstack
+        // The paint stack. It is the clip's own rules, in the clip's own order, packed four
+        // RGBA32F texels each — same trick as the cutter pool, and for the same reason. A clip
+        // baked before the exporter existed has none, and then the shapes view keeps the flat grey
+        // it had rather than inventing a colour.
+        //
+        // LAST, and it has to be: this sets UNPACK_ALIGNMENT to 4 for a float texture, and the
+        // light volume above is RG8 and depends on the 1 the material upload left behind. Put
+        // between them, it made every light row misaligned, texImage3D refuse the buffer, and the
+        // whole voxel view come back black — with a console warning and no error anywhere near the
+        // code that caused it.
+        {
+            const paint = paintFromClip(clip, { mode: this.paintMode });
+            const uploaded = uploadRules(gl, this.rules, paint.rules, paint.bounds);
+            this.ruleCount = uploaded.count;
+            this.ruleWidth = uploaded.width;
+            this.paintStats = {
+                rules: uploaded.count, boxed: uploaded.boxed, source: paint.source,
+            };
+        }
+        // <<< paintstack
     }
 
     attributesAt(byteOffset) {
@@ -1050,6 +1115,19 @@ export class Renderer {
         gl.bindTexture(gl.TEXTURE_2D, this.cutters);
         gl.uniform1i(u.u_cutters, 0);
         gl.uniform1i(u.u_cutterWidth, this.cutterWidth);
+        // >>> paintstack
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.rules);
+        gl.uniform1i(u.u_rules, 1);
+        gl.uniform1i(u.u_ruleWidth, this.ruleWidth);
+        gl.uniform1i(u.u_ruleCount, this.ruleCount);
+        gl.uniform1i(u.u_paintDebug,
+                     this.paintMode === 'cap' ? 1 : (this.paintMode === 'cover' ? 2 : 0));
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, this.materials);
+        gl.uniform1i(u.u_shapeMaterials, 2);
+        gl.activeTexture(gl.TEXTURE0);
+        // <<< paintstack
 
         gl.enable(gl.DEPTH_TEST);
         gl.depthMask(true);
