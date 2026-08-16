@@ -131,3 +131,62 @@ that.
 Nothing needs fixing in the language for this — a box is the right tool and it is already there.
 What would help is `bounds_of` learning that an intersection with a half space can clip the box it
 already has, which is four comparisons and would make the obvious spelling the fast one.
+
+## 7. There is no usable amplitude for a fine grain at metre 32, and the facility does not have one either
+
+Not a missing feature so much as a fact worth putting somewhere the next person will find it.
+
+`usable_displacement` in `clip_script.cpp` drops any `displace` or `weather` amount under **half a
+voxel** — 0.0156 m at metre 32 — as "too small to move a surface, large enough to dither one", and
+it is right to. But a fine grain at that amplitude *sheds voxels*: `d + a·n` closes a contour and
+pinches a lump off the face it belongs to. Four arms on a probe box cut to this clip's cavea, at
+metre 32, one line changed between them:
+
+| final displacement | components | floating |
+|---|---|---|
+| `grain_fine` (fbm size 0.07) at 0.018 | 50 | 57 |
+| `grain_stone` (fbm size 0.35) at 0.018 | 14 | 14 |
+| `grain_broad` (fbm size 0.90) at 0.018 | 8 | 8 |
+| none | **1** | **0** |
+
+A fifth arm with the three `weather` amounts set to nought and the grain left in reported 50 and 57
+— identical to the first — so weathering displaces nothing loose and the grain displaces everything
+loose. On the whole clip the same line was worth **644 components and 791 floating voxels**.
+
+There is no amplitude that escapes: below half a voxel it is dropped, at half a voxel it sheds, and
+the finer the noise the worse. So `theatre.clip` has no whole-part grain and leans on `variation`,
+which is what `fittings.clip` credits for the same job anyway and which moves no surface at all.
+
+**And `clips/facility.clip` is already in that state without saying so.** Its `let all = displace {
+furnished grain_fine } amount=0.012` is 0.384 of a voxel at the contract's metre 32, so
+`usable_displacement` drops it and logs a warning; `Field::displace` then returns the child
+unchanged and removes the pattern from the tree entirely. The comment above that line describes
+twelve millimetres of grain the build has not applied at full detail for as long as it has read
+0.012. That is not a bug — it is very likely why the facility measures one component — but the
+comment and the build disagree, and one of them should be corrected.
+
+What would make a fine grain possible: a displacement that cannot disconnect, i.e. one applied
+along the surface normal with a magnitude clamped by the local feature size, or a post-pass that
+reattaches or deletes components under some voxel count. `despeckle` is not that pass — it only
+repaints lone voxels of the wrong *material* (D610) and never removes matter.
+
+### The three things that got the last of it out, and the one that did not
+
+With the grain gone, the whole clip still came out in 24 pieces with 29 loose voxels, every one of
+them on the berceau. Three more arms on a probe box cut to the tunnel's east arm (x 9.00 … 16.20,
+y 3.50 … 8.20, z −6.00 … 1.00), one change each:
+
+| change | components | note |
+|---|---|---|
+| as it stood | 6 | five loose voxels along the hedge's springing arris, one at the cut end |
+| `round { offset { mass } by=-0.045 } by=0.045` | **13** | refuted — rounding the arris made it *worse* |
+| an iron eaves rail at the arris (`torus ring=11.99 tube=0.09`) | 3 | the arris voxels are gone |
+| rail **and** cutting the ends *after* the displacement | **2** | the second is the probe box's own clipped corner |
+
+Two lessons worth keeping. **A free 90-degree arris on a displaced surface sheds voxels, and the fix
+is to put something solid along it rather than to soften it** — the shrink-round-regrow trick, which
+is the standard way to fillet an SDF without growing it, doubled the count here because `offset`
+thins the shell first and the displacement then bites through what is left. And **a shape cut by a
+plane and then displaced is not cut by that plane**: the noise pushes the surface past it, and the
+lump beyond the cut is attached to nothing. Cut before *and* after, which is one extra node and is
+also what a pair of shears actually does to the end of a hedge.

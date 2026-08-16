@@ -30,8 +30,16 @@
 #                 five base materials on this part means five base records for it to perturb, and
 #                 the measured answer is the report line `variation ... distinct records`
 #
-# MEASURED, `--clip-part part_walls` at the contract's metre 32: 27,340,220 voxels, 2244 m² of
-# surface, 1,000,008 distinct visual records, largest identical group 588. On a path trace the
+# MEASURED at the contract's metre 32, on requests/walls-probe.clip, which is this part with the
+# other twenty fragments' paint rules taken off it: 27,359,448 voxels, 834.94 m³, 2234.50 m² of
+# surface, ONE component and nothing floating. The two figures before the assembly order was fixed
+# — see THE PART, below — were 27,340,500 voxels and 2244.95 m², so the wall gained 0.58 m³ of the
+# quoin the rustication cutter had been shaving off it and lost 10.5 m² of the surface that was
+# wrapped round the one-voxel fins left behind.
+#
+# `--clip-part part_walls` on the manifest at metre 32 reported 1,000,008 distinct visual records,
+# largest identical group 588. That number is from before this change and is still the number: the
+# paint stack at the bottom of this file has not been touched. On a path trace the
 # plane reads as granular stone and not as flat grey, which was the question asked. Two caveats,
 # both written up with their arithmetic in clips/facility/requests/walls.md: that million is the
 # whole clip's default variation budget, spent by this one fragment, and it is also very nearly
@@ -72,6 +80,60 @@
 #                 it paints. Anything the eye can measure is above; these are tolerances.
 
 include "_contract.clip"
+
+# ================================================================================================
+# THE THICKNESS. 0.90, EVERYWHERE, AND IT IS A PROMISE TO THE REST OF THE BUILDING
+# ================================================================================================
+#
+# This is the number four other fragments measure their openings and their rooms from, and until
+# now none of them could read it anywhere: it was implied by two boxes forty lines below and
+# nowhere stated. It is stated here, as three dials, in the file that builds the wall.
+#
+#   wall_thick   0.90 = D = 2 M    the outer wall, at every height and on all four faces
+#   wall_cut     1.00              how deep a cutter must reach from the outer face to go through
+#   wall_relief  0.18              the most anything on this wall stands proud of that face
+#
+# THE FACES. Outer on the contract's own block outline — x = +-16.00, z = +-7.50, both storeys,
+# with no set-back at the string course. Inner on x = +-15.10 and z = +-6.60, which is that outline
+# less D and is a number seven other fragments already write down:
+#
+#   entablature.clip  "the wall below is 0.90 thick with its inner face on +-15.10 and +-6.60"
+#   ballroom.clip     "x = 15.10 (block_x 16.00 less D)", "z = -6.60 (block_z 7.50 less a 2 M wall)"
+#   chapel, enfilade, library, salon, stair    all stand their rooms against +-15.10 / +-6.60
+#
+# So the thickness is not free to change. It is the inside face of seven other files, and moving it
+# by a module would move every state room in the building. It stays at D, and what this file owes
+# everybody instead is to SAY so, and to be that thick everywhere anybody measures it. Measured, at
+# the contract's metre 32, by `--slice y@h` on requests/walls-corner.clip:
+#
+#   plain, ashlar storey and rusticated alike    0.906   0.90 to the nearest voxel — 29 of them
+#   in a rustication channel, horizontal or vertical    0.781   0.90 less the channel's 0.135
+#   at a quoin                                  1.031   0.90 and the 0.135 it stands proud
+#   behind the string course band               1.094   0.90 and the corona's 0.18 of projection
+#
+# Those are the OUTER face moving. The inner face is +-15.10 and +-6.60 at every height on all four
+# faces and nothing this file draws touches it: `--gap z@0.30,8.00` on the whole ring reads 13.250 m
+# of clear air between the two long walls and `--gap x@8.00,0.30` reads 30.250 m between the ends,
+# at every height either was asked at.
+#
+# WHAT MAY BE CUT THROUGH IT, WHICH IS THE PART THAT HAS BEEN GETTING THIS WRONG. A window or a
+# door that starts on the outer face and wants to come out the other side needs to reach 0.90, and
+# 1.00 with this file's own cutter slack of 0.10 on the end of it — the same slack the rustication
+# channels use to reach past the face they cut. It does NOT need 1.80.
+#
+# 1.80 is what windows.clip and doors.clip both cut, and 0.90 of that is hole hanging in the room
+# beyond the wall. That is not an abstraction. halls.clip stops its two great halls at x = 13.95
+# instead of 15.10 and says why in its own header — "0.90 PAST the inner face of a 0.90 wall" —
+# leaving a 1.15 m strip of nothing along each end of the building. chapel.clip carries "the strip
+# z -6.65 .. -5.70 along my whole south side is a hole I do not [want]" and builds its own window
+# embrasures because the cutter that should have made them stops 0.90 too far in. ballroom.clip
+# records the same 0.90 in capitals. Four fragments deformed around one number, and the number was
+# only ever a guess at what this wall might turn out to be.
+#
+# It is 0.90. It was always 0.90. Written up for them in requests/walls-thickness.md.
+param wall_thick   0.90
+param wall_cut     1.00
+param wall_relief  0.18
 
 # ================================================================================================
 # THE RING — 0.90 thick, 1.75 to 11.90
@@ -134,7 +196,25 @@ let walls_vjoint_e_odd  = translate { repeat { walls_vbar_e } z=1.35 y=1.20 nz=7
 let walls_vjoint_n = mirror { union { walls_vjoint_n_even walls_vjoint_n_odd } } axis=z
 let walls_vjoint_e = mirror { union { walls_vjoint_e_even walls_vjoint_e_odd } } axis=x
 
-let walls_channels = union { walls_hchan walls_vjoint_n walls_vjoint_e }
+# AND THE WHOLE CUTTER STOPS AT 5.31, WHICH IS THE UNDERSIDE OF THE STRING COURSE.
+#
+# The top course of the rustication runs 4.80 to 5.40 and the odd vertical bar is one course tall,
+# so it ended at 5.40 — and the astragal that starts the string course begins at 5.31 and is only
+# buried 0.045 into a face this bar cuts 0.135 out of. Untrimmed, every odd joint on the building
+# ran up BEHIND that moulding: the neck was severed once a bay, all the way round, and what was
+# left of it was roofing a 0.09 pocket with nothing behind it. Measured at `--slice y@5.35`, 0.781 m
+# of wall at each joint where the run reads 1.000 everywhere else — and the string course's own
+# note, "there is no hairline anywhere for the manifest's grain to open", was false at twenty-four
+# places on every face.
+#
+# 5.31 is the astragal's foot, so the joint now runs the full height of the face anybody can see
+# and stops exactly where the moulding covers it. The box is generous on the other five sides
+# (+-16.20, +-7.70, 1.70) because it is trimming a CUTTER: it must not clip the 0.10 of slack the
+# channels need to reach past the face they cut.
+let walls_channels = intersection {
+    union { walls_hchan walls_vjoint_n walls_vjoint_e }
+    box -16.20 1.70 -7.70   16.20 5.31 7.70
+}
 
 # ================================================================================================
 # THE QUOINS — every external corner, 1.80 to 9.90
@@ -215,11 +295,38 @@ let walls_sc_east  = union { walls_sc_neck_e walls_sc_band_e walls_sc_step_e wal
 let walls_string   = union { mirror { walls_sc_north } axis=z  mirror { walls_sc_east } axis=x }
 
 # ================================================================================================
-# THE PART
+# THE PART — AND THE CHANNELS CUT THE FIELD, NOT THE DRESSINGS
 # ================================================================================================
+#
+# THE ORDER OF THESE TWO LINES IS THE WHOLE OF IT, and it was the other way round until it was
+# measured. `difference { union { ring quoins string } channels }` runs the rustication cutter over
+# the quoins as well as over the wall, and a cutter sized for one face does not fit another:
+#
+#   the cutter reaches 0.10 past the face it cuts — to x 16.10, z 7.60 — which is the right slack
+#   for a face at 16.00 and 7.50, and is exactly what the header calls a tolerance.
+#   a quoin stands 0.135 PROUD of that face, to x 16.135 and z 7.635.
+#
+# 0.135 less 0.10 is 0.035, and that is what was left standing. At every one of the five horizontal
+# channels, and at every vertical joint that fell on a quoin, a 0.035 m fin of quoin survived a cut
+# it should have been immune to. **0.035 m is 1.1 voxels at the contract's metre 32** — the
+# thinnest thing in the building, on the corner of it, and nobody drew it. Measured before the
+# change, `--slice y@2.42` on requests/walls-corner.clip at the north-east corner:
+#
+#   x 16.094 .. 16.125   0.031 m   a fin standing across the channel, one voxel thick
+#   z 7.594 .. 7.625     0.031 m   the same fin on the other face of the same corner
+#
+# and at metre 8, where a 0.035 fin cannot be resolved at all, it did not disappear quietly: the
+# corner crumbled into pieces touching nothing. `part_walls` reported **21 components and 132
+# floating voxels**, 33 at each of the four corners, every one of them a piece of quoin cut off by
+# a channel. It is 1 component and 0 floating now, and the whole facility went from 804 components
+# and 6227 floating voxels to 776 and 6111.
+#
+# So: the channels are cut out of the FIELD of the wall, which is what a rusticated field is, and
+# the quoins and the string course are laid on afterwards, which is what a dressing is. That is
+# also the masonry — the channels now run out of the wall and stop dead against the quoin.
 
-let walls_mass = union { walls_ring walls_quoins walls_string }
-let part_walls = difference { walls_mass walls_channels }
+let walls_field = difference { walls_ring walls_channels }
+let part_walls  = union { walls_field walls_quoins walls_string }
 
 # ================================================================================================
 # THE SURFACE — where the load actually lives

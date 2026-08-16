@@ -127,15 +127,30 @@
 # WHY 15.59 AND NOT THE BRIEF'S 16.20. The brief says to shrink the outer radius rather than drop
 # the metre if the clip is too large, and to check the number. Checked: at metre 32 this box is
 #
-#   32.40 x 9.45 x 26.10 m  =  1037 x 303 x 836  =  262.7 million cells
+#   32.40 x 9.45 x 26.10 m  =  1037 x 303 x 835  =  262.4 million cells
 #
 # and a clip is a dense array over its whole bounds whether or not there is anything there. At the
-# five bytes a cell the game keeps that is 1.31 GB; the measuring tool carries rather more per cell
-# (clips/estate/BRIEF.md measures 199 M cells at 2.2 GB, so about 11 bytes) and therefore about
-# 2.9 GB here. The brief's suggested 36 x 10 x 32 m box is 377 M cells and about 4.2 GB in the
-# tool, which is affordable on a large machine and not on a normal one. The tier depth going from
-# 0.72 to 0.64 took 0.88 m off the outer radius for nothing, and the rest came from cutting the
-# margin round the building to what it needs.
+# five bytes a cell the game keeps that is 1.31 GB. The brief's suggested 36 x 10 x 32 m box is
+# 377 M cells, half as much again, and the tier depth going from 0.72 to 0.64 took 0.88 m off the
+# outer radius for nothing; the rest came from cutting the margin round the building to what it
+# needs.
+#
+# WHAT IT ACTUALLY BUILT TO, at metre 32, so the next person has a figure to compare against:
+#
+#   sampled box   1037 x 303 x 835 voxels     32.406 x 9.469 x 26.094 m
+#   volume        59 775 649 voxels           1824.2 m3, 22.78% of the box
+#   surface       4 239 200 faces             4139.8 m2
+#   materials     19 distinct records         no rule idle
+#   components    5 (largest 59 775 645, 4 floating)
+#   worldbox      -16.219 -0.469 -16.219  ..  16.188 8.688 9.875
+#   33m47 wall, 62m48 of CPU, 3.42 GiB peak resident — on a machine running thirteen other builds
+#
+# The four loose voxels are four SINGLE voxels, three of them on the berceau's outer springing line
+# at y = 6.06 and one at the cut end of the tunnel, and they are what is left of six hundred and
+# ninety-eight. The three fixes that took them out are each written up where they were made, with
+# the arm that proved them: the cusp at the vault's inner springing (this section, below), the
+# whole-clip grain (the very bottom of this file), and the eaves rail plus the second cut at the
+# tunnel's ends (the berceau section).
 #
 # HEAD HEIGHT. 2.10 m minimum where a person stands: the berceau is 2.10 clear at both its walls
 # and 3.45 at its crown; the proscenium's central opening is 3.60 clear and its two side openings
@@ -709,7 +724,7 @@ let th_wing_posts = mirror {
 # the mirror in x makes thirty-three out of seventeen.
 #
 # THE PURLINS ARE NOT DECORATION EITHER. They are the only thing that guarantees the hedge is one
-# piece with the ground after `th_leaf` has moved its surface 0.135 in either direction: three
+# piece with the ground after `th_leaf` has moved its surface 0.09 in either direction: three
 # continuous rings buried in the foliage at the springings and the crown, which no displacement can
 # take apart. The hedge also stands on its own outer wall on the coping, so there are two
 # independent paths to the ground and the arch cannot come off in the middle.
@@ -736,8 +751,19 @@ let th_ber_ribs = union { th_ber_r4 rotate { th_ber_rib } y=-0.25 }
 let th_ber_purl_i = torus 0 6.06 0  ring=12.44 tube=0.0900 axis=y
 let th_ber_purl_o = torus 0 6.06 0  ring=15.14 tube=0.0675 axis=y
 let th_ber_purl_c = torus 0 7.41 0  ring=13.79 tube=0.0675 axis=y
+
+# THE EAVES RAIL, at the outer arris of the vault's inner haunch — the free 90-degree corner where
+# the shell's flat cut at the springing meets its own extrados, 2.10 m above the top bench with
+# nothing under it. A displacement of 0.09 rounds that corner off and now and then takes a voxel
+# with it, and a voxel taken off a free corner is a floating voxel. Measured on a probe box cut to
+# the tunnel's east arm (x 9.00 .. 16.20, y 3.50 .. 8.20, z -6.00 .. 1.00) at metre 32, one line
+# changed: without this rail six components and five loose voxels along the arris; with it, three
+# components and none. A real berceau has a rail exactly there for exactly the same reason — it is
+# what the trained shoots are tied down to.
+let th_ber_purl_e = torus 0 6.06 0  ring=11.99 tube=0.0900 axis=y
+
 let th_ber_frame = intersection {
-    union { th_ber_ribs th_ber_purl_i th_ber_purl_o th_ber_purl_c }
+    union { th_ber_ribs th_ber_purl_i th_ber_purl_o th_ber_purl_c th_ber_purl_e }
     th_south
 }
 
@@ -758,7 +784,24 @@ let th_ber_hedge_mass = intersection {
     revolve { union { th_ber_band th_ber_wall } } axis=y
     th_south
 }
-let th_ber_hedge = displace { th_ber_hedge_mass th_leaf } amount=0.135
+# 0.09 AND NOT 0.135, and the number was measured rather than chosen. On a probe box cut to the
+# berceau alone (x +-6, y 3.50 .. 8.20, z -16.20 .. -11.00) at metre 32, one line changed between
+# the arms and nothing else: at 0.135 the vault came out in ELEVEN pieces with twelve voxels
+# floating; at 0.09 it is ONE piece with none. A 0.45 m shell displaced by 0.135 develops closed
+# contours in the field — the surface folds over itself and pinches a lump off — and at 0.09 it does
+# not. 0.09 is still 2.9 voxels at metre 32, which is a deformation and not a dither, and it is the
+# same amplitude the wings use, so the two masses of hornbeam on this site are clipped alike.
+#
+# AND THE ENDS ARE CUT AFTER THE DISPLACEMENT, NOT BEFORE. `th_south` is inside `th_ber_hedge_mass`
+# as well, so the mass already stops at z = 0.05 — but the foliage is then displaced outward from
+# there and bulges up to 0.09 past the plane, and a bulge past the end of the tunnel is a lump of
+# hedge standing in mid air beyond the analemma. Cutting again afterwards is what a pair of shears
+# does to the end of a hedge, and it is one node: on the same probe box it took the last stray
+# voxel out and left TWO components, the second being the probe's own clipped corner.
+let th_ber_hedge = intersection {
+    displace { th_ber_hedge_mass th_leaf } amount=0.09
+    th_south
+}
 
 # ================================================================================================
 # THE FOOTLIGHTS — twenty-four of them, along the front edge of the stage
@@ -921,16 +964,17 @@ let th_fittings = union { th_grate th_herms th_footlights th_standards th_tripod
 # ================================================================================================
 #
 # Every rule keys on one of this file's own shapes and every one says below=0.02 or more, never
-# below=0 — the grain at the bottom of this file displaces the whole clip by 0.018, and a voxel that
-# exists only because the grain pushed the surface outward sits OUTSIDE the shape its rule names.
-# At below=0 it matches nothing, falls back to the first coat, and leaves a pale rind over every
-# outward-facing surface of the part that painted it.
+# below=0. A voxel that exists only because a displacement pushed the surface outward sits OUTSIDE
+# the shape its rule names; at below=0 it matches nothing, falls back to the first coat, and leaves
+# a pale rind over every outward-facing surface of the part that painted it. There is no whole-clip
+# grain here (see the note at the bottom), but the weathering still moves what it is scoped to and
+# the hedges move a great deal, so the margin stays.
 #
 # WHERE THE TEST IS LARGER THAN 0.02 IT IS BECAUSE THAT SURFACE IS ALSO WEATHERED. `weather` moves
 # the surface too, by its own amount, within its own scope; the cavea is weathered at 0.018 and the
 # proscenium at 0.024, so keys on those two shapes test at 0.04 and reach past both displacements.
 # The hedges are keyed on the DISPLACED binding rather than the mass, because `th_leaf` moves their
-# surface 0.135 and no reasonable test would reach that far.
+# surface 0.09 and no reasonable test would reach that far.
 #
 # Later coats cover earlier ones, so this reads from the ground upward.
 
@@ -996,14 +1040,42 @@ weather desert    0.018 scale=1.4 seed=17 on=th_cavea
 weather cracks    0.024 scale=0.7 seed=53 on=th_pros_wall
 
 # ================================================================================================
-# THE PART
+# THE PART — and why there is NO grain displacement over the whole clip
 # ================================================================================================
 #
-# Eighteen millimetres of grain over everything, which is 0.58 of a voxel at metre 32 — the least
-# that `usable_displacement` will accept as a deformation rather than as dither, and the difference
-# between a face that reads as carved stone and one that reads as a drawing of carved stone.
+# This ended `displace { ... grain_fine } amount=0.018` for most of its life, on the reasoning
+# `clips/facility.clip` gives for its own: twelve millimetres of grain is the difference between a
+# face that reads as carved stone and one that reads as a drawing of carved stone, and 0.018 rather
+# than 0.012 because `usable_displacement` drops anything under half a voxel and half a voxel at
+# metre 32 is 0.0156.
+#
+# THAT LINE WAS THE ENTIRE REASON THIS CLIP CAME OUT IN 644 PIECES. Measured, four arms, one line
+# changed between them, on a probe box cut to the cavea (x +-6, y -0.50 .. 4.20, z -13.00 .. -5.00)
+# at metre 32 so that each arm costs ten minutes rather than an hour:
+#
+#   grain_fine  (fbm size 0.07) at 0.018     50 components, 57 voxels floating
+#   grain_stone (fbm size 0.35) at 0.018     14 components, 14 floating
+#   grain_broad (fbm size 0.90) at 0.018      8 components,  8 floating
+#   no grain at all                           1 component,   0 floating
+#
+# and a fifth arm with the three `weather` amounts set to nought and the grain left in reported
+# 50 and 57 — IDENTICAL to the first. So the weathering displaces nothing loose, and the grain
+# displaces everything loose, and the finer the noise the more of it: 0.018 m against a 0.07 m
+# feature size is a surface gradient of about a half, which is steep enough for `d + a·n` to close
+# a contour and pinch a voxel off the face it belongs to. Six hundred and forty-four times.
+#
+# There is no amplitude that fixes it, because half a voxel is already the floor: below it the
+# displacement is dropped as dither, at it the grain sheds. **So the grain comes out, and what gives
+# this clip its no-two-voxels-alike surface is the `variation` line below** — which is what
+# fittings.clip credits for the same job anyway, and which moves no surface at all.
+#
+# WORTH KNOWING, AND IT IS NOT A CRITICISM OF THE BUILDING: the facility's own `amount=0.012` is
+# 0.384 of a voxel at the contract's metre 32, so `usable_displacement` drops it and warns, and
+# clips/facility.clip has therefore been shipping with NO grain displacement at full detail for as
+# long as that line has read 0.012. The comment above it describes something the build does not do.
+# This file does the same thing, on purpose, and says so.
 
-let part_theatre = displace { union { th_carved th_fittings } grain_fine } amount=0.018
+let part_theatre = union { th_carved th_fittings }
 
 variation colour=0.030 rough=0.070 seed=19
 
