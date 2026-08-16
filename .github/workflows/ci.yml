@@ -12,9 +12,20 @@ name: ci
 
 on:
   push:
-    branches: ["**"]
+    # Every branch, except the clip viewer's, which is mirrored to `main` commit for commit and so
+    # was building every change twice on two runners for the same five minutes.
+    branches: ["**", '!claude/clip-viewer-website-iukadp']
   pull_request:
   workflow_dispatch:
+
+# A build of a commit that has already been superseded on its own branch tells nobody anything, so
+# the newer push takes the runner. This is safe here in a way it was NOT safe in pages.yml (D667):
+# what made a group harmful there was the schedule arriving every twenty minutes and displacing the
+# one pending run it was meant to back up. Nothing here is scheduled, and the key is per-ref, so
+# `main` and a branch never contend.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows:

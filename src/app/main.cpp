@@ -760,361 +760,413 @@ void parse_reals(const std::string& text, f64* out, u32 count) {
 // Frame parameters live in a uniform buffer rather than push constants; see
 // gpu/render_params.hpp for why.
 
+// One `else if` per flag, and MSVC counts every one of them as another nested block. The chain
+// reached 126 branches, and with the loop around it and the function body that was exactly the
+// limit: `main.cpp(1106): fatal error C1061: compiler limit: blocks nested too deeply`, on every
+// push. The Windows job compiled 405 of its 414 objects and then stopped, which also meant
+// `ws_tests` never ran -- a red CI saying nothing at all about the code it was there to test.
+//
+// So the chain is three functions. Each takes the argument and answers whether it recognised it;
+// `i` is a reference because a flag that carries a value advances it. The split points are
+// arbitrary and the comment should not pretend otherwise -- the chain is ordered by the history of
+// the project rather than by theme, and there is no seam to cut along.
+//
+// What is NOT arbitrary is the order, which is preserved exactly. The chain is first-match-wins,
+// and some branches test `i + 1 < argc` as part of their condition, so a flag that is missing its
+// value falls through every group and reaches the same warning it always did.
+bool parse_options_a(const std::string& arg, int& i, int argc, char** argv, Options& options) {
+    auto next_number = [&](u64 fallback) -> u64 {
+        if (i + 1 < argc) return std::strtoull(argv[++i], nullptr, 10);
+        return fallback;
+    };
+
+    if (arg == "--headless") {
+        options.headless = true;
+    } else if (arg == "--world") {
+        if (i + 1 < argc) options.world = argv[++i];
+    } else if (arg == "--no-title") {
+        options.no_title = true;
+    } else if (arg == "--title-shot") {
+        if (i + 1 < argc) options.title_shot = argv[++i];
+    } else if (arg == "--title-frames") {
+        options.title_frames = next_number(options.title_frames);
+    } else if (arg == "--title-open") {
+        if (i + 1 < argc) options.title_open = argv[++i];
+    } else if (arg == "--icon-sheet") {
+        options.icon_sheet = true;
+    } else if (arg == "--shelf") {
+        if (i + 1 < argc) options.shelf = argv[++i];
+    } else if (arg == "--logo-seed") {
+        options.logo_seed = static_cast<u32>(next_number(options.logo_seed));
+    } else if (arg == "--logo-change") {
+        options.logo_change = next_number(60);
+    } else if (arg == "--cycle") {
+        options.cycle = next_number(120);
+    } else if (arg == "--ticks") {
+        options.ticks = next_number(0);
+        options.headless = true;
+    } else if (arg == "--width") {
+        options.width = static_cast<u32>(next_number(options.width));
+        options.size_explicit = true;
+    } else if (arg == "--height") {
+        options.height = static_cast<u32>(next_number(options.height));
+        options.size_explicit = true;
+    } else if (arg == "--cam") {
+        if (i + 1 < argc) options.camera = argv[++i];
+    } else if (arg == "--orbit") {
+        if (i + 1 < argc) options.orbit = argv[++i];
+    } else if (arg == "--fly") {
+        if (i + 1 < argc) options.fly = argv[++i];
+    } else if (arg == "--cut") {
+        if (i + 1 < argc) options.cuts.push_back(argv[++i]);
+    } else if (arg == "--edit") {
+        if (i + 1 < argc) options.edit = argv[++i];
+    } else if (arg == "--preview") {
+        if (i + 1 < argc) options.preview = argv[++i];
+    } else if (arg == "--preview-mark") {
+        if (i + 1 < argc) options.preview_marks.push_back(argv[++i]);
+    } else if (arg == "--clip") {
+        if (i + 1 < argc) options.clip = argv[++i];
+    } else if (arg == "--fog") {
+        if (i + 1 < argc) options.fog = argv[++i];
+    } else if (arg == "--clip-file") {
+        if (i + 1 < argc) options.clip_file = argv[++i];
+    } else if (arg == "--clip-slice") {
+        if (i + 1 < argc) options.clip_slices.push_back(argv[++i]);
+    } else if (arg == "--clip-symmetry") {
+        options.clip_symmetry = true;
+    } else if (arg == "--clip-align") {
+        options.clip_align = true;
+    } else if (arg == "--clip-metre") {
+        options.clip_metre = static_cast<i32>(next_number(0));
+    } else if (arg == "--no-despeckle") {
+        // The control arm for D610. Two flags of one build: with it, every lone voxel of the
+        // wrong material stays exactly where the sampler put it.
+        options.despeckle = false;
+    } else if (arg == "--no-clip-cache") {
+        options.no_clip_cache = true;
+    } else if (arg == "--no-paste-pool") {
+        options.no_paste_pool = true;
+    } else if (arg == "--no-paste-drop") {
+        options.no_paste_drop = true;
+    } else if (arg == "--no-batch-parallel") {
+        options.no_batch_parallel = true;
+    } else if (arg == "--stipple-from-world") {
+        options.stipple_at_coarse = false;
+    } else if (arg == "--world-clean-serial") {
+        options.world_clean_serial = true;
+    } else if (arg == "--clean-world") {
+        options.clean_world = true;
+    } else if (arg == "--clean-world-rounds") {
+        options.clean_world_rounds = static_cast<u32>(std::max<i64>(1, next_number(2)));
+    } else if (arg == "--no-coarse-paste") {
+        options.no_coarse_paste = true;
+    } else if (arg == "--refine-workers" && i + 1 < argc) {
+        options.refine_workers = static_cast<u32>(std::max(1, std::atoi(argv[++i])));
+    } else if (arg == "--refine-batch" && i + 1 < argc) {
+        options.refine_batch = static_cast<usize>(std::max(1, std::atoi(argv[++i])));
+    } else if (arg == "--clip-part") {
+        if (i + 1 < argc) options.clip_part = argv[++i];
+    } else if (arg == "--clip-bounds") {
+        if (i + 1 < argc) options.clip_bounds = argv[++i];
+    } else {
+        return false;
+    }
+    return true;
+}
+
+bool parse_options_b(const std::string& arg, int& i, int argc, char** argv, Options& options) {
+    auto next_number = [&](u64 fallback) -> u64 {
+        if (i + 1 < argc) return std::strtoull(argv[++i], nullptr, 10);
+        return fallback;
+    };
+
+    if (arg == "--sample-cost") {
+        options.sample_cost = true;
+    } else if (arg == "--sample-cost-levels") {
+        if (i + 1 < argc) options.sample_cost_levels = argv[++i];
+    } else if (arg == "--sample-cost-nodes") {
+        options.sample_cost_nodes = static_cast<u32>(next_number(24));
+    } else if (arg == "--sample-cost-boxes") {
+        options.sample_cost_boxes = static_cast<u32>(next_number(3));
+    } else if (arg == "--sample-cost-csv") {
+        if (i + 1 < argc) options.sample_cost_csv = argv[++i];
+    } else if (arg == "--sample-cost-replan") {
+        options.sample_cost_replan = true;
+    } else if (arg == "--stipple-tiled") {
+        options.stipple_tiled = true;
+    } else if (arg == "--stipple-level") {
+        options.stipple_level = next_number(5);
+    } else if (arg == "--refine-all") {
+        options.refine_all = true;
+    } else if (arg == "--clip-at") {
+        if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
+    } else if (arg == "--material") {
+        options.material = static_cast<u32>(next_number(0));
+    } else if (arg == "--debug-mode") {
+        options.debug_mode = static_cast<u32>(next_number(0));
+    } else if (arg == "--screenshot") {
+        if (i + 1 < argc) options.screenshot = argv[++i];
+    } else if (arg == "--screenshot-frame") {
+        options.screenshot_frame = next_number(30);
+    } else if (arg == "--no-vsync") {
+        options.vsync = false;
+    } else if (arg == "--validation") {
+        options.validation = true;
+    } else if (arg == "--target-fps" && i + 1 < argc) {
+        options.target_fps = static_cast<f32>(std::atof(argv[++i]));
+    } else if (arg == "--max-seconds" && i + 1 < argc) {
+        options.max_seconds = std::atof(argv[++i]);
+    } else if (arg == "--undo-frame" && i + 1 < argc) {
+        options.undo_frame = static_cast<u64>(std::atoll(argv[++i]));
+    } else if (arg == "--redo-frame" && i + 1 < argc) {
+        options.redo_frame = static_cast<u64>(std::atoll(argv[++i]));
+    } else if (arg == "--edit-frame" && i + 1 < argc) {
+        options.edit_frame = static_cast<u64>(std::atoll(argv[++i]));
+    } else if (arg == "--face-gate" && i + 1 < argc) {
+        options.face_gate = static_cast<u32>(std::atoll(argv[++i]));
+    } else if (arg == "--no-face-gate") {
+        options.face_gate = 0x7FFFFFFFu;
+    } else if (arg == "--no-face-worklist") {
+        options.face_worklist = false;
+    } else if (arg == "--no-face-prolong") {
+        options.face_prolong = false;
+    } else if (arg == "--no-node-crossings") {
+        options.node_crossings = false;
+    } else if (arg == "--no-light-keeps-geometry") {
+        options.light_read_period = 0;
+    } else if (arg == "--light-read-period" && i + 1 < argc) {
+        // Rounded UP to a power of two, because the shader tests a mask. Saying so beats a
+        // silent floor: `-Extra "--light-read-period 24"` would otherwise measure 16 and be
+        // written down as 24.
+        // Clamped before the doubling, and that is not tidiness. A negative number becomes a
+        // u32 near the top of the range, `period` doubles past 2^31 to zero, and `0 < asked` is
+        // true for ever: `--light-read-period -3` hung the game before it drew a frame. The
+        // shader's mask cannot express more than 2^30 either way.
+        const i64 given = std::atoll(argv[++i]);
+        const u32 asked = static_cast<u32>(std::clamp<i64>(given, 0, 1 << 30));
+        u32 period = 1;
+        while (period < asked) period <<= 1;
+        options.light_read_period = (asked == 0) ? 0 : period;
+        if (options.light_read_period != asked) {
+            WS_LOG_WARN("app", "--light-read-period {} rounded up to {}, which is what the "
+                               "shader's mask can express",
+                        asked, options.light_read_period);
+        }
+    } else if (arg == "--face-edit-seed" && i + 1 < argc) {
+        options.face_edit_seed = static_cast<u32>(std::atoll(argv[++i]));
+    } else if (arg == "--sun-seed" && i + 1 < argc) {
+        // R5b's dial and its control arm in one: 0 is a new face starting from nothing, which
+        // is every build before this one. It travels in the light probe buffer rather than in
+        // the push block, which is exactly full -- see kProbeSunSeed in shaders\node.glsl.
+        options.sun_seed = static_cast<u32>(std::atoll(argv[++i]));
+    } else if (arg == "--no-sun-confidence") {
+        // R5b's control arm: a face's own sun ratio is believed the moment it has one sample,
+        // which is the state every figure taken before this was measured in. The shading pass
+        // then leaves the stand-in word at nought and both readers return the raw ratio
+        // unchanged -- bit-exactly, not nearly (face_terms.glsl, face_sun_believed).
+        options.sun_confidence = false;
+    } else if (arg == "--no-lamp-edit-scope") {
+        options.lamp_edit_scope = false;
+    } else if (arg == "--chisel" && i + 1 < argc) {
+        // EVERY[,RADIUS] -- carve and fill in front of the camera, for ever.
+        i64 values[2]{0, 16};
+        parse_numbers(argv[++i], values, 2);
+        options.chisel_every = static_cast<u64>(values[0] > 0 ? values[0] : 0);
+        options.chisel_radius = values[1] > 0 ? values[1] : 16;
+    } else if (arg == "--benchmark") {
+        options.benchmark = true;
+    } else if (arg == "--no-auto-quality") {
+        options.no_auto_quality = true;
+    } else if (arg == "--quality" && i + 1 < argc) {
+        options.quality_level = std::atoi(argv[++i]);
+    } else if (arg == "--face-budget" && i + 1 < argc) {
+        // How many faces the store may hold. Here so the full-table path can be reached from
+        // one camera in one run: at the real budget it takes a player moving about for a
+        // while, which is precisely why "the shadowed faces stop being produced" was found by
+        // playing rather than by any test.
+        options.face_budget = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--face-read-period" && i + 1 < argc) {
+        // A power of two, or 0 for off. Not rounded here: a figure that is silently changed is
+        // a figure an A/B cannot be read against.
+        options.face_read_period = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--no-face-reads") {
+        options.face_read_period = 0;   // D508's control arm
+    } else if (arg == "--secondary-period" && i + 1 < argc) {
+        // A power of two, or 0 for off. R9a's dial: how fast the off-screen set fills in,
+        // against how much of the feedback buffer it takes to fill it.
+        options.secondary_period = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--no-secondary-faces") {
+        options.secondary_period = 0;   // R9a's control arm
+    } else if (arg == "--secondary-share" && i + 1 < argc) {
+        // A hard ceiling on the off-screen class, as a divisor of the table. The default is
+        // none, and the class is bounded by what the table has spare; 4 is the fixed quarter
+        // this used to be and is the control arm for that change.
+        options.secondary_share = static_cast<u32>(std::atoi(argv[++i]));
+    } else {
+        return false;
+    }
+    return true;
+}
+
+bool parse_options_c(const std::string& arg, int& i, int argc, char** argv, Options& options) {
+    auto next_number = [&](u64 fallback) -> u64 {
+        if (i + 1 < argc) return std::strtoull(argv[++i], nullptr, 10);
+        return fallback;
+    };
+
+    if (arg == "--secondary-light-share" && i + 1 < argc) {
+        // R9b's ray share: how much of the on-screen set's shading rate the off-screen set gets,
+        // as a divisor. Larger is cheaper and slower. Not rounded and not clamped here, so the
+        // figure an A/B is read against is the figure that was asked for.
+        options.secondary_light_share = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--no-secondary-light") {
+        // R9b's control arm: a face nobody is looking at casts nothing, whatever is reading it.
+        // This is the state every figure taken before this change was measured in.
+        options.secondary_light_share = 0;
+    } else if (arg == "--denoise-edge" && i + 1 < argc) {
+        // R5a's agreement test. 0 is the control arm and restores the filter that smeared each
+        // lit face into a ring of eight that should have stayed dark.
+        options.denoise_edge = static_cast<f32>(std::atof(argv[++i]));
+    } else if (arg == "--exposure-max" && i + 1 < argc) {
+        // How far the meter may lift a dark scene. Larger recovers more of the dark and lets a
+        // room with no light in it read as lit; smaller crushes more of it. Measured against
+        // `clips/exposure_range.clip`, which legitimately needs 33x.
+        options.exposure_max = static_cast<f32>(std::atof(argv[++i]));
+    } else if (arg == "--no-auto-exposure") {
+        // R6a's control arm: the fixed 3.2 this pass applied for the whole of the rewrite.
+        options.auto_exposure = false;
+    } else if (arg == "--no-face-denoise") {
+        // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
+        // is the state every figure taken before R5 was measured in.
+        options.face_denoise = false;
+    } else if (arg == "--no-level-blend") {
+        // R5c's control arm. A hit draws the colour of the cell it stopped on outright, so the
+        // two levels a footprint sits between are two flat tones in a fixed 4x4 pattern -- which
+        // is the state every figure taken before this was measured in.
+        options.level_blend = false;
+    } else if (arg == "--no-emitter-cache") {
+        // R9g's control arm: rediscover every chunk's emitters on every announced change.
+        options.emitter_cache = false;
+    } else if (arg == "--halo") {
+        // R9c on: claim a margin past the screen, sized by how fast the camera is turning.
+        options.halo = true;
+    } else if (arg == "--no-halo") {
+        options.halo = false;   // the default, and the state every figure before R9c was in
+    } else if (arg == "--halo-lead" && i + 1 < argc) {
+        options.halo_lead = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--face-fold") {
+        // R9f on: a coarse face takes its sky and its bounce from the four faces under it.
+        options.face_fold = true;
+    } else if (arg == "--no-face-fold") {
+        options.face_fold = false;   // the default, and a coarse face measures itself
+    } else if (arg == "--no-face-materials") {
+        // R4a's control arm: no face asks what it is made of, so the descent, the two table
+        // reads and the load that finds out all go. The picture is the same in both arms.
+        options.face_materials = false;
+    } else if (arg == "--no-see-through") {
+        // R4d's control arm: transmissive matter stops a light ray dead, as it always has.
+        options.see_through = false;
+    } else if (arg == "--no-translucency") {
+        // R4e's control arm: the byte stays unread, as it was until now.
+        options.translucency = false;
+    } else if (arg == "--no-refraction") {
+        // R4d's other control arm: the ray behind the glass carries straight on, which is
+        // what D604 built and what every figure before this was taken in.
+        options.refraction = false;
+    } else if (arg == "--no-edge-aa") {
+        // R5d's control arm: a coarse node is fully opaque whatever its coverage says, so
+        // nothing casts a second march and every silhouette is a hard stair-step again.
+        options.edge_aa = false;
+    } else if (arg == "--node-payload") {
+        options.node_payload_mb = next_number(0);
+    } else if (arg == "--lobe-coverage") {
+        // R4b's second size class on. Off by default -- see the option for the measurement.
+        options.lobe_coverage = true;
+    } else if (arg == "--no-lobe-coverage") {
+        options.lobe_coverage = false;   // the default, and every lobe is the cheap class
+    } else if (arg == "--no-lobe-ray") {
+        // R4b's control arm: the pool, the bins and the energy split all stay, and only the
+        // march goes -- so an A/B prices the ray and nothing else.
+        options.lobe_ray = false;
+    } else if (arg == "--no-face-lobe") {
+        // R4c's control arm: no face holds a block of outgoing bins and no pixel probes for
+        // one, so a metal reflects its own hemispherical mean in every direction at once.
+        options.face_lobe = false;
+    } else if (arg == "--lobe-floor" && i + 1 < argc) {
+        // The worth itself, in [0, 1], so the dial and `face_lobe_worth` speak the same units
+        // and a figure from the census can be typed in without being converted. The gaps that
+        // matter are narrow -- glass and water sit at 0.040 and marble at 0.036 -- and a dial
+        // that could not tell those apart could not answer the question it exists for.
+        // `--lobe-floor 0` gives a block to every face that knows what it is made of, which is
+        // the arm that says what the pool's size is costing.
+        options.lobe_floor = static_cast<f32>(std::atof(argv[++i]));
+    } else if (arg == "--no-class-eviction") {
+        // Every cold record on one clock again, whoever asked for it, and the coarse pyramid
+        // spent at the first step of the squeeze. Pair it with `--secondary-share 4` for the
+        // whole control arm.
+        options.class_eviction = false;
+    } else if (arg == "--no-coarse-keep") {
+        // R9f's first control arm: the store gives a coarse stand-in up on the same clock as
+        // any other face, which is what it did before. Two flags of one build, as D407
+        // requires -- and this pair has to be separable from the one below, because they are
+        // two rules that happen to arrive together: one is about what the store KEEPS and one
+        // about what a gathering ray READS.
+        options.coarse_keep = false;
+    } else if (arg == "--no-coarse-bounce") {
+        options.coarse_bounce = false;   // R9f's second control arm
+    } else if (arg == "--no-light-probe") {
+        // The instrument itself, off. It is on by default because a counter nobody switches on
+        // is a counter nobody reads (D510), and switchable because an instrument whose cost is
+        // unmeasured is trap 20 waiting to happen.
+        options.light_probe = false;
+    } else if (arg == "--no-bounce") {
+        options.bounce = false;   // R9's control arm: kIndirectFloor everywhere again
+    } else if (arg == "--bounce-min" && i + 1 < argc) {
+        options.bounce_min = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--bounce-memory" && i + 1 < argc) {
+        options.bounce_memory = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--face-pressure-from" && i + 1 < argc) {
+        options.face_pressure_from = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--whole-set-retry") {
+        // The control arm for D544: an upload that runs out of staging clears nothing and
+        // resends the whole dirty set next frame, which is what it did before. Two flags of one
+        // build, as D407 requires.
+        options.whole_set_retry = true;
+    } else if (arg == "--no-face-pressure") {
+        // The control arm for D502: the store waits until it is FULL before giving anything up,
+        // which is what it did before. Two flags of one build, as D407 requires.
+        options.face_pressure = false;
+    } else if (arg == "--crash-test" && i + 1 < argc) {
+        options.crash_test = argv[++i];
+    } else if (arg == "--hollow" && i + 1 < argc) {
+        options.hollow = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--clip-coarse" && i + 1 < argc) {
+        options.clip_coarse = static_cast<u32>(std::atoi(argv[++i]));
+    } else if (arg == "--settle") {
+        options.settle = true;
+    } else if (arg == "--no-update-check") {
+        options.no_update_check = true;
+    } else if (arg == "--version") {
+        std::printf("WorldShaper %s\n", kVersion);
+        options.help = true;
+    } else if (arg == "--no-validation") {
+        options.validation = false;
+    } else if (arg == "--help" || arg == "-h") {
+        options.help = true;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 Options parse_options(int argc, char** argv) {
     Options options;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
-        auto next_number = [&](u64 fallback) -> u64 {
-            if (i + 1 < argc) return std::strtoull(argv[++i], nullptr, 10);
-            return fallback;
-        };
-
-        if (arg == "--headless") {
-            options.headless = true;
-        } else if (arg == "--world") {
-            if (i + 1 < argc) options.world = argv[++i];
-        } else if (arg == "--no-title") {
-            options.no_title = true;
-        } else if (arg == "--title-shot") {
-            if (i + 1 < argc) options.title_shot = argv[++i];
-        } else if (arg == "--title-frames") {
-            options.title_frames = next_number(options.title_frames);
-        } else if (arg == "--title-open") {
-            if (i + 1 < argc) options.title_open = argv[++i];
-        } else if (arg == "--icon-sheet") {
-            options.icon_sheet = true;
-        } else if (arg == "--shelf") {
-            if (i + 1 < argc) options.shelf = argv[++i];
-        } else if (arg == "--logo-seed") {
-            options.logo_seed = static_cast<u32>(next_number(options.logo_seed));
-        } else if (arg == "--logo-change") {
-            options.logo_change = next_number(60);
-        } else if (arg == "--cycle") {
-            options.cycle = next_number(120);
-        } else if (arg == "--ticks") {
-            options.ticks = next_number(0);
-            options.headless = true;
-        } else if (arg == "--width") {
-            options.width = static_cast<u32>(next_number(options.width));
-            options.size_explicit = true;
-        } else if (arg == "--height") {
-            options.height = static_cast<u32>(next_number(options.height));
-            options.size_explicit = true;
-        } else if (arg == "--cam") {
-            if (i + 1 < argc) options.camera = argv[++i];
-        } else if (arg == "--orbit") {
-            if (i + 1 < argc) options.orbit = argv[++i];
-        } else if (arg == "--fly") {
-            if (i + 1 < argc) options.fly = argv[++i];
-        } else if (arg == "--cut") {
-            if (i + 1 < argc) options.cuts.push_back(argv[++i]);
-        } else if (arg == "--edit") {
-            if (i + 1 < argc) options.edit = argv[++i];
-        } else if (arg == "--preview") {
-            if (i + 1 < argc) options.preview = argv[++i];
-        } else if (arg == "--preview-mark") {
-            if (i + 1 < argc) options.preview_marks.push_back(argv[++i]);
-        } else if (arg == "--clip") {
-            if (i + 1 < argc) options.clip = argv[++i];
-        } else if (arg == "--fog") {
-            if (i + 1 < argc) options.fog = argv[++i];
-        } else if (arg == "--clip-file") {
-            if (i + 1 < argc) options.clip_file = argv[++i];
-        } else if (arg == "--clip-slice") {
-            if (i + 1 < argc) options.clip_slices.push_back(argv[++i]);
-        } else if (arg == "--clip-symmetry") {
-            options.clip_symmetry = true;
-        } else if (arg == "--clip-align") {
-            options.clip_align = true;
-        } else if (arg == "--clip-metre") {
-            options.clip_metre = static_cast<i32>(next_number(0));
-        } else if (arg == "--no-despeckle") {
-            // The control arm for D610. Two flags of one build: with it, every lone voxel of the
-            // wrong material stays exactly where the sampler put it.
-            options.despeckle = false;
-        } else if (arg == "--no-clip-cache") {
-            options.no_clip_cache = true;
-        } else if (arg == "--no-paste-pool") {
-            options.no_paste_pool = true;
-        } else if (arg == "--no-paste-drop") {
-            options.no_paste_drop = true;
-        } else if (arg == "--no-batch-parallel") {
-            options.no_batch_parallel = true;
-        } else if (arg == "--stipple-from-world") {
-            options.stipple_at_coarse = false;
-        } else if (arg == "--world-clean-serial") {
-            options.world_clean_serial = true;
-        } else if (arg == "--clean-world") {
-            options.clean_world = true;
-        } else if (arg == "--clean-world-rounds") {
-            options.clean_world_rounds = static_cast<u32>(std::max<i64>(1, next_number(2)));
-        } else if (arg == "--no-coarse-paste") {
-            options.no_coarse_paste = true;
-        } else if (arg == "--refine-workers" && i + 1 < argc) {
-            options.refine_workers = static_cast<u32>(std::max(1, std::atoi(argv[++i])));
-        } else if (arg == "--refine-batch" && i + 1 < argc) {
-            options.refine_batch = static_cast<usize>(std::max(1, std::atoi(argv[++i])));
-        } else if (arg == "--clip-part") {
-            if (i + 1 < argc) options.clip_part = argv[++i];
-        } else if (arg == "--clip-bounds") {
-            if (i + 1 < argc) options.clip_bounds = argv[++i];
-        } else if (arg == "--sample-cost") {
-            options.sample_cost = true;
-        } else if (arg == "--sample-cost-levels") {
-            if (i + 1 < argc) options.sample_cost_levels = argv[++i];
-        } else if (arg == "--sample-cost-nodes") {
-            options.sample_cost_nodes = static_cast<u32>(next_number(24));
-        } else if (arg == "--sample-cost-boxes") {
-            options.sample_cost_boxes = static_cast<u32>(next_number(3));
-        } else if (arg == "--sample-cost-csv") {
-            if (i + 1 < argc) options.sample_cost_csv = argv[++i];
-        } else if (arg == "--sample-cost-replan") {
-            options.sample_cost_replan = true;
-        } else if (arg == "--stipple-tiled") {
-            options.stipple_tiled = true;
-        } else if (arg == "--stipple-level") {
-            options.stipple_level = next_number(5);
-        } else if (arg == "--refine-all") {
-            options.refine_all = true;
-        } else if (arg == "--clip-at") {
-            if (i + 1 < argc) parse_numbers(argv[++i], options.clip_at, 3);
-        } else if (arg == "--material") {
-            options.material = static_cast<u32>(next_number(0));
-        } else if (arg == "--debug-mode") {
-            options.debug_mode = static_cast<u32>(next_number(0));
-        } else if (arg == "--screenshot") {
-            if (i + 1 < argc) options.screenshot = argv[++i];
-        } else if (arg == "--screenshot-frame") {
-            options.screenshot_frame = next_number(30);
-        } else if (arg == "--no-vsync") {
-            options.vsync = false;
-        } else if (arg == "--validation") {
-            options.validation = true;
-        } else if (arg == "--target-fps" && i + 1 < argc) {
-            options.target_fps = static_cast<f32>(std::atof(argv[++i]));
-        } else if (arg == "--max-seconds" && i + 1 < argc) {
-            options.max_seconds = std::atof(argv[++i]);
-        } else if (arg == "--undo-frame" && i + 1 < argc) {
-            options.undo_frame = static_cast<u64>(std::atoll(argv[++i]));
-        } else if (arg == "--redo-frame" && i + 1 < argc) {
-            options.redo_frame = static_cast<u64>(std::atoll(argv[++i]));
-        } else if (arg == "--edit-frame" && i + 1 < argc) {
-            options.edit_frame = static_cast<u64>(std::atoll(argv[++i]));
-        } else if (arg == "--face-gate" && i + 1 < argc) {
-            options.face_gate = static_cast<u32>(std::atoll(argv[++i]));
-        } else if (arg == "--no-face-gate") {
-            options.face_gate = 0x7FFFFFFFu;
-        } else if (arg == "--no-face-worklist") {
-            options.face_worklist = false;
-        } else if (arg == "--no-face-prolong") {
-            options.face_prolong = false;
-        } else if (arg == "--no-node-crossings") {
-            options.node_crossings = false;
-        } else if (arg == "--no-light-keeps-geometry") {
-            options.light_read_period = 0;
-        } else if (arg == "--light-read-period" && i + 1 < argc) {
-            // Rounded UP to a power of two, because the shader tests a mask. Saying so beats a
-            // silent floor: `-Extra "--light-read-period 24"` would otherwise measure 16 and be
-            // written down as 24.
-            const u32 asked = static_cast<u32>(std::atoll(argv[++i]));
-            u32 period = 1;
-            while (period < asked) period <<= 1;
-            options.light_read_period = (asked == 0) ? 0 : period;
-            if (options.light_read_period != asked) {
-                WS_LOG_WARN("app", "--light-read-period {} rounded up to {}, which is what the "
-                                   "shader's mask can express",
-                            asked, options.light_read_period);
-            }
-        } else if (arg == "--face-edit-seed" && i + 1 < argc) {
-            options.face_edit_seed = static_cast<u32>(std::atoll(argv[++i]));
-        } else if (arg == "--sun-seed" && i + 1 < argc) {
-            // R5b's dial and its control arm in one: 0 is a new face starting from nothing, which
-            // is every build before this one. It travels in the light probe buffer rather than in
-            // the push block, which is exactly full -- see kProbeSunSeed in shaders\node.glsl.
-            options.sun_seed = static_cast<u32>(std::atoll(argv[++i]));
-        } else if (arg == "--no-sun-confidence") {
-            // R5b's control arm: a face's own sun ratio is believed the moment it has one sample,
-            // which is the state every figure taken before this was measured in. The shading pass
-            // then leaves the stand-in word at nought and both readers return the raw ratio
-            // unchanged -- bit-exactly, not nearly (face_terms.glsl, face_sun_believed).
-            options.sun_confidence = false;
-        } else if (arg == "--no-lamp-edit-scope") {
-            options.lamp_edit_scope = false;
-        } else if (arg == "--chisel" && i + 1 < argc) {
-            // EVERY[,RADIUS] -- carve and fill in front of the camera, for ever.
-            i64 values[2]{0, 16};
-            parse_numbers(argv[++i], values, 2);
-            options.chisel_every = static_cast<u64>(values[0] > 0 ? values[0] : 0);
-            options.chisel_radius = values[1] > 0 ? values[1] : 16;
-        } else if (arg == "--benchmark") {
-            options.benchmark = true;
-        } else if (arg == "--no-auto-quality") {
-            options.no_auto_quality = true;
-        } else if (arg == "--quality" && i + 1 < argc) {
-            options.quality_level = std::atoi(argv[++i]);
-        } else if (arg == "--face-budget" && i + 1 < argc) {
-            // How many faces the store may hold. Here so the full-table path can be reached from
-            // one camera in one run: at the real budget it takes a player moving about for a
-            // while, which is precisely why "the shadowed faces stop being produced" was found by
-            // playing rather than by any test.
-            options.face_budget = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--face-read-period" && i + 1 < argc) {
-            // A power of two, or 0 for off. Not rounded here: a figure that is silently changed is
-            // a figure an A/B cannot be read against.
-            options.face_read_period = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--no-face-reads") {
-            options.face_read_period = 0;   // D508's control arm
-        } else if (arg == "--secondary-period" && i + 1 < argc) {
-            // A power of two, or 0 for off. R9a's dial: how fast the off-screen set fills in,
-            // against how much of the feedback buffer it takes to fill it.
-            options.secondary_period = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--no-secondary-faces") {
-            options.secondary_period = 0;   // R9a's control arm
-        } else if (arg == "--secondary-share" && i + 1 < argc) {
-            // A hard ceiling on the off-screen class, as a divisor of the table. The default is
-            // none, and the class is bounded by what the table has spare; 4 is the fixed quarter
-            // this used to be and is the control arm for that change.
-            options.secondary_share = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--secondary-light-share" && i + 1 < argc) {
-            // R9b's ray share: how much of the on-screen set's shading rate the off-screen set gets,
-            // as a divisor. Larger is cheaper and slower. Not rounded and not clamped here, so the
-            // figure an A/B is read against is the figure that was asked for.
-            options.secondary_light_share = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--no-secondary-light") {
-            // R9b's control arm: a face nobody is looking at casts nothing, whatever is reading it.
-            // This is the state every figure taken before this change was measured in.
-            options.secondary_light_share = 0;
-        } else if (arg == "--denoise-edge" && i + 1 < argc) {
-            // R5a's agreement test. 0 is the control arm and restores the filter that smeared each
-            // lit face into a ring of eight that should have stayed dark.
-            options.denoise_edge = static_cast<f32>(std::atof(argv[++i]));
-        } else if (arg == "--exposure-max" && i + 1 < argc) {
-            // How far the meter may lift a dark scene. Larger recovers more of the dark and lets a
-            // room with no light in it read as lit; smaller crushes more of it. Measured against
-            // `clips/exposure_range.clip`, which legitimately needs 33x.
-            options.exposure_max = static_cast<f32>(std::atof(argv[++i]));
-        } else if (arg == "--no-auto-exposure") {
-            // R6a's control arm: the fixed 3.2 this pass applied for the whole of the rewrite.
-            options.auto_exposure = false;
-        } else if (arg == "--no-face-denoise") {
-            // R5a's control arm. Nothing in this renderer filtered across faces before it, so this
-            // is the state every figure taken before R5 was measured in.
-            options.face_denoise = false;
-        } else if (arg == "--no-level-blend") {
-            // R5c's control arm. A hit draws the colour of the cell it stopped on outright, so the
-            // two levels a footprint sits between are two flat tones in a fixed 4x4 pattern -- which
-            // is the state every figure taken before this was measured in.
-            options.level_blend = false;
-        } else if (arg == "--no-emitter-cache") {
-            // R9g's control arm: rediscover every chunk's emitters on every announced change.
-            options.emitter_cache = false;
-        } else if (arg == "--halo") {
-            // R9c on: claim a margin past the screen, sized by how fast the camera is turning.
-            options.halo = true;
-        } else if (arg == "--no-halo") {
-            options.halo = false;   // the default, and the state every figure before R9c was in
-        } else if (arg == "--halo-lead" && i + 1 < argc) {
-            options.halo_lead = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--face-fold") {
-            // R9f on: a coarse face takes its sky and its bounce from the four faces under it.
-            options.face_fold = true;
-        } else if (arg == "--no-face-fold") {
-            options.face_fold = false;   // the default, and a coarse face measures itself
-        } else if (arg == "--no-face-materials") {
-            // R4a's control arm: no face asks what it is made of, so the descent, the two table
-            // reads and the load that finds out all go. The picture is the same in both arms.
-            options.face_materials = false;
-        } else if (arg == "--no-see-through") {
-            // R4d's control arm: transmissive matter stops a light ray dead, as it always has.
-            options.see_through = false;
-        } else if (arg == "--no-translucency") {
-            // R4e's control arm: the byte stays unread, as it was until now.
-            options.translucency = false;
-        } else if (arg == "--no-refraction") {
-            // R4d's other control arm: the ray behind the glass carries straight on, which is
-            // what D604 built and what every figure before this was taken in.
-            options.refraction = false;
-        } else if (arg == "--no-edge-aa") {
-            // R5d's control arm: a coarse node is fully opaque whatever its coverage says, so
-            // nothing casts a second march and every silhouette is a hard stair-step again.
-            options.edge_aa = false;
-        } else if (arg == "--node-payload") {
-            options.node_payload_mb = next_number(0);
-        } else if (arg == "--lobe-coverage") {
-            // R4b's second size class on. Off by default -- see the option for the measurement.
-            options.lobe_coverage = true;
-        } else if (arg == "--no-lobe-coverage") {
-            options.lobe_coverage = false;   // the default, and every lobe is the cheap class
-        } else if (arg == "--no-lobe-ray") {
-            // R4b's control arm: the pool, the bins and the energy split all stay, and only the
-            // march goes -- so an A/B prices the ray and nothing else.
-            options.lobe_ray = false;
-        } else if (arg == "--no-face-lobe") {
-            // R4c's control arm: no face holds a block of outgoing bins and no pixel probes for
-            // one, so a metal reflects its own hemispherical mean in every direction at once.
-            options.face_lobe = false;
-        } else if (arg == "--lobe-floor" && i + 1 < argc) {
-            // The worth itself, in [0, 1], so the dial and `face_lobe_worth` speak the same units
-            // and a figure from the census can be typed in without being converted. The gaps that
-            // matter are narrow -- glass and water sit at 0.040 and marble at 0.036 -- and a dial
-            // that could not tell those apart could not answer the question it exists for.
-            // `--lobe-floor 0` gives a block to every face that knows what it is made of, which is
-            // the arm that says what the pool's size is costing.
-            options.lobe_floor = static_cast<f32>(std::atof(argv[++i]));
-        } else if (arg == "--no-class-eviction") {
-            // Every cold record on one clock again, whoever asked for it, and the coarse pyramid
-            // spent at the first step of the squeeze. Pair it with `--secondary-share 4` for the
-            // whole control arm.
-            options.class_eviction = false;
-        } else if (arg == "--no-coarse-keep") {
-            // R9f's first control arm: the store gives a coarse stand-in up on the same clock as
-            // any other face, which is what it did before. Two flags of one build, as D407
-            // requires -- and this pair has to be separable from the one below, because they are
-            // two rules that happen to arrive together: one is about what the store KEEPS and one
-            // about what a gathering ray READS.
-            options.coarse_keep = false;
-        } else if (arg == "--no-coarse-bounce") {
-            options.coarse_bounce = false;   // R9f's second control arm
-        } else if (arg == "--no-light-probe") {
-            // The instrument itself, off. It is on by default because a counter nobody switches on
-            // is a counter nobody reads (D510), and switchable because an instrument whose cost is
-            // unmeasured is trap 20 waiting to happen.
-            options.light_probe = false;
-        } else if (arg == "--no-bounce") {
-            options.bounce = false;   // R9's control arm: kIndirectFloor everywhere again
-        } else if (arg == "--bounce-min" && i + 1 < argc) {
-            options.bounce_min = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--bounce-memory" && i + 1 < argc) {
-            options.bounce_memory = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--face-pressure-from" && i + 1 < argc) {
-            options.face_pressure_from = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--whole-set-retry") {
-            // The control arm for D544: an upload that runs out of staging clears nothing and
-            // resends the whole dirty set next frame, which is what it did before. Two flags of one
-            // build, as D407 requires.
-            options.whole_set_retry = true;
-        } else if (arg == "--no-face-pressure") {
-            // The control arm for D502: the store waits until it is FULL before giving anything up,
-            // which is what it did before. Two flags of one build, as D407 requires.
-            options.face_pressure = false;
-        } else if (arg == "--crash-test" && i + 1 < argc) {
-            options.crash_test = argv[++i];
-        } else if (arg == "--hollow" && i + 1 < argc) {
-            options.hollow = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--clip-coarse" && i + 1 < argc) {
-            options.clip_coarse = static_cast<u32>(std::atoi(argv[++i]));
-        } else if (arg == "--settle") {
-            options.settle = true;
-        } else if (arg == "--no-update-check") {
-            options.no_update_check = true;
-        } else if (arg == "--version") {
-            std::printf("WorldShaper %s\n", kVersion);
-            options.help = true;
-        } else if (arg == "--no-validation") {
-            options.validation = false;
-        } else if (arg == "--help" || arg == "-h") {
-            options.help = true;
-        } else {
+        if (!parse_options_a(arg, i, argc, argv, options) &&
+            !parse_options_b(arg, i, argc, argv, options) &&
+            !parse_options_c(arg, i, argc, argv, options)) {
             WS_LOG_WARN("app", "unknown argument '{}'", arg);
         }
     }
