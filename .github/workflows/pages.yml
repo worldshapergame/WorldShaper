@@ -37,10 +37,12 @@ on:
       - 'web/**'
       - 'CMakeLists.txt'
       - '.github/workflows/pages.yml'
-  # And a sweep, for the branches that cannot trigger anything themselves. It costs almost nothing
-  # when nothing has changed: the job asks the published site what it is already showing and stops.
+  # A sweep for the branches that cannot trigger anything themselves, hourly. It was every twenty
+  # minutes, which turned out to be often enough to keep cancelling the queued run it was meant to
+  # be a backstop for. It costs almost nothing when nothing has changed: the job asks the published
+  # site what commit it is already showing and stops.
   schedule:
-    - cron: '*/20 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       ref:
@@ -48,20 +50,18 @@ on:
         required: false
         default: ''
 
-# One deployment at a time, and NOTHING is cancelled.
+# NO CONCURRENCY GROUP AT ALL, and this is the third attempt at the same problem.
 #
-# `cancel-in-progress: true` was the obvious setting and it meant the site was never published
-# once. A commit that lands on a branch and on `main` is two push events, both match the trigger,
-# both land in this group, and the second kills the first seconds after it starts -- runs 4 to 11
-# were four such pairs, every one of them cancelled, while the site went on serving what run 3 had
-# left. The pattern is completely invisible from the page: it just does not change.
+# `cancel-in-progress: true` meant a commit landing on a branch and on `main` was two runs and the
+# second killed the first. Setting it to false did not fix it: a group holds at most one PENDING
+# run, so with a schedule arriving every twenty minutes the queued run was cancelled before it was
+# ever given a runner. Runs 12 to 16 all ended `cancelled` with **zero jobs** and five minutes on
+# the clock -- never started, just queued and then dropped. From the page it is indistinguishable
+# from a site that simply does not update, which is what it looked like for three hours.
 #
-# Queueing instead is affordable now that a bake reuses everything that has not moved: the second
-# run of a pair rebuilds nothing and finishes in seconds. A slow duplicate is a much smaller
-# problem than a publish that never happens.
-concurrency:
-  group: pages
-  cancel-in-progress: false
+# Nothing here needs serialising. Two bakes racing write the same bytes from the same commit, and
+# GitHub serialises Pages deployments itself. So the group is gone, every run starts immediately,
+# and nothing can cancel anything.
 
 permissions:
   contents: read
