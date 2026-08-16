@@ -613,6 +613,263 @@ TEST_CASE("a revolved profile is placed where its axis is put, and stays a dista
     CHECK(box.high.y == doctest::Approx(2.0));
 }
 
+// --- part of the way round --------------------------------------------------------------------
+//
+// An apse, a niche head, a half dome, an arch ring and a curved colonnade are all a sweep through
+// LESS than a whole turn, and the way they go wrong is quiet: a sweep that is a quarter turn out
+// measures a perfectly plausible volume, and a distance that is right in SIGN and wrong in
+// MAGNITUDE outside the cut leaves the shape looking correct in every slice while the surface
+// normals near the cut — and therefore the paint that follows them — are wrong. So both are
+// asserted here, and the full turn is asserted to be untouched to the last bit.
+
+TEST_CASE("a sweep over a whole turn is the same node it always was, to the last bit") {
+    // Not `Approx`. The whole point of storing a full turn as a width of exactly one is that the
+    // existing fast path is taken and the arithmetic is character for character what it was, so
+    // every clip in the repository measures identically. A near-miss here is a content hash that
+    // moves under a building nobody changed.
+    Field f;
+    const u32 section = f.sphere({2.0, 0, 0}, 0.5);
+    const u32 plain = f.revolve(section, {0, 0, 0}, 1);
+    const u32 whole = f.revolve(section, {0, 0, 0}, 1, 0.0, 1.0);
+    const u32 offset_whole = f.revolve(section, {0, 0, 0}, 1, 0.25, 1.25);
+    const u32 ends_meet = f.revolve(section, {0, 0, 0}, 1, 0.4, 0.4);
+
+    const u32 ring = f.torus({0.5, 1, -2}, 2.0, 0.4, 1);
+    const u32 hoop = f.arc({0.5, 1, -2}, 2.0, 0.4, 1);
+    const u32 hoop_wrapped = f.arc({0.5, 1, -2}, 2.0, 0.4, 1, 0.7, 1.7);
+
+    const u32 post = f.cylinder({3.0, 0, 0}, 0.2, 1.0, 1);
+    const u32 eight = f.polar_repeat(post, 8, 1);
+    const u32 eight_full = f.polar_repeat(post, 8, 1, 0.0, 1.0);
+
+    for (f64 z = -3.0; z <= 3.0; z += 0.31) {
+        for (f64 y = -1.5; y <= 1.5; y += 0.27) {
+            for (f64 x = -3.0; x <= 3.0; x += 0.29) {
+                CHECK(at(f, whole, x, y, z) == at(f, plain, x, y, z));
+                CHECK(at(f, offset_whole, x, y, z) == at(f, plain, x, y, z));
+                CHECK(at(f, ends_meet, x, y, z) == at(f, plain, x, y, z));
+                CHECK(at(f, hoop, x, y, z) == at(f, ring, x, y, z));
+                CHECK(at(f, hoop_wrapped, x, y, z) == at(f, ring, x, y, z));
+                CHECK(at(f, eight_full, x, y, z) == at(f, eight, x, y, z));
+            }
+        }
+    }
+}
+
+TEST_CASE("a half revolve is half the shape, and the half it is told to be") {
+    Field f;
+    // A disc of radius a half, two metres out, turned about y. Whole it is a torus; from 0 to 0.5
+    // it is the half of that torus on the +z side, because a turn of nought is along the first
+    // cross-axis (x for a y sweep) and grows toward the second (z).
+    const u32 section = f.sphere({2.0, 0, 0}, 0.5);
+    const u32 whole = f.revolve(section, {0, 0, 0}, 1);
+    const u32 half = f.revolve(section, {0, 0, 0}, 1, 0.0, 0.5);
+
+    CHECK(at(f, half, 0, 0, 2.0) == doctest::Approx(-0.5));    // a quarter turn in: solid
+    CHECK(at(f, half, 0, 0, -2.0) == doctest::Approx(2.5));    // three quarters round: air
+    // Exactly on a cut plane is the surface, so the distance is nought and not a negative number.
+    CHECK(at(f, half, 2.0, 0, 0) == doctest::Approx(0.0));
+    CHECK(at(f, half, -2.0, 0, 0) == doctest::Approx(0.0));
+
+    // Half the volume, counted rather than argued.
+    usize inside_whole = 0, inside_half = 0;
+    for (f64 z = -2.6; z <= 2.6; z += 0.05) {
+        for (f64 y = -0.6; y <= 0.6; y += 0.05) {
+            for (f64 x = -2.6; x <= 2.6; x += 0.05) {
+                if (at(f, whole, x, y, z) < 0.0) ++inside_whole;
+                if (at(f, half, x, y, z) < 0.0) ++inside_half;
+            }
+        }
+    }
+    REQUIRE(inside_whole > 1000);
+    CHECK(static_cast<f64>(inside_half) / static_cast<f64>(inside_whole) ==
+          doctest::Approx(0.5).epsilon(0.01));
+}
+
+TEST_CASE("outside the cut the distance is to the CUT, not to the full revolution") {
+    // The trap this feature is most likely to fall into, and the one that does not show in a
+    // slice: outside the angular wedge the nearest matter is on an END CAP. Return the full
+    // revolution's distance there and every voxel keeps its sign, so nothing appears or vanishes
+    // — but the magnitude is wrong, and magnitude is what surface normals are made of. That is
+    // the same fault, in a new place, as the union box test that put four hundred voxels of moss
+    // where they did not belong.
+    Field f;
+    const u32 half = f.revolve(f.sphere({2.0, 0, 0}, 0.5), {0, 0, 0}, 1, 0.0, 0.5);
+
+    // Out at the middle of the section, just past the cut plane at z = 0: the whole revolution
+    // would say -0.5 because the point is inside the torus. The truth is the distance to the cap,
+    // which is exactly how far past the plane the point stands.
+    for (const f64 e : {0.01, 0.05, 0.1, 0.2}) {
+        CHECK(at(f, half, 2.0, 0, -e) == doctest::Approx(e));
+        CHECK(at(f, half, -2.0, 0, -e) == doctest::Approx(e));
+    }
+    // And inside the solid, near a cap, the depth is to the CAP and not to the swept face: the
+    // caps are surface too.
+    CHECK(at(f, half, 2.0, 0, 0.02) == doctest::Approx(-0.02));
+    CHECK(at(f, half, -2.0, 0, 0.02) == doctest::Approx(-0.02));
+
+    // Which is another way of saying the field stays one-Lipschitz through the cut — a march that
+    // believed a longer distance than the truth would step straight through the cap.
+    for (f64 z = -3.0; z <= 3.0; z += 0.07) {
+        for (f64 x = -3.0; x <= 3.0; x += 0.07) {
+            const f64 d = at(f, half, x, 0.0, z);
+            CHECK(std::abs(at(f, half, x + 0.01, 0.0, z) - d) <= 0.01 + kLoose);
+            CHECK(std::abs(at(f, half, x, 0.0, z + 0.01) - d) <= 0.01 + kLoose);
+        }
+    }
+    CHECK(f.metric_slack(half) == doctest::Approx(0.0));
+}
+
+TEST_CASE("a range written backwards over the seam is the shape on the correct side") {
+    Field f;
+    // `from=0.75 to=0.25` is the half turn that runs 0.75 -> 0 -> 0.25, so it is centred on the
+    // first cross-axis. An author will write this, and the failure it invites is an empty shape.
+    const u32 seam = f.revolve(f.sphere({2.0, 0, 0}, 0.5), {0, 0, 0}, 1, 0.75, 0.25);
+    CHECK(at(f, seam, 2.0, 0, 0) == doctest::Approx(-0.5));    // the middle of the range
+    CHECK(at(f, seam, -2.0, 0, 0) == doctest::Approx(2.5));    // half a turn away: air
+    CHECK(at(f, seam, 0, 0, 2.0) == doctest::Approx(0.0));     // the ends, exactly on the caps
+    CHECK(at(f, seam, 0, 0, -2.0) == doctest::Approx(0.0));
+
+    // And a range with `to` below `from` sweeps the LONG way round, because the sweep always runs
+    // the way `around` goes. 0.5 to 0.25 is three quarters of a turn, not one quarter.
+    const u32 longway = f.revolve(f.sphere({2.0, 0, 0}, 0.5), {0, 0, 0}, 1, 0.5, 0.25);
+    CHECK(at(f, longway, -2.0, 0, 0) == doctest::Approx(0.0));    // 0.5 turns is its `from` cap
+    CHECK(at(f, longway, 2.0, 0, 0) == doctest::Approx(-0.5));    // through the seam: solid
+    CHECK(at(f, longway, 0, 0, -2.0) == doctest::Approx(-0.5));   // and at 0.75 turns: solid
+    const f64 mid = 0.375 * 6.283185307179586;                    // the quarter it must leave out
+    CHECK(at(f, longway, 2.0 * std::cos(mid), 0, 2.0 * std::sin(mid)) > 0.0);
+}
+
+TEST_CASE("an arc is a torus that stops, with a round cap where it stops") {
+    Field f;
+    const u32 hoop = f.arc({0, 0, 0}, 2.0, 0.25, 1, 0.0, 0.5);
+    // On the centre-line anywhere in the arc, the answer is minus the tube.
+    CHECK(at(f, hoop, 2.0, 0, 0) == doctest::Approx(-0.25));
+    CHECK(at(f, hoop, 0, 0, 2.0) == doctest::Approx(-0.25));
+    CHECK(at(f, hoop, -2.0, 0, 0) == doctest::Approx(-0.25));
+    // Round caps: past an end, the shape is a sphere about that end, so the distance is the
+    // distance to the end point less the tube. A flat cap would answer differently by 0.03 here.
+    CHECK(at(f, hoop, 2.0, 0, -0.75) == doctest::Approx(0.5));
+    CHECK(at(f, hoop, 2.0, 0.6, -0.8) == doctest::Approx(1.0 - 0.25));
+    // Nothing on the -z side beyond the caps.
+    CHECK(at(f, hoop, 0, 0, -2.0) == doctest::Approx(std::sqrt(8.0) - 0.25));
+
+    // The exact distance to the centre-line, everywhere, which is what makes this cheap: a real
+    // torus segment has no closed form and this does.
+    // The exact distance to the centre-line, everywhere: not the case analysis the node uses but
+    // a plain minimisation over the arc, so a wrong end or a wrong wrap shows as metres. The
+    // tolerance is the minimisation's own — it samples the arc, so it can only over-state, by at
+    // most the spacing between samples.
+    for (f64 z = -3.2; z <= 3.2; z += 0.31) {
+        for (f64 y = -1.0; y <= 1.0; y += 0.29) {
+            for (f64 x = -3.2; x <= 3.2; x += 0.31) {
+                f64 nearest = 1e30;
+                for (int i = 0; i <= 8000; ++i) {
+                    const f64 turn = 0.5 * static_cast<f64>(i) / 8000.0 * 6.283185307179586;
+                    const f64 cx = 2.0 * std::cos(turn), cz = 2.0 * std::sin(turn);
+                    nearest = std::min(nearest, std::sqrt((x - cx) * (x - cx) + y * y +
+                                                          (z - cz) * (z - cz)));
+                }
+                CHECK(at(f, hoop, x, y, z) == doctest::Approx(nearest - 0.25).epsilon(1e-3));
+            }
+        }
+    }
+    CHECK(f.metric_slack(hoop) == doctest::Approx(0.0));
+}
+
+TEST_CASE("seven columns from here round to there, with one on each end") {
+    // The spacing decision, asserted: over an ARC there are n copies and n-1 gaps, first on
+    // `from` and last on `to`. Over a whole turn there are n copies and n gaps, unchanged,
+    // because a copy on each end would put two in one place.
+    Field f;
+    const u32 shaft = f.cylinder({3.0, 0, 0}, 0.2, 1.0, 1);
+    const u32 fan = f.polar_repeat(shaft, 7, 1, 0.0, 0.25);
+    const f64 tau = 6.283185307179586;
+    for (int k = 0; k < 7; ++k) {
+        const f64 turn = 0.25 * static_cast<f64>(k) / 6.0 * tau;
+        CHECK(at(f, fan, 3.0 * std::cos(turn), 0, 3.0 * std::sin(turn)) ==
+              doctest::Approx(-0.2));
+    }
+    // Between two of them, air.
+    const f64 between = (0.25 / 12.0) * tau;
+    CHECK(at(f, fan, 3.0 * std::cos(between), 0, 3.0 * std::sin(between)) > 0.0);
+    // And nothing at all round the back of the circle.
+    for (f64 turn = 0.35; turn < 0.95; turn += 0.05) {
+        CHECK(at(f, fan, 3.0 * std::cos(turn * tau), 0, 3.0 * std::sin(turn * tau)) > 0.0);
+    }
+}
+
+TEST_CASE("a partial sweep keeps its box, and the box is the whole turn's on purpose") {
+    // Conservative, and said out loud: the segment's true extent is tighter and a box tighter than
+    // the truth is a piece of the clip quietly missing. What has to hold is that the node still
+    // HAS a box — an unbounded node is one no cull can skip — and that the box contains the shape.
+    Field f;
+    const u32 seg = f.revolve(f.sphere({2.0, 0, 0}, 0.5), {1, 2, 3}, 1, 0.1, 0.4);
+    const u32 hoop = f.arc({-1, 0, 2}, 1.5, 0.3, 0, 0.2, 0.9);
+    const u32 both = f.unite({seg, hoop});
+
+    std::vector<f64> before;
+    for (f64 z = -3.0; z <= 5.0; z += 0.23) {
+        for (f64 y = -1.0; y <= 4.0; y += 0.19) {
+            for (f64 x = -3.0; x <= 4.0; x += 0.21) before.push_back(f.eval(both, {x, y, z}));
+        }
+    }
+
+    f.build_bounds();
+    CHECK_FALSE(f.bounds_of(seg).infinite());
+    CHECK_FALSE(f.bounds_of(hoop).infinite());
+    CHECK(f.unbounded_nodes() == 0);
+    // The whole revolution's box: as far out as the profile reaches, all the way round.
+    CHECK(f.bounds_of(seg).low.x == doctest::Approx(1.0 - 2.5));
+    CHECK(f.bounds_of(seg).high.z == doctest::Approx(3.0 + 2.5));
+    CHECK(f.bounds_of(hoop).high.x == doctest::Approx(-1.0 + 0.3));
+
+    // Everything solid is inside its own box, and the boxes changed no answer.
+    usize seen = 0;
+    for (f64 z = -3.0; z <= 5.0; z += 0.23) {
+        for (f64 y = -1.0; y <= 4.0; y += 0.19) {
+            for (f64 x = -3.0; x <= 4.0; x += 0.21) {
+                CHECK(f.eval(both, {x, y, z}) == doctest::Approx(before[seen++]));
+                for (const u32 node : {seg, hoop}) {
+                    if (f.eval(node, {x, y, z}) >= 0.0) continue;
+                    const Field::Aabb box = f.bounds_of(node);
+                    CHECK(x >= box.low.x - kLoose);
+                    CHECK(x <= box.high.x + kLoose);
+                    CHECK(y >= box.low.y - kLoose);
+                    CHECK(y <= box.high.y + kLoose);
+                    CHECK(z >= box.low.z - kLoose);
+                    CHECK(z <= box.high.z + kLoose);
+                }
+            }
+        }
+    }
+    CHECK(seen == before.size());
+}
+
+TEST_CASE("the mirror evaluator walks a partial sweep to the same number") {
+    // A partial revolve asks its profile once, twice or three times depending on where the point
+    // stands, so the non-recursive twin needs a step counter over SAMPLE POINTS rather than over
+    // children — the same mechanism curvature and occlusion use. A second evaluator that disagrees
+    // with the first by one voxel is the worst kind of fault this repository has had.
+    Field f;
+    const u32 seg = f.revolve(f.box({2.0, 0.3, 0}, {0.4, 0.3, 1.0}, 0.0), {0, 0, 0}, 1, 0.1, 0.6);
+    const u32 hoop = f.arc({0, 0, 0}, 1.5, 0.3, 1, 0.8, 0.2);
+    const u32 fan = f.polar_repeat(f.sphere({2.5, 0, 0}, 0.3), 4, 1, 0.05, 0.4);
+    const u32 all = f.unite({seg, hoop, fan});
+
+    forge::Op missing = forge::Op::Constant;
+    REQUIRE(f.mirror_covers(all, &missing));
+    for (f64 z = -3.0; z <= 3.0; z += 0.29) {
+        for (f64 y = -1.5; y <= 1.5; y += 0.23) {
+            for (f64 x = -3.0; x <= 3.0; x += 0.31) {
+                f64 walked = 0.0;
+                REQUIRE(f.mirror_eval(all, {x, y, z}, walked));
+                CHECK(walked == f.eval(all, {x, y, z}));
+            }
+        }
+    }
+}
+
 // --- the volute ------------------------------------------------------------------------------
 
 TEST_CASE("a spiral is a real distance to the tube it sweeps") {

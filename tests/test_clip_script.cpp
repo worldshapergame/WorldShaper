@@ -373,6 +373,163 @@ solid flight
     CHECK(tops.back() > tops.front());
 }
 
+// --- part of the way round ----------------------------------------------------------------
+//
+// `revolve`, `around` and `arc` all take `from` and `to` in turns. The failures these invite are
+// quiet ones — a sweep a quarter turn out measures a plausible volume, and a range written across
+// the seam at zero produces an empty shape if the wrap is dropped — so what is asserted here is
+// WHICH SIDE the matter came out on, and that leaving the keys off changes nothing at all.
+
+TEST_CASE("from and to left off leave a sweep exactly as it was") {
+    // The control arm, in the language rather than in the field: the same three shapes written
+    // with and without a whole-turn range have to sample to the same voxel count. Anything else
+    // is every clip in the repository quietly moving.
+    const Built plain = build(R"(
+metre 16
+bounds -3 -1 -3  3 1 3
+material stone rgb=120,120,116
+let ring  = revolve { sphere 2 0 0 r=0.4 } axis=y
+let hoop  = torus 0 0 0 ring=1.0 tube=0.15 axis=y
+let posts = around { cylinder 2.6 0 0 r=0.12 h=1.6 axis=y } count=6 axis=y
+paint stone
+solid union { ring hoop posts }
+)");
+    const Built ranged = build(R"(
+metre 16
+bounds -3 -1 -3  3 1 3
+material stone rgb=120,120,116
+let ring  = revolve { sphere 2 0 0 r=0.4 } axis=y from=0 to=1
+let hoop  = arc 0 0 0 ring=1.0 tube=0.15 axis=y from=0.3 to=1.3
+let posts = around { cylinder 2.6 0 0 r=0.12 h=1.6 axis=y } count=6 axis=y from=0 to=1
+paint stone
+solid union { ring hoop posts }
+)");
+    REQUIRE(plain.script.ok());
+    REQUIRE(ranged.script.ok());
+    CHECK(ranged.measurement.solid == plain.measurement.solid);
+    CHECK(ranged.measurement.exposed_faces == plain.measurement.exposed_faces);
+}
+
+TEST_CASE("a half revolve is half the matter, on the side the turns say") {
+    // A turn of nought is along the first cross-axis — x, for a sweep about y — and grows toward
+    // the second, which is z. So `from=0 to=0.5` keeps the +z half and drops the -z one.
+    const Built b = build(R"(
+metre 16
+bounds -3 -1 -3  3 1 3
+material stone rgb=120,120,116
+let apse = revolve { sphere 2 0 0 r=0.4 } axis=y from=0 to=0.5
+paint stone
+solid apse
+)");
+    REQUIRE(b.script.ok());
+    const Clip& clip = b.result.clip;
+    // Nothing at all on the -z side of the cut, and plenty on the +z side.
+    usize plus_z = 0, minus_z = 0;
+    for (i32 z = 0; z < clip.size[2]; ++z) {
+        for (i32 y = 0; y < clip.size[1]; ++y) {
+            for (i32 x = 0; x < clip.size[0]; ++x) {
+                if (clip.at(x, y, z) == kAir) continue;
+                if (z > clip.size[2] / 2) ++plus_z;
+                else if (z < clip.size[2] / 2 - 1) ++minus_z;
+            }
+        }
+    }
+    CHECK(plus_z > 1000);
+    CHECK(minus_z == 0);
+    // A torus of ring 2 and tube 0.4 holds 2 pi^2 R r^2; half of it is that halved.
+    const f64 whole = 2.0 * 3.14159265358979 * 3.14159265358979 * 2.0 * 0.4 * 0.4;
+    CHECK(b.measurement.cubic_metres() == doctest::Approx(whole * 0.5).epsilon(0.03));
+}
+
+TEST_CASE("a range written across the seam at zero is not an empty shape") {
+    // `from=0.75 to=0.25` runs 0.75 -> 0 -> 0.25, so the matter is centred on +x. Dropping the
+    // wrap gives a span of minus a half and a clip with nothing in it, which is exactly the sort
+    // of failure that reports success.
+    const Built b = build(R"(
+metre 16
+bounds -3 -1 -3  3 1 3
+material stone rgb=120,120,116
+let niche = revolve { sphere 2 0 0 r=0.4 } axis=y from=0.75 to=0.25
+paint stone
+solid niche
+)");
+    REQUIRE(b.script.ok());
+    const Clip& clip = b.result.clip;
+    usize plus_x = 0, minus_x = 0;
+    for (i32 z = 0; z < clip.size[2]; ++z) {
+        for (i32 y = 0; y < clip.size[1]; ++y) {
+            for (i32 x = 0; x < clip.size[0]; ++x) {
+                if (clip.at(x, y, z) == kAir) continue;
+                if (x > clip.size[0] / 2) ++plus_x;
+                else if (x < clip.size[0] / 2 - 1) ++minus_x;
+            }
+        }
+    }
+    CHECK(plus_x > 1000);
+    CHECK(minus_x == 0);
+}
+
+TEST_CASE("seven columns from here round to there stand on both ends of the arc") {
+    // The spacing an author means: over an arc the first copy is ON `from` and the last is ON
+    // `to`, n copies and n-1 gaps. Asserted by counting the separate pieces — seven columns that
+    // do not touch are seven components.
+    const Built b = build(R"(
+metre 16
+bounds -3 -1 -3  3 1 3
+material stone rgb=120,120,116
+let colonnade = around { cylinder 2.4 0 0 r=0.14 h=1.6 axis=y } count=7 axis=y from=-0.1944 to=0.1944
+paint stone
+solid colonnade
+)");
+    REQUIRE(b.script.ok());
+    const Connectivity joined = connectivity(b.result.clip);
+    CHECK(joined.components == 7);
+    // 140 degrees centred on +x, so the whole colonnade sits on the +x side.
+    const Clip& clip = b.result.clip;
+    usize minus_x = 0;
+    for (i32 z = 0; z < clip.size[2]; ++z) {
+        for (i32 y = 0; y < clip.size[1]; ++y) {
+            for (i32 x = 0; x < clip.size[0] / 2; ++x) {
+                if (clip.at(x, y, z) != kAir) ++minus_x;
+            }
+        }
+    }
+    CHECK(minus_x == 0);
+}
+
+TEST_CASE("an arch ring is a half torus that stands up") {
+    // `arc` about z runs from +x round through +y to -x, so `from=0 to=0.5` is an arch and not a
+    // bowl. One component, because the two ends of one arc are joined by the arc.
+    const Built b = build(R"(
+metre 16
+bounds -2 -0.4 -0.5  2 2 0.5
+material stone rgb=120,120,116
+let ring = arc 0 0 0 ring=1.4 tube=0.16 axis=z from=0 to=0.5
+paint stone
+solid ring
+)");
+    REQUIRE(b.script.ok());
+    const Connectivity joined = connectivity(b.result.clip);
+    CHECK(joined.components == 1);
+    const Clip& clip = b.result.clip;
+    usize below = 0;
+    for (i32 z = 0; z < clip.size[2]; ++z) {
+        for (i32 x = 0; x < clip.size[0]; ++x) {
+            for (i32 y = 0; y < clip.size[1]; ++y) {
+                // The springing is at y = 0, which is 0.4 m up from the bottom of the bounds.
+                if (clip.at(x, y, z) != kAir && y < static_cast<i32>(0.4 * 16.0) - 4) ++below;
+            }
+        }
+    }
+    CHECK(below == 0);
+    // Half a torus of ring 1.4 and tube 0.16, plus the two round caps, which together make one
+    // more sphere of the tube's radius.
+    const f64 pi = 3.14159265358979;
+    const f64 expected = 0.5 * (2.0 * pi * pi * 1.4 * 0.16 * 0.16) +
+                         4.0 / 3.0 * pi * 0.16 * 0.16 * 0.16;
+    CHECK(b.measurement.cubic_metres() == doctest::Approx(expected).epsilon(0.05));
+}
+
 TEST_CASE("a slice reads as a picture of the shape") {
     const Built b = build(R"(
 metre 8

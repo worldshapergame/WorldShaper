@@ -81,6 +81,9 @@ enum class Op : u8 {
     Cylinder,      // centre a[0..2], radius a[3], half height a[4], axis a[5]
     Capsule,       // end a[0..2], end a[3..5], radius a[6]
     Torus,         // centre a[0..2], ring radius a[3], tube radius a[4], axis a[5]
+    Arc,           // a segment of one, with round caps: centre a[0..2], ring a[3], tube a[4],
+                   // axis a[5], first turn a[6], width in turns a[7] — a[7] of one is the whole
+                   // ring and is answered by the torus's own arithmetic, unchanged
     Cone,          // base centre a[0..2], base radius a[3], height a[4], axis a[5]
     Plane,         // normal a[0..2], offset a[3]: the half space behind it
     Ellipsoid,     // centre a[0..2], radii a[3..5]
@@ -98,9 +101,32 @@ enum class Op : u8 {
     // once and turned about an axis; the Ionic capital is a logarithmic spiral. Faked out of
     // stacked cylinders those come out as staircases of rings, and the fake costs more nodes than
     // the real thing does.
+    //
+    // # Part of the way round, and which way round that is
+    //
+    // An apse, a niche head, a half dome, an arch ring, a curved colonnade and an oval room are
+    // all a sweep through LESS than a whole turn. Built out of a whole turn intersected with two
+    // half spaces they cost two extra nodes, lose the bounding box that makes the union fast, and
+    // still cannot say "five columns spread over a hundred and forty degrees" at all.
+    //
+    // So `Revolve`, `PolarRepeat` and `Arc` each carry a first turn and a width in turns, and all
+    // three measure an angle the SAME way:
+    //
+    //   zero is along the FIRST cross-axis — `other_axes` order, so x for a y-axis sweep — and
+    //   the turn increases toward the SECOND, which for a y-axis sweep is z. That is the sense
+    //   `atan2(second, first)` already grows in, which is the sense `around` already spaced its
+    //   copies in, so a partial `around` puts its first copy exactly where a full one did.
+    //
+    // The sweep always runs the increasing way from `from` to `to`, which is what makes a range
+    // that crosses the seam at zero mean something: `from=0.75 to=0.25` is the half turn through
+    // zero, not an empty shape, and `from=0.5 to=0.25` is the three quarters the long way round.
+    // A range a whole turn wide or wider, and a range whose ends coincide, are the whole turn —
+    // stored as a width of exactly one, which is the flag every fast path below tests, so a clip
+    // that never mentions a range pays nothing at all for the feature.
     Revolve,       // child 0 asked at (radius, height) instead of (x, y, z): centre a[0..2],
-                   // axis a[3]. The profile is drawn in the plane of the first cross-axis and
-                   // the axis itself, at the third coordinate zero
+                   // axis a[3], first turn a[4], width in turns a[5]. The profile is drawn in the
+                   // plane of the first cross-axis and the axis itself, at the third coordinate
+                   // zero
     Spiral,        // a logarithmic spiral swept as a tube: centre a[0..2], starting radius a[3],
                    // radius multiplier per turn a[4], tube radius a[5], turns a[6], axis a[7]
 
@@ -118,7 +144,17 @@ enum class Op : u8 {
     Scale,         // by a[0..2]
     Mirror,        // fold about the plane through the origin with normal on axis a[0]
     Repeat,        // tile with period a[0..2]; a[3..5] limit how many either side
-    PolarRepeat,   // a[0] copies about the axis a[1]
+    // `a[0]` copies about the axis `a[1]`, over the arc that starts at turn `a[2]` and is `a[3]`
+    // turns wide.
+    //
+    // **The two cases space their copies differently, and deliberately.** Over a whole turn there
+    // are n copies and n gaps, because the first and the last would otherwise land on top of one
+    // another — that is what `around { } count=8` has always meant and it is unchanged. Over a
+    // PARTIAL arc there are n copies and n-1 gaps, with the first sitting exactly on `from` and
+    // the last exactly on `to`, INCLUSIVE, because "seven columns from here round to there" names
+    // both ends and expects a column on each. A colonnade written the other way is short one
+    // column at the end an author can see.
+    PolarRepeat,
 
     // --- changing the answer --------------------------------------------------------------
     Shell,         // hollow: |d| - a[0]
@@ -249,6 +285,16 @@ public:
     u32 cylinder(Vec3 centre, f64 r, f64 half_height, u32 axis = 1);
     u32 capsule(Vec3 a, Vec3 b, f64 r);
     u32 torus(Vec3 centre, f64 ring, f64 tube, u32 axis = 1);
+
+    // A segment of a torus with a round cap at each end — the arch ring, the curved handrail, the
+    // hoop of a gilt crown.
+    //
+    // Exact, and cheaply so, which the general torus is not: the segment is a sphere of radius
+    // `tube` swept along an arc, so the distance to it is the distance to the nearest point of
+    // that arc's centre-line minus `tube`, and the nearest point of an arc is either the one at
+    // the asking point's own angle or an end of it. `from` and `to` are turns, and a whole turn
+    // hands the answer straight back to `torus` so the two cannot drift apart.
+    u32 arc(Vec3 centre, f64 ring, f64 tube, u32 axis = 1, f64 from = 0.0, f64 to = 1.0);
     u32 cone(Vec3 base_centre, f64 base_r, f64 height, u32 axis = 1);
     u32 plane(Vec3 normal, f64 offset);
     u32 ellipsoid(Vec3 centre, Vec3 radii);
@@ -270,7 +316,16 @@ public:
     // and a hollow drawn once and revolved; a dome is an arc; a baluster is a silhouette. Every
     // one of them built out of stacked cylinders instead is a stack of visible steps, more nodes,
     // and a shape that cannot be re-proportioned by moving one number.
-    u32 revolve(u32 profile, Vec3 centre, u32 axis = 1);
+    //
+    // `from` and `to` are turns and default to a whole revolution, which takes the same code path
+    // it always did. Through less than a whole turn the answer is still an honest distance and
+    // that is the only hard part of it: outside the wedge the nearest matter is on an END CAP,
+    // and returning the full revolution's distance there would leave every surface normal near
+    // the cut wrong while a slice through the shape still looked perfect. So the point's angle is
+    // clamped into the range and the distance measured to the cap disc it lands on, which is
+    // exact; and INSIDE the solid the caps are counted too, because they are part of the surface
+    // and either may be nearer than the swept face.
+    u32 revolve(u32 profile, Vec3 centre, u32 axis = 1, f64 from = 0.0, f64 to = 1.0);
 
     // A logarithmic spiral swept as a tube — the Ionic volute, and the only curve in the orders
     // that is not an arc or a straight line.
@@ -296,7 +351,9 @@ public:
     u32 scale(u32 child, Vec3 by);
     u32 mirror(u32 child, u32 axis);
     u32 repeat(u32 child, Vec3 period, Vec3 limit);
-    u32 polar_repeat(u32 child, u32 count, u32 axis);
+    // n copies about the axis. Over a whole turn — the default — n copies in n sectors, unchanged.
+    // Over an arc, n copies with the first ON `from` and the last ON `to`; see Op::PolarRepeat.
+    u32 polar_repeat(u32 child, u32 count, u32 axis, f64 from = 0.0, f64 to = 1.0);
 
     // --- changing the answer --------------------------------------------------------------
     u32 shell(u32 child, f64 thickness);
