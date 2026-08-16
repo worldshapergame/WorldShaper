@@ -8791,3 +8791,56 @@ while it was fetching.
 | D667 | **The key of what made a file lives in the file** | decision | Incremental without a manifest that can go stale; a warm shard is seconds |
 | D667 | **The early deploy may only add** | fault | As first written it would have published an empty site over a populated one, on its first run |
 | D667 | **The viewer's own branch does not trigger the workflow** | decision | It is mirrored to `main` commit for commit; the two pushes were two identical runs and two racing deploys |
+
+## D668 — the Windows build had not compiled for as long as CI had existed, and the cause was a compiler limit
+
+`ci.yml` (D665's neighbour, added 2026-08-15) had never once been green. Every run failed the same
+way and the message was exact:
+
+```
+main.cpp(1106): fatal error C1061: compiler limit: blocks nested too deeply
+```
+
+**MSVC counts every `else if` as another nested block and gives up at 128.** `parse_options` had
+grown one branch at a time to 126, and with the `for` around it and the function body that is the
+limit precisely. The job compiled 405 of its 414 objects and stopped, so `ws_tests` never ran and
+neither did the headless audit — **a red CI that said nothing whatever about the code it exists to
+test**, for a day, while the facility overhaul and the clip viewer both landed on `main`.
+
+It is worth being plain about why it sat there: it was seen, it was named "pre-existing", and it was
+offered as something that could be fixed rather than fixed. A build that does not build is not a
+background condition.
+
+### The fix, and why it was checked rather than asserted
+
+Three functions of 42 branches. Each takes the argument and returns whether it recognised it; `i` is
+a reference because a flag carrying a value advances it. **The split points are arbitrary** — the
+chain is ordered by the history of the project, not by theme, and the comment says so rather than
+inventing a taxonomy for it. The *order* is not arbitrary and is preserved exactly: the chain is
+first-match-wins, and several branches carry `&& i + 1 < argc` in their own condition, so a flag
+missing its value has to keep falling through to the same warning.
+
+Rearranging 350 lines of a parser nobody can run here is exactly the shape of change that looks
+right and is not, so it was measured. `Options` is 117 fields of nothing but `bool`, `u32`,
+`std::string` and `std::vector<std::string>`, and `parse_options` touches nothing else — so both
+arrangements compile in isolation out of the real source, and both were run against **326
+invocations**: all 127 flag spellings on their own, every value-taking flag with a good value, a
+non-numeric one and a negative one, and every flag at once with and without values, dumping all 117
+fields each time. **Byte for byte identical**, both clean under `-Wall -Wextra -Werror`.
+
+### A hang, found by the harness in the code the harness was measuring
+
+`--light-read-period -3` never returns. The value casts to a `u32` near the top of the range,
+`period` doubles past 2^31 to zero, and `0 < asked` stays true for ever — the game hangs before it
+draws a frame, on a flag a person could plausibly mistype. Clamped to [0, 2^30] before the doubling.
+It was found only because the corpus fed every value-taking flag a negative number, which is worth
+remembering the next time a control arm feels like too much trouble.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D668 | **The argument chain is three functions** | fault | 126 `else if` is past MSVC's 128-block limit; the Windows build had never compiled |
+| D668 | **A build that does not build is not a background condition** | honesty | It was named "pre-existing" and left, so the tests did not run for a day while two large changes landed |
+| D668 | **Both arrangements were run against 326 invocations and compared field by field** | decision | A 350-line rearrangement of a parser is the shape of change that looks right and is not |
+| D668 | **The split points are arbitrary and the comment says so** | decision | There is no seam in the chain; a false taxonomy in a comment is worse than none |
+| D668 | **`--light-read-period` clamps before it doubles** | fault | A negative value hung the game before the first frame; found by feeding every flag a negative |
+| D668 | **`ci.yml` cancels superseded runs, per ref** | decision | Safe here in the way it was not in `pages.yml` (D667): nothing is scheduled, so nothing displaces a queued run |
