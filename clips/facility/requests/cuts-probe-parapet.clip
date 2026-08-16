@@ -1,0 +1,4 @@
+# cuts-probe.clip with the box cut to the parapet alone, for a metre 32 run. NOT part of the building.
+include "cuts-probe.clip"
+bounds -16.5 11.80 -8.0   16.5 14.40 8.0
+solid part_parapet

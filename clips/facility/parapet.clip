@@ -59,6 +59,40 @@
 # worn, wear the plinth course and leave the balusters alone: `weather cracks 0.008 on=parapet_ring`.
 # ------------------------------------------------------------------------------------------------
 #
+# WHAT THIS PART CUTS, measured by building it with each subtraction and again without it, at the
+# contract's metre 32:
+#
+#   parapet_core     313.21 m3   the inside of the ring. It is the difference between a balustrade
+#                                and a solid parapet wall, and it is by far the largest cut here.
+#   parapet_gap        4.46 m3   the length of ring in front of the pediment, between the two
+#                                terminal pedestals. It ends on their west faces, so no free edge.
+#   the sunk panels    0.571 m3  84 of them, 0.36 x 0.45 x 0.045, on 30 dies and 6 pedestals.
+#   the joint quirks   0.096 m3  24 vertical joints, 0.045 deep from each face — see below. The
+#                                part goes from 27.264 m3 to 27.168 and stays at 233 components,
+#                                which is the whole test of a quirk: it has to show and it must not
+#                                sever.
+#   the row boxes      0.0016 m3 the three `intersection`s that cut the baluster rows to length
+#                                remove ONE baluster and 52 voxels of it, because the one they drop
+#                                is already standing inside a corner pedestal. That is not a cut
+#                                that missed; it is a cut whose work was already done, and it is
+#                                worth keeping because it is what makes each row symmetric about
+#                                the centre line without a second set of numbers.
+#
+# It removes nothing from anybody else and the manifest names no `void_parapet`.
+#
+# WHAT THE THIN MATTER COSTS, since this part's whole claim is that it is a measurement: at metre
+# 32 the rank comes back as 233 components — one balustrade and 232 specks totalling 256 voxels,
+# all of them on baluster necks at about y = 12.62. A 0.063 neck is two voxels and the sampler
+# drops one of them here and there. That is the answer this part exists to produce and it is not a
+# fault in the geometry: `ionic_baluster` is one exact `revolve` and its distance field is exact at
+# the waist. Do not widen it to make the number go away.
+#
+# AND DO NOT READ `--part part_parapet` AGAINST clips/facility.clip AS A MEASUREMENT OF THIS FILE.
+# The manifest's closing `origin 0 -3.50 0` moves the solid, the paint rules and the bounds but not
+# the name `part_parapet`, so that command samples an unshifted balustrade with every rule 3.50 m
+# below it: one material, limestone, and the urns cut off by the top of the box.
+# clips/facility/requests/cuts-probe-parapet.clip is the same fragment in a box that has not moved.
+#
 # THE MODULE. D = 0.90, M = 0.45. Everything below is a multiple or a simple fraction of one of
 # them, with three exceptions, all of them named where they occur and all of them forced by the
 # contract rather than chosen:
@@ -178,7 +212,86 @@ let parapet_ring_raw = difference {
 # Every arris rounded 0.012, and shrunk by the same amount first so that the finished faces land
 # exactly on 0.18 and 13.00 rather than 12 mm outside them. The thinnest member of this solid is
 # the rail band at 0.15 tall and 0.36 thick, so the inward offset has a great deal of room.
-let parapet_ring = round { offset { parapet_ring_raw } by=-0.012 } by=0.012
+let parapet_ring_smooth = round { offset { parapet_ring_raw } by=-0.012 } by=0.012
+
+# ================================================================================================
+# THE JOINTS — where one stone of the plinth ends and the next begins
+# ================================================================================================
+#
+# The plinth die is 0.2875 tall, 0.36 thick and SEVENTY-FOUR METRES LONG, and until this it was one
+# stone. So was the rail. That is the one thing left on this part that says "extruded": every
+# baluster above it is a separate turning and the band under them ran unbroken from one corner of
+# the building to the other, which no quarry has ever supplied and no mason has ever set.
+#
+# A joint goes at the middle of every bay — x = 2.70 n on the fronts, z = 2.70 n on the flanks —
+# and that position is not a choice, it is the only one available. The dies stand on 1.35 + 2.70 n
+# and the balusters on 0.135 + 0.27 k; 2.70 n is half a bay from a die and falls in the 0.09 m of
+# daylight BETWEEN two balusters, dead centre, with 0.0225 of air to each. A joint anywhere else
+# either splits a die or comes out from behind a baluster.
+#
+# IT IS A QUIRK AND NOT A CUT, and the difference is the whole of whether this part is still one
+# piece. 0.045 (M/10) wide and 0.045 deep from each face, which leaves 0.27 of the ring's 0.36
+# standing: 24 joints, none of them severing anything, `components` unchanged. Sawn right through,
+# the plinth band becomes twenty-five loose lengths held together only by the balusters bedded
+# 0.05 into it — which is how a balustrade really does stand up, and is not something to ask a
+# connectivity check to believe.
+#
+# It runs the full height, through the plinth, the cap, the rail cyma and the capping, because a
+# vertical joint in masonry does not stop at a moulding — it is the moulding that is cut by it. In
+# the 0.60 m of open air between the two bands the cutter passes through nothing, which costs
+# nothing.
+#
+# 0.045 AND NOT 0.030, which is what a mason would leave. pilasters.clip measured what the sampler
+# does with a shallow cut at the contract's metre 32: a 0.045 flute comes back one voxel deep, and
+# 0.030 is 0.96 of a voxel and comes back as nothing at all. The joint is as fine as it can be and
+# still exist.
+let parapet_joint_n = union {
+    box -0.0225 11.80  7.635   0.0225 13.05  7.700
+    box -0.0225 11.80  7.300   0.0225 13.05  7.365
+}
+let parapet_joint_s = union {
+    box -0.0225 11.80 -7.700   0.0225 13.05 -7.635
+    box -0.0225 11.80 -7.365   0.0225 13.05 -7.300
+}
+let parapet_joint_e = union {
+    box 16.135 11.80 -0.0225   16.200 13.05 0.0225
+    box 15.800 11.80 -0.0225   15.865 13.05 0.0225
+}
+
+# The north front carries six on the +x half and the fold gives the other five; the south returns
+# take two each, since 8.10 is the terminal pedestal and everything inboard of it is the pediment's
+# sky; the flanks take five, symmetric about z = 0 by construction.
+let parapet_joints_north = union {
+    parapet_joint_n
+    translate { parapet_joint_n }  2.70 0 0
+    translate { parapet_joint_n }  5.40 0 0
+    translate { parapet_joint_n }  8.10 0 0
+    translate { parapet_joint_n } 10.80 0 0
+    translate { parapet_joint_n } 13.50 0 0
+}
+let parapet_joints_south = union {
+    translate { parapet_joint_s } 10.80 0 0
+    translate { parapet_joint_s } 13.50 0 0
+}
+let parapet_joints_east = union {
+    parapet_joint_e
+    translate { parapet_joint_e } 0 0  2.70
+    translate { parapet_joint_e } 0 0  5.40
+    translate { parapet_joint_e } 0 0 -2.70
+    translate { parapet_joint_e } 0 0 -5.40
+}
+
+# Wrapped in a box for the reason drum.clip gives at length: `build_bounds` hands `Op::Mirror`
+# nothing it can measure through a fold of a union this shape, and an unbounded knife makes the
+# sampler settle the whole clip. The box is loose and nothing touches its faces.
+let parapet_joints = intersection {
+    mirror {
+        union { parapet_joints_north parapet_joints_south parapet_joints_east }
+    } axis=x
+    box -16.30 11.70 -7.80   16.30 13.10 7.80
+}
+
+let parapet_ring = difference { parapet_ring_smooth parapet_joints }
 
 # ================================================================================================
 # THE BALUSTERS — the order's own, at a pitch of 0.27 (0.6 M)

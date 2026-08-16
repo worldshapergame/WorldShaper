@@ -19,6 +19,20 @@
 #   the fillet between flutes 0.0300  (M/15)    ONE VOXEL, the same number the columns use
 #   the necking astragal      0.0225 across and 0.0225 tall — 0.7 voxel, both ways
 #   the plinth band           0.045 proud and 0.095 tall, unbroken for 94 m round the block
+#   the shaft's bed joints    0.045 tall, cut back to the flute floor — 120 of them
+#
+# AND HERE IS WHAT THE SAMPLER ACTUALLY DOES WITH 0.045 AT METRE 32, because it is the number this
+# whole file is built on and it had never been measured. One pilaster, built with its flutes and
+# again without them, differenced:
+#
+#   metre 64   the flutes remove 0.0402 m3 against a nominal 0.0436 — 92%, the cut is exact
+#   metre 32   the flutes remove 0.0034 m3 — EIGHT PER CENT
+#
+# The geometry is right and the resolution eats it: a 0.045 hollow is 1.44 voxels deep, the sampler
+# keeps one, and the flute comes back a third of its depth and half its width. That is not a fault
+# to fix here — deepening the flute is exactly what the note below forbids and would be wrong at
+# any resolution — but it IS the reason nothing new in this file is thinner than 0.045, and it is
+# the number to quote at anyone who proposes a 0.030 detail on a facade.
 #
 # That is the test, and it is a different test from the columns'. A column is thin matter standing
 # in the open, where the sampler can find its surface from every side and the silhouette does half
@@ -77,6 +91,27 @@
 # 0.0225 m astragal; a coat heavy enough to see would eat it, and the manifest's 12 mm of grain is
 # already half the relief of the volute band. If this part ever needs wearing, wear the plinths and
 # leave the order alone: `weather cracks 0.01 on=pilasters_plinths`.
+#
+# WHAT THIS PART CUTS. Three things, all inside its own shapes, measured by building it twice:
+#
+#   the flutes      0.107 m3 at metre 32 over all thirty, 1.31 m3 nominal — see the note above
+#   the bed joints  0.071 m3 at metre 32, 120 of them
+#   the plinth band 44.18 m3, which is the inner box that turns a solid 32 x 15 m slab into a ring
+#                   0.135 thick. Without it this part is a block, not a band.
+#
+# 13.507 m3 in 13 components at metre 32, and it was 13 before the joints were cut: the count is
+# twelve nine-voxel specks on the volutes' outer turns, where a 0.045 band lies on a 0.0225 plate,
+# and nothing this file has done since has added to it.
+#
+# It removes nothing from anybody else, exposes no void, and the manifest names no `void_pilasters`.
+#
+# `--part part_pilasters` AGAINST clips/facility.clip IS NOT A CHECK OF THIS FILE. The manifest
+# ends with `origin 0 -3.50 0` and `apply_origin` moves the solid, the paint rules and the bounds
+# but not the names a fragment bound, so that command samples an unshifted order underneath rules
+# that have dropped 3.50 m: it reports ELEVEN materials, of which marble and granite are mine and
+# the other nine — gravel, stucco, marble_hot — are other fragments' coats landing on my stone from
+# 3.50 m above. clips/facility/requests/cuts-probe-pilasters.clip is the same thing in a box that
+# has not moved, and reports the three this file paints.
 #
 # THE NUMBERS THAT ARE NOT DIMENSIONS. Everything below is a multiple or a simple fraction of
 # M = 0.45 except these, and every one of them is a construction or an overlap rather than a size:
@@ -144,7 +179,39 @@ let pilasters_min_flcut_b = translate { pilasters_min_flcut } 0.09 0 0
 let pilasters_min_flutes  = mirror {
     union { pilasters_min_flmid pilasters_min_flcut pilasters_min_flcut_b }
 } axis=x
-let pilasters_min_shaft = difference { pilasters_min_shsolid pilasters_min_flutes }
+
+# FOUR BED JOINTS, and a fluted shaft 3.44 m tall with none was the last piece of this order that
+# said "rendered" rather than "cut". Nobody quarries a stone 3.44 m long to stand it on end 0.45 m
+# wide; a pilaster shaft is drums, the same as a column's, and the joints between them run straight
+# across the flutes because that is the order the mason works in — the drum is bedded first and
+# fluted afterwards, through the joint.
+#
+# At 0.675 (1.5 M) from the head of the flutes: 0.9675, 1.6425, 2.3175, 2.9925, which leaves five
+# courses and lands the last joint 0.675 under the necking. 0.045 (M/10) tall, and cut back to
+# z = 0.09 — THE FLUTE FLOOR, not a number of its own, so the joint is exactly as deep as the
+# flutes are and disappears where it crosses one. That is what a bed joint looks like on a real
+# fluted shaft and it costs this file no new dimension.
+#
+# ONE VOXEL DEEP AT THE CONTRACT'S METRE, and it is the same one voxel the flutes get: 0.045 of
+# relief samples as 0.03125 of relief, measured on this very shaft — the flute cut removes 0.0402
+# of a nominal 0.0436 m3 at metre 64 and only 0.0034 at metre 32. So 0.045 is the floor, not a
+# preference. A 0.030 joint, which is what a mason would actually leave, is 0.96 of a voxel and
+# comes back as nothing whatever.
+#
+# THE CUTTER IS 0.60 WIDE AGAINST A 0.45 SHAFT and that is not sloppiness. A knife whose end lands
+# exactly on the arris it is cutting is two coincident faces, and roof.clip has four rods of lead
+# floating over its gutter to show what that costs. Nothing else of this part lives at these
+# heights — the base tops out at 0.225 and the necking starts at 3.6675 — so the overhang cuts air.
+let pilasters_min_bed = box -0.30 -0.0225 0.09   0.30 0.0225 0.20 round=0.010
+let pilasters_min_beds = union {
+    translate { pilasters_min_bed } 0 0.9675 0
+    translate { pilasters_min_bed } 0 1.6425 0
+    translate { pilasters_min_bed } 0 2.3175 0
+    translate { pilasters_min_bed } 0 2.9925 0
+}
+let pilasters_min_shaft = difference {
+    pilasters_min_shsolid pilasters_min_flutes pilasters_min_beds
+}
 
 # --- the capital ------------------------------------------------------------------------------
 #
