@@ -97,6 +97,18 @@ struct Options {
     // facility, and it is the number that keeps a full bake inside a CI job.
     i64 budget = 6'000'000;
     i32 max_metre = 32;
+    // The same cap for a clip baked as one PART of a manifest, which is a different economy.
+    //
+    // A fragment is sampled with the whole building's paint stack and intersected with the whole
+    // building's solid, so it costs like a small facility rather than like its own box, and there
+    // are twenty-eight of them. Measured on the overhauled facility, sampling costs about six
+    // times as much for each doubling of resolution: the building alone is 21.7 s at 8 to the
+    // metre, 131 s at 16 and about thirteen minutes at 32. Everything at 32 is two and a half
+    // hours of a runner; the building at 32 and its parts at 16 is about thirty-five minutes.
+    //
+    // Which is the right split anyway: the whole clip is the thing you look at, and a fragment is
+    // there to answer "is my morning's work the right shape".
+    i32 part_metre = 0;   // 0 means "whatever --max-metre says"
     std::string only;   // bake just the clip whose id matches, for working on one
     // Where these clips came from. The site follows whichever branch is being worked on, so the
     // page has to be able to say which one it is showing -- otherwise "it is not showing the
@@ -770,7 +782,10 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     // Halve until it fits. Halving rather than stepping to any integer keeps the sampled lattice
     // a subset of the authored one, so a coarse bake lands its voxels where the fine one would
     // have and a wall does not move by half a voxel between two resolutions.
-    i32 metre = std::min(options.max_metre, settings.voxels_per_metre);
+    const i32 cap = (is_part && options.part_metre > 0)
+                        ? std::min(options.max_metre, options.part_metre)
+                        : options.max_metre;
+    i32 metre = std::min(cap, settings.voxels_per_metre);
     while (metre > 1) {
         const f64 cells = span[0] * span[1] * span[2] * static_cast<f64>(metre) *
                           static_cast<f64>(metre) * static_cast<f64>(metre);
@@ -1011,6 +1026,8 @@ int main(int argc, char** argv) {
             options.budget = std::stoll(next("--budget"));
         } else if (arg == "--max-metre") {
             options.max_metre = std::stoi(next("--max-metre"));
+        } else if (arg == "--part-metre") {
+            options.part_metre = std::stoi(next("--part-metre"));
         } else if (arg == "--only") {
             options.only = next("--only");
         } else if (arg == "--branch") {
@@ -1026,6 +1043,7 @@ int main(int argc, char** argv) {
                 "  --out DIR        where the .wsc files go (default web/data)\n"
                 "  --budget N       cells a sampled box may hold before the resolution halves\n"
                 "  --max-metre N    never sample finer than this\n"
+                "  --part-metre N   and never finer than this for one part of a manifest\n"
                 "  --only ID        bake one clip, by its id (facility, facility-dome, ...)\n"
                 "  --branch NAME    what the index should say these clips came from\n"
                 "  --commit SHA     and at which commit\n");

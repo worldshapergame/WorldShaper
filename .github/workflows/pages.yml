@@ -148,20 +148,28 @@ jobs:
           cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
           cmake --build build-web --target ws_bake_web
 
-      # THE RESOLUTION THE CLIP WAS AUTHORED AT, which for everything here is 32 voxels to the
-      # metre -- 3.125 cm, the game's own. It was 16 to keep the job short, and the answer to that
-      # was "it doesn't show the clips at full detail level", which is fair: half resolution is
-      # where a 4.5 cm bead stops being a bead.
+      # A WHOLE CLIP AT THE RESOLUTION IT WAS AUTHORED AT -- 32 voxels to the metre, 3.125 cm, the
+      # game's own -- and its PARTS at half that.
       #
-      # Measured on the facility, the worst case at 34 x 20.9 x 25 m: 582 million cells, 291 s to
-      # sample, 1,127,258 quads, 18.9 MB before compression, and a peak of 5.0 GB against the
-      # runner's 16. The budget sits above that cell count so nothing is halved; a clip large
-      # enough to exceed it still steps down rather than failing.
+      # It was 16 for everything, and the answer to that was "it doesn't show the clips at full
+      # detail level", which is fair: half resolution is where a 4.5 cm bead stops being a bead.
+      # Then 32 for everything, which does not fit in a runner. The numbers, measured on the
+      # overhauled facility, are that sampling costs about six times as much per doubling:
+      #
+      #     8 / metre      21.7 s     196,076 quads     4.7 MB
+      #    16 / metre     131.2 s     562,008 quads    10.3 MB
+      #    32 / metre     ~13 min   ~1,700,000 quads   ~20 MB
+      #
+      # Sixty-three clips at 32 is about two and a half hours, because a fragment is sampled with
+      # the whole building's paint and intersected with the whole building's solid and so costs
+      # like a small facility. The building at 32 with its parts at 16 is about thirty-five
+      # minutes, and is the right split anyway: the whole clip is the thing you look at, a
+      # fragment answers "is my morning's work the right shape".
       - name: Bake every clip
         if: steps.pick.outputs.skip != 'true'
         run: |
           ./build-web/bin/ws_bake_web --clips clips --out web/data \
-                                      --budget 700000000 --max-metre 32 \
+                                      --budget 700000000 --max-metre 32 --part-metre 16 \
                                       --branch "${{ steps.pick.outputs.ref }}" \
                                       --commit "${{ steps.pick.outputs.sha }}"
           du -sh web/data
