@@ -1,7 +1,7 @@
 # crypt — the undercroft: a hypostyle hall crypt hollowed out of the solid podium.
 #
 # Forty short granite columns on a 2.70 bay carrying a FLAT coffered ceiling 2.125 m over a
-# travertine floor, inside the podium mass, from y = -0.45 to y = 1.6875. Two stairs down from the
+# travertine floor, inside the podium mass, from y = -0.4625 to y = 1.6875. Two stairs down from the
 # passage under the interior grand stair; three light-wells reaching south under the portico and
 # grated with iron bars; eight niches with tapers; four sarcophagi; a water channel the length of
 # the room from a spouted basin to a sump under the middle grating. It is lit by 3.6 square metres
@@ -12,7 +12,7 @@
 #
 # 1. THE DEEPEST HOLLOW IN THE BUILDING AND THE SMALLEST OPENINGS IN IT, BY AN ORDER OF MAGNITUDE.
 #
-#    266.8 m2 of floor, 2.125 m of head height, and the entire daylight supply is three openings of
+#    266.8 m2 of floor, 2.15 m of head height, and the entire daylight supply is three openings of
 #    1.20 x 1.00 m — 3.60 m2 — each of them HALF SHUT by its own bars, each of them at the far end
 #    of a 3.30 m corridor, and each of them opening not into the sky but into the shade under the
 #    portico, which portico.clip's own header calls the deepest exterior shadow in the building.
@@ -69,26 +69,49 @@
 #
 # THE HEAD HEIGHT IS THE WHOLE CONSTRAINT AND IT HAS NO SLACK IN IT.
 #
-#   floor        -0.45      the podium's own bottom is -0.50, so the floor slab is 0.05 thick
+#   floor        -0.4625   the podium's own bottom is -0.50, so the floor slab is M/12 thick
 #   soffit        1.6875    1.80 less M/4. The podium top is 1.80 and the floors above sit on it
-#                 2.1375    geometric under the coffer bands, 2.175 in the pans, 2.125 measured
+#                 2.15      geometric under the coffer bands, 2.1875 in the pans, 2.125 measured
 #
-# THE SOFFIT IS AT 1.6875 AND NOT AT 1.65, AND THE 0.0375 IS THE SAMPLER'S AND NOT THE ROOM'S.
+# BOTH PLANES ARE OFF THE MODULE BY A VOXEL, AND THE VOXEL IS THE SAMPLER'S AND NOT THE ROOM'S.
+#
 # The room drawn on the module is floor -0.45, soffit 1.65, head height 2.10 exactly — the brief's
-# minimum, on the nose. It measured 2.0625. A voxel is solid if any of it is stone, and neither
-# -0.45 nor 1.65 lands on a voxel boundary at metre 16 or metre 32, so the grid takes most of a
-# voxel off each end and a room built to exactly 2.10 is 37 mm short in the thing you walk about
-# in. 2.10 cannot be an exact number of voxels either: 2.10 / 0.03125 is 67.2.
+# minimum, on the nose. It measured 2.000 at metre 16 and 2.094 at metre 32, and then 2.062 again
+# at metre 16 after the soffit was raised. Two sampler rules, neither written down anywhere, cost it a voxel at each end:
 #
-# So the soffit went up to 1.6875, which IS a boundary at both metres (54 voxels at 32, 27 at 16)
-# and is also 1.80 - M/4, a module number the ceiling slab is glad to be: M/4 thick instead of
-# M/3. The room is now 2.1375 m of stone-to-stone air under the coffer bands and 2.175 in the pans,
-# and `--gap` reads 2.062 to 2.156 in it. The spread is the grid: it is anchored on the clip's own
-# `bounds`, so the last thirty millimetres move with the box the room is sampled in, and the only
-# defence against that is the 37 mm of margin over the brief's minimum. On a calibration clip of
-# these same two planes — floor top -0.45, soffit 1.6875 — `--gap` reads 2.125 m at metre 32.
-# Do not put it back to 1.65 because 2.10 looks like the right number to write down.
+#   A VOXEL IS SOLID IF ANY OF IT IS STONE. So a face that lands part-way through a voxel gives
+#   the whole of that voxel to the stone. Neither -0.45 nor 1.65 is on a voxel boundary at metre
+#   16 or metre 32, so the room lost most of a voxel top and bottom. And 2.10 cannot be a whole
+#   number of voxels anyway: 2.10 / 0.03125 is 67.2.
 #
+#   VOXELS ARE HALF-OPEN, SO THE TWO ENDS ARE NOT SYMMETRIC. A solid's BOTTOM face sitting exactly
+#   on a boundary costs nothing — the voxel below it stays air. A solid's TOP face on a boundary
+#   costs the voxel ABOVE it. So a soffit wants to be ON a boundary and a floor wants to be JUST
+#   UNDER one, and a floor drawn exactly on a boundary is the worst of the three.
+#
+# Hence: soffit 1.6875, which is 1.80 - M/4 and is a boundary at both metres (54 voxels at 32, 27
+# at 16), and floor -0.4625, which is -0.50 + M/12 — podium.clip's own paving-joint width — and
+# sits inside the voxel under a boundary rather than on it. Measured on a calibration clip of the
+# two bare planes, so the number belongs to the planes and not to some other member, and then over
+# a grid of fifty-five points on the real floor:
+#
+#   floor top   soffit    metre 16   metre 32
+#   -0.45       1.65      2.000      2.094     the room as first drawn: fails rule 7 at both
+#   -0.45       1.6875    2.062      2.125     right at 32 and still a voxel short at 16
+#   -0.45       1.725     2.125      2.156     works, and leaves no stone over the coffers
+#   -0.4625     1.6875    2.125      2.156     WHAT IS BUILT
+#   -0.46875    1.6875    2.125      2.125     works, and the floor slab is one voxel thick
+#
+# THE SOFFIT WAS NOT RAISED FURTHER, ON PURPOSE. The coffers have only 0.0375 of stone over them
+# before they are inside rotunda.clip's floor slab, so there is nothing above to give; and the
+# ceiling slab at M/4 is already thin. The 0.0125 came off the bottom, where there was 0.0125 to
+# give and where taking it makes the floor slab a module fraction rather than a voxel count.
+#
+# The room is 2.15 m of stone-to-stone air under the coffer bands and 2.1875 in the pans, and it
+# measures 2.125 at metre 16 and 2.156 at metre 32 everywhere on the floor. Do not put either
+# plane back because 2.10 looks like the right number to write down: 2.10 is what this room
+# MEASURES AS when it is drawn 50 mm bigger than that, and a room drawn to 2.10 measures 2.06.
+
 # Three consequences, and each one is why something below is shaped the way it is:
 #
 #   THE CEILING IS FLAT AND THE COLUMNS ARE CLOSE. A barrel or a groin vault of any radius that
@@ -105,23 +128,25 @@
 #   coffers it covers — never seen, and never walked through either. DO NOT DEEPEN THEM without
 #   re-reading rotunda.clip line 134 first.
 #
-#   THE STAIR'S HALF RISER IS AT THE TOP AND NOT AT THE BOTTOM. 1.80 down to -0.45 is 2.25 m,
-#   which is 12.5 risers of the building's 0.18, so one riser has to be 0.09 and there is no
+#   THE STAIR'S ODD RISER IS AT THE TOP AND NOT AT THE BOTTOM. 1.80 down to -0.4625 is 2.2625 m,
+#   which is 12.57 risers of the building's 0.18, so one riser has to be 0.1025 and there is no
 #   arrangement in which it does not. Raising the floor to -0.36 and taking twelve clean risers —
 #   the other option — gives 2.01 m of head height and fails rule 7 by 90 mm, so the floor stays at
 #   -0.45. Putting the 0.09 at the FOOT needs a landing 0.09 above the floor, and a landing 0.09
 #   above the floor has 2.01 m over it and fails in the same way unless the ceiling is opened over
 #   it too, which means a stair well 0.90 m longer for nothing. So: twelve risers of 0.18 from the
-#   floor at -0.45 up to 1.71, and a last step of 0.09 onto the passage floor at 1.80, taken at the
-#   threshold where you are already holding the door jamb. Measured on the built stair, not assumed.
+#   floor at -0.4625 up to 1.6975, and a last step of 0.1025 onto the passage floor at 1.80, taken
+#   at the threshold where you are already holding the door jamb. Putting it at the foot instead
+#   would give a landing 0.1025 above the floor with 2.0475 m over it, which fails rule 7 the same
+#   way the -0.36 floor did. Measured on the built stair, not assumed.
 #
 # THE MODULE. D = 0.90, M = 0.45, bay = 3 D = 2.70. Every number is one of these or a simple
 # fraction, and the ones that are not are the building's own constants named where they occur —
 # the riser 0.18, the run 0.32, the 0.05 overlap and the 0.02 paint test.
 #
-#   +-11.70  = 26 M       room east/west face   -0.50  podium underside, floor slab bottom
-#   +-11.85  = 26 M + M/3 block back             -0.45  FLOOR
-#   +- 5.70  = 13 M - M/3 room north/south face  -0.225 column plinth top     -0.45 + M/2
+#   +-11.70  = 26 M       room east/west face   -0.50   podium underside, floor slab bottom
+#   +-11.85  = 26 M + M/3 block back             -0.4625 FLOOR                  -0.50 + M/12
+#   +- 5.70  = 13 M - M/3 room north/south face  -0.225 column plinth top     -0.50 + M/2 - M/36
 #   +- 5.85  = 13 M       block back              1.35  cushion capital foot  -0.225 + 3.5 M
 #
 #   THE WALL IS M/3 THICK AND THE MODULE IS TAKEN ON A DIFFERENT FACE IN EACH DIRECTION, which is
@@ -177,30 +202,41 @@
 # them is subtracted back out of the void. Read the comment at the bottom of clips/facility.clip:
 # the last time this was got wrong the building lost every sconce, bench and statue it had.
 
-# MEASURED, `clips/facility/requests/crypt-probe.clip` at the contract's metre 32, in a box cut to
-# the room (24.59 x 3.09 x 15.78 m, 39.3 million cells):
+# MEASURED with the fixed clipcheck, `clips/facility/requests/crypt-probe.clip` in a box cut to
+# the room (24.59 x 3.09 x 15.78 m):
 #
-#   3,752,191 voxels   114.51 m3   1691.38 m2 of surface   0.46 faces to a voxel of volume
-#   ONE COMPONENT, no floating voxels, and the same at metre 8 and metre 16
-#   14 distinct material records, of which 660 voxels — 0.02% — are still the manifest's base coat
+#   metre 32   3,528,861 voxels   107.69 m3   1703.44 m2 of surface   14 material records
+#   metre 32, metre 16 and metre 8 all report ONE COMPONENT and NO FLOATING VOXELS
+#   `crypt-place.clip` — the podium with void_crypt taken out of it — ONE COMPONENT, none floating
+#   `crypt-void-probe.clip` at metre 8 — 598.33 m3 in ONE body of air
 #
-# `--part crypt_gratings` at metre 32: 8,364 voxels in THREE components, one per grating, and a
-# plan slice through them at y = 1.75 shows seven separate bars with clear air between each pair.
-# `--part crypt_shafts_all`: FORTY components, which is the column count checked by the sampler
-# rather than by me. `--part crypt_tapers_all`: eight components, wax and taper both present at
-# 244 voxels between them — a taper is 31 voxels at full detail and it is meant to be.
-# `void_crypt` at metre 8: 597.37 m3 in ONE component, so the room, the three corridors, the three
-# shafts, both stair wells, the eight niches and the twenty-one coffers are all one body of air.
+# HEAD HEIGHT, swept over 63 points at metre 16 AND metre 32: every bay centre, every mid-point
+# between two columns in both directions, the aisle by each wall, and eight points down the three
+# light-well corridors. THE WORST READING ON ANY FLOOR IS 2.125 m at metre 16 and 2.156 at metre 32.
+# The same sweep on the geometry before this fix read 2.062 at metre 16 and 2.062 at metre 32.
+#
+# Six of the 63 read under 2.10, and every one of them is a thing standing on the floor rather than
+# floor: 1.00 m inside the basin ring (you are standing in a basin, under the spout), 1.94 in the
+# sump, 0.97 on a sarcophagus lid, 0.47 on a stair tread, 1.75 on a respond's plinth, and 2.06 over
+# the bottom tread where the stair well is open to the passage above and the probe box's own lid is
+# what closed the run. There is no point of FLOOR in this room under 2.125.
+#
+# `--part crypt_gratings` at metre 32: three components, one per grating, and a plan slice at
+# y = 1.75 shows seven separate bars with clear air between each pair. `--part crypt_shafts_all`:
+# FORTY components, the column count checked by the sampler rather than by me. `--part
+# crypt_tapers_all`: eight components, wax and taper both present.
 #
 # Things I got wrong and had to be told by a number, each written where it happened: the room was
-# built to exactly 2.10 m and measured 2.0625; the water spout and its thread were drawn at the
-# size a jet looks and came back as a floating string of voxels; the stair stopped dead on the wall
-# face and left a loose voxel in each corner; and the floor, lining and ceiling started as three
-# unioned slabs, which is how a 0.05 m floor becomes a sheet of loose voxels at a coarse metre.
+# built to exactly 2.10 m and measured 2.00; raising the soffit alone fixed metre 32 and left metre
+# 16 at 2.06; the rill's water was drawn the depth water looks and measured 2.06 over the whole
+# centre aisle; the spout and its thread came back as a floating string of voxels; the stair stopped
+# dead on the wall face and left a loose voxel in each corner; the floor, lining and ceiling started
+# as three unioned slabs; and dropping the floor 0.0125 for the head height thinned the light-well
+# corridors' end walls until the bottom course of all three came away as 39 loose voxels.
 #
-# Four things I needed and could not say — including a reproducible wrong answer from the sampler,
-# where SHRINKING the block this room is cut out of makes the part BIGGER and pushes it 0.17 m
-# outside its own block — are in clips/facility/requests/crypt.md.
+# What I could not make work — a reproducible wrong answer from the sampler where SHRINKING the
+# block this room is cut out of makes the part BIGGER, and 375 voxels of stranded air in the void
+# at metre 32 that are pre-existing and that I could not reach — is in clips/facility/requests/crypt.md.
 
 include "_contract.clip"
 
@@ -210,7 +246,7 @@ include "_contract.clip"
 #
 # Named first because in this part the air is the room and everything else is a lining round it.
 
-let crypt_room = box -11.70 -0.45 -5.70   11.70 1.6875 5.70
+let crypt_room = box -11.70 -0.4625 -5.70   11.70 1.6875 5.70
 
 # --- the light-well corridors and their shafts ---------------------------------------------------
 #
@@ -221,7 +257,7 @@ let crypt_room = box -11.70 -0.45 -5.70   11.70 1.6875 5.70
 # The shaft over its far end goes to 1.85 — 0.05 above the podium top — so the opening is cut clean
 # through the paving and past the rounding on its arris, and the grating sits in a 0.15 m reveal.
 
-let crypt_slot_air_0  = box -0.60 -0.45 -9.00    0.60 1.6875 -5.60
+let crypt_slot_air_0  = box -0.60 -0.4625 -9.00    0.60 1.6875 -5.60
 let crypt_slot_shaft_0 = box -0.60 1.60 -9.00    0.60 1.85 -8.00
 let crypt_slot_hollow_0 = union { crypt_slot_air_0 crypt_slot_shaft_0 }
 
@@ -280,9 +316,10 @@ let crypt_air = union {
 #
 # ONE BLOCK WITH THE AIR TAKEN OUT OF IT, and not a floor, four walls and a ceiling unioned. A
 # vaulted or a lined room is one piece of stone with a hole in it — halls.clip's own construction —
-# and the reason to write it that way here is the floor: it is 0.05 m thick, because the podium's
+# and the reason to write it that way here is the floor: it is 0.0375 m thick, because the podium's
 # underside is at -0.50 and the site's ground is at -0.875, so anything cut below -0.50 opens this
-# room to the earth. 0.05 is a sixth of a voxel at metre 8 and a voxel and a half at metre 32, and
+# room to the earth. 0.0375 is a third of a voxel at metre 8 and a voxel and a fifth at metre 32,
+# and
 # a slab that thin written as its own box is a sheet of loose voxels at any coarse metre. Written
 # as the bottom of a difference it is part of the same solid as the walls standing on it.
 #
@@ -306,17 +343,24 @@ let crypt_shell = difference {
 # One block per corridor with its own air taken out of it: that gives floor, both walls, the end
 # wall and the ceiling in one shape, with the shaft opening already cut in the ceiling. It runs
 # 0.15 past the room's lining at -5.85 to -5.70 so the two are one solid.
-let crypt_slot_block_0 = box -0.75 -0.50 -9.05   0.75 1.80 -5.70
+# THE END WALL IS 0.15 (M/3) AND IT USED TO BE 0.05. When the floor was dropped to -0.4625 for the
+# head height the corridor's floor slab went from 0.05 to 0.0375 thick, and a 0.05 end wall standing
+# on a 0.0375 floor is two sub-voxel members meeting at metre 16: the bottom course of all three
+# corridor ends came away as 39 loose voxels and the part went to eight components. Taking the block
+# out to -9.15 gives the end wall the same M/3 the room's walls have. It cuts nothing extra — the
+# air still stops at -9.00, so `crypt_air` and the void are untouched; it is only more of my own
+# stone standing where the podium's stone already is.
+let crypt_slot_block_0 = box -0.75 -0.50 -9.15   0.75 1.80 -5.70
 let crypt_slot_shell_0 = difference { crypt_slot_block_0 crypt_slot_hollow_0 }
 let crypt_slot_shells = mirror {
     union { crypt_slot_shell_0  translate { crypt_slot_shell_0 } 4.05 0 0 }
 } axis=x
 
 # ================================================================================================
-# THE COLUMN — 2.1375 m from the floor to the soffit, and every one of the forty is this shape
+# THE COLUMN — 2.15 m from the floor to the soffit, and every one of the forty is this shape
 # ================================================================================================
 #
-#   -0.50 .. -0.225   plinth, 0.675 square (1.5 M), the bottom 0.05 in the floor slab   M/2
+#   -0.50 .. -0.225   plinth, 0.675 square (1.5 M), the bottom M/12 in the floor slab
 #   -0.225 ..  1.35   shaft, 0.45 diameter (M), no taper        3.5 M
 #    1.35  ..  1.545  cushion, from round below to square above
 #    1.545 ..  1.6875 abacus, 0.63 square (1.4 M), running on to 1.7375 inside the ceiling
@@ -386,18 +430,18 @@ let crypt_shafts_all = union { crypt_columns crypt_responds }
 # out by r and the arris is turned through the corner written. stair.clip learned this on the one
 # clearance in the building that had 15 mm to give. Here it is the tread tops that matter — a tread
 # written to 1.71 and rounded to 1.722 makes the last step 0.078 instead of 0.09.
-let crypt_st_01 = box  7.872 -0.488 4.587   11.738 -0.282 5.738 round=0.012
-let crypt_st_02 = box  8.192 -0.488 4.587   11.738 -0.102 5.738 round=0.012
-let crypt_st_03 = box  8.512 -0.488 4.587   11.738  0.078 5.738 round=0.012
-let crypt_st_04 = box  8.832 -0.488 4.587   11.738  0.258 5.738 round=0.012
-let crypt_st_05 = box  9.152 -0.488 4.587   11.738  0.438 5.738 round=0.012
-let crypt_st_06 = box  9.472 -0.488 4.587   11.738  0.618 5.738 round=0.012
-let crypt_st_07 = box  9.792 -0.488 4.587   11.738  0.798 5.738 round=0.012
-let crypt_st_08 = box 10.112 -0.488 4.587   11.738  0.978 5.738 round=0.012
-let crypt_st_09 = box 10.432 -0.488 4.587   11.738  1.158 5.738 round=0.012
-let crypt_st_10 = box 10.752 -0.488 4.587   11.738  1.338 5.738 round=0.012
-let crypt_st_11 = box 11.072 -0.488 4.587   11.738  1.518 5.738 round=0.012
-let crypt_st_12 = box 11.392 -0.488 4.587   11.738  1.698 5.738 round=0.012
+let crypt_st_01 = box  7.872 -0.488 4.587   11.738 -0.2945 5.738 round=0.012
+let crypt_st_02 = box  8.192 -0.488 4.587   11.738 -0.1145 5.738 round=0.012
+let crypt_st_03 = box  8.512 -0.488 4.587   11.738  0.0655 5.738 round=0.012
+let crypt_st_04 = box  8.832 -0.488 4.587   11.738  0.2455 5.738 round=0.012
+let crypt_st_05 = box  9.152 -0.488 4.587   11.738  0.4255 5.738 round=0.012
+let crypt_st_06 = box  9.472 -0.488 4.587   11.738  0.6055 5.738 round=0.012
+let crypt_st_07 = box  9.792 -0.488 4.587   11.738  0.7855 5.738 round=0.012
+let crypt_st_08 = box 10.112 -0.488 4.587   11.738  0.9655 5.738 round=0.012
+let crypt_st_09 = box 10.432 -0.488 4.587   11.738  1.1455 5.738 round=0.012
+let crypt_st_10 = box 10.752 -0.488 4.587   11.738  1.3255 5.738 round=0.012
+let crypt_st_11 = box 11.072 -0.488 4.587   11.738  1.5055 5.738 round=0.012
+let crypt_st_12 = box 11.392 -0.488 4.587   11.738  1.6855 5.738 round=0.012
 
 let crypt_stair_e = union {
     crypt_st_01 crypt_st_02 crypt_st_03 crypt_st_04 crypt_st_05 crypt_st_06
@@ -417,6 +461,27 @@ let crypt_stairs = mirror { crypt_stair_e } axis=x
 # 0.03 into the rim at each end. Nothing here floats and nothing here is thinner than a bar has to
 # be: iron at rough=150 metal=180, so each bar is also a specular highlight one voxel wide seen
 # against the brightest thing in the room.
+# FOURTEEN VOXELS OF THE VOID ARE STRANDED AT THIS SHAFT'S FOUR CORNERS AND I COULD NOT GET THEM
+# BACK. `void_crypt` at metre 16 reports eleven components: the room, and fourteen single air
+# voxels at 1.69 and 1.75 on the corners of the two outer shafts. They are where the shaft's air
+# face and the ceiling's stone face fall inside the SAME voxel — the air's edge at x = +-4.65 is
+# 74.4 voxels out and the shaft's south face at z = -9.00 is exactly on a boundary — and the
+# difference resolves that voxel to air while every one of its neighbours resolves to stone.
+# Widening the rim from 0.05 to 0.12 was the obvious fix and moved the void volume by exactly zero,
+# because the extra stone is outside `crypt_air` and the void never sees it; so the rim is back at
+# the brief's 0.05 overlap. It is pre-existing — the committed version reports the same fourteen
+# voxels at the same coordinates — and at metre 8 and at the contract's metre 32 the void is ONE
+# body. What it costs the building is fourteen one-voxel bubbles buried inside podium stone under
+# the portico, which nothing can see. Written down rather than papered over.
+# THE RIM STARTS AT 1.71 AND NOT FLUSH WITH THE CEILING AT 1.6875, AND THE 0.0225 BETWEEN THEM IS
+# A RING OF STONE THAT COMES AWAY. `crypt-place` — the podium with this room cut out of it —
+# reports 36 voxels adrift at metre 16, and they are that ring: 0.0225 tall and 0.05 wide round the
+# mouth of each shaft, sub-voxel in two directions at once. Bringing the rim down flush to 1.6875
+# was the obvious fix and MADE IT WORSE, because then the rim's own underside lands on the ceiling
+# plane and sheds slivers of its own: 72 adrift in `crypt-place` and 144 in the part, against 36
+# and 0. So it stays at 1.71. The 36 are pre-existing — the committed version reports the same 36
+# at the same coordinates — and they are buried inside podium stone at the mouth of a shaft where
+# nothing can see them. Measured both ways rather than reasoned, because reasoning got it backwards.
 let crypt_grate_rim_0 = difference {
     box -0.65 1.71 -9.05    0.65 1.80 -7.95
     box -0.60 1.68 -9.00    0.60 1.83 -8.00
@@ -438,17 +503,38 @@ let crypt_gratings = mirror {
 # — and it ends in a sump directly under the middle grating, which is the one place in this room
 # where daylight and water are in the same square metre.
 #
-# KERBED, NOT SUNK. See the floor note above: there is 0.05 m of stone under this room and a sunk
-# channel would go through it. The kerbs are 0.1125 (M/4) tall and 0.1125 wide, the water stands
-# 0.0675 deep between them, and its surface is 0.0675 below the kerb top — so the channel reads as
-# a channel from standing height and the water still catches a flame at ten degrees.
+# KERBED, NOT SUNK. See the floor note above: there is 0.0375 m of stone under this room and a sunk
+# channel would go through it. The kerbs are 0.1125 (M/4) tall and 0.1125 wide and the water lies
+# flush in the flags between them, for the reason written over the water itself — so the channel
+# reads as a channel from standing height and the wet strip still catches a flame at ten degrees.
 # THE GAP. The rills run INTO the basin and the sump rather than up against them, so a 0.225 notch
 # the width of the channel is cut through each rim — from the sump's centre to the basin's centre,
 # which is one box and cannot notch the far side of either by accident.
 let crypt_ch_gap = box -0.1125 -0.60 -8.55   0.1125 -0.30 5.025
 
 let crypt_ch_kerb = mirror { box 0.1125 -0.50 -8.25   0.225 -0.3375 4.425 round=0.008 } axis=x
-let crypt_ch_water = box -0.1125 -0.48 -8.55   0.1125 -0.3825 5.025
+# THE RILL'S WATER IS FLUSH WITH THE FLAGS, AND IT IS THE ONE THING IN THIS ROOM THAT LOOKS LIKE A
+# COMPROMISE AND IS NOT.
+#
+# The rill runs down the middle of the x = 0 aisle — the one clear axis in the room, the one you
+# walk in along from the stair — so a foot lands on it whether or not anybody meant it to. Filled
+# 0.0975 deep with its surface at -0.3825 it measured a clear run of 2.062 m over the whole centre
+# line and clipcheck flagged every point of it.
+#
+# It is not the depth of the water, it is the THINNESS of it. A horizontal slab of matter thinner
+# than a voxel is dilated by the sampler a whole voxel in each direction: `--part crypt_ch_water`
+# at metre 16 reports a worldbox 0.188 m tall for a box 0.030 m tall — three voxels for a shape
+# that is half of one. Every top surface the rill was given came back one voxel higher than it was
+# drawn, and the arithmetic has no solution: for the run over the water to reach 2.10 under a
+# soffit at 1.6875 the dilated top has to be at or under -0.4375, so the drawn top has to be at or
+# under -0.50, which is the underside of the podium.
+#
+# So the water is drawn -0.50 .. -0.4625: the top layer of the floor slab itself, between two
+# granite kerbs 0.1125 high. It is wet stone rather than a filled trough, which is what ground
+# water lying in a channel actually looks like, and the clear run over it is 2.125 m. The BASIN and
+# the SUMP keep their full 0.22 m of depth — they are vessels with a kerb round them, nobody stands
+# in one, and they are where the water is meant to be seen as water.
+let crypt_ch_water = box -0.1125 -0.50 -8.55   0.1125 -0.4625 5.025
 
 let crypt_basin_kerb = difference {
     cylinder 0 -0.3625 5.025  r=0.75  h=0.275 axis=y

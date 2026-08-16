@@ -51,72 +51,58 @@ not a thing anybody can be told.
 
 ---
 
-## 2. `--gap` needs a box that begins and ends in stone, and nothing says so
+## 2. `--gap` needed a box that begins and ends in stone — and clipcheck now has the line that fixes it
 
-`--gap y@x,z` is the only way to check rule 7, and against `crypt-probe.clip` — my part on its own,
-in the contract's box — every point in the room reports
+*Superseded and left here because the reasoning was right.* `--gap` reports first-empty to
+last-empty and says BROKEN when the air is in more than one piece, so against a probe of my part
+alone it reported the whole 21 m box for every point in the room: the ceiling of this room is the
+podium and the floor is the bottom of the podium, so there is sky above and open ground below.
+No clip can promise a box that starts and ends in stone.
+
+clipcheck now prints a second line — `clear 2.125 m, the longest unbroken run, closed at both ends`
+— which is exactly the measurement a room needs, and it flags anything under 2.10 on a y query.
+This room is now gated on it. (The `--gap` disagreement reported in the first version of this file
+was a real bug in clipcheck's axis mapping for y queries, since fixed; the instinct to trust the
+slices over the tool was right, and the workaround — calibrating against a clip of two bare planes
+— is still how the numbers below were established.)
+
+**What `clear` still needs:** it flags any column, and a room has things standing in it. Sweeping
+this room's 63 points, six came back under 2.10 and every one is furniture — 1.00 m inside the
+basin ring, 1.94 in the sump, 0.97 on a sarcophagus lid, 0.47 on a stair tread, 1.75 on a respond's
+plinth. All correct, none a place a person stands. What a room has to promise is 2.10 m over every
+part of the FLOOR. A `--head` that walked the topmost floor-like surface, or a `min=` that only
+flagged columns whose run starts at the room's floor plane, would let a fragment gate itself. As it
+is I swept a grid by hand and classified the flagged points by what is standing on them, which is
+fine once and not fine every time somebody edits this file.
+
+## 2a. Two voxel rules that between them cost this room 125 mm of head height
+
+Neither is written down anywhere and both were found the hard way, each against a control.
+
+**A voxel is solid if any of it is stone, so a face part-way through a voxel gives the whole voxel
+away.** 2.10 is not a whole number of voxels at any metre this building uses — 2.10 / 0.03125 is
+67.2 — so a room drawn to exactly the brief's minimum cannot measure it. This room, drawn floor
+-0.45 and soffit 1.65 for a geometric 2.10, measured **2.000 at metre 16 and 2.094 at metre 32.**
+
+**Voxels are half-open, so the two ends are not symmetric.** A solid's BOTTOM face on a voxel
+boundary costs nothing; a solid's TOP face on a boundary costs the voxel above it. So a soffit
+wants to be ON a boundary and a floor wants to be JUST UNDER one. Measured on a calibration clip of
+two bare planes:
 
 ```
-gap    20.938 m of air along y (BROKEN — there is matter in it)
+  floor top   soffit    metre 16   metre 32
+  -0.45       1.65      2.000      2.094     the room as first drawn
+  -0.45       1.6875    2.062      2.125     soffit on a boundary: fixes 32, not 16
+  -0.4625     1.6875    2.125      2.156     what is built
+  -0.46875    1.6875    2.125      2.125     also works; floor slab one voxel thick
 ```
 
-which is the whole height of the sampled box. It is correct and it is useless: the ceiling of this
-room is the podium, the floor is the bottom of the podium, and in a probe of my part alone there is
-sky above and open space below, so the column has three runs of air in it and the tool reports the
-span of all three.
-
-So the head height of a room can only be measured on a clip that contains what is over it, in a box
-whose top and bottom are *inside stone*. `clips/facility/requests/crypt-place.clip` is that: podium
-plus crypt with `void_crypt` taken away, in `bounds -12.3 -0.49 -9.4  12.3 1.79 6.4` — -0.49 is
-inside the 0.05 floor slab and 1.79 is inside the ceiling, so there is exactly one run of air in
-every column and the number printed is the head height.
-
-**What would have helped:** `--gap` printing the LARGEST clear run as well as the span, or a
-`--head y@x,z` that answers "how much clear air is over the topmost floor in this column". Every
-fragment with a room in it needs this and every one of them will trip over the same thing.
-
-**AND I COULD NOT GET `--gap` TO AGREE WITH `--slice` EVERYWHERE, WHICH IS SAID HERE BECAUSE IT IS
-NOT SETTLED.** Eleven sample points in this room report a clean `gap 2.062 .. 2.156 m of air along
-y (clear)`, and a calibration clip — two slabs with the same two planes, floor top -0.45 and soffit
-1.6875, and a pillar beside the sample point — reports exactly the 2.125 m those planes should
-give, and reports `0.000 m of air (BROKEN)` when the sample lands on the pillar. So the tool works
-and the number means what it says.
-
-But a scatter of other points in this room also report `0.000 m of air (BROKEN)` where
-`--slice y@0.5` at the same metre shows open floor: (2.70, 4.95) and its neighbours up and down the
-north aisle, for instance, which the plan slice shows as clear between the stair at |x| > 9.5 and
-the channel kerbs at |x| < 0.25. The same slice, read character by character against the box, puts
-every piece of this fragment where the file says it is. Either the second coordinate of `y@a,b` is
-not z, or something about a folded `mirror` is being asked at the wrong place; I could not tell
-which from the outside, and I would rather write that down than pick the reading that flatters the
-room. The geometry is checked by the slices, which I can read; the head height is checked by the
-calibration, which uses this room's own two planes.
-
-## 2a. And the answer it gives is a voxel short at each end, which cost this room 0.0375 m
-
-A voxel is solid if any of it is stone. Neither -0.45 nor 1.65 — the floor and soffit this room
-was drawn to, both module numbers — lands on a voxel boundary at metre 16 or metre 32, so the grid
-takes most of a voxel off the bottom and most of one off the top, and a room built to exactly the
-brief's 2.10 m measures **2.0625 m**: 37 mm short, in the thing you actually walk about in.
-
-It cannot be fixed by drawing more carefully, because 2.10 is not a whole number of voxels:
-2.10 / 0.03125 = 67.2. The nearest clear height a voxel grid can hold at the contract's metre is
-68 voxels, 2.125 m.
-
-I fixed it by raising the soffit to 1.6875, which is 1.80 - M/4 (a module number, and the ceiling
-slab is happier at M/4 than at M/3) and IS a voxel boundary at both metres — 54 at metre 32, 27 at
-metre 16 — and by giving the room 37 mm over the minimum, because the grid is anchored on the
-clip's `bounds` and those move from probe to probe. Measured clear height is 2.125 m on a
-calibration clip of the same two planes, and 2.062 to 2.156 at points in the room itself.
-
-**This is a rule that should be in BRIEF.md and is not**: *a floor or a soffit that bounds head
-height should land on a voxel boundary of the contract's metre — a multiple of 0.03125 — or the
-room loses up to 62 mm to the grid.* Anything upstairs whose head height was checked by arithmetic
-rather than by `--gap` is 30 to 60 mm shorter than its file says. halls.clip's 2.25 m and
-stair.clip's 2.115 m are both worth re-measuring; stair.clip's is the one with 15 mm of margin in
-it and it is measured by a probe of its own that has the same voxel question in it.
-
----
+The rule worth putting in BRIEF.md: **a floor or a soffit that bounds head height should land on a
+voxel boundary of the contract's metre — a multiple of 0.03125 — with the soffit ON one and the
+floor just UNDER one, and the room drawn 40-50 mm over the minimum so the grid has something to
+take.** Anything upstairs whose head height was checked by arithmetic rather than by `clear` is 30
+to 100 mm shorter than its file says. stair.clip's 2.115 m is the one with 15 mm of margin in it
+and it is worth re-measuring first.
 
 ## 3. `repeat` cannot place a thing on the module twice over, so forty columns are two folds
 
@@ -143,3 +129,43 @@ what I did: my own part intersected with the bottom 0.65 m).
 
 Nothing here is broken. But a crypt is a room whose whole surface story is *water is coming through
 the wall at the bottom*, and the only control over that is the amount and the mask.
+
+---
+
+## 5. A slab thinner than a voxel is dilated a whole voxel in every direction
+
+`--part crypt_ch_water` at metre 16, on a water box 0.225 x 0.030 x 13.575:
+
+```
+worldbox   -0.125 -0.562 -8.562    0.125 -0.375 5.062
+```
+
+0.188 m tall for a shape 0.030 m tall — three voxels for half of one. The width is honest rounding
+to voxel boundaries; the height is a voxel of dilation at each end. It is why the rill in this room
+is water lying flush in the flags rather than water standing in a trough: there is no drawn top low
+enough to survive it, because the drawn top would have to be at -0.50 and that is the underside of
+the podium.
+
+This has teeth well beyond head height. Every thin horizontal feature in this building — a glazing
+bar seen edge-on, a fascia, a dentil bed, this room's own 0.01875 coffer steps — is being sampled
+three voxels thick where it is drawn one, which inflates volume and surface and would flatter any
+thin-matter measurement taken from `--part`. podium.clip reasons carefully about whether its 0.045
+and 0.0375 grooves survive; that reasoning should be re-checked against this.
+
+## 6. 375 voxels of air I could not get out of the void, and they were there before I started
+
+`void_crypt` is one body at metre 8. At metre 16 it is eleven components — fourteen single air
+voxels on the corners of the outer light-well shafts — and at metre 32 it is forty-eight, with 375
+voxels stranded round the sarcophagus plinths and the shaft corners. They sit where an air face and
+a stone face fall inside the SAME voxel and the difference resolves that voxel to air while all its
+neighbours resolve to stone.
+
+**They are not mine and they are not new.** The committed version of this fragment, measured on the
+same binary, reports the same 48 components, the same 375 voxels, at the same coordinates. Widening
+the grating rim from 0.05 to 0.12 — the obvious fix — moved the void volume by exactly zero,
+because the extra stone lies outside `crypt_air` and the difference never sees it, so the rim is
+back at the brief's 0.05.
+
+What it costs the building is that many one-voxel bubbles buried inside podium stone, which nothing
+can see. What it costs anybody measuring is that `components` on a VOID is not a clean gate the way
+it is on a part, and no fragment can currently promise one.
