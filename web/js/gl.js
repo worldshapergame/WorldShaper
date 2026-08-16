@@ -845,8 +845,12 @@ export class Renderer {
         const height = this.canvas.height;
         gl.viewport(0, 0, width, height);
 
-        perspective(this.projection, camera.fov, width / Math.max(1, height), camera.near,
-                    camera.far);
+        // `fovFor` and not `fov`: the vertical angle is derived from the shape of the window so
+        // that the horizontal one clears a floor. On a phone held upright that is the difference
+        // between seeing a room and seeing a letterbox. See Controls.fovFor.
+        const aspect = width / Math.max(1, height);
+        perspective(this.projection, camera.fovFor ? camera.fovFor(aspect) : camera.fov, aspect,
+                    camera.near, camera.far);
         lookAt(this.view, camera.eye, camera.at, [0, 1, 0]);
         multiply(this.viewProj, this.projection, this.view);
         invert(this.invViewProj, this.viewProj);
