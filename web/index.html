@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#141414">
+<meta name="description" content="Every clip in WorldShaper, drawn in the browser. Walk them, slice them, and watch them change as they are built.">
+<title>WorldShaper — clips</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="view"></canvas>
+
+<!-- The bar. The slider is the widest thing on it because slicing is the thing this viewer can do
+     that a screenshot cannot: it walks a plane through the clip and fills the cut, so the inside
+     of a building is one drag away. -->
+<header id="bar">
+  <button id="pick" class="chip wide">loading</button>
+  <div class="slice">
+    <input id="slice" type="range" min="0" max="1000" value="1000" step="1"
+           aria-label="slice the clip">
+    <span id="sliceAt" class="readout">whole</span>
+  </div>
+  <button id="axis" class="chip square" title="which way the cut runs">Z</button>
+  <button id="flip" class="chip square" title="cut from the other side">&#8646;</button>
+  <button id="info" class="chip square" title="what this clip is">i</button>
+</header>
+
+<!-- Walking. The pad is the whole lower left of the screen and draws its knob wherever the thumb
+     lands, so there is nothing small to hit. -->
+<div id="pad"></div>
+<div id="knob"><div></div></div>
+
+<div id="verticals">
+  <button id="btnUp" class="round" title="jump — twice to fly">&#9650;</button>
+  <button id="btnDown" class="round" title="crouch">&#9660;</button>
+</div>
+
+<button id="mode" class="chip mode">Walk</button>
+
+<div id="list" class="sheet hidden">
+  <div class="sheetBar">
+    <input id="filter" type="search" placeholder="find a clip" autocomplete="off">
+    <button id="listClose" class="chip square">&#215;</button>
+  </div>
+  <div id="listBody"></div>
+</div>
+
+<div id="panel" class="sheet right hidden">
+  <div class="sheetBar">
+    <strong>this clip</strong>
+    <span id="fps" class="readout"></span>
+    <button id="panelClose" class="chip square">&#215;</button>
+  </div>
+  <dl id="panelBody"></dl>
+  <p class="note">
+    Baked from the clip file by the game's own sampler and drawn here rasterised — the materials
+    are the clip's own, the light is baked, and nothing is path traced. A fragment of the facility
+    is shown as the building assembles it, before the manifest cuts its openings.
+  </p>
+</div>
+
+<div id="loading">
+  <div class="bar"><div id="loadingBar"></div></div>
+  <div id="loadingText" class="readout"></div>
+</div>
+
+<div id="toast"></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -8634,3 +8634,97 @@ ratio as one comparison (trap 10, in the instrument).
 | D665 | **The pictures do not resolve it here** | honesty | Three runs an arm; the within-arm spread is wider than the gap. D660's shape, and trap 9 |
 | D665 | **The counter is what found the fault** | method | Trap 16: count the events that produced a suspect signal rather than reading the signal again |
 | D665 | **The facility could not be reached from here** | honesty | Shared 13.3 GB cgroup, a 9.2 GB run, three OOM kills |
+
+## D666 — every clip is a web page, baked by the game's own sampler
+
+**The person this is for cannot look at a clip.** The game path traces on a desktop card; the
+facility is now built by many hands at once, a fragment at a time; and the only way to see whether
+this morning's fragment is any good has been to be at that desk. So the clips have been going into
+`main` unlooked-at, which is the condition every trap in §4 was written under.
+
+`documentation/24-clip-viewer.md` is what was built. In one line: **every clip in the repository,
+sampled and meshed by `tools/bake_web.cpp` in CI and drawn in a browser** — turn it round, drag a
+slider through it and see the inside, or walk in through the door. Forty clips, about three
+minutes, and the page reloads a clip in place when its file changes.
+
+**The baker does not read a clip file.** `load_clip_script`, `sample`, `despeckle` — the same three
+calls the game makes, in that order. That is D204's rule and it is the only thing that makes a
+viewer like this worth anything: two things deriving one world from one description is the failure
+mode, so what the site can disagree with the game about is the shading and nothing else. It says so
+on the page.
+
+`-DWS_TOOLS_ONLY=ON` configures `ws_core`, `ws_world`, `ws_game`, `ws_forge` and the tools on them
+and nothing else, so the bake is a Linux job with no Vulkan SDK and no SDL — the two dependencies
+that have actually broken this repository's CI (D641). Same sources, same warnings-as-errors bar.
+
+### Three faults it found, and the first is the one that mattered
+
+**`origin` moves the solid and the paint rules and NOT the names the file bound.** `apply_origin`
+wraps the solid in a translate and shifts every rule; the intermediate bindings stay where they
+were, because until now nothing reached for one afterwards. The facility shifts 3.50 m, so
+`part_dome` sampled in a box 3.5 m below its own matter: **197 × 21 × 197 voxels — a twelve-metre
+saucer four fifths of a metre tall, cut off where the box ran out, wearing one material instead of
+six** because the paint it was tested against belonged to whatever is 3.5 m lower. It is not a
+crash, it is not an error, and nothing but a picture would have shown it. Anything else that reaches
+for a part by name has the same trap waiting.
+
+**A fragment cannot be parsed on its own, and should not be shown on its own either.** No fragment
+includes `_order.clip`, so `doors.clip` alone does not know what a dentil is. So fragments are baked
+out of the *manifest's* parse with their own part as the root — and then **intersected with the
+building's own solid**, which was the second half and the one that makes them worth looking at. A
+part as its file binds it is the part before the manifest has finished with it: `part_walls` before
+the doors and windows are punched through it, `part_rotunda` as the solid drum rather than the room.
+Intersecting needs to know nothing about which voids apply to which part — a distinction the
+manifest itself has got wrong twice, D608 among them — because whatever the building kept is what
+shows. Walls 32,253 → 72,631 quads; rotunda a blank cylinder → a room with its doorway.
+
+**The parser could be made to end the process.** `block → expression → call → block` recurses once
+per `{` with nothing bounding it, and baking fragments singly hit a SIGSEGV inside
+`parse_clip_script` with gdb showing hundreds of frames of exactly that cycle. **It does not
+reproduce from the same file in a fresh process**, so what is written down is what was seen rather
+than a diagnosis — but a parser whose contract is that it collects errors and carries on must not be
+able to end a process, and it is fed files a player writes. `kMaxBlockDepth` = 64, and a test holds
+it.
+
+### What the viewer does about being a rasteriser
+
+It does not pretend. No screen-space reflections, no ambient occlusion pass, no denoiser; a mirror
+is a rough metal with a sky in it. What it is faithful about is the **matter**: every material
+reaches the browser as its 16-byte `VisualRecord`, unquantised — opacity, roughness, metallic, IOR,
+emission and tint, Beer-Lambert absorption, translucency, clearcoat, sheen. *Rasterised* is a claim
+about the light transport, not about what things are made of.
+
+The light that a rasteriser cannot work out is baked into a **0.4 m lattice of (sun, sky)
+visibility**, ray cast in the baker, read as one trilinear fetch. It is a lattice and not a vertex
+colour because **baked light does not survive greedy meshing**: faces merge only when everything
+about them agrees, so a gradient across a wall makes every voxel face its own quad. Corner occlusion
+takes four values and merges; sky visibility is a gradient and does not. Split by that property, a
+wall stays one quad and still darkens as it goes into a room.
+
+**Light leaks through walls and the number is a half.** A lattice point inside stone is read by the
+surfaces on both sides of it, because a trilinear fetch near a wall blends the air in front with the
+stone behind, so buried points are filled from their brightest neighbour at half strength, twice. At
+three quarters, every soffit in the halls wore a pale band where the sky above the roof reached
+through 0.45 m of masonry.
+
+### And the slice, which is why a viewer beats a screenshot
+
+A clip plane through a voxel mesh leaves an open shell — a wall cut in half is a sheet of paper,
+because a surface has no inside. So the cut is filled: the geometry behind the plane is drawn with
+the stencil buffer inverting on every fragment, which leaves odd parity exactly where the plane is
+inside matter, and a quad on the plane is drawn through that stencil. The **body** is clipped by the
+same plane as the eye, so cutting the front off a building lets you walk in through the cut.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D666 | **The baker calls the game's own sampler** | decision | D204: two readers of one description is the failure mode. The shading may differ; the matter may not |
+| D666 | **`WS_TOOLS_ONLY` rather than a second CMake list** | decision | One source list, one warning bar, and a Linux bake that no graphics dependency can break |
+| D666 | **A fragment is the manifest's part, intersected with the solid** | decision | Alone it does not parse; as authored it is the part before the building finished with it |
+| D666 | **A part must be moved by `origin_shift` before it is sampled** | fault | 3.5 m, silently, with the wrong paint and the top cut off |
+| D666 | **Resolution is a budget that halves, not a per-clip list** | decision | Nobody has to edit a table when a fragment grows; halving keeps the coarse lattice a subset of the fine one |
+| D666 | **Light in a lattice, occlusion in the quad** | decision | A gradient cannot be merged and a four-valued corner can; splitting them is what keeps a wall one quad |
+| D666 | **Buried lattice points are filled at half, twice** | fault | Three quarters put a pale band of sky across every soffit indoors |
+| D666 | **The cut is capped with a stencil parity pass** | decision | Without it a sliced building is hollow, which is a lie about stone |
+| D666 | **`kMaxBlockDepth` = 64** | fault | An unbounded recursion in a parser fed files a player writes |
+| D666 | **The crash does not reproduce in isolation** | honesty | Reproducible in that run, three times, with a backtrace; not since. Written as seen, not as diagnosed |
+| D666 | **`web/data/` is not committed** | decision | Derived, tens of megabytes, and stale the moment somebody edits a fragment |

@@ -31,3 +31,11 @@ WorldShaper/
 # tree (CLAUDE.md, "Subagents"). Each one is a whole checkout with its own build directory, so
 # committing them would put the repository inside itself.
 .claude/worktrees/
+
+# The clip viewer's baked clips. Derived from the .clip files by tools/bake_web.cpp, tens of
+# megabytes of binary, and rebuilt by .github/workflows/pages.yml on every push that can change
+# them. Committing them would put a second copy of every clip in the history, out of date the
+# moment somebody edits a fragment.
+web/data/
+build-tools/
+build-web/

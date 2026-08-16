@@ -608,6 +608,7 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 | | state |
 |---|---|
+| **The clip viewer — every clip in the repository as a web page, at `worldshapergame.github.io/WorldShaper`.** Pick a clip, turn it round, drag a slider through it to see the inside, or walk in through the door. Baked from the clip files by the game's own sampler on every push, rasterised because a phone cannot path trace | **in** (D666, `documentation/24-clip-viewer.md`). It found three faults on its way in, and the first is not the viewer's: **`origin` moves the solid and the paint rules and not the names a file bound**, so anything reaching for a part by name gets it 3.5 m from its own paint |
 | **R5d — analytic edge AA, first half.** A node coarser than a voxel and only part full of matter stops being drawn as a solid block: the ray carries on past it and the composite draws the two surfaces in proportion, so a distant railing has weight instead of stair-steps | **in, VERIFIED by picture and by count** (D663). `--no-edge-aa` is the control arm |
 | **R4e — translucency.** Marble glows where it is thin, and the renderer works out which parts those are by counting the stone a ray crosses | **in, and VERIFIED by picture** (D653) |
 | **R4d — refraction.** Glass and water displace what is behind them; absorption over the true path; total internal reflection | **in, and now LOOKED AT** — card-free, at 640×400 settled to frame 120 (D652, D656) |

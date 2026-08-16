@@ -3287,3 +3287,36 @@ its memory with several others, a picture of the facility needs about nine gigab
 attempts were killed by the system part way through — one of them sixteen minutes in. The facility is
 where the twenty-three per cent was measured and it is where this should show best, so that is the
 first thing to look at on a machine with a graphics card.
+
+## You can look at the clips on your phone now
+
+**<https://worldshapergame.github.io/WorldShaper/>**
+
+Every clip in the project — the whole facility, each of its twenty parts, and the little test
+scenes — is now a web page. Open it on a phone, pick one from the list, and drag to turn it round.
+The slider along the top cuts the clip in half, and you can slide the cut all the way through: the
+front wall goes and you are looking into the rooms, with the stone showing solid where it has been
+sliced rather than hollow. Press **Walk** and you are standing on the lawn at eye height. Walk up
+the steps and in through the bronze door. The up button jumps; tap it twice and you fly, and then
+the two buttons take you up and down.
+
+**It rebuilds itself.** The parts of the building are being worked on all the time, and the site
+follows: every time one is changed and pushed, it is rebuilt within a few minutes, and if you have
+that part open on the page it reloads itself with the camera exactly where you left it. So you can
+watch a piece of the building change while somebody is changing it.
+
+The materials are real — glass is see-through, bronze and gilt look like metal, the copper dome is
+green, the marble is polished. What it does *not* do is the light. The game traces light properly
+and no phone can, so the site draws the light in advance and paints it on: the inside of a room is
+dark because it has been worked out in advance that little sky reaches it, rather than because the
+light got there. It is the difference between a photograph and a very good drawing. Everything about
+*what the building is* is exact — it is built by the same code the game builds it with, from the
+same files — and everything about *how it is lit* is an approximation.
+
+**It found a real fault, and not in the website.** When each part of the building is drawn on its
+own, the dome came out as a twelve-metre saucer less than a metre tall, in the wrong colour. The
+building is written to be positioned by one line that moves the whole thing down 3.5 metres so that
+where you spawn is the middle of the rotunda floor; that line moved the building and the paint, and
+did not move the *names* of the parts. Nothing had ever asked for a part by name afterwards, so
+nothing had ever noticed. It is the kind of mistake that produces no error and no crash — just a
+wrong picture — and a picture is exactly what was missing until now.

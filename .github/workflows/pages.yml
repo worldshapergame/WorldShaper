@@ -1,0 +1,104 @@
+# The clip viewer: bake every clip and publish the site.
+#
+# This runs on every push that can change what the site shows — a clip, the sampler under it, or
+# the viewer itself — so the page follows the work rather than a release. documentation/24 says
+# what the site is; this is how it gets there.
+#
+# It is a LINUX job and it does not install a Vulkan SDK or build SDL, which is what
+# `-DWS_TOOLS_ONLY=ON` is for: the baker needs the field, the sampler and the type table, and none
+# of those know what a GPU is. That takes the job from about ten minutes to about five, and it also
+# means this workflow cannot be broken by a graphics dependency moving under it — which is exactly
+# how the release workflow was broken for months (D641).
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'clips/**'
+      - 'src/forge/**'
+      - 'src/world/**'
+      - 'src/game/**'
+      - 'src/core/**'
+      - 'tools/bake_web.cpp'
+      - 'web/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# One deployment at a time, and a newer push wins. Two agents committing a minute apart should
+# publish the second one, not queue behind the first and then publish the first.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      # The build is the same libraries the game is built from, from the same sources, with the
+      # same warnings-as-errors bar. Cached on the compiler and the sources it actually compiles,
+      # so a push that only edits a clip re-links and goes straight to baking.
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: build-web
+          key: pages-build-${{ runner.os }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**', 'tools/bake_web.cpp') }}
+          restore-keys: pages-build-${{ runner.os }}-
+
+      - name: Build the baker
+        run: |
+          cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
+          cmake --build build-web --target ws_bake_web
+
+      # Sixteen voxels to the metre is 6.25 cm, which is half the game's own resolution and is what
+      # a phone can hold: the whole facility comes to about 410,000 quads and 8 MB. The budget
+      # halves that for anything whose sampled box would be larger than 80 million cells, which is
+      # the number that keeps this job inside its time.
+      - name: Bake every clip
+        run: |
+          ./build-web/bin/ws_bake_web --clips clips --out web/data \
+                                      --budget 80000000 --max-metre 16
+          echo "--- what was published ---"
+          ls -la web/data | head -50
+          du -sh web/data
+
+      # A compressed copy beside each file, which the viewer asks for first. GitHub Pages will not
+      # compress an unknown extension itself, and the quads are regular enough to come down about
+      # four to one -- the difference between a building arriving at once on a phone and arriving
+      # after a wait. The plain files stay for a browser without DecompressionStream.
+      - name: Compress
+        run: |
+          gzip -9 -k web/data/*.wsc
+          du -sh web/data
+
+      # The viewer routes on the URL fragment, so there is one page and nothing for Jekyll to
+      # build; this stops Pages trying to.
+      - name: Not a Jekyll site
+        run: touch web/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  publish:
+    needs: bake
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
