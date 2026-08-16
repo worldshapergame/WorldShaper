@@ -73,7 +73,16 @@
 // which is what nobody does because the building takes three minutes to sample.
 //
 // A cut whose removal is ZERO is the mirror-image bug and just as silent: an opening that missed
-// its wall leaves no hole, no error and no difference in any other number here.
+// its wall leaves no hole, no error and no difference in any other number here. `steps.clip` shipped
+// one — `offset { steps_mass } by=-0.045` was meant to shrink a core and grew it, so
+// `difference { mass core }` was empty and every joint in the great stair did not exist. Both sides
+// sampled to the identical 2,423,674 voxels. This mode reported `steps_joints  REMOVED NOTHING` on
+// the tree that had it.
+//
+// The zero has ONE false alarm and it is worth knowing about: a cut narrower than a voxel removes
+// nothing at that resolution and everything at a finer one. So a zero is printed with how thick the
+// cut's own box is IN VOXELS whenever that is under two, which is the difference between a bug and
+// a `--metre` that is too coarse to see the answer.
 //
 // # Whose matter was it
 //
@@ -539,7 +548,63 @@ struct Tally {
     std::vector<u64> victim_only;   // per victim, over `only`
     std::vector<VoxelBox> victim_box;
     u64 unattributed = 0;
+
+    // Only filled in for a cut that removed nothing. See `probe_finer`.
+    i32 finer = 0;                  // the multiple of --metre the probe used; 0 = not probed
+    bool finer_found = false;
+    Vec3 finer_at{0, 0, 0};
 };
+
+// A cut that removed nothing gets asked again, FINER.
+//
+// A cut narrower than a voxel removes nothing at that resolution and everything at a finer one,
+// and the two are the same report. `steps_cope_joints` on the facility is a 0.0375 m rind: zero at
+// metre 8 where a voxel is 0.125 m, 0.031 m3 at metre 32. `steps_joints` with its `offset` sign
+// backwards is zero at every resolution there is. Telling those apart is the whole worth of the
+// zero, so it is measured rather than reasoned about from the cut's bounding box — which is the
+// intersection of two large boxes for `steps_cope_joints` and says nothing about how thin the cut is.
+//
+// Stops at the first point it finds, so the cheap answer (there IS something, your metre is too
+// coarse) costs almost nothing and the expensive one is the case worth paying for.
+struct Probe {
+    i32 factor = 0;
+    bool found = false;
+    Vec3 at{0, 0, 0};
+};
+
+Probe probe_finer(const forge::Field& field, const Cut& cut, u32 base, const Frame& base_frame,
+                  i32 per, u64 budget) {
+    Probe out;
+    if (cut.world_box.infinite()) return out;
+    const f64 span[3]{cut.world_box.high.x - cut.world_box.low.x,
+                      cut.world_box.high.y - cut.world_box.low.y,
+                      cut.world_box.high.z - cut.world_box.low.z};
+    for (const i32 factor : {4, 2}) {
+        const f64 step = 1.0 / static_cast<f64>(per * factor);
+        f64 points = 1.0;
+        for (u32 axis = 0; axis < 3; ++axis) points *= std::floor(span[axis] / step) + 1.0;
+        if (points > static_cast<f64>(budget)) continue;
+        out.factor = factor;
+        const i32 n[3]{static_cast<i32>(span[0] / step) + 1, static_cast<i32>(span[1] / step) + 1,
+                       static_cast<i32>(span[2] / step) + 1};
+        for (i32 k = 0; k < n[2]; ++k) {
+            for (i32 j = 0; j < n[1]; ++j) {
+                for (i32 i = 0; i < n[0]; ++i) {
+                    const Vec3 p{cut.world_box.low.x + (static_cast<f64>(i) + 0.5) * step,
+                                 cut.world_box.low.y + (static_cast<f64>(j) + 0.5) * step,
+                                 cut.world_box.low.z + (static_cast<f64>(k) + 0.5) * step};
+                    if (field.eval(cut.node, to_local(cut.frame, p)) >= 0.0) continue;
+                    if (field.eval(base, to_local(base_frame, p)) >= 0.0) continue;
+                    out.found = true;
+                    out.at = p;
+                    return out;
+                }
+            }
+        }
+        return out;
+    }
+    return out;
+}
 
 void merge_tally(Tally& into, const Tally& from) {
     into.removed += from.removed;
@@ -1005,6 +1070,26 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
         });
         base_evaluations += base_calls.load();
     }
+    // Ask the zeroes again, finer, so "too coarse to see it" and "it really is empty" are two
+    // different lines rather than the same one.
+    std::vector<u32> zeroes;
+    for (usize i = 0; i < walk.cuts.size(); ++i) {
+        if (walk.cuts[i].audited && tally[i].removed == 0) zeroes.push_back(static_cast<u32>(i));
+    }
+    if (!zeroes.empty()) {
+        jobs.parallel_for(zeroes.size(), 1, [&](usize begin, usize end) {
+            for (usize n = begin; n < end; ++n) {
+                const u32 index = zeroes[n];
+                const Cut& cut = walk.cuts[index];
+                const Probe probe = probe_finer(field, cut, groups[cut.group].base,
+                                                groups[cut.group].frame,
+                                                script.settings.voxels_per_metre, 8000000);
+                tally[index].finer = probe.factor;
+                tally[index].finer_found = probe.found;
+                tally[index].finer_at = probe.at;
+            }
+        });
+    }
     const f64 seconds = std::chrono::duration<f64>(std::chrono::steady_clock::now() - started).count();
 
     // --- the report ------------------------------------------------------------------------------
@@ -1055,12 +1140,29 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
             if (best.size() > 4) victims += " ...";
         }
         const char* flag = "";
+        char thin[160];
+        thin[0] = '\0';
+        if (t.removed == 0 && t.finer_found) {
+            std::snprintf(thin, sizeof thin,
+                          "  (but it DOES cut at metre %d, near %.2f %.2f %.2f — thinner than a "
+                          "voxel here, not a fault)",
+                          script.settings.voxels_per_metre * t.finer, t.finer_at.x, t.finer_at.y,
+                          t.finer_at.z);
+        } else if (t.removed == 0 && t.finer > 0) {
+            std::snprintf(thin, sizeof thin, "  (and nothing at metre %d either)",
+                          script.settings.voxels_per_metre * t.finer);
+        } else if (t.removed == 0 && cut.audited) {
+            // Not "it is fine". NOT ASKED — its box is unbounded or too big to sweep finely — and
+            // saying so is the difference between a checked zero and an unchecked one.
+            std::snprintf(thin, sizeof thin, "  (%s, so NOT re-asked finer)",
+                          cut.world_box.infinite() ? "its box is unbounded" : "its box is too big");
+        }
         if (t.removed == 0 && t.on_air == 0) flag = "  <-- REMOVED NOTHING, and covers no matter";
         else if (t.removed == 0) flag = "  <-- REMOVED NOTHING, it is all cutting air";
         else if (t.only == 0) flag = "  <-- nothing of its own: every voxel another cut took too";
-        std::printf("  %-24s %-20s %9.3f %9.3f  %s%s%s\n", cut.name.c_str(), carves,
+        std::printf("  %-24s %-20s %9.3f %9.3f  %s%s%s%s\n", cut.name.c_str(), carves,
                     static_cast<f64>(t.removed) * litre, static_cast<f64>(t.only) * litre,
-                    victims.c_str(), cut.smooth ? "  (smooth: a lower bound)" : "", flag);
+                    victims.c_str(), cut.smooth ? "  (smooth: a lower bound)" : "", flag, thin);
     }
     if (unaudited > 0) {
         std::printf("  not audited  %zu cut%s whose place cannot be mapped back to these "
@@ -1122,22 +1224,45 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
         }
 
         if (!t.removed_box.any || mask.empty()) continue;
-        // A section through the middle of what it took, on the axis it is thinnest along, so the
-        // picture is of the cut rather than of the building.
+        // A section across the axis the cut is thinnest along, because that is the way a person
+        // reads an opening — and through the FULLEST plane of it rather than the middle of its box.
+        //
+        // The middle is the obvious choice and it is wrong on the first real case: `void_windows`
+        // spans y -0.75 to 5.00 because it holds two storeys of windows, and the midpoint at y=2.00
+        // is the blank band of wall BETWEEN them. The section came out with not one voxel of cut in
+        // it, which reads exactly like a cut that did nothing.
         u32 axis = 0;
         i32 thinnest = t.removed_box.high[0] - t.removed_box.low[0];
         for (u32 a = 1; a < 3; ++a) {
             const i32 span = t.removed_box.high[a] - t.removed_box.low[a];
             if (span < thinnest) { thinnest = span; axis = a; }
         }
-        const i32 at = (t.removed_box.low[axis] + t.removed_box.high[axis]) / 2;
+        const u8 bit = static_cast<u8>(1u << f);
+        i32 at = (t.removed_box.low[axis] + t.removed_box.high[axis]) / 2;
+        {
+            std::vector<u64> per_plane(static_cast<usize>(raw.size[axis]), 0);
+            for (i32 z = 0; z < raw.size[2]; ++z) {
+                for (i32 y = 0; y < raw.size[1]; ++y) {
+                    for (i32 x = 0; x < raw.size[0]; ++x) {
+                        if (mask[raw.index(x, y, z)] & bit) {
+                            const i32 coord[3]{x, y, z};
+                            ++per_plane[static_cast<usize>(coord[axis])];
+                        }
+                    }
+                }
+            }
+            u64 best = 0;
+            for (usize i = 0; i < per_plane.size(); ++i) {
+                if (per_plane[i] > best) { best = per_plane[i]; at = static_cast<i32>(i); }
+            }
+        }
         u32 da = 0, db = 0;
         query_axes(axis, da, db);
         const i32 step = std::max(1, std::max(raw.size[da], raw.size[db]) / 110);
-        std::printf("  section     %c = %.3f m,  X only this cut,  o also another,  # matter that "
-                    "stayed\n", "xyz"[axis],
+        std::printf("  section     %c = %.3f m, the fullest plane of the cut.  X only this cut,  "
+                    "o also another,  # matter that stayed\n", "xyz"[axis],
                     static_cast<f64>(built.origin_voxel[axis] + at) / per);
-        std::printf("%s", cut_slice_text(raw, mask, static_cast<u8>(1u << f), axis, at, step).c_str());
+        std::printf("%s", cut_slice_text(raw, mask, bit, axis, at, step).c_str());
     }
 }
 
