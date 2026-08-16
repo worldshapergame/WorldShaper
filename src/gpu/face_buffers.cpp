@@ -394,6 +394,38 @@ bool FaceBuffers::audit(const FaceStore& store, VkBuffer seen, u32 frame, u32 se
             WS_LOG_INFO("faces",
                         "the off-screen set cast on {} faces this frame, out of its own budget",
                         off_screen_shaded);
+            // R5b's ramp, counted where it is decided rather than looked for in a picture.
+            //
+            // **This line exists because the change was measured and read as doing nothing**, and
+            // the reason turned out to be visible in no image: card-free, at a camera cut through
+            // 180 degrees, every pixel that differed between the two arms was a full flip between
+            // black and white -- which is the one thing the ramp never produces, and is exactly
+            // what a re-rolled coin toss looks like. What settles it is the count of events that
+            // produced the signal rather than another reading of the signal (trap 16), and it has
+            // to be TWO counts, because a frame with nothing under-measured and a frame where
+            // every under-measured face was refused a stand-in print the same nought (trap 7).
+            //
+            // `wanted` is faces below `kFaceSunBelieve` samples that asked; `refused` is those with
+            // nothing up the tree holding `kSunStandInMin` rays of its own -- which is what happens
+            // when the coarse face is as new as the fine one under it, and is the case a camera
+            // turning into unseen geometry produces. **The first reading of this line is what found
+            // that the floor was wrong**: it was `kSunSeedMin` = 16, inherited from the one-time
+            // claim seed, and 64.4% of the population was being turned away by it.
+            if ((probe_words[0] & kProbeSunConfidence) != 0) {
+                const u32 wanted = probe_words[kProbeSunRamped];
+                const u32 refused = probe_words[kProbeSunNoStandIn];
+                WS_LOG_INFO("faces",
+                            "the sun's confidence ramp: {} faces short of {} samples this frame, "
+                            "{} of them found no ancestor with {} rays of its own ({:.1f}%), so {} "
+                            "were drawn part way towards a stand-in",
+                            wanted, kFaceEager, refused, kFaceEager,
+                            wanted > 0 ? 100.0 * refused / static_cast<f64>(wanted) : 0.0,
+                            wanted - refused);
+            } else {
+                WS_LOG_INFO("faces",
+                            "the sun's confidence ramp: off (--no-sun-confidence), so a face is "
+                            "believed the moment it has one shadow ray");
+            }
             // R4c's pool, counted where the blocks are handed out. Three numbers because they are
             // three different states and only one of them is a problem:
             //

@@ -258,6 +258,26 @@ struct Options {
     // block is full to the byte (kProbeSunSeed).
     u32 sun_seed = 0;
 
+    // R5b: a face that has cast fewer than four shadow rays is drawn part way towards the coarse
+    // face standing over it, in proportion to how many it has cast.
+    //
+    // On, and `--no-sun-confidence` is the control arm: the face's own ratio is believed the moment
+    // it has one sample, which is every build up to this one. One ray is binary, so a room whose true
+    // answer is 0.05 reads as one face in twenty fully lit -- scattered over everything the camera
+    // has just turned towards, walked up to or revealed by carving, which is 23% of the close
+    // camera's faces (135,071 of 589,870) and is what a player reads as speckle and crawling noise.
+    //
+    // It casts NO extra rays, which is the constraint D394 puts on anything in this class. It is a
+    // different reading of rays already taken, and the arithmetic is in face_terms.glsl above
+    // kFaceSunStandIn -- including why the ramp is over at four samples, which is early enough that
+    // a settled shadow edge is untouched to the bit.
+    //
+    // It is not `--sun-seed` (D660) and the two do not double-count: that one decides where a new
+    // face's estimator STARTS, once, and this decides how far the estimator is believed while it is
+    // still short. With both on, a seeded face enters this ramp at three of four samples and is
+    // pulled towards the number it was seeded from.
+    bool sun_confidence = true;
+
     // An edit reopens a face's LAMP term only where it can stand between that face and a fitting.
     //
     // On, because off is the reported bug: the lamps were reopened over the sun's sixteen-metre box,
@@ -912,6 +932,12 @@ Options parse_options(int argc, char** argv) {
             // is every build before this one. It travels in the light probe buffer rather than in
             // the push block, which is exactly full -- see kProbeSunSeed in shaders\node.glsl.
             options.sun_seed = static_cast<u32>(std::atoll(argv[++i]));
+        } else if (arg == "--no-sun-confidence") {
+            // R5b's control arm: a face's own sun ratio is believed the moment it has one sample,
+            // which is the state every figure taken before this was measured in. The shading pass
+            // then leaves the stand-in word at nought and both readers return the raw ratio
+            // unchanged -- bit-exactly, not nearly (face_terms.glsl, face_sun_believed).
+            options.sun_confidence = false;
         } else if (arg == "--no-lamp-edit-scope") {
             options.lamp_edit_scope = false;
         } else if (arg == "--chisel" && i + 1 < argc) {
@@ -1152,6 +1178,10 @@ void print_help() {
         "                        its sun term from. 0 (the default) is a new face beginning at a\n"
         "                        single shadow ray, which the composite believes; 3 is R5b's\n"
         "                        prior, which no card-free measurement could resolve (D660)\n"
+        "  --no-sun-confidence   a face's own sun ratio is believed the moment it has ONE shadow\n"
+        "                        ray, rather than being blended towards the coarse face over it\n"
+        "                        until it has four. R5b's control arm, and the state every figure\n"
+        "                        before it was measured in\n"
         "  --no-lamp-edit-scope  an edit reopens the lamp term of every face within sixteen metres\n"
         "                        again, rather than only those it can stand in the light of. The\n"
         "                        control arm for the flicker while building\n"
@@ -7037,7 +7067,8 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.refraction ? kProbeRefract : 0u) |
                               (options_.translucency ? kProbeTranslucent : 0u) |
                               (options_.edge_aa ? kProbeEdgeAA : 0u) |
-                              (options_.level_blend ? kProbeLevelBlend : 0u);
+                              (options_.level_blend ? kProbeLevelBlend : 0u) |
+                              (options_.sun_confidence ? kProbeSunConfidence : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),
@@ -7704,11 +7735,15 @@ int Application::play(const Options& options) {
         // more holding the FILTERED far field, bounce and lamp, which R5a writes from this face's
         // coplanar neighbours and which only the composite reads.
         // ...and one more holding WHICH WAY the lamps are, as an octahedral direction, so a polished
-// surface can draw a highlight of a sconce rather than only be lit by it (kFaceLampDir).
-// kFaceLightWords in shaders/face_terms.glsl is the same twenty, and the shader bounds its
-        // writes against this length because a disagreement here is a write into whatever the
+        // surface can draw a highlight of a sconce rather than only be lit by it (kFaceLampDir).
+        // ...and one more again holding the sun visibility of the COARSE FACE standing over this
+        // one, which is the only word here that is a measurement of a different face: it is what a
+        // reader falls back towards while this face has too few shadow rays of its own to be
+        // believed (R5b, kFaceSunStandIn).
+        // kFaceLightWords in shaders/face_terms.glsl is the same twenty-one, and the shader bounds
+        // its writes against this length because a disagreement here is a write into whatever the
         // allocator placed next (D332).
-        if (!face_light_.create(device_, 20 * (face_buffers_.provisional_base() +
+        if (!face_light_.create(device_, 21 * (face_buffers_.provisional_base() +
                                                FaceBuffers::provisional_count()))) {
             WS_LOG_FATAL("app", "could not create the face light buffer");
             return 1;

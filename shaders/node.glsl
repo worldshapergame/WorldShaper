@@ -582,17 +582,27 @@ layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
 //   [29] R4b: how many of the faces holding a block are holding the EXPENSIVE class, which is four
 //        blocks and a hundred and forty-four bins. Read against [24] -- what it says is how much of
 //        the pool the sharp surfaces are taking.
-//   [30] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
-//   [31] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
+//   [30] R5b: faces under `kFaceSunBelieve` samples that were handed a stand-in to be believed
+//        against this frame -- the ramp's own convergence figure.
+//   [31] ...and how many of them found NOTHING up the tree worth taking, so were left believing
+//        their own one or two rays outright. **Two words and not one**, and the reason is that this
+//        change was built, measured, and read as doing nothing at all: every differing pixel
+//        between the two arms was a full flip between black and white, which is what the ramp
+//        NEVER produces and is exactly what a re-rolled coin toss looks like. With one counter,
+//        "no face wanted a stand-in" and "every face wanted one and `kSunSeedMin` refused it" print
+//        the same nought -- trap 7, and trap 16's rule that a suspect signal is settled by counting
+//        the events that produced it rather than by measuring the signal again.
+//   [32] the OFF-SCREEN SET's stride, host-written, in frames. See kProbeSecondaryStride.
+//   [33] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
 //        arm -- the dispatch is then exactly the screen and this stage does not exist.
-//   [32] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
-//   [33] R5b's SUN SEED, host-written: how many samples of the coarse face above it a newly
+//   [34] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
+//   [35] R5b's SUN SEED, host-written: how many samples of the coarse face above it a newly
 //        claimed face starts its sun term from. 0 is the control arm and is every build before it.
 //        Here rather than in the push block because that block is exactly the 128 bytes Vulkan
 //        guarantees, and the three words above it are the standing precedent for a host-written
 //        number that will not fit -- D553's warning is against giving an existing field a second
 //        meaning, not against this.
-const uint kLightProbeWords = 34u;
+const uint kLightProbeWords = 36u;
 const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 const uint kProbeLobeHeld = 24u;
 const uint kProbeLobeDeclined = 25u;
@@ -669,6 +679,17 @@ const uint kProbeEdgeAA = 1u << 11;
 // dither still picks the cell, so the coverage byte, the face key and the depth do not move and the
 // two arms differ by colour alone.
 const uint kProbeLevelBlend = 1u << 12;
+// R5b: a face that has cast fewer than `kFaceSunBelieve` shadow rays is drawn part way towards the
+// coarse face standing over it, in proportion to how many it has. Off, its own ratio is believed the
+// moment it has one sample — which is every build up to this one, and is what a player sees as
+// speckle over everything the camera has just revealed. `--no-sun-confidence` clears it.
+//
+// The dial is read where the stand-in is WRITTEN and never where it is read, which is the same
+// arrangement kProbeDenoise sets out and is not a preference: the composite has no binding for this
+// buffer, so a control arm spelled in the reader is not available to it at all. Off, the shading
+// pass leaves word `kFaceSunStandIn` at nought, both readers take the branch that returns the face's
+// own ratio unchanged, and the two arms differ by the ramp rather than by a branch in the reader.
+const uint kProbeSunConfidence = 1u << 13;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -685,7 +706,7 @@ const uint kProbeLevelBlend = 1u << 12;
 // ordering between them, so a host word inside the zeroed span would be a race whose loser is
 // whichever the driver ran second -- and a stride that reads nought half the time is a class that
 // silently stops casting.
-const uint kProbeSecondaryStride = 30u;
+const uint kProbeSecondaryStride = 32u;
 
 // ---- R9c, the halo: how far past the screen the primary pass claims ---------------------------
 //
@@ -709,10 +730,14 @@ const uint kProbeSecondaryStride = 30u;
 // rays, it moves them EARLIER -- so over a pan the total is unchanged and what changes is how many
 // faces are mid-burst at any instant. The honest risk is therefore the peak rather than the total,
 // and the honest measurement is the faces pass while panning, beside the convergence gate.
-const uint kProbeHaloMargin = 31u;
-const uint kProbeHaloStride = 32u;
+const uint kProbeHaloMargin = 33u;
+const uint kProbeHaloStride = 34u;
 // R5b's sun seed, host-written. See the word map above, and kSunSeedSamples for the figure.
-const uint kProbeSunSeed = 33u;
+const uint kProbeSunSeed = 35u;
+// R5b's ramp, counted where it is decided: how many faces wanted a stand-in this frame and how many
+// of them were refused one. See the word map above for why it is two words rather than one.
+const uint kProbeSunRamped = 30u;
+const uint kProbeSunNoStandIn = 31u;
 
 uint probe_halo_margin() { return light_probe.words[kProbeHaloMargin]; }
 uint probe_halo_stride() { return max(light_probe.words[kProbeHaloStride], 1u); }
@@ -733,6 +758,7 @@ bool probe_refract() { return (light_probe.words[0] & kProbeRefract) != 0u; }
 bool probe_translucent() { return (light_probe.words[0] & kProbeTranslucent) != 0u; }
 bool probe_edge_aa() { return (light_probe.words[0] & kProbeEdgeAA) != 0u; }
 bool probe_level_blend() { return (light_probe.words[0] & kProbeLevelBlend) != 0u; }
+bool probe_sun_confidence() { return (light_probe.words[0] & kProbeSunConfidence) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 uint probe_sun_seed() { return light_probe.words[kProbeSunSeed]; }
 
@@ -982,6 +1008,13 @@ const uint kFaceSettled = 1u;
 // And how long a face is exempt from the shading stride, which is a different question with a
 // different answer: a face that may be read at one sample is still converging at four, so it keeps
 // its ray every frame until it has enough of them to be worth refreshing rather than finishing.
+//
+// R5b's confidence ramp is written against this same four and calls it `kFaceSunBelieve`
+// (shaders/face_terms.glsl), because "may be READ at one sample" and "is BELIEVED at one sample"
+// turned out to be the two halves of one sentence and only the first was ever decided. The figure
+// cannot be spelled as this constant there, since node.glsl includes face_terms.glsl and not the
+// other way about; the comment on kFaceSunBelieve carries the whole argument for why the two are one
+// number rather than two that happen to agree.
 const uint kFaceEager = 4u;
 const uint kFaceWindow = 256u;   // where both counts halve, so the sun may move
 
@@ -1428,6 +1461,38 @@ const uint kSunSeedSamples = 3u;
 // level coarser. Sixteen rather than kSkySeedMin's 64 because the sun's window is 256 where the
 // ambient term's is 2,048: the same fraction of the same estimator.
 const uint kSunSeedMin = 16u;
+
+// ...and the same question asked at READ time, which turns out to have a different answer — this is
+// FOUR, and the sixteen above was inherited into it once and measured as being most of why R5b's
+// ramp did nothing.
+//
+// **The measurement, card-free, three frames after a camera cut through 180 degrees** (D662): of
+// 4,665 faces short of `kFaceSunBelieve` samples, **3,006 — 64.4% — found no ancestor holding
+// sixteen rays of its own**, so two thirds of the population the ramp exists for went on believing
+// one shadow ray outright. Nothing in any picture said so, and it could not have been read out of
+// one: every pixel that differed between the two arms was a full flip between black and white,
+// which is what a re-rolled coin toss looks like and is the one thing the ramp never produces.
+// `kProbeSunRamped` and `kProbeSunNoStandIn` are what answered it, and they are two counters rather
+// than one for exactly that reason.
+//
+// **Why the two thresholds differ is the whole of it, and it is not a relaxation.** `kSunSeedMin`
+// guards a prior written ONCE, into a face's own counters, at claim: it will be believed for the
+// rest of that face's life against every ray the face takes afterwards, so a thin ancestor there is
+// noise that has to be measured back out, and refusing costs nothing — the face simply starts from
+// nothing, which is what it did before D660. This guards a blend re-decided EVERY FRAME and thrown
+// away the moment the face has four rays of its own, so refusing is not free: it is the feature not
+// happening, on the faces it was built for. And the case that makes the two diverge is the one that
+// matters most — a camera turning into geometry it has never faced, where the coarse face is exactly
+// as new as the fine one under it and takes forty frames to reach sixteen samples, because it is
+// eager for four and then on `face_stride` for the rest.
+//
+// Four, and it is `kFaceSunBelieve` again rather than a third number: the honest test is whether the
+// ancestor is better measured than the face reading it, and the face is under four by construction
+// here. So the ancestor has to be worth at least what this renderer calls its own answer. Below
+// that the two are both coin tosses and there is nothing to be gained by mixing them; at four and
+// above the ancestor is drawing on five hundred and twelve faces' worth of geometry at four times
+// the confidence of the face asking.
+const uint kSunStandInMin = 4u;   // must match kFaceSunBelieve in face_terms.glsl
 
 // A pair of counts scaled down to at most `seed` samples, keeping the ratio. The same arithmetic
 // face_light_seed already does to a stand-in's history, applied to a face's own.

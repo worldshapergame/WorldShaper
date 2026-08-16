@@ -578,6 +578,22 @@ vec3 shade_surface(vec3 dir, uvec4 packed, uint face_slot, float t, vec3 lets_pa
         uint samples = counters & 0xFFFFu;
         if (samples >= kShadowSettled) {
             sun_visible = float((counters >> 16u) & 0xFFFFu) / float(samples);
+            // ...and how far that ratio is worth believing, which at one sample is not far at all.
+            //
+            // R5b. `kShadowSettled` is ONE, so the line above reads a coin toss on any face the
+            // camera has just revealed, and neighbouring faces that have each cast one ray disagree
+            // completely -- 23% of the close camera's faces are in that state, and it is what a
+            // player sees as speckle and crawling noise. This blends towards the coarse face
+            // standing over it, which five hundred and twelve faces share, in proportion to how many
+            // rays this face has of its own. The whole argument, the figure and why the ramp is over
+            // before a shadow edge has resolved are in face_terms.glsl above kFaceSunStandIn.
+            //
+            // The word is read under the same bound the counters were, because the two arrays are
+            // sized over the same range -- the store's capacity plus the card's provisional tail --
+            // and the block further down already reads this record under exactly this test.
+            sun_visible = face_sun_believed(
+                sun_visible, samples,
+                face_light.words[face_slot * kFaceLightWords + kFaceSunStandIn]);
         }
     }
     lambert *= sun_visible;
@@ -1566,7 +1582,16 @@ void main() {
                 if (samples < kShadowSettled) {
                     colour = vec3(0.0, 0.3, 1.0);
                 } else {
-                    colour = vec3(float((counters >> 16u) & 0xFFFFu) / float(samples));
+                    // The BELIEVED fraction, which is what the shaded picture beside this view is
+                    // actually lit by since R5b, and not the raw ratio the counters hold. An
+                    // instrument that draws a different number from the engine is trap 10 with the
+                    // colours the right way round: the whole use of this view is to say whether the
+                    // mottle in the picture is in the light, and it cannot answer that about a
+                    // quantity the picture does not use. `--no-sun-confidence` is the arm that draws
+                    // the raw ratio, in both this view and the picture, out of the same build.
+                    colour = vec3(face_sun_believed(
+                        float((counters >> 16u) & 0xFFFFu) / float(samples), samples,
+                        face_light.words[slot * kFaceLightWords + kFaceSunStandIn]));
                     // RED where the last shadow ray was stopped by a cell the pool has not built
                     // rather than by matter. A grey shadow and a shadow cast by ignorance are the
                     // same picture, and only one of the two is a bug.

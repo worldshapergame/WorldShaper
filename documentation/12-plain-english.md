@@ -3243,3 +3243,47 @@ touched it — nine per cent of the picture moved, by about a tenth of the way f
 and every number that describes the *shape* of what was hit came back identical. On your machine,
 at full resolution, the place to look is a large flat surface at middle distance while you walk
 slowly towards it.
+
+## The speckle on anything you have just turned towards
+
+This is the other half of the sun's guess three sections up — the one that is in the build and
+switched off. This half is in and switched on.
+
+When a surface comes into view the renderer fires one ray at the sun to find out whether the sun can
+reach it. One ray has only two possible answers — yes or no — so a wall that is really nine tenths in
+shadow comes out as a scatter of black and white faces, each of them wrong, until enough rays have
+been fired to average them out. That takes a few frames, and it is a few frames on **every** surface
+you turn towards, walk up to, or reveal by cutting something away. Measured on the close camera of
+the facility: **135,071 of its 589,870 surfaces, twenty-three per cent, had not yet fired the four
+rays it takes to have an opinion**. That is what the speckle is made of. It is not the shadows being
+wrong; it is the shadows not having been measured yet.
+
+What has changed is that the renderer now knows the difference between an answer and a guess. Every
+small surface sits under a bigger one — one coarse surface covers five hundred and twelve of them —
+and that bigger one was measured long before its children were even found. So a surface with one ray
+to its name is now drawn mostly as its parent, a surface with two is drawn half and half, and by the
+fourth ray it is entirely its own. Nothing extra is traced: it is the same rays, read more honestly.
+
+**The number four matters and it is not a dial.** Four is where the renderer already stops treating a
+surface as new. Stopping there means a real shadow edge — the soft edge under a cornice, which takes
+about four frames to resolve — is left exactly as it was, to the last decimal place. A longer blend
+would have smoothed the speckle further and taken the edges of your shadows with it, which is the
+trade this deliberately refuses.
+
+**And it was nearly shipped doing a third less than it should**, which is worth saying because the
+thing that caught it was not a picture. Measured on the small test scene here, the change moved so
+little that it could have been switched off and nobody would have known: the difference between
+having it and not having it was smaller than the difference between two runs of the *same* version.
+Rather than look at the pictures again, the renderer was made to COUNT what it was doing — how many
+surfaces asked for a parent to lean on, and how many were turned away. The answer was that **sixty-four
+per cent of them were being turned away**, because the parent has to be reasonably well measured
+itself and the test for that had been copied from somewhere it meant something different. Loosened to
+the honest test — is the parent better measured than the surface asking? — it now serves a third more
+of them. The remainder are the first two or three frames after you spin round, where nothing above is
+any better informed either, and those fill in immediately afterwards.
+
+**What could not be checked here is the building itself.** The machine these sessions run on shares
+its memory with several others, a picture of the facility needs about nine gigabytes, and three
+attempts were killed by the system part way through — one of them sixteen minutes in. The facility is
+where the twenty-three per cent was measured and it is where this should show best, so that is the
+first thing to look at on a machine with a graphics card.

@@ -235,7 +235,7 @@ inline constexpr i32 kFeedbackSecondary = 0x200000;
 // The gathering ray's counters: one word a question, over the whole dispatch, cleared every frame
 // and read back at the screenshot audit. Must match kLightProbeWords in shaders/node.glsl, which
 // carries the word map -- the shader is the authority because it is the only writer.
-inline constexpr u32 kLightProbeWords = 34;
+inline constexpr u32 kLightProbeWords = 36;
 // Where the by-level histogram of "stopped by a cell the pool has not built" starts in it. Must
 // match kLightProbeLevels in shaders/node.glsl.
 inline constexpr u32 kLightProbeLevels = 9;
@@ -256,16 +256,23 @@ inline constexpr u32 kProbeLobeBigHeld = 29;
 // between them with nought -- three ranges that do not touch, because transfer commands in one
 // command buffer have no ordering between them and a host word inside the filled span would be a
 // race. See the write site in main.cpp.
-inline constexpr u32 kProbeSecondaryStride = 30;
+inline constexpr u32 kProbeSecondaryStride = 32;
+// R5b's ramp, and it is TWO counters for the reason trap 7 gives: how many faces were short enough
+// of their own shadow rays to want the coarse face over them, and how many of those found nothing up
+// the tree worth taking. With one number, "nothing was under-measured" and "everything was, and
+// kSunSeedMin refused all of it" print the same nought -- which is exactly how this change was first
+// read as doing nothing. Counters, so they sit inside the span the host fills with nought.
+inline constexpr u32 kProbeSunRamped = 30;
+inline constexpr u32 kProbeSunNoStandIn = 31;
 // R9c's two, past the counters for the same reason: host-written, outside the span the host fills
 // with nought, so the three ranges do not touch. Must match kProbeHaloMargin and kProbeHaloStride
 // in shaders/node.glsl. The margin is in pixels each side and nought means the stage is off.
-inline constexpr u32 kProbeHaloMargin = 31;
-inline constexpr u32 kProbeHaloStride = 32;
+inline constexpr u32 kProbeHaloMargin = 33;
+inline constexpr u32 kProbeHaloStride = 34;
 // R5b's, in the same host-written range and for the same reason: how many samples of the coarse
 // face above it a NEWLY CLAIMED face starts its sun term from. 0 is the control arm. Must match
 // kProbeSunSeed in shaders/node.glsl; the figure itself is kSunSeedSamples, there.
-inline constexpr u32 kProbeSunSeed = 33;
+inline constexpr u32 kProbeSunSeed = 35;
 
 // The dials in word 0 of that buffer, host-written and card-read.
 //
@@ -322,6 +329,16 @@ inline constexpr u32 kProbeEdgeAA = 1u << 11;
 // surfaces since the marcher existed. The dither still picks the CELL in both arms, so the coverage,
 // the face key and the depth are identical and an image diff between the two arms is colour alone.
 inline constexpr u32 kProbeLevelBlend = 1u << 12;
+// R5b: a face that has cast fewer than four shadow rays is drawn part way towards the coarse face
+// standing over it, in proportion to how many it has. Cleared by `--no-sun-confidence`, which
+// believes a face's own ratio the moment it has one sample -- the state every figure before this was
+// taken in, and what a player sees as speckle on everything the camera has just revealed.
+//
+// Read where the stand-in is WRITTEN and never where it is read, which is kProbeDenoise's
+// arrangement and for a harder reason than tidiness: `resolve.comp` has no binding for this buffer
+// at all, so a control arm spelled in the composite is not available to it. Cleared, the shading
+// pass leaves the stand-in word at nought and both readers return the raw ratio bit-exactly.
+inline constexpr u32 kProbeSunConfidence = 1u << 13;
 
 // R4c's pool: how many blocks of outgoing bins there are and how many words each is. Must match
 // kLobeBlocks, kLobeBins and the layout in shaders/face_terms.glsl, which is the authority because

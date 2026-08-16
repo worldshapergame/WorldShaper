@@ -8480,3 +8480,157 @@ with no card; the colour word is.
 | D664 | **The shaded picture cannot resolve this on this machine** | finding | Two runs of one arm: 81.4% of pixels, mean 3.41 of 255 |
 | D664 | **Views 12–15 are the instrument** | finding | The colour word alone moves 9.01% against a 1.00% floor |
 | D664 | **Levels 1 to 3 are one colour, and always were** | finding | No node between a voxel and a brick, so a third of the log2 range has no dither in colour at all |
+
+## D665 — the sun a face has barely measured is no longer believed as though it were measured
+
+**`kFaceSettled` is one, and one shadow ray is a coin toss.** D660 named the fault and fixed the
+wrong half of it. The composite reads a face the moment it has cast a single ray at the sun, so in a
+room whose true answer is 0.05 one face in twenty reads fully lit — scattered over every surface the
+camera has just turned towards, walked up to or revealed by carving. The close camera's own audit
+says how big that population is: **135,071 faces of 589,870, 23%, have fewer than `kFaceEager` = 4
+samples**, which is the same figure the handover quotes as *"the grain is faces that are still
+measuring, not converged faces disagreeing"*.
+
+R9d already built what should stand in for such a face — `visibility.comp` hands the composite the
+coarse face three levels up, which five hundred and twelve faces share and which is therefore
+smooth — **but it is a hard switch**: no samples at all, or your own one-sample answer believed
+outright, with nothing between. **D665 is the ramp.** A reader believes a face's own ratio in
+proportion to how well measured it is and takes the rest from that same stand-in, which is
+`bounce_confidence`'s shape applied to the one term that never had it.
+
+**It casts no rays.** D394 is the standing measurement that metering an unconverged face's burst
+makes the transient worse, because what this pass spends on such a face is mostly the face and not
+the ray, so anything in this class has to be a different reading of rays already taken. This is:
+one word a face, written where the counters are written, read by the composite and by a gathering
+ray out of a record both were already loading.
+
+**Four, and it is `kFaceEager`'s four rather than a figure with room to be tuned.** The argument is
+in `shaders/face_terms.glsl` above `kFaceSunStandIn` and has four parts, of which the last is the
+gate:
+
+- it is where this renderer already stops treating a face as new — below `kFaceEager` a face is
+  exempt from the shading stride and casts every frame — so the ramp is exactly co-extensive with
+  the every-frame phase and the stand-in it blends towards is refreshed on every frame it is used;
+- it is the count the audit already calls settled, so the population it touches is precisely the 23%
+  above and neither number has to be inferred from the other;
+- `kFaceEditSeed` is eight (D373), so any figure above eight would blend every face inside an edit
+  box towards a stand-in the same edit has just reseeded;
+- **a settled shadow edge is untouched, to the bit.** R5a deliberately does not filter the sun,
+  because a shadow edge is a real high-frequency feature, and this must not become that filter by
+  another route. A penumbral face reaches four samples within four frames — it is eager, so it casts
+  every frame — and from there `face_sun_believed` is the identity.
+
+**Where the number lives, and why it is stored rather than looked up where it is read.** The
+composite is the reader this exists for and the composite cannot do the ancestor walk: `resolve.comp`
+holds the face record and has no binding for the face hash table, no `NodeParams`, and no way to turn
+an ancestor key into a slot. Carrying a second slot in the face-slot image is a word a PIXEL — 66 MB
+a frame at 4K — to say what one word a FACE says, and there are two orders of magnitude fewer faces
+than pixels (D205). So `shade_faces.comp` publishes the stand-in's ratio into word 20 of the face
+light record on every visit while the face is short, and `kFaceLightWords` goes 20 → 21 (+4.2 MB,
+88,704 KB of face light against 84,480).
+
+**The control arm is spelled in the WRITER and not in the reader, and that is forced rather than
+chosen.** `resolve.comp` has no binding for the light probe buffer, so `--no-sun-confidence` cannot
+be a branch there. Cleared, the shading pass leaves word 20 at nought, the known bit is absent, and
+`face_sun_believed` returns the raw ratio — **bit-exactly**, by an early return rather than by
+`mix(x, own, 1.0)`. That is `kProbeDenoise`'s arrangement, reached from a harder direction.
+
+**It is not `--sun-seed` and the two cannot double-count.** D660's lever decides where a new face's
+estimator STARTS, once, at claim time; this decides how far that estimator is BELIEVED while it is
+still short. A seeded face arrives holding its ancestor's own ratio at three samples, so what this
+blends is three quarters of that ratio with one quarter of the same ratio, which is the ratio. With
+both on, a face starts at its ancestor's answer and is fully its own after one ray of its own instead
+of four.
+
+**The gate that is not a picture.** `tests/test_sun_confidence.cpp` reads `kFaceSunBelieve` out of
+`shaders/face_terms.glsl` and holds it against `kFaceEager` in `src/world/face_store.hpp` and against
+`kFaceEager` in `node.glsl`, then pins the ramp: 0.25/0.5/0.75/1 at one to four samples, the identity
+at four and above for every stand-in value, the edit reseed landing past the ramp, and the packed
+nought of a fully shadowed ancestor being a different word from a record nobody has written (trap 7
+in sixteen bits). Three copies of one number held together by a comment is the arrangement that rots
+in silence; a test that reads the file is not.
+
+**Measured card-free, and the first reading was wrong in the most useful way.** Not the facility —
+three attempts at it were killed, see below — but `clips/beam_test.clip`, a sealed dark room with one
+oculus, which is where *"the true answer is nought and one ray says otherwise"* is most of the
+picture. Both arms of every pair restored the same saved world, settled at frame 240, cut the camera
+through 180° at measured frame 60, and **every arm printed content `33ae49a68b94352f`**.
+
+**The pictures do not separate the arms, and three runs each is what says so.** Shaded, frame 72,
+`--no-secondary-light` in both arms:
+
+| arm | speckle | mean | roughness | mean |
+|---|---|---|---|---|
+| ramp on | 392.02, 395.78, 391.93 | **393.24** | 34.580, 35.005, 35.057 | **34.881** |
+| `--no-sun-confidence` | 395.83, 396.02, 395.35 | **395.73** | 35.064, 34.632, 35.181 | **34.959** |
+
+Every figure leans the right way and none of them clears its own spread: the ON arm's three speckle
+runs span **3.85** against a gap between the arms of 2.49. Two runs of ONE arm differ on 304 pixels
+where the two arms differ on 460. **Trap 9, and D660's shape exactly** — the repeat arm is what made
+it a measurement rather than a result.
+
+**What the pictures could not say, one counter said in a line.** The differences between the arms
+were not merely small, they were the WRONG SHAPE: bucketed by what the control read there, every
+differing pixel was a full flip between black and white — 252 pixels 0 → 255 and 212 pixels 255 → 0
+on the sun term alone (`--debug-mode 16`). That is what a re-rolled coin toss looks like and it is
+the one thing a ramp never produces: a blended face reads a quarter of 255, not 255. So the ramp was
+doing nothing on the faces that differed, and no picture could show why. **Trap 16 is the rule that
+settles this — do not measure a suspect signal again, count the events that produced it** — and
+`kProbeSunRamped` and `kProbeSunNoStandIn` are that count. Two words rather than one, because
+"nothing was under-measured" and "everything was and every ancestor was refused" print the same
+nought (trap 7). Three frames after the cut:
+
+```
+the sun's confidence ramp: 4665 faces short of 4 samples this frame, 3006 of them
+found no ancestor with 16 rays of its own (64.4%), so 1659 were drawn part way
+towards a stand-in
+```
+
+**Sixty-four per cent of the population this change exists for was being refused a stand-in, and the
+reason was a constant inherited without being asked whether it was the same question.**
+`kSunSeedMin` = 16 guards a prior written ONCE into a face's own counters at claim: that prior is
+believed for the rest of the face's life, so a thin ancestor there is noise that has to be measured
+back out, and refusing costs nothing — the face starts from nothing, which is what it did before
+D660. The ramp re-decides every frame and throws the blend away the moment the face has four rays of
+its own, so refusing is not free: it is the feature not happening, on exactly the faces it was built
+for. And the case that separates the two is the one that matters most — a camera turning into
+geometry it has never faced, where the coarse face is exactly as new as the fine one under it and
+takes about forty frames to reach sixteen samples.
+
+**So the read-time floor is its own constant, `kSunStandInMin` = 4, and it is `kFaceSunBelieve`
+again rather than a third number**: the honest test is whether the ancestor is better measured than
+the face reading it, and the face is under four by construction there. Measured on the same frame of
+the same world, the refusal falls **64.4% → 54.4%** and the population served goes **1,659 → 2,128**,
+a 28% increase for no rays and no extra walk.
+
+**The 54% that remain are structural and are not a bug.** Three frames after a hard cut into unseen
+geometry there is genuinely nothing better up the tree — the ancestor was claimed on the same frame.
+The ramp reaches those faces a few frames later, and the population it was measured against on the
+facility (23% of a SETTLED close camera) is the opposite case: there the coarse pyramid is long
+converged and the fine faces are the ones churning.
+
+**And the facility, which is where R5's gate lives and where the 23% comes from, could not be
+reached.** Every agent session on this container shares ONE memory cgroup of 13.3 GB; a card-free
+facility run peaks at **9.2 GB**; neighbouring sessions were holding 8 to 12 GB of it. Three attempts
+were OOM-killed, one of them sixteen minutes in. A kill writes no screenshot and leaves a log that
+stops mid-frame, which is at least loud — trap 30 one level out.
+
+**Two more arms were thrown away before any of this, and both are traps already in the list.** The
+first pair ran without `--settle` and the second arm resumed from the world cache the first had just
+written: content `900f16ba75a264f3` against `33ae49a68b94352f`, 4,242 nodes sharpened against 6,732.
+Two pictures of two different buildings, and only the `scene:` line said so (trap 8). And the first
+localised roughness figure applied the same black-pixel floor the whole-frame figure uses — the arms
+are black in slightly different places, so it summed **540 windows against 612** and reported the
+ratio as one comparison (trap 10, in the instrument).
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D665 | **The ramp is on by default** | decision | It costs no rays, it cannot touch a settled face, and its control arm is bit-exact |
+| D665 | **Four, and it is `kFaceEager`'s four** | decision | Where the renderer already stops treating a face as new, and early enough that a settled shadow edge is untouched to the bit |
+| D665 | **The stand-in is STORED, not looked up in the composite** | decision | `resolve.comp` has no face hash table; a second slot in the face-slot image is a word a pixel against a word a face |
+| D665 | **The control arm is in the WRITER** | decision | The composite has no binding for the probe buffer, so `--no-sun-confidence` cannot be a branch there |
+| D665 | **`kSunStandInMin` = 4 is NOT `kSunSeedMin` = 16** | decision | A prior written once and a blend re-decided every frame are different questions; at 16, 64.4% of the population was refused |
+| D665 | **Two counters, not one** | method | "Nothing was under-measured" and "every ancestor was refused" printed the same nought, and that is what hid the fault |
+| D665 | **The pictures do not resolve it here** | honesty | Three runs an arm; the within-arm spread is wider than the gap. D660's shape, and trap 9 |
+| D665 | **The counter is what found the fault** | method | Trap 16: count the events that produced a suspect signal rather than reading the signal again |
+| D665 | **The facility could not be reached from here** | honesty | Shared 13.3 GB cgroup, a 9.2 GB run, three OOM kills |

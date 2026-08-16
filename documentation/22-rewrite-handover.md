@@ -642,12 +642,21 @@ a step-bounded ray is not a bound. Not carried. D361.
    per-pixel read, the bin zeroing, the compare-and-swap and every deposit into a bin, one arm at a
    time, and the crash survived all five — while `--lobe-floor 1.0`, where no face holds a block at
    all, reaches frame 40. `--no-lobe-ray` does not help either, so the march is not it.
-3. **Then R5b**, and the first step of it is now a flag rather than a stage: `--sun-seed 3` against
-   the default 0, at **1280×800 quality 7, settled, the enclosed and close cameras**, which is where
-   R5's gate lives. Six card-free runs could not resolve it (D660) and the numbers are in this
-   file's opening block. What is left of R5b after that is the temporal half proper — R5c's
-   deterministic blend is separate, and **R5d's edge AA has since landed its first
-   half** (D663) — whose own next step is `NodePool::fold_children` rather than any shader.
+3. **Then R5b**, and what is left of it needs a card rather than a decision. Two levers exist now
+   and they are different things:
+   - **`--no-sun-confidence`** (D665) is R5b's read half and it is **ON**. A face that has cast
+     fewer than four shadow rays is drawn part way towards the coarse face over it, in proportion to
+     how many it has — which is the 23% of the close camera's faces the numbers below name, and is
+     what a player sees as speckle on anything just revealed. Look at it at **1280×800 quality 7,
+     the enclosed and close cameras**, against `--no-sun-confidence`, and at the ONE thing a settled
+     shot cannot show: turn the camera through 180° and watch the first half second;
+   - **`--sun-seed 3`** against the default 0 is the write half and is still **OFF**, because six
+     card-free runs could not resolve it (D660). The two do not double-count — see D665 — so the
+     honest order is to price the ramp first and then ask whether the seed adds anything on top.
+
+   What is left of R5b after that is the temporal half proper. R5c's deterministic blend and R5d's
+   edge AA are separate stages and **both have since landed their first half** (D664, D663); R5d's
+   own next step is `NodePool::fold_children` rather than any shader.
    **The paragraph below is stale twice over and this is the correction**: the reading it says is
    "not done" IS done for four terms and was never done for the sun, which is what D660 built. The
    old note read: **Its opening instruction below is stale and
@@ -655,6 +664,93 @@ a step-bounded ray is not a bound. Not carried. D361.
    at claim time (`shade_faces.comp`, the `samples == 0` branch), gated on `!provisional_face`, so a
    newly claimed face already starts from the coarse face over it. What is missing is the temporal
    half, and R5b's numbers three blocks down still stand.
+
+---
+
+#### LATEST, 2026-08-16 (night): R5b's READ half is built and is ON — the ramp, D665
+
+**The fault D660 named is fixed from the other end.** `kFaceSettled` is one, so the composite has
+always believed a face that has cast a single shadow ray, and one ray is binary. D660 gave a new face
+a PRIOR at claim time and could not be shown to pay; this changes what a reader DOES with a face that
+is still measuring, every frame, for as long as it is short — which is the stronger of the two and is
+the one the measured 23% is about.
+
+**A face's own sun ratio is blended towards the coarse face standing over it, in proportion to its own
+sample count, reaching full confidence at `kFaceEager` = 4.** R9d's stand-in was already there and was
+a HARD SWITCH — nothing, or your own coin toss believed outright. This is the ramp between, and it is
+`bounce_confidence`'s shape applied to the one term that never had it. **No extra rays** (D394): one
+word a face (`kFaceLightWords` 20 → 21, +4.2 MB), written where the counters are written, read by the
+composite and by a gathering ray out of a record both already load.
+
+Four is not a tuning knob and the reasons are in `shaders/face_terms.glsl` above `kFaceSunStandIn`.
+The one that decides it: **a settled shadow edge is untouched to the bit**, because a penumbral face
+reaches four samples in four frames (it is eager, so it casts every frame) and from there the blend
+is the identity. R5a deliberately does not filter the sun; this must not become that filter by
+another route, and at four it cannot.
+
+`--no-sun-confidence` is the control arm, and it is spelled in the WRITER rather than in the reader —
+`resolve.comp` has no binding for the probe buffer, so a branch there is not available. Cleared, the
+shading pass leaves the word at nought and both readers return the raw ratio bit-exactly.
+`tests/test_sun_confidence.cpp` reads the constant out of the shader and holds it against the store's,
+which is what keeps three copies of one number from drifting.
+
+**Measured card-free on `clips/beam_test.clip`, and the pictures do not resolve it — the COUNTER
+does.** Every arm restored the same saved world, settled at frame 240, cut through 180° at measured
+frame 60, all on content `33ae49a68b94352f`. Three runs an arm of the shaded frame put the two inside
+each other, exactly as D660's did: speckle **393.24 against 395.73** with the ON arm's own three runs
+spanning 3.85, roughness 34.881 against 34.959, and two runs of ONE arm differing on 304 pixels where
+the two arms differ on 460. Trap 9.
+
+**What the pictures could not say, `the sun's confidence ramp:` says in a line**, and it is the line
+to read first when coming back to this. Every pixel that differed between the arms was a full flip
+between black and white — which a blend never produces — so the ramp was not firing on them, and only
+a count of the events could say why (trap 16). Three frames after the cut it read **4,665 faces short
+of four samples, 3,006 of them (64.4%) with no ancestor holding sixteen rays of its own**. The
+read-time floor had been inherited from `kSunSeedMin`, which guards a prior written ONCE at claim; a
+blend re-decided every frame is a different question, and after a hard cut the coarse face is exactly
+as new as the fine one under it. `kSunStandInMin` = 4 is its own constant now: refusal **64.4% →
+54.4%**, faces served **1,659 → 2,128**, for no rays. The 54% that remain are structural three frames
+after a cut and empty out over the next few.
+
+**So the next figure worth taking is on the FACILITY**, where the 23% is measured on a SETTLED close
+camera — the opposite case, with a long-converged coarse pyramid and churning fine faces, which is
+where the refusal rate should be near nought and the ramp should be doing its most work.
+
+**What could not be reached from here is the FACILITY**, which is where R5's gate lives and where the
+23% was measured. Every session on this container shares one 13.3 GB memory cgroup, a card-free
+facility run peaks at **9.2 GB**, and neighbouring sessions held 8–12 GB of it: three attempts were
+OOM-killed, one sixteen minutes in. The recipe is D659's with `--settle`, a restored world cache on
+both arms and a quiet box.
+
+**So what it still wants is a machine with a card**, at 1280×800 quality 7, the enclosed and close
+cameras, plus the one thing a settled shot cannot show: a 180° turn, watched for the first half
+second.
+
+---
+
+#### 2026-08-16 (evening, second): R5c's first half — the level dither picks the cell, not the colour
+
+**Read D664.** The marcher picks how coarse a cell to stop on from the pixel's own footprint, and
+resolves the fractional part with a 4×4 ordered Bayer value — so wherever the footprint sits between
+two levels, neighbouring pixels stop on cells of two different sizes and draw two different folded
+averages in a fixed 4×4 pattern. That is the checkerboard on middle-distance surfaces, and it swims
+as the camera walks.
+
+- **The dither is NOT deleted, and that is the design.** `node.glsl`'s own comment warns that
+  removing it "changes which pixels report full coverage and which report the node's filtered
+  fraction", and it is right. The dither still picks the CELL — coverage byte, face key, level and
+  depth are untouched, and the world's content hash does not move — and only the COLOUR becomes
+  continuous. A hit at the lower level blends towards its parent by the fraction, a hit at the upper
+  level towards the child the ray entered by one minus it, so both members of a dithered pair aim at
+  the same number. `kNodeBlendDeadband` is 1/16 because that is the Bayer table's own step.
+- **The instrument is the visibility buffer's COLOUR word, not the shaded picture.** Facility from
+  twenty metres, settled, quality 7, world `2059a02689b7bf7c`: the colour word moves on **9.01% of
+  pixels against a same-arm floor of 1.00%**, the geometry word moves 2.000% against a floor of
+  1.925%, and **the coverage byte moves on nothing at all**. The shaded frame cannot resolve it here
+  — two runs of one arm differ on 81.4% of pixels — and it is not claimed to.
+- **`--no-level-blend` is the control arm**, and probe bit 12. Levels 1 to 3 fold to one colour
+  because there is no node between a voxel and a brick, so a third of the log2 range has no colour
+  dither in it at all and never had.
 
 ---
 
