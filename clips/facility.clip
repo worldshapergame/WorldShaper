@@ -50,6 +50,26 @@ include "facility/vestibule.clip"
 include "facility/rotunda.clip"
 include "facility/halls.clip"
 include "facility/stair.clip"
+
+# --- and the state rooms, which are new -----------------------------------------------------
+#
+# Four corners of the main block had never been entered. The brief has always said the building
+# has to be able to GROW -- "adding a room is one new file and three lines in the manifest" -- and
+# these are those lines. They go here, after the four original rooms and before the fittings,
+# because the fittings line below has to stay last among the inside parts for the reason its own
+# comment gives.
+#
+# THE INTERIORS ARE NOT MIRRORED AND THE SHELL STILL IS. A salon east and a chapel west, a
+# ballroom over one and a library over the other: mirroring them would mean two salons and no
+# chapel. BRIEF.md rule 3 was amended in the same change to say the shell is symmetric and what
+# is inside a room is not required to be.
+include "facility/crypt.clip"
+include "facility/salon.clip"
+include "facility/chapel.clip"
+include "facility/ballroom.clip"
+include "facility/library.clip"
+include "facility/terrace.clip"
+
 include "facility/fittings.clip"
 
 # --- and what the weather has done to all of it ------------------------------------------------
@@ -76,6 +96,7 @@ let shell = union {
 
 let inside = union {
     part_vestibule part_rotunda part_halls part_stair part_surface
+    part_crypt part_salon part_chapel part_ballroom part_library
 }
 
 let built = union { shell inside }
@@ -87,6 +108,7 @@ let built = union { shell inside }
 let hollowed = difference {
     built
     void_doors void_windows void_vestibule void_rotunda void_halls void_stair
+    void_crypt void_salon void_chapel void_ballroom void_library
 }
 
 # AND THE FURNITURE AFTER THE ROOMS, which is what the paragraph above always claimed happened.
@@ -135,7 +157,15 @@ let hollowed = difference {
 # note reasons the placement from "the great door's dressing stops at 2.025 and the antae start at
 # 6.05" and never mentions the side doorcase, which runs 4.05 .. 6.75 straight through the middle
 # of that span. Moving it is an elevation decision and belongs in the file that draws the elevation.
-let furnished = union { hollowed  difference { part_fittings void_doors void_windows } }
+# AND THE ROOF GARDEN WITH THE FURNITURE, for the same reason and not quite the same one.
+#
+# `part_terrace` is pots, seats, lanterns, an armillary sphere and a cistern standing on the lead
+# deck. Like a fitting it stands in somebody's air and must not be cut by a room; UNLIKE a fitting
+# it is not in a doorway and never can be, because every door and window in this building is at
+# least two and a half metres below the deck it stands on. So it joins here rather than in
+# `inside`, and it does NOT go through the door-and-window difference: passing it through one
+# would be a subtraction that can only ever remove something by accident.
+let furnished = union { hollowed  difference { part_fittings void_doors void_windows }  part_terrace }
 
 # --- surface --------------------------------------------------------------------------------------
 #
