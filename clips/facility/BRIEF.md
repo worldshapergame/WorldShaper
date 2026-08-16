@@ -72,8 +72,10 @@ Nothing else about the rule changes. If your part is any of the shell, mirror it
 must overlap the podium by at least a voxel (0.03 m); do not butt it exactly, because a surface
 displaced by weathering can open a hairline gap. Overlap by 0.05 m and the join is certain.
 
-**5. Paint only your own geometry, and write `below=0.02`, never `below=0`.** Every paint line
-must be `paint <material> where=<one of your own shapes> below=0.02`.
+**5. Paint only your own geometry, and write `below=0.02`, never `below=0` — and `below=0.035`
+for anything a transform put where it is.** Every paint line must be
+`paint <material> where=<one of your own shapes> below=0.02`, or `below=0.035` when the shape is
+placed by `translate`, `rotate`, `around` or `repeat`.
 
 Two rules in one, and both were learned the hard way.
 
@@ -88,15 +90,69 @@ surface of your part. It looks like weathering and it is not; it is your paint f
 the surface of your own geometry. Displacement moves a surface; it does not move which part a
 voxel belongs to, and the test has to say so. 0.02 is comfortably past the 12 mm.
 
+***0.035 and not 0.02 for anything you placed with a transform***, and this is new — found on
+2026-08-16 while the ballroom was being built, and it is the reason that rule now names two
+numbers instead of one.
+
+The 12 mm of grain is not the only thing that pushes a voxel outside the shape its rule names. A
+voxel is decided **solid by coverage** — any part of the cell in the shape — and **painted by a
+rule tested at the cell's centre**. For a shape sitting square on the grid those two nearly agree.
+For a shape put where it is by `translate`, `rotate`, `around` or `repeat` they do not, because the
+surface no longer lies anywhere near a voxel boundary, and **3 to 16 per cent of that shape's own
+solid voxels fall outside its own test.**
+
+They do not vanish and they do not warn. They fall through to the base coat, so a gilt trellis on a
+white ceiling comes back with a pale limestone voxel every few centimetres along every rib. The
+ballroom measured **1021 of them** on one ceiling. `clipcheck` cannot see it either: the rule fired,
+so `never fired` is empty; the geometry is joined, so `components` is 1; and 1021 voxels do not move
+a material share to four decimal places. It is found by painting the base coat something absurd in
+a throwaway copy and looking for what is still wearing it.
+
+So: **0.02 for a shape you drew where it stands, 0.035 for a shape you moved there.** 0.035 costs
+nothing — it only widens the band a rule answers to, and every rule here is keyed on its own shape,
+so there is nothing next to it for the extra 15 mm to bleed onto.
+
 **6. Stairs are for walking up.** A riser is 0.18 m and a run is 0.32 m, everywhere in this
 building, without exception. Ten risers take you from the ground to the podium. If your part has
 steps, they use those numbers.
 
 **7. Head height is 2.10 m minimum** anywhere a person can stand, and 2.40 m through a door.
 
+**Measure it. Do not assume it, and do not measure it with `--gap`.** Two rooms drawn to exactly
+2.10 have come in under it, for two different reasons, and neither showed up in any other number:
+
+*A room drawn to exactly 2.10 measures 2.0625.* A voxel is solid if **any** of it is stone, so two
+planes 2.10 apart that do not land on voxel boundaries lose a voxel at each end. Put your floor and
+your soffit on numbers that ARE boundaries at metre 16 and metre 32 — the crypt's soffit is at
+1.6875, which is 1.80 − M/4 — or draw the room 2.20 and let it lose two.
+
+*`--gap` cannot answer this question.* It reports from the first empty cell to the last, so on any
+probe whose box is taller than one storey it reports the box and flags it BROKEN because your
+ceiling is in between. Asked across the crypt floor it said "3.125 m of air, BROKEN" everywhere,
+about a room 2.14 m high. Use the **`clear`** line instead — the longest unbroken run of air, with
+whether stone closed it at each end — and sweep it across the floor rather than taking one point:
+
+```
+tools/clipcheck.sh clips/facility/requests/yours-probe.clip --metre 16 --gap y@0,0
+    gap     3.125 m of air along y (BROKEN — there is matter in it)     <- the box, not the room
+    clear   2.125 m, the longest unbroken run, closed at both ends      <- the room
+```
+
+For anything with a floor under an overhang — a stair, a gallery, a vaulted passage — the engine's
+own `walkability` check cannot help you at all: it walks a heightfield and finds the topmost matter
+in each column, so a floor under something else is never a surface and is never tested. `stair.clip`
+solves it by building the volume a head sweeps through as a shape of its own and intersecting it
+with the part, which must then measure EMPTY. Copy that.
+
 ## How to build and look at your part
 
 Everything runs from the repository root, `C:\Users\pc\Desktop\WorldShaper`.
+
+**If you are not on Windows** — no Vulkan SDK, no SDL, no MSVC — the game's own `--clip-file` will
+not run, and `tools/clipcheck.sh` is the same four calls (parse, sample, despeckle, measure)
+against the same libraries, built with g++ in about forty seconds. Everything below that reads
+`WorldShaper.exe --clip-file X --clip-metre N --clip-part P` is `tools/clipcheck.sh X --metre N
+--part P`. It does not take screenshots and there is no substitute for those.
 
 **Check that it parses and measure it:**
 
