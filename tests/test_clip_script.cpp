@@ -992,3 +992,45 @@ TEST_CASE("counts summed over boxes with a one-voxel skirt are the whole region'
     }
     CHECK_FALSE(bare_agrees);
 }
+
+// `origin` moves the names a file bound, and not only its solid.
+//
+// `apply_origin` translates the solid, every paint rule and the bounds, and its comment says the
+// whole point is that nothing is left behind. `script.parts` was left behind for the life of the
+// facility, and because it does not fail, it answers: asking for one part sampled an unmoved shape
+// inside a box that had moved. The facility shifts 3.50 m, so `--part part_dome` reported an
+// 11.75 x 1.00 x 11.75 m saucer wearing one material instead of a 4 m dome wearing six -- the
+// slice of it that happened to still fall inside the dropped box, painted by whatever rule was
+// 3.50 m lower. `--part part_pilasters` reported eleven materials on a part that paints two.
+//
+// The shipped building was never wrong: it is built from `solid`, which moved correctly. Only the
+// measurements were, which is worse in its way -- two separate agents concluded their own fragment
+// was broken before either suspected the instrument.
+TEST_CASE("origin moves a bound part, not only the solid") {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "metre 8\n"
+        "bounds -4 -4 -4   4 4 4\n"
+        "let part_ball = sphere 0 1 0 r=0.5\n"
+        "solid part_ball\n"
+        "origin 0 -3 0\n",
+        types, tags);
+    REQUIRE(script.ok());
+
+    u32 part = 0;
+    REQUIRE(script.part("part_ball", part));
+
+    // The sphere was written centred on y = 1 and the origin drops everything by 3, so the part a
+    // tool asks for by name must now be centred on y = -2 exactly as the solid is. Sampling the
+    // field at both centres is the whole assertion: the old one must be air, the new one matter.
+    const Field& f = script.field;
+    CHECK(f.eval(part, Vec3{0.0, -2.0, 0.0}) < 0.0);
+    CHECK(f.eval(part, Vec3{0.0, 1.0, 0.0}) > 0.0);
+
+    // And the part still agrees with the solid it was unioned into, which is the property that
+    // actually matters: a tool that asks for one part must see the same matter the building has.
+    CHECK(f.eval(script.solid, Vec3{0.0, -2.0, 0.0}) < 0.0);
+    CHECK(f.eval(part, Vec3{0.0, -2.0, 0.0})
+          == doctest::Approx(f.eval(script.solid, Vec3{0.0, -2.0, 0.0})));
+}
