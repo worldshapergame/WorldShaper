@@ -396,7 +396,7 @@ sixteen.
 | `facility` at 16/m | 9,139,200 | 17.43 MB | **5.73 MB** (32.9%) | 2.64 -> 3.14 MB |
 | `facility-rotunda` at 16/m | 948,693 | 1.81 MB | **0.65 MB** (36.1%) | 278 -> 335 KB |
 | `sampler` at 16/m | 147,456 | 0.28 MB | **0.09 MB** (33.2%) | 120 -> 133 KB |
-| `glass_test` at 16/m | 331,776 | 0.63 MB | **0.07 MB** (11.5%) | 4.3 -> 6.3 KB |
+| `glass_test` at 16/m | 331,776 | 0.63 MB | **0.08 MB** (11.9%) | 4.3 -> 6.4 KB |
 
 **It is affordable, and the number that says so is the gzipped one**: the site serves `.wsc.gz`,
 and the building's download goes from 2.64 MB to 3.14 MB — a fifth more for the largest clip in the

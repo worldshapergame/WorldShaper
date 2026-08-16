@@ -697,12 +697,14 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 // cache beside a version 2 viewer is a real state and it must produce a clear error rather than a
 // wrong picture: `reuse` refuses it and rebakes, and `web/js/format.js` throws on it.
 //
+// >>> matvol
 // Version 3 spends the last eight bytes of the header on a CHUNK DIRECTORY, so that everything
 // added after this is added without moving a single existing offset again. `u32` at 200 is where
 // the directory is and `u32` at 204 is how many entries it has; an entry is a four-character tag,
 // an offset, a size and a spare word. A reader that does not know a tag skips it, which is the
 // whole point: a viewer one commit behind its data draws what it understands instead of throwing.
 constexpr u32 kFormatVersion = 3;
+// <<< matvol
 constexpr usize kHeaderBytes = 208;
 // 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
 // 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
@@ -1636,10 +1638,10 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         });
     const f64 matvol_seconds = static_cast<f64>(ws::now_ns() - matvol_began) / 1e9;
     if (volume.dropped_materials > 0) {
-        WS_LOG_WARN("bake_web", "%s: %zu materials past the material volume's 255, %zu cells "
-                                "painted as the nearest kept stone",
-                    relative.generic_string().c_str(), volume.dropped_materials,
-                    volume.remapped_cells);
+        WS_LOG_WARN("bake_web", "{}: {} materials past the material volume's {}, {} cells painted "
+                                "as the nearest kept stone",
+                    relative.generic_string(), volume.dropped_materials,
+                    ws::bake::matvol::kMaxPalette, volume.remapped_cells);
     }
     // <<< matvol
 
@@ -1869,9 +1871,10 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                                              : 0.0,
                     matvol_seconds);
         if (volume.dropped_materials > 0 || volume.clamped_cells > 0) {
-            std::printf("      matvol: %zu materials dropped past 255 (%zu cells remapped)  "
+            std::printf("      matvol: %zu materials dropped past %zu (%zu cells remapped)  "
                         "%zu cells thicker than 255 voxels, held there\n",
-                        volume.dropped_materials, volume.remapped_cells, volume.clamped_cells);
+                        volume.dropped_materials, ws::bake::matvol::kMaxPalette,
+                        volume.remapped_cells, volume.clamped_cells);
         }
     }
     // <<< matvol
