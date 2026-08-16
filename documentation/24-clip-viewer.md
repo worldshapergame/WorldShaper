@@ -47,10 +47,14 @@ A 208-byte header, then the blocks, in the layout the card wants so that loading
 and a handful of `subarray` views. Every offset is written down in both `tools/bake_web.cpp` and
 `web/js/format.js`, and the file carries a magic and a version so a mismatch says so.
 
-**The version is 2.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
+<!-- >>> matvol -->
+**The version is 3.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
 of §4a moved every block offset; there is no reading one as the other. `reuse` in the baker refuses
-a version 1 file and rebakes it, and `parseClip` throws on one rather than drawing a wrong picture —
-a cached `web/data` from before the change is a real state and it has to say so.
+an older file and rebakes it, and `parseClip` throws on one rather than drawing a wrong picture —
+a cached `web/data` from before the change is a real state and it has to say so. Version 3 is the
+last version bump that kind of change needs: the header's final word is now a **chunk directory**,
+so a new block is appended and listed rather than inserted, and §6 is the first two entries in it.
+<!-- <<< matvol -->
 
 **Materials.** Every `VisualRecord` used, verbatim, sixteen bytes each. Colour, opacity,
 roughness, metallic, index of refraction, emission and its tint, Beer-Lambert absorption,
@@ -352,3 +356,102 @@ python3 -m http.server 8777 -d web
 **The repository's Pages source has to be set to "GitHub Actions"** in Settings → Pages. The
 workflow cannot do that for a repository that has never had Pages turned on, and until it is, the
 deploy step is the one that fails.
+
+<!-- >>> matvol -->
+## 6. What the stone inside a wall is made of
+
+A `.wsc` carried the exposed surface and a one-bit occupancy grid, and **nothing in it could say
+what the matter at a point INSIDE a wall was**. Two things were wrong for exactly that reason and
+they are the same missing thing seen from two ends:
+
+- **the slice cap was one colour for the whole clip** — the commonest opaque material by area, a
+  stand-in — so cutting through the rotunda's porphyry-and-lapis floor gave the building's
+  limestone;
+- **refraction and translucency had no distance.** `alabaster` is translucent 210, `porcelain` 90,
+  and the three coloured glasses carry a Beer-Lambert `absorb` **per metre**, which is a number
+  with nothing to multiply.
+
+So the baker writes two more things, on the occupancy grid's own 12.5 cm cells:
+
+| | |
+|---|---|
+| **`MVOL`** | one byte a cell, the material. 0 is air. |
+| **`THCK`** | one byte a cell, how thick the matter through it is, in the clip's own voxels — the thinnest run over the three axes, so a pane comes out a pane and a wall comes out a wall. |
+
+### The size is the whole design, and it is measured rather than feared
+
+The facility's occupancy grid at 16 voxels to the metre is **272 x 168 x 200 = 9.14 million
+cells**, so the two channels DENSE are **17.4 MB** against the 8.6 MB its quads cost. That is not
+going onto a phone and it is not coming down a phone's network.
+
+It is stored **sparse, by 4x4x4 block**. A building is mostly air and mostly uniform: a block
+inside a wall is one stone at one thickness and a block of sky is air at zero, so only the blocks a
+surface actually passes through cost anything. A uniform block is one word in a directory, holding
+both its bytes; the rest are pages of 64 cells. **Four and not eight is measured** — on
+`facility/rotunda` the same volume is 0.65 MB at four and 0.95 MB at eight, and worse again at
+sixteen.
+
+| | cells | dense | packed | file, gzipped |
+|---|---|---|---|---|
+| `facility` at 16/m | 9,139,200 | 17.43 MB | **5.73 MB** (32.9%) | 2.64 -> 3.14 MB |
+| `facility-rotunda` at 16/m | 948,693 | 1.81 MB | **0.65 MB** (36.1%) | 278 -> 335 KB |
+| `sampler` at 16/m | 147,456 | 0.28 MB | **0.09 MB** (33.2%) | 120 -> 133 KB |
+| `glass_test` at 16/m | 331,776 | 0.63 MB | **0.07 MB** (11.5%) | 4.3 -> 6.3 KB |
+
+**It is affordable, and the number that says so is the gzipped one**: the site serves `.wsc.gz`,
+and the building's download goes from 2.64 MB to 3.14 MB — a fifth more for the largest clip in the
+repository, and one part in twenty of a photograph for the small ones. Roughly half of it is
+`THCK`: on the facility, `MVOL` is 3.14 MB of the 5.73 and `THCK` the other 2.59.
+
+**And what it costs the card is what it costs the wire**, which is the actual reason it is a block
+index rather than a run length. The packed form IS the form the GPU reads — a block directory as
+one `R32UI` volume and the pages as one `RG8UI` atlas — so nothing is decompressed on load and
+nothing is held twice. A run-length encoding would have been smaller on the wire and 17 MB in VRAM.
+
+### More than 255 materials
+
+A byte indexes 255 of them and air. Nothing is near it — **the whole facility at 16 to the metre
+interns 58 distinct visuals**, because the mesher interns by what a material LOOKS like and not by
+its type, so the 203 names in `_contract.clip` collapse hard. But a clip will pass it one day, and
+a silent truncation is the failure this repository keeps writing down.
+
+So the volume carries **its own palette**: the 255 materials with the most cells, and everything
+past that mapped to the nearest kept one by colour, opacity and translucency. The baker
+`WS_LOG_WARN`s with how many were dropped and how many cells were repainted, and prints it in the
+per-clip line. A clip over the line loses its rarest interior stone to one that looks like it and
+says so; it does not lose the volume.
+
+### A voxel the air touches is worth two
+
+A cell is 12.5 cm and nearly every colour in this building is a coat **two centimetres deep** —
+porphyry in the rotunda's floor bands, verde in its niche linings, lapis in the halls. A straight
+majority over the eight voxels in a cell erases every one of them and paints the cell the
+structural stone behind, so the cap would come out limestone right beside a quad drawn porphyry.
+The volume and the mesh are drawn touching each other and they have to agree, so a voxel with air
+on any side counts double.
+
+### What a shader asks it
+
+Paste `MATVOL_GLSL` from `web/js/features/matvol.js` and call `Matvol.bind(uniforms, unit)`, which
+takes three consecutive texture units:
+
+```glsl
+int   ws_material_at(vec3 world);    // the CLIP's material index -- what the material texture is
+                                     // addressed by -- or -1 for air and for a clip with no volume
+float ws_thickness_at(vec3 world);   // metres of matter through that point, 0 where there is none
+uvec2 ws_matvol_cell(vec3 world);    // both raw: x the volume's own byte, y thickness in voxels
+```
+
+A uniform block costs one `texelFetch` and only a block with a surface in it costs two. A clip
+baked before this existed has no `MVOL`, the dims come out zero, and every call answers "no
+matter" — one code path, and the cap falls back to its one colour.
+
+### The chunk directory, which is why this did not move anything
+
+Version 1's header was 192 bytes with nothing spare, and version 2 exists because adding one block
+to it moved every offset in the file. **Version 3 spends the last spare word on an indirection
+instead of on a block**: `u32` at 200 says where a directory of `(tag, offset, size, spare)` is and
+`u32` at 204 says how many entries. Everything added from here on is appended and listed there,
+nothing already in the file moves, and a viewer that has never heard of a tag steps over it rather
+than mis-reading the bytes behind it.
+<!-- <<< matvol -->
