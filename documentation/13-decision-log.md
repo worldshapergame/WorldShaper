@@ -8227,3 +8227,138 @@ and so does `--no-coarse-paste`.
 | D662 | **It still blocks the main thread** | honesty | A background reader races a brick being FREED, which no epoch check can repair afterwards |
 | D662 | **`--clean-world` is card-free and is a gate** | build | Exits non-zero if either arm fails to reproduce itself |
 | D662 | **The camera dependence is untouched** | honesty | D630's other objection; a partial world still protects 0 materials |
+## D663 — R5d's first half: a coarse node stops being a solid block, and the mechanism is R4d's
+
+Every primary hit in this renderer has been fully opaque. A node coarser than a voxel — which is
+everything past about twenty metres — was drawn as a solid block whatever fraction of it was really
+matter, so a distant railing was a bar, a window frame was a slab, and every silhouette against the
+sky was a hard stair-step that crawled as the camera moved.
+
+The number to fix it has been in the buffer the whole time and nothing read it. `NodePool::build_leaf`
+counts, for each of the six face directions, how much of the node's 8×8 face-on projection has matter
+behind it; `node_march` puts it in `NodeHit::coverage`; `visibility.comp` packs it into byte 3 of the
+visibility word. `resolve.comp` then ignored it, **and the comment saying why was stale**: it
+described the ALPHA of the filtered colour, which is a volumetric fill fraction that halves every
+level, and warned that blending by it dithered distant crates into the sky. That was true of a
+quantity this buffer stopped carrying before the rewrite began. The comment is corrected in the same
+change.
+
+**What is built.** When the primary ray stops on a node with `level > 0` and a coverage under full,
+the ray is cast again past that node and the far surface is packed into R4d's `in_behind` image —
+same wire format, same face-slot lookup, same folded colour, read by the same twenty lines of the
+composite. `through` is `1 - coverage/255` in all three channels.
+
+**One bit had to be added, and it is the part that would have been easy to get wrong.** R4d and R5d
+scale the NEAR surface differently and the difference is visible rather than pedantic:
+
+| | what `through` means | what it scales |
+|---|---|---|
+| glass (R4d) | how much of what is behind the pane arrives through it | the pane's **diffuse only** — its reflection and its emission happen AT the face and are not attenuated by the body of it |
+| an edge (R5d) | the share of the pixel the near surface does not occupy | **all of it** — diffuse, specular and emission, because over that share there is no surface to have a highlight |
+
+Reusing the glass path's asymmetry by accident would leave a distant railing's specular and a distant
+fitting's glow at full strength over a pixel they cover a third of, which sparkles along exactly the
+silhouettes this stage exists to settle. Bit 18 of the `in_behind` word says which question was
+asked; the composite passes `lets_past` of nought and scales the whole return instead.
+
+**Three things were built to make it right rather than merely present.**
+
+- `NodeHit::coverage_exit_t`, taken free from the DDA's own `t_max`, is where the ray leaves the cell
+  the coverage was read off — and it is **nought at the two other places `coverage` is set**. Both of
+  those read the byte off a node COARSER than the cell they draw: the in-brick march takes the
+  brick's byte for a pixel resolving two voxels, and the stand-in takes the parent's for a cell one
+  level under it. Blending a pixel by a fraction measured over eight times its footprint is trap 6 at
+  a different scale, so those two get no edge AA at all.
+- **`node_march` gained a `start_t`**, and this is the one that is not obvious. Launching the second
+  march from the far side of the node is the natural way to write it, and it silently RESTARTS THE
+  DETAIL CLOCK, because `footprint` is `t · pixel_angle` with `t` measured from wherever the ray
+  began. A ray launched from a silhouette a hundred metres out believes the eye is standing on the
+  silhouette and resolves the landscape behind it in bricks — eight times finer than the pixel can
+  show, and, far worse, eight times finer than what its miss reports then ask the pool to **build**.
+  Streaming the world behind every edge at a resolution nobody can see is the unbounded growth this
+  rewrite exists to stop. Keeping the eye as the origin and skipping forward in `t` keeps the
+  footprint, the world clip, the D156 nudge and the returned `t` all eye-relative. Nine call sites
+  pass `0.0`; R4d's two bent segments keep it deliberately, because a bent segment does not continue
+  the original ray and the eye-relative distance it would need is not a number that code has.
+- `kEdgeCoverageFull` = 251 skips the march for a node 63 of whose 64 projected columns hold matter,
+  where the blend is under the quantisation of the byte it would be packed into. **The threshold is
+  not the cost control and saying so matters**: a flat wall struck face on has every column covered,
+  reports 255, and pays nothing. The cost is proportional to the number of EDGE pixels rather than to
+  the number of coarse pixels, by construction.
+
+**Measured, card-free, one build and one flag.** No clip in this repository could take the picture:
+every scene small enough for the software rasteriser is four metres across and a pixel resolves a
+single voxel throughout, so `--no-edge-aa` and the default are bit-identical on all of them.
+`clips/edge_aa_test.clip` is written for this — two railings of twelve-centimetre posts at thirty and
+fifty metres, an open lattice at forty, and a solid wall behind the right-hand half so the same
+structure is seen against geometry on one side and against sky on the other, with no floor because a
+floor is three hundred thousand voxels on its own. 320×200, `--settle`, both arms settled at frame
+240 and shot at measured frame 40, both on scene `047acb7e41e2668b`, both `--no-face-lobe --quality 7
+--no-auto-quality --clip-coarse 1`, camera `0,14,-6,90,-20`.
+
+**Below the cloud deck — 42,880 pixels — exactly 402 differ, and every one of them is inside the
+40 columns and 25 rows the structure occupies (x 140–179, y 78–102).** Mean absolute difference over
+those 402 is **21.280 of 255**, worst channel **209**. The pair was taken twice, either side of a
+comment-only rebuild, and read 405 at 21.507 the first time — the wobble is the face store's own
+convergence and both arms sit in the same place. Everything outside that box is bit-identical,
+which is what says the flag reaches only what it is meant to. Looked at magnified, side by side: the
+control's posts and rails are hard blocks of full-strength colour with the sky cut square around
+them, and the same posts blended read as bars with weight rather than as steps.
+
+**The box gets DARKER, not lighter — 141.120 against 142.552 in mean luma — and that is the right
+sign.** The rails are pale stone against a sky darker than they are, so a rail that covers half a
+pixel now contributes half its brightness instead of all of it. A change that lightened everything
+would have been the composite blending towards the sky rather than towards what is actually behind.
+
+**Two things had to be controlled for, and the first attempt at this measurement was wrong in a way
+worth recording.**
+
+- **The light meter moved the whole frame.** The first pair differed on **99.877%** of the picture,
+  including sky the feature cannot touch, because letting sky through the structure raised the
+  frame's log-average and the meter chose **2.628× against 2.728×**. Every pixel then differs and the
+  measurement says nothing about edges. `--no-auto-exposure` is required for this A/B — and the
+  exposure shift is itself real, so it is a finding rather than only a nuisance.
+- **The cloud deck runs on the wall clock.** With the exposure pinned the pair still differed on
+  **26.8%**, in a band across the whole width, and the difference map is a photograph of the clouds:
+  `params.sky_cloud[1]` is `time_seconds · kGameSecondsPerSecond` in REAL seconds, so two runs of
+  different speeds photograph different weather at the same frame number. Trap 8's shape with a clock
+  instead of a sampler. Aiming the camera twenty degrees down puts the structure below the horizon
+  where the deck is not, and the frame outside it goes bit-identical.
+
+**Cost is UNRESOLVED here and the first attempt to state it was wrong.** Two pairs of arms,
+alternated within minutes of each other, disagree about the SIGN: visibility read **17.083 against
+15.724 ms** in one pair and **15.480 against 16.998** in the next, and resolve **14.783 against
+13.730** then **14.072 against 14.403**. This is a software rasteriser on a four-core container
+shared with three other builds, and trap 29 is exactly this. One pair would have been reported as a
+9% regression; the honest answer is that the milliseconds are not measurable from here at all, and a
+card has to give them.
+
+**What IS repeatable is the STORE, and it is the number to watch**: the second march claims the
+surfaces it lands on, so the face store holds **955 live against 583** (942 against 583 in the
+earlier pair) and the node pool **1,398 leaves against 1,329**. That is the cost of the far half of
+an edge pixel being lit at all rather than falling to the composite's full-sun fallback, and it is
+the same trade D604 took for the surface behind a window. On a scene with four objects in it that is
+a 64% growth in live faces; on the facility it wants measuring against the face budget before this
+is trusted at 4K.
+
+**What is not built.** The plan asks for up to three partial hits composited; `out_behind` carries
+one surface a pixel, so a partly covered node behind a partly covered node is drawn opaque — which
+errs towards the picture this replaces rather than past it. And the coverage FOLD is a maximum over
+children rather than a projection of its own (`NodePool::fold_children`, deliberate, errs towards
+*present*), so above the brick a node reads as more solid than it is: a railing gets its blend, and a
+silhouette across a node that is half solid wall gets none at all. `tests/test_node_pool.cpp` pins
+both halves of that so the next session finds it in a test rather than in a picture.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D663 | **Edge AA reuses R4d's second march and its image** | decision | The blend, the wire format, the face lookup and the composite already exist; a second mechanism would be a second thing to keep in step |
+| D663 | **A bit says which of the two blends it is** | decision | A pane scales the near diffuse alone; a share of a pixel scales all of it. Sharing the code without sharing the rule is a sparkling silhouette |
+| D663 | **`start_t` rather than a moved origin** | decision | A moved origin restarts the detail clock and asks the pool to build the world behind every edge at eight times the needed resolution |
+| D663 | **Only the coarse-node branch gets it** | decision | The other two coverage writers read the byte off a node coarser than the cell they draw — trap 6 at a different scale |
+| D663 | **251 is "solid"** | decision | The last sixty-fourth of an edge is under the quantisation of the byte it would be packed into |
+| D663 | **The stale comment in `resolve.comp` is corrected** | correction | It described the filtered colour's alpha, which this buffer stopped carrying before the rewrite began |
+| D663 | **`--no-auto-exposure` is required for this A/B** | finding | The meter reads 2.628× against 2.728× and moves 99.877% of the frame |
+| D663 | **The cloud deck is not comparable between two runs** | finding | It is driven by REAL seconds, so a slower arm photographs different weather. Keep the horizon out of the shot |
+| D663 | **The face store grows 583 → 955** | honesty | The second march claims what it lands on. Owed a measurement on a real scene with a card |
+| D663 | **The frame COST is unresolved here** | honesty | Two pairs of arms minutes apart disagree on the sign; one of them alone would have read as a 9% regression (trap 29) |
+| D663 | **The fold's maximum limits how much this can do** | honesty | Above the brick a node over-reports coverage, so a wall's silhouette gets no blending; pinned in the tests |

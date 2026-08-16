@@ -654,6 +654,12 @@ const uint kProbeRefract = 1u << 9;
 // marble panel with the sun on the far side is as dark as granite -- which is what this renderer has
 // always drawn. `--no-translucency` clears it.
 const uint kProbeTranslucent = 1u << 10;
+// R5d: a primary ray that stops on a COARSE node only part of which is matter marches on past it,
+// and the composite draws the two surfaces in proportion. Off, every hit is fully opaque and a node
+// larger than a voxel is a solid block whatever is really inside it -- which is what this renderer
+// has always done, and is why a distant railing is a stair-stepped bar that crawls as the camera
+// moves. `--no-edge-aa` clears it.
+const uint kProbeEdgeAA = 1u << 11;
 
 // How often a face nobody is looking at may cast, in frames. One frame in this many, phased on the
 // slot so the off-screen set does not all come due together -- D431's fault, in the pass rather than
@@ -716,6 +722,7 @@ bool probe_lobe_big() { return (light_probe.words[0] & kProbeLobeCoverage) != 0u
 bool probe_see_through() { return (light_probe.words[0] & kProbeSeeThrough) != 0u; }
 bool probe_refract() { return (light_probe.words[0] & kProbeRefract) != 0u; }
 bool probe_translucent() { return (light_probe.words[0] & kProbeTranslucent) != 0u; }
+bool probe_edge_aa() { return (light_probe.words[0] & kProbeEdgeAA) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
 uint probe_sun_seed() { return light_probe.words[kProbeSunSeed]; }
 
@@ -2478,6 +2485,19 @@ struct NodeHit {
     // to the other side through that much stone, which is the whole question a translucent surface
     // asks.
     float crossed;
+
+    // R5d: where the ray leaves the cell whose `coverage` this is, so a caller that wants to know
+    // what is BEHIND a partly covered node can start a second march past it rather than into it.
+    //
+    // Nought unless the coverage above describes exactly the cell that was drawn, and that gate is
+    // the whole reason this is a distance rather than a bool. Three places set `coverage`; only the
+    // coarse-node branch reads it off the very node whose box the pixel landed in. The other two
+    // read it off a node COARSER than the cell they draw -- the in-brick march takes the brick's
+    // byte for a pixel resolving two voxels, and the stand-in takes the parent's for a cell one
+    // level under it -- and blending a pixel by a fraction measured over eight times its footprint
+    // is trap 6 again at a different scale. So those two leave this at nought and get no edge AA,
+    // which is exactly what they had before this existed.
+    float coverage_exit_t;
 };
 
 // ---- R4d: the three things a ray can do about matter it can see through -------------------------
@@ -2584,6 +2604,13 @@ vec3 node_medium_absorb(uint type_id) {
 // Stage 4 hit the same wall from the other side and recorded it: a brick on the surface of the
 // ground is about an eighth full and completely opaque when you look at it, and the two quantities
 // coincide only for a node seen edge-on. Per direction, folded at build time, this is exact.
+//
+// One caution about "exact", which R5d is what it matters to: it is exact at the LEAF and a maximum
+// above it. `NodePool::fold_children` takes the largest of a node's eight children rather than
+// projecting them, which errs towards *present* on the same argument as the floor of one that stops
+// a single voxel rounding away. So a coarse node reads as more solid than it is, the edge
+// anti-aliasing it gets is conservative rather than excessive, and a silhouette across a node that
+// is half solid wall gets none at all. `tests/test_node_pool.cpp` pins both halves of that.
 uint node_face_coverage(uint slot, ivec3 normal) {
     uint xy = nodes.items[slot].coverage_xy;
     uint z = nodes.items[slot].coverage_z;
@@ -2591,6 +2618,23 @@ uint node_face_coverage(uint slot, ivec3 normal) {
     if (normal.y != 0) return (normal.y > 0) ? ((xy >> 16u) & 0xFFu) : ((xy >> 24u) & 0xFFu);
     return (normal.z > 0) ? (z & 0xFFu) : ((z >> 8u) & 0xFFu);
 }
+
+// R5d: at or above this, a coarse node is treated as solid and no second march is cast for it.
+//
+// What it trades is the last sixty-fourth of an edge against a march. The byte is
+// `covered * 255 / 64` over an 8x8 projection, so the only values it can take are multiples of
+// 255/64 and 251 is "sixty-three of the sixty-four columns have matter in them". Blending that
+// pixel 1.6% towards what is behind it is under the quantisation of the byte itself and well under
+// the quantisation of the `through` byte the answer is packed into -- so the picture is unchanged
+// and the march is saved.
+//
+// The saving that matters is not this threshold, though, and that is worth saying because the
+// threshold looks like the cost control and is not. A flat wall seen face on has EVERY column of
+// its projection covered along the direction the ray struck it, so it reports 255 and pays nothing
+// at all. What pays is silhouettes and open structure, which is the set that needed anti-aliasing
+// in the first place -- the cost of this stage is proportional to the number of edge pixels rather
+// than to the number of coarse pixels, by construction rather than by a dial.
+const uint kEdgeCoverageFull = 251u;
 
 // The bounds in the parameter block are in chunks, which the renderer still uses as the unit it
 // reports the world's extent in. Nothing else here knows what a chunk is.
@@ -2713,9 +2757,24 @@ const float kNodeUnbounded = 3.4e38;
 //
 // `kThroughExit` is the refraction segment: it enters the glass, attenuates through it, and stops
 // at the face where it comes out so the caller can bend it there and march on.
+//
+// `start_t` is where along the ray the walk begins, in voxels from `origin`, and it is R5d's. A
+// caller that wants to know what is BEHIND something could always have moved the origin forward
+// instead -- and that is what R4d's refracted segments do -- but moving the origin also RESTARTS THE
+// DETAIL CLOCK, because `footprint` is `t * pixel_angle` and `t` is measured from wherever the ray
+// began. A second march launched from a silhouette a hundred metres out would then resolve the
+// landscape behind it as though the eye were standing on the silhouette: bricks where the pixel
+// resolves half a metre, which is eight times finer than anything can be seen and, far worse, eight
+// times finer than what the miss reports would then ask the pool to BUILD. Streaming the world
+// behind every edge at a resolution nobody can see is exactly the unbounded growth this rewrite
+// exists to stop.
+//
+// Keeping the eye as the origin and skipping forward in `t` keeps every distance in this function
+// eye-relative -- the footprint, the world clip, the D156 nudge and the `t` that comes back -- so
+// the caller has nothing to add on afterwards and nothing to get wrong.
 NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool report,
                    bool report_used, bool report_face, bool stand_in, bool occlude_unknown,
-                   uint through_mode, float max_t) {
+                   uint through_mode, float max_t, float start_t) {
     NodeHit result;
     result.hit = false;
     result.unknown = false;
@@ -2729,6 +2788,7 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
     result.exit_t = 0.0;
     result.exit_normal = ivec3(0, 1, 0);
     result.crossed = 0.0;
+    result.coverage_exit_t = 0.0;
     result.face_node = ivec3(0);
     result.face_level = kNoFaceLevel;
     result.face_dir = 0u;
@@ -2780,6 +2840,11 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
         t = max(t, enter);
         limit = min(limit, exit);
     }
+
+    // R5d's near bound, applied after the clip so a start past the world is a miss rather than a
+    // walk. A ray asked to begin beyond `limit` runs no steps at all and comes back as it would
+    // from open sky, which is what it is: everything this ray was allowed to look at is behind it.
+    t = max(t, start_t);
 
     // This ray treats an unbuilt cell as an occluder, which is exactly the property that makes it
     // need the geometry to exist -- so it is also the ray that must say it is using it. The two
@@ -2859,6 +2924,18 @@ NodeHit node_march(vec3 origin, vec3 dir, float pixel_angle, float dither, bool 
                 result.normal = last_normal;
                 result.colour = nodes.items[found.slot].colour;
                 result.coverage = node_face_coverage(found.slot, last_normal);
+                // R5d: and where the ray comes out the other side of this same cell, which costs
+                // two compares because the DDA has already worked it out. `t_max` holds the t of
+                // the next boundary on each axis for the cell being tested, so the smallest of the
+                // three is where the ray leaves it -- and it is the cell the coverage was read off,
+                // because a node that is not a leaf can only be reached here at exactly the level
+                // the walk asked for (node_descend breaks above `target` only on a LEAF, which the
+                // line above has already excluded).
+                //
+                // Computed unconditionally rather than under `coverage < 255`, because a branch on
+                // a value this late costs more than the two compares it would save on a path that
+                // runs at most once per ray.
+                result.coverage_exit_t = min(min(t_max.x, t_max.y), t_max.z);
                 // Clamped into the range the visibility buffer's level field means. A node level
                 // and a detail level are the same units - both a power of two in voxels - but the
                 // field stops at seven, and a node fourteen levels up is a cell nobody is looking

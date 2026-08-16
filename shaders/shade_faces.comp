@@ -952,7 +952,7 @@ SkySample sky_cast(uint index, float max_t) {
 
     const NodeHit hit =
         node_march(origin, dir, g_sky_pixel_angle, 0.0, false, false, false, false, true,
-                   probe_see_through() ? kThroughPass : kThroughStop, max_t);
+                   probe_see_through() ? kThroughPass : kThroughStop, max_t, 0.0);
 
     s.unknown = hit.hit && hit.unknown;
     s.sky = !hit.hit;
@@ -1199,7 +1199,7 @@ void lobe_cast(uint block, uint bin, uint bins, uint side, uint index, float pix
         face_point(corner, across, down, g_sky_normal, size, at) - chunk_origin;
     const NodeHit hit =
         node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
-                   probe_see_through() ? kThroughPass : kThroughStop, kNodeUnbounded);
+                   probe_see_through() ? kThroughPass : kThroughStop, kNodeUnbounded, 0.0);
 
     probe_add(1u);
     probe_add(kProbeLobeRays);
@@ -1527,7 +1527,7 @@ vec3 lamp_cast(uint index, out bool unknown, out vec3 to_lamp) {
 
     const NodeHit hit =
         node_march(from, dir, g_sky_pixel_angle, 0.0, false, false, false, false, true,
-                   probe_see_through() ? kThroughPass : kThroughStop, reach);
+                   probe_see_through() ? kThroughPass : kThroughStop, reach, 0.0);
     if (hit.hit) {
         unknown = hit.unknown;
         return vec3(0.0);
@@ -1903,7 +1903,7 @@ void main() {
         NodeHit hit = node_march(origin, dir, pixel_angle, 0.0, false, false, false, false, true,
                                  sun_through ? kThroughSolid
                                              : (probe_see_through() ? kThroughPass : kThroughStop),
-                                 kNodeUnbounded);
+                                 kNodeUnbounded, 0.0);
 
         // What survives the stone, and it is a COIN rather than a fraction because the counter it
         // lands in holds whole samples.

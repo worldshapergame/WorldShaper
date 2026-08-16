@@ -56,7 +56,7 @@ constant. Before comparing two figures, check the `scene:` line and its **conten
 is required for anything comparable. **Repeat a figure before calling it a regression** — one window
 is not a measurement.
 
-`documentation/22-rewrite-handover.md` §4 is twenty-seven traps, every one of which produced a wrong
+`documentation/22-rewrite-handover.md` §4 is thirty traps, every one of which produced a wrong
 measurement or a silent failure rather than a compile error. They are worth the twenty minutes.
 
 The two that catch people most often:

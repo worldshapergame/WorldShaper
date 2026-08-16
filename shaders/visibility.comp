@@ -121,6 +121,46 @@ uint visibility_face_slot(ivec3 face_node, uint face_level, uint face_dir) {
     return fresh != kNoFace ? fresh : face_slot;
 }
 
+// The second layer, written the way resolve.comp's `main` unpacks it.
+//
+// One function for R4d's glass and R5d's edge because the wire format is the same and the two
+// halves live in different files: a second copy of this would eventually disagree with the reader
+// about which bit means what, which is the fault D133 describes and is why `visibility_face_slot`
+// above is a function too.
+//
+// `lets_past` is the share of this pixel that the FAR surface is responsible for, and `edge` says
+// which of the two questions produced it -- a pane's transmission, which acts on the near surface's
+// diffuse alone, or the share of the pixel the near surface does not occupy, which acts on all of
+// it. The composite cannot tell those apart from the number, so it is told.
+uvec4 visibility_pack_behind(NodeHit far, vec3 lets_past, bool edge) {
+    uint far_slot = kNoFace;
+    if (far.hit && far.face_level != kNoFaceLevel) {
+        far_slot = visibility_face_slot(far.face_node, far.face_level, far.face_dir);
+    }
+    uint far_face = 0u;
+    if (far.normal.x != 0) far_face = (far.normal.x > 0) ? 0u : 1u;
+    else if (far.normal.y != 0) far_face = (far.normal.y > 0) ? 2u : 3u;
+    else far_face = (far.normal.z > 0) ? 4u : 5u;
+    // One payload field for two mutually exclusive readings, because the composite uses the type id
+    // only at level 0 and the folded colour only above it. `type_id` needs 21 bits
+    // (type_tables.hpp's kMaxTables is 2^21) and the colour needs 24, so 24 is the field and neither
+    // is ever truncated.
+    const uint payload = far.level == 0 ? min(far.type_id, 0xFFFFFFu) : (far.colour & 0xFFFFFFu);
+    const uvec3 quantised = uvec3(round(clamp(lets_past, 0.0, 1.0) * 255.0));
+    uvec4 behind;
+    behind.x = min(far_slot, 0xFFFFFFu) | (far_face << 24u) | (uint(far.level) << 27u);
+    behind.y = payload | (quantised.r << 24u);
+    // Bit 17 says there IS a second layer, rather than leaving the composite to infer it from a
+    // non-zero `through`: a transmission that quantises to zero in all three channels is vanishingly
+    // rare but it is not impossible, and "no window here" and "a window that lets nothing past" want
+    // the same answer by luck rather than by construction. Bit 16 says the far ray landed on
+    // something rather than on sky. Bit 18 says which of the two stages asked.
+    behind.z = quantised.g | (quantised.b << 8u) | (far.hit ? (1u << 16u) : 0u) | (1u << 17u) |
+               (edge ? (1u << 18u) : 0u);
+    behind.w = floatBitsToUint(far.hit ? far.t : push.lens.y);
+    return behind;
+}
+
 void main() {
     // ---- R9c: the dispatch is the screen plus a margin, and the margin is not the screen --------
     //
@@ -261,7 +301,7 @@ void main() {
         // omission: a face is claimed where a pixel lands, so a window that a pixel passed through
         // would have no face, no light of its own and no reflection. See node_march.
         NodeHit halo = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), false,
-                                  false, true, true, false, kThroughStop, kNodeUnbounded);
+                                  false, true, true, false, kThroughStop, kNodeUnbounded, 0.0);
         if (halo.hit && halo.face_level != kNoFaceLevel) {
             node_face_seen(node_face_lookup(halo.face_node, halo.face_level, halo.face_dir));
         }
@@ -269,7 +309,8 @@ void main() {
     }
 
     NodeHit hit = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
-                             report_used, report_face, true, false, kThroughStop, kNodeUnbounded);
+                             report_used, report_face, true, false, kThroughStop, kNodeUnbounded,
+                             0.0);
 
     uvec4 packed = uvec4(0xFFFFFFFFu, 0u, 0u, floatBitsToUint(hit.t));
     if (hit.hit) {
@@ -312,6 +353,8 @@ void main() {
     // Gated on the near hit being a LEAF, because node.glsl's see-through branch is gated on
     // `level == 0` -- a coarse hit does not transmit, so the second march would return the same
     // surface with nothing taken out of it and the composite would draw it twice at full strength.
+    // What a coarse hit wants instead is R5d, in the `else` below, and the two are exclusive by that
+    // same test rather than by agreement between two conditions.
     //
     // The `through` that comes back is the whole path's attenuation, not the material's, so the two
     // halves are exactly complementary: the composite scales the pane's diffuse by (1 - through)
@@ -358,7 +401,7 @@ void main() {
                     const vec3 entry = push.origin.xyz + dir * hit.t + into * 1e-3;
                     NodeHit inside = node_march(entry, into, pixel_angle, node_bayer(pixel), false,
                                                 false, false, true, false, kThroughExit,
-                                                kNodeUnbounded);
+                                                kNodeUnbounded, 0.0);
                     if (inside.left_medium) {
                         const float path_m = inside.exit_t * (1.0 / kVoxelsPerMetreF);
                         const vec3 exit_normal = normalize(vec3(inside.exit_normal));
@@ -376,11 +419,21 @@ void main() {
                         // reason for reporting on the second march, arriving one segment later.
                         // The two segments before it say nothing: the pane's own face was claimed
                         // by the primary hit, and the glass is what they cross rather than land on.
+                        //
+                        // Both of these keep `start_t` at nought even though R5d has since given
+                        // node_march a way to say "carry on from here", and that is deliberate. A
+                        // bent segment does not continue the original ray -- it has its own origin
+                        // and its own direction -- so the eye-relative t it would need is not a
+                        // number this code has. What it loses is the detail clock, which restarts at
+                        // the pane and so resolves what is behind a window a little finer than the
+                        // pixel needs; a pane is centimetres from what it stands in front of, so the
+                        // error is small, and the picture that WAS looked at (D652, D656) is the one
+                        // with this behaviour in it. Not moved by a change about something else.
                         const vec3 leaving = entry + into * inside.exit_t + out_dir * 1e-3;
                         NodeHit beyond = node_march(leaving, out_dir, pixel_angle,
                                                     node_bayer(pixel), report, report_used,
                                                     report_face, true, false, kThroughPass,
-                                                    kNodeUnbounded);
+                                                    kNodeUnbounded, 0.0);
                         // The distance the composite reads has to be the whole path, or a window
                         // fogs as though what is behind it were at the pane.
                         beyond.t += hit.t + inside.exit_t;
@@ -406,40 +459,76 @@ void main() {
             if (!bent) {
                 far = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
                                  report_used, report_face, true, false, kThroughPass,
-                                 kNodeUnbounded);
+                                 kNodeUnbounded, 0.0);
             }
             // Refusing a march that came back unattenuated is the second half of the same guard:
             // whatever the reason, a far surface with nothing taken out of it is the near one.
             const vec3 lets_past = far.through * refract_through;
             if (max(max(lets_past.r, lets_past.g), lets_past.b) < 0.999) {
-                uint far_slot = kNoFace;
-                if (far.hit && far.face_level != kNoFaceLevel) {
-                    far_slot = visibility_face_slot(far.face_node, far.face_level, far.face_dir);
-                }
-                uint far_face = 0u;
-                if (far.normal.x != 0) far_face = (far.normal.x > 0) ? 0u : 1u;
-                else if (far.normal.y != 0) far_face = (far.normal.y > 0) ? 2u : 3u;
-                else far_face = (far.normal.z > 0) ? 4u : 5u;
-                // One payload field for two mutually exclusive readings, because the composite uses
-                // the type id only at level 0 and the folded colour only above it. `type_id` needs
-                // 21 bits (type_tables.hpp's kMaxTables is 2^21) and the colour needs 24, so 24 is
-                // the field and neither is ever truncated.
-                const uint payload = far.level == 0 ? min(far.type_id, 0xFFFFFFu)
-                                                    : (far.colour & 0xFFFFFFu);
-                const uvec3 quantised = uvec3(round(clamp(lets_past, 0.0, 1.0) * 255.0));
-                behind.x = min(far_slot, 0xFFFFFFu) | (far_face << 24u) |
-                           (uint(far.level) << 27u);
-                behind.y = payload | (quantised.r << 24u);
-                // Bit 17 says there IS a second layer, rather than leaving the composite to infer
-                // it from a non-zero `through`: a transmission that quantises to zero in all three
-                // channels is vanishingly rare but it is not impossible, and "no window here" and
-                // "a window that lets nothing past" want the same answer by luck rather than by
-                // construction. Bit 16 says the far ray landed on something rather than on sky.
-                behind.z = quantised.g | (quantised.b << 8u) | (far.hit ? (1u << 16u) : 0u) |
-                           (1u << 17u);
-                behind.w = floatBitsToUint(far.hit ? far.t : push.lens.y);
+                behind = visibility_pack_behind(far, lets_past, false);
             }
         }
+    } else if (hit.hit && hit.level > 0 && hit.coverage < kEdgeCoverageFull &&
+               hit.coverage_exit_t > hit.t && probe_edge_aa()) {
+        // ---- R5d: and what is behind it, when what it landed on was only PART matter -------------
+        //
+        // A node coarser than a voxel is drawn as a solid block, and most of them are not one. The
+        // pool knows exactly how much of each is matter as seen along each of the six directions --
+        // `NodePool::build_leaf` counts the 8x8 face-on projection and `fold_children` carries it up
+        // -- and until now nothing read the byte. So a distant railing was a solid bar, a window
+        // frame was a solid slab, and every silhouette against the sky was a stair-step that crawled
+        // as the camera turned.
+        //
+        // The mechanism is R4d's, deliberately, rather than a second one: cast the ray again, pack
+        // the surface it finds into the same slot, and let the composite blend. What differs is only
+        // what the ray is asked and what the blend means.
+        //
+        //   The ray BEGINS past the node instead of at the eye. Glass transmits, so R4d re-marches
+        //   the whole path with `see_through` on and the pane attenuates it on the way; a coarse
+        //   node transmits nothing at all, so the same march would stop on the same node again and
+        //   pack the near surface as its own background. Starting at the far side of the cell the
+        //   pixel landed in is the only way to ask the question, and it is why `coverage_exit_t`
+        //   exists.
+        //
+        //   `through` is 1 - coverage, in all three channels. It is not a colour here: a share of a
+        //   pixel has no tint, where a pane's transmission has one.
+        //
+        // The NEAR march above is untouched, and that is a rule rather than an oversight. A face is
+        // claimed where a pixel lands (R3e), so moving where the primary ray stops would move which
+        // faces exist and cost the near surface its own light -- which is the same reason R4d's
+        // primary ray stops on the pane.
+        //
+        // What is deliberately NOT done: level 0. A voxel is the whole of itself and reports 255, so
+        // the branch cannot fire there, and the near march is bit for bit what it was for every
+        // pixel inside about twenty metres.
+        //
+        // And ONE further layer, not three. The plan asks for up to three partial hits composited,
+        // and what stops that here is the wire rather than the idea: `out_behind` is one surface a
+        // pixel and a third layer is another sixteen bytes of traffic over the whole screen for a
+        // term already weighted by two coverages multiplied together. The far surface is therefore
+        // drawn opaque whatever ITS coverage says, which errs towards the picture this stage
+        // replaces rather than away from it -- a partly covered node behind a partly covered node is
+        // slightly too solid, where before both were entirely too solid.
+        //
+        // The nudge past the boundary scales with distance for D156's reason: a 32-bit float's own
+        // step at t = 96,000 voxels is 0.0156, so a fixed 1e-3 rounds straight back to the boundary
+        // and the second march begins inside the cell it was meant to clear.
+        const float past = hit.coverage_exit_t + max(1e-3, hit.coverage_exit_t * 1e-5);
+        // The EYE is still the origin and `start_t` carries the skip, which is not the same thing as
+        // launching from the far side of the node and matters more than it looks -- see node_march.
+        // A ray launched from the silhouette has a detail clock that starts at nought there, so it
+        // would resolve the landscape behind it in bricks and ask the pool to build them.
+        //
+        // Reporting is ON, and it is the same argument D604 makes for the segment behind the glass:
+        // this is the ray that lands on the surface a player can see a share of, so it is the one
+        // that has to claim that surface's face and tell residency about it. Cast it silently and
+        // the far half of every edge pixel is lit by the composite's fallback -- full sun -- which
+        // indoors is the most wrong answer available.
+        NodeHit far = node_march(push.origin.xyz, dir, pixel_angle, node_bayer(pixel), report,
+                                 report_used, report_face, true, false, kThroughStop,
+                                 kNodeUnbounded, past);
+        const float covered = float(hit.coverage) * (1.0 / 255.0);
+        behind = visibility_pack_behind(far, vec3(1.0 - covered), true);
     }
     imageStore(out_behind, pixel, behind);
 

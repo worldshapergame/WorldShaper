@@ -222,7 +222,7 @@ written for the person the work is for, so it is the one to keep current.
 | R9 the off-screen set | L | **a, b, e done and f half done** (D526–D532, D554–D560, D569–D572): a light ray names the one face it landed on, the store holds those in a class whose cap is the table's SPARE room rather than a fixed quarter — which was worth **150.1 → 157.4** of 255 in the enclosed room on its own, and needed the store's eviction order fixed beside it or the coarse pyramid paid for it — both classes are counted, and the coarse pyramid now outlives the fine faces under it — which it did not, at all: the control arm holds **0 stand-ins of 711,000 faces**. Bounce reads them (D533–D538), and a ray that still finds nothing walks up. The probe says **a third of what the bounce integrates is still black**, which is what R9c and R9g–R9h are worth. **d done, early** (D308–D311: a face with no light of its own reads the coarse face standing over it — see below). R9c and R9f–R9h **planned, not started.** The face store holds what the camera can see, so light is a screen-space set in world-space clothing. A mirror facing a wall behind the camera reflects nothing, because the wall has no face. R9f–R9h extend it to light from regions that are not loaded at all: light folds up the tree as colour does and outlives its children, the emitter list persists per region and loads with the index rather than the voxels, and **no light path may cause streaming**. §8 R9 |
 | R10 ambient occlusion | L | **done** (D325–D337, D381–D396). The far field (sky visibility, R10a), the near field (first-hit distance through a falloff over a metre, R10b — the term that actually carries shape, because indoors every ray hits something and the far field saturates) and the linear gradient across each face (R10c, from moments the samples already carry: no rays, no passes, no least squares). The quadratic terms §8 calls for were **built, measured and reverted** — they moved the picture by less than the renderer's own run-to-run noise, because a face is a voxel now and a voxel has no curvature inside it (D336, D337). **R10d, convergence, is done too** (D388–D396): the term now measures itself hard and stops, instead of trickling one ray a visit for ever. See §5 |
 | R4 directional faces | L | **started, and it is what the user chose over R9c** — R4a is done, both halves (D582, D583, D591), **R4c** is in (D591, D592) and so is **R4b's ray** (D594). A face resolves what it is made of once; the composite then splits what leaves it by metalness, so the metals stop being Lambertian — bronze, gilt, lead and copper read as metal rather than chalk. The sun comes back through a GGX lobe with no storage; the environment out of **sixteen outgoing bins** in a pool of 65,536 blocks (8.7 MB) that faces HOLD, filled by the gathering ray they were already casting. A face that holds a lobe then casts its own ray, aimed into the cone each bin gathers from, which is what fills the grazing bins a reflection is read out of — bronze reads as deep metal with panel structure where it was a flat wash, and the glass gains a sky-coloured sheen. Costs **nothing measurable settled** and **1.5 ms flying**. **What is still owed**: the bin count does not follow pixel coverage, and the lobe is visibly mottled face to face at 24 samples a bin, which is R5's `face_denoise` and is the next thing this stage wants. **R4d is HALF in — transmission, not refraction** (D601–D604): a face resolves what it lets past and stores it, the sun and sky rays stop being blocked by a pane and are tinted per METRE rather than per voxel, and the primary ray marches on behind the glass so a window is fifteen glazed lights with the bars across them instead of one milky panel. **+0.246 ms (+4.8%) at a camera facing a window**, nothing measurable outdoors or enclosed. **R4d is now WHOLE bar dispersion** (D652): the primary ray bends entering the medium, is stopped at the face where it leaves by the marcher's `kThroughExit`, bends again and marches on, so a pane DISPLACES what is behind it — 4.1 cm at 45° through the facility's glazing — and a basin reads as shallower than it is because over water the two interfaces do not cancel. Absorption is `exp(-absorb·metres)` over the true path, using three bytes of `VisualRecord` nothing had ever read; total internal reflection reflects rather than returning a zero direction. Its arithmetic is pinned against trigonometry (`tests/test_refraction.cpp`) and **its PICTURE IS OWED** — `clips/refraction_small.clip` is the gate, two runs and `--no-refraction`. Dispersion is not built and belongs to the face pass. **And R4e is in and verified by picture** (D653): a translucent material lit from behind lets the sun through in proportion to the stone the light had to cross, measured by a ray in a new `kThroughSolid` mode rather than declared by any clip — settled, the five panels of `clips/translucency_test.clip` read **−1.1, +52.0, +23.4, +15.8, +7.1** in luma, strictly ordered by thickness, with the control panel not moving. The facility has written `translucent=110` on its marble since the building existed and nothing read it. **Owed for both: what they cost** |
-| R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b, c, d not started** |
+| R5 face denoise, composite | M | **a done** (D573–D576) — the first thing here that filters ACROSS faces. `open_sky`, the bounce and the lamps blended with a face's coplanar neighbours' in a 3×3 tent, with no edge-stopping term at all because the face key already answers that question. Roughness **4.35 → 2.97** at the steps and **3.01 → 1.72** enclosed, speckle 35.20 → 27.53 and **12.11 → 7.99**, mean pixel unmoved, flying inside its own spread. Costs 29.6 MB and takes the settled close camera to 4.06 ms of a 4.40 budget. **b is half built and OFF** (D660), **c is not started**, and **d's FIRST HALF is in** (D663): a coarse node whose per-direction coverage is not full casts R4d's second march past itself and the composite draws the two surfaces in proportion, so a distant railing stops being a solid stair-stepped bar. Measured on `clips/edge_aa_test.clip`, written for it because no clip a software rasteriser can hold contains a coarse pixel: below the cloud deck exactly **402 pixels of 42,880 move and every one of them is inside the structure's own box**, at 21.280 of 255. The frame cost is NOT resolvable on a software rasteriser — two pairs of arms minutes apart disagree on the sign — but the face store repeatably grows **583 → 955**, because the second march claims what it lands on. `--no-edge-aa` is the control arm |
 | R6 post | M | **the light meter is done** (D577, D578) — it was not a sub-step in the plan because the tracer had one when the plan was written, and R3d and R1e between them left `kPreviewExposure` a constant of 3.2 with **no writer at all**. Two clips written to test exposure could not be used because of it: `many_lamps.clip` read **248.9 of 255** and `exposure_range.clip` **35.8**; they read **150.6** and **149.3** now. The facility moves 2–6%, because `kExposureBias` is a separate constant from `kMiddleGrey`. **a, b, c not started** |
 | R7 the primary ray | L | not started |
 | R8 infinite detail | XL | not started. **Re-sized to L**: R8c and R8d moved into R11 (D612) |
@@ -539,6 +539,19 @@ failure, not a compile error.
     screenshot line now names the frame it is of and warns when that is short of the frame asked
     for. Trap 15 living in the harness rather than in a shader. D656.
 
+31. **Two things in every frame are not functions of your change, and both of them will read as your
+    result.** An A/B of anything in the composite is compared pixel for pixel, and this frame has an
+    AUTO EXPOSURE and a CLOUD DECK in it. The meter is a feedback loop over the whole picture: R5d
+    let a little sky through a structure, the frame's log-average rose, the meter chose **2.628×
+    against 2.728×** and **99.877% of the picture differed** — including sky the change cannot
+    reach. And `params.sky_cloud[1]` is `time_seconds · kGameSecondsPerSecond` in **real** seconds,
+    so two runs at different speeds photograph different weather at the same frame number: with the
+    exposure pinned the same pair still differed on **26.8%**, in a band across the whole width,
+    and the difference map was a photograph of the clouds. `--no-auto-exposure` fixes the first;
+    nothing fixes the second but keeping the horizon out of the shot. The general form is trap 8 with
+    a clock rather than a sampler — **before comparing two frames, list what in them is driven by
+    something other than your change**, and either pin it or frame it out. D663.
+
 ---
 
 ## 4b. The bug that was open here — closed, and what it teaches
@@ -589,12 +602,13 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ## 5. What to do next
 
-#### START HERE — where it stands on 2026-08-15, and the first three things to do
+#### START HERE — where it stands on 2026-08-16, and the first three things to do
 
 **What landed today, in the order a player would notice it:**
 
 | | state |
 |---|---|
+| **R5d — analytic edge AA, first half.** A node coarser than a voxel and only part full of matter stops being drawn as a solid block: the ray carries on past it and the composite draws the two surfaces in proportion, so a distant railing has weight instead of stair-steps | **in, VERIFIED by picture and by count** (D663). `--no-edge-aa` is the control arm |
 | **R4e — translucency.** Marble glows where it is thin, and the renderer works out which parts those are by counting the stone a ray crosses | **in, and VERIFIED by picture** (D653) |
 | **R4d — refraction.** Glass and water displace what is behind them; absorption over the true path; total internal reflection | **in, and now LOOKED AT** — card-free, at 640×400 settled to frame 120 (D652, D656) |
 | the crash that made every card-free picture but one impossible | **named: it is R4c's lobe pool, not the size of the scene and not refraction** (D656) |
@@ -632,7 +646,8 @@ a step-bounded ray is not a bound. Not carried. D361.
    the default 0, at **1280×800 quality 7, settled, the enclosed and close cameras**, which is where
    R5's gate lives. Six card-free runs could not resolve it (D660) and the numbers are in this
    file's opening block. What is left of R5b after that is the temporal half proper — R5c's
-   deterministic blend and R5d's edge AA are separate.
+   deterministic blend is separate, and **R5d's edge AA has since landed its first
+   half** (D663) — whose own next step is `NodePool::fold_children` rather than any shader.
    **The paragraph below is stale twice over and this is the correction**: the reading it says is
    "not done" IS done for four terms and was never done for the sun, which is what D660 built. The
    old note read: **Its opening instruction below is stale and
@@ -640,6 +655,41 @@ a step-bounded ray is not a bound. Not carried. D361.
    at claim time (`shade_faces.comp`, the `samples == 0` branch), gated on `!provisional_face`, so a
    newly claimed face already starts from the coarse face over it. What is missing is the temporal
    half, and R5b's numbers three blocks down still stand.
+
+---
+
+#### LATEST, 2026-08-16 (evening): R5d's first half — a coarse node stops being a solid block
+
+**Read D663 for the whole of it.** What matters for the next session:
+
+- **The feature.** A primary ray that stops on a node with `level > 0` whose per-direction coverage
+  is under full now casts R4d's second march past that node, and `resolve.comp` composites the two.
+  `--no-edge-aa` restores exactly what every build before this drew. `clips/edge_aa_test.clip` is
+  the gate and had to be written, because **every clip small enough for the software rasteriser is
+  four metres across and contains no coarse pixel at all** — the two arms are bit-identical on all of
+  them.
+- **Two hazards that will bite the next A/B of anything in the composite**, both found by getting
+  them wrong first (D663):
+  **the light meter** moves every pixel in the frame when a change alters the scene's brightness at
+  all — 99.877% of the picture differed before `--no-auto-exposure` went on — and **the cloud deck
+  runs on the REAL wall clock**, so two runs of different speeds photograph different weather at the
+  same frame number. Keep the horizon out of the shot or the whole cloud band reads as your result.
+- **What is owed, and it needs a card.** The frame cost is **not measurable here** and saying it was
+  would have been wrong: two pairs of arms minutes apart put visibility at 17.083 against 15.724 ms
+  and then at 15.480 against 16.998 — opposite signs, one of them a 9% regression on its own (trap
+  29, on a container shared with three other builds). The number that IS repeatable is the store: the
+  second march CLAIMS the surfaces it lands on, so the face store went **583 → 955 live** on a scene
+  with four objects in it. On the facility that wants measuring against the face budget before this
+  is trusted at 4K.
+- **What limits it, and it is not the shader.** `NodePool::fold_children` folds coverage by taking
+  the MAXIMUM over children, so above the brick a node reads as more solid than it is — a thin
+  railing gets its blend and a silhouette across a node that is half solid wall gets none. Making
+  the fold a true projection (each quadrant the max of the two children in line along the axis, then
+  the mean of the four quadrants) is the next step for this stage and is about twenty lines in
+  `node_pool.cpp`. `tests/test_node_pool.cpp` pins the current behaviour both ways, so changing it
+  starts by changing a test that says what it is.
+- **R5d's second half** is the plan's *up to three partial hits*: `out_behind` carries one surface a
+  pixel, so a partly covered node behind a partly covered node is still drawn opaque.
 
 ---
 

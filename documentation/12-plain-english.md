@@ -3183,3 +3183,33 @@ build, switched off. Six runs — three each way, same building, same camera, sa
 tell the two apart: the difference between the two versions was smaller than the difference between
 two runs of the *same* version. On your machine, at full resolution, it may well be visible. Here it
 is not, and the honest thing is to leave it off until somebody can see it.
+
+## Distant railings stop being staircases
+
+Stand a long way from a railing and each post is thinner than a single dot on your screen. The game
+had one answer to that and it was the wrong one: a dot either was the post or it wasn't. So a far-off
+railing came out as a row of solid bars with hard jagged edges, and every one of those edges crawled
+and shimmered as you moved — the same effect as an old photograph of a fence taken through a
+window blind.
+
+The reason it was the wrong answer is that the game already knew better. When it builds its
+summaries of the world — the coarse blocks it draws distant things out of — it works out, for each
+of the six directions you could look at a block from, **exactly what fraction of it is solid from
+that side**. That number has been sitting in the file for two years with nothing reading it, because
+the note explaining what it was for described a different number that used to be there.
+
+Now a distant block that is only half solid is drawn as half solid: the ray carries on past it, finds
+whatever is behind — another part of the building, or the sky — and the two are mixed in the right
+proportion. A thin post covering a third of a dot contributes a third of its colour, and the dot
+keeps two thirds of the sky.
+
+**What you should see:** distant railings, window bars, cornices and crate edges look like thin
+things rather than like blocky ones, and the edge where a far-off building meets the sky stops
+crawling when you walk. Nothing within about twenty metres of you changes at all — up close each dot
+is one cube and there was never anything to smooth.
+
+I could check this one here, which the last few could not be. It needed a new test scene, because
+every scene small enough to draw on a machine with no graphics card is four metres across and
+everything in it is close up. With one built at the right distance, the only part of the picture that
+changes between the old way and the new is the railing itself, down to the pixel — and, magnified,
+the posts stop being blocks. `--no-edge-aa` puts it back exactly as it was if you dislike it.

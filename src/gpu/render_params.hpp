@@ -311,6 +311,11 @@ inline constexpr u32 kProbeRefract = 1u << 9;
 // through the matter behind it, and is lit by what survives the crossing. Cleared by
 // `--no-translucency`, which is the state every figure before it was taken in: marble as granite.
 inline constexpr u32 kProbeTranslucent = 1u << 10;
+// R5d: a primary ray that stops on a coarse node only part of which is matter marches on past it,
+// and the composite draws the two surfaces in proportion to the node's own per-direction coverage.
+// Cleared by `--no-edge-aa`, which is every build before this one: a node larger than a voxel drawn
+// as a solid block, so every distant silhouette is a hard stair-step.
+inline constexpr u32 kProbeEdgeAA = 1u << 11;
 
 // R4c's pool: how many blocks of outgoing bins there are and how many words each is. Must match
 // kLobeBlocks, kLobeBins and the layout in shaders/face_terms.glsl, which is the authority because

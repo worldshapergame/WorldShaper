@@ -226,6 +226,78 @@ TEST_CASE("one voxel in a node still reports present at every level above it") {
     }
 }
 
+TEST_CASE("a node's coverage is its PROJECTION along each direction, and the fold is a maximum") {
+    // R5d blends a pixel by this byte, so what it means has to be pinned rather than believed.
+    // The renderer has two coverage-like numbers on a node and using the wrong one is a mistake this
+    // project has already made twice from opposite sides (trap 6): the alpha of the filtered colour
+    // is a VOLUMETRIC fill fraction that halves at every level, and these six bytes are a PROJECTED
+    // one, per direction, which is the fraction of a pixel that is matter.
+    Fixture f;
+    // A post two voxels square running the full height of one brick, which is the shape the whole
+    // stage exists for -- a railing at a distance.
+    f.fill_box(0, 0, 0, 1, 7, 1);
+    f.want_box(0, 0, 0, 0, 0, 0);
+    f.serve();
+
+    auto faces_at = [&f](i64 x, i64 y, i64 z, u32 level, u32 out[6]) {
+        const u32 slot = f.pool.find(node_key_of(x, y, z, level));
+        REQUIRE(slot != kNoNode);
+        const u32 xy = f.pool.nodes()[slot].coverage_xy;
+        const u32 zz = f.pool.nodes()[slot].coverage_z;
+        out[0] = xy & 0xFFu;
+        out[1] = (xy >> 8) & 0xFFu;
+        out[2] = (xy >> 16) & 0xFFu;
+        out[3] = (xy >> 24) & 0xFFu;
+        out[4] = zz & 0xFFu;
+        out[5] = (zz >> 8) & 0xFFu;
+    };
+
+    u32 leaf[6];
+    faces_at(0, 0, 0, kLeafLevel, leaf);
+    // Looked at from the side, the post covers two of the eight columns across and all eight down:
+    // 16 of 64, which the byte carries as 16 * 255 / 64 = 63. From above it is two by two, 4 of 64,
+    // which is 15. Exact both times, and the same figure both ways along an axis because a
+    // projection has no sense to it.
+    CHECK(leaf[0] == 63);   // +x
+    CHECK(leaf[1] == 63);   // -x
+    CHECK(leaf[2] == 15);   // +y
+    CHECK(leaf[3] == 15);   // -y
+    CHECK(leaf[4] == 63);   // +z
+    CHECK(leaf[5] == 63);   // -z
+
+    // ...and the FOLD is a maximum over the children, not a projection of its own.
+    //
+    // That is a deliberate choice made where `fold_children` makes it -- it errs towards *present*,
+    // on the same argument as the floor of one that stops a single voxel rounding away -- and the
+    // consequence belongs here rather than only in a comment, because it is what limits R5d. The
+    // level above this holds eight of these bricks and only one of them has the post in it, so the
+    // TRUE projection there is a quarter of what the brick reports; the max hands back the brick's
+    // figure unchanged. A coarse node therefore reads as more solid than it is, and the edge
+    // anti-aliasing it gets is conservative rather than excessive -- which is the safe direction,
+    // and is why a silhouette across a node that is half solid wall gets no blending at all.
+    u32 above[6];
+    faces_at(0, 0, 0, kLeafLevel + 1, above);
+    for (u32 face = 0; face < 6; ++face) {
+        CAPTURE(face);
+        CHECK(above[face] == leaf[face]);
+    }
+}
+
+TEST_CASE("a solid node covers all of itself, in all six directions") {
+    // The other end of the same rule, and the one R5d's threshold turns on: a face-on projection of
+    // anything solid is full, so a flat wall reports 255 and never pays for a second march. If this
+    // ever stopped being true the stage would cost a march on every coarse pixel in the frame.
+    Fixture f;
+    f.fill_box(0, 0, 0, 7, 7, 7);
+    f.want_box(0, 0, 0, 0, 0, 0);
+    f.serve();
+
+    const u32 slot = f.pool.find(node_key_of(0, 0, 0, kLeafLevel));
+    REQUIRE(slot != kNoNode);
+    CHECK(f.pool.nodes()[slot].coverage_xy == 0xFFFFFFFFu);
+    CHECK((f.pool.nodes()[slot].coverage_z & 0xFFFFu) == 0xFFFFu);
+}
+
 TEST_CASE("a child mask bit is set exactly where a child exists") {
     Fixture f;
     // Two voxels far enough apart to land in different octants of the same node.

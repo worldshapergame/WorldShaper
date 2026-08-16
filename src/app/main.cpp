@@ -489,6 +489,12 @@ struct Options {
     // proportion to how much of it the light had to cross. `--no-translucency` is the control arm
     // and every such surface goes back to being as dark as granite when the sun is on the far side.
     bool translucency = true;
+    // R5d: a primary ray that stops on a node coarser than a voxel and only part full of matter
+    // marches on past it, and the composite draws the two surfaces in proportion to the node's own
+    // per-direction coverage. `--no-edge-aa` is the control arm and is every build before this one:
+    // a coarse node is a solid block whatever is really inside it, so a distant railing is a bar and
+    // every silhouette against the sky is a stair-step that crawls as the camera moves.
+    bool edge_aa = true;
     // How much of the node pool's payload buffer to use, in megabytes. 0 takes the budget's own
     // figure, clamped to what the driver will bind. There to make a small pool reachable without a
     // rebuild -- the same reason `--face-budget` exists.
@@ -987,6 +993,10 @@ Options parse_options(int argc, char** argv) {
             // R4d's other control arm: the ray behind the glass carries straight on, which is
             // what D604 built and what every figure before this was taken in.
             options.refraction = false;
+        } else if (arg == "--no-edge-aa") {
+            // R5d's control arm: a coarse node is fully opaque whatever its coverage says, so
+            // nothing casts a second march and every silhouette is a hard stair-step again.
+            options.edge_aa = false;
         } else if (arg == "--node-payload") {
             options.node_payload_mb = next_number(0);
         } else if (arg == "--lobe-coverage") {
@@ -1139,6 +1149,9 @@ void print_help() {
         "                        with its coplanar neighbours'. R5a's control arm\n"
         "  --no-face-materials   no face works out what the surface under it is made of. R4a's\n"
         "                        control arm, and the picture is identical in both\n"
+        "  --no-edge-aa          a node coarser than a voxel is drawn as a solid block whatever\n"
+        "                        its coverage says, so a distant railing is a bar and every\n"
+        "                        silhouette is a hard stair-step. R5d's control arm\n"
         "  --halo                claim faces past the edge of the screen, over a margin sized by\n"
         "                        how fast the camera is turning, so they are measuring before they\n"
         "                        arrive. Off by default: it costs the sun's refresh rate (D586)\n"
@@ -7004,7 +7017,8 @@ void Application::record_frame(f32 time_seconds) {
                               (options_.lobe_coverage ? kProbeLobeCoverage : 0u) |
                               (options_.see_through ? kProbeSeeThrough : 0u) |
                               (options_.refraction ? kProbeRefract : 0u) |
-                              (options_.translucency ? kProbeTranslucent : 0u);
+                              (options_.translucency ? kProbeTranslucent : 0u) |
+                              (options_.edge_aa ? kProbeEdgeAA : 0u);
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), 0, sizeof(dials), &dials);
             const u32 secondary_stride = secondary_light_stride();
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSecondaryStride * sizeof(u32),
