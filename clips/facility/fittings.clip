@@ -623,23 +623,52 @@ let fittings_statue_w = rotate { fittings_statue } y=0.75
 # PLACING — the portico
 # ================================================================================================
 #
-# The south wall of the main block, z = -7.50, between the great door's dressing (which stops at
-# x = +-2.025) and the antae (which start at x = +-6.05). Everything is built on +x and folded
-# once at the end, so the two halves of the elevation cannot drift apart.
+# The south wall of the main block, z = -7.50. THE WALL IS NOT AS WIDE AS THIS NOTE USED TO SAY,
+# and that error deleted a light for the whole of this building's life.
 #
-#   x = +-2.70 (6 M) and +-5.40 (12 M)   the sconces, flame on 4.20 = 1.80 + 2.40
+# What it said: "between the great door's dressing (which stops at x = +-2.025) and the antae
+# (which start at x = +-6.05)", and it put the outer sconce at 12 M = 5.40 in the middle of that
+# span. It never mentions the SIDE DOORCASE. doors.clip's `doors_sd_case` runs x 3.96 .. 6.84 and
+# its opening `doors_sd_void_e` is x 4.50 .. 6.30, y 1.80 .. 4.95, z -7.95 .. -5.70 — so 5.40 is
+# not the middle of a wall, it is the middle of a doorway.
+#
+# A DOORWAY CUTS A FITTING BY DESIGN and must: the manifest's `furnished` line differences
+# part_fittings by void_doors and void_windows precisely so nothing stands in a hole. Measured with
+# `intersection { part_fittings void_doors }` at metre 32: 1,768 voxels, two components, the box
+# 3.375..4.375 in y and -7.750..-7.406 in z — which is 884 voxels each and is the WHOLE of this
+# sconce on each side, not part of it. The portico's four sconces were two. This file's own header
+# says "four sconces and two torchères stand in that shadow"; the build had two and two.
+#
+# So the outer sconce moves to the only plain wall this elevation actually has. Measured, not
+# reasoned: doors_gd_case ends at x = 2.031 and doors_sd_case begins at 3.96, so the plain panel is
+# 2.031 .. 3.96, and the statue's plinth already occupies 3.594 .. 4.500 of it. That leaves
+# 2.844 .. 3.594 clear beside the sconce at 6 M, and 7 M sits in it:
+#
+#   x = +-2.70 (6 M) and +-3.15 (7 M)    the sconces, flame on 4.20 = 1.80 + 2.40
 #   x = +-4.05 (9 M)                     a statue, on the axis of the middle column of the portico
 #   x = +-2.25 (5 M), z = -8.85          a torchère, 1.35 (3 M) in front of the wall
 #
-# So this wall reads, from the great door outwards: torchère standing free on the floor, sconce,
-# statue lit from both sides by the two sconces beside it, sconce, anta. THE THREE FLAMES ON EACH
-# SIDE ARE ALL ON ONE LEVEL — both sconce bowls on 4.20 and the torchère's brazier centred on 4.14,
-# four and a half centimetres apart, under a voxel and a half at metre 32. That is what a colonnade
-# wants, and it is also the only way to put `sconce` at emit=150 and `lamp` at emit=200 side by side
-# at the same height in the same shadow, where the difference between them is the material and
-# nothing else.
+# Checked at 7 M before it was written, all at metre 32: cut by void_doors, EMPTY; cut by
+# void_windows, EMPTY; overlapping fittings_po_sconce_a, EMPTY; overlapping fittings_po_statue,
+# EMPTY; and 402 of its 884 voxels lie inside `hollowed`, which is the backplate finding real stone
+# to be buried in. A sconce with nothing behind it is the other half of this failure and it was
+# tested for.
+#
+# WHAT THE ELEVATION NOW READS AS, and it is deliberately not what the old note claimed. The old
+# note said "statue lit from both sides by the two sconces beside it". Both sconces are now WEST of
+# the statue, so it is lit rakingly from one side with the dark of the side doorway behind it —
+# which is what this file's own header asks the statue for: "a thick curved body of it stands in
+# raking light from one side with air behind it. If subsurface transport works, an arm reads warm
+# on its shadow side." The placing note and the load note disagreed; the load note wins, because it
+# is the one that says what the geometry is for.
+#
+# THE THREE FLAMES ON EACH SIDE ARE STILL ALL ON ONE LEVEL — both sconce bowls on 4.20 and the
+# torchère's brazier centred on 4.14, four and a half centimetres apart, under a voxel and a half at
+# metre 32. That is what a colonnade wants, and it is also the only way to put `sconce` at emit=150
+# and `lamp` at emit=200 side by side at the same height in the same shadow, where the difference
+# between them is the material and nothing else.
 let fittings_po_sconce_a = translate { fittings_sconce_s } 2.7000 4.2000 -7.5000
-let fittings_po_sconce_b = translate { fittings_sconce_s } 5.4000 4.2000 -7.5000
+let fittings_po_sconce_b = translate { fittings_sconce_s } 3.1500 4.2000 -7.5000
 let fittings_po_statue   = translate { fittings_statue_s } 4.0500 1.8000 -7.5000
 let fittings_po_torchere = translate { fittings_torchere } 2.2500 1.8000 -8.8500
 
@@ -757,7 +786,7 @@ paint walnut where=fittings_seats below=0.02
 # urns nor the dome's copper, and here it is lit almost entirely by the thing it is holding up.
 let fittings_sconce_metal = mirror { union {
     translate { rotate { fittings_sc_metal } y=0.5 } 2.7000 4.2000 -7.5000
-    translate { rotate { fittings_sc_metal } y=0.5 } 5.4000 4.2000 -7.5000
+    translate { rotate { fittings_sc_metal } y=0.5 } 3.1500 4.2000 -7.5000
     translate { rotate { fittings_sc_metal } y=0.5 } 7.4250 3.8250  2.0250
     translate { rotate { fittings_sc_metal } y=0.5 } 11.4750 3.8250  2.0250
     translate { fittings_sc_metal } 7.4250 3.8250 -2.0250
@@ -783,7 +812,7 @@ paint gilt where=fittings_ch_cups below=0.02
 # guessed at. Nothing else in the building paints either of them.
 let fittings_glows = mirror { union {
     translate { rotate { fittings_sc_glow } y=0.5 } 2.7000 4.2000 -7.5000
-    translate { rotate { fittings_sc_glow } y=0.5 } 5.4000 4.2000 -7.5000
+    translate { rotate { fittings_sc_glow } y=0.5 } 3.1500 4.2000 -7.5000
     translate { rotate { fittings_sc_glow } y=0.5 } 7.4250 3.8250  2.0250
     translate { rotate { fittings_sc_glow } y=0.5 } 11.4750 3.8250  2.0250
     translate { fittings_sc_glow } 7.4250 3.8250 -2.0250
@@ -796,37 +825,47 @@ paint lamp where=fittings_fires below=0.02
 paint lamp where=fittings_ch_fires below=0.02
 
 # ================================================================================================
-# THE ONE THING THIS FILE CANNOT DO FOR ITSELF — read this before wondering where the lights went
+# THE ONE THING THIS FILE CANNOT DO FOR ITSELF — FIXED, AND HERE IS WHAT IT COST
 # ================================================================================================
 #
-# The manifest assembles `built = union { shell inside }`, with `part_fittings` inside it, and THEN
-# subtracts every room's void from the lot:
+# THIS SECTION USED TO SAY THE LIGHTS WERE BEING DELETED AND THAT THE FIX WAS NOT MINE TO MAKE.
+# The fix has been made. It is kept here with its measurement because the number is the argument
+# for never writing the manifest the other way, and because everything this section predicted about
+# `void_rotunda` turned out to be wrong in a way worth recording.
 #
-#     let hollowed = difference { built  void_doors void_windows void_vestibule
-#                                        void_rotunda void_halls void_stair }
+# WHAT IT WAS. The manifest assembled `built = union { shell inside }` with `part_fittings` inside
+# it, and then subtracted every room's void from the lot. A room's void is the air of that room less
+# its own stone — every room file writes it that way, correctly, so another fragment cannot leave a
+# wall standing in their room. But a fitting IS a thing standing in somebody's room, and it went
+# with the air.
 #
-# A room's void is the air of that room less its own stone — halls.clip and vestibule.clip both
-# write it that way, correctly, so that another fragment cannot leave a wall standing in their
-# room. But a fitting IS a thing standing in somebody's room, and it is subtracted with everything
-# else. The manifest's own comment above that line says the voids come last so that "nothing put in
-# afterwards can be eaten by a room being carved", which is the intention; the code does not do it,
-# because `inside` is inside `built`.
+# WHAT IT IS NOW, in clips/facility.clip:
 #
-# MEASURED, so nobody has to take it on trust. Built at metre 10 and photographed from inside the
-# east hall (renders\fit-hall-place\contact-sheet.png): the four sconces are reduced to the 0.09 m
-# of backplate that is buried in the wall — a flat dark rectangle with no bracket, no bowl and no
-# light — and the four benches, which bury the same 0.09 and project 0.45 into the room, are gone
-# altogether. `--clip-part part_fittings` reports all 27 fittings whole and one piece each.
+#     let furnished = union { hollowed
+#                             difference { part_fittings void_doors void_windows }
+#                             part_terrace }
 #
-# The fix is one line in clips/facility.clip and it is not mine to make:
+# with `part_fittings` out of the `inside` union, so a DOOR and a WINDOW still cut a fitting and a
+# ROOM does not.
 #
-#     let furnished = union { hollowed part_fittings }        # and displace `furnished`
+# WHAT THE ROOM VOIDS WOULD TAKE, measured on the assembled building at metre 32 rather than
+# remembered — `intersection { part_fittings union{ every room void } }`:
 #
-# with `part_fittings` taken out of the `inside` union. Written up with the measurement in
-# clips/facility/requests/fittings.md. Until it is made, the four sconces, two torchères and two
-# statues under the PORTICO are the part of this file that survives, because a portico is outdoors
-# and nobody voids it — which is also why the largest single share of the emissive load was put
-# there rather than indoors, and it is there today: renders\fit-pt\portico-front.png is a path
-# trace of four of them alight on the south wall. The corona under the dome survives too, but only
-# because rotunda.clip is still a placeholder; the day it exposes a real `void_rotunda` over the
-# drum, everything between the hoop at 9.90 and the dome's springing at 15.15 goes with it.
+#     part_fittings whole                      313,586 voxels, 29 components
+#     what the ten room voids would remove     125,944 voxels, 22 components   = 40.2%
+#         of which void_halls                  124,436   every sconce, bench and statue indoors
+#         of which void_crypt                    1,508   the foot of the four portico plinths
+#
+# So the halls' eight sconces, eight benches and two statues are the whole of the indoor emissive
+# load and the whole of the loss. The crypt's 1,508 is the other half of the lesson and nobody
+# predicted it: `void_crypt` reaches y 1.750 .. 1.844 under the portico, which is the 0.05 of plinth
+# and pedestal this file beds INTO the floor, so a room two storeys below would have sawn the feet
+# off the statues and torchères standing outdoors.
+#
+# AND `void_rotunda` DOES NOT TOUCH THE CORONA, which is not what this section used to predict. It
+# said "the day it exposes a real void_rotunda over the drum, everything between the hoop at 9.90
+# and the dome's springing at 15.15 goes with it". rotunda.clip exposes a real one now — the coffers
+# and the oculus — and `intersection { part_fittings void_rotunda }` is EMPTY at metre 32. The four
+# hanging rods stop at y 17.70 on a 1.80 radius and the coffers begin outside them, so the corona
+# hangs from soffit the coffering never reaches. The prediction was reasoned from the right rule and
+# the wrong geometry; the measurement is the only reason anybody knows which.
