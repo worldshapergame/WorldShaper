@@ -26,6 +26,7 @@ const state = {
     sliceAxis: 2,
     sliceFlip: true,
     sliceValue: 1,
+    shapes: false,
     resolution: Math.min(window.devicePixelRatio || 1, 2),
     frameMs: 16,
     lastFrame: 0,
@@ -202,6 +203,7 @@ function describe() {
         ['surface', clip.quads.toLocaleString() + ' quads, ' + clip.transparentQuads.toLocaleString() +
                     ' of them clear'],
         ['materials', String(clip.materialCount)],
+        ['shapes', clip.shapeCount ? clip.shapeCount.toLocaleString() + ' as written' : 'not baked'],
         ['download', (entry.bytes / (1024 * 1024)).toFixed(2) + ' MB'],
         ['baked', state.index ? state.index.built : ''],
         // Which clips these are. The site follows whichever branch was pushed last, so without
@@ -472,7 +474,7 @@ function frame(now) {
     state.controls.plane = slicePlane();
     state.controls.update(state.clip, dt);
     resize();
-    if (state.clip) state.renderer.render(state.controls, slicePlane());
+    if (state.clip) state.renderer.render(state.controls, slicePlane(), state.shapes);
 
     // Resolution follows the frame time. A phone that cannot hold sixty at its own pixel ratio
     // gets fewer pixels rather than fewer frames, because a viewer you are steering has to answer
@@ -515,6 +517,17 @@ async function main() {
     };
     $('listClose').onclick = () => $('list').classList.add('hidden');
     $('filter').oninput = buildList;
+    $('shapes').onclick = () => {
+        if (!state.clip || !state.clip.shapeCount) {
+            toast('this clip was baked before the shapes view existed');
+            return;
+        }
+        state.shapes = !state.shapes;
+        $('shapes').classList.toggle('on', state.shapes);
+        toast(state.shapes
+            ? state.clip.shapeCount.toLocaleString() + ' shapes, as written — red is cut away'
+            : 'voxels');
+    };
     $('info').onclick = () => $('panel').classList.toggle('hidden');
     $('panelClose').onclick = () => $('panel').classList.add('hidden');
     $('mode').onclick = () => setMode(state.controls.mode === 'walk' ? 'orbit' : 'walk');

@@ -11,6 +11,8 @@
 export const HEADER_BYTES = 192;
 export const QUAD_BYTES = 16;
 export const MATERIAL_BYTES = 16;
+// op, sign, scale, a 3x4 world-to-local matrix, eight parameters, and the box it ends up in.
+export const SHAPE_BYTES = 116;
 
 // 0 +X   1 -X   2 +Y   3 -Y   4 +Z   5 -Z
 export const FACE_NORMAL = [
@@ -45,6 +47,9 @@ export function parseClip(buffer) {
         high: [view.getFloat32(160, true), view.getFloat32(164, true), view.getFloat32(168, true)],
         authoredMetre: view.getInt32(172, true),
         solid: view.getUint32(176, true),
+        // 180..187 is the key the baker stamps to know whether this file still holds; the viewer
+        // does not care what it is.
+        shapeCount: view.getUint32(188, true),
     };
     // Seven entries: six starts and the end, so a range is start[i]..start[i + 1] everywhere.
     for (let i = 0; i < 7; ++i) {
@@ -67,6 +72,15 @@ export function parseClip(buffer) {
 
     const collisionCells = clip.collisionDims[0] * clip.collisionDims[1] * clip.collisionDims[2];
     clip.collision = new Uint8Array(buffer, at, (collisionCells + 7) >> 3);
+    at += (collisionCells + 7) >> 3;
+
+    // The clip as it was written: every shape the author typed, with the transform that places it.
+    // Absent from files baked before this existed, which is why the length is checked rather than
+    // trusted -- an old file in the cache beside a new one is a real state.
+    clip.shapes = (clip.shapeCount > 0 && at + clip.shapeCount * SHAPE_BYTES <= buffer.byteLength)
+        ? new Uint8Array(buffer, at, clip.shapeCount * SHAPE_BYTES)
+        : new Uint8Array(0);
+    if (clip.shapes.length === 0) clip.shapeCount = 0;
 
     clip.size = [
         clip.dims[0] / clip.metre, clip.dims[1] / clip.metre, clip.dims[2] / clip.metre,

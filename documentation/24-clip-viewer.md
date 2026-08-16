@@ -149,11 +149,84 @@ page renders fewer pixels rather than fewer frames, down to 55%.
 of its own baked bytes. When the hash of the clip on screen changes it is refetched and swapped in
 **with the camera exactly where it was**, which is the only way to see what actually changed.
 
+## 4a. The clip before it was voxels
+
+The ◉ button draws the clip **as it was written**: every shape the author typed, ray-marched, with
+no resolution at all. A shape a `difference` takes away is drawn in red, because the hole somebody
+cut is as much a part of the description as the stone it was cut from and is usually the thing you
+came to look at.
+
+The baker walks the field from the solid and carries three things down: a 3×4 matrix mapping world
+to each node's own space — which is exactly what `eval` does to the point as it descends, so it is
+accumulated rather than inverted — the factor `Op::Scale` multiplies a distance by, and whether an
+odd number of `difference` subtrahends is above it. `mirror` folds space rather than moving it, so
+it emits its child twice; `repeat` is expanded to a cap; `twist`, `bend` and `revolve` have no
+honest affine placement for their children and are left out.
+
+Three things it got wrong first, all of them visible immediately and none of them a crash:
+
+- **The op codes must not be the enum's.** `src/forge/field.hpp` comes from whichever branch is
+  being grafted, and `Op` is a plain enum whose values shift the moment anybody inserts a solid
+  into the middle of the list — which is exactly what the branch that added `arc` did. The format
+  carries the baker's own numbering, assigned by `web_op`.
+- **A fragment's shapes are the fragment's.** After the intersection with the building's solid the
+  root is `intersection { part, the whole building }`, and a walk descends into both: the portico
+  came out with 15,927 shapes against the building's own 15,190. The walk starts from the part
+  before it is intersected.
+- **Nothing may claim a box bigger than the clip.** A `plane` is a half space, its bounds are
+  everywhere, and a two-billion-metre impostor flattens the depth buffer for everything else on
+  screen. There are sixty-five planes in the facility.
+
+## 4b. A clip that has not changed is not baked again
+
+Every baked file carries, in two words of its header, the key of what produced it: the spliced
+source of the program that made it, the resolution settings, and a hash of the sampler's own code.
+A clip whose key still holds is read back rather than rebuilt, and it needs no sidecar and no JSON
+to parse because everything the index wants is already in the header — the file is the record of
+itself. CI keeps `web/data` in a cache between runs.
+
+    nothing changed          0.07 s      forty reused
+    one test clip edited     0.6  s      thirty-nine reused
+    one facility fragment   83    s      the building and its parts
+    cold, all of it        193    s
+
+The fragment case is the honest dependency rather than a missed optimisation: a part is intersected
+with the building's own solid and painted with the building's own stack, so when the manifest moves
+every part really does change. It is keyed on the manifest's splice for that reason.
+
+**Resolution is split.** A whole clip is baked at the resolution it was authored at, 32 voxels to
+the metre; a clip baked as one *part* of a manifest gets half that. Everything at 32 is about two
+and a half hours of a runner, because a fragment costs like a small facility and there are
+twenty-eight of them:
+
+| | time | quads |
+|---|---|---|
+| 8 / metre | 21.7 s | 196,076 |
+| 16 / metre | 131.2 s | 562,008 |
+| 32 / metre | ~13 min | ~1,700,000 |
+
 ## 5. Publishing
 
-`.github/workflows/pages.yml`, on every push to `main` that touches `clips/`, the libraries under
-the baker, or `web/`. It builds `ws_bake_web`, bakes all forty clips (about three minutes),
-compresses each file beside itself, and deploys to GitHub Pages.
+`.github/workflows/pages.yml`. Three things about it were wrong in ways that made the site look
+simply broken, and all three are worth knowing before touching it:
+
+**It picks its own ref.** A push says *look again*; it does not say what to bake. Taking the pushed
+branch means a push to `main` bakes `main` and a push to the viewer's branch bakes the viewer's
+branch, and the new clips are on neither — the facility's overhaul sat on its own branch for a day
+while the site showed `main`, faithfully, and read as out of date. The job takes the branch whose
+last commit to `clips/` is newest.
+
+**It grafts rather than checks out.** A branch that is only writing clips does not have this
+workflow, does not have `tools/bake_web.cpp`, does not have a CMakeLists that knows what
+`ws_bake_web` is, and does not have `web/` at all. The job stays on `main` for the machinery and
+the site and takes `clips/` and `src/` from the branch — `src/` because the clips and the forge are
+one thing, and `arc_test.clip` uses an `arc` that exists only on the branch that added it.
+
+**Nothing is cancelled.** `cancel-in-progress: true` meant the site was never published: a commit
+landing on a branch and on `main` is two push events, both match, both land in the `pages`
+concurrency group, and the second kills the first seconds after it starts. Four such pairs ran and
+were cancelled while the page went on showing an older bake. Queueing is affordable now that a bake
+reuses everything that has not moved.
 
 `web/data/` is **not** committed. It is derived, it is tens of megabytes of binary, and a second
 copy of every clip in the history would be out of date the moment somebody edited a fragment.

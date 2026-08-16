@@ -686,6 +686,282 @@ void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
 }
 
 // --------------------------------------------------------------------------------------
+// The clip before it was voxels
+//
+// A clip is a description, and everything the viewer draws is what fell out of evaluating it. The
+// description itself -- the boxes and cylinders somebody actually typed, the ones a later
+// difference took away again, the shapes that are three millimetres apart and fight over a voxel
+// -- is not in the mesh at all, and it is what you want when the voxels look wrong.
+//
+// So the field is walked from the solid and every SHAPE LEAF is written out with the transform
+// that puts it where it is. The viewer ray-marches them, so what it draws is the true surface at
+// whatever distance you look from: no voxels, no resolution.
+//
+// The walk carries three things down:
+//
+//   a 3x4 matrix   world -> this node's own space, which is exactly what `eval` does to the point
+//                  as it descends, so it is accumulated rather than inverted
+//   a scale        what `Op::Scale` multiplies a distance by, so a scaled shape marches safely
+//   a polarity     whether an odd number of `difference` subtrahends is above it -- a shape that
+//                  is CUT AWAY is as much a part of the description as one that is added
+//
+// `mirror` folds space rather than moving it, so it emits its child twice, once through the fold.
+// `repeat` is expanded up to a cap. Ops that bend the space they contain -- twist, bend, revolve,
+// displace -- have no honest affine placement for their children and are counted rather than
+// drawn, and the viewer says how many were left out.
+// --------------------------------------------------------------------------------------
+
+struct Shape {
+    u32 op = 0;
+    f32 sign = 1.0f;      // -1 where a difference takes it away
+    f32 scale = 1.0f;     // what a distance in this shape's space is worth in metres
+    f32 world_to_local[12]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    f32 a[8]{};
+    f32 low[3]{0, 0, 0};
+    f32 high[3]{0, 0, 0};
+};
+
+struct Placement {
+    f64 m[12]{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};   // rows of [L | t], world -> local
+    f64 scale = 1.0;
+    f64 sign = 1.0;
+};
+
+// A(p) = L p + t, then whatever the node does to the result.
+Placement after_translate(const Placement& in, f64 x, f64 y, f64 z) {
+    Placement out = in;
+    out.m[3] -= x;
+    out.m[7] -= y;
+    out.m[11] -= z;
+    return out;
+}
+
+Placement after_linear(const Placement& in, const f64 r[9]) {
+    Placement out = in;
+    for (i32 row = 0; row < 3; ++row) {
+        for (i32 col = 0; col < 4; ++col) {
+            out.m[row * 4 + col] = r[row * 3 + 0] * in.m[0 * 4 + col] +
+                                   r[row * 3 + 1] * in.m[1 * 4 + col] +
+                                   r[row * 3 + 2] * in.m[2 * 4 + col];
+        }
+    }
+    return out;
+}
+
+// The viewer's own numbering, and it is deliberately not the enum's.
+//
+// `src/forge/field.hpp` comes from whichever branch is being baked, and `Op` is a plain enum whose
+// values shift the moment anybody inserts a shape into the middle of the list -- which is exactly
+// what the branch that added `arc` did. A format that shipped the enum's numbers would draw
+// cylinders as capsules the first time somebody added a solid, and nothing would say so.
+constexpr i32 kShapeUnknown = -1;
+
+i32 web_op(ws::forge::Op op) {
+    using ws::forge::Op;
+    switch (op) {
+        case Op::Sphere: return 0;
+        case Op::Box: return 1;
+        case Op::Cylinder: return 2;
+        case Op::Capsule: return 3;
+        case Op::Torus: return 4;
+        case Op::Cone: return 5;
+        case Op::Plane: return 6;
+        case Op::Ellipsoid: return 7;
+        default: return kShapeUnknown;
+    }
+}
+
+bool is_shape_leaf(ws::forge::Op op) { return web_op(op) != kShapeUnknown; }
+
+struct ShapeWalk {
+    const ws::forge::Field* field = nullptr;
+    std::vector<Shape> shapes;
+    f64 low[3]{-1e9, -1e9, -1e9};
+    f64 high[3]{1e9, 1e9, 1e9};
+    usize skipped = 0;      // subtrees under an op with no affine placement
+    usize capped = 0;       // instances a repeat would have made past the cap
+    static constexpr usize kMaxShapes = 20000;
+    static constexpr i32 kMaxRepeat = 24;
+};
+
+void walk_shapes(ShapeWalk& walk, u32 node, const Placement& at, i32 depth) {
+    using ws::forge::Op;
+    if (depth > 64 || walk.shapes.size() >= ShapeWalk::kMaxShapes) return;
+    const ws::forge::Node& n = walk.field->node(node);
+    const f64* a = n.a;
+
+    if (is_shape_leaf(n.op)) {
+        Shape shape;
+        shape.op = static_cast<u32>(web_op(n.op));
+        shape.sign = static_cast<f32>(at.sign);
+        shape.scale = static_cast<f32>(at.scale);
+        for (i32 i = 0; i < 12; ++i) shape.world_to_local[i] = static_cast<f32>(at.m[i]);
+        for (i32 i = 0; i < 8; ++i) shape.a[i] = static_cast<f32>(a[i]);
+
+        // Where it ends up, so the viewer has a box to march inside. The field knows the shape's
+        // box in its OWN space; the corners of that box go back out through the placement.
+        const ws::forge::Field::Aabb local = walk.field->bounds_of(node);
+        if (local.infinite()) {
+            for (i32 axis = 0; axis < 3; ++axis) {
+                shape.low[axis] = static_cast<f32>(walk.low[axis]);
+                shape.high[axis] = static_cast<f32>(walk.high[axis]);
+            }
+        } else {
+            // The placement maps world -> local, so it is inverted here, once, for eight corners.
+            f64 inv[12];
+            const f64 det =
+                at.m[0] * (at.m[5] * at.m[10] - at.m[6] * at.m[9]) -
+                at.m[1] * (at.m[4] * at.m[10] - at.m[6] * at.m[8]) +
+                at.m[2] * (at.m[4] * at.m[9] - at.m[5] * at.m[8]);
+            if (std::abs(det) < 1e-12) {
+                walk.skipped += 1;
+                return;
+            }
+            const f64 s = 1.0 / det;
+            inv[0] = (at.m[5] * at.m[10] - at.m[6] * at.m[9]) * s;
+            inv[1] = (at.m[2] * at.m[9] - at.m[1] * at.m[10]) * s;
+            inv[2] = (at.m[1] * at.m[6] - at.m[2] * at.m[5]) * s;
+            inv[4] = (at.m[6] * at.m[8] - at.m[4] * at.m[10]) * s;
+            inv[5] = (at.m[0] * at.m[10] - at.m[2] * at.m[8]) * s;
+            inv[6] = (at.m[2] * at.m[4] - at.m[0] * at.m[6]) * s;
+            inv[8] = (at.m[4] * at.m[9] - at.m[5] * at.m[8]) * s;
+            inv[9] = (at.m[1] * at.m[8] - at.m[0] * at.m[9]) * s;
+            inv[10] = (at.m[0] * at.m[5] - at.m[1] * at.m[4]) * s;
+            const f64 tx = at.m[3], ty = at.m[7], tz = at.m[11];
+            inv[3] = -(inv[0] * tx + inv[1] * ty + inv[2] * tz);
+            inv[7] = -(inv[4] * tx + inv[5] * ty + inv[6] * tz);
+            inv[11] = -(inv[8] * tx + inv[9] * ty + inv[10] * tz);
+
+            f64 lo[3] = {1e30, 1e30, 1e30};
+            f64 hi[3] = {-1e30, -1e30, -1e30};
+            for (i32 corner = 0; corner < 8; ++corner) {
+                const f64 c[3] = {(corner & 1) ? local.high.x : local.low.x,
+                                  (corner & 2) ? local.high.y : local.low.y,
+                                  (corner & 4) ? local.high.z : local.low.z};
+                for (i32 axis = 0; axis < 3; ++axis) {
+                    const f64 v = inv[axis * 4 + 0] * c[0] + inv[axis * 4 + 1] * c[1] +
+                                  inv[axis * 4 + 2] * c[2] + inv[axis * 4 + 3];
+                    lo[axis] = std::min(lo[axis], v);
+                    hi[axis] = std::max(hi[axis], v);
+                }
+            }
+            for (i32 axis = 0; axis < 3; ++axis) {
+                shape.low[axis] = static_cast<f32>(std::max(lo[axis] - 0.01, walk.low[axis]));
+                shape.high[axis] = static_cast<f32>(std::min(hi[axis] + 0.01, walk.high[axis]));
+                if (shape.low[axis] >= shape.high[axis]) return;   // entirely outside the clip
+            }
+        }
+        walk.shapes.push_back(shape);
+        return;
+    }
+
+    switch (n.op) {
+        case Op::Union:
+        case Op::SmoothUnion:
+        case Op::Intersection:
+        case Op::SmoothIntersection:
+        case Op::Min:
+        case Op::Max:
+            for (u32 c = 0; c < n.children; ++c) walk_shapes(walk, n.child[c], at, depth + 1);
+            return;
+
+        case Op::Difference:
+        case Op::SmoothDifference: {
+            if (n.children > 0) walk_shapes(walk, n.child[0], at, depth + 1);
+            Placement cut = at;
+            cut.sign = -at.sign;
+            for (u32 c = 1; c < n.children; ++c) walk_shapes(walk, n.child[c], cut, depth + 1);
+            return;
+        }
+
+        case Op::Translate:
+            walk_shapes(walk, n.child[0], after_translate(at, a[0], a[1], a[2]), depth + 1);
+            return;
+
+        case Op::Rotate: {
+            // `eval` turns the POINT by the negated angles, x then y then z, in turns. The same
+            // matrix is accumulated here, which is why nothing has to be inverted.
+            const f64 tau = 6.283185307179586;
+            const f64 cx = std::cos(-a[0] * tau), sx = std::sin(-a[0] * tau);
+            const f64 cy = std::cos(-a[1] * tau), sy = std::sin(-a[1] * tau);
+            const f64 cz = std::cos(-a[2] * tau), sz = std::sin(-a[2] * tau);
+            const f64 rx[9] = {1, 0, 0, 0, cx, -sx, 0, sx, cx};
+            const f64 ry[9] = {cy, 0, sy, 0, 1, 0, -sy, 0, cy};
+            const f64 rz[9] = {cz, -sz, 0, sz, cz, 0, 0, 0, 1};
+            walk_shapes(walk, n.child[0],
+                        after_linear(after_linear(after_linear(at, rx), ry), rz), depth + 1);
+            return;
+        }
+
+        case Op::Scale: {
+            const f64 sx = (a[0] != 0.0) ? a[0] : 1.0;
+            const f64 sy = (a[1] != 0.0) ? a[1] : 1.0;
+            const f64 sz = (a[2] != 0.0) ? a[2] : 1.0;
+            const f64 diag[9] = {1.0 / sx, 0, 0, 0, 1.0 / sy, 0, 0, 0, 1.0 / sz};
+            Placement out = after_linear(at, diag);
+            out.scale = at.scale * std::min(std::abs(sx), std::min(std::abs(sy), std::abs(sz)));
+            walk_shapes(walk, n.child[0], out, depth + 1);
+            return;
+        }
+
+        case Op::Mirror: {
+            // A fold, not a move: the child is on both sides of the plane, so it is emitted twice.
+            const u32 axis = static_cast<u32>(a[0]) % 3u;
+            f64 flip[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+            flip[axis * 3 + axis] = -1.0;
+            walk_shapes(walk, n.child[0], at, depth + 1);
+            walk_shapes(walk, n.child[0], after_linear(at, flip), depth + 1);
+            return;
+        }
+
+        case Op::Repeat: {
+            const f64 period[3] = {a[0], a[1], a[2]};
+            const f64 limit[3] = {a[3], a[4], a[5]};
+            i32 count[3] = {1, 1, 1};
+            for (i32 axis = 0; axis < 3; ++axis) {
+                if (period[axis] > 1e-9) {
+                    count[axis] = (limit[axis] > 0.0)
+                                      ? static_cast<i32>(limit[axis]) * 2 + 1
+                                      : ShapeWalk::kMaxRepeat;
+                    count[axis] = std::min(count[axis], ShapeWalk::kMaxRepeat);
+                }
+            }
+            for (i32 z = 0; z < count[2]; ++z) {
+                for (i32 y = 0; y < count[1]; ++y) {
+                    for (i32 x = 0; x < count[0]; ++x) {
+                        const f64 step[3] = {
+                            (count[0] > 1) ? (x - count[0] / 2) * period[0] : 0.0,
+                            (count[1] > 1) ? (y - count[1] / 2) * period[1] : 0.0,
+                            (count[2] > 1) ? (z - count[2] / 2) * period[2] : 0.0};
+                        walk_shapes(walk, n.child[0],
+                                    after_translate(at, step[0], step[1], step[2]), depth + 1);
+                    }
+                }
+            }
+            return;
+        }
+
+        case Op::Shell:
+        case Op::Round:
+        case Op::Offset:
+        case Op::Displace:
+            // These change the SURFACE without moving the space its children live in, so the shapes
+            // under them are exactly where they were. Displace is the one that matters: the whole
+            // facility is `displace { furnished grain_fine }`, so skipping it returned nothing at
+            // all for the one clip anybody opens first. Its second child is the pattern, which is
+            // not a shape and is not descended into.
+            walk_shapes(walk, n.child[0], at, depth + 1);
+            return;
+
+        default:
+            // Everything else either bends the space its children live in, or is a pattern rather
+            // than a shape. Counted, and the viewer says so.
+            if (n.children > 0) walk.skipped += 1;
+            return;
+    }
+}
+
+// --------------------------------------------------------------------------------------
 // Not baking it again
 //
 // Almost nothing changes between two runs. An agent edits one fragment and the other sixty-two
@@ -785,6 +1061,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
 
     ws::forge::SampleSettings settings = script.settings;
     baked.authored_metre = settings.voxels_per_metre;
+    u32 shapes_from = root;
 
     // A fragment inherits the whole building's `bounds` from the contract it includes, so
     // sampling one on its own would sample thirty-four metres of mostly nothing at the resolution
@@ -822,6 +1099,11 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         // rule about which voids apply to which part. That distinction is real and subtle enough to
         // have been got wrong in the manifest twice (a room's air must not eat a lamp, a doorway
         // must), and this needs to know nothing about it: whatever the building kept is what shows.
+        // The shapes view wants the FRAGMENT'S shapes, and this is the last moment they can be
+        // told apart: after the intersection below the root is `intersection { part, the whole
+        // building }`, and a walk of that descends into both. The portico came out with 15,927
+        // shapes against the building's own 15,190 -- it was showing the entire facility.
+        shapes_from = root;
         if (script.has_solid) {
             root = script.field.intersect({root, script.solid});
         }
@@ -947,6 +1229,18 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                                 static_cast<f64>(clip.size[2]) / static_cast<f64>(metre)};
     const LightGrid light = bake_light(coarse, origin, size_metres, jobs);
 
+    // And the clip as it was written, before any of the above.
+    ShapeWalk walk;
+    walk.field = &script.field;
+    // Nothing may claim a box bigger than the clip. A `plane` is a half space, its bounds are
+    // everywhere, and a two-billion-metre impostor flattens the depth buffer for everything else
+    // on screen -- there are sixty-five planes in the facility.
+    for (i32 axis = 0; axis < 3; ++axis) {
+        walk.low[axis] = origin[axis] - 0.05;
+        walk.high[axis] = origin[axis] + size_metres[axis] + 0.05;
+    }
+    walk_shapes(walk, shapes_from, Placement{}, 0);
+
     // Where the matter actually is, which is what the viewer frames on. The sampled box is nearly
     // always bigger, and framing on it puts a building in the corner of the screen.
     const ws::forge::Measurement measured = ws::forge::measure(clip, metre);
@@ -1026,6 +1320,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     // the code that did the sampling, all in one number. See `reuse` in main.
     put_u32(out, 180, static_cast<u32>(baked.key & 0xFFFFFFFFull));
     put_u32(out, 184, static_cast<u32>(baked.key >> 32));
+    put_u32(out, 188, static_cast<u32>(walk.shapes.size()));
 
     for (const ws::VisualRecord& record : mesher.palette()) {
         const u8* bytes = reinterpret_cast<const u8*>(&record);
@@ -1037,6 +1332,28 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     }
     out.insert(out.end(), light.texels.begin(), light.texels.end());
     out.insert(out.end(), collision.bits.begin(), collision.bits.end());
+    {
+        const auto push_u32 = [&out](u32 bits) {
+            out.push_back(static_cast<u8>(bits & 0xFFu));
+            out.push_back(static_cast<u8>((bits >> 8) & 0xFFu));
+            out.push_back(static_cast<u8>((bits >> 16) & 0xFFu));
+            out.push_back(static_cast<u8>((bits >> 24) & 0xFFu));
+        };
+        const auto put = [&push_u32](f32 value) {
+            u32 bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            push_u32(bits);
+        };
+        for (const Shape& shape : walk.shapes) {
+        push_u32(shape.op);
+        put(shape.sign);
+        put(shape.scale);
+        for (i32 i = 0; i < 12; ++i) put(shape.world_to_local[i]);
+        for (i32 i = 0; i < 8; ++i) put(shape.a[i]);
+        for (i32 i = 0; i < 3; ++i) put(shape.low[i]);
+        for (i32 i = 0; i < 3; ++i) put(shape.high[i]);
+        }
+    }
 
     baked.id = identifier(relative);
     baked.source = relative.generic_string();
@@ -1075,9 +1392,10 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     std::error_code gone;
     fs::remove(options.out / (baked.id + ".wsc.gz"), gone);
 
-    std::printf("  %d/m  %d x %d x %d  %u quads  %zu materials  %.1f MB  %.1f s\n", metre,
-                clip.size[0], clip.size[1], clip.size[2], baked.quads, mesher.palette().size(),
-                static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
+    std::printf("  %d/m  %d x %d x %d  %u quads  %zu shapes  %zu materials  %.1f MB  %.1f s\n",
+                metre,
+                clip.size[0], clip.size[1], clip.size[2], baked.quads, walk.shapes.size(),
+                mesher.palette().size(), static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
     if (options.verbose) {
         std::printf("      box  %.2f %.2f %.2f  ..  %.2f %.2f %.2f      matter  %.2f %.2f %.2f  "
                     ".. %.2f %.2f %.2f\n",

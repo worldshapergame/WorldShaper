@@ -300,6 +300,197 @@ void main() {
     o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
 }`;
 
+
+// --- the clip before it was voxels ---------------------------------------------------------
+//
+// One instanced box per shape the author wrote, and the fragment shader sphere-traces that shape's
+// own signed distance inside it. Nothing here is voxelised: what you see is the true surface at
+// whatever distance you look from, which is the entire point of the view.
+//
+// The shape's own space is reached by a 3x4 matrix the baker accumulated on the way down the
+// field, so `eval`'s own descent is what places it and nothing had to be inverted. A shape a
+// `difference` takes away is drawn too, in another colour -- the hole somebody cut is as much a
+// part of the description as the stone it was cut from, and it is usually what you came to look at.
+const SHAPE_VERTEX = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec4 a_row0;
+layout(location = 1) in vec4 a_row1;
+layout(location = 2) in vec4 a_row2;
+layout(location = 3) in vec4 a_p0;
+layout(location = 4) in vec4 a_p1;
+layout(location = 5) in vec4 a_kind;   // op, sign, scale, unused
+layout(location = 6) in vec3 a_low;
+layout(location = 7) in vec3 a_high;
+
+uniform mat4 u_viewProj;
+
+out vec3 v_world;
+flat out mat3 v_linear;
+flat out vec3 v_offset;
+flat out vec4 v_p0;
+flat out vec4 v_p1;
+flat out vec4 v_kind;
+flat out vec3 v_low;
+flat out vec3 v_high;
+
+void main() {
+    // A cube as a fourteen-vertex strip, so a shape costs one instance and no index buffer.
+    int id = gl_VertexID;
+    const int strip[14] = int[14](3, 7, 1, 5, 4, 7, 6, 3, 2, 1, 0, 4, 2, 6);
+    int corner = strip[id];
+    vec3 unit = vec3(float(corner & 1), float((corner >> 1) & 1), float((corner >> 2) & 1));
+    v_world = mix(a_low, a_high, unit);
+
+    v_linear = mat3(a_row0.xyz, a_row1.xyz, a_row2.xyz);   // columns; transposed on use
+    v_offset = vec3(a_row0.w, a_row1.w, a_row2.w);
+    v_p0 = a_p0;
+    v_p1 = a_p1;
+    v_kind = a_kind;
+    v_low = a_low;
+    v_high = a_high;
+    gl_Position = u_viewProj * vec4(v_world, 1.0);
+}`;
+
+const SHAPE_FRAGMENT = `#version 300 es
+precision highp float;
+
+in vec3 v_world;
+flat in mat3 v_linear;
+flat in vec3 v_offset;
+flat in vec4 v_p0;
+flat in vec4 v_p1;
+flat in vec4 v_kind;
+flat in vec3 v_low;
+flat in vec3 v_high;
+
+uniform vec3 u_eye;
+uniform vec3 u_sun;
+uniform vec3 u_sunColour;
+uniform vec3 u_skyUp;
+uniform vec3 u_skyDown;
+uniform float u_exposure;
+uniform vec4 u_clip;
+uniform mat4 u_viewProj;
+
+out vec4 o_colour;
+
+// The baker's own numbering, not the enum's. See web_op in tools/bake_web.cpp for why the enum's
+// values must never reach this file. (No back-quotes in here: this is inside a template string.)
+const int OP_SPHERE = 0;
+const int OP_BOX = 1;
+const int OP_CYLINDER = 2;
+const int OP_CAPSULE = 3;
+const int OP_TORUS = 4;
+const int OP_CONE = 5;
+const int OP_PLANE = 6;
+const int OP_ELLIPSOID = 7;
+
+vec3 along(int axis, vec3 p) {
+    return (axis == 0) ? p.yzx : ((axis == 1) ? p.xzy : p.xyz);
+}
+
+float shape_distance(vec3 p) {
+    int op = int(v_kind.x + 0.5);
+    vec4 a = v_p0;
+    vec4 b = v_p1;
+    if (op == OP_SPHERE) {
+        return length(p - a.xyz) - a.w;
+    } else if (op == OP_BOX) {
+        vec3 d = abs(p - a.xyz) - vec3(a.w, b.x, b.y) + vec3(b.z);
+        return min(max(d.x, max(d.y, d.z)), 0.0) + length(max(d, 0.0)) - b.z;
+    } else if (op == OP_ELLIPSOID) {
+        vec3 r = vec3(a.w, b.x, b.y);
+        vec3 q = (p - a.xyz) / max(r, vec3(1e-5));
+        float k = length(q);
+        return (k - 1.0) * min(r.x, min(r.y, r.z));
+    } else if (op == OP_CYLINDER) {
+        vec3 q = along(int(b.y + 0.5), p - a.xyz);
+        vec2 d = abs(vec2(length(q.xy), q.z)) - vec2(a.w, b.x);
+        return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+    } else if (op == OP_CAPSULE) {
+        vec3 p0 = a.xyz;
+        vec3 p1 = vec3(a.w, b.x, b.y);
+        vec3 pa = p - p0, ba = p1 - p0;
+        float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-9), 0.0, 1.0);
+        return length(pa - ba * h) - b.z;
+    } else if (op == OP_TORUS) {
+        vec3 q = along(int(b.y + 0.5), p - a.xyz);
+        vec2 t = vec2(length(q.xy) - a.w, q.z);
+        return length(t) - b.x;
+    } else if (op == OP_CONE) {
+        vec3 q = along(int(b.y + 0.5), p - a.xyz);
+        float h = b.x;
+        float r = a.w;
+        vec2 d = vec2(length(q.xy) - r * clamp(1.0 - q.z / max(h, 1e-5), 0.0, 1.0),
+                      abs(q.z - h * 0.5) - h * 0.5);
+        return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
+    } else if (op == OP_PLANE) {
+        return dot(p, a.xyz) - a.w;
+    }
+    return 1e9;
+}
+
+vec3 tonemap(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+void main() {
+    if (dot(v_world, u_clip.xyz) + u_clip.w > 0.0) discard;
+
+    vec3 direction = normalize(v_world - u_eye);
+    // Into the shape's own space, where its distance is written.
+    mat3 L = mat3(vec3(v_linear[0].x, v_linear[1].x, v_linear[2].x),
+                  vec3(v_linear[0].y, v_linear[1].y, v_linear[2].y),
+                  vec3(v_linear[0].z, v_linear[1].z, v_linear[2].z));
+
+    float scale = max(v_kind.z, 1e-4);
+    float travel = 0.0;
+    // The far side of this shape's own box, so a march can never run past what it is allowed to
+    // draw and into somebody else's.
+    vec3 inverse = 1.0 / max(abs(direction), vec3(1e-6)) * sign(direction + vec3(1e-9));
+    vec3 t1 = (v_low - v_world) * inverse;
+    vec3 t2 = (v_high - v_world) * inverse;
+    float exit = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z));
+
+    bool hit = false;
+    vec3 at = v_world;
+    for (int i = 0; i < 96; ++i) {
+        at = v_world + direction * travel;
+        float d = shape_distance(L * at + v_offset) * scale;
+        if (d < 0.0015) { hit = true; break; }
+        travel += max(d, 0.0015);
+        if (travel > exit) break;
+    }
+    if (!hit) discard;
+
+    vec3 local = L * at + v_offset;
+    vec2 h = vec2(0.002, 0.0);
+    vec3 n = normalize(vec3(
+        shape_distance(local + h.xyy) - shape_distance(local - h.xyy),
+        shape_distance(local + h.yxy) - shape_distance(local - h.yxy),
+        shape_distance(local + h.yyx) - shape_distance(local - h.yyx)));
+    vec3 N = normalize(transpose(L) * n);
+    vec3 V = normalize(u_eye - at);
+    if (dot(N, V) < 0.0) N = -N;
+
+    // Added or taken away. A cut shape is the one you usually came to look at, so it reads clearly
+    // rather than politely.
+    bool cut = v_kind.y < 0.0;
+    vec3 albedo = cut ? vec3(0.42, 0.10, 0.10) : vec3(0.62, 0.60, 0.56);
+
+    vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
+    float ndl = max(dot(N, u_sun), 0.0);
+    vec3 colour = albedo * (ambient + u_sunColour * ndl * 0.7);
+    // A rim, because a construction view is read by its silhouettes.
+    colour += albedo * pow(1.0 - max(dot(N, V), 0.0), 3.0) * 0.5;
+
+    vec4 clipPos = u_viewProj * vec4(at, 1.0);
+    gl_FragDepth = (clipPos.z / clipPos.w) * 0.5 + 0.5;
+    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), cut ? 0.55 : 1.0);
+}`;
+
 function compile(gl, type, source, name) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -428,9 +619,13 @@ export class Renderer {
 
         this.surface = link(gl, VERTEX_SOURCE, FRAGMENT_SOURCE, 'surface');
         this.sky = link(gl, SKY_VERTEX, SKY_FRAGMENT, 'sky');
+        this.shapes = link(gl, SHAPE_VERTEX, SHAPE_FRAGMENT, 'shapes');
 
         this.vao = gl.createVertexArray();
         this.buffer = gl.createBuffer();
+        this.shapeVao = gl.createVertexArray();
+        this.shapeBuffer = gl.createBuffer();
+        this.shapeCount = 0;
         this.materials = gl.createTexture();
         this.light = gl.createTexture();
         this.clip = null;
@@ -477,6 +672,46 @@ export class Renderer {
             gl.vertexAttribDivisor(i, 1);
         }
         gl.bindVertexArray(null);
+
+        // The clip as it was written. 112 bytes a shape, straight into a buffer.
+        this.shapeCount = clip.shapeCount;
+        if (this.shapeCount > 0) {
+            gl.bindVertexArray(this.shapeVao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.shapeBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, clip.shapes, gl.STATIC_DRAW);
+            // op 0..3, sign 4..7, scale 8..11, placement 12..59, parameters 60..91,
+            // box 92..115. Written by the loop at the end of bake_root.
+            const stride = 116;
+            const layout = [
+                [0, 4, 12], [1, 4, 28], [2, 4, 44],   // the 3x4 placement, a row to an attribute
+                [3, 4, 60], [4, 4, 76],               // eight parameters
+                [6, 3, 92], [7, 3, 104],              // the box it lands in
+            ];
+            // The head is op (a uint) then sign and scale (floats); the shader wants all three as
+            // floats, so the op is converted here rather than reinterpreted there.
+            const head = new Float32Array(this.shapeCount * 4);
+            const view = new DataView(clip.shapes.buffer, clip.shapes.byteOffset,
+                                      clip.shapes.byteLength);
+            for (let i = 0; i < this.shapeCount; ++i) {
+                head[i * 4 + 0] = view.getUint32(i * stride, true);
+                head[i * 4 + 1] = view.getFloat32(i * stride + 4, true);
+                head[i * 4 + 2] = view.getFloat32(i * stride + 8, true);
+            }
+            this.shapeHead = this.shapeHead || gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.shapeHead);
+            gl.bufferData(gl.ARRAY_BUFFER, head, gl.STATIC_DRAW);
+            gl.enableVertexAttribArray(5);
+            gl.vertexAttribPointer(5, 4, gl.FLOAT, false, 16, 0);
+            gl.vertexAttribDivisor(5, 1);
+
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.shapeBuffer);
+            for (const [index, size, offset] of layout) {
+                gl.enableVertexAttribArray(index);
+                gl.vertexAttribPointer(index, size, gl.FLOAT, false, stride, offset);
+                gl.vertexAttribDivisor(index, 1);
+            }
+            gl.bindVertexArray(null);
+        }
 
         // Materials, verbatim: each VisualRecord is four RGBA8 texels and the shader fetches the
         // row it wants. Nothing is converted on the way in, which is the point — the browser reads
@@ -567,9 +802,39 @@ export class Renderer {
         gl.uniform1i(uniforms.u_light, 1);
     }
 
+    // The clip as it was written, instead of as it came out. One instanced box per shape, each
+    // sphere-traced in its own space, so nothing here has a resolution.
+    drawShapes(camera, plane) {
+        const gl = this.gl;
+        if (!this.shapeCount) return;
+        gl.bindVertexArray(this.shapeVao);
+        gl.useProgram(this.shapes.program);
+        const u = this.shapes.uniforms;
+        gl.uniformMatrix4fv(u.u_viewProj, false, this.viewProj);
+        gl.uniform3fv(u.u_eye, camera.eye);
+        gl.uniform3fv(u.u_sun, this.sun);
+        gl.uniform3fv(u.u_sunColour, this.sunColour);
+        gl.uniform3fv(u.u_skyUp, this.skyUp);
+        gl.uniform3fv(u.u_skyDown, this.skyDown);
+        gl.uniform1f(u.u_exposure, this.exposure);
+        gl.uniform4fv(u.u_clip, plane);
+
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthMask(true);
+        // No culling: the eye is inside a shape's own box as often as not, and a box whose front
+        // faces are gone is a shape that vanishes when you walk up to it.
+        gl.disable(gl.CULL_FACE);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 14, this.shapeCount);
+        gl.disable(gl.BLEND);
+        gl.bindVertexArray(null);
+        this.stats.draws += 1;
+    }
+
     // `slice` is null, or { axis: 0..2, sign: +1 | -1, at: metres }. The plane keeps everything on
     // the side the sign points away from, so dragging the slider walks the cut through the clip.
-    render(camera, slice) {
+    render(camera, slice, showShapes) {
         const gl = this.gl;
         const clip = this.clip;
         this.stats.draws = 0;
@@ -612,6 +877,11 @@ export class Renderer {
         if (slice) {
             plane[slice.axis] = slice.sign;
             plane[3] = -slice.sign * slice.at;
+        }
+
+        if (showShapes) {
+            this.drawShapes(camera, plane);
+            return;
         }
 
         gl.bindVertexArray(this.vao);
