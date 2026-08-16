@@ -1,0 +1,120 @@
+# enfilade-probe — the two connecting passages on their own, so they can be measured without the
+#                  rest of the building.
+#
+# There is no Windows and no Vulkan on the machine this was written on, so `clipcheck` is the only
+# thing that can look at this part and the runs below are the whole of the gate:
+#
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 8
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 16 --slice y@3.0
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 16 --slice x@14.6
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --gap y@14.5,0
+#
+# `components 1` at metre 32 is the first test of done; `never fired` is a paint rule that painted
+# nothing and looks exactly like success; and metre 32 is the only run in which a jar's neck, a
+# taper or a gilt fillet exists at all.
+#
+# THE OPENINGS ARE CHECKED WITH `--part`, and this is the check nothing else makes. salon.clip put
+# 822 voxels of its own skirting, dado cap and cornice straight across its own doorway and no
+# number in any report mentioned it. Each of these four must report AN EMPTY CLIP:
+#
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --part enf_check_gs
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --part enf_check_gn
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --part enf_check_us
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --part enf_check_un
+#
+# And this one must report MATTER, because `mirror { } axis=x` folds to the positive side and a
+# west copy that was never made looks exactly like a west copy that was:
+#
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 16 --part enf_west_check
+#
+# And these four are head height and door clearance, measured rather than assumed. All four must
+# report AN EMPTY CLIP:
+#
+#   ... --metre 32 --part enf_head_g      2.10 m over the cabinet floor, 0.66 m of walking width
+#   ... --metre 32 --part enf_head_u      2.10 m over the gallery floor, 0.64 m of walking width
+#   ... --metre 32 --part enf_door_g      0.71 x 2.40 through the south end, ground
+#   ... --metre 32 --part enf_door_u      0.71 x 2.40 through the south end, piano nobile
+#
+# THE BOUNDS ARE NARROWED AND THEY COVER BOTH SIDES. The contract's own box is 34 x 21 x 25 m,
+# which at metre 32 is 582 million cells and about 2.8 GB before a voxel of the building exists,
+# for a part that occupies half a percent of it. The box below is the two strips plus a margin —
+# and it spans x from -15.3 to 15.3 rather than only the east, on purpose, because the west copy of
+# this part is not a separate binding and the only way to see it is to sample where it is.
+#
+# `metre` and `bounds` come AFTER EVERY include and not before: enfilade.clip includes
+# _contract.clip again for its own dimensions and the contract re-states the building's own box, so
+# these two lines put anywhere above the last include are quietly undone by it.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+# The coat everything starts in, exactly as the manifest has it, so that any surface of mine which
+# no rule of mine reaches comes back as limestone and is visible as a fault rather than as nothing.
+paint limestone
+
+include "../enfilade.clip"
+
+# The four openings, as shapes, so they can be asked for by name. Each is the doorway box carried
+# 0.05 into my own block, which is a sterner test than the doorway alone: a moulding that stops
+# exactly on the end face would pass a test that stopped there too.
+let enf_check_gs = intersection { part_enfilade  box 14.05 1.80 -3.00   14.85 4.20 -2.90 }
+let enf_check_gn = intersection { part_enfilade  box 14.05 1.80  3.00   14.95 4.20  3.15 }
+let enf_check_us = intersection { part_enfilade  box 14.05 6.30 -3.00   14.85 8.70 -2.90 }
+let enf_check_un = intersection { part_enfilade  box 14.05 6.30  3.00   14.95 8.55  3.15 }
+
+# THE HEAD-HEIGHT PROBES, which are the same idea stair.clip uses and for the same reason: the
+# engine's own `walkability` walks a heightfield and has nothing to say about a floor under a
+# vault. These are the volume a person's head sweeps — 2.10 m over each floor, across the band
+# that is actually clear of the shelves on one side and the dado on the other — INTERSECTED with
+# the part. BOTH MUST REPORT AN EMPTY CLIP.
+#
+#   the cabinet   x 14.19 .. 14.85, which is 0.66 in the clear: the shelf fronts stand at 14.1625
+#                 and the girandoles at 14.185 on the west, the dado cap at 14.86 on the east
+#   the gallery   x 14.19 .. 14.83. The barrel springs at 8.10 and crowns at 8.55, so the soffit
+#                 falls to 2.10 over the floor at 0.335 either side of the centre line: the clear
+#                 height is 2.25 on the centre line, 2.10 at 14.165 and 14.835, and less than that
+#                 only where a person would be standing inside the wall.
+let enf_head_g = intersection { part_enfilade  box 14.19 1.80 -2.95   14.85 3.90 3.10 }
+let enf_head_u = intersection { part_enfilade  box 14.19 6.30 -2.95   14.85 8.40 3.10 }
+
+# The two doorways at the south end, as the clear opening a person walks through rather than as the
+# hole in the wall: 0.71 m wide by 2.40 m high, from the west dado / base course face out to the
+# jamb ballroom.clip and library.clip cut at 14.85. Both must report an empty clip.
+# -2.90 and not -2.85: the doorway is the 0.05 lap and the 0.05 of my own block behind it, and a
+# test carried further than that walks into the barrel vault, whose soffit is 8.383 at x = 14.85.
+# Which is the honest shape of this opening: 2.40 m of clear height IN THE DOORWAY, and 2.25 on the
+# centre line of the gallery beyond it, because the vault crowns at 8.55.
+let enf_door_g = intersection { part_enfilade  box 14.14 1.80 -3.00   14.85 4.20 -2.90 }
+let enf_door_u = intersection { part_enfilade  box 14.14 6.30 -3.00   14.85 8.70 -2.85 }
+
+# WHAT WINDOWS.CLIP WOULD DELETE. The manifest subtracts `void_windows` from the whole building,
+# and windows.clip's east openings are cut from x = 14.20 — 0.75 m INSIDE this room. Anything of
+# mine standing free in that cut, between 14.20 and my own east face at 14.95, inside one of the
+# three lights' y and z bands, is deleted after assembly with no error and no change to any count.
+# These two must report AN EMPTY CLIP. They are the only check there is on it, because nothing in
+# this fragment's own measurements can see the difference.
+#
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --part enf_win_g_check
+#   ./build/clipcheck clips/facility/requests/enfilade-probe.clip --metre 32 --part enf_win_u_check
+let enf_win_g_check = intersection {
+    part_enfilade
+    union { box 14.20 2.70 -3.375   14.95 4.50 -2.025
+            box 14.20 2.70 -0.675   14.95 4.50  0.675
+            box 14.20 2.70  2.025   14.95 4.50  3.375 }
+}
+let enf_win_u_check = intersection {
+    part_enfilade
+    union { box 14.20 6.30 -3.375   14.95 8.55 -2.025
+            box 14.20 6.30 -0.675   14.95 8.55  0.675
+            box 14.20 6.30  2.025   14.95 8.55  3.375 }
+    # everything of mine below 8.55 that stands free of the east wall. The east lining itself, at
+    # 14.95 and beyond, IS meant to go: that is the window opening.
+}
+
+metre 32
+bounds -15.30 1.60 -3.20   15.30 10.00 3.30
+
+variation colour=0.030 rough=0.070 seed=17
+
+solid part_enfilade

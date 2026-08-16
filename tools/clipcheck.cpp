@@ -80,6 +80,56 @@ void query_axes(u32 axis, u32& a, u32& b) {
     else { a = 0; b = 1; }
 }
 
+
+// THE LONGEST CONTIGUOUS RUN OF AIR along one axis, with stone at both ends of it.
+//
+// This is what an author means by "head height", and neither `span_along` nor `gap_along`
+// answers it. Both report from the FIRST empty cell to the LAST, so on any probe whose box is
+// taller than the room -- which is every probe, because a clip's bounds are cut to the building
+// and not to one storey -- they report the box and flag it BROKEN because the ceiling is in
+// between. Measured on the crypt at eight points across the floor, `--gap y@...` said 3.125 m of
+// air, BROKEN, everywhere; the room is 2.14 m high. The number was not wrong, it was the answer
+// to a different question, and the crypt's own notes record that `--gap` "needs a probe box whose
+// top and bottom are inside stone", which nothing tells anybody and no clip can promise.
+//
+// So: walk the column, keep the longest unbroken run, and say whether stone closed it at each
+// end. A run open at one end is a shaft to the sky or to the bottom of the box and is reported as
+// such rather than silently counted as headroom. Rule 7 of the brief -- 2.10 m minimum anywhere a
+// person can stand -- is checkable in one command with this and was not with either of the others.
+struct Clear {
+    f64 metres = 0.0;
+    bool closed_below = false;
+    bool closed_above = false;
+    i32 from = 0;
+};
+
+Clear longest_clear(const Clip& clip, u32 axis, i32 a, i32 b) {
+    u32 pa = 0, pb = 0;
+    query_axes(axis, pa, pb);
+    i32 at[3]{0, 0, 0};
+    at[pa] = a;
+    at[pb] = b;
+    Clear best;
+    if (a < 0 || b < 0 || a >= clip.size[pa] || b >= clip.size[pb]) return best;
+    const i32 n = clip.size[axis];
+    i32 run = 0;
+    for (i32 i = 0; i <= n; ++i) {
+        const bool air = (i < n) && (at[axis] = i, clip.at(at[0], at[1], at[2]) == 0);
+        if (air) {
+            ++run;
+            continue;
+        }
+        if (run > 0 && static_cast<f64>(run) > best.metres) {
+            best.metres = static_cast<f64>(run);
+            best.from = i - run;
+            best.closed_below = (i - run) > 0;
+            best.closed_above = (i < n);
+        }
+        run = 0;
+    }
+    return best;
+}
+
 // "y@1.5,-3.0" — an axis, and where on the other two. Written this way because a span is always
 // asked as "how tall is it here", and "here" is two numbers in metres.
 Axis parse_axis(const char* text) {
@@ -257,6 +307,16 @@ int main(int argc, char** argv) {
         std::printf("gap           %.3f m of air along %c (%s)\n",
                     static_cast<f64>(s.length()) / per, "xyz"[gap.axis],
                     s.contiguous ? "clear" : "BROKEN — there is matter in it");
+        const Clear clear = longest_clear(clip, gap.axis, a, b);
+        std::printf("clear         %.3f m, the longest unbroken run, %s%s\n",
+                    clear.metres / per,
+                    clear.closed_below && clear.closed_above
+                        ? "closed at both ends"
+                        : (clear.closed_below ? "OPEN at the far end" : "OPEN at the near end"),
+                    (clear.closed_below && clear.closed_above && gap.axis == 1 &&
+                     clear.metres / per < 2.10)
+                        ? "  -- UNDER THE 2.10 m HEAD HEIGHT"
+                        : "");
     }
     if (slice.given) {
         const i32 at = static_cast<i32>(slice.a * per) - built.origin_voxel[slice.axis];

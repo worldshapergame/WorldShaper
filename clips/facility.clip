@@ -68,6 +68,7 @@ include "facility/salon.clip"
 include "facility/chapel.clip"
 include "facility/ballroom.clip"
 include "facility/library.clip"
+include "facility/enfilade.clip"
 include "facility/terrace.clip"
 
 include "facility/fittings.clip"
@@ -96,7 +97,7 @@ let shell = union {
 
 let inside = union {
     part_vestibule part_rotunda part_halls part_stair part_surface
-    part_crypt part_salon part_chapel part_ballroom part_library
+    part_crypt part_salon part_chapel part_ballroom part_library part_enfilade
 }
 
 let built = union { shell inside }
@@ -108,7 +109,7 @@ let built = union { shell inside }
 let hollowed = difference {
     built
     void_doors void_windows void_vestibule void_rotunda void_halls void_stair
-    void_crypt void_salon void_chapel void_ballroom void_library
+    void_crypt void_salon void_chapel void_ballroom void_library void_enfilade
 }
 
 # AND THE FURNITURE AFTER THE ROOMS, which is what the paragraph above always claimed happened.
