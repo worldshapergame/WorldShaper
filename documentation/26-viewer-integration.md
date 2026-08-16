@@ -197,3 +197,68 @@ cost on the facility: **3%**.
 One more thing it found in the code added today: **the slice cap's copy of ACES had no `clamp` on
 the end** — a fourth opinion about what "bright" means, on the one surface that meets every other
 surface along an edge. All four passes now end on one injected `ws_output`.
+
+---
+
+## 8. The engine bug is REAL, and it is on the scene the project is judged against
+
+Confirmed against `forge::sample` itself — not against the export — with the right control. `place`
+is a **cull and nothing else**, so clearing every `has_place` must not change which materials get
+painted. It changes them:
+
+| | as authored | place cleared (control) | place shifted by origin |
+|---|---|---|---|
+| `estate/colonnade` 4/m | 10 materials | 12 | 12 |
+| — `moss` / `lichen` | **0 / 0** | 12,392 / 5,231 | identical to the control |
+| `facility` `part_terrace` 8/m | 19 materials | 22 | 22 |
+| — `moss` / `lichen` / `bleached` | **0 / 0 / 0** | 210 / 100 / 4,036 | identical to the control |
+
+**Solid voxel counts are identical in all three arms**, so this is paint and not geometry, and
+shifting `place` by `origin_shift` restores the control exactly. `apply_origin` translates a paint
+rule's `test` and leaves its `place`; `plan_sample` does not shift it either. **Every placed
+weathering coat in the facility and the estate is silently painting nothing in the game.** No error,
+no warning — a rule that never fires produces no output at all.
+
+Not fixed here: `src/forge` belongs to a second line of work. It is one shift in `plan_sample`, and
+`--place-check` in `tools/paintcheck.cpp` is the regression test for it.
+
+## 9. The paint stack cannot be evaluated per pixel, and the number is not close
+
+`facility/part_terrace`, 348 rules: **2,018,075 node evaluations per stack walk.** After the
+per-rule bounding-box reject, **338.6 of 348 rules survive** — because only 11 of 348 carry an
+`on=` place, so the box has almost nothing to bite on — leaving 338,060 nodes.
+
+That is ~200 s a frame on this machine, and **a GPU a thousand times faster is still 200 ms a frame
+for one fragment.** Cross-checked at 0.24 s per surface point per walk in optimised C++ on four
+cores.
+
+**This is not a shader-care problem and no amount of tuning reaches it.** The fix is upstream: do
+not bake rules whose test is the `occlusion` or `curvature` of a large solid. Until then the raw
+view needs the distance fallback and the rule cap that are now in `paintcost.js`, and the honest
+answer for a facility fragment is the flat grey with a line saying why.
+
+## 10. The two views will never agree exactly, and that is geometry rather than a bug
+
+Measured against the sampler's own decision, `sampler.clip` at 32/m:
+
+| where the stack is asked | disagreement |
+|---|---|
+| at the voxel centre | 1.872 % |
+| …in single precision | 1.872 % — **f32 costs one point in 132,055** |
+| `glass_test`, all shape-keyed rules | **0.000 % of 151,218 surface voxels** |
+| **at the marched hit point** | **34.737 %** |
+
+The stack ports exactly. What differs is **where it is asked**: the analytic surface and the voxel
+centre are different places, 0.37 voxels apart on average and up to 3.1, and **84 % of the
+disagreements are the winning rule firing by more than 1e-2** — a genuinely different pattern
+value, not a rounding. The worst single confusion is 25,445 voxels of `stone` reading as `metal`
+from one brick-bond rule with a 2 cm mortar joint sampled at a 3.1 cm voxel.
+
+**No port can remove this.** The raw view shows the colours the clip's rules give *at the true
+surface*; the voxel view shows what those rules gave *at the voxel centres*. Where a pattern is
+finer than a voxel the two differ by construction, and the raw one is arguably the more correct.
+That has to be said on the page rather than presented as an exact preview.
+
+The guard against the trap that would have hidden all of this: `sealed_dark.clip` has one material,
+so every arm agrees trivially — the tool reports `THIS RUN PROVES LITTLE` and exits non-zero rather
+than printing 0.000 % six times.
