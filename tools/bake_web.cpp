@@ -128,7 +128,14 @@ struct Options {
     // floor and is the building itself.
     i32 shard = 0;
     i32 shards = 1;
-    bool force = false;   // bake everything, whatever the keys say
+    bool force = false;        // bake everything, whatever the keys say
+    // Write the index over whatever is already there and sample nothing.
+    //
+    // For getting the SITE up before the clips are ready: the page, the viewer and last run's
+    // clips are worth having in the thirty seconds it takes to publish them, rather than after
+    // the ten minutes a cold bake of the building takes. Clips that are missing or stale are left
+    // out of the index rather than half-written into it, and the real bake replaces the lot.
+    bool index_only = false;
     bool verbose = false;
 };
 
@@ -1454,6 +1461,8 @@ int main(int argc, char** argv) {
             options.shards = std::max(1, std::stoi(value.substr(slash + 1)));
         } else if (arg == "--code-hash") {
             options.code_hash = next("--code-hash");
+        } else if (arg == "--index-only") {
+            options.index_only = true;
         } else if (arg == "--force") {
             options.force = true;
         } else if (arg == "--verbose") {
@@ -1471,7 +1480,8 @@ int main(int argc, char** argv) {
                 "  --commit SHA     and at which commit\n"
                 "  --code-hash H    a hash of the sampler's own sources; changing it rebakes all\n"
                 "  --force          bake every clip even if its key says it is unchanged\n"
-                "  --shard I/N      bake only every Nth clip, starting at I, for a parallel bake\n");
+                "  --shard I/N      bake only every Nth clip, starting at I, for a parallel bake\n"
+                "  --index-only     index what is already baked and sample nothing\n");
             return 0;
         } else {
             std::printf("unknown argument %s\n", arg.c_str());
@@ -1600,6 +1610,10 @@ int main(int argc, char** argv) {
             done.push_back(baked);
             continue;
         }
+        if (options.index_only) {
+            std::printf("  not baked yet\n");
+            continue;
+        }
         baked.key = key;
 
         root = 0;
@@ -1657,7 +1671,7 @@ int main(int argc, char** argv) {
     //
     // Never while sharding: a shard's output directory holds one twelfth of the clips by design,
     // and a sweep there would delete the other eleven twelfths as soon as they were merged.
-    if (options.shards == 1) {
+    if (options.shards == 1 && !options.index_only) {
         std::vector<std::string> keep;
         for (const Baked& baked : done) keep.push_back(baked.id);
         std::error_code walk;
@@ -1739,5 +1753,5 @@ int main(int argc, char** argv) {
     // A clip that cannot be built is reported and does not fail the bake. The site exists to show
     // work in progress, and a fragment somebody is halfway through editing is exactly the case it
     // has to survive — failing here would take the other twenty clips off the site with it.
-    return done.empty() ? 1 : 0;
+    return (done.empty() && !options.index_only) ? 1 : 0;
 }

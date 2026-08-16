@@ -136,6 +136,86 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # THE SITE BEFORE THE CLIPS. A cold bake of the building is ten minutes and the page itself is
+  # ready in thirty seconds, so it is published straight away out of the last run's clips and then
+  # published again when the new ones land. `--index-only` writes an index over whatever files are
+  # actually present and samples nothing: a clip that is missing or stale is left OUT of the index
+  # rather than half-written into it, so the site is always a smaller true thing and never a
+  # broken big one. The viewer re-reads the index every five seconds, so clips appear as they are
+  # baked without anybody reloading anything.
+  early:
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Graft the clips being worked on
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.plan.outputs.ref }}" != "main" ]; then
+            git checkout "origin/${{ needs.plan.outputs.ref }}" -- clips/ src/
+          fi
+
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: build-web
+          key: pages-build-${{ runner.os }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**', 'tools/bake_web.cpp') }}
+          restore-keys: pages-build-${{ runner.os }}-
+
+      - name: Whatever the site had last time
+        uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-site-none
+          restore-keys: pages-site-
+
+      - name: Build the baker
+        run: |
+          cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
+          cmake --build build-web --target ws_bake_web
+
+      - name: Index what is already there
+        run: |
+          mkdir -p web/data
+          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
+          ./build-web/bin/ws_bake_web --clips clips --out web/data --index-only \
+                                      --budget 700000000 --max-metre 32 --part-metre 16 \
+                                      --code-hash "$code" \
+                                      --branch "${{ needs.plan.outputs.ref }}" \
+                                      --commit "${{ needs.plan.outputs.sha }}"
+          du -sh web/data || true
+
+      - run: |
+          for f in web/data/*.wsc; do
+            [ -e "$f" ] || continue
+            if [ ! -f "$f.gz" ] || [ "$f" -nt "$f.gz" ]; then gzip -9 -kf "$f"; fi
+          done
+      - run: touch web/.nojekyll
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          name: pages-early
+          path: web
+
+  deploy-early:
+    needs: early
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-early
+
   bake:
     needs: plan
     if: needs.plan.outputs.skip != 'true'
@@ -278,12 +358,19 @@ jobs:
         with:
           enablement: true
 
+      # Kept whole, so the NEXT run can publish the page out of it in thirty seconds.
+      - name: Keep the whole site for next time
+        uses: actions/cache/save@v4
+        with:
+          path: web/data
+          key: pages-site-${{ github.run_id }}
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
 
   deploy:
-    needs: index
+    needs: [index, deploy-early]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
