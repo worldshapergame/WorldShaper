@@ -37,7 +37,12 @@ name: pages
 
 on:
   push:
-    branches: [main, 'claude/**']
+    # The viewer's own branch is excluded because it is mirrored to `main` commit for commit, and
+    # the two pushes were making two identical runs -- twenty-six runners drawing the same bytes
+    # from the same commit, and two deploys racing each other at the end of it. The job picks its
+    # own ref regardless of which branch moved, so the second run could never have said anything
+    # the first did not.
+    branches: [main, 'claude/**', '!claude/clip-viewer-website-iukadp']
     paths:
       - 'clips/**'
       - 'src/forge/**'
@@ -148,6 +153,8 @@ jobs:
     if: needs.plan.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      have: ${{ steps.gate.outputs.have }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -176,6 +183,34 @@ jobs:
           key: pages-site-none
           restore-keys: pages-site-
 
+      # And whatever the site has RIGHT NOW, for anything the cache did not carry. This is the
+      # difference between an early deploy that helps and one that does harm: the first run after
+      # this job existed had no cache to restore, so it would have indexed an empty directory and
+      # published a site with no clips on it -- over the top of a live site that had some. The early
+      # deploy must only ever ADD, so it starts from the published site and fills in the gaps.
+      - name: And whatever the site has right now
+        id: live
+        run: |
+          set -uo pipefail
+          mkdir -p web/data
+          base="https://worldshapergame.github.io/WorldShaper"
+          if ! curl -fsS --max-time 30 "$base/data/index.json?ci=$GITHUB_RUN_ID" -o /tmp/live.json; then
+            echo "nothing published yet"
+            echo "commit=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "commit=$(python3 -c 'import json;print(json.load(open("/tmp/live.json")).get("commit",""))')" \
+            >> "$GITHUB_OUTPUT"
+          for id in $(python3 -c 'import json;[print(c["id"]) for c in json.load(open("/tmp/live.json"))["clips"]]'); do
+            [ -f "web/data/$id.wsc" ] && continue
+            if curl -fsS --max-time 120 "$base/data/$id.wsc.gz" -o "web/data/$id.wsc.gz"; then
+              gzip -df "web/data/$id.wsc.gz" || rm -f "web/data/$id.wsc.gz"
+            elif ! curl -fsS --max-time 120 "$base/data/$id.wsc" -o "web/data/$id.wsc"; then
+              rm -f "web/data/$id.wsc"
+            fi
+          done
+          ls web/data | wc -l
+
       - name: Build the baker
         run: |
           cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DWS_TOOLS_ONLY=ON
@@ -198,16 +233,39 @@ jobs:
             if [ ! -f "$f.gz" ] || [ "$f" -nt "$f.gz" ]; then gzip -9 -kf "$f"; fi
           done
       - run: touch web/.nojekyll
-      - uses: actions/configure-pages@v5
+
+      # Two ways this deploy is not worth making, and both of them are ways it would LOSE something.
+      # An index with nothing in it, and a real bake that finished while this job was fetching --
+      # publishing a fetched copy over the top of that would put the site back an hour.
+      - name: Is this deploy still worth making
+        id: gate
+        run: |
+          set -uo pipefail
+          n=$(python3 -c 'import json;print(len(json.load(open("web/data/index.json"))["clips"]))' 2>/dev/null || echo 0)
+          now="$(curl -fsS --max-time 20 \
+            "https://worldshapergame.github.io/WorldShaper/data/index.json?ci=$GITHUB_RUN_ID-b" \
+            | python3 -c 'import json,sys;print(json.load(sys.stdin).get("commit",""))' 2>/dev/null || true)"
+          if [ "$n" -eq 0 ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"; echo "no clips to show yet"
+          elif [ -n "$now" ] && [ "$now" != "${{ steps.live.outputs.commit }}" ]; then
+            echo "have=false" >> "$GITHUB_OUTPUT"; echo "the site moved to $now while this ran"
+          else
+            echo "have=true" >> "$GITHUB_OUTPUT"; echo "$n clips are walkable now"
+          fi
+
+      - if: steps.gate.outputs.have == 'true'
+        uses: actions/configure-pages@v5
         with:
           enablement: true
-      - uses: actions/upload-pages-artifact@v3
+      - if: steps.gate.outputs.have == 'true'
+        uses: actions/upload-pages-artifact@v3
         with:
           name: pages-early
           path: web
 
   deploy-early:
     needs: early
+    if: needs.early.outputs.have == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -369,8 +427,14 @@ jobs:
         with:
           path: web
 
+  # `needs: deploy-early` is ORDERING and not a requirement -- the real deploy must land after the
+  # early one, never before it, or the site would end on the older copy. `always()` is what keeps
+  # that from turning into a dependency: a skipped early deploy skips everything downstream of it
+  # otherwise, and the run that has nothing to show early is exactly the run whose real deploy
+  # matters most.
   deploy:
     needs: [index, deploy-early]
+    if: always() && needs.index.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
