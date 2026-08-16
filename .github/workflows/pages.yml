@@ -88,7 +88,14 @@ jobs:
       - name: Not a Jekyll site
         run: touch web/.nojekyll
 
+      # `enablement` turns Pages on for a repository that has never had it, rather than failing and
+      # asking somebody to go and click it. Without this the first run got all the way through --
+      # forty clips baked in four minutes seventeen -- and then stopped on "Get Pages site failed:
+      # Not Found", which is a whole bake thrown away over a setting.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
