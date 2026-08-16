@@ -1,7 +1,7 @@
 #pragma once
 // Emissive geometry, turned into a list of LIGHTS the viewer can shade with.
 //
-// documentation/24-clip-viewer.md §6 is what this is for. In one paragraph: the viewer treats an
+// documentation/24-clip-viewer.md §4c is what this is for. In one paragraph: the viewer treats an
 // emitter as bright paint and nothing else, so `clips/many_lamps.clip` — a sealed hall with no sky
 // and no sun in it, lit by thirty-seven fittings — draws thirty-seven white rectangles on a wall
 // that is otherwise the colour of the ambient constant. Everything the clip is FOR is invisible.

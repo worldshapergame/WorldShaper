@@ -1,6 +1,6 @@
 // The light list: emissive geometry, shaded as real lights.
 //
-// documentation/24-clip-viewer.md §6 is what this is for, and tools/bake/lights.hpp is what makes
+// documentation/24-clip-viewer.md §4c is what this is for, and tools/bake/lights.hpp is what makes
 // the file this reads. In one paragraph: these clips are full of emitters and the viewer treated
 // every one of them as bright paint. `clips/many_lamps.clip` is a sealed hall with no sky and no
 // sun in it, lit by thirty-six fittings, and it drew as thirty-six white rectangles on walls the
@@ -24,8 +24,10 @@
 // A phone will not shade thirty-six lights a pixel, let alone the facility's. `MAX_LAMPS` are kept
 // per draw, ranked by what each delivers at the camera — its intensity over the square of its
 // distance, the same rank `src/world/light_list.cpp` uses for the game's own list. Sixteen is the
-// number and it is a measurement rather than a guess: see §6 of the documentation for the frame
-// times either side of it.
+// number, and it is a CHOICE and not yet a measurement: it is the largest uniform array that fits
+// comfortably inside the ES 3.0 minimum of 224 fragment uniform vectors alongside everything else
+// this shader already holds. Nobody has run it against eight or against thirty-two on a phone, and
+// it bites on both clips it has been tried on. §4c of the documentation carries what IS measured.
 //
 // The ranking is by the CAMERA and not by the surface, which is the honest limitation of doing it
 // on the host: a lamp behind the eye is scored as if it lit what the eye is looking at. It is the
@@ -50,7 +52,7 @@
 // do reach the screen is a faint wash that ignores a wall. The count is printed by the baker and
 // carried here as `unshadowed`.
 
-// How many lamps one draw may shade. See the note above and §6 of the documentation.
+// How many lamps one draw may shade. See the note above and §4c of the documentation.
 export const MAX_LAMPS = 16;
 
 // The record the baker writes, in bytes. tools/bake/lights.hpp writes exactly this.

@@ -333,11 +333,14 @@ is. A cluster with no face touching air emits nowhere and is dropped with a coun
 
 ### The cap, and where it is wrong
 
-**Sixteen lamps a draw.** Ranked by what each delivers at the camera — intensity over distance
-squared, the same rank `src/world/light_list.cpp` uses for the game's own list — and the baker keeps
-at most 256 in the file. The count, how many a draw is shading, and whether the cap bit are printed
+**Sixteen lamps a draw**, and sixteen is a **choice, not yet a measurement**: it is the largest
+uniform array that fits comfortably inside the ES 3.0 minimum of 224 fragment uniform vectors
+alongside what this shader already holds. Nobody has
+run it against eight or against thirty-two on a phone. Ranked by what each delivers at the camera —
+intensity over distance squared, the same rank `src/world/light_list.cpp` uses for the game's own
+list — and the baker keeps at most 256 in the file. The count, how many a draw is shading, and whether the cap bit are printed
 per clip by the baker and logged once per clip by the viewer, and they are on `renderer.lights`.
-many_lamps has 36 and the cap bites; `facility/fittings` has 25 and it does not.
+It bites on both clips looked at: many_lamps has 36 and `facility/fittings` has 25.
 
 The honest limitation is that **the rank is by the eye and not by the surface**: a lamp behind the
 camera is scored as if it lit what the camera is looking at. It is visible in an orbit view of
@@ -393,6 +396,9 @@ and drops their visibility, which lights many_lamps as one room instead of four.
 
 ### What it costs
 
+Both baked with `--budget 8000000`, which puts many_lamps at 16 voxels to the metre and the
+fragment at 8; CI bakes at 700 M and `--part-metre 16`, so the facility figures there will be larger.
+
 | | many_lamps | facility/fittings |
 |---|---|---|
 | lights found | 36 from 40 clusters | 25 from 25 |
@@ -405,6 +411,22 @@ and drops their visibility, which lights many_lamps as one room instead of four.
 
 The atlas is nearly all "nothing between here and the range" and gzips about ten to one, and the
 site serves `.wsc.gz`, so what a phone downloads is a fraction of the raw figure.
+
+**The frame cost has not been measured on a GPU.** Everything here was rendered by SwiftShader, a
+software rasteriser, on a box shared with fourteen other jobs. Two paired runs of many_lamps at
+900×700 with the camera a metre from a lit wall, `?nolamps` against the shipped build:
+
+| | lamps off | lamps on (16) |
+|---|---|---|
+| run 1 | 171 ms | 677 ms |
+| run 2 | 221 ms | 1535 ms |
+
+Four to seven times, and both halves of that are untrustworthy for a phone: a software rasteriser
+has no texture-sampling hardware, so the sixteen bilinear atlas fetches cost far more of the frame
+there than they would on any GPU, and the run-to-run spread is larger than the effect being
+measured. What the numbers do establish is that the term is **not free and scales with the cap** —
+whoever puts this on a real device should measure eight against sixteen against thirty-two before
+believing the cap is right.
 
 **A trap for whoever owns `pages.yml`:** its cache key is
 `find src tools/bake_web.cpp`, which does **not** cover `tools/bake/lights.hpp`. An edit to that
