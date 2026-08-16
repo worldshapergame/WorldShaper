@@ -1728,7 +1728,20 @@ makes the whole thing free, and R10g is what makes it survive eviction.
   3.2157 → 2.6859, speckle 13.210 → 10.847. Flying, the arms sit inside each other's spread. It costs
   the faces pass **3.45 → 4.06 ms** settled at the steps, against a 4.40 budget, and **seven words a
   face** (50,688 → 80,256 KB).
-- **R5b — temporal EMA per face and parent seeding at claim time.**
+- **R5b — temporal EMA per face and parent seeding at claim time. Half built, and OFF —
+  D660.** The parent seeding this line asks for exists for four of the five terms and never
+  existed for the SUN: `face_light_seed` seeds the near field and its gradients, the far
+  field, the bounce and the lamps, while the sun's counters live on the face record and were
+  left at nought — and `kFaceSettled` is one, so the composite believes a newly claimed
+  face's single shadow ray. `--sun-seed N` gives it three samples of the nearest ancestor's
+  ratio at claim time; three because `kFaceEager` is four and a larger prior takes a new face
+  off the every-frame ray it needs to correct it. The lever is a word of the light probe
+  buffer, not a push field, because that block is full to the byte (D553).
+  **Six card-free runs on the facility could not resolve it** — the enclosed camera cut
+  through 180 degrees at frame 100, shot at 101, all on world `b131dd05af668996`: speckle
+  511.85 against 512.39 and distance-to-converged 54.508 against 54.349, with three runs of
+  one arm spreading by 21. Default 0, and the A/B is one flag at 1280x800 quality 7 settled,
+  which is where this stage's gate lives. **The temporal EMA half is untouched.**
 - **R5c — deterministic two-level blend** in the composite; delete the ordered dither.
 - **R5d — analytic edge AA** from `face_coverage[6]`, compositing up to three partial hits.
   *Gate: speckle down 4× against the R0 baseline on the enclosed-room camera; two identical frames

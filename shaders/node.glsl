@@ -586,7 +586,13 @@ layout(std430, binding = 19) buffer LightProbe { uint words[]; } light_probe;
 //   [31] R9c's HALO MARGIN, host-written, in pixels each side. 0 is off and is the whole control
 //        arm -- the dispatch is then exactly the screen and this stage does not exist.
 //   [32] R9c's halo STRIDE: one halo sample in this many pixels each way. See kProbeHaloStride.
-const uint kLightProbeWords = 33u;
+//   [33] R5b's SUN SEED, host-written: how many samples of the coarse face above it a newly
+//        claimed face starts its sun term from. 0 is the control arm and is every build before it.
+//        Here rather than in the push block because that block is exactly the 128 bytes Vulkan
+//        guarantees, and the three words above it are the standing precedent for a host-written
+//        number that will not fit -- D553's warning is against giving an existing field a second
+//        meaning, not against this.
+const uint kLightProbeWords = 34u;
 const uint kLightProbeLevels = 9u;    // where the by-level histogram starts
 const uint kProbeLobeHeld = 24u;
 const uint kProbeLobeDeclined = 25u;
@@ -690,6 +696,8 @@ const uint kProbeSecondaryStride = 30u;
 // and the honest measurement is the faces pass while panning, beside the convergence gate.
 const uint kProbeHaloMargin = 31u;
 const uint kProbeHaloStride = 32u;
+// R5b's sun seed, host-written. See the word map above, and kSunSeedSamples for the figure.
+const uint kProbeSunSeed = 33u;
 
 uint probe_halo_margin() { return light_probe.words[kProbeHaloMargin]; }
 uint probe_halo_stride() { return max(light_probe.words[kProbeHaloStride], 1u); }
@@ -709,6 +717,7 @@ bool probe_see_through() { return (light_probe.words[0] & kProbeSeeThrough) != 0
 bool probe_refract() { return (light_probe.words[0] & kProbeRefract) != 0u; }
 bool probe_translucent() { return (light_probe.words[0] & kProbeTranslucent) != 0u; }
 uint probe_secondary_stride() { return light_probe.words[kProbeSecondaryStride]; }
+uint probe_sun_seed() { return light_probe.words[kProbeSunSeed]; }
 
 // How many frames a face goes on being lit after the last pixel that read it. The DEFAULT; the
 // live value is `node_push.seen_window`, so `--face-gate` can widen it to the whole run and give
@@ -1371,6 +1380,37 @@ uint face_accumulate(uint counters, bool reached_the_sun) {
 // The live value is `node_push.edit_seed`, so `--face-edit-seed 0` is the old behaviour exactly and
 // the two arms of the A/B are one build (D407).
 const uint kFaceEditSeed = 8u;
+
+// ---- R5b: what a face's SUN term starts from, which until now was nothing at all ---------------
+//
+// Every other term on a new face is seeded from the coarse face standing over it — the near field
+// and its gradients, the far field, the bounce and the lamps, all in `face_light_seed`, each with a
+// comment saying that starting from nought is a flash a player sees. **The sun was the one term
+// with no prior**, and it is the term `kFaceSettled` lets the composite read after ONE sample.
+//
+// So a face claimed this frame shows a coin toss: one shadow ray, believed. In a room where the
+// true answer is 0.05 that is one face in twenty reading fully lit, scattered over every surface
+// the camera has just revealed — and the close camera has **23% of its faces still measuring**,
+// which is where R5b's speckle actually comes from. `kFaceSettled`'s own comment says the variance
+// it accepts is "what R5's denoise exists to take"; this is the other half of that sentence, and it
+// takes the variance out at the source rather than filtering it afterwards.
+//
+// **Three samples, and the number is chosen against `kFaceEager` rather than against the noise.**
+// A face under kFaceEager = 4 samples is exempt from the shading stride — it gets a ray EVERY
+// frame until it has four of its own. A prior of four or more would put a newly claimed face
+// straight onto one frame in `face_stride`, so it would inherit its parent's answer and then take
+// a hundred frames to correct it. At three it starts from a prior, keeps its every-frame ray, and
+// its own samples outvote the parent within a handful of frames — the same shape as
+// kFaceEditSeed and kLampSeedSamples, with the stride's threshold deciding the figure.
+//
+// The prior is also self-correcting where it is wrong: `face_accumulate`'s unanimity rule fires on
+// a sample that contradicts a unanimous history, so a child of a fully-lit parent that finds itself
+// in shadow drops to two samples on its first ray and is measuring its own answer immediately.
+const uint kSunSeedSamples = 3u;
+// And the least the ancestor must have measured before its ratio is a prior rather than noise one
+// level coarser. Sixteen rather than kSkySeedMin's 64 because the sun's window is 256 where the
+// ambient term's is 2,048: the same fraction of the same estimator.
+const uint kSunSeedMin = 16u;
 
 // A pair of counts scaled down to at most `seed` samples, keeping the ratio. The same arithmetic
 // face_light_seed already does to a stand-in's history, applied to a face's own.

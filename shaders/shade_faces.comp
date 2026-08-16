@@ -527,6 +527,36 @@ bool face_fold(uint slot, uint light_at, ivec3 node, uint level, uint dir) {
     return true;
 }
 
+// R5b: the sun's own prior, from the same ancestor the light terms take theirs from.
+//
+// A separate walk rather than a branch inside `face_light_seed`, and that is an ordering fact
+// rather than a preference: the sun is accumulated in a block ABOVE the one that seeds the light
+// words — `counters` is read there, before the light block runs, which is what lets the light block
+// use a sample count of nought to mean "this slot is new". Seeding the sun from inside
+// `face_light_seed` would write a prior over a sample the same invocation had already taken.
+//
+// It costs one ancestor walk on the ONE frame of a face's life when its counters are nought, and
+// nothing on any frame after that. `kSunSeedMin` is what keeps it from inheriting noise, and the
+// nearest ancestor is preferred for the same reason `face_light_seed` prefers it: a face
+// subdivided out of the one above it is looking at the same sun past the same geometry.
+//
+// Returns nought when nothing up the tree has an answer worth taking, which is exactly the
+// behaviour this replaces — a new face starts from nothing and the composite reads the stand-in.
+uint face_sun_seed(ivec3 node, uint level, uint dir) {
+    const uint want = probe_sun_seed();
+    if (want == 0u) return 0u;   // the control arm: --sun-seed 0
+    for (int step = 1; step <= kFaceAncestorStep; ++step) {
+        const uint found = node_face_lookup(node >> step, level + uint(step), dir);
+        if (found == kNoFace || found == kFaceTombstone) continue;
+        const uint anc = faces.items[found].counters;
+        if (face_samples_of(anc) < kSunSeedMin) continue;
+        // The ratio, at the confidence a prior is worth. `face_reseed` rounds rather than
+        // truncates, so a parent at 255 of 256 arrives as 3 of 3 and not as 2 of 3.
+        return face_reseed(anc, want);
+    }
+    return 0u;
+}
+
 void face_light_seed(uint light_at, ivec3 node, uint level, uint dir) {
     // The NEAREST ancestor that has something to say, not the one three levels up.
     //
@@ -1616,8 +1646,28 @@ void main() {
     // the coarse face three levels above it, and indoors that stand-in is inside the same box and
     // has been zeroed by the same line. See kFaceEditSeed for the whole of it.
     const bool edit_reset = work.edit_reset;
-    const uint counters = work.counters;   // already reseeded by face_work_of when edit_reset
+    uint counters = work.counters;   // already reseeded by face_work_of when edit_reset
     if (edit_reset) faces.items[slot].counters = counters;
+
+    // ...and a slot the store has just handed out starts from the face above it rather than from a
+    // coin toss. R5b, and see kSunSeedSamples for why three.
+    //
+    // Here, at the one place `counters` is read, so the prior is what this frame's own sample is
+    // added to rather than something written beside it. A stand-in is excluded for the reason every
+    // other seed excludes it: it IS the coarse face, its record is rewritten every frame, and the
+    // ancestor three levels above it is six levels above the geometry.
+    if (!edit_reset && !provisional_face && counters == 0u) {
+        const uint seeded =
+            face_sun_seed(ivec3(face.x, face.y, face.z), level, face_dir_of(face.packed));
+        if (seeded != 0u) {
+            counters = seeded;
+            // Written now as well as by the accumulation below, because this face may not be due a
+            // sun ray this frame at all -- and a prior that only lands on the frames a ray happens
+            // to be cast is a prior that is missing exactly when the face is being read and not
+            // shaded.
+            faces.items[slot].counters = counters;
+        }
+    }
 
     // ---- if the camera cannot see it, it is not lit -------------------------------------------
     //

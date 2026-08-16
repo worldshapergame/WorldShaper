@@ -232,6 +232,26 @@ struct Options {
     // been wiped by the same line. See kFaceEditSeed in shaders\node.glsl.
     u32 face_edit_seed = 8;
 
+    // What a NEWLY CLAIMED face's sun term starts from, in samples of the coarse face over it, and
+    // `--sun-seed 0` is the control arm. R5b.
+    //
+    // **Nought, which is OFF, and the measurement is why (D660).** Six runs of the facility on a
+    // software rasteriser — the enclosed camera cut through 180 degrees at frame 100, photographed
+    // at 101, every arm on the same world — put the two arms inside each other: speckle 511.85
+    // against 512.39, distance to the same view converged 54.508 against 54.349, with three runs of
+    // ONE arm spreading by 21. A change that cannot be shown to pay is a lever and not a default
+    // (R9c's precedent), and what this one needs is the resolution R5's gate is written at: 1280x800
+    // quality 7 settled, where the numbers are 8.93 and 28.98 rather than 103 and 512.
+    //
+    // Three is what to set it to. A face under `kFaceEager` = 4 samples is exempt from the shading
+    // stride, so a larger prior would put a newly claimed face straight onto one frame in
+    // `face_stride` and leave it a hundred frames from correcting an inherited answer. See
+    // kSunSeedSamples in shaders\node.glsl, which carries the whole of it — including why the sun
+    // was the one term with no prior while the near field, the far field, the bounce and the lamps
+    // have all had one since R9d. It reaches the card in the light probe buffer, because the push
+    // block is full to the byte (kProbeSunSeed).
+    u32 sun_seed = 0;
+
     // An edit reopens a face's LAMP term only where it can stand between that face and a fitting.
     //
     // On, because off is the reported bug: the lamps were reopened over the sun's sixteen-metre box,
@@ -842,6 +862,11 @@ Options parse_options(int argc, char** argv) {
             }
         } else if (arg == "--face-edit-seed" && i + 1 < argc) {
             options.face_edit_seed = static_cast<u32>(std::atoll(argv[++i]));
+        } else if (arg == "--sun-seed" && i + 1 < argc) {
+            // R5b's dial and its control arm in one: 0 is a new face starting from nothing, which
+            // is every build before this one. It travels in the light probe buffer rather than in
+            // the push block, which is exactly full -- see kProbeSunSeed in shaders\node.glsl.
+            options.sun_seed = static_cast<u32>(std::atoll(argv[++i]));
         } else if (arg == "--no-lamp-edit-scope") {
             options.lamp_edit_scope = false;
         } else if (arg == "--chisel" && i + 1 < argc) {
@@ -1069,6 +1094,10 @@ void print_help() {
         "  --face-edit-seed N    samples a face keeps when an edit says the world under it moved\n"
         "                        (default 8). 0 restores the wipe, which is the control arm for\n"
         "                        the blocky flashing an edit used to cause\n"
+        "  --sun-seed N          samples of the coarse face above it a NEWLY CLAIMED face starts\n"
+        "                        its sun term from. 0 (the default) is a new face beginning at a\n"
+        "                        single shadow ray, which the composite believes; 3 is R5b's\n"
+        "                        prior, which no card-free measurement could resolve (D660)\n"
         "  --no-lamp-edit-scope  an edit reopens the lamp term of every face within sixteen metres\n"
         "                        again, rather than only those it can stand in the light of. The\n"
         "                        control arm for the flicker while building\n"
@@ -6952,6 +6981,12 @@ void Application::record_frame(f32 time_seconds) {
             const u32 halo[2]{halo_margin_, halo_stride_};
             vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeHaloMargin * sizeof(u32),
                               sizeof(halo), halo);
+            // R5b's sun seed, in the same host-owned range past the counters. It is a NUMBER and
+            // not a bit, so it cannot go in the dials word, and the push block is exactly full --
+            // which is the same sentence kProbeSecondaryStride and the halo pair are here for.
+            const u32 sun_seed = options_.sun_seed;
+            vkCmdUpdateBuffer(cmd, light_probe_.buffer(), kProbeSunSeed * sizeof(u32),
+                              sizeof(sun_seed), &sun_seed);
             // Everything between the two host words, and the bounds are named rather than counted:
             // words 1 up to but not including the stride.
             vkCmdFillBuffer(cmd, light_probe_.buffer(), sizeof(u32),

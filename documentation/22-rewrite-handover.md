@@ -626,7 +626,14 @@ a step-bounded ray is not a bound. Not carried. D361.
    card-free session that can see its own work and one that cannot. What is left to bisect is inside
    `node_face_lobe` (`node.glsl`), the bin writes in `shade_faces.comp` and the four-way probe in
    `resolve.comp` — `--no-lobe-ray` does NOT help, so the march is not it.
-3. **Then R5b**, which is what the user asked for next. **Its opening instruction below is stale and
+3. **Then R5b**, and the first step of it is now a flag rather than a stage: `--sun-seed 3` against
+   the default 0, at **1280×800 quality 7, settled, the enclosed and close cameras**, which is where
+   R5's gate lives. Six card-free runs could not resolve it (D660) and the numbers are in this
+   file's opening block. What is left of R5b after that is the temporal half proper — R5c's
+   deterministic blend and R5d's edge AA are separate.
+   **The paragraph below is stale twice over and this is the correction**: the reading it says is
+   "not done" IS done for four terms and was never done for the sun, which is what D660 built. The
+   old note read: **Its opening instruction below is stale and
    this is the correction**: the reading it says is "not done" IS done — `face_light_seed` is called
    at claim time (`shade_faces.comp`, the `samples == 0` branch), gated on `!provisional_face`, so a
    newly claimed face already starts from the coarse face over it. What is missing is the temporal
@@ -634,7 +641,48 @@ a step-bounded ray is not a bound. Not carried. D361.
 
 ---
 
-#### LATEST, 2026-08-15 evening: the card-free crash is the LOBE POOL, and R4d has been looked at
+#### LATEST, 2026-08-16: the FACILITY renders card-free, and R5b's first half is built and unresolved
+
+**Two things, and the first one changes what a session with no graphics card is for.**
+
+**1. The building renders here (D659).** `--no-face-lobe` — D656's flag — pointed at
+`clips/facility.clip` reaches **frame 120 at 320×200**: 125,413,954 solid voxels, 22,206 of 27,788
+nodes sharpened, content `151db7fb674bbf59`, about twelve minutes a run on four cores. The picture
+is the enclosed room, urns and arch and striped floor. So the scene every figure in this repository
+is against is now available without a card, at the camera R5's gate is written for, with its audit
+lines. **Card-free figures compare with each other and with nothing else** — a sixth of the pixels,
+a software rasteriser, and the lobes off.
+
+```powershell
+DISPLAY=:99 WorldShaper --no-title --max-seconds 0 --no-face-lobe \
+    --clip-file clips/facility.clip --cam "0,0,0,-90,0" --width 320 --height 200 \
+    --screenshot fac.png --screenshot-frame 120
+```
+
+**2. R5b's parent seeding is built for the one term that never had it, and it ships OFF (D660).**
+The handover said R5b's seeding was done; it is done for four terms and was never done for the
+**sun**. `face_light_seed` seeds the near field, its gradients, the far field, the bounce and the
+lamps; the sun's counters live on the face record, and `kFaceSettled` is one — so a newly claimed
+face shows the composite a single shadow ray, believed. `--sun-seed N` gives it three samples of the
+nearest ancestor's ratio at claim time (three because `kFaceEager` is four, and a bigger prior takes
+a new face off the every-frame ray it needs to correct it).
+
+**Six runs say it cannot be resolved from here**, on the enclosed camera cut through 180° at frame
+100 and photographed at 101, every arm on the world `b131dd05af668996`:
+
+| arm | speckle | distance to the same view converged |
+|---|---|---|
+| `--sun-seed 3` | 500.68, 512.85, 522.02 — mean **511.85** | 54.374, 54.571, 54.579 — mean **54.508** |
+| `--sun-seed 0` | 515.00, 524.98, 497.18 — mean **512.39** | 54.173, 54.451, 54.424 — mean **54.349** |
+
+Three runs of one arm spread by 21; the arms' means differ by 0.5. **So the default is 0** and the
+first machine with a card has a one-flag A/B waiting, at the resolution R5's gate is written at —
+1280×800, quality 7, settled, where the numbers are 8.93 enclosed and 28.98 close against this
+machine's 103 and 512.
+
+---
+
+#### 2026-08-15 evening: the card-free crash is the LOBE POOL, and R4d has been looked at
 
 **Everything below this block that says the software rasteriser "cannot reach" a scene was written
 before this was known, and the rule it inferred is wrong.** D654 said card-free pictures work up to

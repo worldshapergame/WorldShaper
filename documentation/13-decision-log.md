@@ -7945,3 +7945,90 @@ neither is the interface this project is going to keep.
 `WorldShaper-v0.8.1-windows-x64.zip`, 4,347,455 bytes, SHA-256
 `378CF82773B83856A388091DC5B211F641DE221A7E071EE4FF4068B195793D86`, attested. Third green run in a
 row, all three dispatched rather than tagged (D657).
+
+## D659 — the facility renders on a machine with no graphics card
+
+D656 named the lobe pool as what kills a software-rasteriser run and shot R4d's gate with
+`--no-face-lobe`. The same flag was then pointed at the building, which had never survived past
+frame 33 (D650, D651), and it goes all the way:
+
+```powershell
+DISPLAY=:99 WorldShaper --no-title --max-seconds 0 --no-face-lobe \
+    --clip-file clips/facility.clip --cam "0,0,0,-90,0" --width 320 --height 200 \
+    --screenshot fac.png --screenshot-frame 120
+```
+
+**Frame 120, 125,413,954 solid voxels, 68 chunks, 22,206 of 27,788 nodes sharpened, content
+`151db7fb674bbf59`** — and the picture is the enclosed room: two urns on their pedestals, the arch
+between them, the striped marble floor. About twelve minutes a run at 320×200 on four cores.
+
+**What that changes is what a card-free session is FOR.** Until today the answer was "the forge, the
+field, the sampler and the ladder's arithmetic" (D648) plus one small clip's light (D653). It is now
+the scene every figure in this repository is against, at the camera R5's gate is written for, with
+the audit lines that come with it: `sun on the card`, the face store's population, the ladder's
+census, the content hash. A figure taken this way is not comparable with one from the development
+machine — a sixth of the pixels, a software rasteriser, the lobes off — but **two figures taken this
+way are comparable with each other**, which is what an A/B needs.
+
+What it does not buy: anything about metals, glass reflections or the lobe pool, which is the
+feature that is off; and any timing, since llvmpipe's milliseconds are not a card's.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D659 | **The facility is photographable card-free** | finding | `--no-face-lobe`, 320×200, frame 120, hash `151db7fb674bbf59` |
+| D659 | **Card-free figures compare with each other and nothing else** | honesty | A sixth of the pixels, a software rasteriser, one feature off |
+
+## D660 — R5b's first half is built, and this machine cannot resolve whether it helps
+
+**The sun was the one term on a face with no prior, and the handover said R5b's seeding was done.**
+It is done for the near field, its two gradients, the far field, the bounce and the lamps — all of
+`face_light_seed`, each with a comment saying that starting from nothing is a flash a player sees.
+The sun's counters live on the face record rather than in the light words, `face_light_seed` never
+touched them, and `kFaceSettled` is **one**: so a face claimed this frame shows the composite a
+single shadow ray, believed. In a room whose true answer is 0.05 that is one face in twenty reading
+fully lit, scattered over everything the camera has just revealed — which is exactly what the close
+camera's *"23% of its faces have not settled"* is made of.
+
+**So: `--sun-seed N`, three samples of the nearest ancestor's ratio at claim time, and 0 is the
+control arm.** Three because a face under `kFaceEager` = 4 samples is exempt from the shading
+stride: a larger prior would put a newly claimed face straight onto one frame in `face_stride` and
+leave it a hundred frames from correcting an inherited answer. `face_accumulate`'s unanimity rule
+makes the prior self-correcting — a child of a fully-lit parent that finds itself in shadow drops to
+two samples on its first ray and is measuring its own answer immediately.
+
+**The lever is a word of the light probe buffer and not a push field, and that is the codebase's own
+rule rather than a preference.** `NodePush` is exactly the 128 bytes Vulkan guarantees; the dials
+comment beside it says a lever that will not fit must not be spelled by changing what an existing
+field means (D553). `kProbeSecondaryStride`, `kProbeHaloMargin` and `kProbeHaloStride` are three
+standing precedents for a host-written NUMBER in that buffer, and this is the fourth. The first
+attempt packed it into the high sixteen bits of `edit_seed` and was thrown away for that reason.
+
+**Measured on the facility, card-free (D659), and the honest answer is that it cannot be seen from
+here.** The camera is the enclosed one, cut through 180° at frame 100 — every face in the new view
+is claimed that frame, which is the case this change is about — and the shot is frame 101. All six
+runs hash `b131dd05af668996`, so the scene is the same in every arm.
+
+| arm | speckle at frame 101 | mean \|ΔL\| against the converged view |
+|---|---|---|
+| `--sun-seed 3` | 500.68, 512.85, 522.02 — **mean 511.85** | 54.374, 54.571, 54.579 — **mean 54.508** |
+| `--sun-seed 0` | 515.00, 524.98, 497.18 — **mean 512.39** | 54.173, 54.451, 54.424 — **mean 54.349** |
+
+**The arms interleave.** Three runs of one arm spread by 21 speckle; the two arms' means differ by
+0.5. The second metric was added because speckle is the wrong question for a prior — a prior does
+not remove variance, it starts the estimator nearer the answer — and distance to the same view
+converged says the same thing: 0.16 apart, inside a within-arm spread of 0.2. Trap 9, and the
+repeat arm is what settled it rather than a third theory.
+
+**So it ships OFF: `--sun-seed 0` is the default.** R9c's precedent, and D637's — a change that
+cannot be shown to pay is a lever and not a default. What it needs is the resolution R5's own gate
+is written at: **1280×800, quality 7, settled, the enclosed and close cameras**, where the numbers
+are 8.93 and 28.98 speckle and this machine reads 103 and 512. It is one flag on the first machine
+with a card, against the same scene, and the arithmetic is already in the build.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D660 | **The sun had no prior at claim time; now it can** | finding | `face_light_seed` seeds four terms and never touched the counters |
+| D660 | **Three samples, chosen against `kFaceEager`** | decision | Four or more takes a new face off the every-frame ray it needs to correct the prior |
+| D660 | **The lever lives in the probe buffer** | decision | The push block is full to the byte and D553 forbids re-meaning a field |
+| D660 | **Default OFF** | decision | Six runs, two metrics, and the arms interleave — R9c's precedent |
+| D660 | **The repeat arm is what made it a measurement** | method | One arm's three runs spread wider than the gap between arms (trap 9) |

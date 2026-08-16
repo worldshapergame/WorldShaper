@@ -235,7 +235,7 @@ inline constexpr i32 kFeedbackSecondary = 0x200000;
 // The gathering ray's counters: one word a question, over the whole dispatch, cleared every frame
 // and read back at the screenshot audit. Must match kLightProbeWords in shaders/node.glsl, which
 // carries the word map -- the shader is the authority because it is the only writer.
-inline constexpr u32 kLightProbeWords = 33;
+inline constexpr u32 kLightProbeWords = 34;
 // Where the by-level histogram of "stopped by a cell the pool has not built" starts in it. Must
 // match kLightProbeLevels in shaders/node.glsl.
 inline constexpr u32 kLightProbeLevels = 9;
@@ -262,6 +262,10 @@ inline constexpr u32 kProbeSecondaryStride = 30;
 // in shaders/node.glsl. The margin is in pixels each side and nought means the stage is off.
 inline constexpr u32 kProbeHaloMargin = 31;
 inline constexpr u32 kProbeHaloStride = 32;
+// R5b's, in the same host-written range and for the same reason: how many samples of the coarse
+// face above it a NEWLY CLAIMED face starts its sun term from. 0 is the control arm. Must match
+// kProbeSunSeed in shaders/node.glsl; the figure itself is kSunSeedSamples, there.
+inline constexpr u32 kProbeSunSeed = 33;
 
 // The dials in word 0 of that buffer, host-written and card-read.
 //

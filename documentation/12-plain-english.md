@@ -3103,3 +3103,31 @@ This is on the temporary strip, not the real interface, and it goes when that ar
 
 **It is in v0.8.1**, which is the download on the releases page now — or press **F8** if the game is
 already telling you there is a newer one.
+
+## The whole building now draws on a machine with no graphics card
+
+This one is about how the work gets checked rather than about the game, and it is the reason the
+last few reports have had pictures in them at all.
+
+The machine these sessions run on has no graphics card. Everything the game draws has to be done by
+the processor instead, which is roughly a thousand times slower — and until yesterday it also
+crashed after eight frames on any scene with glass, water or metal in it, which is every scene worth
+looking at. Yesterday that turned out to be one feature: the part that gives shiny surfaces a
+direction to reflect in. With it switched off, **the facility itself now draws** — all hundred and
+twenty-five million voxels of it, the room with the two urns and the arch, in about twelve minutes
+a picture.
+
+So a session with no card can now photograph the actual building, at the actual camera the
+performance numbers are written for, and compare two versions of it. What it cannot do is tell you
+what any of it costs in frames per second, or show you anything about metals and reflections — that
+still needs your machine.
+
+**And the first thing that was measured that way came out empty**, which is worth saying because the
+alternative is only ever reporting the things that worked. When a surface first comes into view the
+renderer fires a single ray at the sun and believes the answer, which is a coin toss; every other
+kind of light on a face starts from a sensible guess borrowed from the bigger surface it was part
+of, and the sun was the one that did not. Giving it that guess is two dozen lines and it is in the
+build, switched off. Six runs — three each way, same building, same camera, same frame — could not
+tell the two apart: the difference between the two versions was smaller than the difference between
+two runs of the *same* version. On your machine, at full resolution, it may well be visible. Here it
+is not, and the honest thing is to leave it off until somebody can see it.
