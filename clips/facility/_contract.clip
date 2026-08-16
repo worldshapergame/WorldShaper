@@ -133,6 +133,86 @@ material water      rgb=68,108,132  rough=24  opacity=110 ior=1.33
 material lamp       rgb=255,238,206 rough=140 emit=200
 material sconce     rgb=255,224,178 rough=140 emit=150
 
+# --- the state rooms: what a baroque, rococo or renaissance interior is made of ----------------
+#
+# The list above is a STONE BUILDING SEEN FROM OUTSIDE, and it is complete for that. It is not
+# complete for a room. A neoclassical shell is limestone, marble and bronze because that is what
+# weather falls on; behind the same shell a state room of the same century is gilt on gesso, wax,
+# silvered glass, lacquer, silk, porcelain and cut crystal, and NOT ONE OF THOSE IS ANYWHERE IN
+# THE LIST ABOVE. Every one of them is also a distinct question for the path tracer, which is why
+# they earn their place here rather than being three more greys:
+#
+#   `mirror`      a metal at roughness 6. Two of them facing each other across a room is the
+#                 oldest hard case in the subject: a path that never terminates, an image of an
+#                 image of an image, and a bounce budget that has to be spent rather than
+#                 exhausted. Nothing else in this building asks for it.
+#   `crystal`     ior 1.62 and nearly clear. A chandelier is four hundred small refracting solids
+#                 hanging in front of a light — dispersion, caustics on the floor beneath, and a
+#                 shape whose every facet is a separate refraction event.
+#   `alabaster`   translucent=210. Stone you can see INTO: a lamp behind an alabaster panel is
+#                 the subsurface case, and marble's translucent=110 is only half of it.
+#   `porcelain`   translucency AND a clearcoat, which is the combination a glazed white body
+#                 actually is and the one a single-lobe shader cannot fake.
+#   `velvet`      rough=252 with sheen. The retro-reflective end of the range: a fabric that is
+#                 brightest where you look along the light, and the opposite failure mode from
+#                 the mirror in every way.
+#   `ormolu`      fire-gilt bronze at rough=48 beside `gilt` at rough=64 and `gold_leaf` at 40 —
+#                 three golds a stop apart, so "is the metal right" stops being a yes/no about
+#                 one sample and becomes a comparison the eye can make inside one frame.
+#
+# Coloured stone earns its place differently: a room floored in `rosso` under a white vault is
+# the colour-bleed rig the rotunda already runs, in five more colours, at a smaller scale where a
+# second bounce that is merely bright rather than bright AND RED is obvious.
+
+material ormolu     rgb=214,178,96  rough=48  metal=235
+material gold_leaf  rgb=222,182,92  rough=40  metal=240 sheen=6
+material silver     rgb=226,228,230 rough=36  metal=245
+material mirror     rgb=238,242,244 rough=6   metal=252
+material iron       rgb=54,54,58    rough=150 metal=180 brush=2
+material steel      rgb=176,178,184 rough=90  metal=210 brush=1
+
+material alabaster  rgb=236,230,214 rough=110 translucent=210
+material onyx       rgb=206,186,150 rough=90  translucent=160
+material travertine rgb=214,196,164 rough=228
+material giallo     rgb=196,152,84  rough=150
+material rosso      rgb=124,44,42   rough=160
+material malachite  rgb=42,118,86   rough=120
+material breccia    rgb=168,124,110 rough=170
+material jasper     rgb=142,58,48   rough=130
+material tuff       rgb=150,142,124 rough=250
+
+material ebony      rgb=28,24,22    rough=120 lacquer=8
+material boiserie   rgb=232,228,216 rough=190 lacquer=6
+material lacquer_red rgb=132,26,24  rough=48  lacquer=14
+material parquet    rgb=126,88,50   rough=140 lacquer=10
+material gesso      rgb=238,234,224 rough=200
+
+material damask     rgb=118,32,44   rough=246 sheen=10
+material velvet     rgb=58,22,58    rough=252 sheen=14
+material silk       rgb=196,176,206 rough=200 sheen=15
+
+material porcelain  rgb=244,244,240 rough=44  translucent=90 lacquer=12
+material faience    rgb=222,228,236 rough=60  lacquer=10
+material shellwork  rgb=234,224,206 rough=90  sheen=12
+material wax        rgb=240,232,214 rough=180 translucent=150
+
+# The glasses, and `absorb` is the whole point of the three coloured ones: Beer-Lambert per metre,
+# so a pane that is 12 mm thick is a tint and the same glass 300 mm deep is a colour. A stained
+# window made of `rgb` alone is a coloured surface; made of `absorb` it is a coloured VOLUME, and
+# the light that comes through it onto the floor behind carries the colour with it.
+material crystal    rgb=246,248,252 rough=8   opacity=40  ior=1.62
+material glass_ruby rgb=224,150,150 rough=26  opacity=70  ior=1.52 absorb=20,190,180
+material glass_blue rgb=150,180,224 rough=26  opacity=70  ior=1.52 absorb=180,120,20
+material glass_gold rgb=228,200,140 rough=26  opacity=70  ior=1.52 absorb=30,90,200
+
+material candle     rgb=255,214,150 rough=150 emit=170
+material taper      rgb=255,196,120 rough=150 emit=210
+
+material boxwood    rgb=58,86,48    rough=252
+material citrus     rgb=44,84,44    rough=248
+material orange     rgb=224,124,36  rough=210
+material bark       rgb=88,70,54    rough=246
+
 # --- shared patterns -------------------------------------------------------------------------
 #
 # Named here so that two parts of one wall are weathered by the same grain rather than by two

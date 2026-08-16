@@ -1,0 +1,982 @@
+# pavilion — the belvedere: a rococo garden pavilion on an island in the north basin.
+#
+# An octagonal glass pavilion of the Amalienburg kind, standing on an oval island in a still
+# basin at the far end of the north garden, under a bell-curved cupola of lead with a gilt
+# finial. Glazed on all eight sides, mirrored on the four diagonals, so that a person in the
+# middle sees the garden through four faces and four reflections of it in the others.
+#
+# WHERE IT STANDS. Its own origin is the centre of the pavilion floor, at the centre of the
+# island, and its water surface is y = 0. On the estate's site plan (clips/estate/BRIEF.md) that
+# origin is at facility x 0, z 46 — on the axis, north of the building, past the fountain court —
+# and the pavilion's floor at y = 0.90 here is the facility's ground level y = 0.00 there. So the
+# basin is a tank sunk 0.90 into the garden, which is what a miroir d'eau is, and the bridge
+# reaches the island level without a step. Entrance faces −z, south, back towards the facility.
+#
+# WHICH OF THE TWO SIZE FIXES, AND WHY. **The basin is shrunk and the metre is kept at 32.** The
+# brief offered 42 × 14 × 36 m at metre 32 (693 M cells, over 3 GB) or the same at metre 16, and
+# said to prefer shrinking. Shrinking is right here for a reason particular to this building and
+# not merely for the memory: **every feature this part exists to test is one voxel wide at 32 and
+# does not exist at 16.** The glazing bars are 0.030 m — one voxel at 32, half a voxel at 16. The
+# cupola's ribs are 0.09 and converge to nothing at the crown, which is the whole point of item 4
+# below. The finial's spindle is 0.045. At metre 16 there would be no bars, no convergence and no
+# finial, and the file would be a picture of the load rather than the load.
+#
+# What the basin loses by being 26.10 × 21.60 rather than 40 × 34 is nothing that matters: the
+# basin's job is to be a MIRROR, and a mirror is judged by what stands in it, not by its acreage.
+# The grazing angle is what makes water a mirror rather than a window, and it is set by the length
+# of the tank against the height of an eye: standing on the near kerb with the eye 2.60 m above the
+# water, the far kerb 26.10 m away is seen at 5.7 degrees, which is well inside the band where
+# Fresnel reflectance passes 0.5 and climbs. Doubling the tank to 52 m would take that to 2.9 and
+# change nothing anybody can see. Measured: 28.20 × 13.35 × 23.70 m at metre 32 is
+# 902 × 427 × 758 = 292 M cells, 42 per cent of what was asked for.
+#
+# MEASURED, at the resolution this file claims:
+#
+#   ./build/clipcheck clips/estate/pavilion.clip --metre 32
+#   sampled box   903 x 427 x 759 voxels   28.219 x 13.344 x 23.719 m
+#   volume        32419291 voxels   989.36 m3   11.08% of the box
+#   surface       3093754 faces    3021.24 m2
+#   materials     30 distinct records
+#   components    264 (largest 32418993 voxels, 298 floating)
+#   42 min 37 s wall on a four-core box with a dozen other clips being sampled on it, and a peak
+#   resident set of 4.01 GB IN THE MEASURING TOOL, which carries about 12.4 bytes a cell. The game
+#   carries five, so the same clip is 1.46 GB there — see _contract.clip's own arithmetic.
+#
+# THE 298 FLOATING VOXELS ARE NINE THOUSANDTHS OF A PER CENT OF THE MATTER, and they are not a
+# structure fault: nothing in the building floats. 264 components against 298 floating voxels means
+# two hundred and sixty-odd of them are ONE VOXEL EACH, and they are where this file said they
+# would be — the 0.030 glazing bars at 0.96 of a voxel, the ribs converging at the crown, and the
+# grain on both. Item 4 says do not thicken either, and this is what not thickening them looks
+# like. The one identifiable modelling residue is the coronet: eight cones on the finial's ball,
+# and a cone tip is sub-voxel by construction whatever radius it starts at, so its last 0.08 m
+# comes apart into about thirty specks at 11.44. Left as it is, and written down here rather than
+# fixed by fattening, because fattening it is the move item 4 exists to refuse.
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD
+#
+# 1. A WHOLE BUILDING REFLECTED IN STILL WATER, OUTDOORS, UNDER SKY. `water` is ior 1.33 at
+#    rough 24, and this is 347 m² of it — a 26.10 × 21.60 tank less the island — in one unbroken
+#    plane with a lit building standing in the middle of it. Nothing in this project has ever
+#    reflected anything larger than a puddle: mirror_test.clip is a 16 × 20 m floor with four posts
+#    and three balls on it, indoors, with no
+#    sky and no refraction. Here the one flat surface has to carry, at once, a doubly-curved lead
+#    cupola, a gilt point 12 m up, eight glazed faces, the travertine quay, and the sky — and at
+#    the far edge, at grazing incidence, Fresnel makes the water a mirror rather than a window and
+#    the whole building appears in it a second time, upside down, through a refracting interface.
+#    THE WATER SURFACE IS THE ONLY THING IN THIS FILE THAT IS NOT DISPLACED BY THE FINAL GRAIN, and
+#    that is deliberate: 16 mm of fbm on a mirror is not weathering, it is a broken reflection. See
+#    the note over `pav_dry` at the bottom.
+#
+# 2. MIRRORS INSIDE A GLASS BOX. Four `mirror` panels (rgb 238,242,244 rough 6 metal 252), 2.80 ×
+#    3.70 m, in the four diagonal faces, alternating with four glazed doorways in the axial ones.
+#    Each mirror faces two other mirrors across the room AND a glazed opening opposite it, so the
+#    natural path is: mirror → mirror → out through a 0.03 m pane with an index of refraction →
+#    off the water → back in through another pane → mirror. That is longer and more interesting
+#    than two facing mirrors in a closed room, because every leg of it changes medium or leaves the
+#    building, and it is the case where a bounce budget has to be SPENT WELL rather than merely
+#    spent: the fifth bounce is still carrying the garden.
+#
+# 3. A CURVED METAL SURFACE AGAINST SKY, WITH A GILT POINT ON TOP. The bell is `lead` at rough 170,
+#    smooth and doubly curved, 10.80 m across the springing and 5.40 m of rise, with nothing near it
+#    but sky. On top of it, at 12.15 m — the highest thing in the scene — is a `gilt` finial at
+#    rough 64 whose spindle is 0.045 m and whose ball is 0.54 across. A small bright curved thing
+#    against the brightest background in the frame is where a renderer's tone response and its edge
+#    handling are judged at the same moment, and there is nothing beside it to hide behind.
+#
+# 4. THIN MATTER TWICE: BARS AND RIBS. The glazing bars are 0.030 m — ONE VOXEL at metre 32, the
+#    same number drum.clip chose for the same reason — and there are 8 openings with a muntin, four
+#    transoms and a semicircular head bar apiece. The cupola's eight ribs are 0.09 m wide and stand
+#    0.06 m proud, and THEY ARE NOT STOPPED AT A HUB: they run to the crown, where eight ribs 0.09
+#    wide meet on a circle whose radius is under a voxel, so their spacing goes sub-voxel before
+#    they get there. Neither is thickened to make it sample cleanly. If the crown breaks up into
+#    noise, that is the answer and not a modelling fault; dome.clip stopped its twenty-four ribs at
+#    a 1.125 m hub precisely to avoid asking this question, and this file asks it.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE. D = 0.90, M = 0.45, from _contract.clip, and every dimension here is one of those or
+# a simple fraction of one. The octagon is set out ACROSS THE FLATS, because that is the dimension
+# a mason sets out and the one the module can hold — a regular octagon's side is its across-flats
+# times tan(22.5°) and can never be a module multiple, so the side is what falls out and the
+# apothem is what is chosen.
+#
+#   across the flats  10.80   24 M      apothem 5.40 = 12 M, circumradius 5.84492
+#   wall              0.45    M         inner apothem 4.95 = 11 M, inner circumradius 5.35784
+#   face              4.4735            = 10.80 × tan(22.5°). The one number that is not module.
+#   opening           2.70    6 M = 3 D — the contract's own bay, so a pier is 1.7735 on the face
+#   floor             0.90    2 M above the water
+#   opening head      4.50    springing 3.15 = 7 M, radius 1.35 = 3 M, crown 4.50 = 10 M
+#   cornice top       5.40    12 M
+#   cupola springing  5.40    12 M, at radius 5.40 — the bell springs on the wall face
+#   crown of the lead 10.80   24 M
+#   finial            12.15   27 M
+#   basin floor      −0.90    2 M below the water
+#
+# THE BELL, AND WHY IT IS A REVOLVE AND NOT A STACK. Two arcs, tangent-continuous where they meet:
+#
+#   5.40 → 8.10   CONCAVE, tucking in.  radius 5.40 at the springing, 3.60 (8 M) at 8.10 (18 M).
+#                 The section is a box less a disc centred at (r 6.525, y 8.10) of radius 2.925
+#                 — 14.5 M and 6.5 M — which are the two numbers that make the arc pass through
+#                 (5.40, 5.40) and (3.60, 8.10). It leaves the springing nearly horizontal, which
+#                 is the flared skirt a bell has, and arrives vertical at 8.10.
+#   8.10 → 10.80  CONVEX, swelling and closing. An ellipsoid rx 3.60, ry 2.70, vertical where it
+#                 meets the arc below and horizontal at the crown.
+#
+# Both are `revolve`d or ellipsoidal, so both are exact at every point in the world. A stack of
+# cylinders would have been a staircase, and — worse for the one thing this file exists to do — a
+# staircase reflected in still water reads as a staircase, at twice the length, upside down.
+#
+# WHAT COULD NOT BE DONE, and it is in pavilion.md as well: there is no way to run a moulding round
+# a POLYGON. `revolve` makes a circle and the six-number mouldings run straight. So the octagonal
+# cornice is drawn as five stepped prisms with `round by=` doing the work of the curves, and only
+# the round things here — the coping, the bell — get real profiles.
+
+include "../facility/_contract.clip"
+
+metre 32
+bounds -14.1 -1.0 -11.85   14.1 12.35 11.85
+
+# ================================================================================================
+# THE BASIN — a rectangular tank sunk 0.90 into the garden, and the mirror this file is about
+# ================================================================================================
+#
+# 26.10 × 21.60 of water (58 M × 48 M), a granite kerb 0.45 wide round it, and lawn beyond the kerb
+# out to the bounds. The kerb is FOUR BOXES and not a difference of two, because drum.clip paid an
+# afternoon for the lesson that a `difference` with a large subtrahend reports a distance that has
+# nothing to do with where the stone is, and every one of these gets painted.
+
+let pav_kerb_e = box  13.05 -0.90 -11.25   13.50 0.90  11.25  round=0.012
+let pav_kerb_w = box -13.50 -0.90 -11.25  -13.05 0.90  11.25  round=0.012
+let pav_kerb_n = box -13.20 -0.90  10.80   13.20 0.90  11.25  round=0.012
+let pav_kerb_s = box -13.20 -0.90 -11.25   13.20 0.90 -10.80  round=0.012
+let pav_kerb   = union { pav_kerb_e pav_kerb_w pav_kerb_n pav_kerb_s }
+
+# The lawn outside it, lapping the kerb by 0.05 so nothing here is ever two pieces.
+let pav_gnd_e = box  13.45 0.00 -11.70   13.95 0.90  11.70
+let pav_gnd_w = box -13.95 0.00 -11.70  -13.45 0.90  11.70
+let pav_gnd_n = box -13.50 0.00  11.20   13.50 0.90  11.70
+let pav_gnd_s = box -13.50 0.00 -11.70   13.50 0.90 -11.20
+let pav_ground = union { pav_gnd_e pav_gnd_w pav_gnd_n pav_gnd_s }
+
+# The bed of the tank, running 0.15 under the kerb on all four sides so it is one piece with it.
+let pav_bed = box -13.20 -0.90 -10.95   13.20 -0.63 10.95  round=0.012
+
+# THE WATER. 0.72 deep, its surface at exactly y = 0, lapping the kerb by 0.05 and the bed by 0.09.
+# It is a solid in the ordinary way — this engine has no fluid, only matter with an index of
+# refraction — and the ONLY thing about it that matters is that its top face is flat. See `pav_dry`.
+let pav_water = box -13.10 -0.72 -10.85   13.10 0.00 10.85
+
+# ================================================================================================
+# THE ISLAND — an oval of travertine quay, 18.00 × 15.30
+# ================================================================================================
+#
+# A circle scaled to 0.85 in z, which is 9.00 × 7.65 in the half. `scale` multiplies the distance
+# it returns by its smallest factor, so this reports 0.85 of the truth — an UNDER-estimate, which
+# is the safe direction and costs only a little sampler time.
+
+let pav_isl_disc = cylinder 0 0 0 r=9.00 h=1.80 axis=y
+let pav_isl_mass = scale { pav_isl_disc } x=1 y=1 z=0.85
+
+# The moulded coping at the waterline: a band from −0.18 to 0.27 standing 0.135 (0.3 M) proud of
+# the quay face, so the shadow it throws lands on the water and its underside is what the
+# reflection sees first. Revolved from a section — a bead over a fillet — and then squashed.
+let pav_cop_sec = union {
+    box  9.00 -0.18 -1   9.135 0.27 1  round=0.012
+    bead 9.135 -0.045   9.225 0.135
+}
+let pav_coping = scale { revolve { pav_cop_sec } axis=y } x=1 y=1 z=0.85
+
+let pav_quay = union { pav_isl_mass pav_coping }
+
+# The band of the quay the water actually reaches — from the bed at −0.90 to 0.63 up the face — as
+# a shape for `weather sea` to be scoped to. Scoping it to the whole island instead is correct and
+# very slow: a weathering mask is built out of an occlusion and a curvature of the ENTIRE solid,
+# and confining it to a shape is what stops every voxel of the island's 390 cubic metres paying for
+# that. It is also the honest scope: a tide line is a line, not a volume — written first as the
+# whole island cut by the same band, it painted weed through 390 cubic metres of buried travertine
+# that nobody will ever see, and charged the sampler for the occlusion of every one of them.
+let pav_waterline = intersection {
+    shell { pav_isl_mass } thickness=0.60
+    box -9.60 -0.90 -8.20   9.60 0.63 8.20
+}
+
+# The top of the island, as a shape to paint gravel on. 0.045 thick — one and a half voxels — and
+# it is a shape and not a height test, so it cannot paint anybody else's ground.
+let pav_isl_top = scale { cylinder 0 0.8775 0 r=9.00 h=0.045 axis=y } x=1 y=1 z=0.85
+
+# ================================================================================================
+# FOUR FLIGHTS DOWN TO THE WATER — 0.18 rise, 0.32 run, on the four diagonals
+# ================================================================================================
+#
+# Six risers of 0.18 from the quay at 0.90 to 1.08 below it at −0.18, so the bottom tread is
+# 0.18 under water and the weathering has something to stain. Six runs of 0.32 = 1.92.
+#
+# Built on −z and turned by −0.375 of a turn, which is what lands it in +x +z. `stairs` always
+# rises toward +z, so a flight that climbs OUT of the water toward the island has to be drawn with
+# its foot at the more negative z; turning that by a quarter would put it in −x −z, where the two
+# mirrors below throw it away without an error. Measured the way drum.clip says to: the quadrant's
+# worldbox must come back on +x AND +z.
+let pav_stp_flight = stairs -0.90 -0.18 -9.72   0.90 0.90 -7.80  run=0.32 rise=0.18
+let pav_stp_base   = box    -0.90 -0.70 -9.72   0.90 -0.10 -7.80  round=0.012
+let pav_stp_one    = union { pav_stp_flight pav_stp_base }
+
+#
+# ONE member and not two. A second at y=-0.125 was written in first, on the reasoning that four
+# diagonals want four members; they do not — a member that lands strictly inside the quadrant is
+# copied to all four by the two mirrors, and the second one landed on +x −z, where `mirror axis=z`
+# asks the child at +z, finds nothing there, and deletes it. It cost nothing and built nothing, and
+# the only sign of it was that the flights were still four.
+let pav_stp_a = rotate { pav_stp_one } y=-0.375
+let pav_box_stp = box -10.4 -0.75 -10.4   10.4 0.95 10.4
+let pav_steps = intersection {
+    mirror { mirror { pav_stp_a } axis=x } axis=z
+    pav_box_stp
+}
+
+# ================================================================================================
+# THE BRIDGE — one flat travertine arch, 3.15 m of span, from the south kerb to the island
+# ================================================================================================
+#
+# A segmental arch: half-span 1.575, rise 0.45, so the soffit is a circle of radius 2.9812 whose
+# centre is 2.2612 below the crown. Springings at 0.27, crown of the soffit at 0.72, deck at 0.90.
+# It laps the kerb by 0.15 and the island by 0.25, because the brief's 0.05 is a minimum and a
+# bridge that comes away from a bank is the exact fault `components 1` exists to catch.
+let pav_bri_box  = box -1.35 0.09 -11.10   1.35 0.90 -7.40  round=0.012
+let pav_bri_bore = cylinder 0 -2.2612 -9.225 r=2.9812 h=3.60 axis=x
+let pav_bri_arch = difference { pav_bri_box pav_bri_bore }
+
+let pav_bri_par_e = box  1.08 0.90 -11.10   1.35 1.26 -7.40  round=0.012
+let pav_bri_par_w = box -1.35 0.90 -11.10  -1.08 1.26 -7.40  round=0.012
+let pav_bri_cop_e = box  1.035 1.26 -11.10   1.395 1.35 -7.40  round=0.014
+let pav_bri_cop_w = box -1.395 1.26 -11.10  -1.035 1.35 -7.40  round=0.014
+let pav_bridge = union {
+    pav_bri_arch pav_bri_par_e pav_bri_par_w pav_bri_cop_e pav_bri_cop_w
+}
+
+# ================================================================================================
+# THE PAVILION — eight piers, eight openings, an entablature
+# ================================================================================================
+#
+# Every prism is `sides=8 turn=0`, which puts a flat face on +x, −x, +z and −z: the entrance faces
+# −z, south, back at the facility, and the four mirrors fall on the diagonals. `r=` on a prism is
+# the CIRCUMRADIUS, so every one of these is its apothem × 1.0823922 and the apothem is the number
+# that came from the module.
+#
+#   socle       apothem 5.625  (12.5 M)   0.72 → 1.35   0.18 of it buried in the island
+#   wall        apothem 5.40   (12 M)     1.26 → 4.50
+#   architrave  apothem 5.445             4.50 → 4.815
+#   frieze      apothem 5.40              4.77 → 5.13
+#   bed mould   apothem 5.58   (12.4 M)   5.085 → 5.22
+#   corona      apothem 5.85   (13 M)     5.22 → 5.355   oversails the frieze by 0.45 in one step
+#   crown       apothem 5.76   (12.8 M)   5.31 → 5.40
+#
+# The corona's 0.45 oversail on a 0.135 depth is the blackest shadow on the outside of this
+# building and the reason a cornice is cut in this order — and it is 0.45 clear of the bell's foot,
+# so it reads against the sky and against its own reflection rather than against the lead.
+
+let pav_socle = prism 0 1.035 0  r=6.08846 h=0.63 sides=8 axis=y turn=0
+let pav_wall  = prism 0 2.880 0  r=5.84492 h=3.24 sides=8 axis=y turn=0
+let pav_arc   = prism 0 4.6575 0 r=5.89363 h=0.315 sides=8 axis=y turn=0
+let pav_frz   = prism 0 4.950 0  r=5.84492 h=0.36 sides=8 axis=y turn=0
+let pav_bed_m = prism 0 5.1525 0 r=6.03975 h=0.135 sides=8 axis=y turn=0
+let pav_cor   = prism 0 5.2875 0 r=6.33199 h=0.135 sides=8 axis=y turn=0
+let pav_crn   = prism 0 5.355 0  r=6.23458 h=0.09 sides=8 axis=y turn=0
+
+let pav_shell = round { union { pav_socle pav_wall pav_arc pav_frz pav_bed_m pav_cor pav_crn } } by=0.01
+
+# The floor, inside the walls: apothem 4.95, 0.72 → 0.90, so it is one piece with the socle and the
+# island under it and the room's void starts on top of it.
+let pav_floor = prism 0 0.81 0 r=5.35784 h=0.18 sides=8 axis=y turn=0
+
+# THE RADIATING STAR, as shapes to paint by and not as inlay to build. Sixteen spokes of `giallo`,
+# a roundel of `rosso` in the middle and a border of `breccia` at the wall: a floor is one plane of
+# stone with sixteen wedges of colour set into it, which is what a rule keyed on a shape says and
+# what sixteen separate solids would not. Sixteen is five rotations mirrored twice — the two on the
+# axes fold onto themselves — and every one of them is symmetric about its own z before it turns.
+let pav_star_a = box 1.26 0.855 -0.18   5.10 0.92 0.18
+let pav_star_b = rotate { pav_star_a } y=-0.0625
+let pav_star_c = rotate { pav_star_a } y=-0.125
+let pav_star_d = rotate { pav_star_a } y=-0.1875
+let pav_star_e = rotate { pav_star_a } y=-0.25
+let pav_box_star = box -5.70 0.84 -5.70   5.70 0.93 5.70
+let pav_star = intersection {
+    mirror { mirror { union { pav_star_a pav_star_b pav_star_c pav_star_d pav_star_e } } axis=x } axis=z
+    pav_box_star
+}
+let pav_roundel = cylinder 0 0.8775 0 r=1.17 h=0.09 axis=y
+let pav_border = intersection {
+    shell { prism 0 0.8775 0 r=5.35784 h=0.20 sides=8 axis=y turn=0 } thickness=0.36
+    pav_box_star
+}
+
+# ================================================================================================
+# THE BELL — 5.40 to 10.80, two arcs, tangent where they meet
+# ================================================================================================
+#
+# The section is drawn in (radius, height) and turned, which is exact: the nearest point of a
+# surface of revolution is always at the asking point's own angle, so the profile's own
+# two-dimensional distance IS the three-dimensional one. See the header for the two arcs.
+#
+# A skirt from 5.20 to 5.40 at radius 5.40 laps the crowning course of the cornice, so the bell
+# meets the building whatever the last 20 mm of the cornice turns out to be.
+let pav_bel_skirt = cylinder 0 5.30 0 r=5.40 h=0.20 axis=y
+let pav_bel_s_box = box 0 5.40 -1   5.40 8.10 1
+let pav_bel_s_cut = cylinder 6.525 8.10 0 r=2.925 h=2 axis=z
+let pav_bel_lower = revolve { difference { pav_bel_s_box pav_bel_s_cut } } axis=y
+let pav_bel_upper = intersection {
+    ellipsoid 0 8.10 0 rx=3.60 ry=2.70 rz=3.60
+    box -3.70 8.05 -3.70   3.70 10.85 3.70
+}
+let pav_bell_hull = union { pav_bel_skirt pav_bel_lower pav_bel_upper }
+
+# THE EIGHT RIBS, and they run all the way to the crown.
+#
+# The hull grown 0.06 outward and sliced by eight radial fins 0.09 wide, which is the only
+# construction that keeps a rib the same height on a doubly-curved surface: `offset` moves a
+# surface along its own normal, so the fin stands 0.06 proud at the springing, at the waist and at
+# the crown without ever knowing what it is sitting on.
+#
+# `by=` IS NEGATIVE TO GROW, because `offset` ADDS its number to the distance and a positive one
+# pushes the surface inward. Written the intuitive way round the ribs are carved INTO the lead and,
+# being unioned with it, vanish with no error and no warning.
+#
+# EIGHT AS THREE ROTATIONS MIRRORED TWICE, never `around { } count=8`: polar repeat declares its
+# metric slack infinite, the sampler takes the minimum slack over the whole expression, and
+# infinite slack anywhere means not one voxel of these 292 million can be skipped anywhere.
+# _order.clip measured that substitution at a factor of 950. The angles are negative because
+# `rotate y=+turns` carries +x toward −z and `mirror` throws away whatever lands on the negative
+# side of its fold.
+let pav_rib_out = offset { pav_bell_hull } by=-0.06
+let pav_rib_a   = box 0 5.20 -0.045   6.00 11.00 0.045
+let pav_rib_b   = rotate { pav_rib_a } y=-0.125
+let pav_rib_c   = rotate { pav_rib_a } y=-0.25
+let pav_box_rib = box -6.60 5.05 -6.60   6.60 11.00 6.60
+let pav_rib_fan = intersection {
+    mirror { mirror { union { pav_rib_a pav_rib_b pav_rib_c } } axis=x } axis=z
+    pav_box_rib
+}
+let pav_ribs = intersection { pav_rib_out pav_rib_fan pav_box_rib }
+
+# THE SCALE-WORK between the ribs: twenty-four columns of four bronze scales apiece on the flared
+# skirt, following the arc down from 5.60 to 6.50. Seven rotations mirrored twice makes
+# twenty-four — the two on the axes fold onto themselves — which is dome.clip's own arithmetic.
+# The upper bell is left bare on purpose: item 3 above wants a SMOOTH doubly-curved metal against
+# the sky, and a scaled one is a different question.
+let pav_scl_one = union {
+    sphere 4.90 5.60 0 r=0.16
+    sphere 4.49 5.90 0 r=0.16
+    sphere 4.19 6.20 0 r=0.16
+    sphere 3.97 6.50 0 r=0.16
+}
+let pav_scl_b = rotate { pav_scl_one } y=-0.0416667
+let pav_scl_c = rotate { pav_scl_one } y=-0.0833333
+let pav_scl_d = rotate { pav_scl_one } y=-0.125
+let pav_scl_e = rotate { pav_scl_one } y=-0.1666667
+let pav_scl_f = rotate { pav_scl_one } y=-0.2083333
+let pav_scl_g = rotate { pav_scl_one } y=-0.25
+let pav_box_scl = box -5.60 5.40 -5.60   5.60 6.70 5.60
+let pav_scales = intersection {
+    mirror { mirror { union { pav_scl_one pav_scl_b pav_scl_c pav_scl_d
+                              pav_scl_e pav_scl_f pav_scl_g } } axis=x } axis=z
+    pav_box_scl
+}
+
+# ================================================================================================
+# THE FINIAL — a ball, a coronet and a vane, and the top of it is 12.15 exactly
+# ================================================================================================
+let pav_fin_neck  = cylinder 0 10.68 0 r=0.09  h=0.36 axis=y      # 10.50 .. 10.86
+let pav_fin_coll  = cylinder 0 10.89 0 r=0.135 h=0.09 axis=y      # 10.845 .. 10.935
+let pav_fin_ball  = sphere   0 11.16 0 r=0.27                     # 10.89 .. 11.43
+let pav_fin_ring  = torus    0 11.34 0 ring=0.18 tube=0.045 axis=y
+let pav_fin_pt_a  = cone     0.18 11.34 0 r=0.045 h=0.18 axis=y
+let pav_fin_pt_b  = rotate { pav_fin_pt_a } y=-0.125
+let pav_fin_pt_c  = rotate { pav_fin_pt_a } y=-0.25
+let pav_box_fin   = box -0.40 11.30 -0.40   0.40 11.60 0.40
+let pav_fin_pts = intersection {
+    mirror { mirror { union { pav_fin_pt_a pav_fin_pt_b pav_fin_pt_c } } axis=x } axis=z
+    pav_box_fin
+}
+let pav_fin_spin = cylinder 0 11.70 0 r=0.045 h=0.72 axis=y       # 11.34 .. 12.06
+let pav_fin_vane = box -0.27 11.61 -0.024   0.27 11.97 0.024 round=0.008
+let pav_fin_arrw = capsule -0.36 11.79 0   0.36 11.79 0 r=0.030
+let pav_fin_top  = sphere 0 12.09 0 r=0.06                        # 12.03 .. 12.15
+let pav_finial = union {
+    pav_fin_neck pav_fin_coll pav_fin_ball pav_fin_ring pav_fin_pts
+    pav_fin_spin pav_fin_vane pav_fin_arrw pav_fin_top
+}
+
+# ================================================================================================
+# ONE FACE'S OPENING — drawn on +x, and it is a hole all the way through
+# ================================================================================================
+#
+# 2.70 wide (6 M = 3 D, the contract's own bay), from the floor at 0.90 to a semicircular head of
+# radius 1.35 springing at 3.15, so the crown stands at 4.50 where the architrave begins. It runs
+# from x 4.55 — inside the room by 0.40 — out to 6.15, which clears the socle's face at 5.625, so
+# the glazing really is to the floor and there is no plinth across the threshold.
+let pav_opn_body = box 4.55 0.90 -1.35   6.15 3.15 1.35
+let pav_opn_head = cylinder 5.35 3.15 0 r=1.35 h=1.60 axis=x
+let pav_opn_one  = union { pav_opn_body pav_opn_head }
+
+let pav_opn_b = rotate { pav_opn_one } y=-0.125
+let pav_opn_c = rotate { pav_opn_one } y=-0.25
+let pav_box_opn = box -6.60 0.85 -6.60   6.60 4.55 6.60
+let pav_openings = intersection {
+    mirror { mirror { union { pav_opn_one pav_opn_b pav_opn_c } } axis=x } axis=z
+    pav_box_opn
+}
+
+# ================================================================================================
+# THE ROOM AND THE VAULT — the air, taken away in one place at the end
+# ================================================================================================
+#
+# An octagonal prism to the springing at 4.50 and a revolved dome over it, and the dome's radius at
+# the springing is 4.95 — the octagon's INNER APOTHEM, which is the circle inscribed in the room.
+# So the vault touches the middle of each of the eight faces and leaves a triangle of stone in each
+# of the eight corners: a pendentive, which is what a round dome on a polygon actually needs, and
+# which the first draft of this file did not have. Written as a cylinder void up to 5.85 it cut
+# straight through the lead at the corners, where the octagon's circumradius of 5.36 is outside the
+# bell's own 4.66, and left eight holes in the roof that no elevation would have shown.
+#
+# Head height: the floor is 0.90 and the crown of the vault is 7.20, so 6.30 m in the middle and
+# 3.60 at the wall. Through a door it is 2.43 — see the transom rail below, which is set at 3.33
+# and not at the springing for exactly that reason.
+let pav_room_prism = prism 0 2.75 0 r=5.35784 h=3.70 sides=8 axis=y turn=0     # 0.90 .. 4.60
+let pav_room_vault = intersection {
+    ellipsoid 0 4.50 0 rx=4.95 ry=2.70 rz=4.95
+    box -5.00 4.40 -5.00   5.00 7.25 5.00
+}
+let pav_room_void = union { pav_room_prism pav_room_vault }
+
+# The attic in the top of the bell, above the vault and under the lead. Nobody sees it; it is here
+# because 90 cubic metres of solid stone in the crown of a cupola is 3 million voxels of nothing.
+# Its foot is at 7.65 and the vault's crown is at 7.20, so there is 0.45 of masonry between them
+# and the two hollows do not meet — which they did when the attic started at 7.20 and touched the
+# vault's apex at a single point, opening the roof void into the room.
+let pav_attic = intersection {
+    ellipsoid 0 7.65 0 rx=3.15 ry=2.70 rz=3.15
+    box -3.20 7.65 -3.20   3.20 10.40 3.20
+}
+
+# ================================================================================================
+# ONE FACE'S GLAZING — iron and glass, drawn on +x
+# ================================================================================================
+#
+# Set 0.15 (M/3) back from the outer face, in the middle of the reveal, so the frame is in the
+# arch's shadow for most of the day and the pane is lit by sky. The frame is 0.09 wide and 0.09
+# deep and beds 0.045 into the stone all the way round, which is the only thing holding eight panes
+# and fifty bars onto this building.
+#
+# THE BARS ARE 0.030 ACROSS — M/15, and ONE VOXEL at metre 32. Do not fatten them. If they come
+# back as noise the sampler is what is wrong, and that is half of what this file is for.
+let pav_glz_f_out = union {
+    box 5.19 0.855 -1.395   5.28 3.15 1.395
+    cylinder 5.235 3.15 0 r=1.395 h=0.09 axis=x
+}
+let pav_glz_f_in = union {
+    box 5.16 0.945 -1.305   5.31 3.15 1.305
+    cylinder 5.235 3.15 0 r=1.305 h=0.15 axis=x
+}
+let pav_glz_frame = difference { pav_glz_f_out pav_glz_f_in }
+
+let pav_bar_v  = box 5.2125 0.86   -0.015   5.2575 4.55   0.015
+let pav_bar_h1 = box 5.2125 1.6200 -1.37    5.2575 1.6500 1.37
+let pav_bar_h2 = box 5.2125 2.3400 -1.37    5.2575 2.3700 1.37
+let pav_bar_h3 = box 5.2125 3.0600 -1.37    5.2575 3.0900 1.37
+let pav_bar_h4 = box 5.2125 3.7800 -1.37    5.2575 3.8100 1.37
+let pav_bar_arc = intersection {
+    torus 5.2425 3.15 0 ring=0.675 tube=0.015 axis=x
+    box 5.19 3.05 -0.80   5.28 3.90 0.80
+}
+let pav_glz_metal = union {
+    pav_glz_frame pav_bar_v pav_bar_h1 pav_bar_h2 pav_bar_h3 pav_bar_h4 pav_bar_arc
+}
+
+# The pane: 0.03 thick — one voxel — filling the whole opening, its edge buried in the frame and in
+# the reveal so it cannot come away.
+let pav_glz_pane = union {
+    box 5.2275 0.87 -1.37   5.2575 3.15 1.37
+    cylinder 5.2425 3.15 0 r=1.37 h=0.03 axis=x
+}
+let pav_glz_full = union { pav_glz_metal pav_glz_pane }
+
+# THE AXIAL FACES ARE DOORS, so their glazing is only the lunette over the transom, and the transom
+# is at 3.33 rather than at the springing at 3.15. 0.90 + 2.40 = 3.30 is the brief's head height
+# through a door and 3.15 would have missed it by 0.15; the rail's soffit is at 3.33, so the clear
+# height is 2.43.
+let pav_glz_high = intersection { pav_glz_full  box -7 3.33 -7   7 4.60 7 }
+let pav_glz_rail = box 5.19 3.285 -1.395   5.28 3.42 1.395 round=0.008
+
+# A PAIR OF GLAZED LEAVES PER DOOR, STANDING OPEN INWARD at right angles against the jambs. They
+# are the thinnest free-standing matter in the file — 0.06 m of iron frame and a 0.03 m pane — and
+# they stand IN the room, where they are seen twice in every mirror.
+#
+# Both leaves are drawn, at +z and at −z, rather than one and a `mirror`: this whole member gets
+# turned by a quarter to reach the ±z faces, and a member that is not symmetric about z before that
+# turn lands astride x = 0 and is half eaten by the mirror that follows.
+let pav_lf_stile_i = box 4.88 0.85 1.35   5.00 3.24 1.41  round=0.008
+let pav_lf_stile_o = box 3.60 0.85 1.35   3.72 3.24 1.41  round=0.008
+let pav_lf_rail_b  = box 3.60 0.85 1.35   5.00 0.97 1.41  round=0.008
+let pav_lf_rail_m  = box 3.60 1.98 1.35   5.00 2.07 1.41  round=0.008
+let pav_lf_rail_t  = box 3.60 3.12 1.35   5.00 3.24 1.41  round=0.008
+let pav_lf_bar     = box 3.60 1.395 1.365   5.00 1.425 1.395
+let pav_lf_iron_p  = union { pav_lf_stile_i pav_lf_stile_o pav_lf_rail_b
+                             pav_lf_rail_m pav_lf_rail_t pav_lf_bar }
+let pav_lf_glass_p = box 3.66 0.91 1.365   4.94 3.18 1.395
+let pav_leaf_iron  = union { pav_lf_iron_p  mirror { pav_lf_iron_p } axis=z }
+let pav_leaf_glass = union { pav_lf_glass_p mirror { pav_lf_glass_p } axis=z }
+
+# THE FOUR MIRRORS, in the diagonal faces, set in the reveal at x 4.95 → 5.01 so that their edges
+# at |z| between 1.35 and 1.40 are buried in the jamb and their foot at 0.85 is buried in the
+# floor. 2.80 × 3.70 of `mirror` at roughness 6 and metal 252, round-headed to the arch.
+let pav_mirror_one = union {
+    box 4.95 0.85 -1.40   5.01 3.15 1.40
+    cylinder 4.98 3.15 0 r=1.40 h=0.06 axis=x
+}
+
+# ================================================================================================
+# THE LINING — boiserie, gesso and rocaille, drawn on +x
+# ================================================================================================
+#
+# A dado and its capping, ON THE PIERS AND NOT ROUND THE ROOM. Written first as a `shell` of the
+# room's own prism, which is one line and is wrong: the openings go to the floor, so a continuous
+# ring at dado height crosses all eight of them — a bar of boiserie 0.90 m up across four doorways,
+# through which nobody can walk. These are added after the room is carved, so nothing cuts them and
+# they have to be drawn where the stone is. Each runs 1.30 to 2.40 along its own face, which is
+# past the octagon's corner at 2.2367 and into the neighbour's, so the eight meet at the corners
+# instead of stopping short of them; the overshoot is buried in the wall and never seen.
+let pav_dado_p = box 4.830 0.86 1.30   5.00 1.80  2.40  round=0.010
+let pav_dcap_p = box 4.785 1.71 1.26   5.00 1.845 2.44  round=0.010
+let pav_dado_pair = union { pav_dado_p  mirror { pav_dado_p } axis=z }
+let pav_dcap_pair = union { pav_dcap_p  mirror { pav_dcap_p } axis=z }
+let pav_box_dado = box -5.60 0.80 -5.60   5.60 1.90 5.60
+let pav_dado_c = rotate { pav_dado_pair } y=-0.25
+let pav_dado_d = rotate { pav_dado_pair } y=-0.125
+let pav_dado = intersection {
+    mirror { mirror { union { pav_dado_pair pav_dado_c pav_dado_d } } axis=x } axis=z
+    pav_box_dado
+}
+let pav_dcap_c = rotate { pav_dcap_pair } y=-0.25
+let pav_dcap_d = rotate { pav_dcap_pair } y=-0.125
+let pav_dado_cap = intersection {
+    mirror { mirror { union { pav_dcap_pair pav_dcap_c pav_dcap_d } } axis=x } axis=z
+    pav_box_dado
+}
+
+# The rocaille: on each of the sixteen half-piers inside, a gesso panel over the dado with an
+# asymmetric C-scroll, a shell and three reeds standing proud of it. A volute IS a logarithmic
+# spiral, so it is a `spiral` and not a stack of rings; `axis=x` winds it in the plane of the wall.
+# The panel's back is at 4.95 — inside the stone — and its face at 4.86, so the ornament in front
+# of it has somewhere to be.
+let pav_roc_panel = box 4.86 1.98 1.50   5.00 3.60 1.95  round=0.010
+let pav_roc_scrl  = spiral 4.845 2.52 1.73 r=0.20 tighten=0.55 tube=0.030 turns=1.6 axis=x
+let pav_roc_shell = intersection {
+    ellipsoid 4.80 3.33 1.725 rx=0.14 ry=0.24 rz=0.20
+    box 4.76 3.15 1.50   5.02 3.60 1.95
+}
+let pav_roc_reed1 = capsule 4.842 2.16 1.62   4.842 3.06 1.62 r=0.030
+let pav_roc_reed2 = capsule 4.842 2.07 1.725  4.842 3.15 1.725 r=0.030
+let pav_roc_reed3 = capsule 4.842 2.16 1.83   4.842 3.06 1.83 r=0.030
+let pav_roc_one = union {
+    pav_roc_panel pav_roc_scrl pav_roc_shell pav_roc_reed1 pav_roc_reed2 pav_roc_reed3
+}
+let pav_roc_pair = union { pav_roc_one  mirror { pav_roc_one } axis=z }
+
+# Outside, the same idea in stone: a sunk panel on each half-pier with a gilt bead round it and a
+# scroll over it. Two per face, sixteen in all.
+let pav_pan_bed  = box 5.355 1.755 1.485   5.445 3.645 2.115 round=0.010
+let pav_pan_face = box 5.355 1.800 1.530   5.4675 3.600 2.070 round=0.010
+let pav_pan_scrl = spiral 5.42 3.87 1.80 r=0.16 tighten=0.55 tube=0.022 turns=1.4 axis=x
+let pav_pan_one  = union { pav_pan_bed pav_pan_face pav_pan_scrl }
+let pav_pan_pair = union { pav_pan_one  mirror { pav_pan_one } axis=z }
+
+# ================================================================================================
+# THE EIGHT — the axial set, the diagonal set, and the sets that go on all eight
+# ================================================================================================
+#
+# Every one of these is a union of rotations, mirrored in x and then in z, and then INTERSECTED
+# WITH A BOX. `build_bounds` gives `Op::Rotate` no bounding box at all, so a union of rotated
+# things reports infinite bounds and anything upstream that needs to measure it gives up.
+# windows.clip measured that one at a factor of a hundred in sample time. The boxes are bounds and
+# not cutters; NOTHING MAY TOUCH THEIR FACES, and one of them nearly did: the opening void reaches
+# radius 6.296 at its outer corners once it is turned onto a diagonal, against a box first drawn at
+# 6.30. Four millimetres is not clearance, and a bound that cuts is a cutter nobody wrote down.
+
+let pav_box_glz  = box -6.40 0.80 -6.40   6.40 4.60 6.40
+let pav_box_lin  = box -5.70 1.30 -5.70   5.70 3.95 5.70
+let pav_box_pan  = box -6.40 1.70 -6.40   6.40 4.10 6.40
+let pav_box_lf   = box -5.60 0.80 -5.60   5.60 3.30 5.60
+let pav_box_mir  = box -5.60 0.80 -5.60   5.60 4.60 5.60
+
+# The axial four: doors on ±x and ±z. Both members are symmetric about their own z before turning.
+let pav_ax_one = union { pav_glz_high pav_glz_rail }
+let pav_ax_c   = rotate { pav_ax_one } y=-0.25
+let pav_glazing_ax = intersection {
+    mirror { mirror { union { pav_ax_one pav_ax_c } } axis=x } axis=z
+    pav_box_glz
+}
+let pav_lfi_c = rotate { pav_leaf_iron } y=-0.25
+let pav_leaves_iron = intersection {
+    mirror { mirror { union { pav_leaf_iron pav_lfi_c } } axis=x } axis=z
+    pav_box_lf
+}
+let pav_lfg_c = rotate { pav_leaf_glass } y=-0.25
+let pav_leaves_glass = intersection {
+    mirror { mirror { union { pav_leaf_glass pav_lfg_c } } axis=x } axis=z
+    pav_box_lf
+}
+
+# The diagonal four: glazed to the floor, with a mirror behind the glass.
+let pav_dg_glz = rotate { pav_glz_full } y=-0.125
+let pav_glazing_dg = intersection {
+    mirror { mirror { pav_dg_glz } axis=x } axis=z
+    pav_box_glz
+}
+let pav_dg_mir = rotate { pav_mirror_one } y=-0.125
+let pav_mirrors = intersection {
+    mirror { mirror { pav_dg_mir } axis=x } axis=z
+    pav_box_mir
+}
+
+# Separated so the paint can tell iron from glass: the metal of all eight, and the glass of all
+# eight, each as its own binding.
+let pav_glz_m_dg = rotate { pav_glz_metal } y=-0.125
+let pav_glz_m_ax = intersection { pav_glz_metal box -7 3.33 -7   7 4.60 7 }
+let pav_glz_m_c  = rotate { union { pav_glz_m_ax pav_glz_rail } } y=-0.25
+let pav_iron_all = intersection {
+    mirror { mirror { union { pav_glz_m_ax pav_glz_rail pav_glz_m_c pav_glz_m_dg } } axis=x } axis=z
+    pav_box_glz
+}
+let pav_glz_p_dg = rotate { pav_glz_pane } y=-0.125
+let pav_glz_p_ax = intersection { pav_glz_pane box -7 3.33 -7   7 4.60 7 }
+let pav_glz_p_c  = rotate { pav_glz_p_ax } y=-0.25
+let pav_glass_all = intersection {
+    mirror { mirror { union { pav_glz_p_ax pav_glz_p_c pav_glz_p_dg } } axis=x } axis=z
+    pav_box_glz
+}
+
+# The lining and the outside panels go on all eight faces: two members, at 0 and a quarter, plus
+# one on the diagonal.
+let pav_roc_c = rotate { pav_roc_pair } y=-0.25
+let pav_roc_d = rotate { pav_roc_pair } y=-0.125
+let pav_rocaille = intersection {
+    mirror { mirror { union { pav_roc_pair pav_roc_c pav_roc_d } } axis=x } axis=z
+    pav_box_lin
+}
+let pav_pan_c = rotate { pav_pan_pair } y=-0.25
+let pav_pan_d = rotate { pav_pan_pair } y=-0.125
+let pav_panels = intersection {
+    mirror { mirror { union { pav_pan_pair pav_pan_c pav_pan_d } } axis=x } axis=z
+    pav_box_pan
+}
+
+# The four members that are a different material from the field they sit in, each carried round the
+# eight the same way, so that every paint rule below keys on a shape and never on a coordinate.
+let pav_pbd_pair = union { pav_pan_bed  mirror { pav_pan_bed } axis=z }
+let pav_pbd_c = rotate { pav_pbd_pair } y=-0.25
+let pav_pbd_d = rotate { pav_pbd_pair } y=-0.125
+let pav_pan_bed_all = intersection {
+    mirror { mirror { union { pav_pbd_pair pav_pbd_c pav_pbd_d } } axis=x } axis=z
+    pav_box_pan
+}
+let pav_psc_pair = union { pav_pan_scrl  mirror { pav_pan_scrl } axis=z }
+let pav_psc_c = rotate { pav_psc_pair } y=-0.25
+let pav_psc_d = rotate { pav_psc_pair } y=-0.125
+let pav_pan_scrolls = intersection {
+    mirror { mirror { union { pav_psc_pair pav_psc_c pav_psc_d } } axis=x } axis=z
+    pav_box_pan
+}
+let pav_rsc_pair = union { pav_roc_scrl  mirror { pav_roc_scrl } axis=z }
+let pav_rsc_c = rotate { pav_rsc_pair } y=-0.25
+let pav_rsc_d = rotate { pav_rsc_pair } y=-0.125
+let pav_roc_scrolls = intersection {
+    mirror { mirror { union { pav_rsc_pair pav_rsc_c pav_rsc_d } } axis=x } axis=z
+    pav_box_lin
+}
+let pav_rsh_pair = union { pav_roc_shell  mirror { pav_roc_shell } axis=z }
+let pav_rsh_c = rotate { pav_rsh_pair } y=-0.25
+let pav_rsh_d = rotate { pav_rsh_pair } y=-0.125
+let pav_roc_shells = intersection {
+    mirror { mirror { union { pav_rsh_pair pav_rsh_c pav_rsh_d } } axis=x } axis=z
+    pav_box_lin
+}
+
+# ================================================================================================
+# THE GIRANDOLES — eight, in the eight inner corners, with wax tapers and lit flames
+# ================================================================================================
+#
+# On the corner directions at 22.5 and 67.5 degrees, which is where the room's inner corners are,
+# so a flat backplate has something to sit against. Sixteen flames, and they are the only light
+# inside this building after the sun has gone round: item 2's mirror path is lit by these as much
+# as by the garden.
+let pav_gir_plate = box 5.05 2.25 -0.20   5.36 3.15 0.20 round=0.010
+let pav_gir_arm_a = capsule 5.20 2.88 0.00   4.74 3.06 0.27 r=0.030
+let pav_gir_arm_b = capsule 5.20 2.88 0.00   4.74 3.06 -0.27 r=0.030
+let pav_gir_cup_a = cylinder 4.74 3.10 0.27 r=0.054 h=0.09 axis=y
+let pav_gir_cup_b = cylinder 4.74 3.10 -0.27 r=0.054 h=0.09 axis=y
+let pav_gir_wax_a = cylinder 4.74 3.30 0.27 r=0.036 h=0.40 axis=y
+let pav_gir_wax_b = cylinder 4.74 3.30 -0.27 r=0.036 h=0.40 axis=y
+let pav_gir_fl_a  = ellipsoid 4.74 3.55 0.27 rx=0.030 ry=0.072 rz=0.030
+let pav_gir_fl_b  = ellipsoid 4.74 3.55 -0.27 rx=0.030 ry=0.072 rz=0.030
+let pav_gir_ormolu = union {
+    pav_gir_plate pav_gir_arm_a pav_gir_arm_b pav_gir_cup_a pav_gir_cup_b
+}
+let pav_gir_wax   = union { pav_gir_wax_a pav_gir_wax_b }
+let pav_gir_flame = union { pav_gir_fl_a pav_gir_fl_b }
+
+let pav_box_gir = box -5.60 2.20 -5.60   5.60 3.70 5.60
+let pav_gir_o_a = rotate { pav_gir_ormolu } y=-0.0625
+let pav_gir_o_b = rotate { pav_gir_ormolu } y=-0.1875
+let pav_girandoles = intersection {
+    mirror { mirror { union { pav_gir_o_a pav_gir_o_b } } axis=x } axis=z
+    pav_box_gir
+}
+let pav_gir_w_a = rotate { pav_gir_wax } y=-0.0625
+let pav_gir_w_b = rotate { pav_gir_wax } y=-0.1875
+let pav_tapers = intersection {
+    mirror { mirror { union { pav_gir_w_a pav_gir_w_b } } axis=x } axis=z
+    pav_box_gir
+}
+let pav_gir_f_a = rotate { pav_gir_flame } y=-0.0625
+let pav_gir_f_b = rotate { pav_gir_flame } y=-0.1875
+let pav_flames = intersection {
+    mirror { mirror { union { pav_gir_f_a pav_gir_f_b } } axis=x } axis=z
+    pav_box_gir
+}
+
+# ================================================================================================
+# THE CHANDELIER — a hundred and ninety-two crystal drops in three tiers
+# ================================================================================================
+#
+# Hung from the crown of the vault at 7.20 on an ormolu stem, three hoops at 5.40, 5.13 and 4.86
+# carrying sixteen strings apiece, and four drops to a string. Sixteen strings is five rotations
+# mirrored twice — the two on the axes fold onto themselves — so the whole thing is fifteen rotate
+# nodes and not a hundred and ninety-two.
+#
+# Every drop is `crystal`: ior 1.62, opacity 40, roughness 8. A hundred and ninety-two small
+# refracting solids hanging in front of sixteen flames, over a marble floor, under a vault, is the
+# caustic case the contract argues for this material — and here it stands between four mirrors, so
+# the caustic on the floor appears in the mirrors as well as on the floor.
+let pav_ch_rose = sphere 0 7.15 0 r=0.18
+#
+# THE METALWORK IS 0.09 TO 0.11 ACROSS AND NOT 0.05, AND THAT IS A MEASUREMENT AND NOT A TASTE.
+# Drawn first with a 0.09 stem, 0.072 hoops and 0.072 arms — the proportions a real chandelier has
+# — this came back at metre 16 as ONE HUNDRED AND NINETY-ONE COMPONENTS, and every floating one of
+# them was between y 4.3 and 4.9 with |x| and |z| under a metre: the drops were fine, and every
+# single thing holding them up was one voxel across and sampled into dashes. A tube whose diameter
+# is near one voxel is not thin matter, it is a dotted line. The bars and the ribs are where this
+# file's thin-matter argument is made, at 0.030 and 0.09, and a chandelier that comes apart is not
+# a second hard case, it is a bug.
+let pav_ch_stem = cylinder 0 5.85 0 r=0.054 h=2.70 axis=y          # 4.50 .. 7.20
+let pav_ch_hoop_a = torus 0 5.40 0 ring=0.90  tube=0.054 axis=y
+let pav_ch_hoop_b = torus 0 5.13 0 ring=0.675 tube=0.048 axis=y
+let pav_ch_hoop_c = torus 0 4.86 0 ring=0.45  tube=0.045 axis=y
+let pav_ch_arm_a = capsule 0.02 5.40 0   0.92 5.40 0 r=0.048
+let pav_ch_arm_b = capsule 0.02 5.13 0   0.70 5.13 0 r=0.048
+let pav_ch_arm_c = capsule 0.02 4.86 0   0.47 4.86 0 r=0.048
+let pav_ch_arm_one = union { pav_ch_arm_a pav_ch_arm_b pav_ch_arm_c }
+let pav_ch_arm_2 = rotate { pav_ch_arm_one } y=-0.125
+let pav_ch_arm_3 = rotate { pav_ch_arm_one } y=-0.25
+let pav_box_arm = box -1.05 4.75 -1.05   1.05 5.50 1.05
+let pav_ch_arms = intersection {
+    mirror { mirror { union { pav_ch_arm_one pav_ch_arm_2 pav_ch_arm_3 } } axis=x } axis=z
+    pav_box_arm
+}
+let pav_ch_drip = ellipsoid 0 4.41 0 rx=0.11 ry=0.18 rz=0.11
+let pav_ch_frame = union {
+    pav_ch_rose pav_ch_stem pav_ch_hoop_a pav_ch_hoop_b pav_ch_hoop_c pav_ch_arms
+}
+
+# One string, at each of the three radii: three beads and a pear, and THE BEADS TOUCH EACH OTHER.
+#
+# They did not, in the first draft — 0.108 across at 0.18 centres, threaded on an ormolu wire
+# 0.018 thick. That wire is 0.58 of a voxel at metre 32 and does not survive sampling at any
+# resolution this clip will ever be opened at, so what the tool reported was a hundred and ninety-
+# two separate components hanging in the air, with a perfectly sensible volume and no error. Beads
+# of 0.144 at 0.12 centres overlap by 0.024 and the string is one piece of crystal, which is what a
+# cut-glass chain actually is.
+let pav_ch_str_a = union {
+    sphere 0.90 5.33 0 r=0.072
+    sphere 0.90 5.21 0 r=0.072
+    sphere 0.90 5.09 0 r=0.072
+    ellipsoid 0.90 4.955 0 rx=0.066 ry=0.115 rz=0.066
+}
+let pav_ch_str_b = union {
+    sphere 0.675 5.06 0 r=0.072
+    sphere 0.675 4.94 0 r=0.072
+    sphere 0.675 4.82 0 r=0.072
+    ellipsoid 0.675 4.685 0 rx=0.066 ry=0.115 rz=0.066
+}
+let pav_ch_str_c = union {
+    sphere 0.45 4.79 0 r=0.072
+    sphere 0.45 4.67 0 r=0.072
+    sphere 0.45 4.55 0 r=0.072
+    ellipsoid 0.45 4.415 0 rx=0.066 ry=0.115 rz=0.066
+}
+let pav_ch_str = union { pav_ch_str_a pav_ch_str_b pav_ch_str_c }
+
+let pav_ch_s2 = rotate { pav_ch_str } y=-0.0625
+let pav_ch_s3 = rotate { pav_ch_str } y=-0.125
+let pav_ch_s4 = rotate { pav_ch_str } y=-0.1875
+let pav_ch_s5 = rotate { pav_ch_str } y=-0.25
+let pav_box_drop = box -1.05 4.10 -1.05   1.05 5.50 1.05
+let pav_ch_drops = intersection {
+    mirror { mirror { union { pav_ch_str pav_ch_s2 pav_ch_s3 pav_ch_s4 pav_ch_s5 } } axis=x } axis=z
+    pav_box_drop
+}
+
+
+# ================================================================================================
+# THE PARTERRE — boxwood clipped in scrolls, on the eight corner bearings
+# ================================================================================================
+#
+# Away from both the four axial walks that lead out of the doors and the four diagonal flights down
+# to the water, so the compartments read as compartments. A clipped scroll IS a spiral, so it is a
+# `spiral` — `axis=y` winds it flat in the plane of the ground.
+let pav_bxw_one = union {
+    spiral 6.75 1.08 0 r=0.54 tighten=0.62 tube=0.135 turns=1.5 axis=y
+    box 6.60 0.85 -0.135   7.60 1.17 0.135  round=0.020
+}
+let pav_bxw_b = rotate { pav_bxw_one } y=-0.0625
+let pav_bxw_c = rotate { pav_bxw_one } y=-0.1875
+let pav_box_bxw = box -8.40 0.80 -8.40   8.40 1.25 8.40
+let pav_boxwood = intersection {
+    mirror { mirror { union { pav_bxw_b pav_bxw_c } } axis=x } axis=z
+    pav_box_bxw
+}
+
+# ================================================================================================
+# ASSEMBLY — the mass, then the air taken out of it, and THEN everything that stands in the air
+# ================================================================================================
+#
+# The order is the whole of it, and it is the trap clips/facility.clip has a long comment about at
+# the bottom of its manifest: a room's void is BY DEFINITION the air a fitting stands in, so a
+# chandelier, a girandole, a mirror, a door leaf or a pane of glass unioned before the difference
+# is eaten by the room it belongs to, silently, with no error and a sensible volume. Everything
+# below the `difference` goes in after it.
+#
+# THE OPENINGS ARE DIFFERENT FROM THE ROOM, exactly as `void_doors` is different from
+# `void_rotunda` there: a hole through a wall is the point of the hole, and the glazing that sits
+# in it was drawn to fit the hole rather than to survive it. So the glazing goes in after too, and
+# nothing at all is subtracted from it.
+
+let pav_mass = union {
+    pav_kerb pav_ground pav_bed
+    pav_quay pav_steps pav_bridge
+    pav_shell pav_floor
+    pav_bell_hull pav_ribs pav_scales pav_finial
+}
+
+let pav_hollow = union { pav_room_void pav_openings pav_attic }
+let pav_cut = difference { pav_mass pav_hollow }
+
+let pav_fittings = union {
+    pav_glazing_ax pav_glazing_dg
+    pav_leaves_iron pav_leaves_glass pav_mirrors
+    pav_dado pav_dado_cap pav_rocaille pav_panels
+    pav_girandoles pav_tapers pav_flames
+    pav_ch_frame pav_ch_drops pav_ch_drip
+    pav_boxwood
+}
+
+# SIXTEEN MILLIMETRES OF GRAIN OVER THE STONE, AND NOT ONE OVER THE WATER.
+#
+# This is the one place this file departs from the facility's manifest, and it is the whole reason
+# the building is standing in a basin. A little grain is the difference between carved stone and a
+# drawing of carved stone — on stone. On a specular surface at ior 1.33 it is not weathering, it is
+# a broken reflection: 16 mm of fbm at 0.07 m across, on a plane 26 m wide seen at 25 degrees,
+# scatters the far half of the image. The
+# reflection IS the deliverable here, so the water is unioned in after the displacement and its top
+# face is exactly the plane y = 0, everywhere, to the last decimal.
+let pav_dry = displace { union { pav_cut pav_fittings } grain_fine } amount=0.016
+let part_pavilion = union { pav_dry pav_water }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Every rule keys on a shape bound in this file and every one tests below=0.02 rather than below=0,
+# because the grain above pushes the surface out by up to 16 mm and a voxel that only exists
+# because of that sits OUTSIDE the shape whose rule named it. At below=0 no rule matches, it falls
+# back to the first coat, and the whole building comes back wearing a rind of pale limestone.
+#
+# Order matters: a later coat covers an earlier one.
+
+paint limestone
+
+# --- the ground and the water ------------------------------------------------------------------
+paint lawn       where=pav_ground below=0.02
+paint water      where=pav_water  below=0.02
+paint granite    where=pav_bed    below=0.02
+paint granite    where=pav_kerb   below=0.02
+
+# --- the island --------------------------------------------------------------------------------
+paint travertine where=pav_quay      below=0.02
+paint travertine where=pav_steps     below=0.02
+paint travertine where=pav_bridge    below=0.02
+paint gravel     where=pav_isl_top   below=0.02
+paint boxwood    where=pav_boxwood   below=0.02
+
+# --- the pavilion, outside -----------------------------------------------------------------------
+paint limestone  where=pav_shell   below=0.02
+paint gesso      where=pav_panels  below=0.02
+paint gold_leaf  where=pav_pan_bed_all below=0.02
+paint gold_leaf  where=pav_pan_scrolls below=0.02
+paint lead       where=pav_bell_hull below=0.02
+paint bronze     where=pav_scales  below=0.02
+paint gilt       where=pav_ribs    below=0.02
+paint gilt       where=pav_finial  below=0.02
+
+# --- the floor: marble and giallo in a radiating star --------------------------------------------
+#
+# Sixteen spokes as five rotations mirrored twice, a roundel in the middle and a border at the
+# wall. It is paint and not geometry because a floor is one plane of stone and sixteen wedges of
+# inlay, which is what a rule keyed on a shape says and what sixteen separate solids would not.
+paint marble  where=pav_floor   below=0.02
+paint breccia where=pav_border  below=0.02
+paint giallo  where=pav_star    below=0.02
+paint rosso   where=pav_roundel below=0.02
+
+# --- the pavilion, inside ------------------------------------------------------------------------
+paint boiserie  where=pav_dado     below=0.02
+paint gold_leaf where=pav_dado_cap below=0.02
+paint gesso     where=pav_rocaille below=0.02
+paint silver    where=pav_roc_scrolls below=0.02
+paint gold_leaf where=pav_roc_shells  below=0.02
+
+# --- glass, iron, mirror, and what is lit ---------------------------------------------------------
+paint glass  where=pav_glass_all    below=0.02
+paint glass  where=pav_leaves_glass below=0.02
+paint iron   where=pav_iron_all     below=0.02
+paint iron   where=pav_leaves_iron  below=0.02
+paint mirror where=pav_mirrors      below=0.02
+
+paint ormolu  where=pav_girandoles below=0.02
+paint wax     where=pav_tapers     below=0.02
+paint taper   where=pav_flames     below=0.02
+paint ormolu  where=pav_ch_frame   below=0.02
+paint crystal where=pav_ch_drops   below=0.02
+paint crystal where=pav_ch_drip    below=0.02
+
+# ================================================================================================
+# WEATHERING — three kinds, each scoped to one of this file's own shapes
+# ================================================================================================
+#
+# `weather` without `on=` works on the whole clip: it bleaches the lawn, scours the volutes and
+# sands the steps along with whatever it was meant for, because the coats it adds are keyed on a
+# value and not on a place. Each of these names a shape bound above.
+#
+# The amounts are small on purpose. Every weathering is a displacement on top of the 16 mm of grain
+# already spent — and 16 mm is not a taste, it is the smallest amount that survives: anything under
+# half a voxel is dropped as dither, which at metre 32 is 0.0156. The thinnest things here are
+# 0.030 across and a second large displacement would eat them.
+#
+# `sea` is the one weathering that cares where the datum is, and `level=` is this file's water
+# surface: 0.0. Above it, salt and bleaching on the quay; below it, barnacles on what the light
+# reaches and weed in what it does not — which is the line the reflection is cut at, and the only
+# thing in the scene that says how deep the water is.
+weather sea       0.16 scale=0.9 seed=29 level=0.0 on=pav_waterline
+weather overgrown 0.10 scale=0.7 seed=13 on=pav_coping
+weather desert    0.05 scale=1.1 seed=41 on=pav_bell_hull
+
+variation colour=0.026 rough=0.060 seed=19
+
+solid part_pavilion

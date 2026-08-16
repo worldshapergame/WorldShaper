@@ -197,6 +197,71 @@ f64 sd_torus(Vec3 p, f64 ring, f64 tube, u32 axis) {
     return std::hypot(radial, axis_of(p, axis)) - tube;
 }
 
+// --- part of the way round ---------------------------------------------------------------------
+//
+// The three sweeps — `revolve`, `around` and `arc` — all carry a first turn and a width in turns,
+// and all three measure the angle the way `atan2(second cross-axis, first cross-axis)` does. See
+// the block above Op::Revolve in field.hpp for why that sense and not another.
+
+// An author's `from` and `to` reduced to the pair the nodes actually store: where the sweep starts,
+// and how wide it is.
+//
+// A width of exactly one means the whole turn, and every evaluator below tests for it before doing
+// anything else — so a clip that never writes `from=` pays not one extra multiply. Ends that
+// coincide are a whole turn rather than an empty shape, because `from=0.25 to=0.25` is a person
+// saying "all the way round from a quarter" and not "nothing".
+//
+// The sweep always runs the increasing way, which is what makes `from=0.75 to=0.25` the half turn
+// through the seam at zero instead of a hole where a shape was meant to be.
+void sweep_range(f64 from, f64 to, f64& out_from, f64& out_span) {
+    const f64 raw = to - from;
+    // Not `>= 1.0`, so that a NaN — which compares false against everything — also lands here.
+    if (!(std::abs(raw) < 1.0)) { out_from = 0.0; out_span = 1.0; return; }
+    const f64 span = raw - std::floor(raw);
+    if (!(span > 0.0)) { out_from = 0.0; out_span = 1.0; return; }
+    out_from = from - std::floor(from);
+    out_span = span;
+}
+
+// Whether a stored width is a real arc rather than the whole turn.
+inline bool is_partial_sweep(f64 span) { return span > 0.0 && span < 1.0; }
+
+// A turn folded into [0, 1). `std::floor` rather than `fmod` because fmod keeps the sign.
+inline f64 wrap_turn(f64 t) {
+    const f64 w = t - std::floor(t);
+    return (w < 1.0) ? w : 0.0;   // a tiny negative t can round up to exactly 1.0
+}
+
+// Which end of an arc a point outside it is nearer to, as a signed offset in turns: positive when
+// the point lies past `to`, negative when it lies short of `from`.
+//
+// The nearer end by ANGLE is the nearer end by DISTANCE, and that is what makes clamping exact
+// rather than plausible. Two points sharing a radius and a height are |p−q|² = r₁² + r₂² −
+// 2r₁r₂cos Δ + Δh² apart, which grows with |Δ| the whole way from nought to half a turn — so for
+// every point of the swept shape, rotating it to the angularly nearest end brings it nearer.
+inline f64 nearer_end(f64 rel, f64 span) {
+    const f64 past_end = rel - span;      // beyond `to`, going the way the sweep runs
+    const f64 before_start = 1.0 - rel;   // short of `from`, going the same way round the seam
+    return (past_end <= before_start) ? past_end : -before_start;
+}
+
+// Which of a partial `around`'s copies a point belongs to, as the turn that copy stands at.
+//
+// n copies and n-1 gaps, first on `from` and last on `to` — see Op::PolarRepeat in field.hpp for
+// why that and not n gaps. A point in the gap outside the arc is folded into whichever END copy
+// is nearer, which does not invent matter: that copy really does stand there, and asking it about
+// a point behind itself is the same question the whole-turn fold has always asked.
+f64 polar_copy_turn(f64 turn, f64 from, f64 span, u32 count) {
+    if (count <= 1) return from;   // one copy, and it sits on `from`
+    const f64 step = span / static_cast<f64>(count - 1);
+    const f64 rel = wrap_turn(turn - from);
+    if (rel <= span) {
+        const f64 k = clamp(std::round(rel / step), 0.0, static_cast<f64>(count - 1));
+        return from + k * step;
+    }
+    return (nearer_end(rel, span) > 0.0) ? from + span : from;
+}
+
 f64 sd_cone(Vec3 p, f64 base_r, f64 height, u32 axis) {
     // Measured from the base, growing along the axis. Written as the intersection of the side
     // and the two caps, which is exact and needs no special case for a degenerate tip.
@@ -526,6 +591,15 @@ u32 Field::torus(Vec3 centre, f64 ring, f64 tube, u32 axis) {
     return push(n);
 }
 
+u32 Field::arc(Vec3 centre, f64 ring, f64 tube, u32 axis, f64 from, f64 to) {
+    Node n;
+    n.op = Op::Arc;
+    n.a[0] = centre.x; n.a[1] = centre.y; n.a[2] = centre.z;
+    n.a[3] = ring; n.a[4] = tube; n.a[5] = static_cast<f64>(axis);
+    sweep_range(from, to, n.a[6], n.a[7]);
+    return push(n);
+}
+
 u32 Field::cone(Vec3 base_centre, f64 base_r, f64 height, u32 axis) {
     Node n;
     n.op = Op::Cone;
@@ -585,13 +659,14 @@ u32 Field::stairs(Vec3 centre, Vec3 half, f64 run, f64 rise) {
     return push(n);
 }
 
-u32 Field::revolve(u32 profile, Vec3 centre, u32 axis) {
+u32 Field::revolve(u32 profile, Vec3 centre, u32 axis, f64 from, f64 to) {
     Node n;
     n.op = Op::Revolve;
     n.child[0] = profile;
     n.children = 1;
     n.a[0] = centre.x; n.a[1] = centre.y; n.a[2] = centre.z;
     n.a[3] = static_cast<f64>(axis);
+    sweep_range(from, to, n.a[4], n.a[5]);
     return push(n);
 }
 
@@ -680,10 +755,11 @@ u32 Field::repeat(u32 child, Vec3 period, Vec3 limit) {
     return push(n);
 }
 
-u32 Field::polar_repeat(u32 child, u32 count, u32 axis) {
+u32 Field::polar_repeat(u32 child, u32 count, u32 axis, f64 from, f64 to) {
     Node n = unary(Op::PolarRepeat, child);
     n.a[0] = static_cast<f64>(count);
     n.a[1] = static_cast<f64>(axis);
+    sweep_range(from, to, n.a[2], n.a[3]);
     return push(n);
 }
 
@@ -939,10 +1015,69 @@ f64 Field::eval(u32 at, Vec3 p) const {
             other_axes(axis, u, v);
             const Vec3 q = p - Vec3{a[0], a[1], a[2]};
             const f64 r = std::hypot(axis_of(q, u), axis_of(q, v));
-            Vec3 flat{0, 0, 0};
-            flat = with_axis(flat, u, r);
-            flat = with_axis(flat, axis, axis_of(q, axis));
-            return eval(n.child[0], flat);
+            if (!is_partial_sweep(a[5])) {
+                Vec3 flat{0, 0, 0};
+                flat = with_axis(flat, u, r);
+                flat = with_axis(flat, axis, axis_of(q, axis));
+                return eval(n.child[0], flat);
+            }
+
+            // --- part of the way round ------------------------------------------------------
+            //
+            // The profile in its own plane, at any radius — including a negative one, which is
+            // what the far side of an end cap asks for.
+            const auto profile_at = [&](f64 radius) {
+                Vec3 flat{0, 0, 0};
+                flat = with_axis(flat, u, radius);
+                flat = with_axis(flat, axis, axis_of(q, axis));
+                return eval(n.child[0], flat);
+            };
+
+            // How far the point is from the end cap standing `delta` turns away from it. The cap
+            // is the profile's own region, flat, at that angle; rotating the point into the cap's
+            // plane splits it into a distance measured IN the plane and one perpendicular to it,
+            // and the distance to a flat region is the hypotenuse of the two. Exact.
+            const auto cap_away = [&](f64 delta) {
+                const f64 turn = delta * kTau;
+                const f64 across = r * std::cos(turn);    // toward the cap's own radius
+                const f64 off = r * std::sin(turn);       // out of the cap's plane
+                return std::hypot(std::max(profile_at(across), 0.0), off);
+            };
+
+            const f64 rel = wrap_turn(std::atan2(axis_of(q, v), axis_of(q, u)) / kTau - a[4]);
+            if (rel > a[5]) {
+                // Outside the wedge, and this is the whole trap. The honest distance here is to
+                // the END CAP, not to the surface of the full revolution — return the latter and
+                // every normal near the cut is wrong while a slice through the shape still looks
+                // exactly right. D-note in field.hpp.
+                return cap_away(nearer_end(rel, a[5]));
+            }
+
+            const f64 d = profile_at(r);
+            // Outside the profile and inside the wedge: the nearest matter is at the point's own
+            // angle, so the profile's own answer is already the true distance.
+            if (d >= 0.0) return d;
+            // Inside the solid the caps are surface too, and either may be nearer than the swept
+            // face. Magnitude is what normals are made of, so this is not optional.
+            return std::max(d, -std::min(cap_away(rel), cap_away(rel - a[5])));
+        }
+        case Op::Arc: {
+            const Vec3 q = p - Vec3{a[0], a[1], a[2]};
+            const u32 axis = static_cast<u32>(a[5]);
+            if (!is_partial_sweep(a[7])) return sd_torus(q, a[3], a[4], axis);
+            u32 u = 0, v = 0;
+            other_axes(axis, u, v);
+            const f64 x = axis_of(q, u), y = axis_of(q, v);
+            const f64 rel = wrap_turn(std::atan2(y, x) / kTau - a[6]);
+            // Within the arc the nearest point of the centre-line is at the asking point's own
+            // angle, which is exactly what the torus already computes — so the same call answers
+            // it and the two can never drift apart.
+            if (rel <= a[7]) return sd_torus(q, a[3], a[4], axis);
+            // Past an end, the nearest point of the centre-line is that end, and the cap is round
+            // because the segment is a swept sphere. So: the distance to one point, less the tube.
+            const f64 turn = (a[6] + ((nearer_end(rel, a[7]) > 0.0) ? a[7] : 0.0)) * kTau;
+            const f64 ex = a[3] * std::cos(turn), ey = a[3] * std::sin(turn);
+            return std::hypot(std::hypot(x - ex, y - ey), axis_of(q, axis)) - a[4];
         }
         case Op::Spiral:
             return sd_spiral(p - Vec3{a[0], a[1], a[2]}, a[3], a[4], a[5], a[6],
@@ -1160,9 +1295,13 @@ f64 Field::eval(u32 at, Vec3 p) const {
             u32 u = 0, v = 0;
             other_axes(axis, u, v);
             const f64 x = axis_of(p, u), y = axis_of(p, v);
-            const f64 sector = kTau / static_cast<f64>(count);
             f64 angle = std::atan2(y, x);
-            angle -= sector * std::round(angle / sector);
+            if (!is_partial_sweep(a[3])) {
+                const f64 sector = kTau / static_cast<f64>(count);
+                angle -= sector * std::round(angle / sector);
+            } else {
+                angle -= kTau * polar_copy_turn(angle / kTau, a[2], a[3], count);
+            }
             const f64 r = std::hypot(x, y);
             Vec3 q = p;
             q = with_axis(q, u, std::cos(angle) * r);
@@ -1611,7 +1750,18 @@ void Field::build_bounds() {
                 box = around({a[0], a[1], a[2]}, half);
                 break;
             }
-            case Op::Torus: {
+            case Op::Torus:
+            case Op::Arc: {
+                // **The WHOLE ring's box, even for a segment of one, and that is deliberate.**
+                //
+                // A segment's true extent is tighter — a quarter of a ring occupies a quarter of
+                // the box — and a tighter box would cull better. It would also be a box worked out
+                // from an arc's endpoints and its extreme angles, which is four cases and a seam,
+                // and a box that is tighter than the truth by any amount at all is a piece of the
+                // clip quietly missing. Conservative is always correct here: the segment is inside
+                // the full ring, and the segment's answer is at least the full torus's answer, so
+                // a point outside this box is told at least the distance to it and the cull that
+                // reads it stays sound.
                 const u32 axis = static_cast<u32>(a[5]);
                 const f64 across = a[3] + a[4];
                 Vec3 half{across, across, across};
@@ -1647,6 +1797,14 @@ void Field::build_bounds() {
                 // As far out as the profile reaches from the axis, all the way round, and as far
                 // along the axis as the profile is tall. The profile's third dimension says
                 // nothing: it is only ever asked at zero.
+                //
+                // A PARTIAL revolve keeps the whole turn's box, unchanged and on purpose. The
+                // truth is tighter and the tighter one would have to be derived from an arc's
+                // extremes, and this is not the place to be clever: a box larger than the shape
+                // culls a little less and is always right, a box smaller than the shape deletes
+                // whatever falls outside it and says nothing while it does. The soundness the cull
+                // needs also still holds — the segment is inside the full revolution, so its
+                // answer at a point outside this box is at least the distance to the box.
                 const Aabb child = bounds_of(n.child[0]);
                 if (child.infinite()) { box = everywhere(); break; }
                 const u32 axis = static_cast<u32>(a[3]);
@@ -1964,6 +2122,7 @@ const char* op_name(Op op) {
         case Op::Cylinder: return "cylinder";
         case Op::Capsule: return "capsule";
         case Op::Torus: return "torus";
+        case Op::Arc: return "arc";
         case Op::Cone: return "cone";
         case Op::Plane: return "plane";
         case Op::Ellipsoid: return "ellipsoid";
@@ -2348,6 +2507,9 @@ f64 Field::metric_slack(u32 at) const {
         case Op::Cylinder:
         case Op::Capsule:
         case Op::Torus:
+        // A segment of one is the exact distance to its centre-line less the tube, which is a real
+        // distance to the real shape both within the arc and past either end of it.
+        case Op::Arc:
         case Op::Cone:
         case Op::Plane:
         case Op::Ellipsoid:
@@ -2371,6 +2533,13 @@ f64 Field::metric_slack(u32 at) const {
         // with a positive radius is swept, so when a profile crosses its own axis the answer is
         // the distance to a shape slightly larger than the one that is built — smaller than the
         // truth, which is the direction that costs time rather than voxels.
+        //
+        // A PARTIAL revolve is still a distance and still on the safe side of one. Outside the
+        // wedge it is exactly the distance to the end cap; inside the wedge and outside the
+        // profile it is exactly the profile's own; and inside the solid it is the least of the
+        // full revolution's distance and the two caps' — which can only be SHORTER than the true
+        // distance to the segment's own surface, because the segment's swept face is a piece of
+        // the full revolution's and a piece is never nearer than the whole.
         case Op::Revolve:
             return worst_child(1);
 
@@ -2431,7 +2600,10 @@ f64 Field::metric_slack(u32 at) const {
         }
 
         // The same objection, about an angle rather than a coordinate, and without the tidy
-        // bound: how far a sector is depends on how far out you are.
+        // bound: how far a sector is depends on how far out you are. A partial `around` is the
+        // same answer for the same reason — it folds to the nearest copy BY ANGLE, and the nearest
+        // copy by angle is only the nearest by distance when the copy is round, which a colonnade
+        // is and a bracket is not.
         case Op::PolarRepeat:
             return kInfiniteSlack;
 
@@ -2493,6 +2665,7 @@ bool mirror_is_leaf(Op op) {
     switch (op) {
         case Op::Constant: case Op::Parameter: case Op::Coordinate: case Op::Radius:
         case Op::Sphere: case Op::Box: case Op::Cylinder: case Op::Capsule: case Op::Torus:
+        case Op::Arc:
         case Op::Cone: case Op::Plane: case Op::Ellipsoid: case Op::Prism: case Op::Platonic:
         case Op::Wedge: case Op::Stairs: case Op::Spiral: case Op::Fbm: case Op::Noise:
         case Op::Ridged: case Op::Rasp: case Op::Cells: case Op::CellEdge: case Op::Sine:
@@ -2649,21 +2822,68 @@ bool Field::mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest) const {
         switch (n.op) {
             // ---- one child, the point changed on the way in -------------------------------
             case Op::Revolve: {
-                if (f.step == 0) {
-                    f.step = 1;
-                    const u32 axis = static_cast<u32>(a[3]);
-                    u32 u = 0, v = 0;
-                    other_axes(axis, u, v);
-                    const Vec3 q = f.p - Vec3{a[0], a[1], a[2]};
-                    const f64 r = std::hypot(axis_of(q, u), axis_of(q, v));
+                const u32 axis = static_cast<u32>(a[3]);
+                u32 u = 0, v = 0;
+                other_axes(axis, u, v);
+                const Vec3 q = f.p - Vec3{a[0], a[1], a[2]};
+                const f64 r = std::hypot(axis_of(q, u), axis_of(q, v));
+                // The profile's plane: a radius across, the height along, and nothing else.
+                const auto flat_at = [&](f64 radius) {
                     Vec3 flat{0, 0, 0};
-                    flat = with_axis(flat, u, r);
+                    flat = with_axis(flat, u, radius);
                     flat = with_axis(flat, axis, axis_of(q, axis));
-                    if (!push(n.child[0], flat)) return false;
+                    return flat;
+                };
+
+                if (!is_partial_sweep(a[5])) {
+                    if (f.step == 0) {
+                        f.step = 1;
+                        if (!push(n.child[0], flat_at(r))) return false;
+                        continue;
+                    }
+                    finish(ret);
                     continue;
                 }
-                finish(ret);
-                continue;
+
+                // Part of the way round. The recursive evaluator asks the profile once, twice or
+                // three times depending on where the point stands, so this one carries a step per
+                // ASK — the same mechanism `curvature` and `occlusion` use — and `lean[0]` holds
+                // the out-of-plane leg of whichever cap is being measured.
+                const f64 rel = wrap_turn(std::atan2(axis_of(q, v), axis_of(q, u)) / kTau - a[4]);
+                const auto ask_cap = [&](f64 delta, u32 next) -> bool {
+                    const f64 turn = delta * kTau;
+                    f.lean[0] = r * std::sin(turn);
+                    f.step = next;
+                    return push(n.child[0], flat_at(r * std::cos(turn)));
+                };
+                const auto cap_away = [&]() { return std::hypot(std::max(ret, 0.0), f.lean[0]); };
+
+                switch (f.step) {
+                    case 0:
+                        if (rel > a[5]) {
+                            // Outside the wedge: one ask, at the nearer end cap.
+                            if (!ask_cap(nearer_end(rel, a[5]), 4)) return false;
+                            continue;
+                        }
+                        f.step = 1;
+                        if (!push(n.child[0], flat_at(r))) return false;
+                        continue;
+                    case 1:
+                        if (ret >= 0.0) { finish(ret); continue; }
+                        f.acc = ret;
+                        if (!ask_cap(rel, 2)) return false;
+                        continue;
+                    case 2:
+                        f.lean[1] = cap_away();
+                        if (!ask_cap(rel - a[5], 3)) return false;
+                        continue;
+                    case 3:
+                        finish(std::max(f.acc, -std::min(f.lean[1], cap_away())));
+                        continue;
+                    default:
+                        finish(cap_away());
+                        continue;
+                }
             }
             case Op::Translate: {
                 if (f.step == 0) {
@@ -2724,9 +2944,13 @@ bool Field::mirror_eval(u32 at, Vec3 p, f64& out, u32* deepest) const {
                     u32 u = 0, v = 0;
                     other_axes(axis, u, v);
                     const f64 x = axis_of(f.p, u), y = axis_of(f.p, v);
-                    const f64 sector = kTau / static_cast<f64>(count);
                     f64 angle = std::atan2(y, x);
-                    angle -= sector * std::round(angle / sector);
+                    if (!is_partial_sweep(a[3])) {
+                        const f64 sector = kTau / static_cast<f64>(count);
+                        angle -= sector * std::round(angle / sector);
+                    } else {
+                        angle -= kTau * polar_copy_turn(angle / kTau, a[2], a[3], count);
+                    }
                     const f64 r = std::hypot(x, y);
                     Vec3 q = f.p;
                     q = with_axis(q, u, std::cos(angle) * r);

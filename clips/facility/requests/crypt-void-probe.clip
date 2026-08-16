@@ -1,0 +1,28 @@
+# The AIR of the crypt, on its own. NOT part of the building.
+#
+# void_crypt is what the manifest subtracts from the whole building: the air of this room less the
+# stone this part puts back into it. For a room hollowed out of a solid podium that shape IS the
+# room, so this is the probe to slice.
+#
+#   ./build/clipcheck clips/facility/requests/crypt-void-probe.clip --metre 16 --slice y@0.5
+#   ./build/clipcheck clips/facility/requests/crypt-void-probe.clip --metre 16 --slice z@-8.5
+#
+# Anything in here that should have been STONE is a thing this part is about to lose to its own
+# room: a grating, a taper, a sarcophagus or the stair. They are all in part_crypt, so none of them
+# should show up in this shape.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../crypt.clip"
+
+# THE SAMPLED BOX IS CUT DOWN TO THIS ROOM, and that is the only reason a metre 32 run of it
+# finishes. The contract's box is 34 x 20.9 x 25 m — 582 million cells at metre 32, nearly all of
+# it the air over a building this fragment is 2.10 m underneath. This one is 24.6 x 3.1 x 15.8,
+# which is 39 million, and it holds the whole room, both stairs, all three light-well corridors
+# and the podium's top surface over them with a margin. A probe is not the building.
+bounds -12.3 -0.95 -9.4   12.3 2.15 6.4
+
+solid void_crypt

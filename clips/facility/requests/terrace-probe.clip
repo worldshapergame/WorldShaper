@@ -1,0 +1,19 @@
+# terrace-probe — the roof terrace on its own, for clipcheck.
+#
+# The contract for the dimensions and the materials, the order because the manifest loads it before
+# any fragment and a fragment is entitled to reach for it, then the fragment itself.
+#
+#   ./build/clipcheck clips/facility/requests/terrace-probe.clip --metre 8
+#   ./build/clipcheck clips/facility/requests/terrace-probe.clip --metre 16 --slice y@12.6
+#   ./build/clipcheck clips/facility/requests/terrace-probe.clip --metre 32
+#
+# More than one component is expected and correct here: this part is a paved floor in TWO courts
+# either side of the drum — see the long note at the top of terrace.clip about why there is no
+# ground north or south of it — with pots, seats, lanterns and an armillary sphere standing on it.
+# What matters is WHERE the loose pieces are.
+
+include "../_contract.clip"
+include "../_order.clip"
+include "../terrace.clip"
+
+solid part_terrace

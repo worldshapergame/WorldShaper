@@ -1,0 +1,20 @@
+# Probe manifest for library.clip. It is not part of the building and nothing includes it.
+#
+#   ./build/clipcheck clips/facility/requests/library-probe.clip --metre 8
+#   ./build/clipcheck clips/facility/requests/library-probe.clip --metre 16 --slice y@7.0
+#   ./build/clipcheck clips/facility/requests/library-probe.clip --metre 16 --slice x@-10.5
+#   ./build/clipcheck clips/facility/requests/library-probe.clip --metre 32
+#
+# The bounds are the room plus a little, not the building's: the contract's own box is 34 x 21 x 25
+# metres and this room is 9.15 x 5.60 x 3.65, so sampling the whole box to look at one room costs
+# two and a half gigabytes to hold air.
+include "../_contract.clip"
+include "../_order.clip"
+include "../library.clip"
+
+metre 32
+bounds -15.30 5.90 -6.80   -5.90 11.75 -2.90
+
+variation colour=0.030 rough=0.070 seed=17
+
+solid part_library

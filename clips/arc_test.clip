@@ -1,0 +1,99 @@
+# arc_test.clip — the three ways of going PART of the way round.
+#
+# Every apse, niche head, half dome, arch ring, curved colonnade and oval room is a sweep through
+# less than a whole turn. This is one of each, with a full-turn control standing beside it, laid
+# out in a row so that a slice says which way the angles go and where the ends of each sweep are.
+#
+#   clipcheck clips/arc_test.clip --metre 16
+#   clipcheck clips/arc_test.clip --metre 16 --slice y@1.0      # through the domes and the shafts
+#   clipcheck clips/arc_test.clip --metre 16 --slice y@0.4      # through the rings
+#
+# HOW THE ANGLES RUN, which is most of what this file is for:
+#
+#   `from` and `to` are TURNS, like `rotate`. Zero is along the FIRST cross-axis of the sweep's
+#   own axis — x for an axis of y, x again for an axis of z — and the turn grows toward the
+#   SECOND, which is z for a y axis and y for a z axis. So `from=0 to=0.25` about y is the
+#   quarter filling the +x,+z corner and NOT the +x,-z one. The sweep always runs the increasing
+#   way, so `from=0.75 to=0.25` is the half turn that crosses the seam at zero rather than an
+#   empty shape.
+#
+#   A `--slice y@...` picture prints x left to right and z BOTTOM TO TOP, so "toward +z" reads
+#   as upward on the page.
+#
+# `around` over an arc spaces its copies INCLUSIVELY: with count=n the first sits exactly on
+# `from` and the last exactly on `to`, n copies and n-1 gaps. Over a whole turn it keeps the old
+# spacing of n copies in n sectors, because a copy on each end would put two in one place.
+
+metre 32
+bounds -9 0 -5   9 4 5
+
+material stone  rgb=124,120,112 rough=210
+material pale   rgb=196,192,182 rough=200
+material bronze rgb=140,104,52  rough=90 metal=190
+
+let plinth = box -9 0 -5   9 0.25 5 round=0.03
+
+# --- 1. revolve: a whole dome, a half dome, and a niche head over the seam --------------------
+#
+# One section, drawn once: a disc of radius 0.9 about the axis with everything below the
+# springing cut away. Revolved whole it is a hemisphere.
+
+let dome_section = intersection { sphere 0 0 0 r=0.9   plane 0 -1 0 at=0.0 }
+
+# The control. No `from`, no `to`, and the node does exactly what it always did.
+let dome_whole = revolve -6.5 0.20 0 { dome_section } axis=y
+
+# Half of it, from 0 to 0.5 — so the solid half is the one toward +z, the TOP of a y slice, and
+# its flat face is the plane z = 0.
+let dome_half  = revolve -3.5 0.20 0 { dome_section } axis=y from=0 to=0.5
+
+# The same half written across the seam at zero: 0.75 round through 0 to 0.25. That is the half
+# centred on +x, so it faces RIGHT in a slice — and it is the case that produces an empty shape
+# if the wrap is not handled.
+let niche_head = revolve -0.5 0.20 0 { dome_section } axis=y from=0.75 to=0.25
+
+let domes = union { dome_whole dome_half niche_head }
+
+# --- 2. around: a curved colonnade over 140 degrees --------------------------------------------
+#
+# Seven columns from here round to there — the thing the language could not say at all before.
+# 140 degrees is 0.3889 of a turn; written from -0.1944 to +0.1944 the arc is centred on +x, so
+# the colonnade fills the right of a slice and a column stands exactly on each of its two ends.
+
+let colonnade_shaft = cylinder 2.6 0 0  r=0.16 h=2.4 axis=y
+let colonnade = around { colonnade_shaft } count=7 axis=y from=-0.1944 to=0.1944
+let colonnade = translate { colonnade } 2.5 1.40 0
+
+# The control beside it: eight shafts about the whole circle, spacing unchanged.
+let rotunda_shaft = cylinder 1.1 0 0  r=0.14 h=2.4 axis=y
+let rotunda = around { rotunda_shaft } count=8 axis=y
+let rotunda = translate { rotunda } 7.6 1.40 0
+
+let shafts = union { colonnade rotunda }
+
+# --- 3. arc: an arch ring, a curved kerb, and a whole hoop --------------------------------------
+#
+# An arch ring is a half torus standing on its ends: about z, from 0 to 0.5, which runs +x round
+# through +y to -x — so it stands UP, which is what an arch does, and its two ends land on the
+# plinth.
+
+let arch_ring = arc -6.5 0.25 -3.2  ring=1.1 tube=0.14 axis=z from=0 to=0.5
+
+# A quarter of a curved kerb lying flat on the plinth: about y, from 0.25 to 0.5, which is the
+# quadrant between +z and -x — upper left of a y slice.
+let kerb = arc -1.0 0.28 -1.6  ring=1.3 tube=0.10 axis=y from=0.25 to=0.5
+
+# The controls: a whole hoop written as an `arc`, and the same thing written as a `torus`. These
+# two must be the same shape to the last voxel.
+let hoop  = arc   4.0 0.25 -3.2  ring=1.0 tube=0.12 axis=z
+let wheel = torus 7.0 0.25 -3.2  ring=1.0 tube=0.12 axis=z
+
+let rings = union { arch_ring kerb hoop wheel }
+
+let all = union { plinth domes shafts rings }
+
+paint stone
+paint pale   where=domes below=0.02
+paint bronze where=rings below=0.02
+
+solid all

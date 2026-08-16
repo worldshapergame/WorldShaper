@@ -1,0 +1,37 @@
+# The crypt IN THE PODIUM, which is the only way its head height can be measured. NOT part of the
+# building.
+#
+# `--gap y@x,z` walks a column of the sampled clip and reports the air in it. Run against
+# crypt-probe.clip it reports the whole 21 m of the box, because in that probe there is nothing
+# over the room and nothing under it: the ceiling of this room is the podium, and the floor is the
+# bottom of the podium. So the head height has to be measured on the podium with the room cut out
+# of it, which is this file — podium and crypt unioned, and void_crypt taken away, exactly as the
+# manifest does it.
+#
+#   ./build/clipcheck clips/facility/requests/crypt-place.clip --metre 16 --gap y@0,0
+#   ./build/clipcheck clips/facility/requests/crypt-place.clip --metre 16 --slice x@0.0
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../podium.clip"
+include "../crypt.clip"
+
+let crypt_place = difference { union { part_podium part_crypt } void_crypt }
+
+# THE BOX IS CUT TO THE ROOM, AND ITS TOP AND BOTTOM ARE INSIDE STONE ON PURPOSE.
+#
+# Two reasons. The first is size: the contract's box is 582 million cells at metre 32, nearly all
+# of it the air over a building this fragment is 2.10 m underneath.
+#
+# The second is what `--gap` actually measures. It reports the air it finds in a column, and it
+# says BROKEN when that air is in more than one piece — so a box with sky in it reports the sky,
+# the room and the space under the podium as one broken 3.1 m span and tells you nothing. -0.49 is
+# inside the 0.05 m floor slab and 1.79 is inside the 0.15 m ceiling, so every column of this box
+# begins and ends in stone and the one air run in it IS the head height. That is why the number
+# this probe prints can be read straight off.
+bounds -12.3 -0.49 -9.4   12.3 1.79 6.4
+
+solid crypt_place

@@ -1,0 +1,892 @@
+# library - a two-tier monastic library on the piano nobile of the west wing, south front.
+#
+# ================================================================================================
+# WHAT THIS PART PUTS UNDER LOAD - do not "tidy" any of it away.
+#
+# 1. THE DENSEST FIELD OF THIN MATTER IN THE BUILDING.
+#
+#    Every book on these shelves is a real solid. A spine is 0.030, 0.045 or 0.048 m wide -- ONE
+#    voxel, or one and a half, at the contract's metre 32 -- and there are a little over two
+#    thousand of them, in ranks of six repeating widths, at two levels, on both long walls. They
+#    stand at three different depths and six different heights so that the rank is not a comb, and
+#    the gap between one rank and the next is 0.030: one voxel of air between two voxels of wood.
+#    That is a higher spatial frequency, over a larger area, than the flutes and the dentils
+#    together, and it is what breaks a sampler, then a mesher, then a denoiser.
+#
+#    DO NOT THICKEN A SPINE TO MAKE IT SAMPLE CLEANLY. If a shelf comes back as a brown smear that
+#    is the answer this room was built to give. The widths are module fractions (0.045 = M/10,
+#    0.030 = M/15, 0.048 is the one exception and is named where it occurs) so they cannot be
+#    nudged without breaking the rank.
+#
+# 2. A DEEP ROOM WITH LIGHT ONLY AT ONE END OF ITS SECTION.
+#
+#    Four windows, all of them at floor level: three in the south wall at x = -13.50, -10.80 and
+#    -8.10 and one in the west wall at z = -5.40, every one of them cut by windows.clip with its
+#    sill at 6.30 -- THE FLOOR OF THIS ROOM -- and its head at 8.55. The room is 3.15 m deep clear
+#    and 5.175 m from floor to crown, and a gallery at 9.00 shades everything under it. So the
+#    light comes in at the very bottom of the section, is stopped 2.475 m up by the gallery, and
+#    everything above that line -- the whole upper tier, the cornice, the vault and its nine
+#    lunettes -- is lit only by what comes back up through a light well 0.72 m wide. The gradient
+#    from a sunlit sill to the back of a lower press under the gallery is the widest in the
+#    building outside the vestibule, and here it has to be carried by a vault rather than a wall.
+#
+# 3. CLEARCOAT AT A GRAZING ANGLE, TWICE. `parquet` carries lacquer=10 and `ebony` lacquer=8. The
+#    floor between the presses is parquet banded with ebony, and the ebony books are on the shelves
+#    above it: the same clearcoat lobe at two roughnesses, in one frame, with a low south sun
+#    coming through the window at the height of both. Nothing else in the building can ask that.
+#
+# 4. REPETITION THAT MUST NOT LOOK REPEATED. Two thousand nearly identical small solids is the
+#    case the no-two-voxels-alike variation exists for. The geometry does its half -- six widths,
+#    six heights, three depths, and a different period and a different shelf pitch in the upper
+#    tier from the lower -- and variation does the rest.
+# ================================================================================================
+#
+# THE MODULE. M = 0.45. Every number below is a multiple of M, M/2, M/4, M/5, M/10 or M/20, and
+# the arithmetic is written out here so nobody has to work backwards:
+#
+#   PLAN                                          SECTION
+#  -15.15  west lining back, 0.05 into the         6.00  slab foot, on the chapel's ceiling
+#          outer wall whose inner face is         6.30  FLOOR                     the given level
+#          at 15.10 (block_x - D)                 6.525 press plinth top         6.30 + M/2
+#  -14.85  room west face          33 M           8.325 lower press top          6.525 + 4 M
+#  -12.15  bay one / bay two       27 M           8.775 gallery soffit           6.30 + 5.5 M
+#   -9.45  bay two / bay three     21 M           9.00  GALLERY DECK             6.30 + 6 M
+#   -6.75  room east face          15 M           9.225 upper plinth top         9.00 + M/2
+#   -6.00  east wall back, the vestibule's       10.125 upper press top          9.225 + 2 M
+#   -6.60  room south face, the outer wall       10.35  CORNICE TOP / SPRINGING   6.30 + 9 M
+#   -3.45  room north face                       11.475 VAULT CROWN              6.30 + 11.5 M
+#   -3.00  north wall back                       11.60  block top          the brief's own ceiling
+#
+#   -13.50, -10.80, -8.10   the three bay axes, 2.70 apart (3 D, the contract's eustyle spacing),
+#                           and they are the axes windows.clip already cut its three south piano
+#                           nobile windows on. The bays are the windows; nothing else was chosen.
+#
+# THE ROOM IS 8.10 x 3.15 CLEAR, which is 18 M by 7 M, or three square-ish bays of 2.70 x 3.15.
+#
+# WHY THE WEST END OF THE ROOM IS AT 14.85 AND NOT AT THE WALL'S OWN 15.10. Because 15.10 is
+# block_x - D and is not a multiple of M -- the contract says so itself about 16.00 and 7.50 -- and
+# three bays of 2.70 have to start somewhere that is. So the 0.25 between 15.10 and 14.85 is a
+# LINING: the panelled back the west press stands against, and the reveal of the west window, which
+# windows.clip punches through it to x = -14.20 without this file having to know.
+#
+# THE GALLERY IS AT 9.00 AND NOT AT THE BRIEF'S 8.85. The brief says "8.85 (that is 6.30 + 2.55,
+# and 2.55 is a multiple of the module - check it)". It is not: 2.55 / 0.45 = 5.667. The two module
+# levels either side are 8.55 (+5 M) and 9.00 (+6 M), and 8.55 fails head height -- a deck thick
+# enough to walk on leaves 2.02 m under it. 9.00 is the answer, and it lands the gallery SOFFIT at
+# 8.775 and the lower press top at 8.325, which puts the whole deck clear above the 8.55 window
+# heads: the daylight goes under the gallery and not into it.
+#
+# THE VAULT SPRINGS AT 10.35 AND NOT AT THE BRIEF'S 9.30, for the same kind of reason. 9.30 is
+# 6.30 + 3.00 and 3.00 is not a multiple of M either. 10.35 is 6.30 + 9 M, it is the top of the
+# upper press, and it is the highest springing a room capped at 11.60 can carry: rise 1.125, half
+# span 1.575, so R = (1.125^2 + 1.575^2) / (2 x 1.125) = 1.665 = 3.7 M and the centre falls on
+# 9.81. sqrt(1.665^2 - 1.575^2) is exactly 0.54, so the vault meets both walls exactly on the
+# cornice line and not a millimetre above or below it. A semicircular barrel over this span would
+# crown at 11.925 and there is no room for it.
+#
+# HEAD HEIGHT, MEASURED AND NOT ASSUMED, because this is the one room in the building where it can
+# fail in three separate places:
+#
+#   under the gallery      8.775 - 6.30 = 2.475      soffit, clear of everything
+#   under a bracket        8.550 - 6.30 = 2.250      the brackets hang 0.225 and no more
+#   under the lower cyma   8.415 - 6.30 = 2.115      the lowest projecting moulding in the room,
+#                                                    and it is at the face of the bookcase
+#   through the door       8.700 - 6.30 = 2.400      exactly the brief's figure for a door
+#   ON THE GALLERY         the vault at the face of the upper press, z = -4.08, is
+#                          9.81 + sqrt(1.665^2 - 0.945^2) = 11.181, so 11.181 - 9.00 = 2.181
+#
+# THAT LAST NUMBER IS WHY THE PRESSES ARE 0.63 DEEP (1.4 M) AND NOT 0.45. At 0.45 the walkway
+# begins 1.125 from the vault's axis and the clear height there is 2.037 -- under the brief's 2.10
+# by 63 mm. The vault cannot be raised (11.60 is the ceiling) so the walkway had to be moved
+# inboard, and a deeper press is what moves it. It also gives the folios somewhere to go. The
+# upper carcase is 0.585 and its cornice 0.63, so 0.63 is the face everything above was measured
+# from and nothing on the gallery oversails it.
+#
+# MEASURED, `--part part_library` at the contract's metre 32, in the probe's own box:
+#   3,041,212 voxels, 92.81 m3, 663.31 m2 of surface, ONE COMPONENT and nothing adrift.
+#   The books on their own are 6.76 m3 and 212 m2 -- 0.98 faces to a voxel of volume, against 0.22
+#   for the room as a whole, because the room as a whole is mostly the vault's haunch fill.
+#   About two thousand spines, in twelve ranks, on eight runs of shelving.
+#
+# AT METRE 16 IT IS 53 COMPONENTS AND THAT IS THE RIGHT ANSWER, NOT A FAULT. A 0.030 spine, a
+# 0.045 shelf board and a 0.045 grille bar are all UNDER one voxel at metre 16, so half the room
+# dissolves and what is left of it is in pieces. The contract's metre is 32 and this room is the
+# reason it is not 16.
+#
+# WHERE THE DOOR IS, AND WHY IT IS NOT WHERE THE BRIEF SAID. The brief gives the stair's gallery as
+# x -15.07..-11.86, z -6.57..-4.74 and says to meet it. Run `--part part_stair` and it reports
+# worldbox z 3.000 .. 6.875: the stair and its gallery are on the NORTH front, x +-11.635..15.235,
+# z 4.515..6.735. The z in the brief is sign-flipped. So the stair does not touch this room at all,
+# and the only way from its gallery to here is south down the west wing in the 1.15 m strip between
+# the outer wall at 15.10 and the west face of the halls block at 13.95. The door is therefore in
+# the NORTH wall, x -14.85..-13.95, 0.90 wide (D) and 2.40 high, which is exactly that strip less
+# this file's own 0.25 lining. Its east jamb is flush with the halls block's west face so it cannot
+# nick it. What is north of it is nobody's yet.
+#
+# WHAT I DID NOT BUILD AND LEFT CLEAR. Everything north of z = -3.00 (the halls' vaults reach 7.00
+# there), everything above 11.60, everything east of x = -6.00, and the outer walls themselves --
+# the south and west faces of this room ARE walls.clip's wall, and this file only laps 0.05 into
+# them. The three south window reveals and the two west ones are cut out of that lap by copies of
+# windows.clip's own opening boxes, so the probe shows the room lit; the manifest cuts them again
+# through void_windows and the two cuts agree because they are the same numbers.
+#
+# THINGS THAT ARE INSIDE THE ROOM'S AIR AND MUST SURVIVE IT: every book, every shelf, the globes,
+# the desks, the ladder, the sconces, the balustrade and the door architrave. They are all in
+# `part_library` and `void_library` is written as `library_air` LESS `part_library`, which is the
+# only form that cannot go stale when a fitting is added. See the long note at the bottom of
+# clips/facility.clip about the day every sconce in the building went missing.
+
+include "_contract.clip"
+include "_order.clip"
+
+# ================================================================================================
+# THE BLOCK, THE AIR, AND THE VAULT
+# ================================================================================================
+#
+# Walls, floor and vault are one mass with a hole in it, which is what a vaulted room is and what
+# makes this part one component. The block laps 0.05 into the outer wall on the west and south and
+# stops dead on the brief's own limits north (z = -3.00) and east (x = -6.00).
+
+let library_block = box -15.15 6.00 -6.65   -6.00 11.60 -3.00 round=0.015
+
+let library_room = box -14.85 6.30 -6.60   -6.75 10.35 -3.45
+
+# The barrel: axis along the room, on the room's centre line in z, at the height worked out in the
+# header. Its section meets the two long walls exactly on 10.35.
+let library_barrel = cylinder -10.80 9.81 -5.025  r=1.665 h=8.10 axis=x
+
+# THE LUNETTES, one to a bay, and they are written as three FULL-DEPTH transverse cylinders on
+# purpose. A lunette of radius 0.90 springing from 10.35 crowns at 11.25, which is 0.225 BELOW the
+# main crown, so in the middle of the room the union takes the barrel and the lunette is swallowed
+# whole. It only emerges where the barrel has fallen below 11.25, which is within 0.739 m of either
+# long wall. One cylinder therefore draws the lunette over the window AND its blind twin opposite,
+# both the right size, both dying into the barrel on a curve, and neither of them written twice.
+let library_lun_a = cylinder -13.50 10.35 -5.025  r=0.90 h=3.30 axis=z
+let library_lun_b = cylinder -10.80 10.35 -5.025  r=0.90 h=3.30 axis=z
+let library_lun_c = cylinder  -8.10 10.35 -5.025  r=0.90 h=3.30 axis=z
+
+# `smooth=0.02` is the round the brief asks of every stone arris, applied to the one arris here
+# that cannot take a `round=` key: the groin where a lunette meets the barrel. 0.02 is two thirds
+# of a voxel at metre 32, so it is a sub-voxel curved crease and not a comfortable one. Do not
+# widen it. The key goes BEFORE the block on a union; after it, it parses as a statement.
+let library_webs = union smooth=0.02 { library_barrel library_lun_a library_lun_b library_lun_c }
+
+# Clipped to the room in plan and reaching 0.15 below the springing so the vault is certainly one
+# solid with the walls under it. The clip in z is not optional: at 10.20 the barrel is 1.619 from
+# its axis and the room is only 1.575, so without it the vault would eat into both walls.
+let library_vbox  = box -14.85 10.20 -6.60   -6.75 11.60 -3.45
+let library_vault = intersection { library_webs library_vbox }
+
+# The doorway: 0.90 wide, 2.40 high, through the north wall at the west end. It runs 0.02 past the
+# far face so the cut is certain, and stops on x = -13.95 so it cannot touch the halls block.
+let library_door = box -14.85 6.30 -3.50   -13.95 8.70 -2.98
+
+# ================================================================================================
+# THE SUNK PANELS - the fresco, which in a renderer with no textures has to be made of matter
+# ================================================================================================
+#
+# Three in the crown of the vault, one to a bay, between gilt ribs 0.225 wide; six in the wall
+# faces under the lunettes; one in each end tympanum. All of them 0.09 deep (M/5) and not 0.045.
+# halls.clip sank its first lunette panels one and a half voxels and they did not exist; this room
+# has more light than that one but the panels are 3 m over a reader's head and the argument holds.
+
+let library_vt_out = cylinder -10.80 9.81 -5.025  r=1.755 h=8.10 axis=x
+let library_vt_in  = cylinder -10.80 9.81 -5.025  r=1.665 h=8.30 axis=x
+let library_vt_sh  = difference { library_vt_out library_vt_in }
+
+let library_vp_a = intersection { library_vt_sh  box -14.7375 10.35 -5.85  -12.2625 11.60 -4.20 }
+let library_vp_b = intersection { library_vt_sh  box -12.0375 10.35 -5.85   -9.5625 11.60 -4.20 }
+let library_vp_c = intersection { library_vt_sh  box  -9.3375 10.35 -5.85   -6.8625 11.60 -4.20 }
+let library_vpans = union { library_vp_a library_vp_b library_vp_c }
+
+# One lunette tympanum, drawn at the origin and carried to its six places. 0.81 is the lunette's
+# 0.90 less a margin of 0.09.
+let library_lp_one = intersection {
+    cylinder 0 10.35 0  r=0.81 h=0.30 axis=z
+    box -0.90 10.35 -0.045   0.90 11.40 0.045
+}
+let library_lpans = union {
+    translate { library_lp_one } -13.50 0 -6.645
+    translate { library_lp_one } -10.80 0 -6.645
+    translate { library_lp_one }  -8.10 0 -6.645
+    translate { library_lp_one } -13.50 0 -3.405
+    translate { library_lp_one } -10.80 0 -3.405
+    translate { library_lp_one }  -8.10 0 -3.405
+}
+
+# The two end tympana: the barrel's own section struck 0.09 smaller, sunk into the end walls.
+let library_ep_w = intersection {
+    cylinder -14.805 9.81 -5.025  r=1.575 h=0.09 axis=x
+    box -14.85 10.35 -6.60   -14.76 11.60 -3.45
+}
+let library_ep_e = intersection {
+    cylinder  -6.705 9.81 -5.025  r=1.575 h=0.09 axis=x
+    box -6.84 10.35 -6.60   -6.66 11.60 -3.45
+}
+
+# The blind arch in the east wall: 1.80 wide (4 M), 0.09 deep, springing at 7.65 and crowning at
+# 8.55 on the gallery soffit line. It is the far wall of a room eight metres long and the one thing
+# standing at the end of it; a globe and a desk stand in front of it.
+let library_blind = intersection {
+    union { box -6.75 6.75 -5.925   -6.66 7.65 -4.125
+            cylinder -6.705 7.65 -5.025  r=0.90 h=0.09 axis=x }
+    box -6.75 6.75 -5.925   -6.66 8.55 -4.125
+}
+
+let library_recess = union { library_vpans library_lpans library_ep_w library_ep_e library_blind }
+
+# ================================================================================================
+# THE WINDOW REVEALS
+# ================================================================================================
+#
+# Copies of windows.clip's own opening boxes, cut out of this file's 0.05 lap and 0.25 lining so
+# the probe shows the room as the manifest will. They are NOT in `library_air`: windows.clip
+# subtracts its own openings from the building through `void_windows`, and a second fragment
+# putting the same hole in `void_library` would be two files claiming one cut.
+#
+# windows_pn_cut is (-0.675, 6.30, -0.18) to (0.675, 8.55, 1.80) about its own axis, which on the
+# south front lands z -7.68 .. -5.70 and on the west front x -16.18 .. -14.20.
+let library_wr_s = box -0.675 6.30 -6.70   0.675 8.55 -5.65
+let library_wr_w = box -15.20 6.30 -0.675   -14.15 8.55 0.675
+let library_reveals = union {
+    translate { library_wr_s } -13.50 0 0
+    translate { library_wr_s } -10.80 0 0
+    translate { library_wr_s }  -8.10 0 0
+    translate { library_wr_w } 0 0 -5.40
+    translate { library_wr_w } 0 0 -2.70
+}
+
+let library_air   = union { library_room library_vault library_door library_recess }
+let library_cuts  = union { library_air library_reveals }
+let library_shell = difference { library_block library_cuts }
+
+# ================================================================================================
+# THE PRESSES - the lower tier, 6.30 to 8.325, 0.63 deep (1.4 M), round all four walls
+# ================================================================================================
+#
+# Written as RINGS - the difference of two boxes, twice over - so that one pair of shapes lines all
+# four walls and every mitre is free. `lib_low_out` is the carcase's outside; `lib_low_hol` is the
+# space inside it, which reaches 0.09 PAST the front so the press is open where a press is open and
+# closed on its back, its ends, its plinth and its top. What is left is a 0.045 shell with a 0.15
+# back, which is what a bookcase is.
+#
+# THE PRESSES ARE 0.63 DEEP AND THAT IS A HEAD-HEIGHT NUMBER, not a joinery one. See the section in
+# the header: at 0.45 the gallery walkway above begins where the vault is 11.037 and the clearance
+# is 2.037, which is 63 mm under the brief's 2.10. The press is what holds the walkway inboard.
+
+let lib_low_out = difference {
+    box -14.90 6.30 -6.65    -6.70 8.325 -3.40  round=0.012
+    box -14.22 6.30 -5.97    -7.38 8.325 -4.08
+}
+let lib_low_hol = difference {
+    box -14.75 6.525 -6.50   -6.85 8.28 -3.55
+    box -14.31 6.525 -6.06   -7.29 8.28 -3.99
+}
+let lib_low_ring = difference { lib_low_out lib_low_hol }
+
+# WHERE THE LOWER TIER IS NOT. Three south windows, one west window, the doorway, and the blind
+# arch in the east wall. The x figures are windows.clip's own openings widened by 0.045 (M/10) so
+# that a press end never lands inside a reveal; the room's four south piers fall out of them as
+# 0.63, 1.26, 1.26 and 0.63, and those are exactly the four zones the south books stand in.
+let lib_low_cut = union {
+    box -15.00 6.20 -3.70   -13.95 8.40 -2.90
+    box -15.00 6.20 -6.12   -14.10 8.40 -4.68
+    box  -7.50 6.20 -5.97    -6.60 8.40 -4.08
+    box -14.22 6.20 -6.70   -12.78 8.40 -5.90
+    box -11.52 6.20 -6.70   -10.08 8.40 -5.90
+    box  -8.82 6.20 -6.70    -7.38 8.40 -5.90
+}
+let lib_low_body = difference { lib_low_ring lib_low_cut }
+
+# The shelves: one ring 0.045 thick drawn on the middle level and repeated 0.36 either way, which
+# puts board tops on 6.525, 6.885, 7.245, 7.605 and 7.965 -- five compartments of 0.36 (0.8 M) with
+# 0.315 clear in each, and the tallest book is 0.288.
+let lib_low_bd = difference {
+    box -14.82 7.20 -6.57    -6.78 7.245 -3.50
+    box -14.22 7.20 -5.97    -7.38 7.245 -4.08
+}
+let lib_low_boards = difference { repeat { lib_low_bd } y=0.36 ny=2  lib_low_cut }
+
+# The uprights, 0.045 wide at 1.35 (3 M), which is five book periods exactly.
+let lib_low_up_n = translate { repeat { box -0.0225 6.48 -4.08   0.0225 8.325 -3.50 } x=1.35 nx=3 } -10.80 0 0
+let lib_low_up_s = translate { repeat { box -0.0225 6.48 -6.57   0.0225 8.325 -5.97 } x=1.35 nx=3 } -10.80 0 0
+let lib_low_ups  = difference { union { lib_low_up_n lib_low_up_s } lib_low_cut }
+
+# ================================================================================================
+# THE PRESSES - the upper tier, 9.00 to 10.125, 0.585 deep, standing on the gallery
+# ================================================================================================
+#
+# The same two rings a module and a half higher, and here they run unbroken: there is no opening in
+# any of the four walls above 8.55, so the upper tier is continuous where the lower is cut to
+# pieces. Its shelf pitch is 0.30 and not 0.36 and its book period is 0.315 and not 0.27 -- see
+# load 4 at the top: two tiers of the same thing at the same rhythm is a comb.
+let lib_up_out = difference {
+    box -14.90  9.00 -6.65    -6.70 10.125 -3.40  round=0.012
+    box -14.265 9.00 -6.015   -7.335 10.125 -4.035
+}
+let lib_up_hol = difference {
+    box -14.75  9.225 -6.50   -6.85 10.08 -3.55
+    box -14.355 9.225 -6.105  -7.245 10.08 -3.945
+}
+let lib_up_body = difference { lib_up_out lib_up_hol }
+
+let lib_up_bd = difference {
+    box -14.82  9.48 -6.57    -6.78 9.525 -3.50
+    box -14.265 9.48 -6.015   -7.335 9.525 -4.035
+}
+let lib_up_boards = repeat { lib_up_bd } y=0.30 ny=1
+
+# 1.575 (3.5 M) here, which is five upper book periods, against 1.35 below.
+let lib_up_up_n = translate { repeat { box -0.0225 9.18 -4.035  0.0225 10.125 -3.50 } x=1.575 nx=2 } -10.80 0 0
+let lib_up_up_s = translate { repeat { box -0.0225 9.18 -6.57   0.0225 10.125 -6.015 } x=1.575 nx=2 } -10.80 0 0
+let lib_up_ups  = union { lib_up_up_n lib_up_up_s }
+
+# ================================================================================================
+# THE CORNICES - the lower one carries the gallery, the upper one is the vault's springing line
+# ================================================================================================
+#
+# Both are rings again, in three courses, so they mitre at the four corners for nothing:
+#
+#   8.325 - 8.415  frieze   flush with the press face, 0.63 from the wall
+#   8.415 - 8.595  bed      a cyma reversa out to 0.81, written as a run on each of the four walls
+#                           because a moulding IS a straight length and there is no other way
+#   8.595 - 8.775  corona   0.90 from the wall, and its soffit is the gallery's own bed
+#
+# 8.415 IS A HEAD-HEIGHT NUMBER TOO. The bed mould is the lowest thing in this room that projects
+# over a floor somebody walks on, and its foot had to clear 6.30 + 2.10 = 8.40. The frieze between
+# 8.325 and 8.415 exists for no other reason: without it the cyma starts at the press top and the
+# clearance at the bookcase face is 2.025.
+let lib_lco_frieze = difference {
+    box -14.90 8.325 -6.65    -6.70 8.415 -3.40  round=0.010
+    box -14.22 8.28  -5.97    -7.38 8.46  -4.08
+}
+let lib_lco_back = difference {
+    box -14.90 8.415 -6.65    -6.70 8.595 -3.40
+    box -14.22 8.375 -5.97    -7.38 8.635 -4.08
+}
+# The run key is not cosmetic: with run=x the section is read in (z, y), with the default run=z in
+# (x, y). A moulding written eight metres long across its own projection is a flat slab.
+let lib_lco_bed_n = cyma_reversa -13.95 8.415 -4.08    -6.75 8.595 -4.26  run=x
+let lib_lco_bed_s = cyma_reversa -14.85 8.415 -5.97    -6.75 8.595 -5.79  run=x
+let lib_lco_bed_w = cyma_reversa -14.22 8.415 -6.60   -14.04 8.595 -3.45
+let lib_lco_bed_e = cyma_reversa  -7.38 8.415 -6.60    -7.56 8.595 -3.45
+let lib_lco_corona = difference {
+    box -14.90 8.595 -6.65    -6.70 8.775 -3.40  round=0.010
+    box -13.95 8.55  -5.70    -7.65 8.83  -4.35
+}
+let lib_lco = union {
+    lib_lco_frieze lib_lco_back
+    lib_lco_bed_n lib_lco_bed_s lib_lco_bed_w lib_lco_bed_e
+    lib_lco_corona
+}
+
+# The upper cornice stops flush at 0.63 from the wall and does NOT oversail, because the gallery
+# walkway is under it and 10.125 is only 1.125 above the deck. Everything the walkway's 2.181 m of
+# clearance was measured from is this face.
+let lib_uco_frieze = difference {
+    box -14.90 10.125 -6.65   -6.70 10.215 -3.40  round=0.010
+    box -14.265 10.08 -6.015  -7.335 10.26 -4.035
+}
+let lib_uco_bed_n = cyma_reversa -14.85 10.215 -4.035  -6.75 10.305 -4.08  run=x
+let lib_uco_bed_s = cyma_reversa -14.85 10.215 -6.015  -6.75 10.305 -5.97  run=x
+let lib_uco_bed_w = cyma_reversa -14.265 10.215 -6.60  -14.22 10.305 -3.45
+let lib_uco_bed_e = cyma_reversa  -7.335 10.215 -6.60   -7.38 10.305 -3.45
+let lib_uco_corona = difference {
+    box -14.90 10.215 -6.65   -6.70 10.35 -3.40  round=0.010
+    box -14.22 10.17  -5.97   -7.38 10.40 -4.08
+}
+let lib_uco = union {
+    lib_uco_frieze
+    lib_uco_bed_n lib_uco_bed_s lib_uco_bed_w lib_uco_bed_e
+    lib_uco_corona
+}
+
+# ================================================================================================
+# THE BOOKS - load 1, and the reason this room is in the building
+# ================================================================================================
+#
+# One period of the lower rank is 0.270 (0.6 M) and holds six spines and one gap:
+#
+#   a  0.045 wide   0.288 tall   full depth        d  0.045   0.198   set back 0.015
+#   b  0.030        0.225        set back 0.0225   e  0.030   0.279   full depth
+#   c  0.045        0.261        full depth        f  0.045   0.243   set back 0.0225
+#                                                  the gap 0.030
+#
+# 0.045 is M/10 and 0.030 is M/15 -- the same two numbers as a dentil and a flute fillet, which is
+# not a coincidence: they are the widths this building has already decided are the thinnest matter
+# it will carry. At metre 32 they are 1.44 and 0.96 voxels, and the 0.030 gap between one rank and
+# the next is 0.96 as well. Six heights, three depths and a 0.030 gap is what stops 160 spines in a
+# row reading as a comb; variation does the rest.
+#
+# Each rank is drawn ONCE at the origin, repeated 0.27 along x and 0.36 up y, and then dropped into
+# a zone box for each wall. The zone is what makes the ends of the shelves right, and it is a
+# difference against the uprights and the sconces, so no spine is ever half behind either.
+#
+# THE BOOKS SIT 0.06 INTO THE BOARD THEY STAND ON, AND THE FIRST PASS SANK THEM 0.03. A book that
+# laps its shelf by 0.03 laps it by 0.96 of a voxel at metre 32, and whether the one voxel they
+# share materialises depends on where the shelf falls against the grid: whole periods of six books
+# came back adrift, six of them, in the two end piers, at two shelf levels and not at the other
+# three. 0.06 is two voxels and cannot land between them.
+
+let lib_bl_a = box 0.000 -0.06 0   0.045 0.288 0.3150
+let lib_bl_b = box 0.045 -0.06 0   0.075 0.225 0.2925
+let lib_bl_c = box 0.075 -0.06 0   0.120 0.261 0.3150
+let lib_bl_d = box 0.120 -0.06 0   0.165 0.198 0.3000
+let lib_bl_e = box 0.165 -0.06 0   0.195 0.279 0.3150
+let lib_bl_f = box 0.195 -0.06 0   0.240 0.243 0.2925
+
+let lib_fl_a = repeat { repeat { lib_bl_a } x=0.27 nx=17 } y=0.36 ny=2
+let lib_fl_b = repeat { repeat { lib_bl_b } x=0.27 nx=17 } y=0.36 ny=2
+let lib_fl_c = repeat { repeat { lib_bl_c } x=0.27 nx=17 } y=0.36 ny=2
+let lib_fl_d = repeat { repeat { lib_bl_d } x=0.27 nx=17 } y=0.36 ny=2
+let lib_fl_e = repeat { repeat { lib_bl_e } x=0.27 nx=17 } y=0.36 ny=2
+let lib_fl_f = repeat { repeat { lib_bl_f } x=0.27 nx=17 } y=0.36 ny=2
+
+# The sconces stand on the press faces at the two middle bay axes, so the books stand aside for
+# them. Bay axes are -12.15 and -9.45; the boxes are the sconce plus a margin.
+let lib_zl_ex = union {
+    lib_low_up_n lib_low_up_s
+    box -12.42 7.58 -4.40   -11.88 8.22 -3.90
+    box  -9.72 7.58 -4.40    -9.18 8.22 -3.90
+    box -12.42 7.58 -6.10   -11.88 8.22 -5.60
+    box  -9.72 7.58 -6.10    -9.18 8.22 -5.60
+}
+let lib_zl_n = difference { box -13.77 6.44 -4.06   -6.75 8.30 -3.70   lib_zl_ex }
+let lib_zl_s = difference {
+    union {
+        box -14.85 6.44 -6.35  -14.31 8.30 -5.99
+        box -12.69 6.44 -6.35  -11.61 8.30 -5.99
+        box  -9.99 6.44 -6.35   -8.91 8.30 -5.99
+        box  -7.29 6.44 -6.35   -6.75 8.30 -5.99
+    }
+    lib_zl_ex
+}
+
+# North faces south, so its rank is the same rank turned half a turn about y. A rotation is an
+# isometry and carries a box; it is caught in the zone box in any case.
+let lib_bkl_a = union { intersection { translate { rotate { lib_fl_a } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
+                        intersection { translate { lib_fl_a } -10.80 7.245 -6.33  lib_zl_s } }
+let lib_bkl_b = union { intersection { translate { rotate { lib_fl_b } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
+                        intersection { translate { lib_fl_b } -10.80 7.245 -6.33  lib_zl_s } }
+let lib_bkl_c = union { intersection { translate { rotate { lib_fl_c } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
+                        intersection { translate { lib_fl_c } -10.80 7.245 -6.33  lib_zl_s } }
+let lib_bkl_d = union { intersection { translate { rotate { lib_fl_d } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
+                        intersection { translate { lib_fl_d } -10.80 7.245 -6.33  lib_zl_s } }
+let lib_bkl_e = union { intersection { translate { rotate { lib_fl_e } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
+                        intersection { translate { lib_fl_e } -10.80 7.245 -6.33  lib_zl_s } }
+let lib_bkl_f = union { intersection { translate { rotate { lib_fl_f } y=0.5 } -10.80 7.245 -3.72  lib_zl_n }
+                        intersection { translate { lib_fl_f } -10.80 7.245 -6.33  lib_zl_s } }
+
+# The upper rank: period 0.315 (0.7 M), six spines, TWO gaps, and one width of 0.048 which is the
+# only number in this file that is not a module fraction. It is there on purpose -- a rank whose
+# every width divides the same way beats against the voxel grid, and one width that does not is
+# what breaks the beat. Shelf pitch 0.30, clear 0.255, tallest book 0.234.
+let lib_bu_a = box 0.000 -0.06 0   0.045 0.234 0.2700
+let lib_bu_b = box 0.045 -0.06 0   0.081 0.180 0.2550
+let lib_bu_c = box 0.081 -0.06 0   0.111 0.216 0.2700
+let lib_bu_d = box 0.135 -0.06 0   0.183 0.225 0.2475
+let lib_bu_e = box 0.183 -0.06 0   0.216 0.189 0.2700
+let lib_bu_f = box 0.216 -0.06 0   0.261 0.207 0.2550
+
+let lib_fu_a = repeat { repeat { lib_bu_a } x=0.315 nx=15 } y=0.30 ny=1
+let lib_fu_b = repeat { repeat { lib_bu_b } x=0.315 nx=15 } y=0.30 ny=1
+let lib_fu_c = repeat { repeat { lib_bu_c } x=0.315 nx=15 } y=0.30 ny=1
+let lib_fu_d = repeat { repeat { lib_bu_d } x=0.315 nx=15 } y=0.30 ny=1
+let lib_fu_e = repeat { repeat { lib_bu_e } x=0.315 nx=15 } y=0.30 ny=1
+let lib_fu_f = repeat { repeat { lib_bu_f } x=0.315 nx=15 } y=0.30 ny=1
+
+let lib_zu_n = difference { box -14.85 9.14 -4.00   -6.975 10.07 -3.70   lib_up_ups }
+let lib_zu_s = difference { box -14.85 9.14 -6.31   -6.975 10.07 -6.02   lib_up_ups }
+
+let lib_bku_a = union { intersection { translate { rotate { lib_fu_a } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
+                        intersection { translate { lib_fu_a } -10.755 9.525 -6.30  lib_zu_s } }
+let lib_bku_b = union { intersection { translate { rotate { lib_fu_b } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
+                        intersection { translate { lib_fu_b } -10.755 9.525 -6.30  lib_zu_s } }
+let lib_bku_c = union { intersection { translate { rotate { lib_fu_c } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
+                        intersection { translate { lib_fu_c } -10.755 9.525 -6.30  lib_zu_s } }
+let lib_bku_d = union { intersection { translate { rotate { lib_fu_d } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
+                        intersection { translate { lib_fu_d } -10.755 9.525 -6.30  lib_zu_s } }
+let lib_bku_e = union { intersection { translate { rotate { lib_fu_e } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
+                        intersection { translate { lib_fu_e } -10.755 9.525 -6.30  lib_zu_s } }
+let lib_bku_f = union { intersection { translate { rotate { lib_fu_f } y=0.5 } -10.80 9.525 -3.72  lib_zu_n }
+                        intersection { translate { lib_fu_f } -10.755 9.525 -6.30  lib_zu_s } }
+
+let lib_books = union {
+    lib_bkl_a lib_bkl_b lib_bkl_c lib_bkl_d lib_bkl_e lib_bkl_f
+    lib_bku_a lib_bku_b lib_bku_c lib_bku_d lib_bku_e lib_bku_f
+}
+
+# ================================================================================================
+# THE GALLERY - a ring 1.215 wide (2.7 M) round a well 0.72 wide, deck top 9.00, soffit 8.775
+# ================================================================================================
+#
+# Four runs, bedded 0.05 into all four walls, leaving a light well x -13.635 .. -7.965 by
+# z -5.385 .. -4.665. The well is the ONLY way daylight reaches the upper half of this room: the
+# windows are all below the deck, so everything above 8.775 is lit by what comes back up through a
+# slot 0.72 m wide and 5.67 long. That is load 2, and it is why the well is not wider.
+let library_deck = union {
+    box -14.90 8.775 -4.665   -6.70 9.00 -3.40   round=0.012
+    box -14.90 8.775 -6.65    -6.70 9.00 -5.385  round=0.012
+    box -14.90 8.775 -6.65   -13.635 9.00 -3.40  round=0.012
+    box  -7.965 8.775 -6.65   -6.70 9.00 -3.40   round=0.012
+}
+
+# THE BRACKETS. The cornice below carries 0.90 of the 1.215; the last 0.315 is carried on carved
+# consoles at 1.35 (3 M), and they hang 0.225 and not a millimetre more. 8.775 - 0.225 = 8.55, and
+# 8.55 - 6.30 = 2.25, which is the clearance under them. A console that hung the 0.54 its scroll
+# wants would put 1.71 m over the floor of a room people read in.
+let lib_brk_blank = box -0.105 -0.2175 -0.315   0.105 0.00 0.05
+let lib_brk_cove  = intersection {
+    cylinder 0 -0.09 -0.315  r=0.18 h=0.30 axis=x
+    box -0.20 -0.40 -0.60   0.20 -0.09 0.10
+}
+let lib_bracket = difference { lib_brk_blank lib_brk_cove }
+
+let lib_brk_blank_x = box -0.315 -0.2175 -0.105   0.05 0.00 0.105
+let lib_brk_cove_x  = intersection {
+    cylinder -0.315 -0.09 0  r=0.18 h=0.30 axis=z
+    box -0.60 -0.40 -0.20   0.10 -0.09 0.20
+}
+let lib_bracket_x = difference { lib_brk_blank_x lib_brk_cove_x }
+
+let lib_brk_row_z = repeat { lib_bracket } x=1.35 nx=3
+let lib_brk_row_x = repeat { lib_bracket_x } z=1.35 nz=1
+let library_brackets = union {
+    translate { lib_brk_row_z } -10.80 8.775 -4.35
+    translate { rotate { lib_brk_row_z } y=0.5 } -10.80 8.775 -5.70
+    translate { lib_brk_row_x } -7.65 8.775 -5.025
+    translate { rotate { lib_brk_row_x } y=0.5 } -13.95 8.775 -5.025
+}
+
+# THE BALUSTRADE. _order.clip's own turned baluster, 0.70 tall with a 0.063 neck -- two voxels --
+# at 0.225 (M/2) centres, which leaves 0.045 of daylight between two plinths: one and a half
+# voxels, the same gap as a dentil. Base rail 9.00 to 9.12, balusters 9.07 to 9.77, handrail 9.72
+# to 9.90, so every joint laps 0.05 and the rail stands 0.90 (2 M) over the deck.
+let lib_bal_base = difference {
+    box -13.725 9.00 -5.475   -7.875 9.12 -4.575  round=0.010
+    box -13.545 8.95 -5.295   -8.055 9.17 -4.755
+}
+let lib_handrail = difference {
+    box -13.725 9.72 -5.475   -7.875 9.90 -4.575  round=0.015
+    box -13.545 9.67 -5.295   -8.055 9.95 -4.755
+}
+let lib_bal_one = translate { ionic_baluster } 0 9.07 0
+let library_balusters = union {
+    translate { repeat { lib_bal_one } x=0.225 nx=11 } -10.80 0 -4.575
+    translate { repeat { lib_bal_one } x=0.225 nx=11 } -10.80 0 -5.475
+    translate { repeat { lib_bal_one } z=0.225 nz=1 } -13.725 0 -5.025
+    translate { repeat { lib_bal_one } z=0.225 nz=1 }  -7.875 0 -5.025
+}
+let lib_newel_one = box -0.09 9.00 -0.09   0.09 9.99 0.09 round=0.012
+let library_newels = union {
+    translate { lib_newel_one } -13.725 0 -5.475
+    translate { lib_newel_one } -13.725 0 -4.575
+    translate { lib_newel_one }  -7.875 0 -5.475
+    translate { lib_newel_one }  -7.875 0 -4.575
+}
+
+# ================================================================================================
+# THE GRILLES - ormolu lattice over the two end presses, the closed cases
+# ================================================================================================
+#
+# The west and east cases hold nothing a reader takes down, so they are barred rather than open:
+# bars 0.045 square (M/10) at 0.09 (M/5) centres both ways -- thirty-six of them crossing nineteen
+# more, in a polished metal, one and a half voxels thick at metre 32 and UNDER ONE at metre 16.
+#
+# THEY WERE 0.0225 AND HAD TO BE THICKENED, WHICH IS THE ONE PLACE IN THIS FILE THIN MATTER LOST.
+# At 0.0225 a bar is 0.72 of a voxel, and where two of them cross, whether the shared voxel exists
+# is decided by where the lattice falls against the grid: the grille arrived in a dozen pieces. The
+# spines are still 0.030 and the shelf boards still 0.045 -- what could stay thin stayed thin.
+let lib_gr_bar_wv = box -14.2425 6.48 -0.0225   -14.1975 8.30 0.0225
+let lib_gr_bar_wh = box -14.2425 -0.0225 -6.645  -14.1975 0.0225 -3.495
+# THE CUT ROUND THE OPENINGS IS ITS OWN AND NOT `lib_low_cut`, AND ITS EDGES ARE ON BAR CENTRES.
+# Cut anywhere else and every horizontal bar ends in a stub 0.05 long past the last vertical it
+# crosses, which is two voxels of ormolu with nothing holding them: eleven separate floating
+# components, all of them invisible, all of them counted.
+let lib_gr_cut = union {
+    box -15.00 6.20 -6.105  -14.10 8.40 -4.755
+    box  -7.50 6.20 -5.925   -6.60 8.40 -4.125
+}
+let lib_grille_w = difference {
+    union { translate { repeat { lib_gr_bar_wv } z=0.09 nz=18 } 0 0 -5.025
+            translate { repeat { lib_gr_bar_wh } y=0.09 ny=9 } 0 7.4025 0 }
+    lib_gr_cut
+}
+let lib_gr_bar_ev = box -7.4025 6.48 -0.0225   -7.3575 8.30 0.0225
+let lib_gr_bar_eh = box -7.4025 -0.0225 -6.645  -7.3575 0.0225 -3.495
+let lib_grille_e = difference {
+    union { translate { repeat { lib_gr_bar_ev } z=0.09 nz=18 } 0 0 -5.025
+            translate { repeat { lib_gr_bar_eh } y=0.09 ny=9 } 0 7.4025 0 }
+    lib_gr_cut
+}
+let library_grilles = union { lib_grille_w lib_grille_e }
+
+# ================================================================================================
+# THE DOORCASE - the only opening, and the architrave has to stand INSIDE the air it dresses
+# ================================================================================================
+#
+# It projects 0.045 into the room, which puts it inside `library_room` and therefore inside
+# `library_air`. It survives because `void_library` is written as the air LESS this part; written
+# as a bare box it would delete its own architrave.
+let library_doorcase = difference {
+    box -15.00 6.30 -3.495   -13.80 8.865 -3.45  round=0.010
+    box -14.85 6.25 -3.55    -13.95 8.70  -3.40
+}
+
+# ================================================================================================
+# THE SCONCES - ormolu, wax tapers, taper flames
+# ================================================================================================
+#
+# Four on the press faces at the two middle bay axes, their plates from 7.65 to 8.10 so the flame
+# stands 1.845 m over the floor -- the same height fittings.clip hangs the hall sconces at -- and
+# six more on the gallery standards, where they are the only light the vault will ever get from
+# below. The books stand aside for the four lower ones; see `lib_zl_ex`.
+let lib_scn_plate = box -0.135 0 -0.09   0.135 0.45 0.05  round=0.012
+let lib_scn_arm   = capsule 0.045 0.36 -0.05   0.18 0.30 -0.24  r=0.036
+let lib_scn_pan   = cylinder 0.18 0.285 -0.24  r=0.081 h=0.045 axis=y
+let lib_scn_wax1  = cylinder 0.18 0.375 -0.24  r=0.027 h=0.18 axis=y
+let lib_scn_fl1   = ellipsoid 0.18 0.495 -0.24  rx=0.024 ry=0.045 rz=0.024
+let lib_scn_metal = union { lib_scn_plate  mirror { union { lib_scn_arm lib_scn_pan } } axis=x }
+let lib_scn_wax   = mirror { lib_scn_wax1 } axis=x
+let lib_scn_flame = mirror { lib_scn_fl1 } axis=x
+
+let lib_std_stem = cylinder 0 10.10 0  r=0.036 h=0.50 axis=y
+let lib_std_pan  = cylinder 0 10.3725 0  r=0.081 h=0.045 axis=y
+let lib_std_wax1 = cylinder 0 10.485 0  r=0.027 h=0.225 axis=y
+let lib_std_fl1  = ellipsoid 0 10.635 0  rx=0.024 ry=0.045 rz=0.024
+let lib_std_metal = union { lib_std_stem lib_std_pan }
+
+let library_scn_metal = union {
+    translate { lib_scn_metal } -12.15 7.65 -4.08
+    translate { lib_scn_metal }  -9.45 7.65 -4.08
+    translate { rotate { lib_scn_metal } y=0.5 } -12.15 7.65 -5.97
+    translate { rotate { lib_scn_metal } y=0.5 }  -9.45 7.65 -5.97
+    translate { lib_std_metal } -13.725 0 -5.475
+    translate { lib_std_metal } -13.725 0 -4.575
+    translate { lib_std_metal }  -7.875 0 -5.475
+    translate { lib_std_metal }  -7.875 0 -4.575
+    translate { lib_std_metal } -10.80 0 -5.475
+    translate { lib_std_metal } -10.80 0 -4.575
+}
+let library_tapers = union {
+    translate { lib_scn_wax } -12.15 7.65 -4.08
+    translate { lib_scn_wax }  -9.45 7.65 -4.08
+    translate { rotate { lib_scn_wax } y=0.5 } -12.15 7.65 -5.97
+    translate { rotate { lib_scn_wax } y=0.5 }  -9.45 7.65 -5.97
+    translate { lib_std_wax1 } -13.725 0 -5.475
+    translate { lib_std_wax1 } -13.725 0 -4.575
+    translate { lib_std_wax1 }  -7.875 0 -5.475
+    translate { lib_std_wax1 }  -7.875 0 -4.575
+    translate { lib_std_wax1 } -10.80 0 -5.475
+    translate { lib_std_wax1 } -10.80 0 -4.575
+}
+let library_flames = union {
+    translate { lib_scn_flame } -12.15 7.65 -4.08
+    translate { lib_scn_flame }  -9.45 7.65 -4.08
+    translate { rotate { lib_scn_flame } y=0.5 } -12.15 7.65 -5.97
+    translate { rotate { lib_scn_flame } y=0.5 }  -9.45 7.65 -5.97
+    translate { lib_std_fl1 } -13.725 0 -5.475
+    translate { lib_std_fl1 } -13.725 0 -4.575
+    translate { lib_std_fl1 }  -7.875 0 -5.475
+    translate { lib_std_fl1 }  -7.875 0 -4.575
+    translate { lib_std_fl1 } -10.80 0 -5.475
+    translate { lib_std_fl1 } -10.80 0 -4.575
+}
+
+# ================================================================================================
+# THE FURNITURE - two globes, two reading desks, and a ladder on a rail
+# ================================================================================================
+#
+# All of it stands 0.05 into the floor. All of it is inside `library_room` and therefore inside
+# `library_air`, and all of it is in `part_library`, which is the only reason any of it survives
+# the manifest subtracting this room from the building.
+
+let lib_glb_base  = box 0 0.00 -1   0.27  0.09 1
+let lib_glb_tor   = bead 0.09 0.09   0.18 0.18
+let lib_glb_shaft = box 0 0.09 -1   0.072 0.72 1
+let lib_glb_knop  = bead 0.072 0.36  0.135 0.495
+let lib_glb_cup   = cyma_reversa 0.072 0.72  0.225 0.81
+let lib_glb_sect  = union { lib_glb_base lib_glb_tor lib_glb_shaft lib_glb_knop lib_glb_cup }
+let lib_glb_stand = revolve { lib_glb_sect } axis=y
+let lib_glb_ball  = sphere 0 1.08 0 r=0.315
+let lib_glb_ring  = torus  0 1.08 0 ring=0.345 tube=0.027 axis=x
+
+let lib_globe_stand = union { lib_glb_stand }
+let library_globes = union {
+    translate { lib_globe_stand } -13.50 6.25 -5.025
+    translate { lib_globe_stand }  -8.10 6.25 -5.025
+}
+let library_globe_balls = union {
+    translate { lib_glb_ball } -13.50 6.25 -5.025
+    translate { lib_glb_ball }  -8.10 6.25 -5.025
+}
+let library_globe_rings = union {
+    translate { lib_glb_ring } -13.50 6.25 -5.025
+    translate { lib_glb_ring }  -8.10 6.25 -5.025
+}
+
+# `mirror` FOLDS the coordinate to the positive side, so the leg has to be drawn on +x and +z.
+# Drawn on -x it is mirrored to a place it is not and the desk arrives with no legs at all.
+let lib_dsk_leg  = box 0.27 0 0.18   0.36 0.72 0.27 round=0.010
+let lib_dsk_legs = mirror { mirror { lib_dsk_leg } axis=x } axis=z
+let lib_dsk_rail = difference {
+    box -0.36 0.540 -0.27    0.36 0.72 0.27
+    box -0.27 0.500 -0.18   0.27 0.76 0.18
+}
+let lib_dsk_top  = wedge -0.45 0.675 -0.36   0.45 0.81 0.36 rise=y run=z
+let lib_dsk_lip  = box -0.45 0.675 -0.36   0.45 0.72 -0.315 round=0.008
+let lib_desk     = union { lib_dsk_legs lib_dsk_rail lib_dsk_top lib_dsk_lip }
+let library_desks = union {
+    translate { lib_desk } -12.15 6.25 -5.025
+    translate { lib_desk }  -9.45 6.25 -5.025
+}
+
+# The ladder rail runs the length of the north press just under its top, on five small brackets,
+# and the ladder stands against it. The rail is 0.054 across: less than two voxels of polished
+# metal, eight metres long, with a book rank behind it at every point.
+let lib_rail       = cylinder -10.80 8.28 -4.20  r=0.027 h=7.20 axis=x
+let lib_rail_brk   = box -0.036 8.235 -4.215   0.036 8.325 -4.05
+let lib_rail_brks  = translate { repeat { lib_rail_brk } x=1.35 nx=2 } -10.80 0 0
+
+let lib_lad_stile  = box -0.0225 6.25 -4.20   0.0225 8.37 -4.155 round=0.008
+let lib_lad_rung   = box -11.8575 -0.018 -4.20   -11.5425 0.018 -4.155
+let library_ladder = union {
+    translate { lib_lad_stile } -11.88 0 0
+    translate { lib_lad_stile } -11.52 0 0
+    translate { repeat { lib_lad_rung } y=0.30 ny=3 } 0 7.29 0
+}
+
+# ================================================================================================
+# THE PART, AND THE VOID
+# ================================================================================================
+
+let library_joinery = union {
+    lib_low_body lib_low_boards lib_low_ups
+    lib_up_body lib_up_boards lib_up_ups
+    lib_lco lib_uco
+    library_deck library_brackets
+    lib_bal_base library_balusters library_newels
+    library_doorcase
+    library_desks library_globes library_ladder
+}
+
+let part_library = union {
+    library_shell
+    library_joinery
+    lib_books
+    library_grilles lib_handrail lib_rail lib_rail_brks
+    library_globe_balls library_globe_rings
+    library_scn_metal library_tapers library_flames
+}
+
+# The air of this room LESS every stone and every stick of joinery in it. Written as a difference
+# against the part itself and never as a list, for the reason the bottom of clips/facility.clip
+# gives: a fitting is by definition a thing standing in somebody's air, and a void written any
+# other way deletes it the day it is added.
+let void_library = difference { library_air part_library }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Later coats cover earlier ones: the shell, then the fresco sunk into it, then the floor laid on
+# it, then the joinery standing on the floor, then the books on the joinery, then the metal, then
+# the flame. `below=0.02` on every rule and never 0 -- the manifest displaces the whole building by
+# 12 mm of grain at the end and a test at zero misses the voxels the displacement made.
+
+paint plaster where=library_shell below=0.02
+
+# THE FRESCO. There are no textures in this engine, so a painted ceiling has to be made of matter:
+# the panels are sunk 0.09 and the gesso is the ground they are painted on, with gold_leaf on the
+# ribs between them and round the lunettes. The paint zones are SHELLS STRADDLING THE SURFACE --
+# a rule keyed on the air inside the vault paints nothing, because the voxels are on the other side
+# of it.
+let lib_pz_pan = difference {
+    cylinder -10.80 9.81 -5.025 r=1.80 h=8.10 axis=x
+    cylinder -10.80 9.81 -5.025 r=1.71 h=8.30 axis=x
+}
+let lib_gesso_vault = union {
+    intersection { lib_pz_pan  box -14.7375 10.35 -5.85  -12.2625 11.60 -4.20 }
+    intersection { lib_pz_pan  box -12.0375 10.35 -5.85   -9.5625 11.60 -4.20 }
+    intersection { lib_pz_pan  box  -9.3375 10.35 -5.85   -6.8625 11.60 -4.20 }
+}
+paint gesso where=lib_gesso_vault below=0.02
+
+let lib_gesso_lun = round { library_lpans } by=0.045
+paint gesso where=lib_gesso_lun below=0.02
+
+let lib_gesso_end = round { union { library_ep_w library_ep_e library_blind } } by=0.045
+paint gesso where=lib_gesso_end below=0.02
+
+let lib_pz_face = difference {
+    cylinder -10.80 9.81 -5.025 r=1.71 h=8.10 axis=x
+    cylinder -10.80 9.81 -5.025 r=1.62 h=8.30 axis=x
+}
+let lib_gold_ribs = union {
+    intersection { lib_pz_face  box -14.85 10.35 -6.60  -14.7375 11.60 -3.45 }
+    intersection { lib_pz_face  box -12.2625 10.35 -6.60  -12.0375 11.60 -3.45 }
+    intersection { lib_pz_face  box  -9.5625 10.35 -6.60   -9.3375 11.60 -3.45 }
+    intersection { lib_pz_face  box  -6.8625 10.35 -6.60   -6.75 11.60 -3.45 }
+}
+paint gold_leaf where=lib_gold_ribs below=0.02
+
+# --- the floor ------------------------------------------------------------------------------------
+#
+# Parquet at lacquer=10 with a band and five lozenges of ebony at lacquer=8, laid in the 1.89 m of
+# open floor between the two ranges of presses. Two clearcoats a shelf apart, both of them under a
+# window whose sill is level with them: load 3, and the only place in the building it can be asked.
+let lib_fl_zone = box -14.85 6.24 -6.60   -6.75 6.36 -3.45
+paint parquet where=lib_fl_zone below=0.02
+
+let lib_fl_out  = box -14.85 6.24 -5.97    -6.75 6.36 -4.08
+let lib_fl_in   = box -14.625 6.20 -5.745  -6.975 6.40 -4.305
+let lib_fl_band = difference { lib_fl_out lib_fl_in }
+paint ebony where=lib_fl_band below=0.02
+
+let lib_fl_loz1 = intersection {
+    rotate { box -0.27 6.24 -0.27   0.27 6.36 0.27 } y=0.125
+    box -0.40 6.24 -0.40   0.40 6.36 0.40
+}
+let lib_fl_loz = translate { repeat { lib_fl_loz1 } x=1.35 nx=2 } -10.80 0 -5.025
+paint ebony where=lib_fl_loz below=0.02
+
+# --- the joinery ------------------------------------------------------------------------------------
+let lib_wal = union {
+    lib_low_body lib_low_boards lib_low_ups
+    library_deck library_brackets lib_bal_base library_balusters library_newels
+    library_doorcase library_desks library_globes library_ladder
+}
+paint walnut where=lib_wal below=0.02
+
+let lib_oak = union { lib_up_body lib_up_boards lib_up_ups }
+paint oak where=lib_oak below=0.02
+
+# The gilt fillets: the two friezes, which are the flat band at the foot of each cornice and the
+# one line that runs unbroken round all four walls at both levels.
+let lib_gilt = union { lib_lco_frieze lib_uco_frieze }
+paint gilt where=lib_gilt below=0.02
+
+paint gesso where=library_globe_balls below=0.02
+
+# --- the books ------------------------------------------------------------------------------------
+paint walnut      where=lib_bkl_a below=0.02
+paint ebony       where=lib_bkl_b below=0.02
+paint oak         where=lib_bkl_c below=0.02
+paint damask      where=lib_bkl_d below=0.02
+paint velvet      where=lib_bkl_e below=0.02
+paint lacquer_red where=lib_bkl_f below=0.02
+paint lacquer_red where=lib_bku_a below=0.02
+paint velvet      where=lib_bku_b below=0.02
+paint damask      where=lib_bku_c below=0.02
+paint oak         where=lib_bku_d below=0.02
+paint ebony       where=lib_bku_e below=0.02
+paint walnut      where=lib_bku_f below=0.02
+
+# --- the metal and the light -------------------------------------------------------------------
+let lib_orm = union {
+    library_grilles lib_handrail lib_rail lib_rail_brks
+    library_globe_rings library_scn_metal
+}
+paint ormolu where=lib_orm below=0.02
+paint wax    where=library_tapers below=0.02
+paint taper  where=library_flames below=0.02

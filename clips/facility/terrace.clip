@@ -1,0 +1,639 @@
+# terrace — the Dachgarten: a formal garden on the leads, inside the balustrade, round the drum.
+#
+# Two paved courts east and west of the drum, each with a walk curving round it, four parterres of
+# clipped box on gravel, citrus in tubs on the bay spacing, a raised cistern of water at the north
+# end and an armillary sphere at the south, a treillage arbour against the outer end, seats, eight
+# lanterns and an iron guard rail along the open edges. It stands ON roof.clip's lead deck and
+# INSIDE parapet.clip's balustrade and takes nothing away from either.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD — four things, and they are the reason it exists.
+#
+# 1. THE ONLY LARGE OPEN-SKY SURFACE IN THE BUILDING THAT IS NOT THE GROUND. Everything else
+#    outdoors here is a wall seen edge-on or the lawn. This is 166 m² of flat floor eleven metres up
+#    with a balustrade round it, a dome standing out of it, and nothing above it: the ambient
+#    occlusion case in its pure form. The horizon from this floor is a rail 0.70 m high, so the sky
+#    term should be very nearly full in the middle of a court and fall away only in the last metre
+#    before the parapet — a shallow, wide gradient across a large flat plane, which is exactly the
+#    shape of gradient that bands if the sky term is quantised or interpolated over too coarse a
+#    grid. If it bands anywhere in this building, it bands here, and it will band in stripes
+#    parallel to the parapet.
+#
+# 2. THIN METAL HOOPS AGAINST THE SKY. The armillary's own rings are 0.032 to 0.050 m through — one
+#    to one and a half voxels at the contract's metre 32; only the fixed meridian, at 0.090, is more
+#    than two — and they stand free in open sky at 13.53 m with nothing behind them but the
+#    brightest thing in the frame. That is the hardest silhouette in the building: unlike a
+#    baluster, which at least has a neighbour 0.27 m away to be compared with, a hoop is a single
+#    curve of pure thin matter whose own far side is also in the picture. The treillage is the same
+#    test at a hundred times the count — 43 bars of 0.06 m to a screen, crossed by 7 more, over a
+#    panel of sky 9.90 m by 1.85 m. A sampler that smears either turns the hoop into a smudge and
+#    the lattice into a grey panel, and both failures are visible from the lawn.
+#
+# 3. STILL WATER AGAINST A LIT DOME. Two cisterns of 2.25 x 2.25 m of `water` (ior 1.33, rough 24),
+#    0.30 m deep on a lead floor, flat, open to the sky, with the drum and the dome standing over
+#    them. A specular reflection of a large lit curved surface in a small flat one, outdoors, with
+#    sky behind it — and 0.30 m of a refracting medium over a rough metal floor, which is where the
+#    caustic goes. It is the only water in this building that is not indoors.
+#
+# 4. FOLIAGE, WHICH THIS BUILDING HAS NONE OF ABOVE THE GROUND. Clipped box, citrus crowns and
+#    citrus trained over treillage: dense small-scale matter with no flat face anywhere on it, which
+#    is the opposite of everything else here and the case where a summary of far geometry has
+#    nothing large to hold on to. It is built as real matter — a `cells` field displacing a rounded
+#    mass — and not as a green box, so what a summary has to summarise is a real surface with real
+#    curvature and not a lie about one.
+# ------------------------------------------------------------------------------------------------
+#
+# WHAT THE ROOF ACTUALLY IS, AND WHY THE PLAN IS TWO COURTS AND NOT ONE ROOM. This is the thing
+# worth reading in this file. The brief describes the terrace as one walled room 32 x 15 m with a
+# walk all round the drum. Measured off roof.clip and drum.clip, it is not:
+#
+#   the deck        roof.clip's slab is level only inside |x| <= 14.35 and |z| <= 5.85. Outside that
+#                   is THE GUTTER, a channel 1.20 m wide with its sole at 12.00 running the whole
+#                   perimeter, with an outlet gully and a bronze grating in the middle of each side.
+#   the drum        drum.clip's plinth is an annulus out to 5.85 and its copper apron lip out to
+#                   5.895, both topping out level with the deck at 12.15.
+#
+# So NORTH AND SOUTH OF THE DRUM THERE IS NO GROUND AT ALL: the drum's apron ends at 5.895 and the
+# gutter begins at 5.85, and the apron actually oversails the channel by 0.045. A walk round the
+# drum would have to be carried over the gutter on a bridge, and the north and south gullies sit at
+# |z| 6.55 .. 7.10 on the centre line, which is precisely where such a bridge would want to land. A
+# terrace that ponds water is wrong and a terrace laid over the drainage is worse, so THE WALK ROUND
+# THE DRUM IS NOT COMPLETED. Each court has its own quarter-circle ambulatory ending north and south
+# at the terrace edge, and the two courts do not meet. That is a real fact about this building, like
+# the 0.70 m balustrade, and it is left standing rather than papered over.
+#
+# For the same reason the cistern and the armillary cannot both stand on the building's own
+# north-south axis: that axis is drum, then gutter, then gully. They stand instead on the north and
+# south cross axis OF EACH COURT — cistern north, dial south, as the brief has them — which keeps
+# the pairing, keeps the whole terrace symmetric about x = 0 (rule 3), and puts two of each in the
+# scene rather than one, which for both load cases is more of the thing being measured, not less.
+#
+# THE OTHER THING THE ROOF IMPOSES: THE ROLLS. 26 lead rolls run down the fall at a pitch of 0.90 m
+# (D), standing 0.045 m proud. They are the drainage and they are also roof.clip's own thin-matter
+# case, so the paving is not allowed to bury them. It does not: the bed carries a channel 0.18 m
+# wide and 0.09 m deep over every roll line, cut from the bed and not from the roll, which leaves
+# 0.045 m of air either side of each roll and a continuous run of it from the drum to open lead
+# beyond the paving. Water under this terrace goes where it went before. The paving edges stand
+# BETWEEN roll lines, never on one: |z| = 4.95 is the midpoint of the gap between the rolls at 4.50
+# and 5.40, and the roll at 5.40 is left in the open with 0.90 m of bare lead beside it.
+#
+# NO PART OF THIS TERRACE COMES WITHIN 0.40 m OF A GRATING. The four gullies are at |x| 15.05..15.60
+# and |z| 6.55..7.10; the paving stops at 13.95 and 4.95.
+#
+# ------------------------------------------------------------------------------------------------
+# THE MODULE. D = 0.90, M = 0.45, bay = 2.70. Every dimension below is a whole multiple or a simple
+# fraction of one of them. The numbers that come from somewhere else, all measured, none invented:
+#
+#   12.15 12.1125 12.075 12.0375   roof.clip's four bay levels, stepping down at x = 8.05, 10.30,
+#                                  12.55. The bed's underside steps with them, 0.05 into each.
+#   0.045, 0.90                    the rolls' half width and their pitch.
+#   5.895                          drum.clip's copper apron lip. The paving's inner arc stands at
+#                                  6.30 (14 M), which clears it by 0.405 and leaves the apron ring
+#                                  visible in the lead where roof.clip says it reads.
+#   13.00                          parapet_top. The rail tops out at 13.20, 0.20 above it. Nothing
+#                                  on this terrace comes nearer the balustrade than 1.87 m in x or
+#                                  2.46 m in z; the ground between is roof.clip's, and stays its.
+#   1.35, 4.05                     pilaster axes, from the contract's 2.70 bay. Every pot and every
+#                                  citrus stands on one of them, so the ranks line up with the
+#                                  windows below; the two lantern standards sit on the same bay.
+#
+# THE LEVELS:
+#
+#   11.9875 .. 12.10   the bed's underside, stepped per bay, 0.05 (the brief's overlap) into each
+#   12.0975 .. 12.21   the top of the roll channels, one height to each bay, each 0.015 clear of
+#                      its own bay's roll
+#   12.30              THE FLOOR. 11.85 + 0.45 (M above the deck's soffit); 0.15 (M/3) above the
+#                      lead at the drum, so the paving reads as a course laid on the roof and not
+#                      as the roof. The lid over a roll channel is 0.09 (M/5) on bay one, and
+#                      0.1275, 0.165 and 0.2025 on the three bays outside it.
+#   12.45              kerbs, plinths and pot feet: M/3 above the floor
+#   12.75              the cistern rim and the seats: M above the floor
+#   13.20              the iron rail: 2 M above the floor, 0.20 above the balustrade
+#   14.19              the arbour cornice, the highest stone; 14.255 the armillary's meridian ring;
+#                      14.22 the highest leaf. NOTHING reaches 14.30.
+#
+# WHY THE FLOOR IS AT 12.30 AND NOT AT 12.25. At 12.25 the lid over bay one's channel is 0.04 —
+# one and a quarter voxels at metre 32 and a third of one at metre 8 — and the paving comes apart
+# into twelve strips lying between the roll lines and reads as decking. 12.30 leaves 0.09, M/5, the
+# same number the entablature's dentils are built on, and it is the first module fraction above the
+# rolls that does. The cost is that the balustrade is 0.70 above the floor instead of 0.75, which is
+# still low for a person, still deliberate, and still not mine to fix.
+#
+# WHY THERE IS NO VOID. This part is laid ON a roof, not cut into one. The cistern is a RAISED
+# basin — a rim standing 0.45 above the floor with a lead pan inside it — for exactly that reason: a
+# sunk basin would need a void, a void would have to be subtracted from the whole building after
+# assembly, and the note at the foot of clips/facility.clip is what happens when a room's void is
+# written a little wrong. There is nothing here worth that risk, so `part_terrace` is the only
+# binding this file exposes and it removes nothing from anybody.
+#
+# WHAT WAS TRIED AND IS NOT HERE: a treillage BERCEAU — an arbour you walk under — which is what a
+# Dachgarten of this date would really have had at the ends. The zone runs 12.30 to 14.30 and the
+# head-height rule is 2.10, so a berceau over this floor would have to break one of them by 0.10.
+# It is a screen instead, with its cornice kept flush with its own face so nothing overhangs a place
+# a person can stand.
+# ------------------------------------------------------------------------------------------------
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE PLAN, from the drum outwards. Everything is drawn once in the quarter x > 0, z > 0 and folded
+# twice, so the two courts and the two ends of each court cannot drift apart.
+#
+#   x  6.30 .. 7.65   the ambulatory, an arc of 3 M round the drum
+#      7.65 .. 9.45   parterre panel A, 4 M
+#      9.45 .. 11.25  the cross walk, 4 M, on 10.35 (23 M)
+#     11.25 .. 13.05  parterre panel B, 4 M
+#     13.05 .. 13.50  the verge walk, M
+#     13.50 .. 13.95  the treillage screen, M deep. Then 0.40 of open lead to the gutter.
+#
+#   z  0.00 .. 0.90   the central walk, 2 M
+#      0.90 .. 2.25   the parterre panels, 3 M
+#      2.25 .. 4.95   the terminal compartment, 6 M: the cistern north, the dial south. Then the
+#                     roll at 5.40 in the open and 0.90 of lead to the gutter.
+# ================================================================================================
+
+# --- the bed and the paving -------------------------------------------------------------------
+#
+# Four boxes, one to each of roof.clip's bay levels, each bedded 0.05 into its own bay, all topping
+# out at the floor. The drum's circle is taken out at 6.30, which is what curves the ambulatory.
+let terr_bed_one = box  0.00 12.1000 -4.95   8.05 12.30 4.95  round=0.012
+let terr_bed_two = box  8.05 12.0625 -4.95  10.30 12.30 4.95  round=0.012
+let terr_bed_thr = box 10.30 12.0250 -4.95  12.55 12.30 4.95  round=0.012
+let terr_bed_fou = box 12.55 11.9875 -4.95  13.95 12.30 4.95  round=0.012
+let terr_bed_all = union { terr_bed_one terr_bed_two terr_bed_thr terr_bed_fou }
+
+# The well the drum stands in, cut generously: 6.30 (14 M) clears the copper apron lip at 5.895 by
+# 0.405 and leaves the apron ring lying in bare lead where roof.clip says it reads as a green ring.
+let terr_well = cylinder 0 12.60 0  r=6.30 h=1.60 axis=y
+
+# THE ROLL CHANNELS. One slot to a roll line, 0.18 wide (0.045 of air either side of a roll 0.09
+# across). Eleven lines, at z = 0 and every 0.90 out to 4.50; the roll at 5.40 is outside the paving
+# altogether. They run the whole length of the paving in x and open onto bare lead at both ends, so
+# the fall under this terrace is the fall roof.clip laid.
+#
+# FOUR SETS AND NOT ONE, ONE TO EACH BAY, EACH CUT TO ITS OWN BAY'S ROLL AND NO HIGHER — the roll
+# top plus 0.015 of air. That is not fussiness, it was measured. Cut to a single top of 12.21 (which
+# is what the tallest roll, on bay one, needs) the lid over the outer three bays is 0.09 everywhere,
+# and 0.09 is under a voxel at metre 8: no voxel centre lands in it, the whole paving comes apart
+# into twelve strips lying between the roll lines, and the part reports 52 components. Cut per bay
+# the lid is 0.09 on bay one and 0.1275, 0.165 and 0.2025 further out, the outer three bays keep a
+# continuous course at any detail, and bay one's strips are joined by it. Same channels, same
+# drainage, same 0.045 of air either side of every roll — and one component to a court.
+let terr_slot_one = repeat { box  3.00 11.90 -0.09    8.05 12.2100 0.09 } z=0.90 nz=5
+let terr_slot_two = repeat { box  8.05 11.90 -0.09   10.30 12.1725 0.09 } z=0.90 nz=5
+let terr_slot_thr = repeat { box 10.30 11.90 -0.09   12.55 12.1350 0.09 } z=0.90 nz=5
+let terr_slot_fou = repeat { box 12.55 11.90 -0.09   14.20 12.0975 0.09 } z=0.90 nz=5
+let terr_roll_slot = union { terr_slot_one terr_slot_two terr_slot_thr terr_slot_fou }
+
+let terr_paving = difference { terr_bed_all  terr_well  terr_roll_slot }
+
+# THE FLAGGING. A grid of granite joint bands 0.09 wide on a 0.90 pitch (D), let into the top 0.09
+# of the travertine and offset by 0.45 so that a joint never lands over a roll channel. It is
+# geometry and not a pattern rule, and it is intersected with my own paving, because a bare pattern
+# is true everywhere in the clip and would flag the lawn as readily as this floor.
+#
+# It goes into the QUARTER and not into the court, so that the two folds put the joints at +-0.45,
+# +-1.35 ... either way from both axes. Built at court level the +0.45 offset would run the grid out
+# to 4.95 on the north and stop at 4.05 on the south, which is a seam the eye finds at once.
+let terr_joint_seed_x = repeat { box -1 12.21 -0.045   20 12.31 0.045 } z=0.90 nz=5
+let terr_joint_seed_z = repeat { box -0.045 12.21 -6   0.045 12.31 6 } x=0.90 nx=15
+let terr_joints = intersection {
+    terr_paving
+    translate { union { terr_joint_seed_x terr_joint_seed_z } } 0.45 0 0.45
+}
+
+# ================================================================================================
+# THE PARTERRES — box scrollwork on gravel, in a granite kerb
+# ================================================================================================
+#
+# The one place in this building where a curve is drawn in plants rather than in stone. Each panel
+# is 1.80 x 1.35 (4 M x 3 M) inside a kerb of 0.09, and carries the same figure: a ring, four corner
+# volutes and a ball at the centre, all of it displaced by a `cells` field so that the surface is
+# leaf-scale and has no flat face on it anywhere. Drawn once about its own centre and set into both
+# panels.
+
+let terr_leaf = cells size=0.105
+
+let terr_par_fig = union {
+    torus 0 12.48 0  ring=0.36  tube=0.135 axis=y
+    torus  0.54 12.48  0.315 ring=0.135 tube=0.09 axis=y
+    torus -0.54 12.48  0.315 ring=0.135 tube=0.09 axis=y
+    torus  0.54 12.48 -0.315 ring=0.135 tube=0.09 axis=y
+    torus -0.54 12.48 -0.315 ring=0.135 tube=0.09 axis=y
+    sphere 0 12.50 0 r=0.24
+}
+let terr_par_box = displace { terr_par_fig terr_leaf } amount=0.05
+let terr_hedge_a = translate { terr_par_box }  8.55 0 1.575
+let terr_hedge_b = translate { terr_par_box } 12.15 0 1.575
+let terr_hedges = union { terr_hedge_a terr_hedge_b }
+
+# The kerb: a granite frame 0.09 thick standing M/3 above the floor, bedded 0.05 into it.
+let terr_kerb_a = difference {
+    box  7.65 12.25 0.90    9.45 12.45 2.25  round=0.01
+    box  7.74 12.25 0.99    9.36 12.50 2.16
+}
+let terr_kerb_b = difference {
+    box 11.25 12.25 0.90   13.05 12.45 2.25  round=0.01
+    box 11.34 12.25 0.99   12.96 12.50 2.16
+}
+let terr_kerbs = union { terr_kerb_a terr_kerb_b }
+
+let terr_gravel_a = box  7.74 12.28 0.99    9.36 12.42 2.16
+let terr_gravel_b = box 11.34 12.28 0.99   12.96 12.42 2.16
+let terr_gravel = union { terr_gravel_a terr_gravel_b }
+
+# ================================================================================================
+# CITRUS IN TUBS — a terracotta pot and a Versailles caisse, each drawn once and set out on the bay
+# ================================================================================================
+#
+# Four to a quarter, sixteen in the terrace. The two on the ambulatory stand on the arc at a radius
+# of 6.975 (15.5 M) on the pilaster axes z = 1.35 and 4.05, so their spacing IS the bay and their x
+# follows from the circle rather than from a choice. The two on the verge stand at x = 13.275, the
+# middle of the M-wide walk, on the same two axes.
+
+let terr_pot_sect = union {
+    box 0 12.42 -1   0.150 12.48 1  round=0.01
+    box 0 12.48 -1   0.180 12.78 1  round=0.01
+    box 0 12.78 -1   0.210 12.87 1  round=0.01
+    bead 0.210 12.87   0.240 12.96
+}
+let terr_pot_clay = revolve { terr_pot_sect } axis=y
+let terr_pot_foot = box -0.225 12.25 -0.225   0.225 12.45 0.225  round=0.012
+
+let terr_cai_foot = box -0.225 12.25 -0.225   0.225 12.42 0.225  round=0.012
+let terr_cai_tub  = union {
+    box -0.210 12.40 -0.210   0.210 12.87 0.210  round=0.012
+    box -0.240 12.87 -0.240   0.240 12.96 0.240  round=0.012
+}
+let terr_cai_strap = union {
+    box -0.225 12.44 -0.225  -0.165 12.99 -0.165
+    box  0.165 12.44 -0.225   0.225 12.99 -0.165
+    box -0.225 12.44  0.165  -0.165 12.99  0.225
+    box  0.165 12.44  0.165   0.225 12.99  0.225
+}
+
+# The tree. A bark trunk out of the earth of the tub, and a crown that is a rounded mass displaced
+# by the leaf field — real matter with a real curvature, which is the whole of load 4.
+let terr_tree_trunk = capsule 0 12.75 0   0 13.38 0  r=0.05
+let terr_tree_crown = displace { sphere 0 13.68 0 r=0.33  terr_leaf } amount=0.06
+let terr_tree_fruit = union {
+    sphere  0.30 13.68  0.00  r=0.070
+    sphere -0.22 13.62  0.18  r=0.070
+    sphere  0.09 13.55 -0.28  r=0.070
+}
+
+let terr_pot_a = translate { terr_pot_clay } 6.843 0 1.35
+let terr_pot_b = translate { terr_pot_clay } 5.679 0 4.05
+let terr_pots_clay = union { terr_pot_a terr_pot_b }
+
+let terr_cai_a = translate { terr_cai_tub } 13.275 0 1.35
+let terr_cai_b = translate { terr_cai_tub } 13.275 0 4.05
+let terr_cai_wood = union { terr_cai_a terr_cai_b }
+
+let terr_cai_strap_a = translate { terr_cai_strap } 13.275 0 1.35
+let terr_cai_strap_b = translate { terr_cai_strap } 13.275 0 4.05
+let terr_cai_straps = union { terr_cai_strap_a terr_cai_strap_b }
+
+let terr_tub_feet = union {
+    translate { terr_pot_foot } 6.843 0 1.35
+    translate { terr_pot_foot } 5.679 0 4.05
+    translate { terr_cai_foot } 13.275 0 1.35
+    translate { terr_cai_foot } 13.275 0 4.05
+}
+let terr_trunks = union {
+    translate { terr_tree_trunk } 6.843 0 1.35
+    translate { terr_tree_trunk } 5.679 0 4.05
+    translate { terr_tree_trunk } 13.275 0 1.35
+    translate { terr_tree_trunk } 13.275 0 4.05
+}
+let terr_crowns = union {
+    translate { terr_tree_crown } 6.843 0 1.35
+    translate { terr_tree_crown } 5.679 0 4.05
+    translate { terr_tree_crown } 13.275 0 1.35
+    translate { terr_tree_crown } 13.275 0 4.05
+}
+let terr_fruit_tubs = union {
+    translate { terr_tree_fruit } 6.843 0 1.35
+    translate { terr_tree_fruit } 5.679 0 4.05
+    translate { terr_tree_fruit } 13.275 0 1.35
+    translate { terr_tree_fruit } 13.275 0 4.05
+}
+
+# ================================================================================================
+# THE TREILLAGE SCREEN — the arbour against the outer end
+# ================================================================================================
+#
+# 0.45 deep (M), 1.80 high (4 M) to the head, standing on the paving and bedded 0.05 into it. Oak
+# posts every 1.35 with a sill, a head and a projecting cornice, and between them a lattice of bars
+# 0.06 x 0.06 — two voxels at the contract's metre 32 — at a pitch of 0.225 (M/2) one way and 0.225
+# the other. 42 verticals and 7 horizontals to a screen, twice, against open sky.
+#
+# The cornice is kept flush with the screen's own face at 13.50 and projects only outwards, so
+# nothing overhangs the walk. See the head-height note at the top of this file.
+let terr_tre_sill = box 13.50 12.25 0    13.95 12.40 4.95  round=0.012
+let terr_tre_head = box 13.50 13.92 0    13.95 14.10 4.95  round=0.012
+let terr_tre_corn = box 13.50 14.10 0    14.04 14.19 4.95  round=0.012
+let terr_tre_post = repeat { box 13.50 12.25 -0.09   13.95 14.10 0.09  round=0.01 } z=1.35 nz=3
+let terr_tre_endp = box 13.50 12.25 4.77   13.95 14.10 4.95  round=0.01
+
+let terr_tre_bar_v = repeat { box 13.62 12.35 -0.03   13.74 14.00 0.03 } z=0.225 nz=21
+let terr_tre_bar_h = intersection {
+    translate { repeat { box 13.62 -0.03 0   13.74 0.03 4.95 } y=0.225 ny=4 } 0 13.1625 0
+    box 13.50 12.42 -0.01   13.95 13.92 4.96
+}
+let terr_treillage = union {
+    terr_tre_sill terr_tre_head terr_tre_corn terr_tre_post terr_tre_endp
+    terr_tre_bar_v terr_tre_bar_h
+}
+
+# The citrus trained over it. Two masses to a screen, growing through the lattice.
+let terr_tre_leaf_a = displace { ellipsoid 13.72 13.80 1.35  rx=0.24 ry=0.36 rz=0.72  terr_leaf } amount=0.06
+let terr_tre_leaf_b = displace { ellipsoid 13.72 13.05 3.60  rx=0.24 ry=0.45 rz=0.81  terr_leaf } amount=0.06
+let terr_tre_leaves = union { terr_tre_leaf_a terr_tre_leaf_b }
+let terr_tre_fruit = union {
+    sphere 13.72 13.80 2.01  r=0.075
+    sphere 13.72 14.10 1.35  r=0.075
+    sphere 13.72 13.05 4.35  r=0.075
+    sphere 13.72 13.50 3.60  r=0.075
+}
+
+# ================================================================================================
+# SEATS — granite ends and walnut slats
+# ================================================================================================
+#
+# Two to a court: one with its back to the drum on the ambulatory, one in the arbour on the verge.
+# Drawn as the z > 0 half of a bench 1.80 long, so the fold makes the whole of it.
+let terr_seat_stone = union {
+    box  6.48 12.25 0.72    6.93 12.72 0.90  round=0.012
+    box  6.48 12.25 0.00    6.93 12.72 0.09  round=0.012
+    box 13.05 12.25 0.72   13.50 12.72 0.90  round=0.012
+    box 13.05 12.25 0.00   13.50 12.72 0.09  round=0.012
+}
+let terr_seat_slats = union {
+    box  6.510 12.70 0    6.600 12.78 0.90  round=0.008
+    box  6.645 12.70 0    6.735 12.78 0.90  round=0.008
+    box  6.780 12.70 0    6.870 12.78 0.90  round=0.008
+    box 13.080 12.70 0   13.170 12.78 0.90  round=0.008
+    box 13.215 12.70 0   13.305 12.78 0.90  round=0.008
+    box 13.350 12.70 0   13.440 12.78 0.90  round=0.008
+}
+
+# ================================================================================================
+# LANTERNS — eight of them, on standards along the walks
+# ================================================================================================
+#
+# Two to a quarter and so eight in the terrace: one on the cross walk beside the parterres, one on
+# the verge between the two caisses. A bronze standard, a cage of four corner posts with the light
+# open between them, and a `lamp` flame standing on the cage floor.
+let terr_lamp_stem = union {
+    cylinder 0 12.90 0  r=0.045 h=1.00 axis=y
+    cone 0 13.71 0  r=0.15 h=0.18 axis=y
+}
+# The cage: a bottom plate, a top plate and four corner posts of 0.06 — two voxels at metre 32 —
+# with the light open between them. The plates are M/5 thick and the openings stop 0.09 short of
+# each, and both of those numbers were measured rather than chosen: at 0.03 the plates are half a
+# voxel at metre 16, they disappear, and every lamp in the terrace comes back as eight loose specks.
+let terr_lamp_cage = difference {
+    box -0.12 13.35 -0.12   0.12 13.71 0.12  round=0.012
+    box -0.06 13.44 -0.30   0.06 13.62 0.30
+    box -0.30 13.44 -0.06   0.30 13.62 0.06
+}
+let terr_lamp_foot = box -0.135 12.25 -0.135   0.135 12.45 0.135  round=0.012
+let terr_lamp_fire = sphere 0 13.45 0 r=0.10
+
+let terr_lamp_bronze = union {
+    translate { union { terr_lamp_stem terr_lamp_cage } } 10.350 0 1.575
+    translate { union { terr_lamp_stem terr_lamp_cage } } 13.275 0 2.700
+}
+let terr_lamp_feet = union {
+    translate { terr_lamp_foot } 10.350 0 1.575
+    translate { terr_lamp_foot } 13.275 0 2.700
+}
+let terr_lamp_fires = union {
+    translate { terr_lamp_fire } 10.350 0 1.575
+    translate { terr_lamp_fire } 13.275 0 2.700
+}
+
+# ================================================================================================
+# THE RAIL — the terrace's own guard along the open ends
+# ================================================================================================
+#
+# The parapet is not the danger here; it is 2.46 m away across bare lead. The danger is the step off
+# this paving at |z| = 4.95 — 0.30 down to the leads and 0.30 more into the gutter, in the dark,
+# eleven metres up. So the rail stands on my own paving 0.09 inside its edge, and it tops out at
+# 13.20, 2 M above the floor and 0.20 above the balustrade beyond it. The parapet is NOT raised.
+#
+# The posts are cut to the paving by intersection, which is what removes the two copies of the
+# repeat that would otherwise land on bare lead at 3.60 and 14.40. Where the cistern stands the
+# posts rise out of its own north kerb, which is what a balustrade does when a basin is set into it.
+let terr_rail_post = box -0.03 12.15 -0.03   0.03 13.20 0.03
+let terr_rail_posts = intersection {
+    translate { repeat { terr_rail_post } x=1.35 nx=5 } 10.35 0 4.86
+    box 4.80 12.20 4.60   13.20 13.30 5.10
+}
+let terr_rail_bars = union {
+    capsule 4.95 13.14 4.86   13.05 13.14 4.86  r=0.024
+    capsule 4.95 12.72 4.86   13.05 12.72 4.86  r=0.024
+}
+let terr_rail = union { terr_rail_posts terr_rail_bars }
+
+# ================================================================================================
+# THE CISTERN — north end of each court
+# ================================================================================================
+#
+# 2.70 x 2.70 (6 M x 6 M) centred on the court's cross walk at x = 10.35 (23 M), its sides on
+# 9.00 (20 M) and 11.70 (26 M). RAISED and not sunk: a granite rim 0.225 (M/2) thick standing 0.45 (M) above the floor,
+# a lead pan 0.06 thick inside it, and 0.30 (M/1.5) of water on the lead. No void anywhere.
+let terr_cis_rim = difference {
+    box 9.000 12.25 2.250   11.700 12.75 4.950  round=0.012
+    box 9.225 12.28 2.475   11.475 12.80 4.725
+}
+let terr_cis_pan = difference {
+    box 9.225 12.28 2.475   11.475 12.72 4.725
+    box 9.285 12.34 2.535   11.415 12.80 4.665
+}
+let terr_cis_water = box 9.285 12.34 2.535   11.415 12.64 4.665
+
+# The spout: a bronze block on the north kerb with a nozzle over the water.
+let terr_cis_spout = union {
+    box 10.245 12.75 4.680   10.455 13.05 4.950  round=0.02
+    capsule 10.35 12.86 4.710   10.35 12.86 4.500  r=0.045
+}
+
+# ================================================================================================
+# THE ARMILLARY SPHERE — south end of each court
+# ================================================================================================
+#
+# A granite pedestal, a bronze stem, and the rings: a fixed horizon and meridian of 0.68, and inside
+# them the sphere proper — equator, two colures, two tropics and the polar axis — tilted 0.11 turns
+# so the axis points at the pole. Tubes run 0.016 to 0.045, which is 0.032 to 0.090 across: one to
+# three voxels at the contract's metre 32, and one to one and a half for everything but the
+# meridian. THIS IS LOAD 2 AND IT IS THE WHOLE REASON THE PIECE IS HERE. Do not thicken a tube.
+#
+# The rotate is intersected with a box immediately afterwards, and that is not tidiness: `rotate`
+# is deliberately given no bounding box, and a subtree with no box makes every box above it
+# unsettleable. The intersection hands one back. (field.cpp, and the note in roof.clip about what
+# an unbounded child inside a repeat cost that file.)
+#
+# Everything touches: the polar rod's ends lie exactly on the meridian ring, because a line through
+# the centre of the yz plane meets a circle of that plane whatever its angle; the colures meet the
+# equator at their poles; the meridian meets the horizon at z = +-0.68; and the stem meets the polar
+# rod at the centre and the pedestal at its foot.
+let terr_arm_rings = union {
+    torus 0 0 0  ring=0.60 tube=0.025 axis=y
+    torus 0 0 0  ring=0.60 tube=0.022 axis=x
+    torus 0 0 0  ring=0.60 tube=0.022 axis=z
+    torus 0  0.2325 0  ring=0.5535 tube=0.016 axis=y
+    torus 0 -0.2325 0  ring=0.5535 tube=0.016 axis=y
+    capsule 0 -0.72 0   0 0.72 0  r=0.018
+}
+let terr_arm_tilt = intersection {
+    rotate { terr_arm_rings } x=0.11
+    box -0.78 -0.78 -0.78   0.78 0.78 0.78
+}
+let terr_arm_frame = union {
+    torus 0 0 0  ring=0.68 tube=0.030 axis=y
+    torus 0 0 0  ring=0.68 tube=0.045 axis=x
+}
+let terr_arm_gilt = translate { union { terr_arm_tilt terr_arm_frame } } 10.35 13.53 -3.60
+
+let terr_arm_stone = union {
+    box  9.900 12.25 -4.050   10.800 12.45 -3.150  round=0.012
+    box 10.125 12.45 -3.825   10.575 12.90 -3.375  round=0.012
+    box 10.050 12.90 -3.900   10.650 13.05 -3.300  round=0.012
+}
+let terr_arm_stem = capsule 10.35 12.85 -3.60   10.35 13.53 -3.60  r=0.045
+
+# ================================================================================================
+# THE MATERIALS, EACH FOLDED TWICE
+# ================================================================================================
+#
+# Every material is collected before it is folded, and every one is folded the same way: what was
+# drawn in the quarter is folded in z to make the court, what belongs to one end of a court only is
+# added at court level, and the whole court is folded in x. That is what makes the paint match the
+# stone exactly — there is no shape in this part that is not in one of these sixteen bindings, and
+# no binding that reaches outside this part.
+
+let terr_travertine = mirror { terr_paving } axis=x
+
+let terr_granite_q = union { terr_kerbs terr_tub_feet terr_lamp_feet terr_seat_stone terr_joints }
+let terr_granite   = mirror {
+    union { mirror { terr_granite_q } axis=z   terr_cis_rim terr_arm_stone }
+} axis=x
+
+let terr_gravel_m  = mirror { mirror { terr_gravel } axis=z } axis=x
+let terr_boxwood_m = mirror { mirror { terr_hedges } axis=z } axis=x
+let terr_clay      = mirror { mirror { terr_pots_clay } axis=z } axis=x
+let terr_oak       = mirror { mirror { union { terr_treillage terr_cai_wood } } axis=z } axis=x
+let terr_walnut    = mirror { mirror { terr_seat_slats } axis=z } axis=x
+
+let terr_iron = mirror { mirror { union { terr_rail terr_cai_straps } } axis=z } axis=x
+
+let terr_bark   = mirror { mirror { terr_trunks } axis=z } axis=x
+let terr_citrus = mirror { mirror { union { terr_crowns terr_tre_leaves } } axis=z } axis=x
+let terr_orange = mirror { mirror { union { terr_fruit_tubs terr_tre_fruit } } axis=z } axis=x
+
+let terr_bronze = mirror {
+    union { mirror { terr_lamp_bronze } axis=z   terr_cis_spout terr_arm_stem }
+} axis=x
+let terr_flame = mirror { mirror { terr_lamp_fires } axis=z } axis=x
+
+let terr_lead_m = mirror { terr_cis_pan } axis=x
+let terr_water  = mirror { terr_cis_water } axis=x
+let terr_gilt_m = mirror { terr_arm_gilt } axis=x
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+#
+# It removes nothing from anybody. There is no `void_terrace`: this is laid on a roof, not cut into
+# one, and the basins are raised rather than sunk precisely so that it stays that way.
+
+let part_terrace = union {
+    terr_travertine terr_granite terr_gravel_m terr_boxwood_m
+    terr_clay terr_oak terr_walnut terr_iron
+    terr_bark terr_citrus terr_orange
+    terr_bronze terr_flame terr_lead_m terr_water terr_gilt_m
+}
+
+# ================================================================================================
+# THE SURFACE
+# ================================================================================================
+#
+# below=0.02 on every rule and never below=0: the manifest displaces the whole building by 12 mm of
+# grain at the end, and a voxel that exists only because the grain pushed the surface outward lies
+# OUTSIDE the shape its rule names. At below=0 those voxels match nothing, fall back to the base
+# coat, and leave a pale rind over every outward face of this terrace.
+#
+# Travertine first, because the paving is the largest thing here and everything else is set on it.
+paint travertine where=part_terrace  below=0.02
+paint granite    where=terr_granite  below=0.02
+paint gravel     where=terr_gravel_m below=0.02
+paint boxwood    where=terr_boxwood_m below=0.02
+paint terracotta where=terr_clay     below=0.02
+paint oak        where=terr_oak      below=0.02
+paint walnut     where=terr_walnut   below=0.02
+paint iron       where=terr_iron     below=0.02
+paint bark       where=terr_bark     below=0.02
+paint citrus     where=terr_citrus   below=0.02
+paint orange     where=terr_orange   below=0.02
+paint bronze     where=terr_bronze   below=0.02
+paint lead       where=terr_lead_m   below=0.02
+paint water      where=terr_water    below=0.02
+paint gilt       where=terr_gilt_m   below=0.02
+paint lamp       where=terr_flame    below=0.02
+
+# --- weathering ---------------------------------------------------------------------------------
+#
+# The most exposed surface in the building, and the two coats it wants are opposite: sun on the open
+# floor, damp in the corners the sun does not reach.
+#
+# BOTH ARE SCOPED WITH on=<one of my own shapes>, and the shapes are the FOLDED ones, so what is
+# weathered is the terrace and nothing else. Without `on=` a coat is keyed on a value rather than on
+# a place and goes on after everything anybody painted — it would bleach the lawn 12 m below, scour
+# the volutes and sand the steps, which is why the last facility shipped with none.
+#
+# The damp scope is deliberately small: the two corners of each court where the ambulatory meets the
+# terminal compartment, and the two outer corners behind the arbour. Those are the four places on
+# this terrace that are in shadow for most of the day — the drum takes the first pair and the screen
+# takes the second — and they are the only places moss belongs on a roof that otherwise bakes.
+#
+# WHAT THESE TWO LINES COST, MEASURED BOTH WAYS, BECAUSE roof.clip FOUND SOMETHING HERE AND ITS
+# NOTE NAMES A CAUSE THAT TURNS OUT TO BE ONLY HALF RIGHT.
+#
+# roof.clip records `weather overgrown` on its gutter taking that part from 110 ms to 17,646 ms at
+# metre 8 — 160x — and says the cost is not the scope but `occlusion`, `curvature` and `facing`
+# being asked of the whole clip once per solid voxel. This part carries two coats. Three alternated
+# pairs of runs with the two lines and with them commented out, at metre 8:
+#
+#   with    22.9 s   24.3 s   17.1 s
+#   without  3.4 s    1.9 s    2.8 s
+#
+# So a coat here costs about thirteen seconds at metre 8, and two of them cost about eight times
+# what the rest of this part costs to sample. I then tried the obvious fix — replacing the scope
+# with one box less one cylinder instead of `terr_paving`, which is four boxes less a cylinder less
+# forty-four repeated slots, on the theory that the scope's own field is walked per voxel:
+#
+#   with a scope of 2 nodes    29.4 s   28.6 s   30.2 s
+#   without                     2.3 s    2.7 s    1.9 s
+#
+# IT IS NOT THE SCOPE. A scope of two nodes costs the same as a scope of forty-eight, or a little
+# more. roof.clip's diagnosis stands and this is a second, independent measurement of it on a
+# different part with a different shape — which is worth more than agreeing with it would have been,
+# because the cheap scope was my theory and the control killed it.
+#
+# The coats stay, because this is the most exposed surface in the building and the brief asks for
+# them, and because the cost is a sampling cost paid once and not a frame cost. But nobody should
+# add a third here until `weather` stops asking the whole clip for its occlusion. Written up in
+# clips/facility/requests/terrace.md.
+let terr_damp_q = intersection {
+    terr_paving
+    union {
+        box 3.60 12.10 3.60    6.75 12.40 4.95
+        box 12.60 12.10 3.60  13.95 12.40 4.95
+    }
+}
+let terr_damp = mirror { mirror { terr_damp_q } axis=z } axis=x
+
+weather desert    0.05 scale=1.30 seed=61 on=terr_travertine
+weather overgrown 0.06 scale=0.70 seed=67 on=terr_damp

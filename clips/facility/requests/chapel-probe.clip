@@ -1,0 +1,34 @@
+# chapel-probe — the chapel fragment on its own, for clipcheck.
+#
+# Not part of the building. `_contract.clip` for the dimensions and materials, `_order.clip` for the
+# vocabulary, then the fragment, then `solid part_chapel`. Paths resolve against THIS file, so they
+# climb one level out of requests/.
+#
+#   ./build/clipcheck clips/facility/requests/chapel-probe.clip --metre 8
+#   ./build/clipcheck clips/facility/requests/chapel-probe.clip --metre 16 --slice y@2.5
+#   ./build/clipcheck clips/facility/requests/chapel-probe.clip --metre 16 --slice x@-10.5
+#   ./build/clipcheck clips/facility/requests/chapel-probe.clip --metre 32
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../chapel.clip"
+
+# THE BOX IS CUT TO THE ZONE, AND IT HAS TO COME AFTER THE INCLUDES.
+#
+# `_contract.clip` sets `bounds -17 -0.9 -16.5  17 20 8.5`, which is 582 million cells at metre 32
+# and about 2.8 GB of dense array before a single voxel of anything exists. That box is sized for
+# the whole building; on its own it will not fit anywhere a fragment is being checked, and the first
+# metre-32 run of this probe was killed by the kernel for want of memory. This restates it as the
+# chapel's zone plus a third of a metre on every side — 9.8 x 4.9 x 4.4 m, 6.9 million cells at
+# metre 32 — which is what makes a full-detail run possible at all.
+#
+# IT MUST BE WRITTEN BELOW `include "../chapel.clip"` AND NOT ABOVE IT. That fragment includes
+# `_contract.clip` itself, `bounds` is a plain assignment to the settings (clip_script.cpp:776), and
+# the last one wins — so a bounds written above the include is silently overwritten by the
+# contract's and the run is the 2.8 GB one again. It cost one killed process to find that out.
+bounds -15.50 1.40 -7.00   -5.70 6.30 -2.60
+
+solid part_chapel

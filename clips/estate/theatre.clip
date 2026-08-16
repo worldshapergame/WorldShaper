@@ -1,0 +1,1010 @@
+# theatre — the garden theatre in the bosquet: a semicircular cavea of stone benches, an orchestra,
+#           a stage with a rusticated proscenium, four pairs of clipped hornbeam wings in forced
+#           perspective, a hornbeam berceau round the top, and twenty-four footlights.
+#
+# A STANDALONE CLIP. It is not a fragment of clips/facility.clip and must never be added to it. It
+# declares its own metre and its own bounds after the contract's, which is what every file in
+# clips/estate does and why the estate is a family of clips rather than one array.
+#
+# WHERE IT STANDS. On the estate's site plan (clips/estate/BRIEF.md) the garden theatre is west, in
+# the bosquet, at x -40 .. -20, z 4 .. 28 relative to the facility, whose ground is y = 0 and whose
+# north is +z. This file is built in ITS OWN coordinates with the centre of the orchestra circle at
+# its own origin, the stage to the NORTH (+z) and the audience looking north — so the day these are
+# stamped into one world, the transform is a translation of (-30, 0, +16) and nothing else.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD — four things, and every one of them decided a dimension below.
+#
+# 1. TWENTY-FOUR SMALL EMISSIVES LIGHTING A LARGE SURFACE FROM BELOW, AT A GRAZING ANGLE.
+#
+#    fittings.clip names the hardest lighting case in the facility as *a small bright body in a
+#    large dark room*, and measures it as 0.08 m2 of emitter against 143 m2 of room. This is that
+#    case outdoors, in a row of twenty-four, and aimed the wrong way up. Each footlight flame is an
+#    ellipsoid 0.09 x 0.18 x 0.09 — about 0.05 m2 of emitting surface, SMALLER than a sconce bowl —
+#    behind a polished `silver` half-pipe reflector that throws its light UP AND UPSTAGE. What it
+#    lights is the proscenium: 16.20 m wide and 6.30 m tall, 8.10 m away, which is 102 m2 of
+#    rusticated stone at a grazing angle of about four degrees. Twenty-four x 0.05 m2 against
+#    102 m2 is a worse ratio than the facility's worst interior, and the geometry is worse still:
+#    every rustication channel, every dentil, every herm and the whole broken pediment casts a LONG
+#    UPWARD SHADOW, which is the one lighting direction the real world never produces and which
+#    therefore makes any error in a surface — a facet, a stair-step, a normal that points the wrong
+#    way — visible at once instead of being hidden by the way stone is normally lit.
+#
+#    A path tracer that finds its lights by hoping a bounce lands on one will never converge here.
+#    One that samples them directly will. That is the whole of why there are twenty-four small ones
+#    and not two big ones: a large soft source makes this easy and asks nothing.
+#
+#    The reflectors are a second question asked at the same time. `silver` is rough=36 metal=245,
+#    the sharpest specular in the contract after `mirror`, and there are twenty-four of them curved
+#    round twenty-four emitters at a radius of 0.1125 m. A sharp specular reflector immediately
+#    behind a light is the case an importance sampler is worst at — the same case the corona's gilt
+#    cups make in the rotunda, here at four times the count and outdoors.
+#
+# 2. ELEVEN CONCENTRIC RINGS OF STONE, SEEN FROM ABOVE AND FROM WITHIN.
+#
+#    A cavea is a staircase bent into a circle. The treads are annuli, the risers are cylinders,
+#    and the six radial stairs cut across them at angles that are at no useful angle to the voxel
+#    grid. Twenty-two concentric edges converging on one centre is the aliasing case for a regular
+#    structure, and it is where a stair-step in a curve cannot be hidden.
+#
+#    It is built as ONE `revolve`d step profile cut by a half space, which is the construction
+#    clips/estate/BRIEF.md and this brief both ask to be tried before eleven cylinders — and it is
+#    the right one for a reason worth writing down: `revolve` folds the asking point into the
+#    profile's own half plane, so the answer is a REAL distance and not a bound, and twenty-two
+#    steps drawn once cost the sampler the same as one. Eleven cylinders would have been eleven
+#    unioned boxes at every point in the clip.
+#
+# 3. FORCED PERSPECTIVE: PARALLEL RECEDING PLANES OF DENSE FOLIAGE.
+#
+#    Four pairs of clipped hornbeam flats, each 3.60 x 5.40 (19.44 m2 of face), parallel to the
+#    proscenium at 1.80 m spacing, each stepping 0.90 further inboard than the one in front so the
+#    stage reads deeper than its 9.00 m. They are real matter: a rounded mass displaced by an `fbm`
+#    field at 0.09 m, never a green box. Receding planes of dense small-scale geometry is exactly
+#    the case where a coarse summary of far detail has nothing large to hold on to, and four of them
+#    at a KNOWN and EQUAL spacing makes any discontinuity between detail levels measurable rather
+#    than merely visible: if the third plane summarises differently from the second, the eye has a
+#    ruler.
+#
+# 4. A BERCEAU: A TUNNEL OF LEAVES.
+#
+#    An arched hedge tunnel 2.70 m wide and 3.45 m high runs the whole 43 m of the cavea's top. It
+#    is a deep hollow whose walls are not solid — light reaches it through thousands of small gaps
+#    in displaced foliage rather than through one opening, and its inner side is open to the sky
+#    over the theatre. That is the exact opposite of the grotto's problem (one small mouth, a large
+#    dark volume) and nothing else on the estate has it. Six bronze standards with `lamp` flames
+#    stand INSIDE it, so the same tunnel is lit from within as well as through its own leaves.
+#
+# Secondary loads, all riding on geometry that had to exist anyway:
+#
+#   THIN MATTER. The berceau's iron hoops are 0.045 across (1.44 voxels at metre 32) and there are
+#   thirty-three of them on a 4.24 m arc; the proscenium dentils are 0.09 wide with 0.09 between
+#   them, eighty-nine of them in a row; the footlight reflectors are 0.045 thick; the rustication
+#   channels are 0.045 wide and 0.09 deep, which steps.clip calls the hardest thin matter there is
+#   because it is a surface that folds back on itself inside one sample step. DO NOT WIDEN ANY OF
+#   THEM.
+#
+#   MATERIALS. `travertine`, `silver`, `taper` and `iron` are all in the contract and none of them
+#   is in the facility's own frame at all. Travertine (rough=228) beside granite (rough=225) beside
+#   marble (rough=140) in one raking light is a rougher comparison than the facility ever makes;
+#   silver at rough=36 next to bronze at rough=110 under the same flame is the specular one.
+#
+#   WALKABLE. A person can walk up the orchestra, up any of the six radial stairs, along the
+#   praecinctio, through the berceau, back down, up either side flight and across the stage. Every
+#   rise on that route is 0.18 and every run is 0.32.
+#
+# ------------------------------------------------------------------------------------------------
+# THE MODULE, AND THE ONE PLACE THIS FILE DEPARTS FROM THE BRIEF'S SUGGESTED NUMBERS.
+#
+# D = 0.90, M = 0.45, riser 0.18, run 0.32.
+#
+# The brief suggests a bench tier 0.36 high and 0.72 deep, and adds "that is the module twice over
+# — check it". Checked: 0.72 is 1.6 M, not 2 M, and worse, a tier 0.36 high and 0.72 deep rakes at
+# 1:2, while a stair of 0.18 and 0.32 rakes at 1:1.778. THE TWO CANNOT BOTH BE TRUE. A radial stair
+# laid on that tier has either a 0.36 run (rise kept, run lost) or it climbs off the tier line
+# within three steps (run kept, everything else lost).
+#
+# So the tier is 0.64 deep, which is TWO RUNS, exactly as its 0.36 height is TWO RISERS. A bench
+# tier IS two steps: the front 0.32 is the footwell the person on the tier above rests their feet
+# in, at +0.18, and the back 0.32 is the seat, at +0.36. That is the real Roman section, and it
+# makes the whole cavea a flight of twenty-two steps of exactly 0.18 and exactly 0.32 — so the six
+# radial stairs get BOTH their numbers without a fudge, because they are the same steps, in granite,
+# between kerbs. 0.64 is derived from the contract's own run in the same way 0.36 is derived from
+# its own riser; neither 0.32 nor 0.18 is a multiple of M either, and both are in the contract for
+# the same reason: a person is that size.
+#
+# Everything else is on the module. The radii, written out because a cavea is where it is easiest
+# to lose:
+#
+#   orchestra          0 .. 5.40          12 M, a half disc, its diameter on z = 0
+#   seating         5.40 .. 12.44         22 steps of 0.32 = 7.04
+#   praecinctio    12.44 .. 15.14         2.70 = 6 M, the berceau's floor
+#   coping wall    15.14 .. 15.50         die, 0.36; cap oversails to 15.59
+#   outer radius          15.59
+#
+# and vertically: orchestra 0.00, seating top 3.96 (22 x 0.18), coping top 4.86 (+2 M), berceau
+# springing 6.06 (2.10 clear, the brief's own head height), crown 7.41.
+#
+# WHY 15.59 AND NOT THE BRIEF'S 16.20. The brief says to shrink the outer radius rather than drop
+# the metre if the clip is too large, and to check the number. Checked: at metre 32 this box is
+#
+#   32.40 x 9.45 x 26.10 m  =  1037 x 303 x 836  =  262.7 million cells
+#
+# and a clip is a dense array over its whole bounds whether or not there is anything there. At the
+# five bytes a cell the game keeps that is 1.31 GB; the measuring tool carries rather more per cell
+# (clips/estate/BRIEF.md measures 199 M cells at 2.2 GB, so about 11 bytes) and therefore about
+# 2.9 GB here. The brief's suggested 36 x 10 x 32 m box is 377 M cells and about 4.2 GB in the
+# tool, which is affordable on a large machine and not on a normal one. The tier depth going from
+# 0.72 to 0.64 took 0.88 m off the outer radius for nothing, and the rest came from cutting the
+# margin round the building to what it needs.
+#
+# HEAD HEIGHT. 2.10 m minimum where a person stands: the berceau is 2.10 clear at both its walls
+# and 3.45 at its crown; the proscenium's central opening is 3.60 clear and its two side openings
+# 2.70; nothing overhangs the praecinctio or the top bench.
+#
+# THE STAIR RUN, ANSWERED PLAINLY. Both numbers are kept. Rise 0.18, run 0.32, on the radial stairs
+# and on every bench tier alike, because the tier was cut to two runs rather than to the brief's
+# 0.72. The one thing given up for it is that the seating's outer radius is 12.44 rather than a
+# multiple of M — a radius that is a module number and a stair that is not was the wrong trade.
+#
+# WHAT IS CARVED AND WHAT IS PUT BACK AFTERWARDS. clips/facility.clip's closing note is about
+# exactly this: `let furnished = union { hollowed part_fittings }`, because a fitting standing in a
+# space that is later carved is eaten by the carve. Here the carves are the proscenium's three
+# openings, the orchestra's paving joints and the grate's recess; the footlights, standards,
+# tripods, herms and the grate itself are unioned back after them, at the bottom of this file.
+# ------------------------------------------------------------------------------------------------
+
+include "../facility/_contract.clip"
+
+metre 32
+bounds -16.20 -0.45 -16.20   16.20 9.00 9.90
+
+# The half space the whole auditorium is cut by: everything at z <= 0.05, which is the audience side
+# plus 0.05 of overlap onto the stage, so the cavea and the stage cannot open a joint between them
+# (rule 4). `around` has no partial-arc form, but `revolve`, `around` and `arc` all take `from=` and
+# `to=` now; the half space is still the better tool here because it keeps the revolved profile's
+# distance exact and costs one node.
+#
+# IT IS A BOX AND NOT A `plane`, AND THAT IS A MEASUREMENT AND NOT A PREFERENCE. A plane's bounding
+# box is everywhere, and an intersection keeps the intersection of its children's boxes — so
+# `intersection { revolve plane }` reports the box of the WHOLE revolution, both halves, and every
+# sample taken anywhere near the stage is charged with evaluating a twenty-two box cavea profile
+# that stops fourteen metres away. Cutting with a box that stops at z = 0.05 halves the reported
+# extent of every revolved shape in this file.
+#
+# MEASURED, BOTH ARMS, and the control is a separate copy of this file rather than a counter read
+# from inside the change. Same command, `--metre 8`, the only difference the two lines below and
+# the stair sector's box:
+#
+#   `plane`   141.5 s of CPU        179 components, 941593 voxels in the largest
+#   box        81.3 s of CPU        179 components, 941593 voxels in the largest
+#
+# — the same clip to the voxel, built in 57% of the time. Wall clock is not quoted because this
+# machine was running fourteen other builds; CPU time is the figure that survives that.
+#
+# The two `plane`s that remain are the stair sector's own tapers, and both are bounded by the boxes
+# they are intersected with, for the same reason.
+let th_south      = box -17.00 -1.00 -17.00   17.00 10.00 0.05
+let th_hard_south = box -17.00 -1.00 -17.00   17.00 10.00 0.00
+
+# The foliage field. One pattern for the wings and the berceau both, so two masses of clipped
+# hornbeam forty metres apart are the same plant rather than two different ones — the same argument
+# _contract.clip makes for naming its grains once.
+let th_leaf = fbm size=0.30 octaves=4 seed=71
+
+# ================================================================================================
+# THE GROUND
+# ================================================================================================
+#
+# Lawn, with a gravel walk round the outside of the cavea and a gravel yard round the stage. Drawn
+# past the bounds on every side so the frame is filled rather than fringed.
+
+let th_ground_slab = box -16.50 -0.50 -16.50   16.50 0.00 10.20
+
+let th_walk_ring = difference {
+    cylinder 0 -0.20 0  r=17.55 h=1.00 axis=y
+    cylinder 0 -0.20 0  r=15.59 h=1.20 axis=y
+}
+let th_gravel_yard = box -16.50 -0.50 0.00   16.50 0.02 10.20
+let th_gravel_zone = intersection { th_ground_slab  union { th_walk_ring th_gravel_yard } }
+
+# ================================================================================================
+# THE CAVEA — one revolved step profile, twenty-two steps of 0.18 and 0.32
+# ================================================================================================
+#
+# Twenty-two nested boxes in (radius, height), each set out one run and up one riser from the one
+# below and each running out to the outer face at 15.50, so that everything above buries everything
+# below and the twenty-two treads CANNOT DRIFT — the same argument steps.clip makes for writing its
+# ten treads out as ten boxes rather than sweeping them.
+#
+#   step  1  r  5.40  top 0.18      step 12  r  8.92  top 2.16
+#   step  2  r  5.72  top 0.36      step 13  r  9.24  top 2.34
+#   step  3  r  6.04  top 0.54      step 14  r  9.56  top 2.52
+#   step  4  r  6.36  top 0.72      step 15  r  9.88  top 2.70
+#   step  5  r  6.68  top 0.90      step 16  r 10.20  top 2.88
+#   step  6  r  7.00  top 1.08      step 17  r 10.52  top 3.06
+#   step  7  r  7.32  top 1.26      step 18  r 10.84  top 3.24
+#   step  8  r  7.64  top 1.44      step 19  r 11.16  top 3.42
+#   step  9  r  7.96  top 1.62      step 20  r 11.48  top 3.60
+#   step 10  r  8.28  top 1.80      step 21  r 11.80  top 3.78
+#   step 11  r  8.60  top 1.98      step 22  r 12.12  top 3.96
+#
+# Odd steps are the footwells (granite, walked on), even steps are the seats (travertine, sat on).
+# Step 22's top at 3.96 runs on out to 15.50 and IS the praecinctio — the walk round the top and the
+# floor of the berceau — so there is no separate slab and no joint to open.
+#
+# The nosing round is 0.015 (M/30), chosen against the grid for the reason steps.clip sets out: at
+# metre 32 the deepest it pulls a tread top down at a sample is about 3 mm, a tenth of a voxel, and
+# never enough to move a tread into the voxel below.
+
+let th_cv_01 = box  5.40 -0.45 -1   15.50 0.18 1 round=0.015
+let th_cv_02 = box  5.72 -0.45 -1   15.50 0.36 1 round=0.015
+let th_cv_03 = box  6.04 -0.45 -1   15.50 0.54 1 round=0.015
+let th_cv_04 = box  6.36 -0.45 -1   15.50 0.72 1 round=0.015
+let th_cv_05 = box  6.68 -0.45 -1   15.50 0.90 1 round=0.015
+let th_cv_06 = box  7.00 -0.45 -1   15.50 1.08 1 round=0.015
+let th_cv_07 = box  7.32 -0.45 -1   15.50 1.26 1 round=0.015
+let th_cv_08 = box  7.64 -0.45 -1   15.50 1.44 1 round=0.015
+let th_cv_09 = box  7.96 -0.45 -1   15.50 1.62 1 round=0.015
+let th_cv_10 = box  8.28 -0.45 -1   15.50 1.80 1 round=0.015
+let th_cv_11 = box  8.60 -0.45 -1   15.50 1.98 1 round=0.015
+let th_cv_12 = box  8.92 -0.45 -1   15.50 2.16 1 round=0.015
+let th_cv_13 = box  9.24 -0.45 -1   15.50 2.34 1 round=0.015
+let th_cv_14 = box  9.56 -0.45 -1   15.50 2.52 1 round=0.015
+let th_cv_15 = box  9.88 -0.45 -1   15.50 2.70 1 round=0.015
+let th_cv_16 = box 10.20 -0.45 -1   15.50 2.88 1 round=0.015
+let th_cv_17 = box 10.52 -0.45 -1   15.50 3.06 1 round=0.015
+let th_cv_18 = box 10.84 -0.45 -1   15.50 3.24 1 round=0.015
+let th_cv_19 = box 11.16 -0.45 -1   15.50 3.42 1 round=0.015
+let th_cv_20 = box 11.48 -0.45 -1   15.50 3.60 1 round=0.015
+let th_cv_21 = box 11.80 -0.45 -1   15.50 3.78 1 round=0.015
+let th_cv_22 = box 12.12 -0.45 -1   15.50 3.96 1 round=0.015
+
+let th_cavea_prof = union {
+    th_cv_01 th_cv_02 th_cv_03 th_cv_04 th_cv_05 th_cv_06 th_cv_07 th_cv_08
+    th_cv_09 th_cv_10 th_cv_11 th_cv_12 th_cv_13 th_cv_14 th_cv_15 th_cv_16
+    th_cv_17 th_cv_18 th_cv_19 th_cv_20 th_cv_21 th_cv_22
+}
+let th_cavea_rev = revolve { th_cavea_prof } axis=y
+let th_cavea     = intersection { th_cavea_rev th_south }
+
+# --- the treads and the seats, as keys ------------------------------------------------------------
+#
+# The same profile said twice more, once for the eleven walking surfaces and once for the eleven
+# seats, so the paint and the weathering both key on a shape of this file rather than on a height.
+# Each key box reaches 0.19 below its own tread and 0.02 above it, which takes in the riser under it
+# and nothing of the step in front.
+
+let th_tk_01 = box  5.40 -0.01 -1   5.72 0.20 1
+let th_tk_03 = box  6.04  0.35 -1   6.36 0.56 1
+let th_tk_05 = box  6.68  0.71 -1   7.00 0.92 1
+let th_tk_07 = box  7.32  1.07 -1   7.64 1.28 1
+let th_tk_09 = box  7.96  1.43 -1   8.28 1.64 1
+let th_tk_11 = box  8.60  1.79 -1   8.92 2.00 1
+let th_tk_13 = box  9.24  2.15 -1   9.56 2.36 1
+let th_tk_15 = box  9.88  2.51 -1  10.20 2.72 1
+let th_tk_17 = box 10.52  2.87 -1  10.84 3.08 1
+let th_tk_19 = box 11.16  3.23 -1  11.48 3.44 1
+let th_tk_21 = box 11.80  3.59 -1  12.12 3.80 1
+let th_tread_prof = union {
+    th_tk_01 th_tk_03 th_tk_05 th_tk_07 th_tk_09 th_tk_11
+    th_tk_13 th_tk_15 th_tk_17 th_tk_19 th_tk_21
+}
+let th_tread_key = intersection { revolve { th_tread_prof } axis=y  th_south }
+
+let th_sk_02 = box  5.72  0.17 -1   6.04 0.38 1
+let th_sk_04 = box  6.36  0.53 -1   6.68 0.74 1
+let th_sk_06 = box  7.00  0.89 -1   7.32 1.10 1
+let th_sk_08 = box  7.64  1.25 -1   7.96 1.46 1
+let th_sk_10 = box  8.28  1.61 -1   8.60 1.82 1
+let th_sk_12 = box  8.92  1.97 -1   9.24 2.18 1
+let th_sk_14 = box  9.56  2.33 -1   9.88 2.54 1
+let th_sk_16 = box 10.20  2.69 -1  10.52 2.90 1
+let th_sk_18 = box 10.84  3.05 -1  11.16 3.26 1
+let th_sk_20 = box 11.48  3.41 -1  11.80 3.62 1
+let th_sk_22 = box 12.12  3.77 -1  12.44 3.98 1
+let th_seat_prof = union {
+    th_sk_02 th_sk_04 th_sk_06 th_sk_08 th_sk_10 th_sk_12
+    th_sk_14 th_sk_16 th_sk_18 th_sk_20 th_sk_22
+}
+let th_seat_key = intersection { revolve { th_seat_prof } axis=y  th_south }
+
+# --- the coping ------------------------------------------------------------------------------------
+#
+# A moulded parapet round the outside of the praecinctio: a die 0.36 thick and 0.72 tall, a cap that
+# oversails 0.09 on both faces, and an ovolo under the cap on each side. 3.96 + 0.90 = 4.86, which is
+# two modules over the walk, and it is what the berceau's outer hedge stands on. The die is founded
+# at 3.91, 0.05 into the walk (rule 4).
+#
+# One profile, revolved. Four sections in four lines is what _order.clip's note about the Attic base
+# says to do instead of stacking cylinders, and the argument is the same at this size: a stacked
+# ovolo is a staircase.
+
+let th_cop_die = box 15.14 3.91 -1   15.50 4.68 1 round=0.012
+let th_cop_cap = box 15.05 4.68 -1   15.59 4.86 1 round=0.012
+let th_cop_bed_i = ovolo 15.14 4.50  15.05 4.68
+let th_cop_bed_o = ovolo 15.50 4.50  15.59 4.68
+let th_coping_prof = union { th_cop_die th_cop_cap th_cop_bed_i th_cop_bed_o }
+let th_coping = intersection { revolve { th_coping_prof } axis=y  th_south }
+
+# --- the analemma -----------------------------------------------------------------------------------
+#
+# The two end walls, on the diameter. Built as the cavea's own profile RAISED ONE TIER and cut to a
+# 0.50 m slab across z = 0, so the wall follows the seating step for step and stands exactly 0.36
+# above it the whole way out — no second profile, no chance of the two disagreeing. Trimmed to the
+# seating's own radii so it stops at the praecinctio and does not run through the berceau.
+
+# IT RUNS THE WHOLE WAY OUT TO 15.62 AND NOT ONLY TO THE SEATING, and that is a repair rather than a
+# flourish. `th_south` cuts the cavea at z = 0.05, so without an end wall the last 0.05 of stone
+# stands as a FIN 1.6 voxels thick and up to 3.96 m tall along the whole diameter — thin matter
+# nobody asked for, in the one place where it is a modelling error rather than a test. A 0.50 m end
+# wall buries it.
+let th_anal_slab = box -16.20 -0.50 -0.45   16.20 5.20 0.05
+let th_anal_out  = cylinder 0 2.00 0  r=15.62 h=12.00 axis=y
+let th_anal_in   = cylinder 0 2.00 0  r= 5.35 h=12.00 axis=y
+let th_analemma  = difference {
+    intersection { translate { th_cavea_rev } 0 0.36 0   th_anal_slab  th_anal_out }
+    th_anal_in
+}
+
+# ================================================================================================
+# THE RADIAL STAIRS — six of them, dividing the cavea into five wedges
+# ================================================================================================
+#
+# Six scalaria at -0.25, -0.15, -0.05, +0.05, +0.15 and +0.25 turns from the south axis, so the five
+# wedges between them are each a tenth of a turn and the two outermost stairs stand against the
+# analemmae, which is where a theatre puts them. Five equal wedges over a half circle needs six
+# boundaries; putting a stair on all six is what makes the plan symmetric about the axis rather than
+# about a wedge.
+#
+# THE STAIR IS A TRUE SECTOR AND NOT A PARALLEL STRIP, so its treads are WEDGES, widening from 0.82
+# at the orchestra to 1.88 at the top and measuring the brief's 1.35 at the mid radius. It is two
+# tilted half spaces folded in x — `mirror { plane }` reads the plane at |x|, which is the two-sided
+# taper in one node — and the tangent 0.0757 is 0.675 / 8.92, the half width at the mid radius.
+#
+# THE RISE AND THE RUN ARE BOTH EXACT AND THERE IS NOTHING TO CONFESS. A radial stair here is the
+# cavea's own twenty-two steps in a different stone between two kerbs, so its rise is 0.18 and its
+# run is 0.32 by construction — see the module note at the top of this file for the tier depth that
+# bought it.
+#
+# The kerbs are the same trick as the analemma: the cavea's profile raised ONE RISER, intersected
+# with a thin angular band down each side of the sector. So a kerb is 0.18 proud of whichever tread
+# it is beside, all the way up, and cannot be out of step with the stair it edges.
+
+let th_sec_out = mirror { plane 1 0 0.0757 at=0 } axis=x
+let th_sec_in  = mirror { plane 1 0 0.0555 at=0 } axis=x
+let th_rad_band = difference {
+    cylinder 0 2.00 0  r=12.62 h=12.00 axis=y
+    cylinder 0 2.00 0  r= 5.35 h=12.00 axis=y
+}
+
+# The sector's own bounding box, given explicitly for the same reason `th_south` is a box: two
+# tilted half spaces have no bounds at all, and `th_rad_band` is a difference of cylinders whose box
+# is the whole annulus — so without this line each of the six stairs claims the whole auditorium and
+# every sample anywhere in it pays for all six. The numbers are what the sector actually reaches:
+# 0.0757 x 12.62 = 0.955 across at the widest, and the radii it is trimmed to.
+let th_stair_box = box -1.00 -0.60 -12.70   1.00 4.40 -5.30
+let th_stair_one = intersection { th_sec_out th_rad_band th_stair_box }
+let th_stair_set = mirror {
+    union {
+        rotate { th_stair_one } y=-0.05
+        rotate { th_stair_one } y=-0.15
+        rotate { th_stair_one } y=-0.25
+    }
+} axis=x
+let th_stair_zone = intersection { th_stair_set th_south }
+
+let th_kerb_one = intersection {
+    difference { th_sec_out th_sec_in }
+    th_rad_band
+    th_stair_box
+    translate { th_cavea_rev } 0 0.18 0
+}
+let th_kerb_set = mirror {
+    union {
+        rotate { th_kerb_one } y=-0.05
+        rotate { th_kerb_one } y=-0.15
+        rotate { th_kerb_one } y=-0.25
+    }
+} axis=x
+let th_stair_kerbs = intersection { th_kerb_set th_south }
+
+# ================================================================================================
+# THE ORCHESTRA — a paved half disc, 10.80 m across, radiating from the centre of its own circle
+# ================================================================================================
+#
+# Travertine, with four concentric granite bands and thirty-two radial joints. The joints are
+# 0.0375 wide and 0.045 deep, which is steps.clip's own paving joint to the millimetre — one and a
+# fifth voxels across at metre 32, and the hardest thin matter there is because a sampler stepping
+# by its own reported distance can walk across the mouth of one. DO NOT WIDEN THEM.
+#
+# The radial joints are SIXTEEN BOXES THROUGH THE CENTRE and not `around { } count=32`. A polar fold
+# reports a distance larger than the truth near a sector boundary, so the field has to declare itself
+# slack everywhere, and _order.clip measured that at 950x on one column; sixteen rotations of one box
+# are isometries, each carrying a box, and each box covers two rays. They are built by doubling —
+# four unions and four rotations for sixteen copies.
+
+let th_orch_disc = intersection { cylinder 0 -0.225 0 r=5.45 h=0.45 axis=y  th_south }
+
+let th_or_ray  = box -0.01875 -0.045 -5.60   0.01875 0.20 5.60
+let th_or_r1   = union { th_or_ray rotate { th_or_ray } y=-0.03125 }
+let th_or_r2   = union { th_or_r1  rotate { th_or_r1 }  y=-0.0625 }
+let th_or_r3   = union { th_or_r2  rotate { th_or_r2 }  y=-0.125 }
+let th_or_rays = union { th_or_r3  rotate { th_or_r3 }  y=-0.25 }
+
+let th_or_ring_1 = box 1.78125 -0.045 -1   1.81875 0.20 1
+let th_or_ring_2 = box 2.68125 -0.045 -1   2.71875 0.20 1
+let th_or_ring_3 = box 3.58125 -0.045 -1   3.61875 0.20 1
+let th_or_ring_4 = box 4.48125 -0.045 -1   4.51875 0.20 1
+let th_or_rings  = revolve { union { th_or_ring_1 th_or_ring_2 th_or_ring_3 th_or_ring_4 } } axis=y
+
+# THE JOINTS ARE CONFINED TO THE PAVING BEFORE THEY ARE SUBTRACTED. A ray is a box through the
+# centre of the circle and reaches 5.60 m the other way, which is straight through the front of the
+# stage; sixteen of them would have sawn thirty-two slots up the stage's granite base. Intersected
+# with the disc first, a cutter can only reach what it is a joint in.
+let th_or_cuts = intersection { union { th_or_rays th_or_rings } th_orch_disc }
+
+# The bands of granite between the joints, as a paint key: two annuli of the four the rings divide
+# the pavement into, so the floor reads as alternating courses of two stones rather than as one
+# stone with lines scratched on it.
+let th_or_band_a = box 1.80 -0.50 -1   2.70 0.20 1
+let th_or_band_b = box 3.60 -0.50 -1   4.50 0.20 1
+let th_or_bands  = intersection { revolve { union { th_or_band_a th_or_band_b } } axis=y
+                                  th_orch_disc }
+
+# --- the grate ---------------------------------------------------------------------------------------
+#
+# A half round bronze grate 2.70 across at the centre of the orchestra's own circle, which for a
+# SEMICIRCULAR orchestra is on the diameter, against the front of the stage — which is also where
+# the water would actually go. Recessed 0.09 and put back after the carve.
+#
+# The bars are 0.045 across and 0.09 deep on a 0.27 grid: eleven one way, eleven the other, and the
+# grid is the only place in this clip where an emissive is not what a sampler is being asked about
+# and a hundred small holes are.
+
+# Cut and refilled against `th_hard_south`, which stops at z = 0 rather than at `th_south`'s 0.05:
+# the stage's own front face is that plane, and a recess 0.05 into it would be a notch in the stage
+# rather than a grate in the floor.
+let th_gr_recess = intersection { cylinder 0 0.20 0 r=1.35 h=0.58 axis=y  th_hard_south }
+let th_gr_rim    = intersection { revolve { box 1.26 -0.09 -1  1.39 0.00 1 } axis=y  th_hard_south }
+let th_gr_bar    = box -0.0225 -0.09 -1.40   0.0225 0.00 1.40
+let th_gr_bars_a = repeat { th_gr_bar } x=0.27 nx=5
+let th_gr_bars_b = rotate { th_gr_bars_a } y=0.25
+let th_gr_bars   = intersection {
+    union { th_gr_bars_a th_gr_bars_b }
+    cylinder 0 -0.045 0 r=1.35 h=0.30 axis=y
+}
+let th_grate = intersection { union { th_gr_rim th_gr_bars } th_hard_south }
+
+# ================================================================================================
+# THE STAGE — 16.20 x 9.00, floor 0.90 over the orchestra, oak boards on a granite base
+# ================================================================================================
+#
+# 0.90 is 2 M and it is also five risers, which is what the two side flights climb. The boards are
+# 0.45 wide with a 0.0375 joint 0.045 deep between them, on the same grid the podium and the great
+# steps of the facility are jointed on.
+
+let th_stage_base   = box -8.10 -0.45 0.00   8.10 0.72 9.05 round=0.02
+let th_stage_boards = box -8.10  0.72 0.00   8.10 0.90 8.15 round=0.010
+let th_bd_joint     = box -0.01875 0.855 -0.10   0.01875 0.95 8.20
+let th_bd_joints    = repeat { th_bd_joint } x=0.45 nx=18
+
+# The two side flights, drawn on the east and folded. Five risers of 0.18 and five runs of 0.32 from
+# the ground to the stage, then a landing 1.42 deep beside the stage so a person turns onto it rather
+# than stepping off the top tread sideways. Each tread runs north to z = 1.65 and is buried by the
+# one above it, which is steps.clip's construction and for its reason: a box is the only thing in
+# this language that cannot drift.
+let th_fl_t1 = box 8.05 -0.05 0.00   9.45 0.18 1.65 round=0.015
+let th_fl_t2 = box 8.05 -0.05 0.32   9.45 0.36 1.65 round=0.015
+let th_fl_t3 = box 8.05 -0.05 0.64   9.45 0.54 1.65 round=0.015
+let th_fl_t4 = box 8.05 -0.05 0.96   9.45 0.72 1.65 round=0.015
+let th_fl_t5 = box 8.05 -0.05 1.28   9.45 0.90 2.70 round=0.015
+let th_flight_e = union { th_fl_t1 th_fl_t2 th_fl_t3 th_fl_t4 th_fl_t5 }
+let th_flights  = mirror { th_flight_e } axis=x
+
+# ================================================================================================
+# THE PROSCENIUM — the back scene: a rusticated wall 6.30 high with three round-headed openings
+# ================================================================================================
+#
+# AT THE BACK OF THE STAGE AND NOT AT THE FRONT, which is the whole reason the footlights work. They
+# stand at z = 0.09 and throw upward and UPSTAGE; the wall they throw at is 8.10 m away and 6.30 m
+# tall, so every projecting thing on it — nine courses of rustication, eighty-nine dentils, a cornice
+# and four herms — casts a long shadow UP the face of the wall.
+#
+#   0.90 .. 4.05    the rusticated storey, channels 0.045 wide and 0.09 deep, courses of 0.45,
+#                   blocks of 1.35 in running bond. The podium's own numbers, so the two read as
+#                   one idiom across the estate. One and a half voxels across at metre 32; below
+#                   metre 24 they will not show at all, and that is the resolution, not a fault.
+#   central opening x +-1.35 (3 M wide), springing 4.50, radius 1.35, crown 5.85 — 3.60 clear
+#   side openings   x 3.60 .. 5.40 (2 M wide), springing 3.60, radius 0.90, crown 4.50 — 2.70 clear
+#   6.30 .. 7.20    the entablature: architrave, frieze, dentils, corona. 0.90 = 2 M.
+#   7.20 .. 8.55    the broken segmental pediment, with a gilt cartouche in the break
+
+let th_pros_wall = box -8.10 0.72 8.10   8.10 7.20 9.00 round=0.015
+
+# THE CHANNEL CUTS INTO THE WALL AND NOT ACROSS ITS FACE. The wall's face is z = 8.10 and its body
+# is at z > 8.10, so a channel runs from 8.05 (clear of the face, and clear of the grain that will
+# move it) to 8.19, which is 0.09 in. Written the other way round it takes 0.01 off the face and
+# nothing else — a rustication that measures perfectly and cannot be seen.
+let th_pr_chan_h = box -8.20 -0.0225 8.05   8.20 0.0225 8.19
+let th_pr_beds   = translate { repeat { th_pr_chan_h } y=0.45 ny=4 } 0 2.70 0
+let th_pr_perp   = box -0.0225 0 8.05   0.0225 0.45 8.19
+let th_pr_perps_a = translate { repeat { repeat { th_pr_perp } x=1.35 nx=6 } y=0.90 ny=4 } 0 0.90 0
+let th_pr_perps_b = translate { th_pr_perps_a } 0.675 0.45 0
+let th_pr_rust_zone = box -8.20 0.85 8.04   8.20 4.10 8.22
+let th_pr_rustic = intersection {
+    union { th_pr_beds th_pr_perps_a th_pr_perps_b }
+    th_pr_rust_zone
+}
+
+let th_pr_op_c = union {
+    box -1.35 0.85 8.00   1.35 4.50 9.10
+    cylinder 0 4.50 8.55  r=1.35 h=1.20 axis=z
+}
+let th_pr_op_e = union {
+    box 3.60 0.85 8.00   5.40 3.60 9.10
+    cylinder 4.50 3.60 8.55  r=0.90 h=1.20 axis=z
+}
+let th_pr_openings = union { th_pr_op_c  mirror { th_pr_op_e } axis=x }
+
+# The entablature. Three bands and a dentil course, not one band — the same rule _order.clip gives
+# for the facility's own. The dentils are 0.09 wide with 0.09 between them and stand 0.09 proud:
+# eighty-nine blocks of thin matter in a row, 2.88 voxels across at metre 32, lit from below by
+# twenty-four flames eight metres away and by nothing else.
+let th_pr_architrave = box -8.19 6.30 8.055   8.19 6.66 9.00 round=0.012
+let th_pr_frieze     = box -8.19 6.66 8.100   8.19 6.93 9.00 round=0.012
+let th_pr_dband      = box -8.19 6.93 8.055   8.19 7.02 9.00 round=0.010
+let th_pr_dentil     = box -0.045 6.93 7.965   0.045 7.02 8.10 round=0.008
+let th_pr_dentils    = repeat { th_pr_dentil } x=0.18 nx=44
+let th_pr_corona     = box -8.19 7.02 7.92   8.19 7.20 9.00 round=0.012
+let th_pr_entab = union {
+    th_pr_architrave th_pr_frieze th_pr_dband th_pr_dentils th_pr_corona
+}
+
+# The broken segmental pediment. Span 5.40 (12 M) and rise 1.35 (3 M) give a radius of
+# (2.70^2 + 1.35^2) / (2 x 1.35) = 3.375, which is 7.5 M exactly, struck from y = 5.175 (11.5 M).
+# The band is 0.45 (M) deep, so its soffit is radius 2.925 (6.5 M). Those three radii are a
+# CONSTRUCTION out of the span and the rise, in the same way steps.clip's rake angle is a
+# construction out of its own riser and run — not a dimension invented by eye.
+#
+# It is broken over the middle 1.35, and the cartouche stands in the break on a small pedestal off
+# the cornice, so it touches stone at 7.20 and is not an ornament hanging in the air.
+let th_pd_out   = cylinder 0 5.175 8.46  r=3.375 h=1.08 axis=z
+let th_pd_in    = cylinder 0 5.175 8.46  r=2.925 h=1.20 axis=z
+let th_pd_zone  = box -3.60 7.15 7.90   3.60 9.00 9.02
+let th_pd_break = box -0.675 7.10 7.88   0.675 9.10 9.04
+let th_pediment = difference {
+    intersection { th_pd_out th_pd_zone }
+    th_pd_in th_pd_break
+}
+
+let th_ca_ped     = box -0.45 7.15 8.10   0.45 7.74 8.55 round=0.012
+let th_ca_body    = ellipsoid 0 8.06 8.37  rx=0.54 ry=0.63 rz=0.225
+let th_ca_scr_e   = spiral 0.45 8.24 8.40  r=0.18 tighten=0.45 tube=0.054 turns=1.25 axis=z
+let th_cartouche  = union { th_ca_ped th_ca_body  mirror { th_ca_scr_e } axis=x }
+
+# ================================================================================================
+# THE HERMS — four of them, on the piers of the proscenium
+# ================================================================================================
+#
+# A head and shoulders on a tapering pillar, the pillar wider at the top than at the foot, which is
+# what makes a herm a herm and not a bust on a plinth. The taper is TWO TILTED HALF SPACES FOLDED,
+# `mirror { plane 1 -0.05 0 }`, so a batter of 0.05 in x and in z at once is two nodes and is exact
+# — a `scale` cannot taper and stacked boxes read as a wedding cake at 32 voxels to the metre.
+#
+# Its features are one- and two-voxel things: the nose stands 0.0225 proud, the brow 0.0225, the
+# eyes are cut 0.027. They are silhouette and shading rather than detail, and what actually reads
+# from the cavea is the hair mass, the beard and the line of the brow — lit, here, from BELOW by
+# footlights 7.75 m in front of them, which is the one direction that makes a face read as a mask.
+#
+# 2.69 m over the stage floor, on the two piers each side: x = +-2.475 (between the central and side
+# openings) and +-6.75 (between the side opening and the end of the wall). Its back is sunk 0.05
+# into the wall at z = 8.10 and its foot 0.05 into the boards.
+
+let th_hm_tap_x = mirror { plane 1 -0.05 0 at=0.18 } axis=x
+let th_hm_tap_z = mirror { plane 0 -0.05 1 at=0.18 } axis=z
+let th_hm_box   = box -0.30 -0.05 -0.30   0.30 1.80 0.30
+let th_hm_shaft = round { intersection { th_hm_box th_hm_tap_x th_hm_tap_z } } by=0.010
+
+let th_hm_collar = box -0.2925 1.755 -0.2925   0.2925 1.89 0.2925 round=0.012
+let th_hm_torso  = ellipsoid 0 2.16  0      rx=0.225 ry=0.315 rz=0.153
+let th_hm_shldr  = capsule -0.2025 2.25 0    0.2025 2.25 0  r=0.117
+let th_hm_neck   = capsule 0 2.295 -0.018   0 2.385 -0.018  r=0.058
+let th_hm_skull  = ellipsoid 0 2.52  -0.027  rx=0.108 ry=0.135 rz=0.117
+let th_hm_hair   = difference {
+    ellipsoid 0 2.535 -0.009  rx=0.126 ry=0.153 rz=0.135
+    box -0.20 2.40 -0.30   0.20 2.72 -0.108
+}
+let th_hm_beard = ellipsoid 0 2.385 -0.081  rx=0.081 ry=0.108 rz=0.090
+let th_hm_nose  = capsule 0 2.520 -0.135   0 2.475 -0.153  r=0.0225
+let th_hm_brow  = capsule -0.072 2.556 -0.126   0.072 2.556 -0.126  r=0.0225
+let th_hm_eye_e = sphere 0.054 2.529 -0.126  r=0.027
+let th_herm_one = difference {
+    union {
+        th_hm_shaft th_hm_collar th_hm_torso th_hm_shldr th_hm_neck
+        th_hm_skull th_hm_hair th_hm_beard th_hm_nose th_hm_brow
+    }
+    mirror { th_hm_eye_e } axis=x
+}
+let th_herms = mirror {
+    union {
+        translate { th_herm_one } 2.475 0.90 7.85
+        translate { th_herm_one } 6.750 0.90 7.85
+    }
+} axis=x
+
+# ================================================================================================
+# THE WINGS — four pairs of clipped hornbeam flats, in perspective towards the back
+# ================================================================================================
+#
+# Parallel to the proscenium at 1.80 m spacing, each 3.60 wide (8 M), 5.40 tall (12 M) and 0.45
+# thick (M), each stepping 0.90 (2 M) further inboard than the one in front:
+#
+#   z 1.80    x 4.50 .. 8.10     the acting opening is 9.00 across here
+#   z 3.60    x 3.60 .. 7.20                        7.20
+#   z 5.40    x 2.70 .. 6.30                        5.40
+#   z 7.20    x 1.80 .. 5.40                        3.60
+#
+# EQUAL SPACING AND EQUAL SIZE, on purpose. The convergence is entirely in x. A real baroque set
+# also shrinks the flats going back, and shrinking them would have made the four planes different
+# objects and destroyed the one thing they are here to measure: four identical 19.44 m2 slabs of
+# dense small-scale geometry at a known 1.80 m pitch, so that any difference in how the third is
+# summarised against the second is a number and not an impression.
+#
+# Real matter, not a green box: a rounded mass displaced by `th_leaf` at 0.09, which at metre 32 is
+# nearly three voxels and is a deformation rather than a dither. An iron post at the inner edge of
+# each flat stands on the boards independently of the foliage, so the displacement can do what it
+# likes to the hedge without a flat ever standing on nothing.
+
+let th_wing_1e = box 4.50 0.85 1.80   8.10 6.30 2.25 round=0.09
+let th_wing_2e = box 3.60 0.85 3.60   7.20 6.30 4.05 round=0.09
+let th_wing_3e = box 2.70 0.85 5.40   6.30 6.30 5.85 round=0.09
+let th_wing_4e = box 1.80 0.85 7.20   5.40 6.30 7.65 round=0.09
+let th_wing_mass = mirror {
+    union { th_wing_1e th_wing_2e th_wing_3e th_wing_4e }
+} axis=x
+let th_wings = displace { th_wing_mass th_leaf } amount=0.09
+
+let th_wpost_1e = cylinder 4.5675 3.62 2.025  r=0.0675 h=5.54 axis=y
+let th_wpost_2e = cylinder 3.6675 3.62 3.825  r=0.0675 h=5.54 axis=y
+let th_wpost_3e = cylinder 2.7675 3.62 5.625  r=0.0675 h=5.54 axis=y
+let th_wpost_4e = cylinder 1.8675 3.62 7.425  r=0.0675 h=5.54 axis=y
+let th_wing_posts = mirror {
+    union { th_wpost_1e th_wpost_2e th_wpost_3e th_wpost_4e }
+} axis=x
+
+# ================================================================================================
+# THE BERCEAU — an arched tunnel of clipped hornbeam on an iron frame, round the top of the cavea
+# ================================================================================================
+#
+# 2.70 clear between its walls (12.44 to 15.14, six modules), springing at 6.06 and crowning at 7.41
+# — 2.10 clear at the walls and 3.45 at the crown. The brief asks for 3.15 high; 3.45 is what the
+# brief's OTHER rule costs. A semicircular vault is by definition its springing height at the wall
+# it springs from, so a 3.15 tunnel of this width springs at 1.80 and gives 1.80 m of head height at
+# the walls, which is under the 2.10 minimum. The springing was raised to 2.10 exactly — the same
+# number as the head-height rule it satisfies — and the crown followed it up.
+#
+# THE INNER SIDE IS OPEN. There is no hedge below the springing on the inside, only the iron; the
+# outer side is closed by a hedge wall standing on the coping.
+#
+# THE VAULT IS CUT FLAT AT ITS SPRINGING AND NOT TRIMMED BACK TO THE TUNNEL WALL, and that is a
+# repair with 698 components behind it. It was first written `box 12.44 6.06 ... `, so the hedge's
+# inner face was sliced vertical at the tunnel's own wall line to stop the haunch overhanging the
+# top bench. A 0.45 m shell sliced by the plane its intrados is TANGENT to does not end in a face;
+# it ends in a CUSP, whose thickness near the springing goes as the square root of the distance
+# from it — under one voxel for 15 cm along a feather edge running the whole forty-three metres of
+# the tunnel. `th_leaf` then moves that edge 0.135 either way and it comes apart. Measured, metre
+# 32: 698 components and 887 floating voxels, EVERY ONE of them between y 5.97 and 6.47 at a radius
+# between 12.41 and 12.53 — the cusp, and nothing else in the clip.
+#
+# The trim was never needed. The overhang it was there to prevent sits 6.06 - 3.96 = 2.10 above the
+# walk, which is exactly the head height the rule asks for, so the shell is simply cut flat at its
+# springing and the haunch is allowed to come down over the top bench the way a real hedge does.
+#
+# THE FRAME IS THIRTY-THREE RIBS AT A SIXTY-FOURTH OF A TURN — 5.625 degrees, which at the tunnel's
+# mid radius is 1.354 m, a trellis pitch — plus three continuous purlins at the two springings and
+# the crown. They are ROTATIONS OF ONE RIB and not `around { } count=64`, for the reason
+# fittings.clip gives for its four hanging rods: a polar fold reports a distance larger than the
+# truth near a sector boundary and makes the whole clip's field slack, and a rotation is an isometry
+# that carries a box. Sixteen come from four doublings, one more is placed at the quarter turn, and
+# the mirror in x makes thirty-three out of seventeen.
+#
+# THE PURLINS ARE NOT DECORATION EITHER. They are the only thing that guarantees the hedge is one
+# piece with the ground after `th_leaf` has moved its surface 0.135 in either direction: three
+# continuous rings buried in the foliage at the springings and the crown, which no displacement can
+# take apart. The hedge also stands on its own outer wall on the coping, so there are two
+# independent paths to the ground and the arch cannot come off in the middle.
+
+let th_ber_hoop = intersection {
+    torus 0 6.06 -13.79  ring=1.35 tube=0.045 axis=x
+    box -0.20 6.06 -15.30   0.20 7.50 -12.28
+}
+let th_ber_leg_i = capsule 0 3.91 -12.44   0 6.10 -12.44  r=0.0675
+let th_ber_leg_o = capsule 0 4.81 -15.14   0 6.10 -15.14  r=0.0675
+let th_ber_rib   = union { th_ber_hoop th_ber_leg_i th_ber_leg_o }
+
+let th_ber_r1 = union { th_ber_rib rotate { th_ber_rib } y=-0.015625 }
+let th_ber_r2 = union { th_ber_r1  rotate { th_ber_r1 }  y=-0.03125 }
+let th_ber_r3 = union { th_ber_r2  rotate { th_ber_r2 }  y=-0.0625 }
+let th_ber_r4 = union { th_ber_r3  rotate { th_ber_r3 }  y=-0.125 }
+let th_ber_ribs = union { th_ber_r4 rotate { th_ber_rib } y=-0.25 }
+
+# The inner purlin is 0.09 across the tube where the other two are 0.0675, because it is the one
+# with a job the others do not have: the outer purlin is buried inside the hedge wall and the crown
+# purlin is buried in the crown, but this one lies in the open under the springing and has to hold
+# the vault's inner haunch to the frame across a 0.09 x 0.09 overlap. At 0.0675 that overlap is two
+# voxels square at metre 32, which is the size fittings.clip measured a lamp falling off at.
+let th_ber_purl_i = torus 0 6.06 0  ring=12.44 tube=0.0900 axis=y
+let th_ber_purl_o = torus 0 6.06 0  ring=15.14 tube=0.0675 axis=y
+let th_ber_purl_c = torus 0 7.41 0  ring=13.79 tube=0.0675 axis=y
+let th_ber_frame = intersection {
+    union { th_ber_ribs th_ber_purl_i th_ber_purl_o th_ber_purl_c }
+    th_south
+}
+
+# The hedge itself, as one revolved section: an annulus 0.45 thick struck from the tunnel's own
+# centre, cut flat at the springing, plus the wall that carries it down onto the coping. The knife's
+# inner edge is at 11.90, which is 0.09 clear of the 11.99 the shell actually reaches, so the cut
+# only ever takes the half below the springing and never grazes the shell's own faces — see the
+# header of this section for what happened when it did.
+let th_ber_band = intersection {
+    difference {
+        cylinder 13.79 6.06 0  r=1.80 h=4.00 axis=z
+        cylinder 13.79 6.06 0  r=1.35 h=4.40 axis=z
+    }
+    box 11.90 6.06 -1   15.70 7.90 1
+}
+let th_ber_wall = box 15.14 4.81 -1   15.59 6.10 1
+let th_ber_hedge_mass = intersection {
+    revolve { union { th_ber_band th_ber_wall } } axis=y
+    th_south
+}
+let th_ber_hedge = displace { th_ber_hedge_mass th_leaf } amount=0.135
+
+# ================================================================================================
+# THE FOOTLIGHTS — twenty-four of them, along the front edge of the stage
+# ================================================================================================
+#
+# THE POINT OF THE BUILDING. Drawn once at the origin: y = 0 is the stage floor, z = 0 is the front
+# of the housing, and the light goes to +z and up.
+#
+#   a bronze trough 0.45 x 0.27 and 0.14 tall, its front face flush with the edge of the stage
+#   a `silver` half pipe behind the flame, 0.045 thick on a radius of 0.1125, opening to +z and up
+#   a `taper` flame 0.09 x 0.18 x 0.09 standing in front of it on a 0.054 stem
+#   a bronze hood over the top of the reflector, which is what keeps the flame out of the audience's
+#     eyes and is therefore what makes the light go UP AND BACK instead of everywhere
+#
+# THE FLAME IS SMALL AND THE REFLECTOR IS THIN ON PURPOSE, and both numbers come from measurement
+# somebody else already paid for. fittings.clip's sconce bowl is a hemisphere of radius 0.1125 and
+# it calls that the small end; this flame is smaller. Its rim torus had to be 0.0281 to survive the
+# grid and its stay was allowed to stay at 0.045 BECAUSE IT IS ATTACHED AT BOTH ENDS and a hole in
+# the middle of it costs no component — the reflector here is the same case, a 0.045 shell joined to
+# the trough along its whole length, so whatever the grid does to it is visible and free.
+#
+# Twenty-four at 0.675 (1.5 M) apart, from x = +-0.3375 out to +-7.7625, which is 0.3375 clear of
+# the ends of the stage. Twelve on the east, folded: eleven from a `repeat` and one placed, because
+# `repeat` counts copies EITHER SIDE of the original and can only make an odd number.
+
+let th_fo_trough = box -0.225 -0.05 -0.09   0.225 0.09 0.18 round=0.0135
+let th_fo_stem   = cylinder 0 0.09 0.10  r=0.027 h=0.20 axis=y
+let th_fo_hood   = box -0.225 0.315 -0.10   0.225 0.36 0.06 round=0.0135
+let th_fo_metal  = union { th_fo_trough th_fo_stem th_fo_hood }
+
+let th_fo_refl = intersection {
+    difference {
+        cylinder 0 0.18 0.045  r=0.135 h=0.36 axis=x
+        cylinder 0 0.18 0.045  r=0.090 h=0.40 axis=x
+    }
+    box -0.18 0.045 -0.10   0.18 0.36 0.045
+}
+let th_fo_flame = ellipsoid 0 0.225 0.10  rx=0.045 ry=0.09 rz=0.045
+
+let th_foot_metal = mirror {
+    union {
+        translate { repeat { th_fo_metal } x=0.675 nx=5 } 3.7125 0.90 0.09
+        translate { th_fo_metal } 7.7625 0.90 0.09
+    }
+} axis=x
+let th_foot_refl = mirror {
+    union {
+        translate { repeat { th_fo_refl } x=0.675 nx=5 } 3.7125 0.90 0.09
+        translate { th_fo_refl } 7.7625 0.90 0.09
+    }
+} axis=x
+let th_foot_flames = mirror {
+    union {
+        translate { repeat { th_fo_flame } x=0.675 nx=5 } 3.7125 0.90 0.09
+        translate { th_fo_flame } 7.7625 0.90 0.09
+    }
+} axis=x
+let th_footlights = union { th_foot_metal th_foot_refl th_foot_flames }
+
+# ================================================================================================
+# THE STANDARDS AND THE TRIPODS
+# ================================================================================================
+#
+# Six bronze standards with `lamp` flames, one at the head of each radial stair, standing INSIDE the
+# berceau at a radius of 13.05 — so the leaf tunnel is lit from within as well as through its own
+# foliage, which is the whole of load 4. 2.63 m tall over the walk, and the vault at that radius
+# stands at 7.19, so there is 0.55 over the tallest flame.
+#
+# Two gilt tripods on the stage at x = +-5.85, z = 6.30, between the third and fourth pairs of wings.
+# `gilt` is rough=64 metal=225, the sharpest specular in the contract after silver and mirror, and a
+# tripod is a bowl of fire standing on three 0.09 legs — thin bright metal holding a light, seen
+# against dark foliage.
+
+let th_st_ped   = box -0.27 -0.05 -0.27   0.27 0.18 0.27 round=0.0135
+let th_st_foot  = box -0.18 0.135 -0.18   0.18 0.315 0.18 round=0.012
+let th_st_shaft = cylinder 0 1.26 0  r=0.045 h=1.89 axis=y
+let th_st_knop  = sphere 0 1.26 0  r=0.09
+let th_st_neck  = torus 0 2.16 0  ring=0.09 tube=0.0225 axis=y
+let th_st_bowl  = intersection {
+    ellipsoid 0 2.34 0  rx=0.225 ry=0.18 rz=0.225
+    box -0.225 2.16 -0.225   0.225 2.34 0.225
+}
+let th_st_rim   = torus 0 2.34 0  ring=0.225 tube=0.0225 axis=y
+let th_st_fire  = ellipsoid 0 2.385 0  rx=0.135 ry=0.135 rz=0.135
+let th_st_tong  = ellipsoid 0 2.520 0  rx=0.0675 ry=0.1125 rz=0.0675
+
+let th_st_metal_o = union { th_st_foot th_st_shaft th_st_knop th_st_neck th_st_bowl th_st_rim }
+let th_st_fires_o = union { th_st_fire th_st_tong }
+
+let th_std_ped_s   = translate { th_st_ped }     0 3.96 -13.05
+let th_std_metal_s = translate { th_st_metal_o } 0 3.96 -13.05
+let th_std_fires_s = translate { th_st_fires_o } 0 3.96 -13.05
+
+let th_std_peds = mirror { union {
+    rotate { th_std_ped_s } y=-0.05  rotate { th_std_ped_s } y=-0.15
+    rotate { th_std_ped_s } y=-0.25
+} } axis=x
+let th_std_metal = mirror { union {
+    rotate { th_std_metal_s } y=-0.05  rotate { th_std_metal_s } y=-0.15
+    rotate { th_std_metal_s } y=-0.25
+} } axis=x
+let th_std_fires = mirror { union {
+    rotate { th_std_fires_s } y=-0.05  rotate { th_std_fires_s } y=-0.15
+    rotate { th_std_fires_s } y=-0.25
+} } axis=x
+let th_standards = union { th_std_peds th_std_metal th_std_fires }
+
+let th_tp_leg  = capsule 0.45 -0.05 0   0.135 1.26 0  r=0.045
+let th_tp_legs = union {
+    th_tp_leg  rotate { th_tp_leg } y=0.3333333  rotate { th_tp_leg } y=0.6666667
+}
+let th_tp_ring = torus 0 0.72 0  ring=0.265 tube=0.027 axis=y
+let th_tp_hub  = sphere 0 1.26 0  r=0.108
+let th_tp_bowl = intersection {
+    ellipsoid 0 1.53 0  rx=0.36 ry=0.27 rz=0.36
+    box -0.36 1.26 -0.36   0.36 1.53 0.36
+}
+let th_tp_rim  = torus 0 1.53 0  ring=0.36 tube=0.027 axis=y
+let th_tp_fire = ellipsoid 0 1.575 0  rx=0.225 ry=0.18 rz=0.225
+let th_tp_tong = ellipsoid 0 1.755 0  rx=0.108 ry=0.144 rz=0.108
+
+let th_tp_metal_o = union { th_tp_legs th_tp_ring th_tp_hub th_tp_bowl th_tp_rim }
+let th_tp_fires_o = union { th_tp_fire th_tp_tong }
+let th_tri_metal = mirror { translate { th_tp_metal_o } 5.85 0.90 6.30 } axis=x
+let th_tri_fires = mirror { translate { th_tp_fires_o } 5.85 0.90 6.30 } axis=x
+let th_tripods   = union { th_tri_metal th_tri_fires }
+
+# ================================================================================================
+# ASSEMBLY — mass, then the carves, then everything that stands in a carved space put back
+# ================================================================================================
+#
+# clips/facility.clip's closing note is the reason this is in three steps and not one. A room's void
+# subtracted from a union that already contains the furniture deletes the furniture, silently, and
+# it took a photograph from inside a hall to see it. Nothing here stands in an opening — the herms
+# are on the piers between them — but the grate stands in its own recess and the footlights stand on
+# a floor whose joints are cut, so the order is written out rather than assumed.
+
+let th_mass = union {
+    th_ground_slab
+    th_cavea th_coping th_analemma th_stair_kerbs
+    th_orch_disc
+    th_stage_base th_stage_boards th_flights
+    th_pros_wall th_pr_entab th_pediment th_cartouche
+    th_wings th_wing_posts
+    th_ber_frame th_ber_hedge
+}
+
+let th_voids = union {
+    th_pr_rustic th_pr_openings
+    th_or_cuts th_gr_recess
+    th_bd_joints
+}
+
+let th_carved = difference { th_mass th_voids }
+
+let th_fittings = union { th_grate th_herms th_footlights th_standards th_tripods }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Every rule keys on one of this file's own shapes and every one says below=0.02 or more, never
+# below=0 — the grain at the bottom of this file displaces the whole clip by 0.018, and a voxel that
+# exists only because the grain pushed the surface outward sits OUTSIDE the shape its rule names.
+# At below=0 it matches nothing, falls back to the first coat, and leaves a pale rind over every
+# outward-facing surface of the part that painted it.
+#
+# WHERE THE TEST IS LARGER THAN 0.02 IT IS BECAUSE THAT SURFACE IS ALSO WEATHERED. `weather` moves
+# the surface too, by its own amount, within its own scope; the cavea is weathered at 0.018 and the
+# proscenium at 0.024, so keys on those two shapes test at 0.04 and reach past both displacements.
+# The hedges are keyed on the DISPLACED binding rather than the mass, because `th_leaf` moves their
+# surface 0.135 and no reasonable test would reach that far.
+#
+# Later coats cover earlier ones, so this reads from the ground upward.
+
+paint lawn        where=th_ground_slab  below=0.02
+paint gravel      where=th_gravel_zone  below=0.02
+
+paint travertine  where=th_cavea        below=0.04
+paint granite     where=th_tread_key    below=0.04
+paint granite     where=th_stair_zone   below=0.04
+paint granite     where=th_stair_kerbs  below=0.02
+paint granite     where=th_analemma     below=0.02
+paint marble      where=th_coping       below=0.02
+
+paint travertine  where=th_orch_disc    below=0.02
+paint granite     where=th_or_bands     below=0.02
+
+paint granite     where=th_stage_base   below=0.02
+paint granite     where=th_flights      below=0.02
+paint oak         where=th_stage_boards below=0.02
+
+paint travertine  where=th_pros_wall    below=0.04
+let th_pr_rust_key = intersection { th_pros_wall th_pr_rust_zone }
+paint granite     where=th_pr_rust_key  below=0.04
+paint travertine  where=th_pr_entab     below=0.02
+paint travertine  where=th_pediment     below=0.02
+paint gilt        where=th_cartouche    below=0.02
+paint limestone   where=th_herms        below=0.02
+
+paint iron        where=th_wing_posts   below=0.02
+paint hedge       where=th_wings        below=0.02
+paint iron        where=th_ber_frame    below=0.02
+paint hedge       where=th_ber_hedge    below=0.02
+
+paint bronze      where=th_grate        below=0.02
+paint bronze      where=th_foot_metal   below=0.02
+paint silver      where=th_foot_refl    below=0.02
+paint taper       where=th_foot_flames  below=0.02
+
+paint granite     where=th_std_peds     below=0.02
+paint bronze      where=th_std_metal    below=0.02
+paint gilt        where=th_tri_metal    below=0.02
+paint lamp        where=th_std_fires    below=0.02
+paint lamp        where=th_tri_fires    below=0.02
+
+# ================================================================================================
+# WEATHERING — every one scoped with `on=<one of my own shapes>`, never bare
+# ================================================================================================
+#
+# Without `on=`, weathering works on the WHOLE clip: it would bleach the lawn, scour the herms and
+# sand the footlight reflectors along with whatever it was meant for, because the coats it adds are
+# keyed on a value rather than on a place. Each of these three names a binding of this file.
+#
+#   overgrown on the seats, because that is where nobody has sat for a century and moss gets into a
+#     joint that is never scuffed. Scoped to the ELEVEN SEAT ANNULI and not to the whole cavea, so
+#     the walking surfaces stay clean and the difference between the two is legible from the stage.
+#   desert, lightly, over the whole cavea — a bosquet in high summer, and the amount is 0.018, which
+#     is 0.58 of a voxel at metre 32 and therefore a real deformation rather than a dither.
+#   cracks on the proscenium, which is the one large flat stone face in the clip and the one thing
+#     the footlights rake at four degrees, so a crack casts a shadow the length of the wall.
+
+weather overgrown 0.024 scale=0.9 seed=31 on=th_seat_key
+weather desert    0.018 scale=1.4 seed=17 on=th_cavea
+weather cracks    0.024 scale=0.7 seed=53 on=th_pros_wall
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+#
+# Eighteen millimetres of grain over everything, which is 0.58 of a voxel at metre 32 — the least
+# that `usable_displacement` will accept as a deformation rather than as dither, and the difference
+# between a face that reads as carved stone and one that reads as a drawing of carved stone.
+
+let part_theatre = displace { union { th_carved th_fittings } grain_fine } amount=0.018
+
+variation colour=0.030 rough=0.070 seed=19
+
+solid part_theatre

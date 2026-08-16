@@ -514,6 +514,16 @@ bool Parser::call(u32& out) {
                       keys.number("tube", 0.25), axis_from(keys.word("axis", "y")) % 3u);
         return true;
     }
+    if (head == "arc") {
+        // A torus that goes part of the way round, with a round cap at each end — the arch ring,
+        // the curved handrail, the hoop of a crown. `from` and `to` are turns, measured from the
+        // first cross-axis and running the way `around` goes; omit them and it is a whole torus.
+        const f64 from = keys.number("from", 0.0);
+        out = f.arc({arg(0, 0), arg(1, 0), arg(2, 0)}, keys.number("ring", 1.0),
+                    keys.number("tube", 0.25), axis_from(keys.word("axis", "y")) % 3u, from,
+                    keys.number("to", from + 1.0));
+        return true;
+    }
     if (head == "cone") {
         out = f.cone({arg(0, 0), arg(1, 0), arg(2, 0)}, keys.number("r", 1.0),
                      keys.number("h", 1.0), axis_from(keys.word("axis", "y")) % 3u);
@@ -659,19 +669,31 @@ bool Parser::call(u32& out) {
             out = f.repeat(child,
                            {keys.number("x", 0), keys.number("y", 0), keys.number("z", 0)},
                            {keys.number("nx", 0), keys.number("ny", 0), keys.number("nz", 0)});
-        else if (head == "around")
+        else if (head == "around") {
+            // Over an arc rather than the whole circle, `count` copies span it INCLUSIVELY: the
+            // first sits on `from` and the last on `to`. Over a whole turn the old spacing stands
+            // — n copies in n sectors — because a copy on each end would put two in one place.
+            const f64 from = keys.number("from", 0.0);
             out = f.polar_repeat(child, static_cast<u32>(keys.number("count", arg(0, 4.0))),
-                                 axis_from(keys.word("axis", "y")) % 3u);
+                                 axis_from(keys.word("axis", "y")) % 3u, from,
+                                 keys.number("to", from + 1.0));
+        }
         else if (head == "shell")
             out = f.shell(child, keys.number("thickness", arg(0, 0.1)));
         else if (head == "round")
             out = f.round_off(child, keys.number("by", arg(0, 0.05)));
-        else if (head == "revolve")
+        else if (head == "revolve") {
             // The three numbers, when they are given, are where the axis stands — so a base is
             // drawn once from its own axis outward and then placed under whichever column it
             // belongs to, without a translate round every one.
+            //
+            // `from` and `to` in turns cut it to an apse, a niche head or a half dome. Left out
+            // they are a whole revolution and nothing about the node changes.
+            const f64 from = keys.number("from", 0.0);
             out = f.revolve(child, {arg(0, 0), arg(1, 0), arg(2, 0)},
-                            axis_from(keys.word("axis", "y")) % 3u);
+                            axis_from(keys.word("axis", "y")) % 3u, from,
+                            keys.number("to", from + 1.0));
+        }
         else if (head == "offset")
             out = f.offset(child, keys.number("by", arg(0, 0.0)));
         else if (head == "twist")
