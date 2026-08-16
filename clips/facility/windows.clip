@@ -52,11 +52,54 @@
 # contract names, which is where the contract says a window goes. The centre bay is left empty on
 # both fronts, because that is the door's.
 #
-# Nothing here needs anything from anybody. The dressings stand on the wall face at x = +-16 and
-# z = +-7.5 and bite 0.09 into it; the openings are cut 1.80 m (4 M) deep from that face, which is
-# more than any sane outer wall, so a window goes through whatever thickness walls.clip settles on.
-# If that wall ends up thicker than 1.80 the openings stop short and this file has to change: it is
-# the single assumption it makes about anybody else. Written up in requests/windows.md.
+# The dressings stand on the wall face at x = +-16 and z = +-7.5 and bite 0.09 into it.
+#
+# ------------------------------------------------------------------------------------------------
+# HOW DEEP AN OPENING IS CUT, AND WHY IT IS NO LONGER ONE NUMBER
+#
+# It used to be 1.80 m (4 M) for all fifty-six, and this file's own note called that "more than any
+# sane outer wall, so a window goes through whatever thickness walls.clip settles on". walls.clip
+# settled on 0.90 (D). So every opening ran 0.90 m PAST the inner face of the wall it pierces, and
+# a cut that is deliberately deeper than its wall keeps going into whatever is behind the wall.
+#
+# MEASURED on the assembled building at metre 8, `void_windows` present against `void_windows`
+# absent: the cut removes 106.83 m3, of which 13.58 m3 in 31 separate pieces stands BEYOND the
+# inner face and is not wall at all, and it raises the whole building's component count from 528
+# to 804. Some of that 13.58 is wanted and most of it is not, and telling the two apart is the
+# whole of the change below.
+#
+#   WANTED, and it is the only thing the deep cut is for. chapel.clip fills the south-west corner
+#   solid from the wall's inner face to its oval and cuts its four embrasures FROM z = -5.70 and
+#   x = -14.20 -- this file's old cutter limit, quoted in its file by number -- so its four stained
+#   lights, the only coloured-volume glass in the building, are blind unless the opening reaches
+#   that line. Its own words: "its cutter stops at z = -5.70 and x = -14.20 ... so without these
+#   four the lights are blind."
+#
+#   NOT WANTED. The same 0.90 m of over-reach on the NORTH front drives the ground-storey arched
+#   opening at x = +-8.10 straight through stair.clip's half landing -- a 0.76 x 1.04 m hole in a
+#   floor somebody walks up onto, in both wings -- and on the END WALLS it drives through the end
+#   of salon.clip's north wall, which that file measured as "a hole 0.56 m wide and 1.80 m tall"
+#   and had to stand a pier in front of to hide.
+#
+# So the depth follows the wall, and the deep reveal is kept only where a room has published that
+# it starts its own work on that line:
+#
+#   1.05   THROUGH THE WALL. walls.clip's ring is 0.90 (outer face on the contract's block outline,
+#          inner face at +-15.10 / +-6.60) and 0.15 further, which clears the deepest lining any
+#          room stands on the inside of it -- enfilade.clip's, finished face 14.95 -- and every
+#          0.05 lap the others bed into it. Every room that lines its own walls deeper than that
+#          cuts its own reveal: salon.clip's `salon_win_e` to 14.71, library.clip's copies of these
+#          same opening boxes, ballroom.clip's `ball_win_cuts`. Checked in those files, not assumed.
+#
+#   1.80   THE DEEP REVEAL, and only on the ten openings chapel.clip works from: the whole GROUND
+#          storey of the south front, and the ground-storey opening at z = +-5.40 in each end wall.
+#          Three of the six south ones and one of the four end ones are the chapel's; the rest are
+#          their mirror images and the salon's, where nothing stands in the over-reach to be cut --
+#          measured, at y = 3.60 the east half of the south front loses nothing past the wall.
+#
+# If walls.clip ever changes its 0.90, both numbers here change with it. That is still the single
+# assumption this file makes about anybody else, and it is now written as two numbers rather than
+# hidden inside one generous one. Written up in requests/windows.md.
 # ------------------------------------------------------------------------------------------------
 
 include "_contract.clip"
@@ -195,7 +238,12 @@ let windows_pn_metal = union {
     windows_pn_barh1 windows_pn_barh2 windows_pn_barh3 windows_pn_barh4
 }
 let windows_pn_glass = box -0.63 6.345 0.225  0.63 8.505 0.27
-let windows_pn_cut   = box -0.675 6.30 -0.18  0.675 8.55 1.80
+
+# THE HOLE. 1.05 deep from the wall face: 0.90 of walls.clip's ring and 0.15 past its inner face.
+# No piano-nobile opening anywhere in the building needs more — every room at this level either
+# stands its lining within that 0.15 or cuts its own reveal through it. See the note on depth at
+# the head of this file.
+let windows_pn_cut   = box -0.675 6.30 -0.18  0.675 8.55 1.05
 
 # --- the ground storey, round-headed --------------------------------------------------------
 #
@@ -279,7 +327,14 @@ let windows_ga_glass = union {
     box -0.63 2.745 0.225  0.63 4.05 0.27
     cylinder 0 4.05 0.2475 r=0.63 h=0.045 axis=z
 }
+# THE HOLE, in both depths. The head is a cylinder and a cylinder is placed by its CENTRE, so the
+# two are written as centre and height rather than as near and far face: -0.18 .. 1.05 is centre
+# 0.435 and height 1.23, and -0.18 .. 1.80 is centre 0.81 and height 1.98.
 let windows_ga_cut = union {
+    box -0.675 2.70 -0.18  0.675 4.05 1.05
+    cylinder 0 4.05 0.435 r=0.675 h=1.23 axis=z
+}
+let windows_ga_cutd = union {
     box -0.675 2.70 -0.18  0.675 4.05 1.80
     cylinder 0 4.05 0.81 r=0.675 h=1.98 axis=z
 }
@@ -313,7 +368,8 @@ let windows_gs_metal = union {
     windows_gs_frame windows_gs_barv windows_gs_barh1 windows_gs_barh2 windows_gs_barh3
 }
 let windows_gs_glass = box -0.63 2.745 0.225  0.63 4.455 0.27
-let windows_gs_cut   = box -0.675 2.70 -0.18  0.675 4.50 1.80
+let windows_gs_cut   = box -0.675 2.70 -0.18  0.675 4.50 1.05
+let windows_gs_cutd  = box -0.675 2.70 -0.18  0.675 4.50 1.80
 
 # ================================================================================================
 # WHERE THEY GO
@@ -429,27 +485,54 @@ let windows_glass = union {
                    box -16.05 2.60 -6.70  -15.65 8.65 6.70 }
 }
 
+# THE HOLES, and this is where the two depths are chosen. The set of openings is exactly the set
+# above — same bays, same sizes, same sills and heads — and only how far each one runs back into
+# the building differs. The elevation cannot change here, because nothing in this block is in
+# `part_windows`.
+#
+# THE SOUTH GROUND STOREY IS THE DEEP ONE, ALL SIX OF IT. chapel.clip owns x = -8.10, -10.80 and
+# -13.50 and begins its own embrasures at z = -5.70; the three on the salon's side are their mirror
+# images and cost nothing, because at y = 3.60 the east half of this front loses no matter at all
+# past the wall. A fold that is a fold in the elevation should stay one in the cutter.
+let windows_cut_gw_d = union {
+    translate { windows_gs_cutd } 10.80 0 0
+    translate { windows_gs_cutd } 13.50 0 0
+}
 let windows_cut_gw = union {
     translate { windows_gs_cut } 10.80 0 0
     translate { windows_gs_cut } 13.50 0 0
 }
 let windows_cut_pn = translate { repeat { windows_pn_cut } x=2.70 nx=2 } 8.10 0 0
 let windows_cut_hs = union {
-    windows_cut_pn windows_cut_gw
-    translate { windows_ga_cut } 8.10 0 0
+    windows_cut_pn windows_cut_gw_d
+    translate { windows_ga_cutd } 8.10 0 0
 }
+# THE NORTH GROUND STOREY IS THE SHALLOW ONE, and that is the fix stair.clip cannot make for
+# itself. Its half landing is bedded 0.15 into this wall at z = 6.75 with its top at 4.14, and the
+# arched opening at x = +-8.10 runs 2.70 .. 4.725 — so the old cutter took a 0.76 x 1.04 m bite out
+# of the landing's north-east corner in each wing. Nothing behind this front wants a deep reveal:
+# below the landing is the passage, above it is the stair, and both are already air.
 let windows_cut_hn = union {
     windows_cut_pn windows_cut_gw
     translate { repeat { windows_ga_cut } x=2.70 nx=1 } 5.40 0 0
 }
+# THE END WALLS ARE MIXED, one opening in five. z = +-5.40 is deep — the west one is chapel.clip's
+# fourth light, whose embrasure starts at x = -14.20, and the east one has nothing behind it at all
+# at that depth. z = 0 and +-2.70 are shallow: 1.05 lands exactly on enfilade.clip's finished face
+# at 14.95, which is the number that keeps its cabinet and its gallery lit, and stopping there is
+# what closes the hole salon.clip measured through the end of its own north wall.
 let windows_cut_e = union {
-    repeat { windows_gs_cut } x=2.70 nx=2
+    repeat { windows_gs_cut } x=2.70 nx=1
+    mirror { translate { windows_gs_cutd } 5.40 0 0 } axis=x
     repeat { windows_pn_cut } x=2.70 nx=2
 }
+# The boxes are bounds and not knives, for the reason given over the fanlight rays, and each is
+# generous by more than a voxel on every face. The north one is drawn back from 5.60 to 6.40
+# because nothing on that front now reaches past 6.45.
 let windows_cuts = union {
     translate { mirror { windows_cut_hs } axis=x } 0 0 -7.5
     intersection { translate { rotate { mirror { windows_cut_hn } axis=x } y=0.5 } 0 0 7.5
-                   box -14.85 2.60 5.60   14.85 8.65 7.80 }
+                   box -14.85 2.60 6.40   14.85 8.65 7.80 }
     intersection { translate { rotate { windows_cut_e } y=-0.25 }  16 0 0
                    box  14.10 2.60 -6.70   16.30 8.65 6.70 }
     intersection { translate { rotate { windows_cut_e } y=0.25 }  -16 0 0
