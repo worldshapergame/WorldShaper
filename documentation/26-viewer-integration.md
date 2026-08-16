@@ -153,3 +153,47 @@ Three separate agents hit the same wall from three directions:
 
 All three are the same shape of gap: a term that is correct in the shader and starved of the baked
 data it needs. None is a shader bug and none will be found by looking at a shader.
+
+---
+
+## 7. The frame, measured — and the fleet-wide worry does not reproduce
+
+**The "every clip pays for every feature" alarm is not supported.** The SSR agent measured its own
+feature branched entirely off at 1.8× a pristine build and flagged it as possibly making the whole
+fleet's approach wrong. The budget agent took the control with a tighter instrument — the same
+shader, same scene, same resolution, lobes *compiled out* versus merely *branched around*:
+
+```
+sampler, rung 4, 544x424    lean (compiled out)   858   838
+                            fat  (branched round) 830   789
+```
+
+The lean build is if anything **slower**, by less than the noise floor. Four branched-around
+lighting lobes and a fog function cost nothing measurable.
+
+This is **not a refutation of the original observation** — SSR added two texture-sampling loops and
+a `mat4`, a far larger register footprint than four branches — and **SwiftShader is not a mobile
+compiler**, so neither number transfers to a phone. What can be said is that the *general* claim
+does not survive a control. Settling it needs a real mobile GPU on an unloaded machine. The fix is
+built regardless and lives in the ladder, where it belongs rather than in fourteen features:
+`#define WS_LEAN` makes the feature test a constant so the compiler deletes the branches, and rung
+4 lazily links a second program.
+
+**The real finding is that the facility's frame is 96% the opaque pass.** Per-pass GPU timing,
+64,250 quads: sky 50.6 ms, opaque 1721.8, glass 13.6. Every lever the quality ladder has lives in
+the other 4%, and its biggest — a 4× cut in pixels — bought only 1.6×. **The frame is
+geometry-bound and nothing in this viewer has a geometry lever.** No amount of shader work fixes
+that; it wants culling, or level of detail, or fewer quads.
+
+**And the slice costs as much as the clip.** The stencil parity pass measured 336.7 ms against the
+opaque pass's 305.6 — it is a second full walk of the mesh with culling and depth writes off, pure
+overdraw, and it runs whenever the slider is off its stop. That is the cap added earlier today, and
+it roughly doubles a clip's cost while slicing. Worth knowing before anybody optimises a shader.
+
+**Post nearly pays for itself:** the chain costs 222 ms of new work, but compositing means the
+default framebuffer no longer needs MSAA, and dropping that took 220 ms off the opaque pass. Net
+cost on the facility: **3%**.
+
+One more thing it found in the code added today: **the slice cap's copy of ACES had no `clamp` on
+the end** — a fourth opinion about what "bright" means, on the one surface that meets every other
+surface along an edge. All four passes now end on one injected `ws_output`.
