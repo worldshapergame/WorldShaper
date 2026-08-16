@@ -506,6 +506,33 @@ uniform mat4 u_viewProj;
 uniform highp sampler2D u_cutters;   // six RGBA32F texels a cutter, texelFetch only
 uniform int u_cutterWidth;           // texels across, so an index becomes a row and a column
 
+// >>> paintcheck
+// How much of the paint stack this pixel is allowed to walk. See web/js/features/paintcost.js for
+// the ladder these two come off and why each cut is where it is.
+//
+//   u_paintFar       metres from the eye past which the stack is not walked at all and the shape is
+//                    the flat grey it has always been. A building seen from across the site is a
+//                    silhouette, and a silhouette does not need to know where its moss is. The
+//                    degradation is VISIBLE by construction — near geometry is coloured, far
+//                    geometry is grey, and the boundary is a thing you can walk towards — which is
+//                    the whole point: a view that quietly stops doing something is a view nobody
+//                    can trust, and a silent truncation reads as "it worked".
+//   u_paintMaxRules  the most rules one pixel may evaluate. Nought turns painting off entirely.
+//
+// A stack is walked BACK TO FRONT. Last match wins, so going backwards the first rule that fires is
+// the answer and everything in front of it is dead work; that cut is exact and changes no pixel.
+// The cap is the one that is not exact — it drops the EARLIEST rules, which are the undercoats — so
+// a pixel that reaches it can come out the colour of a later coat with no ground under it.
+uniform float u_paintFar;
+uniform int u_paintMaxRules;
+
+// Whether this pixel paints at all, given how far away it landed. One place, so the shading and the
+// budget cannot drift apart.
+bool paint_here(vec3 at, vec3 eye) {
+    return u_paintMaxRules > 0 && distance(at, eye) <= u_paintFar;
+}
+// <<< paintcheck
+
 out vec4 o_colour;
 
 // One shape may subtract at most this many, and the baker warns when it had to drop some. A GLSL
@@ -649,6 +676,14 @@ void main() {
     // subtrahend was drawn as a solid of its own; now that a hole is a hole there is nothing left
     // for it to say.
     vec3 albedo = vec3(0.62, 0.60, 0.56);
+    // >>> paintcheck
+    // The stone grey above is the honest fallback and it stays the fallback. Whatever evaluates the
+    // paint stack goes inside this branch — `paint_here` is the budget, and a pixel it says no to
+    // keeps the grey rather than getting a cheaper wrong colour.
+    if (paint_here(at, u_eye)) {
+        // material_at(at, N) goes here.
+    }
+    // <<< paintcheck
 
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
     float ndl = max(dot(N, u_sun), 0.0);
@@ -1050,6 +1085,13 @@ export class Renderer {
         gl.bindTexture(gl.TEXTURE_2D, this.cutters);
         gl.uniform1i(u.u_cutters, 0);
         gl.uniform1i(u.u_cutterWidth, this.cutterWidth);
+        // >>> paintcheck
+        // The rung, applied. `this.paint` is set by whoever owns the policy — app.js, from
+        // web/js/features/paintcost.js — and defaults to full so a page that never sets it draws
+        // everything. Nothing here decides anything: the policy is one thing in one place.
+        gl.uniform1f(u.u_paintFar, this.paint ? this.paint.u_paintFar : 1e9);
+        gl.uniform1i(u.u_paintMaxRules, this.paint ? this.paint.u_paintMaxRules : 4096);
+        // <<< paintcheck
 
         gl.enable(gl.DEPTH_TEST);
         gl.depthMask(true);
