@@ -1,0 +1,270 @@
+# The five upper parts on their own, in a box that is NOT shifted by the manifest's `origin`.
+# NOT part of the building. This is the rig the cut audit was run on.
+#
+# WHY IT EXISTS. clips/facility.clip ends with `origin 0 -3.50 0`, and `apply_origin` in
+# src/forge/clip_script.cpp moves three things: the solid, the paint rules, and THE BOUNDS. It
+# does not move the names a fragment bound, because a name is not a part of the solid tree it
+# was folded into. So
+#
+#     tools/clipcheck.sh clips/facility.clip --part part_dome --metre 8
+#
+# replaces the solid with the UNSHIFTED `part_dome` and samples it inside a box that has been
+# shifted DOWN 3.50 m — bounds y -0.9..20 become -4.4..16.5. The dome stands 15.45..19.60, so
+# what comes back is the bottom 1.05 m of it, and every paint rule has moved down 3.50 m as well
+# so none of them lands on the stone that is left. Reported: "11.750 x 1.000 x 11.750 m, one
+# material, limestone". A twelve-metre saucer four fifths of a metre tall wearing one material
+# instead of six. The dome is fine; the box was in the wrong place.
+#
+# Same arithmetic for the other four, and it is worst for the ones nearest the top:
+#
+#   part_dome        15.45 .. 19.60   box tops out at 16.50 — 1.05 m of 4.15 survives
+#   part_drum        11.25 .. 15.60   inside the box, but painted by other people's rules
+#   part_parapet     11.85 .. 14.30   the urns and the rail are cut off
+#   part_roof        11.85 .. 12.15   inside the box, same paint fault
+#   part_pilasters    5.74 ..  9.90   inside the box, and reports ELEVEN materials, nine of which
+#                                     belong to fragments 3.50 m above it
+#
+# So a `--part` run against the manifest is only ever a check that a part BUILDS. For anything
+# about where it is, what it is made of, or what it cut, use this file, which has no `origin` in
+# it and therefore no shift in it.
+#
+#   bash tools/clipcheck.sh clips/facility/requests/cuts-probe.clip --part part_dome --metre 8
+#   bash tools/clipcheck.sh clips/facility/requests/cuts-probe.clip --part arm_dome_no_oculus --metre 8
+#
+# and the `arm_` bindings below are the decisive evidence: each is the same part with ONE cut left
+# out, so the difference between the two volumes is exactly what that cut removes. The four
+# `cuts-probe-<part>.clip` files beside this one are this file with the box drawn round one part,
+# so it can be sampled at the contract's own metre 32 without asking for 1.3 GB.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../pilasters.clip"
+include "../parapet.clip"
+include "../roof.clip"
+include "../drum.clip"
+include "../dome.clip"
+
+# The box: the top of the building and nothing else. The contract's own box is 34 x 20.9 x 25 m,
+# which is 9 million cells at metre 8 and 580 million at metre 32; this one holds everything from
+# the foot of the pilasters to the finial and is a fifth of that.
+bounds -16.7 5.5 -8.2   16.7 20.0 8.2
+
+# ================================================================================================
+# THE DOME — everything that is subtracted from `dome_mass`, and the two intersections
+# ================================================================================================
+let arm_dome_no_oculus = union {
+    difference { dome_mass union { dome_void dome_lan_bore round { dome_lights } by=0.010 } }
+    dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball
+}
+let arm_dome_no_void = union {
+    difference { dome_mass union { dome_oculus dome_lan_bore round { dome_lights } by=0.010 } }
+    dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball
+}
+let arm_dome_no_lights = union {
+    difference { dome_mass union { dome_void dome_oculus dome_lan_bore } }
+    dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball
+}
+let arm_dome_no_lanbore = union {
+    difference { dome_mass union { dome_void dome_oculus round { dome_lights } by=0.010 } }
+    dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball
+}
+# The hub, which is the one subtraction in these five files that removes nothing at all.
+let arm_dome_no_hub = union {
+    difference {
+        union { dome_outer intersection { dome_rib_out dome_rib_fan dome_above }
+                dome_welts dome_roll dome_lan_solid }
+        dome_hollow
+    }
+    dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball
+}
+# `dome_above` is an intersection and not a difference, and it is the one that matters most:
+# without it the lower half of both ellipsoids comes back and the part is a bowl.
+let arm_dome_no_above = union {
+    difference {
+        union { dome_hull intersection { dome_rib_out dome_rib_fan }
+                dome_welts dome_roll dome_lan_solid }
+        dome_hollow
+    }
+    dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball
+}
+# The welts and the ribs, so the copper's two depths of fold can be weighed separately.
+let arm_dome_no_welts = union {
+    difference { union { dome_outer dome_ribs dome_roll dome_lan_solid } dome_hollow }
+    dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball
+}
+let arm_dome_no_ribs = union {
+    difference { union { dome_outer dome_welts dome_roll dome_lan_solid } dome_hollow }
+    dome_rim dome_lan_cupola dome_lan_neck dome_lan_ball
+}
+
+# ================================================================================================
+# THE DRUM — one cut, and the two joints that are taken out of a section before it is revolved
+# ================================================================================================
+let arm_drum_no_windows = union { drum_stone drum_metal drum_glass }
+let arm_drum_no_beds = union {
+    difference {
+        union {
+            revolve { drum_s_core_raw } axis=y
+            drum_socle drum_bands drum_cornice drum_apron
+            drum_pilasters drum_dressings
+        }
+        drum_windows
+    }
+    drum_metal drum_glass
+}
+let arm_drum_no_throat = union {
+    difference {
+        union {
+            drum_core drum_socle drum_bands drum_apron
+            revolve {
+                union { drum_s_bed drum_s_fil drum_s_corona drum_s_crnbk drum_s_crown }
+            } axis=y
+            drum_pilasters drum_dressings
+        }
+        drum_windows
+    }
+    drum_metal drum_glass
+}
+
+# ================================================================================================
+# THE ROOF — four cuts out of the slab, the drum out of the rolls, the slots out of the gratings
+# ================================================================================================
+let arm_roof_no_well = union {
+    difference { roof_slab roof_cut_gutter roof_drips roof_sumps }
+    roof_rolls roof_grates
+}
+let arm_roof_no_gutter = union {
+    difference { roof_slab roof_well roof_drips roof_sumps }
+    roof_rolls roof_grates
+}
+let arm_roof_no_drips = union {
+    difference { roof_slab roof_well roof_cut_gutter roof_sumps }
+    roof_rolls roof_grates
+}
+let arm_roof_no_sumps = union {
+    difference { roof_slab roof_well roof_cut_gutter roof_drips }
+    roof_rolls roof_grates
+}
+let arm_roof_no_rollcut = union {
+    roof_deck mirror { roof_roll_bank } axis=x roof_grates
+}
+let arm_roof_no_slots = union {
+    roof_deck roof_rolls
+    union { mirror { roof_grate_plate_e } axis=x mirror { roof_grate_plate_n } axis=z }
+}
+let arm_roof_with_noses = union { roof_deck roof_rolls roof_noses roof_grates }
+
+# ================================================================================================
+# THE PARAPET — three cuts in the ring, one in the dies, one in the pedestals, and the row boxes
+# ================================================================================================
+let arm_parapet_no_core = union {
+    difference {
+        round { offset { difference {
+            intersection { parapet_south parapet_north parapet_ew } parapet_gap
+        } } by=-0.012 } by=0.012
+        parapet_joints
+    }
+    parapet_bal_north parapet_folded parapet_urns_all
+}
+let arm_parapet_no_gap = union {
+    difference {
+        round { offset { difference {
+            intersection { parapet_south parapet_north parapet_ew } parapet_core
+        } } by=-0.012 } by=0.012
+        parapet_joints
+    }
+    parapet_bal_north parapet_folded parapet_urns_all
+}
+let arm_parapet_no_joints = union {
+    parapet_ring_smooth parapet_bal_north parapet_folded parapet_urns_all
+}
+let arm_parapet_no_panels = union {
+    parapet_ring parapet_bal_north
+    mirror { union {
+        union { translate { parapet_die_n_raw }  1.35 0 0  translate { parapet_die_n_raw }  4.05 0 0
+                translate { parapet_die_n_raw }  6.75 0 0  translate { parapet_die_n_raw }  9.45 0 0
+                translate { parapet_die_n_raw } 12.15 0 0  translate { parapet_die_n_raw } 14.85 0 0 }
+        union { translate { parapet_die_s_raw }  9.45 0 0  translate { parapet_die_s_raw } 12.15 0 0
+                translate { parapet_die_s_raw } 14.85 0 0 }
+        union { translate { parapet_die_e_raw } 0 0  1.35  translate { parapet_die_e_raw } 0 0  4.05
+                translate { parapet_die_e_raw } 0 0  6.75  translate { parapet_die_e_raw } 0 0 -1.35
+                translate { parapet_die_e_raw } 0 0 -4.05  translate { parapet_die_e_raw } 0 0 -6.75 }
+        parapet_bal_east parapet_bal_south
+        union { translate { union { parapet_ped_dado parapet_ped_base parapet_ped_cap } } 16.00 0  7.50
+                translate { union { parapet_ped_dado parapet_ped_base parapet_ped_cap } } 16.00 0 -7.50
+                translate { union { parapet_ped_dado parapet_ped_base parapet_ped_cap } }  8.10 0 -7.50 }
+    } } axis=x
+    parapet_urns_all
+}
+let arm_parapet_no_balcut = union {
+    parapet_ring
+    translate { parapet_bal_rowx } 0 0 7.50
+    parapet_folded parapet_urns_all
+}
+
+# ================================================================================================
+# THE PILASTERS — the flutes, the bed joints, and the ring cut out of the plinth band
+# ================================================================================================
+#
+# The order is written out longhand three times because a `let` cannot be re-bound inside the
+# fragment that owns it, and the point of a control arm is that the fragment is not edited.
+let arm_pil_noflute = union {
+    pilasters_min_base difference { pilasters_min_shsolid pilasters_min_beds } pilasters_min_cap
+}
+let arm_pil_nobed = union {
+    pilasters_min_base difference { pilasters_min_shsolid pilasters_min_flutes } pilasters_min_cap
+}
+let arm_pilasters_no_flutes = union {
+    mirror { union {
+        union { translate { rotate { arm_pil_noflute } y=0.5 }  9.45 5.85 -7.5
+                translate { rotate { arm_pil_noflute } y=0.5 } 12.15 5.85 -7.5
+                translate { rotate { arm_pil_noflute } y=0.5 } 14.85 5.85 -7.5 }
+        union { translate { arm_pil_noflute }  1.35 5.85 7.5
+                translate { arm_pil_noflute }  4.05 5.85 7.5
+                translate { arm_pil_noflute }  6.75 5.85 7.5
+                translate { arm_pil_noflute }  9.45 5.85 7.5
+                translate { arm_pil_noflute } 12.15 5.85 7.5
+                translate { arm_pil_noflute } 14.85 5.85 7.5 }
+        union { translate { rotate { arm_pil_noflute } y=0.25 } 16 5.85 -6.75
+                translate { rotate { arm_pil_noflute } y=0.25 } 16 5.85 -4.05
+                translate { rotate { arm_pil_noflute } y=0.25 } 16 5.85 -1.35
+                translate { rotate { arm_pil_noflute } y=0.25 } 16 5.85  1.35
+                translate { rotate { arm_pil_noflute } y=0.25 } 16 5.85  4.05
+                translate { rotate { arm_pil_noflute } y=0.25 } 16 5.85  6.75 }
+    } } axis=x
+    pilasters_band
+}
+let arm_pilasters_no_beds = union {
+    mirror { union {
+        union { translate { rotate { arm_pil_nobed } y=0.5 }  9.45 5.85 -7.5
+                translate { rotate { arm_pil_nobed } y=0.5 } 12.15 5.85 -7.5
+                translate { rotate { arm_pil_nobed } y=0.5 } 14.85 5.85 -7.5 }
+        union { translate { arm_pil_nobed }  1.35 5.85 7.5
+                translate { arm_pil_nobed }  4.05 5.85 7.5
+                translate { arm_pil_nobed }  6.75 5.85 7.5
+                translate { arm_pil_nobed }  9.45 5.85 7.5
+                translate { arm_pil_nobed } 12.15 5.85 7.5
+                translate { arm_pil_nobed } 14.85 5.85 7.5 }
+        union { translate { rotate { arm_pil_nobed } y=0.25 } 16 5.85 -6.75
+                translate { rotate { arm_pil_nobed } y=0.25 } 16 5.85 -4.05
+                translate { rotate { arm_pil_nobed } y=0.25 } 16 5.85 -1.35
+                translate { rotate { arm_pil_nobed } y=0.25 } 16 5.85  1.35
+                translate { rotate { arm_pil_nobed } y=0.25 } 16 5.85  4.05
+                translate { rotate { arm_pil_nobed } y=0.25 } 16 5.85  6.75 }
+    } } axis=x
+    pilasters_band
+}
+let arm_pilasters_no_bandcut = union { pilasters_orders pilasters_band_out }
+
+# ================================================================================================
+# THE JUNCTIONS — is a part still one thing when its neighbour is standing next to it?
+# ================================================================================================
+let junc_dome_drum   = union { part_dome part_drum }
+let junc_roof_drum   = union { part_roof part_drum }
+let junc_roof_para   = union { part_roof part_parapet }
+let junc_five        = union { part_dome part_drum part_roof part_parapet part_pilasters }
+
+solid part_dome
