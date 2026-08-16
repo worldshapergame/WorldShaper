@@ -60,6 +60,9 @@
 #include <unordered_map>
 #include <vector>
 
+// >>> ao
+#include "bake/occlusion.hpp"
+// <<< ao
 #include "core/jobs.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -146,6 +149,22 @@ struct Options {
 // across the wall behind them, and still reaches down the oculus. A sun overhead lights nothing
 // interesting and a sun in the north lights the back of the building.
 constexpr f64 kSunDir[3] = {0.42, 0.80, -0.43};
+
+// >>> ao
+// How far the ambient-occlusion hemisphere reaches, and how many rays it takes to get there.
+//
+// 0.45 m is chosen against the building rather than against a rule of thumb. A coffer in the dome
+// is 0.225 m deep and between 0.309 and 1.004 m across, a flute is 0.12 m across, a niche is
+// 0.675 m deep, a window reveal is a third of a metre: a radius under a quarter of a metre sees
+// none of them as a recess, and one over half a metre starts closing whole rooms and doing the
+// light grid's job badly. It is the scale that lies between the one voxel corner occlusion covers
+// and the 0.4 m lattice the light grid samples, which is the entire reason this term exists.
+//
+// Thirty-two rays because the directions are FIXED -- see occlusion.hpp -- so the count buys
+// smoothness in space and not noise, and sixteen shows the Fibonacci spiral on a large flat floor.
+constexpr f64 kAoRadiusMetres = 0.45;
+constexpr i32 kAoRays = 32;
+// <<< ao
 
 // --------------------------------------------------------------------------------------
 // Small helpers
@@ -691,8 +710,22 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 // the resolved solid, so the header grew to 208 and the version says so. A version 1 file in the
 // cache beside a version 2 viewer is a real state and it must produce a clear error rather than a
 // wrong picture: `reuse` refuses it and rebakes, and `web/js/format.js` throws on it.
-constexpr u32 kFormatVersion = 2;
+// >>> ao
+// Version 3 spends the last eight spare bytes on a CHUNK DIRECTORY, so that a baked block can be
+// added without moving anything: 200 is where the directory starts, 204 is how many entries it
+// has, and an entry is a four-character name, an offset, a size and a spare word. Everything
+// before it is byte for byte what version 2 wrote.
+//
+// The reason is not elegance. Fifteen agents are adding baked terms to this format at once, and
+// the version 1 -> 2 change moved every offset in the file because the header had no room; doing
+// that fifteen times in a fortnight is fifteen chances to serve a file one reader agrees with and
+// another does not. A directory costs 16 bytes a block and settles it.
+constexpr u32 kFormatVersion = 3;
 constexpr usize kHeaderBytes = 208;
+constexpr usize kChunkOffsetAt = 200;
+constexpr usize kChunkCountAt = 204;
+constexpr usize kChunkEntryBytes = 16;
+// <<< ao
 // 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
 // 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
 constexpr usize kShapeBytes = 120;
@@ -714,6 +747,44 @@ void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
         out.push_back(0);
     }
 }
+
+// >>> ao
+// One named block, appended after everything version 2 wrote, and findable without knowing what
+// else is in the file. Anybody adding a baked term here pushes one of these and changes nothing
+// else -- that is the whole point of the directory.
+struct Chunk {
+    char fourcc[4]{' ', ' ', ' ', ' '};
+    std::vector<u8> bytes;
+};
+
+// The directory, then the payloads. Every payload starts on a four-byte boundary, because the
+// browser makes typed-array views straight onto these bytes and a Uint32Array wants alignment --
+// the cutter pool already has to be copied instead of viewed for exactly that reason.
+void append_chunks(std::vector<u8>& out, const std::vector<Chunk>& chunks) {
+    if (chunks.empty()) {
+        put_u32(out, kChunkOffsetAt, 0);
+        put_u32(out, kChunkCountAt, 0);
+        return;
+    }
+    while ((out.size() & 3u) != 0) out.push_back(0);
+    const usize directory = out.size();
+    put_u32(out, kChunkOffsetAt, static_cast<u32>(directory));
+    put_u32(out, kChunkCountAt, static_cast<u32>(chunks.size()));
+    out.resize(directory + chunks.size() * kChunkEntryBytes, 0);
+    for (usize i = 0; i < chunks.size(); ++i) {
+        while ((out.size() & 3u) != 0) out.push_back(0);
+        const usize at = directory + i * kChunkEntryBytes;
+        out[at + 0] = static_cast<u8>(chunks[i].fourcc[0]);
+        out[at + 1] = static_cast<u8>(chunks[i].fourcc[1]);
+        out[at + 2] = static_cast<u8>(chunks[i].fourcc[2]);
+        out[at + 3] = static_cast<u8>(chunks[i].fourcc[3]);
+        put_u32(out, at + 4, static_cast<u32>(out.size()));
+        put_u32(out, at + 8, static_cast<u32>(chunks[i].bytes.size()));
+        put_u32(out, at + 12, 0);
+        out.insert(out.end(), chunks[i].bytes.begin(), chunks[i].bytes.end());
+    }
+}
+// <<< ao
 
 // --------------------------------------------------------------------------------------
 // The clip before it was voxels
@@ -1571,6 +1642,37 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                                 static_cast<f64>(clip.size[2]) / static_cast<f64>(metre)};
     const LightGrid light = bake_light(coarse, origin, size_metres, jobs);
 
+    // >>> ao
+    // Ambient occlusion, one texel per exposed voxel face.
+    //
+    // The quads are handed over in EXACTLY the order they are written to the file below -- every
+    // opaque face group in face order, then every transparent one -- because that order is the
+    // allocation. The viewer re-derives where each quad's run starts by prefix-summing `w * h`
+    // over the quads it already has, so the file carries no per-quad offset; the total is written
+    // down and checked at load, so the two derivations either agree or one of them says so.
+    //
+    // tools/bake/occlusion.hpp is what this is, why it is an atlas rather than a volume, and why
+    // it is a different term from the corner occlusion in the quad record, which it does not
+    // touch.
+    std::vector<ws::bake::AoQuad> ao_quads;
+    for (i32 pass = 0; pass < 2; ++pass) {
+        const std::array<std::vector<Quad>, 6>& lists =
+            (pass == 0) ? mesher.opaque() : mesher.transparent();
+        for (i32 face = 0; face < 6; ++face) {
+            for (const Quad& q : lists[static_cast<usize>(face)]) {
+                ao_quads.push_back(ws::bake::AoQuad{static_cast<i32>(q.x), static_cast<i32>(q.y),
+                                                    static_cast<i32>(q.z), static_cast<i32>(q.w),
+                                                    static_cast<i32>(q.h), face});
+            }
+        }
+    }
+    const u64 ao_began = ws::now_ns();
+    const ws::bake::Occlusion occlusion = ws::bake::bake_occlusion(
+        [&mesher](i32 x, i32 y, i32 z) { return mesher.solid(x, y, z); }, ao_quads, metre,
+        kAoRadiusMetres, kAoRays, jobs);
+    const f64 ao_seconds = static_cast<f64>(ws::now_ns() - ao_began) / 1e9;
+    // <<< ao
+
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
     walk.field = &script.field;
@@ -1714,6 +1816,34 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         for (const f32 value : walk.pool) put(value);
     }
 
+    // >>> ao
+    // The named blocks, after everything version 2 wrote and behind a directory, so adding one
+    // moves nothing. `AOCC` is the ambient-occlusion atlas: a small header, then one byte per
+    // exposed voxel face.
+    {
+        std::vector<Chunk> chunks;
+        Chunk ao;
+        ao.fourcc[0] = 'A';
+        ao.fourcc[1] = 'O';
+        ao.fourcc[2] = 'C';
+        ao.fourcc[3] = 'C';
+        ao.bytes.assign(32, 0);
+        put_u32(ao.bytes, 0, 1);   // the chunk's own version, which is not the file's
+        put_u32(ao.bytes, 4, occlusion.texel_count);
+        put_u32(ao.bytes, 8, occlusion.atlas_width);
+        // What the prefix sum over the quads has to come out at. The viewer computes where every
+        // quad's run starts rather than reading it, which saves four bytes a quad -- 1.6 MB on the
+        // whole facility -- and this is the number that makes that safe rather than hopeful.
+        put_u32(ao.bytes, 12, opaque_total + transparent_total);
+        put_f32(ao.bytes, 16, occlusion.radius);
+        put_u32(ao.bytes, 20, occlusion.rays);
+        ao.bytes.insert(ao.bytes.end(), occlusion.texels.begin(), occlusion.texels.end());
+        while ((ao.bytes.size() & 3u) != 0) ao.bytes.push_back(0);
+        chunks.push_back(std::move(ao));
+        append_chunks(out, chunks);
+    }
+    // <<< ao
+
     baked.id = identifier(relative);
     baked.source = relative.generic_string();
     {
@@ -1757,6 +1887,12 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                 clip.size[0], clip.size[1], clip.size[2], baked.quads, walk.shapes.size(),
                 walk.cutter_count(), mesher.palette().size(),
                 static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
+    // >>> ao
+    std::printf("      ao: %u texels at 1/%d m  %.2f MB  %.1f s  radius %.2f m  %u rays\n",
+                occlusion.texel_count, metre,
+                static_cast<f64>(occlusion.texels.size()) / (1024.0 * 1024.0), ao_seconds,
+                static_cast<f64>(occlusion.radius), occlusion.rays);
+    // <<< ao
     // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
     // "it worked", which is the whole reason these are counted at all.
     if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||

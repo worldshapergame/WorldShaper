@@ -60,6 +60,12 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> ao
+// Ambient occlusion, baked to one texel per exposed voxel face. Everything about what it is, why
+// it is an atlas rather than a volume, and why it is a different term from the corner occlusion in
+// `a_ao` is in web/js/features/ao.js and tools/bake/occlusion.hpp.
+import * as ao from './features/ao.js';
+// <<< ao
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -68,6 +74,7 @@ layout(location = 0) in vec3 a_cell;
 layout(location = 1) in vec2 a_size;
 layout(location = 2) in float a_material;
 layout(location = 3) in float a_ao;
+` + ao.AO_VERTEX_INPUTS + `
 
 uniform mat4 u_viewProj;
 uniform vec3 u_origin;     // metres at cell (0, 0, 0)
@@ -93,6 +100,7 @@ void main() {
     v_ao = float((packed >> (which * 2)) & 3) / 3.0;
 
     v_material = int(a_material + 0.5);
+` + ao.AO_VERTEX_BODY + `
     gl_Position = u_viewProj * vec4(v_world, 1.0);
 }`;
 
@@ -123,7 +131,7 @@ uniform float u_exposure;
 uniform vec4 u_clip;          // dot(world, xyz) + w > 0 is cut away
 uniform float u_cutSide;      // 1 draws only what the slice removes, for the stencil pass
 uniform float u_blended;      // 1 on the blended pass, where the material's opacity is used
-
+` + ao.AO_FRAGMENT + `
 out vec4 o_colour;
 
 vec4 material_row(int which) {
@@ -215,7 +223,19 @@ void main() {
 
     // Corner occlusion is a voxel's own shape and the light grid is the room it stands in; both
     // are needed, and neither substitutes for the other.
-    float occluded = mix(0.35, 1.0, v_ao) * mix(0.25, 1.0, skyVisible);
+    //
+    // AND BETWEEN THEM IS THE SCALE THIS BUILDING IS MADE OF, which is the third term. Corner
+    // occlusion reaches one voxel and the light grid samples every 0.4 m; a coffer is 0.225 m
+    // deep, a flute 0.12 m across, a niche 0.675 m deep, and none of them was darkened by
+    // anything at all. The term below is a hemisphere of thirty-two rays about this face's own
+    // normal out to 0.45 m, one value per voxel face, read out of the atlas the baker wrote.
+    // (No back-quotes in here: this is inside a template string, and one ends it.)
+    //
+    // It multiplies the ambient and never the sun: a face turned away from the sun is already
+    // dark, and occluding direct light as well is how a rasteriser gets black under every eave at
+    // noon.
+    float baked = mix(u_aoFloor, 1.0, ao_here());
+    float occluded = mix(0.35, 1.0, v_ao) * mix(0.25, 1.0, skyVisible) * baked;
 
     float dielectric = (iorByte > 0.5)
         ? pow((iorByte / 128.0) / (2.0 + iorByte / 128.0), 2.0)
@@ -267,8 +287,12 @@ void main() {
     // metal rather than as brown paint.
     vec3 R = reflect(-V, N);
     vec3 reflected = mix(sky_colour(R), ambient, rough * rough);
+    // The reflected sky is occluded too, and by the square root of the same term rather than by
+    // the term: a recess still sees a sliver of sky in its own reflection, and multiplying a
+    // specular lobe by a diffuse occlusion in full is what makes polished stone in a niche read as
+    // soot. The gilt urns standing in the rotunda's four niches are the case that decides it.
     vec3 ambientSpecular = reflected * fresnel(f0, ndv) * mix(0.25, 1.0, skyVisible) *
-                           mix(0.4, 1.0, v_ao);
+                           mix(0.4, 1.0, v_ao) * sqrt(baked);
 
     vec3 colour = diffuse + specular + ambientSpecular;
 
@@ -802,6 +826,17 @@ export class Renderer {
         this.cutterWidth = 1;
         this.materials = gl.createTexture();
         this.light = gl.createTexture();
+        // >>> ao
+        this.aoTexture = gl.createTexture();
+        this.aoBases = gl.createBuffer();
+        this.occlusion = null;
+        // The control arm, and it is a real one rather than a debug leftover: with this set the
+        // shader takes the same path a clip baked before the atlas existed takes, and the ambient
+        // occlusion term comes out exactly 1 — which makes the shading bit for bit what it was
+        // before any of this. Two arms of one build settle what two builds cannot.
+        //   window.__state.renderer.aoDisabled = true
+        this.aoDisabled = false;
+        // <<< ao
         this.clip = null;
 
         this.viewProj = new Float32Array(16);
@@ -845,6 +880,22 @@ export class Renderer {
             gl.enableVertexAttribArray(i);
             gl.vertexAttribDivisor(i, 1);
         }
+        // >>> ao
+        // The first texel of every quad's run, one instanced uint. Derived from the quads rather
+        // than read out of the file — see web/js/features/ao.js — and checked against the count
+        // the chunk wrote, so a mismatch is a message and not a building shaded a quad out of
+        // step. A clip baked before the atlas existed simply has none, and draws as it always did.
+        this.occlusion = ao.readOcclusion(clip);
+        ao.upload(gl, this.aoTexture, this.occlusion);
+        if (this.occlusion) {
+            ao.uploadBases(gl, this.aoBases, this.occlusion);
+            gl.enableVertexAttribArray(4);
+            gl.vertexAttribDivisor(4, 1);
+        } else {
+            gl.disableVertexAttribArray(4);
+            gl.vertexAttribI4ui(4, 0, 0, 0, 0);
+        }
+        // <<< ao
         gl.bindVertexArray(null);
 
         // The colour the cut face is painted, and it is the clip's own rather than a constant.
@@ -975,6 +1026,15 @@ export class Renderer {
         gl.vertexAttribPointer(1, 2, gl.UNSIGNED_SHORT, false, 16, byteOffset + 6);
         gl.vertexAttribPointer(2, 1, gl.UNSIGNED_SHORT, false, 16, byteOffset + 10);
         gl.vertexAttribPointer(3, 1, gl.UNSIGNED_BYTE, false, 16, byteOffset + 12);
+        // >>> ao
+        // The atlas offsets live in their own buffer, one uint a quad, so the sixteen-byte quad
+        // record is untouched and nothing else in this format had to move. A quad record is
+        // exactly sixteen bytes, so the byte offset into the mesh IS the quad index times four.
+        if (this.occlusion) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.aoBases);
+            gl.vertexAttribIPointer(4, 1, gl.UNSIGNED_INT, 4, (byteOffset / 16) * 4);
+        }
+        // <<< ao
     }
 
     // One pass over the mesh: six ranges, one per face, each with its own normal and basis.
@@ -1028,6 +1088,19 @@ export class Renderer {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_3D, this.light);
         gl.uniform1i(uniforms.u_light, 1);
+        // >>> ao
+        // The occlusion atlas. `u_aoWidth` of 1 is what a clip with no atlas gets, and it is what
+        // the shader tests: an old file draws with the corner occlusion it always had rather than
+        // with a texture full of nothing.
+        if (uniforms.u_ao !== undefined) {
+            gl.activeTexture(gl.TEXTURE2);
+            gl.bindTexture(gl.TEXTURE_2D, this.aoTexture);
+            gl.uniform1i(uniforms.u_ao, 2);
+            gl.uniform1i(uniforms.u_aoWidth,
+                         (this.occlusion && !this.aoDisabled) ? this.occlusion.width : 1);
+            gl.uniform1f(uniforms.u_aoFloor, ao.AO_FLOOR);
+        }
+        // <<< ao
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each

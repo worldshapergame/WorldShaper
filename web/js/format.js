@@ -8,7 +8,12 @@
 // Every offset here has a matching one in bake_web.cpp. If you change one, change both — the file
 // carries a version and a magic so a mismatch says so instead of drawing nonsense.
 
-export const FORMAT_VERSION = 2;
+// >>> ao
+// Version 3 spends the header's last eight spare bytes on a chunk directory — see parseChunks
+// below — so a baked block can be added without moving any offset in front of it. Everything
+// before byte 200 is byte for byte what version 2 wrote.
+export const FORMAT_VERSION = 3;
+// <<< ao
 export const HEADER_BYTES = 208;
 export const QUAD_BYTES = 16;
 export const MATERIAL_BYTES = 16;
@@ -64,7 +69,12 @@ export function parseClip(buffer) {
         shapeCount: view.getUint32(188, true),
         cutterCount: view.getUint32(192, true),
         cutterOffset: view.getUint32(196, true),
-        // 200..207 is spare.
+        // >>> ao
+        // 200..207 was spare and is now the chunk directory: where it starts, and how many
+        // entries it has. Read into `clip.chunks` below.
+        chunkOffset: view.getUint32(200, true),
+        chunkCount: view.getUint32(204, true),
+        // <<< ao
     };
     // Seven entries: six starts and the end, so a range is start[i]..start[i + 1] everywhere.
     for (let i = 0; i < 7; ++i) {
@@ -122,8 +132,40 @@ export function parseClip(buffer) {
     clip.reach = Math.max(
         clip.high[0] - clip.low[0], clip.high[1] - clip.low[1], clip.high[2] - clip.low[2]) || 1;
     clip.quads = clip.opaqueQuads + clip.transparentQuads;
+    // >>> ao
+    clip.chunks = parseChunks(buffer, view, clip);
+    // <<< ao
     return clip;
 }
+
+// >>> ao
+// The chunk directory: every baked block that came after version 2, by name.
+//
+// Fifteen hands are adding terms to this format at once, and the version 1 -> 2 change moved every
+// offset in the file because the header had no room left. A directory costs sixteen bytes a block
+// and means a reader that does not know about a block simply does not ask for it.
+//
+//     u32 at 200  where the directory is       u32 at 204  how many entries
+//     an entry    char fourcc[4], u32 offset, u32 size, u32 reserved
+//
+// Returns a Map from the four-character name to a Uint8Array over the block's bytes.
+function parseChunks(buffer, view, clip) {
+    const chunks = new Map();
+    if (!clip.chunkCount || clip.chunkOffset <= 0) return chunks;
+    const end = clip.chunkOffset + clip.chunkCount * 16;
+    if (end > buffer.byteLength) return chunks;
+    for (let i = 0; i < clip.chunkCount; ++i) {
+        const at = clip.chunkOffset + i * 16;
+        const name = String.fromCharCode(view.getUint8(at), view.getUint8(at + 1),
+                                         view.getUint8(at + 2), view.getUint8(at + 3));
+        const offset = view.getUint32(at + 4, true);
+        const size = view.getUint32(at + 8, true);
+        if (offset + size > buffer.byteLength) continue;
+        chunks.set(name, new Uint8Array(buffer, offset, size));
+    }
+    return chunks;
+}
+// <<< ao
 
 // Is this cell matter? Anything outside the clip is air, which is what makes the edge of the world
 // something you walk off rather than something you stand inside.
