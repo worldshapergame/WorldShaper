@@ -19,16 +19,16 @@ of them can be inspected with `git show <branch> --stat`.
 | ambient occlusion | `a048d1a63ecd106c5` | done, **conflicts** |
 | sun shadow map + contact | `a667a5c956087be61` | done, not yet merged |
 | colour irradiance volume | `a3152a149c26dcb5a` | done, **conflicts** |
-| reflection probes | `acdc889a8d97e0f2d` | in flight |
-| emissive light list | `ab5180c8f00d521a4` | in flight |
-| material + thickness volume | `a37a9ce69787f558e` | in flight |
-| screen-space reflections | `a643b6e516b884abc` | in flight |
-| refraction / glass / translucency | `a99ae7b903fb4ca82` | in flight |
-| BRDF: clearcoat, sheen, anisotropy | `afeeda78b79e4a87b` | in flight |
-| post, bloom, fog, frame budget | `ab2021708dcf200a0` | in flight |
-| GLSL field evaluator | `acc8d6b191e041a28` | in flight |
-| paint stack evaluation | `a08d1f2578fdf6279` | in flight |
-| paint verification + cost | `af84b1903c7344d71` | in flight |
+| reflection probes | `acdc889a8d97e0f2d` | **done**, not yet merged |
+| emissive light list | `ab5180c8f00d521a4` | **done**, not yet merged |
+| material + thickness volume | `a37a9ce69787f558e` | **done**, not yet merged |
+| screen-space reflections | `a643b6e516b884abc` | **done**, not yet merged |
+| refraction / glass / translucency | `a99ae7b903fb4ca82` | **done**, not yet merged |
+| BRDF: clearcoat, sheen, anisotropy | `afeeda78b79e4a87b` | **done**, not yet merged |
+| post, bloom, fog, frame budget | `ab2021708dcf200a0` | **done**, not yet merged |
+| GLSL field evaluator | `acc8d6b191e041a28` | **done**, not yet merged |
+| paint stack evaluation | `a08d1f2578fdf6279` | **done**, not yet merged |
+| paint verification + cost | `af84b1903c7344d71` | **done**, not yet merged |
 
 ## 2. The one collision, and it is the same one four times
 
