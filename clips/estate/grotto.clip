@@ -34,15 +34,32 @@
 #    basin backwards — the cascade, the mask, the god, the whole encrusted vault — is lit by what
 #    came off the water.
 #
-# 2. THE ROUGHEST SURFACE IN THE PROJECT, BY A LONG WAY.
+# 2. THE ROUGHEST SURFACE IN THE PROJECT, BY A LONG WAY — AND `roughness` IS THE WRONG NUMBER
+#    FOR IT, WHICH IS THE FINDING AND NOT AN EXCUSE.
 #    The shellwork is REAL MATTER and not a texture: a 45 mm skin lying in the stone behind every
 #    interior surface, displaced outward into the room by two `cells` fields, so that shell,
-#    pebble and stone alternate WITH the geometry rather than beside it. `exposed faces` is the
-#    only measurement that notices texture and `roughness` — faces per voxel — is the number:
-#    a smooth wall is about 0.2 and the facility's roughest part is under 1.0. `part_grotto` as a
-#    whole cannot show it, because a hill is nine hundred cubic metres of solid rock and roughness
-#    is a surface-to-volume ratio; the number that CAN show it is `--part grotto_crust`, which is
-#    the encrustation on its own, and it is reported in the header at the bottom of this file.
+#    pebble and stone alternate WITH the geometry rather than beside it.
+#
+#    The brief asked for `roughness` — faces per voxel — and said several times 1.0 would show it.
+#    It does not, and the control says why. Measured at metre 32, `--part grotto_crust`, against
+#    the SAME clip with the two displacements taken out so the crust is a plain 45 mm shell:
+#
+#                              volume        surface        roughness
+#      encrusted             12.65 m3       765.4 m2          1.89
+#      plain 45 mm shell     10.59 m3       665.4 m2          1.96
+#
+#    The encrustation makes the number go DOWN. `roughness` is surface over volume, and the
+#    extreme of that ratio is a smooth sheet one voxel thick — so a thin shell scores high because
+#    it is thin, and lumping it adds volume slightly faster than it adds face. The number is a
+#    thinness meter, not a texture meter, and on `part_grotto` as a whole (nine hundred cubic
+#    metres of solid hill) it reads 0.06 and means nothing at all.
+#
+#    WHAT DOES SHOW IT IS EXPOSED SURFACE AGAINST THE SMOOTH ROOM. `--part grot_hollow` at metre
+#    32 — the air of the three chambers, so its surface IS the room's boundary as drawn — is
+#    461.50 m3 of air inside 520.19 m2 of wall. The encrustation adds 100.0 m2 of exposed face to
+#    that for 2.06 m3 of added stone: a fifth again as much surface as the whole room had, out of
+#    two cubic metres of shells. A painted texture adds nought, which is the comparison that
+#    matters and the one to make on any part that claims to be built rather than drawn.
 #
 # 3. CAUSTICS FROM A DAYLIGHT SHAFT ONTO A ROUGH RECEIVER THROUGH A SMALL APERTURE.
 #    Sun through a 1.35 m hole, into `water` at ior 1.33 half a metre deep, onto a bowl lined with
@@ -74,11 +91,12 @@
 # amount reads as "grow outward by whatever this field says", which is checkable in a slice and
 # cannot be got backwards by accident.
 #
-# WHY THE LUMP FIELDS ARE MASKED BY `smoothstep { grotto_skin }`. A `cells` site that happens to
-# fall 60 mm clear of the surface grows a blob of its own with nothing under it, and `components`
-# finds it as a floating voxel. Multiplying every lump field by an inside-ness mask of the skin it
-# is displacing kills those before they exist: measured on a test sphere, 18 components without
-# the mask and 1 with it.
+# WHY THE LUMP FIELDS ARE MASKED BY A `smoothstep` OF THE SKIN, AND WHY THERE ARE TWO OF THEM. A
+# `cells` site that happens to fall clear of the surface grows a blob of its own with nothing under
+# it, and `components` finds it as a floating voxel: 18 components on a bare test sphere with no
+# mask at all, 1 with one. The second mask is tighter and exists because a mask alone is not
+# enough once a lump cone is steeper than forty-five degrees — the whole argument, with the three
+# measurements that settle it, is at `grot_tight` below.
 #
 # WHAT IS UNIONED BACK AFTER THE CARVE, and it is the trap the manifest of the facility has a long
 # comment about at its foot. The rooms are cut out of a hill. EVERYTHING THAT STANDS IN A ROOM —
@@ -744,3 +762,69 @@ weather cracks 0.25 scale=1.2 seed=29 on=grot_fac_weathered
 variation colour=0.045 rough=0.090 seed=61
 
 solid part_grotto
+
+# ================================================================================================
+# WHAT IT MEASURES — the ledger, at the contract's metre 32 unless said otherwise
+# ================================================================================================
+#
+# THE BOX. 704 x 256 x 448 = 80,740,352 cells, 22.0 x 8.0 x 14.0 m, 404 MB in the game at five
+# bytes a cell.
+#
+# THE WHOLE PART, `clipcheck clips/estate/grotto.clip --metre 32`:
+#
+#   volume        31,069,650 voxels   948.17 m3   38.48% of the box
+#   surface       1,760,108 faces     1718.86 m2
+#   roughness     0.06 faces per voxel   — a hill; see the note in the load list above
+#   materials     24 distinct, and NO rule that never fired
+#   components    87, largest 31,069,550, one hundred floating voxels
+#   worldbox      -11.000 -0.656 -1.500   11.000 7.188 12.000 m
+#   peak memory   1,135,108 kB = 1.11 GB
+#   wall clock    2,543 s = 42 min 23 s
+#
+# THE WALL CLOCK IS NOT A FIGURE ANYBODY SHOULD COMPARE ANYTHING TO. Thirteen other agents were
+# building on this machine while it ran, at a load average of eighteen, and the same file at metre
+# 16 took 97 s early in the session and 296 s late in it for identical output. What IS comparable
+# is the memory, which is a function of the box, and the arithmetic of `skip_slack` written out at
+# the encrustation above: 1.039 m of slack in a box two fifths full of rock means no cell is ever
+# skipped, and eighty million field evaluations is what this building costs by construction.
+#
+# EIGHTY-SEVEN COMPONENTS AND A HUNDRED FLOATING VOXELS, AND WHAT THEY ARE. One to three voxels
+# each, all of them on the two faces of the facade at z = -0.12 and z = 1.34, and they are chips
+# knocked off by `weather cracks`. Measured on a bare block with the same crack setting and nothing
+# else in the clip: 15 islands of 15 voxels. It is what that weathering does — it opens a fissure
+# 29 mm deep and sometimes the fissure meets itself round a corner. `despeckle` does not remove
+# them because `despeckle` repaints colour specks and does not delete matter. The number that was
+# worth chasing was the 850 components the same file reported before the two connectivity fixes
+# above (the false union face, and the 63-degree lump cone), and those are gone.
+#
+#   metre 16      3,885,885 voxels, 51 components, 58 floating, 54.7 MB, 296 s
+#   metre  8        495,646 voxels, 12 components, 12 floating
+#
+# HEAD HEIGHT, and it is measured off `--slice z@` at metre 8 and not off `--gap y@` — see the note
+# at the passages for why a building with sky over it cannot be probed with `--gap` along y. Every
+# figure below is the clear height above the floor at that (x, z), to the 0.125 m of a metre-8
+# voxel, and the encrustation and the stalactites are IN it:
+#
+#   z = 1.60  hall, just inside the front wall   2.85 at x -4.4 (hard against the wall)
+#                                                5.47 on the centre line
+#   z = 2.50  hall                               3.35 at x -4.4 ... 5.85 at x 0
+#             side chambers                      2.35 at x +-8.9 and +-5.6 ... 3.73 at x +-7.1
+#   z = 4.30  hall                               4.22 at x -4.4 ... 6.10 at x 0
+#             the two passages                   3.23 at x +-4.6 and +-5.1
+#             side chambers                      3.35 ... 4.60
+#   z = 6.00  hall                               4.10 ... 5.97, and OPEN TO THE SKY at x 0, which
+#                                                is the oculus and is the check that it is bored
+#             side chambers                      2.35 ... 4.10
+#   z = 7.50  hall                               2.85 at x -4.4 ... 5.60 on the centre line
+#   z = 0.70  through the centre arch            4.10 ... 5.10
+#             through the side arches            0.85, WHICH IS THE IRON GRILLE, and is the point
+#                                                of a grille: they are windows, not ways in
+#
+# The lowest figure anywhere a person can stand is 2.35 m, in the side chambers with a shoulder
+# against the wall, against the brief's 2.10. The lowest through anything is 3.23 m in the two
+# passages, against the brief's 2.40. Nothing in this building is tight.
+#
+# THE ENCRUSTATION, `--part grotto_crust` at metre 32: 12.65 m3 of stone carrying 765.38 m2 of
+# exposed face, against 10.59 m3 and 665.40 m2 for the same skin undisplaced. It reports 144
+# components ON ITS OWN and that is not a fault: it is three shells, one per room, and two of them
+# are the side chambers at 77,350 and 77,193 voxels. In `part_grotto` they are part of the hill.

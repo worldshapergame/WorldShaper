@@ -684,8 +684,21 @@ let th_wing_posts = mirror {
 # number as the head-height rule it satisfies — and the crown followed it up.
 #
 # THE INNER SIDE IS OPEN. There is no hedge below the springing on the inside, only the iron; the
-# hedge's inner face is trimmed vertical at r = 12.44 so that nothing overhangs the top bench, and
-# the outer side is closed by a hedge wall standing on the coping.
+# outer side is closed by a hedge wall standing on the coping.
+#
+# THE VAULT IS CUT FLAT AT ITS SPRINGING AND NOT TRIMMED BACK TO THE TUNNEL WALL, and that is a
+# repair with 698 components behind it. It was first written `box 12.44 6.06 ... `, so the hedge's
+# inner face was sliced vertical at the tunnel's own wall line to stop the haunch overhanging the
+# top bench. A 0.45 m shell sliced by the plane its intrados is TANGENT to does not end in a face;
+# it ends in a CUSP, whose thickness near the springing goes as the square root of the distance
+# from it — under one voxel for 15 cm along a feather edge running the whole forty-three metres of
+# the tunnel. `th_leaf` then moves that edge 0.135 either way and it comes apart. Measured, metre
+# 32: 698 components and 887 floating voxels, EVERY ONE of them between y 5.97 and 6.47 at a radius
+# between 12.41 and 12.53 — the cusp, and nothing else in the clip.
+#
+# The trim was never needed. The overhang it was there to prevent sits 6.06 - 3.96 = 2.10 above the
+# walk, which is exactly the head height the rule asks for, so the shell is simply cut flat at its
+# springing and the haunch is allowed to come down over the top bench the way a real hedge does.
 #
 # THE FRAME IS THIRTY-THREE RIBS AT A SIXTY-FOURTH OF A TURN — 5.625 degrees, which at the tunnel's
 # mid radius is 1.354 m, a trellis pitch — plus three continuous purlins at the two springings and
@@ -715,7 +728,12 @@ let th_ber_r3 = union { th_ber_r2  rotate { th_ber_r2 }  y=-0.0625 }
 let th_ber_r4 = union { th_ber_r3  rotate { th_ber_r3 }  y=-0.125 }
 let th_ber_ribs = union { th_ber_r4 rotate { th_ber_rib } y=-0.25 }
 
-let th_ber_purl_i = torus 0 6.06 0  ring=12.44 tube=0.0675 axis=y
+# The inner purlin is 0.09 across the tube where the other two are 0.0675, because it is the one
+# with a job the others do not have: the outer purlin is buried inside the hedge wall and the crown
+# purlin is buried in the crown, but this one lies in the open under the springing and has to hold
+# the vault's inner haunch to the frame across a 0.09 x 0.09 overlap. At 0.0675 that overlap is two
+# voxels square at metre 32, which is the size fittings.clip measured a lamp falling off at.
+let th_ber_purl_i = torus 0 6.06 0  ring=12.44 tube=0.0900 axis=y
 let th_ber_purl_o = torus 0 6.06 0  ring=15.14 tube=0.0675 axis=y
 let th_ber_purl_c = torus 0 7.41 0  ring=13.79 tube=0.0675 axis=y
 let th_ber_frame = intersection {
@@ -724,13 +742,16 @@ let th_ber_frame = intersection {
 }
 
 # The hedge itself, as one revolved section: an annulus 0.45 thick struck from the tunnel's own
-# centre, cut to y >= 6.06 and to r >= 12.44, plus the wall that carries it down onto the coping.
+# centre, cut flat at the springing, plus the wall that carries it down onto the coping. The knife's
+# inner edge is at 11.90, which is 0.09 clear of the 11.99 the shell actually reaches, so the cut
+# only ever takes the half below the springing and never grazes the shell's own faces — see the
+# header of this section for what happened when it did.
 let th_ber_band = intersection {
     difference {
         cylinder 13.79 6.06 0  r=1.80 h=4.00 axis=z
         cylinder 13.79 6.06 0  r=1.35 h=4.40 axis=z
     }
-    box 12.44 6.06 -1   15.70 7.90 1
+    box 11.90 6.06 -1   15.70 7.90 1
 }
 let th_ber_wall = box 15.14 4.81 -1   15.59 6.10 1
 let th_ber_hedge_mass = intersection {
