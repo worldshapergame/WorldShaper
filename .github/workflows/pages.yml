@@ -183,6 +183,88 @@ jobs:
           key: pages-site-none
           restore-keys: pages-site-
 
+      # AND EVERY SHARD'S OWN CLIPS, which is what makes this job worth having during a cold bake
+      # rather than only after one. The shards save their slice as each finishes, so while the one
+      # holding `estate/campanile` is still sampling -- an hour and a quarter of it -- the other
+      # eleven twelfths are already sitting in a cache. Restoring them all into one directory
+      # reassembles the site from work that has finished, and the clips are disjoint by
+      # construction, so they merge by simply landing in the same place.
+      #
+      # Twelve steps because a job cannot loop. If the shard count changes, this list changes with
+      # it; the bake matrix is the one that decides.
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-0-none
+          restore-keys: pages-data-0-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-1-none
+          restore-keys: pages-data-1-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-2-none
+          restore-keys: pages-data-2-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-3-none
+          restore-keys: pages-data-3-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-4-none
+          restore-keys: pages-data-4-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-5-none
+          restore-keys: pages-data-5-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-6-none
+          restore-keys: pages-data-6-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-7-none
+          restore-keys: pages-data-7-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-8-none
+          restore-keys: pages-data-8-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-9-none
+          restore-keys: pages-data-9-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-10-none
+          restore-keys: pages-data-10-
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: web/data
+          key: pages-data-11-none
+          restore-keys: pages-data-11-
+
       # And whatever the site has RIGHT NOW, for anything the cache did not carry. This is the
       # difference between an early deploy that helps and one that does harm: the first run after
       # this job existed had no cache to restore, so it would have indexed an empty directory and
