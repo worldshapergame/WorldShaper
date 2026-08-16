@@ -172,10 +172,22 @@ picture.
 It fades at the screen edge, and it fades where the ray points back at the camera — which is not a
 tidying-up but the whole reason the second half exists. **A mirror facing you shows mostly what is
 behind you, and that is never on the screen.** Everything a screen-space ray cannot answer falls
-through to `ws_probe_radiance(world, direction, roughness)`, the pre-filtered octahedral reflection
-probe. Until that bake lands, the function in `ssr.js` returns the sky — which is exactly what the
-viewer reflected before, so a miss looks like the picture always did and the day probes arrive that
-one function is the only thing to replace.
+through to the baked probes:
+
+```glsl
+vec4 probeReflection(vec3 world, vec3 normal, vec3 reflectDir, float roughness);
+```
+
+Three things about that call are worth writing down because each of them is silent when it is
+wrong. `reflectDir` goes in **uncorrected** — parallax correction happens inside, and doing it
+twice bends a reflection off the wall it belongs to. `roughness` is the material's **own byte**,
+not the GGX-clamped value the march blurs with. And the return is a `vec4` whose **`.a` is
+coverage**: how much of that point's probe neighbourhood was actually baked. Zero does not mean
+black, it means nobody looked there, and the answer is then the analytic sky — mixed rather than
+branched, so the edge of a probe volume is a fade and not a seam.
+
+Fresnel stays gl.js's own Schlick. `probeFresnel` exists and is deliberately **not** called; two of
+them would multiply.
 
 Two things bound what it costs on a phone. A surface rougher than 0.62 never marches, because a
 pre-filtered probe says the same thing better and cheaper; and neither does one whose Fresnel is

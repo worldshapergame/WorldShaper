@@ -299,8 +299,11 @@ void main() {
     // >>> ssr
     // ...and the room, reflected, which is what a mirror is FOR. The screen-space march reads the
     // scene capture; everything it cannot reach — off the edge, behind the eye, too rough — comes
-    // back from the probe, whose stub is this same sky. See web/js/features/ssr.js.
-    vec3 reflected = ws_reflected_radiance(v_world, N, rough, f0, ndv);
+    // back from the baked probe, and where there is no probe either, from the sky above.
+    //
+    // surface.r and not rough: the probe wants the material's own roughness byte, where the
+    // march wants the GGX-clamped one. See web/js/features/ssr.js.
+    vec3 reflected = ws_reflected_radiance(v_world, N, rough, surface.r, f0, ndv);
     // <<< ssr
     vec3 ambientSpecular = reflected * fresnel(f0, ndv) * mix(0.25, 1.0, skyVisible) *
                            mix(0.4, 1.0, v_ao);
@@ -911,6 +914,7 @@ export class Renderer {
         gl.uniform4fv(this.surface.uniforms.u_clip, plane);
         gl.uniform1f(this.surface.uniforms.u_cutSide, 0);
         this.ssr.bind(this.surface.uniforms, camera, this.clip);
+        if (this.probes) this.probes.bind(this.surface.uniforms);
         gl.enable(gl.DEPTH_TEST);
         gl.depthFunc(gl.LESS);
         gl.depthMask(true);
@@ -1232,6 +1236,10 @@ export class Renderer {
         gl.uniform1f(this.surface.uniforms.u_cutSide, 0);
         // >>> ssr
         this.ssr.bind(this.surface.uniforms, camera, clip);
+        // The probes, on texture units 4 and 5, after useProgram. Guarded because this worktree
+        // has the fallback rather than the bake; delete the guard, or this line, if the probes'
+        // own marked region already binds them here.
+        if (this.probes) this.probes.bind(this.surface.uniforms);
         // <<< ssr
 
         // --- opaque ----------------------------------------------------------------------------
