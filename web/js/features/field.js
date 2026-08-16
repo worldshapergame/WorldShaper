@@ -56,20 +56,32 @@
 // walk of one rule's field afterwards. A rule keyed on a single `fbm` is four texel fetches and
 // eight hashes; a rule keyed on a union of thirty solids is thirty leaf evaluations, once.
 //
-// # Where it is not the C++
+// # Where it is not the C++, measured rather than assumed
 //
-// Everything here is `highp float` where the C++ is `double`, and the places that costs something
-// are written down in documentation/24-clip-viewer.md §4c. The short of it: the arithmetic agrees
-// to about 1e-6, and the one real hazard is `floor(p / size)` for a fine noise far from the origin,
-// where a single-precision point can land in the neighbouring cell and the noise is then a
-// completely different number. That is a property of f32 and not a bug to be fixed here.
+// Everything here is `highp float` where the C++ is `double`. Checked against `Field::eval` over
+// 1024 points in a clip-sized box and 1024 thirty metres out, per op — see
+// documentation/24-clip-viewer.md §4c for the table. Two findings, and only one of them is f32:
+//
+// - **The noise agrees.** Worst over `noise`, `fbm`, `ridged`, `rasp`, `cells` and `cell_edge` is
+//   9.6e-6 near the origin and 1.4e-4 at thirty metres, on values in [-1, 1], and **not one sample
+//   of 12,000 landed in a different noise cell** — which is the failure that would have mattered,
+//   because a hash cell boundary crossed is a completely different number rather than a nearer one.
+// - **Anything with a sine in it is the DRIVER's, not this file's.** `rotate`, `around`, `twist`,
+//   `bend`, `sine` and `waves` differ by up to 1.9e-4, and a control that computes `sin(x)` in the
+//   same shader with no field in it at all is 1.894e-4 from `Math.sin` — the same number. GLSL ES
+//   3.00 only promises sin/cos to 2^-11. At thirty metres that 1.9e-4 becomes a centimetre of
+//   position under a `rotate`, which is invisible in a paint rule and would not be in a march.
 
 // --- the op numbering ---------------------------------------------------------------------------
 //
-// One place. Swapping to another numbering is one edit to this table and nothing else in the
-// viewer changes, because the GLSL constants are generated from it.
+// **This is `field_op()` in `tools/bake/paint.hpp`, verbatim, and the baker refuses to bake if the
+// two disagree.** One place on this side; swapping it is one edit and nothing else in the viewer
+// changes, because the GLSL constants are generated from it.
+//
+// 0..7 are `web_op`'s existing numbers unchanged, deliberately, so one GLSL distance function
+// serves both the shapes view and the paint field.
 export const FIELD_OPS = {
-    // leaf solids — 0..7 are `web_op`'s, unchanged, deliberately
+    // solids
     SPHERE: 0,
     BOX: 1,
     CYLINDER: 2,
@@ -78,52 +90,51 @@ export const FIELD_OPS = {
     CONE: 5,
     PLANE: 6,
     ELLIPSOID: 7,
-    PRISM: 8,
-    PLATONIC: 9,
-    WEDGE: 10,
-    STAIRS: 11,
-    ARC: 12,
+    ARC: 8,
+    PRISM: 9,
+    PLATONIC: 10,
+    WEDGE: 11,
+    STAIRS: 12,
     SPIRAL: 13,
-    // leaf sources
+    // sources
     CONSTANT: 14,
-    COORDINATE: 15,   // `axis`
-    RADIUS: 16,       // `distance`
-    // leaf patterns
-    SINE: 17,
-    WAVES: 18,
-    NOISE: 19,
-    FBM: 20,
-    RIDGED: 21,
-    RASP: 22,
-    CELLS: 23,
-    CELL_EDGE: 24,
-    CHECKER: 25,
-    STRIPES: 26,
-    BRICKS: 27,
-    // --- everything at or below 27 has no children. The shader tests exactly that. ---
+    COORDINATE: 15,   // axis
+    RADIUS: 16,       // distance
     // combining
-    UNION: 28,
-    INTERSECTION: 29,
-    DIFFERENCE: 30,
-    SMOOTH_UNION: 31,
-    SMOOTH_INTERSECTION: 32,
-    SMOOTH_DIFFERENCE: 33,
+    UNION: 17,
+    INTERSECTION: 18,
+    DIFFERENCE: 19,
+    SMOOTH_UNION: 20,
+    SMOOTH_INTERSECTION: 21,
+    SMOOTH_DIFFERENCE: 22,
     // moving the point before asking
-    TRANSLATE: 34,
-    ROTATE: 35,
-    SCALE: 36,
-    MIRROR: 37,
-    REPEAT: 38,
-    POLAR_REPEAT: 39,   // `around`
-    TWIST: 40,
-    BEND: 41,
-    REVOLVE: 42,
+    TRANSLATE: 23,
+    ROTATE: 24,
+    SCALE: 25,
+    MIRROR: 26,
+    REPEAT: 27,
+    POLAR_REPEAT: 28,   // around
+    REVOLVE: 29,
     // changing the answer
-    SHELL: 43,
-    ROUND: 44,
-    OFFSET: 45,
-    DISPLACE: 46,
-    // what the shape is doing here
+    SHELL: 30,
+    ROUND: 31,
+    OFFSET: 32,
+    DISPLACE: 33,
+    TWIST: 34,
+    BEND: 35,
+    // patterns
+    SINE: 36,
+    WAVES: 37,
+    NOISE: 38,
+    FBM: 39,
+    RIDGED: 40,
+    RASP: 41,
+    CELLS: 42,
+    CELL_EDGE: 43,
+    CHECKER: 44,
+    STRIPES: 45,
+    BRICKS: 46,
+    // what the shape is doing here — the weathering geometry queries
     CURVATURE: 47,
     OCCLUSION: 48,
     FACING: 49,
@@ -140,16 +151,15 @@ export const FIELD_OPS = {
     SMOOTHSTEP: 59,
     CLAMP: 60,
     POWER: 61,
-    // Not evaluable from the graph alone: a Parameter node holds a SLOT INDEX in a[0] and the value
-    // lives in the field's parameter table, which the FLDG chunk does not carry. The exporter must
-    // fold it to a CONSTANT holding the current value. Until it does, this returns "no match"
-    // rather than painting with a slot number.
-    PARAMETER: 62,
 };
 
-// The last op with no children. `fld_is_leaf` in the shader is `op <= FIELD_LEAF_MAX`, which is the
-// only thing in the GLSL that depends on the ORDER of the table above rather than its values.
-export const FIELD_LEAF_MAX = FIELD_OPS.BRICKS;
+// The ops with no children, which the table above puts in TWO runs rather than one: the solids and
+// sources at 0..16, and the patterns at 36..46. Written as two ranges rather than a switch because
+// the walk asks this of every node it visits.
+export const FIELD_LEAF_A = FIELD_OPS.RADIUS;    // 0..16
+export const FIELD_LEAF_B0 = FIELD_OPS.SINE;     // 36..46
+export const FIELD_LEAF_B1 = FIELD_OPS.BRICKS;
+export const FIELD_OP_COUNT = 62;
 
 // --- the wire format --------------------------------------------------------------------------
 //
@@ -160,11 +170,16 @@ export const FIELD_NODE_WORDS = 20;
 export const FIELD_NODE_BYTES = FIELD_NODE_WORDS * 4;
 export const FIELD_NODE_TEXELS = FIELD_NODE_WORDS / 4;
 
-// The ceiling on the compiled-in stack. 32 is well past the 24 the deepest paint rule in the
-// facility reaches; the field's SOLID goes to 41, and a rule keyed on the whole building would be
-// refused. That is the right failure: a stack of 41 vec3s per fragment is private memory nobody can
-// afford, and a refusal says so where a silent truncation would paint the wrong stone.
-export const FIELD_MAX_STACK = 32;
+// The ceiling on the compiled-in stack.
+//
+// 64 because the exporter measures `facility/terrace` at 4,829 nodes and **depth 54**, and a walk
+// that cannot reach the bottom of a rule paints nothing at all. `sampler` is depth 4 and compiles a
+// stack of 4: the depth is taken from the graph the page actually loaded, so nobody pays 64 frames
+// of private memory for a clip that needs a handful.
+//
+// A graph past the ceiling is REFUSED rather than truncated — `field_eval_ok` returns false, which a
+// rule reads as "no match". "I could not" and "the answer is nought" must never be the same reply.
+export const FIELD_MAX_STACK = 64;
 
 // One texel row cannot exceed the card's MAX_TEXTURE_SIZE; 1020 is a multiple of five under every
 // floor anybody ships, so a node never straddles two rows and the index arithmetic in the shader
@@ -330,7 +345,9 @@ function opConstants() {
     for (const [name, value] of Object.entries(FIELD_OPS)) {
         lines.push('const int FLD_' + name + ' = ' + value + ';');
     }
-    lines.push('const int FLD_LEAF_MAX = ' + FIELD_LEAF_MAX + ';');
+    lines.push('const int FLD_LEAF_A = ' + FIELD_LEAF_A + ';');
+    lines.push('const int FLD_LEAF_B0 = ' + FIELD_LEAF_B0 + ';');
+    lines.push('const int FLD_LEAF_B1 = ' + FIELD_LEAF_B1 + ';');
     lines.push('const int FLD_TEXELS = ' + FIELD_NODE_TEXELS + ';');
     return lines.join('\n');
 }
@@ -741,17 +758,26 @@ float fld_leaf(int op, vec4 A, vec4 B, vec3 p) {
     if (op == FLD_CONSTANT) return A.x;
     if (op == FLD_COORDINATE) return fld_axis(p, int(A.x));
     if (op == FLD_RADIUS) return length(p - A.xyz);
+    // The turn is folded into [0, 1) BEFORE it is multiplied up, which the C++ does not have to do:
+    // a wave of period 0.7 read thirty metres out is an argument of 270 radians, and GLSL ES says
+    // nothing at all about how a large one is reduced. fract() first is the same number in exact
+    // arithmetic and keeps the argument inside one turn.
+    //
+    // **It bought nothing measurable and it is kept anyway.** On the software rasteriser this was
+    // checked with, sin() is 1.894e-4 from the truth at |x| <= pi and 1.894e-4 at |x| <= 8pi, so
+    // there was no large-argument penalty to remove -- the floor is the transcendental itself. A
+    // card that reduces its own arguments badly is a card this protects, and it costs one fract.
     if (op == FLD_SINE) {
         float period = (A.y != 0.0) ? A.y : 1.0;
-        return sin(FLD_TAU * (fld_axis(p, int(A.x)) / period + A.z));
+        return sin(FLD_TAU * fract(fld_axis(p, int(A.x)) / period + A.z));
     }
     if (op == FLD_WAVES) {
         int u, v;
         fld_other(int(A.x), u, v);
         float pa = (A.y != 0.0) ? A.y : 1.0;
         float pb = (A.z != 0.0) ? A.z : 1.0;
-        return sin(FLD_TAU * (fld_axis(p, u) / pa + A.w)) *
-               sin(FLD_TAU * (fld_axis(p, v) / pb + A.w));
+        return sin(FLD_TAU * fract(fld_axis(p, u) / pa + A.w)) *
+               sin(FLD_TAU * fract(fld_axis(p, v) / pb + A.w));
     }
     if (op == FLD_NOISE) return fld_value_noise(p, A.x, uint(A.y));
     if (op == FLD_FBM) return fld_fbm(p, A.x, int(A.y), A.z, A.w, uint(B.x));
@@ -953,7 +979,9 @@ bool field_eval_ok(uint root, vec3 point, out float answer) {
         float done = 0.0;
         bool finished = false;
 
-        if (op <= FLD_LEAF_MAX) {
+        // The leaves are two runs in the baker's table, not one: the solids and sources at the
+        // bottom, the patterns in the middle. Anything else has children.
+        if (op <= FLD_LEAF_A || (op >= FLD_LEAF_B0 && op <= FLD_LEAF_B1)) {
             done = fld_leaf(op, A, B, p);
             finished = true;
         } else if (op == FLD_TRANSLATE) {
@@ -1186,8 +1214,8 @@ bool field_eval_ok(uint root, vec3 point, out float answer) {
                 s_step[fi] = step + 1;
                 pushNode = kids.x; pushAt = shifted;
             }
-        } else if (op <= FLD_SMOOTH_DIFFERENCE || op == FLD_ADD || op == FLD_MULTIPLY ||
-                   op == FLD_MIN || op == FLD_MAX) {
+        } else if ((op >= FLD_UNION && op <= FLD_SMOOTH_DIFFERENCE) ||
+                   (op >= FLD_ADD && op <= FLD_MAX)) {
             // Every child at the same point, folded together.
             if (step > 0) {
                 acc.x = (step == 1) ? ret : fld_fold(op, A, acc.x, ret);
