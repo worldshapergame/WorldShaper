@@ -60,6 +60,14 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> brdf
+// Every lobe a VisualRecord declares — lacquer, sheen, the brush grain, metal and emission — as
+// the game's own shaders write them. See web/js/features/brdf.js for what is matched exactly,
+// what is approximated, and the one factor of PI that separates this viewer's units from the
+// path tracer's. It needs `vec3 sky_colour(vec3)` in scope, which is why it is spliced in below
+// that function and not above it.
+import { BRDF_GLSL } from './features/brdf.js';
+// <<< brdf
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -160,6 +168,10 @@ vec3 sky_colour(vec3 direction) {
     return base;
 }
 
+// >>> brdf
+${BRDF_GLSL}
+// <<< brdf
+
 // ACES, in the fitted form. A path tracer's output needs a curve like this and so does anything
 // with a sun in it: without one every lit face of pale limestone is the same clipped white.
 vec3 tonemap(vec3 x) {
@@ -180,29 +192,20 @@ void main() {
     vec4 depth = material_row(2);
     vec4 extra = material_row(3);
 
-    vec3 albedo = base.rgb * base.rgb;            // close enough to sRGB, and one multiply
-    float opacity = base.a;
-    float rough = clamp(surface.r, 0.045, 1.0);
-    float metal = surface.g;
-    float iorByte = surface.b * 255.0;
-    float emissive = surface.a;
-    float translucency = depth.a;
-
-    int flags = int(extra.b * 255.0 + 0.5);
-    int coat = int(extra.a * 255.0 + 0.5);
-    float clearcoat = float(coat & 15) / 15.0;
-    float sheen = float((coat >> 4) & 15) / 15.0;
+    // >>> brdf
+    // The sixteen bytes, unpacked once, in the one place that knows the layout.
+    WsMaterial mat = ws_material(base, surface, depth, extra);
+    vec3 albedo = mat.albedo;
+    float opacity = mat.opacity;
+    float translucency = mat.translucency;
+    // <<< brdf
 
     vec3 N = u_normal;
     vec3 V = normalize(u_eye - v_world);
     if (dot(N, V) < 0.0) N = -N;                  // the far side of a pane, seen through the near
     vec3 L = u_sun;
-    vec3 H = normalize(L + V);
 
-    float ndl = max(dot(N, L), 0.0);
     float ndv = max(dot(N, V), 1e-4);
-    float ndh = max(dot(N, H), 0.0);
-    float vdh = max(dot(V, H), 0.0);
 
     // What the baker cast: how much of the sun and how much of the sky reach this place. Sampled
     // a little along the normal so that a face reads the air in front of it rather than the stone
@@ -213,80 +216,26 @@ void main() {
     float sunVisible = visible.r;
     float skyVisible = visible.g;
 
-    // Corner occlusion is a voxel's own shape and the light grid is the room it stands in; both
-    // are needed, and neither substitutes for the other.
-    float occluded = mix(0.35, 1.0, v_ao) * mix(0.25, 1.0, skyVisible);
-
-    float dielectric = (iorByte > 0.5)
-        ? pow((iorByte / 128.0) / (2.0 + iorByte / 128.0), 2.0)
-        : 0.04;
-    vec3 f0 = mix(vec3(dielectric), albedo, metal);
-
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
-    vec3 direct = u_sunColour * ndl * sunVisible;
 
-    vec3 diffuse = albedo * (1.0 - metal) * (direct + ambient * occluded);
+    // >>> brdf
+    // Every lobe the record declares, in one call: the base GGX (anisotropic where the record
+    // named a grain), the sheen on the diffuse, the lacquer over the top, the metal's Fresnel and
+    // the emission. web/js/features/brdf.js is where each of those comes from in the game's own
+    // shaders, and where the approximations are written down.
+    vec3 colour = ws_shade(mat, N, V, L, u_sunColour, sunVisible, ambient, skyVisible, v_ao);
 
     // Translucent matter lights from behind: leaves, thin marble, wax. One term, and it is the
-    // only place in this shader where light arrives through something.
+    // only place in this shader where light arrives through something. Left outside the lobes
+    // because it is transport rather than a surface response — the game handles it by sending a
+    // ray into the material, and this has no rays.
     if (translucency > 0.0) {
         float through = max(dot(-N, L), 0.0) * 0.6 + 0.25;
-        diffuse += albedo * translucency * through * u_sunColour * sunVisible;
+        colour += albedo * translucency * through * u_sunColour * sunVisible;
     }
 
-    // Brushed metal. A voxel world has no UVs and no tangent frame, so a VisualRecord can name
-    // exactly one thing here — which of the three world axes the grain runs along — and that is
-    // what bits 3 and 4 hold. The grain is projected into the face and the highlight is stretched
-    // across it, which is the whole visible difference between brushed bronze and brown paint.
-    // On a face the grain runs straight out of, there is no direction left and it stays round.
-    float distribution = ggx(ndh, rough);
-    int brush = (flags >> 3) & 3;
-    if (brush != 0) {
-        vec3 axis = (brush == 1) ? vec3(1.0, 0.0, 0.0)
-                  : (brush == 2) ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
-        vec3 along = axis - N * dot(N, axis);
-        float reach = length(along);
-        if (reach > 0.05) {
-            along /= reach;
-            vec3 across = cross(N, along);
-            float alpha = rough * rough;
-            float ax = max(alpha * 0.35, 0.002);
-            float ay = max(alpha * 1.60, 0.002);
-            float th = dot(along, H) / ax;
-            float bh = dot(across, H) / ay;
-            float d = th * th + bh * bh + ndh * ndh;
-            distribution = 1.0 / (3.14159265 * ax * ay * d * d + 1e-7);
-        }
-    }
-
-    vec3 specular = fresnel(f0, vdh) * distribution * smith(ndv, ndl, rough) /
-                    (4.0 * ndv * max(ndl, 1e-4) + 1e-4) * direct * ndl;
-
-    // The sky, reflected. A rough surface takes a blurred sky, which here is the sky colour along
-    // the reflection lerped towards the flat ambient — cheap, and it is what makes bronze read as
-    // metal rather than as brown paint.
-    vec3 R = reflect(-V, N);
-    vec3 reflected = mix(sky_colour(R), ambient, rough * rough);
-    vec3 ambientSpecular = reflected * fresnel(f0, ndv) * mix(0.25, 1.0, skyVisible) *
-                           mix(0.4, 1.0, v_ao);
-
-    vec3 colour = diffuse + specular + ambientSpecular;
-
-    if (clearcoat > 0.0) {
-        float lacquer = ggx(ndh, 0.1) * smith(ndv, ndl, 0.1) / (4.0 * ndv * max(ndl, 1e-4) + 1e-4);
-        colour += clearcoat * 0.25 * (lacquer * direct * ndl + reflected * 0.15 * skyVisible);
-    }
-    if (sheen > 0.0) {
-        float rim = pow(1.0 - ndv, 3.0);
-        colour += sheen * rim * albedo * (ambient * skyVisible + direct * 0.3);
-    }
-    if (emissive > 0.0) {
-        int tint = int(extra.r * 255.0 + 0.5) | (int(extra.g * 255.0 + 0.5) << 8);
-        vec3 glow = vec3(float((tint >> 11) & 31) / 31.0,
-                         float((tint >> 5) & 63) / 63.0,
-                         float(tint & 31) / 31.0);
-        colour += glow * emissive * 6.0;
-    }
+    colour += mat.emission;
+    // <<< brdf
 
     // Beer-Lambert, over a thickness nobody knows. A rasteriser has no path length, so this takes
     // the material's absorption as a tint on what shows through and says so rather than pretending
