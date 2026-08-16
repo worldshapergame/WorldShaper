@@ -64,6 +64,22 @@ struct Axis {
     bool given = false;
 };
 
+// The two axes a query about `axis` is positioned by, IN THE ORDER measure.cpp asks for them.
+//
+// This is not (axis+1)%3, (axis+2)%3, and writing it that way was a real bug that shipped in the
+// first version of this file. `other_axes` in measure.cpp returns (0,2) for axis 1, and the cyclic
+// form gives (2,0) — so every `--gap y@a,b` converted `a` against the z origin and then indexed x.
+// It did not fail. It answered a different question, plausibly, in metres, and one agent measuring
+// head height in a crypt spent an afternoon on a scatter of points that reported 0.000 m of air
+// where a slice at the same resolution showed open floor.
+//
+// x and z happen to agree between the two forms, which is exactly why it survived being used.
+void query_axes(u32 axis, u32& a, u32& b) {
+    if (axis == 0) { a = 1; b = 2; }
+    else if (axis == 1) { a = 0; b = 2; }
+    else { a = 0; b = 1; }
+}
+
 // "y@1.5,-3.0" — an axis, and where on the other two. Written this way because a span is always
 // asked as "how tall is it here", and "here" is two numbers in metres.
 Axis parse_axis(const char* text) {
@@ -223,16 +239,20 @@ int main(int argc, char** argv) {
     }
 
     if (span.given) {
-        const i32 a = static_cast<i32>(span.a * per) - built.origin_voxel[(span.axis + 1) % 3];
-        const i32 b = static_cast<i32>(span.b * per) - built.origin_voxel[(span.axis + 2) % 3];
+        u32 pa = 0, pb = 0;
+        query_axes(span.axis, pa, pb);
+        const i32 a = static_cast<i32>(span.a * per) - built.origin_voxel[pa];
+        const i32 b = static_cast<i32>(span.b * per) - built.origin_voxel[pb];
         const forge::Span s = forge::span_along(clip, span.axis, a, b);
         std::printf("span          %.3f m of matter along %c (%s)\n",
                     static_cast<f64>(s.length()) / per, "xyz"[span.axis],
                     s.contiguous ? "unbroken" : "BROKEN — there is a gap in it");
     }
     if (gap.given) {
-        const i32 a = static_cast<i32>(gap.a * per) - built.origin_voxel[(gap.axis + 1) % 3];
-        const i32 b = static_cast<i32>(gap.b * per) - built.origin_voxel[(gap.axis + 2) % 3];
+        u32 pa = 0, pb = 0;
+        query_axes(gap.axis, pa, pb);
+        const i32 a = static_cast<i32>(gap.a * per) - built.origin_voxel[pa];
+        const i32 b = static_cast<i32>(gap.b * per) - built.origin_voxel[pb];
         const forge::Span s = forge::gap_along(clip, gap.axis, a, b);
         std::printf("gap           %.3f m of air along %c (%s)\n",
                     static_cast<f64>(s.length()) / per, "xyz"[gap.axis],
@@ -240,7 +260,16 @@ int main(int argc, char** argv) {
     }
     if (slice.given) {
         const i32 at = static_cast<i32>(slice.a * per) - built.origin_voxel[slice.axis];
-        const i32 size = m.size[slice.axis];
+        // The step comes from the axes the picture is DRAWN on, not from the one held fixed.
+        //
+        // Taking it from `slice.axis` was the second bug of the same family: on a 57 m orangery,
+        // `--slice x@0` is a section 9 m by 11 m -- about 290 by 360 voxels, which fits -- and it
+        // came out downsampled seventeen times at every resolution, because the step was computed
+        // from the 1901 voxels of LENGTH the slice had just discarded. The section was unreadable
+        // and the only way round it was to slice the building the other way.
+        u32 da = 0, db = 0;
+        query_axes(slice.axis, da, db);
+        const i32 size = std::max(m.size[da], m.size[db]);
         const i32 step = std::max(1, size / 110);
         std::printf("%s", forge::slice_text(clip, slice.axis, at, step).c_str());
     }
