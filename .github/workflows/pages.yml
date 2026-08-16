@@ -48,10 +48,20 @@ on:
         required: false
         default: ''
 
-# One deployment at a time, and a newer push wins.
+# One deployment at a time, and NOTHING is cancelled.
+#
+# `cancel-in-progress: true` was the obvious setting and it meant the site was never published
+# once. A commit that lands on a branch and on `main` is two push events, both match the trigger,
+# both land in this group, and the second kills the first seconds after it starts -- runs 4 to 11
+# were four such pairs, every one of them cancelled, while the site went on serving what run 3 had
+# left. The pattern is completely invisible from the page: it just does not change.
+#
+# Queueing instead is affordable now that a bake reuses everything that has not moved: the second
+# run of a pair rebuilds nothing and finishes in seconds. A slow duplicate is a much smaller
+# problem than a publish that never happens.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
