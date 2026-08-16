@@ -207,8 +207,8 @@ twenty-eight of them:
 
 ## 5. Publishing
 
-`.github/workflows/pages.yml`. Three things about it were wrong in ways that made the site look
-simply broken, and all three are worth knowing before touching it:
+`.github/workflows/pages.yml`. Several things about it were wrong in ways that made the site look
+simply broken, and every one of them is worth knowing before touching it:
 
 **It picks its own ref.** A push says *look again*; it does not say what to bake. Taking the pushed
 branch means a push to `main` bakes `main` and a push to the viewer's branch bakes the viewer's
@@ -222,11 +222,34 @@ workflow, does not have `tools/bake_web.cpp`, does not have a CMakeLists that kn
 the site and takes `clips/` and `src/` from the branch — `src/` because the clips and the forge are
 one thing, and `arc_test.clip` uses an `arc` that exists only on the branch that added it.
 
-**Nothing is cancelled.** `cancel-in-progress: true` meant the site was never published: a commit
-landing on a branch and on `main` is two push events, both match, both land in the `pages`
-concurrency group, and the second kills the first seconds after it starts. Four such pairs ran and
-were cancelled while the page went on showing an older bake. Queueing is affordable now that a bake
-reuses everything that has not moved.
+**There is no concurrency group, and the reason is not the one that was written here first.**
+`cancel-in-progress: true` was the obvious cause — a commit landing on a branch and on `main` is two
+push events and the second killed the first — and setting it to `false` did not fix anything. The
+actual cause was in the run list all along: **runs 12 to 16 ended `cancelled` with zero jobs.** They
+were never given a runner. A concurrency group holds at most *one* pending run, and the schedule,
+then every twenty minutes, kept arriving and displacing the run that was queued. So the group is
+gone entirely and the schedule is hourly. Nothing here needs serialising — two bakes of one commit
+write the same bytes, and Pages serialises deployments itself.
+
+The viewer's own branch is excluded from the push trigger for the same family of reason: it is
+mirrored to `main` commit for commit, so its push was a second identical run and a second deploy
+racing the first.
+
+**Twelve runners, and the page before the clips.** A cold bake at full resolution is minutes per
+clip and the building dominates, so the `bake` job is a matrix of twelve, each taking every twelfth
+clip. Nothing shares state, so the wall clock is the slowest single clip rather than the sum —
+sixteen seconds for the lightest shard, thirteen minutes for the one carrying the building.
+
+Ahead of all of that, `early` publishes the page in about half a minute: it restores the last run's
+clips, fills in anything missing from the site that is currently published, and runs the baker with
+`--index-only`, which writes an index over the files on disk and samples nothing. So the site is up
+and every clip that has ever been baked is walkable while the new ones are still being made; the
+viewer re-reads `index.json` every five seconds, so they appear as they land without a reload.
+
+That job may only ever **add**. It will not deploy an empty index, and it re-reads the published
+commit just before uploading so it cannot put a copy it started from over a real bake that finished
+underneath it. As first written it did neither, and on its first run — with no cache to restore — it
+would have published a site with no clips on it over a live site that had some.
 
 `web/data/` is **not** committed. It is derived, it is tens of megabytes of binary, and a second
 copy of every clip in the history would be out of date the moment somebody edited a fragment.

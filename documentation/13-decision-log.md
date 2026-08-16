@@ -8728,3 +8728,66 @@ same plane as the eye, so cutting the front off a building lets you walk in thro
 | D666 | **`kMaxBlockDepth` = 64** | fault | An unbounded recursion in a parser fed files a player writes |
 | D666 | **The crash does not reproduce in isolation** | honesty | Reproducible in that run, three times, with a backtrace; not since. Written as seen, not as diagnosed |
 | D666 | **`web/data/` is not committed** | decision | Derived, tens of megabytes, and stale the moment somebody edits a fragment |
+
+## D667 — the site was right for three hours and nobody could see it, and the cause was a queue
+
+D666 built the viewer. This is about the part after that, which was harder and is worth more: **a
+bake that is correct and never reaches the page is indistinguishable, from the page, from no bake at
+all.** Between them, four theories were written down before the right one, and three of them were
+wrong in the same way — they explained the symptom without anybody checking the thing that produced
+it.
+
+### Three wrong diagnoses of one cancellation
+
+The runs kept ending `cancelled`. In order:
+
+1. **`cancel-in-progress: true` and two pushes.** True, and it was fixed, and it was not the cause.
+2. **`false`, then.** Still cancelled.
+3. **The right one, and it was in the run list the whole time: runs 12 to 16 ended cancelled with
+   ZERO JOBS and five minutes on the clock.** They never started. A concurrency group holds at most
+   *one* pending run, and the schedule then set to every twenty minutes kept arriving and displacing
+   the run that was queued — the backstop cancelling the thing it was a backstop for.
+
+So there is **no concurrency group at all**, and the schedule is hourly. Nothing here needs
+serialising: two bakes of one commit write the same bytes, and Pages serialises deployments itself.
+The lesson is not about concurrency. It is that *"cancelled" was read as a verdict on the run for
+three hours, and one look at its job count said it had never been a run.*
+
+### And one cancellation that was mine, wrongly
+
+A healthy run was cancelled on the belief it had hung. It had not: the container clock and GitHub
+agreed only twelve minutes had passed. The background sleeps had been launched and polled **in the
+same turn**, so nothing was ever waited on — the poll read the sleep's empty output as elapsed time.
+Written down because it is the exact shape of §4's rule about counters taken from inside the change.
+
+### What a bake costs, and the two things that made it stop mattering
+
+A cold bake of the overhauled facility at 32 voxels to the metre is minutes per clip and the
+building itself dominates. Two changes, in the order they were needed:
+
+- **Twelve runners, each taking every twelfth clip.** No clip needs another's output, so the wall
+  clock becomes the slowest single clip rather than the sum. Sixteen seconds for the lightest shard,
+  thirteen minutes for the one holding the building.
+- **Every file carries the key of what made it** — spliced-source hash, settings, code hash, in the
+  header. A clip whose key still matches is read back rather than resampled, which is what makes a
+  warm shard finish in seconds and a bake incremental without a manifest to keep honest.
+
+### The early deploy, and the harm it could have done
+
+`--index-only` writes an index over whatever files are on disk and samples nothing, so the page can
+be published in half a minute out of the last run's clips while the new ones bake behind it. The
+first version of that job would have done real damage on its very first run: with no cache to
+restore it would have indexed an empty directory and published **a site with no clips on it, over a
+live site that had some**. It now starts from the published site itself, fetching every clip the
+cache did not carry, and it will not deploy an empty index nor overwrite a real bake that landed
+while it was fetching.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D667 | **No concurrency group on the pages workflow** | fault | A group holds one pending run; the schedule kept cancelling the queued run it existed to back up |
+| D667 | **"Cancelled" was read for three hours without reading the job count** | honesty | Runs 12–16 had zero jobs. They were never runs. Two fixes were shipped against the wrong cause first |
+| D667 | **A healthy run was cancelled on a hunch it had hung** | honesty | Sleeps launched and polled in one turn: nothing was waited on, and twelve minutes was read as an hour |
+| D667 | **Twelve shards, one clip in twelve each** | decision | No clip needs another's output, so the cold bake becomes the slowest clip and not their sum |
+| D667 | **The key of what made a file lives in the file** | decision | Incremental without a manifest that can go stale; a warm shard is seconds |
+| D667 | **The early deploy may only add** | fault | As first written it would have published an empty site over a populated one, on its first run |
+| D667 | **The viewer's own branch does not trigger the workflow** | decision | It is mirrored to `main` commit for commit; the two pushes were two identical runs and two racing deploys |

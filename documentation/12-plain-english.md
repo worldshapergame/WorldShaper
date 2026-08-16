@@ -3305,6 +3305,13 @@ follows: every time one is changed and pushed, it is rebuilt within a few minute
 that part open on the page it reloads itself with the camera exactly where you left it. So you can
 watch a piece of the building change while somebody is changing it.
 
+**And it opens straight away, even when it is busy rebuilding.** Working out a building of this size
+one voxel at a time is real work, and the first time it is done it takes minutes however it is
+arranged — so it is spread over twelve machines at once, each taking every twelfth clip, and none of
+them redoes a clip that has not changed since last time. Ahead of all of that, the page itself goes
+up within about half a minute, showing every clip that has been built before. The new ones appear on
+the list on their own as they finish. Nothing to reload, and never a blank site while it works.
+
 The materials are real — glass is see-through, bronze and gilt look like metal, the copper dome is
 green, the marble is polished. What it does *not* do is the light. The game traces light properly
 and no phone can, so the site draws the light in advance and paints it on: the inside of a room is
