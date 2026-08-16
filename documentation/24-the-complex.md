@@ -227,6 +227,39 @@ Beside it: **`round=` on a box does not grow the box**, which contradicts what `
 
 ---
 
+## 3a. The grain the building has never had
+
+Found by the theatre's author, and it is about the shipped building rather than about any new work.
+
+`clips/facility.clip` ends with `let all = displace { furnished grain_fine } amount=0.012`, and the
+comment beside it read: *"under half a voxel at full detail, so it moves no wall — and is the
+difference between a face that reads as carved stone and one that reads as a drawing of carved
+stone."*
+
+**The sampler drops it.** `usable_displacement` throws away any displacement under half a voxel,
+for a reason it argues at length in `src/forge/clip_script.cpp` and which quotes this exact line
+back: being under a voxel is not what makes a displacement harmless, it is precisely what makes it
+DITHER, because a displacement too small to move a wall is still large enough to flip the voxels
+the wall is made of. On flat axis-aligned faces the whole face dithers at once — a raspy speckle
+that became black pepper once the renderer had real sun and sky.
+
+12 mm is **0.38 of a voxel at metre 32 and 0.10 at metre 8**. There is no resolution this building
+is ever sampled at where that line does anything, and the build log has said so in a WARN on every
+single build for as long as the number has read 0.012.
+
+**The behaviour is correct and was not changed.** Raising the amount to 0.016 would make it apply
+and would bring back the pepper. What was wrong was two documents reasoning from an effect that
+does not happen: the manifest's own comment, and **BRIEF.md rule 5**, whose entire justification for
+`below=0.02` was this grain pushing voxels outside the shape their rule names. Both are corrected.
+The rind that rule prevents is real; it comes from coverage-versus-centre, which is the same
+mechanism as the transform case and is why that one needs 0.035.
+
+Beside it, measured with both arms by the same author: **`plane` has an infinite bounding box and an
+intersection keeps it.** Replacing half-spaces with boxes gave the same clip to the voxel in **57%
+of the CPU** — 141.5 s against 81.3 s at metre 8.
+
+---
+
 ## 4. The assembled building at metre 32, against the building this work started from
 
 Taken last, on an idle machine, at the contract's own resolution — the only one where a book
