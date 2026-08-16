@@ -5,13 +5,20 @@
 // voxel face, a Cook-Torrance lobe per light, and every term that needs to know what is between a
 // surface and the sky read out of the light grid the baker cast.
 //
-// What it deliberately does NOT do is fake the path tracer. There are no screen-space reflections,
-// no ambient occlusion pass, no denoiser. A mirror is a rough metal with a sky in it, glass is
-// blended, and neither claims to be what the game shows. What it IS faithful about is the matter:
-// the geometry is the clip's own voxels and the materials are its own VisualRecords, unquantised.
+// What it deliberately does NOT do is fake the path tracer. There is no ambient occlusion pass and
+// no denoiser. Glass is blended and does not claim to be what the game shows. What it IS faithful
+// about is the matter: the geometry is the clip's own voxels and the materials are its own
+// VisualRecords, unquantised.
+//
+// >>> ssr
+// A mirror WAS a rough metal with a sky in it, and is not any more: there is a screen-space
+// reflection pass, with a baked probe behind it for everything a screen cannot hold. It is
+// web/js/features/ssr.js, and the capture pass it needs is `captureScene` below.
+// <<< ssr
 //
 // # Three passes and a cap
 //
+//   capture      the sky and the opaque surfaces again, offscreen at half size, for reflections
 //   sky          a full-screen gradient with the sun in it
 //   opaque       depth written; back faces culled only when nothing is sliced
 //   transparent  blended, depth tested, depth not written
@@ -60,6 +67,11 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> ssr
+// Reflections. The whole feature is in web/js/features/ssr.js, including the GLSL, so that this
+// file gains a string and four calls rather than a second renderer.
+import { Ssr, SSR_FRAGMENT_GLSL } from './features/ssr.js';
+// <<< ssr
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -167,6 +179,13 @@ vec3 tonemap(vec3 x) {
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+// >>> ssr
+// Screen-space reflections and the probe behind them. It goes here because it reflects the sky
+// when it misses and inverts tonemap() when it hits, so both have to already exist. (No
+// back-quotes in here: this is inside a template string, and one closes it.)
+${SSR_FRAGMENT_GLSL}
+// <<< ssr
+
 void main() {
     float side = dot(v_world, u_clip.xyz) + u_clip.w;
     if (u_cutSide > 0.5) {
@@ -266,9 +285,22 @@ void main() {
     // the reflection lerped towards the flat ambient — cheap, and it is what makes bronze read as
     // metal rather than as brown paint.
     vec3 R = reflect(-V, N);
-    vec3 reflected = mix(sky_colour(R), ambient, rough * rough);
+    // >>> ssr
+    // ...and the room, reflected, which is what a mirror is FOR. The screen-space march reads the
+    // scene capture; everything it cannot reach — off the edge, behind the eye, too rough — comes
+    // back from the probe, whose stub is this same sky. See web/js/features/ssr.js.
+    vec3 reflected = ws_reflected_radiance(v_world, N, rough, f0, ndv);
+    // <<< ssr
     vec3 ambientSpecular = reflected * fresnel(f0, ndv) * mix(0.25, 1.0, skyVisible) *
                            mix(0.4, 1.0, v_ao);
+
+    // >>> ssr
+    // The reflection REPLACES the specular lobe rather than adding to a full diffuse. At a
+    // grazing angle Schlick goes to one, so without this the water in estate/pavilion and every
+    // polished floor gains the whole room on top of everything they already scattered, and the
+    // clip glows along all its silhouettes. Stone is f0 = 0.04 head-on and barely notices.
+    diffuse *= 1.0 - clamp(fresnel(f0, ndv), 0.0, 1.0);
+    // <<< ssr
 
     vec3 colour = diffuse + specular + ambientSpecular;
 
@@ -824,7 +856,62 @@ export class Renderer {
         this.exposure = 1.0;
 
         this.stats = { draws: 0, quads: 0 };
+
+        // >>> ssr
+        // The scene capture the reflections march. It sizes itself on the first frame and turns
+        // itself off if the card will not give it a depth texture.
+        this.ssr = new Ssr(gl);
+        // <<< ssr
     }
+
+    // >>> ssr
+    // The sky and the opaque surfaces, drawn again into the half-resolution offscreen target so
+    // that the pass after this one has a depth buffer to march and a colour buffer to read.
+    //
+    // It is the viewer's OWN two passes pointed somewhere else — the same programs, the same
+    // uniforms, the same `drawFaces` — and not a second description of the scene, which is the
+    // thing D204 says is the failure mode. `u_ssr` is left at zero here, which is what holds a
+    // mirror inside a mirror to one bounce instead of a black hole.
+    captureScene(camera, slice, plane) {
+        const gl = this.gl;
+        if (!this.ssr.begin(this.canvas.width, this.canvas.height)) return;
+
+        gl.clearColor(0, 0, 0, 1);
+        gl.clearDepth(1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.CULL_FACE);
+        gl.disable(gl.BLEND);
+        gl.disable(gl.STENCIL_TEST);
+        gl.useProgram(this.sky.program);
+        gl.uniformMatrix4fv(this.sky.uniforms.u_invViewProj, false, this.invViewProj);
+        gl.uniform3fv(this.sky.uniforms.u_eye, camera.eye);
+        gl.uniform3fv(this.sky.uniforms.u_sun, this.sun);
+        gl.uniform3fv(this.sky.uniforms.u_sunColour, this.sunColour);
+        gl.uniform3fv(this.sky.uniforms.u_skyUp, this.skyUp);
+        gl.uniform3fv(this.sky.uniforms.u_skyDown, this.skyDown);
+        gl.uniform1f(this.sky.uniforms.u_exposure, this.exposure);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        gl.bindVertexArray(this.vao);
+        gl.useProgram(this.surface.program);
+        this.setShared(this.surface.uniforms, camera);
+        gl.uniform4fv(this.surface.uniforms.u_clip, plane);
+        gl.uniform1f(this.surface.uniforms.u_cutSide, 0);
+        this.ssr.bind(this.surface.uniforms, camera, this.clip);
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LESS);
+        gl.depthMask(true);
+        gl.frontFace(gl.CCW);
+        gl.cullFace(gl.BACK);
+        if (slice) gl.disable(gl.CULL_FACE); else gl.enable(gl.CULL_FACE);
+        this.drawFaces(this.surface.uniforms, this.clip.opaqueFace, 0, 0);
+        gl.bindVertexArray(null);
+
+        this.ssr.end(this.canvas.width, this.canvas.height);
+    }
+    // <<< ssr
 
     // Everything that lands on the card for one clip: one vertex buffer, one material texture, one
     // light volume. Called again when the clip is rebuilt, so it frees before it allocates.
@@ -1121,11 +1208,20 @@ export class Renderer {
             return;
         }
 
+        // >>> ssr
+        // The scene, into the offscreen target, before anything on screen reads it. It leaves the
+        // default framebuffer bound and the viewport where it found it.
+        this.captureScene(camera, slice, plane);
+        // <<< ssr
+
         gl.bindVertexArray(this.vao);
         gl.useProgram(this.surface.program);
         this.setShared(this.surface.uniforms, camera);
         gl.uniform4fv(this.surface.uniforms.u_clip, plane);
         gl.uniform1f(this.surface.uniforms.u_cutSide, 0);
+        // >>> ssr
+        this.ssr.bind(this.surface.uniforms, camera, clip);
+        // <<< ssr
 
         // --- opaque ----------------------------------------------------------------------------
         gl.enable(gl.DEPTH_TEST);
