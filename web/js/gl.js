@@ -70,7 +70,15 @@ import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
 // >>> ssr
 // Reflections. The whole feature is in web/js/features/ssr.js, including the GLSL, so that this
 // file gains a string and four calls rather than a second renderer.
-import { Ssr, SSR_FRAGMENT_GLSL } from './features/ssr.js';
+import { Ssr, SSR_FRAGMENT_GLSL, PROBE_FALLBACK_GLSL } from './features/ssr.js';
+// The baked reflection probes go in ahead of it, because the reflection asks them first and the
+// screen-space march is only what refines the answer where the screen happens to have it.
+//
+// ONE LINE WIRES THE REAL BAKE. Add
+//     import { PROBE_GLSL, Probes } from './features/probes.js';
+// and set WS_PROBE_GLSL to PROBE_GLSL. The fallback declares the same two functions and returns
+// coverage zero, which is the genuine "no probe here" answer rather than a stand-in for one.
+const WS_PROBE_GLSL = PROBE_FALLBACK_GLSL;
 // <<< ssr
 
 const VERTEX_SOURCE = `#version 300 es
@@ -180,9 +188,12 @@ vec3 tonemap(vec3 x) {
 }
 
 // >>> ssr
-// Screen-space reflections and the probe behind them. It goes here because it reflects the sky
-// when it misses and inverts tonemap() when it hits, so both have to already exist. (No
-// back-quotes in here: this is inside a template string, and one closes it.)
+// The baked reflection probes, then the screen-space march that refines them. Both go here
+// because the march falls back to the sky and inverts tonemap(), so sky_colour and tonemap have
+// to already exist above. PROBE_GLSL declares its own uniforms and wants the precision statement
+// at the top of this shader, which it has. (No back-quotes in here: this is inside a template
+// string, and one closes it.)
+${WS_PROBE_GLSL}
 ${SSR_FRAGMENT_GLSL}
 // <<< ssr
 

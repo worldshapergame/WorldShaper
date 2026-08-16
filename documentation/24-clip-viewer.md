@@ -154,6 +154,67 @@ page renders fewer pixels rather than fewer frames, down to 55%.
 of its own baked bytes. When the hash of the clip on screen changes it is refetched and swapped in
 **with the camera exactly where it was**, which is the only way to see what actually changed.
 
+<!-- >>> ssr -->
+### Reflections, and the offscreen target they needed
+
+Nothing reflected anything. A `mirror` (rough 6, metal 252) and still water both came out the
+colour of the sky, because the only thing the surface shader had to put in a specular lobe was
+`sky_colour(R)` — a gradient with a sun in it, and no room, no floor and no posts. There are now
+**screen-space reflections with a baked probe behind them**, in `web/js/features/ssr.js`.
+
+**The march.** Along the reflection vector, twenty-four steps growing at 1.13 from a stride of four
+thousandths of the clip's own size, then four halvings of the interval that straddles the surface.
+A step is a **lerp and not a matrix multiply**: the projection is affine in world space, so
+`viewProj * (origin + R·t)` is `viewProj·origin + t · viewProj·R`, two matrix multiplies for the
+whole ray instead of one per step. Written the obvious way it cost three times as much for the same
+picture.
+
+It fades at the screen edge, and it fades where the ray points back at the camera — which is not a
+tidying-up but the whole reason the second half exists. **A mirror facing you shows mostly what is
+behind you, and that is never on the screen.** Everything a screen-space ray cannot answer falls
+through to `ws_probe_radiance(world, direction, roughness)`, the pre-filtered octahedral reflection
+probe. Until that bake lands, the function in `ssr.js` returns the sky — which is exactly what the
+viewer reflected before, so a miss looks like the picture always did and the day probes arrive that
+one function is the only thing to replace.
+
+Two things bound what it costs on a phone. A surface rougher than 0.62 never marches, because a
+pre-filtered probe says the same thing better and cheaper; and neither does one whose Fresnel is
+under 0.055, which is a stone wall seen head-on. Grazing angles still march, because grazing is
+where a floor stops being paint. Roughness is a **mip of the capture** rather than a spray of extra
+rays: there is no temporal filter here to resolve noise into an image, so a blurred fetch is stable
+where a stochastic one would crawl.
+
+**Energy: the reflection replaces the specular lobe.** The diffuse is multiplied by `1 − F`. At a
+grazing angle Schlick goes to one, and without that the water in `estate/pavilion` and every
+polished floor would gain the whole room on top of everything they already scattered.
+
+**The offscreen target — this is shared plumbing.** The viewer drew straight to the default
+framebuffer, which has no readable depth and no readable colour. So `Renderer.captureScene` draws
+the sky and the opaque surfaces **again**, into one framebuffer object holding an `RGBA8` colour
+texture with a full mip chain and a `DEPTH_COMPONENT24` depth texture, at **half the canvas in each
+axis** — a quarter of the pixels, which is the phone budget and is also why marching it is
+affordable. It is the viewer's own two passes pointed somewhere else: the same programs, the same
+uniforms, the same `drawFaces`. Not a second description of the scene, which is what D204 says the
+failure mode is. `u_ssr` is left at zero inside it, and that is what holds a mirror inside a mirror
+to one bounce.
+
+**The capture is display-space and a reflection has to be added in radiance.** It is written by the
+same fragment shader that writes the screen, so it comes out tone mapped and gamma encoded, and
+`ws_capture_radiance` puts it back — the ACES fit in `tonemap` is a ratio of two quadratics and
+inverts in closed form. An `RGBA16F` target would avoid that, and needs `EXT_color_buffer_float`,
+which a phone may not have; it would buy precision only in the highlights that clipped to white
+anyway. Those come back as 7.24, which is bright enough to read as a highlight, and it is the one
+place this is approximate.
+
+Anything else wanting a readable depth buffer should take **this** one rather than make a second:
+`Ssr.colour`, `Ssr.depth`, `Ssr.width`, `Ssr.height`, the current camera, texture units 2 and 3.
+A post chain wants something different — the *final* image at *full* size, with the glass in it —
+and should build its own with the exported `makeTarget`.
+
+`?ssr=0` turns the whole thing off, `?ssr=capture` captures and does not march, and `?ssr=full`
+captures at full resolution. The three of them are how the cost is split without a rebuild.
+<!-- <<< ssr -->
+
 ## 4a. The clip before it was voxels
 
 The ◉ button draws the clip **as it was written**: every shape the author typed, ray-marched, with

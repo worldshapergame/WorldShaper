@@ -48,9 +48,30 @@
 // something different -- the FINAL image at FULL resolution -- and should make its own target with
 // `makeTarget` rather than borrow this one, because this one has no glass in it and is half size.
 
-// Texture units 2 and 3 are the capture's. 0 and 1 are the materials and the light volume.
+// Texture units 2 and 3 are the capture's. 0 and 1 are the materials and the light volume, and
+// the probes are on 4 and 5.
 export const SSR_COLOUR_UNIT = 2;
 export const SSR_DEPTH_UNIT = 3;
+
+// THE PROBE INTERFACE, when web/js/features/probes.js is not there to provide it.
+//
+// It declares the two functions RPRB's PROBE_GLSL declares, with the same signatures, and
+// `probeReflection` returns **coverage zero** -- which is the real "no probe here" answer and
+// sends every caller down the same analytic-sky path it will use in the finished build. That is
+// the point of writing the fallback this way rather than having it return the sky itself: the
+// miss path is exercised, not simulated, so nothing new gets tested for the first time on the day
+// the bake lands.
+//
+// TO WIRE THE REAL ONE: in gl.js, import { PROBE_GLSL, Probes } from './features/probes.js' and
+// point WS_PROBE_GLSL at PROBE_GLSL instead of at this. Nothing in this file changes.
+export const PROBE_FALLBACK_GLSL = `
+vec4 probeReflection(vec3 world, vec3 normal, vec3 reflectDir, float roughness) {
+    return vec4(0.0);
+}
+vec3 probeFresnel(vec3 f0, float ndv, float roughness) {
+    return f0 + (max(vec3(1.0 - roughness), f0) - f0) * pow(1.0 - ndv, 5.0);
+}
+`;
 
 // Everything the surface fragment shader gains, as one string, so that gl.js's own shader is
 // edited in one place and this file holds the whole feature.
@@ -78,14 +99,10 @@ const float WS_SSR_ROUGH_MAX = 0.62;
 // grazing is where a floor stops being paint.
 const float WS_SSR_MIN_FRESNEL = 0.055;
 
-// THE PROBE. The RPRB bake replaces this one function; the body is the sky so that a viewer
-// without probes yet draws exactly what it drew before.
-//
-// Assumed signature: vec3 ws_probe_radiance(vec3 world, vec3 direction, float roughness)
-//   world      the point being shaded, in metres -- which probe, and how to blend between them
-//   direction  the reflection vector, world space, normalised
-//   roughness  0..1, which pre-filtered level of the octahedral map to read
-vec3 ws_probe_radiance(vec3 world, vec3 direction, float roughness) {
+// The analytic sky, which is what this viewer reflected before there was anything else. It is no
+// longer the fallback for everything -- it is the fallback for where the probes do not reach, and
+// probeReflection says where that is.
+vec3 ws_sky_radiance(vec3 direction, float roughness) {
     vec3 flat_sky = mix(u_skyDown, u_skyUp, clamp(direction.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
     return mix(sky_colour(direction), flat_sky, roughness * roughness);
 }
@@ -188,13 +205,24 @@ vec3 ws_screen_reflection(vec3 origin, vec3 R, float rough, out float weight) {
     return ws_capture_radiance(uv, lod);
 }
 
-// What the specular lobe reflects: the room if the screen has it, the probe if it does not.
+// What the specular lobe reflects: the room if the screen has it, the probe if it does not, and
+// the analytic sky where there are no probes either.
 //
 // \`f0\` and \`ndv\` are here to decide whether to march at all, not to shade with -- the Fresnel
-// itself is applied by the caller, where it always was.
-vec3 ws_reflected_radiance(vec3 world, vec3 N, float rough, vec3 f0, float ndv) {
+// itself is applied by the caller with gl.js's own Schlick, where it always was. probeFresnel is
+// deliberately NOT called: two Fresnels would multiply.
+//
+// \`rough\` is the GGX-clamped roughness this file marches and blurs with; \`rawRough\` is the
+// material's own byte, which is what the probe wants for its pre-filtered level.
+vec3 ws_reflected_radiance(vec3 world, vec3 N, float rough, float rawRough, vec3 f0, float ndv) {
     vec3 R = reflect(normalize(world - u_eye), N);
-    vec3 fallback = ws_probe_radiance(world, R, rough);
+    // R goes in UNCORRECTED. probeReflection applies its own parallax correction, and correcting
+    // twice bends the reflection off the wall it belongs to.
+    vec4 probe = probeReflection(world, N, R, rawRough);
+    // .a is coverage -- how much of this point's probe neighbourhood actually had probes baked.
+    // Zero is not "black", it is "nobody looked here", and the sky is the honest answer. Mixed
+    // rather than branched, so the edge of a probe volume is a fade and not a seam.
+    vec3 fallback = mix(ws_sky_radiance(R, rough), probe.rgb, clamp(probe.a, 0.0, 1.0));
     if (u_ssr < 0.5 || rough > WS_SSR_ROUGH_MAX) return fallback;
     vec3 f = fresnel(f0, ndv);
     if (max(f.r, max(f.g, f.b)) < WS_SSR_MIN_FRESNEL) return fallback;
