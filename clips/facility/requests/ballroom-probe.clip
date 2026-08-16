@@ -1,0 +1,38 @@
+# ballroom-probe — the ballroom on its own, so it can be measured without the rest of the building.
+#
+# There is no Windows and no Vulkan on the machine this was written on, so `clipcheck` is the only
+# thing that can look at this room and the numbers below are the whole of the gate:
+#
+#   ./build/clipcheck clips/facility/requests/ballroom-probe.clip --metre 8
+#   ./build/clipcheck clips/facility/requests/ballroom-probe.clip --metre 16 --slice y@8.0
+#   ./build/clipcheck clips/facility/requests/ballroom-probe.clip --metre 16 --slice z@-5.0
+#   ./build/clipcheck clips/facility/requests/ballroom-probe.clip --metre 32
+#
+# `components 1` is the first test of done; `never fired` is a paint rule that painted nothing and
+# looks exactly like success; and metre 32 is the only one that has a crystal drop or a rocaille
+# tail in it at all.
+#
+# THE BOUNDS ARE NARROWED, DELIBERATELY, AND THIS IS THE ONLY PLACE THAT IS ALLOWED. The contract's
+# box is 34 x 21 x 25 m, which at metre 32 is 582 million cells and about 2.8 GB before a voxel of
+# the building exists — for a room that occupies 1.6% of it. The box below is this room plus a
+# margin, so a metre 32 run is seconds rather than minutes and can be run after every edit, which
+# is the only way the thin matter in here ever got checked. It changes nothing about the fragment:
+# `bounds` only says where the sampler looks.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+# The coat everything starts in, exactly as the manifest has it, so that any surface of mine which
+# no rule of mine reaches comes back as limestone and is visible as a fault rather than as nothing.
+paint limestone
+
+include "../ballroom.clip"
+
+# `metre` and `bounds` come AFTER EVERY include and not before. ballroom.clip includes
+# _contract.clip again for its own dimensions, and the contract re-states the building's box, so
+# these two lines put anywhere above the last include are quietly undone by it. That cost twenty
+# minutes and looked exactly like the narrowing having no effect.
+metre 32
+bounds 5.80 5.80 -6.90   15.40 11.50 -2.80
+
+solid part_ballroom

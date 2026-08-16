@@ -1,0 +1,1164 @@
+# ballroom — the Festsaal on the piano nobile of the east wing, south front. White, silver and
+#            gold; a coved ceiling; three windows on the south answered by mirrors on the north;
+#            three crystal chandeliers.
+#
+# ================================================================================================
+# WHAT THIS PART PUTS UNDER LOAD — read this before you move a number, and do not "tidy" any of it
+# away. Every one of these is a question put to the path tracer, and each of them is the reason a
+# piece of this room is shaped the way it is rather than a way that would have been easier.
+#
+# 1. MIRRORS FACING MIRRORS ACROSS A LIT ROOM, AND HALF OF WHAT EACH ONE SEES IS THE SKY.
+#
+#    `mirror` is rough=6, metal=252. There are SIX mirror piers in here: two on the south wall
+#    between the three windows, on x = 9.45 and 12.15, and four on the north wall, on x = 8.10,
+#    9.45, 10.80 and 12.15 — 13.2 m2 of silvered glass in two opposed ranks 2.97 m apart, with the
+#    two on the south DIRECTLY OPPOSITE two of the four on the north. That pair is a path that
+#    never terminates: an image of an image of an image, and a bounce budget that has to be SPENT
+#    rather than exhausted.
+#
+#    What separates this rig from the mirror salon on the storey below is the WINDOWS. The south
+#    wall alternates window, mirror, window, mirror, window; the four north mirrors therefore see
+#    a mirror on two of their axes and 1.35 x 2.25 m of open sky on the other two, at floor level,
+#    at eleven o'clock in the morning. Half of what comes back down a mirror path in here is the
+#    sun and half of it is another mirror, and a renderer that terminates paths WELL and one that
+#    merely terminates them look identical until it is asked that.
+#
+#    DO NOT MOVE THE MIRRORS OFF x = 9.45 AND 12.15. The opposition is the whole point of them.
+#
+# 2. THREE CHANDELIERS OF FOUR HUNDRED AND TEN REFRACTING SOLIDS EACH.
+#
+#    `crystal` is ior 1.62 and opacity 40. Each chandelier hangs 410 separate crystals — 24 strands
+#    of six off the corona, 24 of four off the upper ring, 24 of five off the lower ring, 24 of two
+#    off the outer ring, and the finial — as OCTAHEDRA, DODECAHEDRA AND ICOSAHEDRA of 0.076 to
+#    0.10 m, so every drop is a faceted solid with eight, twelve or twenty refraction events on it
+#    rather than a sphere, which has none. 1230 of them in the room, over a lacquered parquet floor,
+#    hung on the long axis on 2.70 m (3 D) centres so the THREE CAUSTICS OVERLAP on the floor
+#    between them. One caustic is a demonstration; three that add up correctly is a measurement.
+#
+#    Each strand is threaded on a rod of the same crystal, 0.060 across, which is what makes it one
+#    solid rather than eighteen beads a quarter of a voxel apart. A real chandelier has that wire
+#    and here it is also the only reason this part reports one component.
+#
+# 3. A COVE 0.90 m ON THE QUARTER, WHICH IS THE SURFACE THE INDIRECT TERM IS JUDGED ON.
+#
+#    The ceiling is coved: a quarter hollow of radius 0.90 (2 M) running right round the room
+#    between the cornice at 9.90 and the flat ceiling at 10.80, mitred at the four corners. It is
+#    white plaster, it is 32 m2, it is smooth, it has NO DIRECT LIGHT ON ANY OF IT — the windows
+#    are at floor level and their heads are 1.35 m below the springing — and it is lit almost
+#    entirely by what the floor and the three chandeliers throw up at it. Banding, blotching and
+#    low-frequency noise in an indirect term are invisible on a wall with a picture on it and
+#    impossible to miss on this. That is what it is for.
+#
+#    IT IS BUILT AS FOUR CYLINDERS AND NOT AS `round`. A rounded box gives the corners a sphere and
+#    a step at the springing; four quarter-cylinders unioned give a mitre that is continuous with
+#    the wall below it, which is what a plasterer's cove actually does.
+#
+# 4. THIN MATTER AT ONE AND TWO VOXELS, CUT AND PAINTED, IN THE SAME FRAME.
+#
+#    At the contract's metre 32 a voxel is 0.03125 m. CUT: the bead run round every mirror and
+#    every window is 0.044 across (1.4 voxels); the trellis rib on the ceiling and on both coves is
+#    0.030 wide (ONE voxel) standing 0.055 proud; the fold ribs in the silk and the damask are
+#    0.036; a rocaille palm is 0.044 and a girandole's branch 0.052. PAINTED: the marquetry lines in
+#    the parquet come out 0.070 wide — the 0.030 stencil plus the paint rule's own reach either side
+#    — WITH NO GEOMETRY UNDER THEM AT ALL, and so is the gold_leaf scrollwork on the boiserie of the
+#    west and north walls. A denoiser that has an edge to hold on to and one that has only a colour
+#    change are two different problems, and this room asks both of them a metre apart on the same
+#    wall: the cut rocaille over each mirror and the painted rocaille on the ground beside it.
+#
+#    AND NOTHING FREE-STANDING IS UNDER 0.044. That is not a softening of the rule, it is the rule
+#    read properly: thin matter is safe when it is knitted along its whole length to what it lies on
+#    — a rib on a ceiling, a fold in a hanging, a painted line on a slab — and it comes apart when
+#    it is a rod in mid-air. The first cut of this room had 0.030 scrolls and 0.040 chandelier
+#    struts and reported THREE HUNDRED AND TWENTY COMPONENTS.
+#
+# 5. AND THE MATERIALS NOTHING ELSE IN THE BUILDING USES. mirror, crystal, ormolu, gold_leaf,
+#    silver, boiserie, gesso, parquet, ebony, faience, silk, damask, wax, taper, giallo, rosso.
+#    Three golds a stop apart (ormolu 48, gilt 64, gold_leaf 40) are on the same pier as `silver`
+#    at 36 and `mirror` at 6, so "is the metal right" becomes a comparison the eye can make inside
+#    one frame instead of a yes/no about one sample.
+# ================================================================================================
+#
+# THE MODULE, AND WHERE EVERY NUMBER CAME FROM. M = 0.45, D = 0.90.
+#
+# TWO OF THE ROOM'S FOUR FACES ARE NOT ON THE MODULE AND CANNOT BE. The south wall's inner face is
+# z = -6.60 (block_z 7.50 less a 2 M wall) and the east wall's is x = 15.10 (block_x 16.00 less D),
+# and neither 7.50 nor 16.00 is a multiple of 0.45. So every number measured off those two faces is
+# a construction and is marked here; everything else is a module multiple.
+#
+#   PLAN
+#    6.00   zone limit west, outer face of my west wall     (the upper vestibule is beyond it)
+#    6.50   inner face of that wall, 1 M thick plus the 0.05 lap
+#    6.54   FINISHED west face — the boiserie is 0.09 (M/5) thick on every wall
+#   15.10   inner face of the east wall              walls.clip's, NOT a module multiple
+#   15.01   FINISHED east face
+#   -6.60   inner face of the south wall             walls.clip's, NOT a module multiple
+#   -6.51   FINISHED south face
+#   -3.00   zone limit north, outer face of my north wall   (the east hall's vault is beyond it)
+#   -3.50   inner face of that wall
+#   -3.54   FINISHED north face
+#     so the room in the clear is 8.47 x 2.97, and its centre line is z = -5.025, x = 10.775.
+#
+#    8.10  10.80  13.50   the window axes on the south front. windows.clip's, on the contract's
+#                         2.70 (3 D) eustyle bay, and they are the spine of this room: everything
+#                         in it is on one of them or on the 1.35 (3 M) half-bay between two.
+#    9.45  12.15          the south mirror piers — the half-bays between the windows
+#    8.10  9.45  10.80  12.15   the north mirror piers
+#   14.40 = 32 M          the door out to the stair, 0.90 (2 M) wide
+#
+#   SECTION
+#    6.00   underside of my floor slab = ceiling of the mirror salon below
+#    6.30   FLOOR. The contract's piano nobile: 1.80 + 25 risers of 0.18, and the line the window
+#           sills outside are cut at, which is why the windows in here start at the floor.
+#    6.75   top of the base course              6.30 + 1 M
+#    6.885  foot of a mirror plate
+#    8.55   window head                         windows.clip's opening, 2.25 (5 M) tall
+#    9.135  head of a mirror plate              2.25 (5 M) tall, the same as a window
+#    9.27   head of a mirror frame
+#    9.585  foot of the cornice
+#    9.90   CORNICE AND COVE SPRINGING          6.30 + 8 M = 3.60
+#   10.80   flat ceiling soffit                 9.90 + 2 M, the cove's own radius
+#   11.25   top of the ceiling slab             10.80 + M
+#     so the clear height from floor to flat ceiling is 4.50 = 10 M exactly.
+#
+#   TOLERANCES, never seen and never measured: the 0.05 laps (6.25, -6.65, 15.15, 9.85, 6.28), the
+#   0.02 and 0.035 under a paint rule's `below`, and the small rounds on every stone arris.
+#
+# WHAT THIS PART LOOKS LIKE AT COARSER METRES, so nobody reads it as a fault. The contract samples
+# this building at METRE 32 and at metre 32 this part is ONE COMPONENT with nothing floating. At
+# metre 16 a voxel is 0.0625 and every rod in a chandelier, every branch of a girandole and every
+# rocaille palm is UNDER ONE VOXEL, so they come apart: it reports about 490 components. That is not
+# a fault in the geometry, it is the geometry being finer than the grid, which is what a room of
+# 1230 crystal drops is for. Judge it at 32.
+#
+# WHERE IT MEETS ITS NEIGHBOURS
+#
+#   BELOW  the mirror salon, y 1.80..6.00. My floor slab is its ceiling: 6.00 to 6.30, over the
+#          whole footprint, lapping 0.05 into the south and east walls.
+#   SOUTH  and EAST, walls.clip's outer walls, 0.90 thick. windows.clip has already cut three
+#          piano nobile aedicules through the south one at x = 8.10, 10.80 and 13.50.
+#          ITS `windows_pn_cut` IS 1.35 x 2.25 AND RUNS BACK TO z = -5.70 — 0.90 m PAST THE INNER
+#          FACE OF THE WALL AND INTO THIS ROOM. Everything in this file stands clear of those three
+#          boxes; the base course, the boiserie and the architraves are all cut back to the jambs,
+#          and there is no console, no hanging and no chandelier inside one. Anything put in one is
+#          deleted by the manifest, silently.
+#   NORTH  the east hall's groin vaults, whose crowns are at 6.525 and whose block runs to 6.975 in
+#          z +-2.925. This room stops at z = -3.00 for that reason and nothing here goes north of
+#          it. The doorway at x = 14.40 opens onto the strip east of that block.
+#   ABOVE  y 11.25, and the roof deck is at 11.75.
+#
+# WHAT I COULD NOT MEET, SAID PLAINLY. The brief asked this room to meet the interior grand stair
+# "on the east side at 6.30". stair.clip's gallery is at x 11.86..15.07, z 4.74..6.57 — the NORTH
+# strip of this wing, 7.7 m away across the hall vaults, and there is no floor at 6.30 between the
+# two. So the doorway is placed on the line it would arrive on, at the east end of my north wall,
+# and the floor from z = -3.00 to the gallery belongs to whoever builds the upper east hall. It is
+# written up in clips/facility/requests/ballroom.md.
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE SHELL — floor, two walls of my own, the boiserie ground on all four, the cove, the ceiling
+# ================================================================================================
+
+# The floor slab. Its top is the piano nobile at 6.30 and its underside is the mirror salon's
+# ceiling at 6.00. It laps 0.05 into the south and east walls, which are solid stone and nobody's
+# room, and it stops dead on the zone limits at x 6.00 and z -3.00.
+let ball_floor = box 6.00 6.00 -6.65   15.15 6.30 -3.00 round=0.012
+
+# The two walls this room builds for itself, 1 M thick, up to the top of the ceiling slab. Both
+# start at 6.25 so they are certainly bedded in the floor.
+let ball_wall_w = box 6.00 6.25 -6.65   6.50 11.25 -3.00 round=0.012
+
+# THE DOORWAY, 0.90 (2 M) wide on x = 14.40 (32 M) and 2.40 m high, which is the brief's door
+# height. It is cut from z = -3.68 so it takes the boiserie lining with it and leaves a clean
+# reveal; its foot is at 6.30 so it cannot bite into the floor slab and leave a step.
+let ball_door_void = box 13.95 6.30 -3.68   14.85 8.70 -2.95
+let ball_wall_n_mass = box 6.00 6.25 -3.50   15.15 11.25 -3.00 round=0.012
+
+# The boiserie ground: 0.09 (M/5) of panelling on all four walls, which is what makes the four
+# finished faces of the room parallel to each other and 0.09 in from the structure. On the south
+# and east it is the only thing of mine against walls.clip's stone, so it laps 0.05 into it.
+let ball_lin_s_mass = box 6.45 6.25 -6.65   15.15 9.90 -6.51
+let ball_lin_e      = box 15.01 6.25 -6.65  15.15 9.90 -3.45
+let ball_lin_w      = box 6.45 6.25 -6.65   6.54 9.90 -3.45
+let ball_lin_n_mass = box 6.45 6.25 -3.54   15.15 9.90 -3.45
+
+# The three window openings, as this room sees them: 1.35 (3 M) wide on the axes above and 2.25
+# (5 M) tall from the floor. Cut from my own panelling so the reveal is mine and the jambs are
+# clean; windows.clip's own void goes further back and cannot be seen from in here.
+let ball_win_cut_u = box -0.675 6.30 -6.70   0.675 8.55 -6.40
+let ball_win_cuts = union {
+    translate { ball_win_cut_u }  8.10 0 0
+    translate { ball_win_cut_u } 10.80 0 0
+    translate { ball_win_cut_u } 13.50 0 0
+}
+let ball_lin_s = difference { ball_lin_s_mass ball_win_cuts }
+let ball_lin_n = difference { ball_lin_n_mass ball_door_void }
+let ball_wall_n = difference { ball_wall_n_mass ball_door_void }
+
+# --- THE COVE ----------------------------------------------------------------------------------
+#
+# A quarter hollow of radius 0.90 (2 M), springing at 9.90 off each finished face and landing on
+# the flat ceiling at 10.80. The centre of curvature is therefore 0.90 in from the wall AT THE
+# SPRINGING HEIGHT, so the hollow is tangent to the wall below it and tangent to the ceiling above
+# it, which is what makes it a cove rather than a chamfer with a round on it.
+#
+#   south  centre z = -6.51 + 0.90 = -5.61        west  centre x = 6.54 + 0.90 = 7.44
+#   north  centre z = -3.54 - 0.90 = -4.44        east  centre x = 15.01 - 0.90 = 14.11
+#
+# The four are unioned, not blended, and the union is what mitres them into each other in the
+# corners. Each band starts at 9.85 so it is certainly knitted to the panelling under it.
+let ball_cove_cyl_s = cylinder 10.575 9.90 -5.61  r=0.90 h=9.75 axis=x
+let ball_cove_cyl_n = cylinder 10.575 9.90 -4.44  r=0.90 h=9.75 axis=x
+let ball_cove_cyl_w = cylinder 7.44  9.90 -4.825  r=0.90 h=4.10 axis=z
+let ball_cove_cyl_e = cylinder 14.11 9.90 -4.825  r=0.90 h=4.10 axis=z
+
+let ball_cove_s = difference { box 6.00 9.85 -6.65   15.15 10.80 -5.61   ball_cove_cyl_s }
+let ball_cove_n = difference { box 6.00 9.85 -4.44   15.15 10.80 -3.00   ball_cove_cyl_n }
+let ball_cove_w = difference { box 6.00 9.85 -6.65    7.44 10.80 -3.00   ball_cove_cyl_w }
+let ball_cove_e = difference { box 14.11 9.85 -6.65  15.15 10.80 -3.00   ball_cove_cyl_e }
+let ball_cove = union { ball_cove_s ball_cove_n ball_cove_w ball_cove_e }
+
+# The ceiling slab over it, M thick.
+let ball_ceiling = box 6.00 10.80 -6.65   15.15 11.25 -3.00 round=0.012
+
+# --- THE CORNICE ---------------------------------------------------------------------------------
+#
+# 0.315 (0.7 M) deep, projecting 0.135 (0.3 M), running round all four walls under the springing.
+# A bed mould, a plain band and a corona: three members, the smallest of which projects 0.045, for
+# the reason vestibule.clip wrote down — a moulding is only the swell in FRONT of its own core, so
+# a member that projects one voxel is half a voxel of solid and misses every voxel centre it goes
+# past. 0.045 is a voxel and a half and it is there.
+let ball_corn_s_bed  = cyma_reversa 6.54 9.585 -6.51   15.01 9.675 -6.42  run=x
+let ball_corn_s_bnd  = box 6.54 9.675 -6.51   15.01 9.765 -6.42  round=0.008
+let ball_corn_s_cor  = box 6.54 9.765 -6.51   15.01 9.90  -6.375 round=0.008
+let ball_corn_n_bed  = cyma_reversa 6.54 9.585 -3.54   15.01 9.675 -3.63  run=x
+let ball_corn_n_bnd  = box 6.54 9.675 -3.63   15.01 9.765 -3.54  round=0.008
+let ball_corn_n_cor  = box 6.54 9.765 -3.675  15.01 9.90  -3.54  round=0.008
+let ball_corn_w_bed  = cyma_reversa 6.54 9.585 -6.51   6.63 9.675 -3.54  run=z
+let ball_corn_w_bnd  = box 6.54 9.675 -6.51   6.63 9.765 -3.54  round=0.008
+let ball_corn_w_cor  = box 6.54 9.765 -6.51   6.675 9.90 -3.54  round=0.008
+let ball_corn_e_bed  = cyma_reversa 15.01 9.585 -6.51  14.92 9.675 -3.54  run=z
+let ball_corn_e_bnd  = box 14.92 9.675 -6.51  15.01 9.765 -3.54  round=0.008
+let ball_corn_e_cor  = box 14.875 9.765 -6.51 15.01 9.90 -3.54  round=0.008
+let ball_cornice = union {
+    ball_corn_s_bed ball_corn_s_bnd ball_corn_s_cor
+    ball_corn_n_bed ball_corn_n_bnd ball_corn_n_cor
+    ball_corn_w_bed ball_corn_w_bnd ball_corn_w_cor
+    ball_corn_e_bed ball_corn_e_bnd ball_corn_e_cor
+}
+
+# --- THE BASE COURSE -----------------------------------------------------------------------------
+#
+# 1 M high, projecting 0.045, with a cap projecting 0.09. It breaks at every window because the
+# windows in this room stand on the floor.
+let ball_base_s = union {
+    box 6.54 6.28 -6.51   15.01 6.705 -6.465 round=0.008
+    box 6.54 6.705 -6.51  15.01 6.75  -6.42  round=0.014
+}
+let ball_base_n = union {
+    box 6.54 6.28 -3.585   15.01 6.705 -3.54 round=0.008
+    box 6.54 6.705 -3.63   15.01 6.75  -3.54 round=0.014
+}
+let ball_base_w = union {
+    box 6.54 6.28 -6.51   6.585 6.705 -3.54 round=0.008
+    box 6.54 6.705 -6.51  6.63  6.75  -3.54 round=0.014
+}
+let ball_base_e = union {
+    box 14.965 6.28 -6.51  15.01 6.705 -3.54 round=0.008
+    box 14.92  6.705 -6.51 15.01 6.75  -3.54 round=0.014
+}
+let ball_base = difference {
+    union { ball_base_s ball_base_n ball_base_w ball_base_e }
+    union { ball_win_cuts ball_door_void }
+}
+
+let ball_shell = union {
+    ball_floor ball_wall_w ball_wall_n
+    ball_lin_s ball_lin_e ball_lin_w ball_lin_n
+    ball_cove ball_ceiling ball_cornice ball_base
+}
+
+# ================================================================================================
+# THE RELIEF ZONES — where an ornament is allowed to be, so it lies ON the room and not IN it
+# ================================================================================================
+#
+# A rocaille scroll that BREAKS OVER THE CORNICE AND RUNS ONTO THE COVE is what separates rococo
+# from every style before it, and it is the one thing in this room that cannot be drawn flat: the
+# cove's surface comes 0.12 m into the room over the first 0.45 m of its height, so an ornament
+# drawn on the wall plane is buried by the cove above 10.25 and floating below it.
+#
+# So the ornament is drawn generously in a plane and then INTERSECTED with a shell that hugs the
+# actual surface — 0.15 m of relief inside the room and 0.06 m of it inside the ground it sits on,
+# so it is certainly knitted to what it lies on. On the walls that shell is a box; on the cove it
+# is the space between two cylinders on the cove's own axis, which is exact.
+let ball_rz_s   = box 6.54 6.30 -6.57   15.01 9.90 -6.36
+let ball_rz_n   = box 6.54 6.30 -3.72   15.01 9.90 -3.48
+let ball_rz_cov_s = difference {
+    intersection { cylinder 10.575 9.90 -5.61 r=0.96 h=9.75 axis=x
+                   box 6.54 9.85 -6.65   15.01 10.80 -5.55 }
+    cylinder 10.575 9.90 -5.61 r=0.78 h=9.75 axis=x
+}
+let ball_rz_cov_n = difference {
+    intersection { cylinder 10.575 9.90 -4.44 r=0.96 h=9.75 axis=x
+                   box 6.54 9.85 -4.50   15.01 10.80 -3.40 }
+    cylinder 10.575 9.90 -4.44 r=0.78 h=9.75 axis=x
+}
+let ball_relief = union { ball_rz_s ball_rz_n ball_rz_cov_s ball_rz_cov_n }
+
+# ================================================================================================
+# A MIRROR PIER — drawn once, at local x = 0, with the FINISHED WALL FACE AT z = 0 and the room at
+# +z, so that the same unit serves the south wall by a translate and the north wall by a half turn
+# ================================================================================================
+#
+# The plate is 2.25 (5 M) tall, which is exactly the height of a window opposite it, and it stands
+# on the base course at 6.75. The frame is a flat boiserie border with a gilt bead run round its
+# inner arris; the bead is four capsules 0.044 across, which is 1.4 voxels at metre 32 and the
+# finest cut line in the room after the trellis.
+#
+# TWO WIDTHS, because the two walls are not the same problem. On the south the pier between two
+# windows is 1.35 in the clear and the architraves take 0.1125 of it either side, so the plate is
+# 0.675 (1.5 M) and there is boiserie showing beside it. On the north there is no window to make
+# room for, so the plate is 1.125 (2.5 M) and the four frames abut into a continuous mirrored wall
+# — 10.1 m2 of it, facing 3.0 m2 on the south and three open windows.
+
+# --- the narrow pier, for the south wall ---
+let ball_pn_frame = difference {
+    box -0.4725 6.75 -0.05   0.4725 9.27 0.09  round=0.010
+    box -0.3375 6.885 0.0    0.3375 9.135 0.12
+}
+let ball_pn_glass = box -0.3375 6.885 0.0   0.3375 9.135 0.045 round=0.006
+let ball_pn_bead = union {
+    capsule -0.3595 6.863 0.0675  -0.3595 9.157 0.0675 r=0.022
+    capsule  0.3595 6.863 0.0675   0.3595 9.157 0.0675 r=0.022
+    capsule -0.3595 9.157 0.0675   0.3595 9.157 0.0675 r=0.022
+    capsule -0.3595 6.863 0.0675   0.3595 6.863 0.0675 r=0.022
+}
+
+# --- the wide pier, for the north wall ---
+let ball_pw_frame = difference {
+    box -0.675 6.75 -0.05   0.675 9.27 0.09  round=0.010
+    box -0.5625 6.885 0.0   0.5625 9.135 0.12
+}
+let ball_pw_glass = box -0.5625 6.885 0.0   0.5625 9.135 0.045 round=0.006
+let ball_pw_bead = union {
+    capsule -0.5845 6.863 0.0675  -0.5845 9.157 0.0675 r=0.022
+    capsule  0.5845 6.863 0.0675   0.5845 9.157 0.0675 r=0.022
+    capsule -0.5845 9.157 0.0675   0.5845 9.157 0.0675 r=0.022
+    capsule -0.5845 6.863 0.0675   0.5845 6.863 0.0675 r=0.022
+}
+
+# ================================================================================================
+# A GIRANDOLE — an ormolu sconce standing in front of a mirror, two branches, two wax tapers
+# ================================================================================================
+#
+# Local, same frame as the pier: x = 0 on the pier's axis, z = 0 the finished wall face. The
+# backplate is a shield that sits ON the glass, so a lit taper is 0.20 m from a mirror at rough=6
+# and the mirror carries the flame as a second source. That is the whole reason a girandole hangs
+# where it does and it is the cheapest bright caustic in the room.
+let ball_gir_plate = union {
+    ellipsoid 0 7.65 0.045 rx=0.10 ry=0.155 rz=0.075
+    capsule 0 7.42 0.06   0 7.86 0.06 r=0.030
+}
+#
+# AN ARM IS 0.052 ACROSS AND NOT 0.040, AND THAT IS A FLOOR RATHER THAN A CHOICE. At 0.040 the
+# branch is 1.3 voxels at metre 32 and it sheds a voxel at some phases of the grid: the first cut
+# of this room reported the four candles of the north girandoles as four separate components,
+# 18 voxels each, hanging in the air in front of a mirror. 0.052 is 1.7 voxels and it holds. The
+# same arithmetic set the chandeliers' strand rods.
+let ball_gir_arm_e = union {
+    capsule  0.03 7.74 0.09    0.175 7.815 0.135 r=0.026
+    capsule  0.175 7.815 0.135  0.20 7.92 0.15  r=0.024
+    cylinder 0.20 7.945 0.15 r=0.055 h=0.04 axis=y
+    cylinder 0.20 8.045 0.15 r=0.024 h=0.20 axis=y
+    ellipsoid 0.20 8.185 0.15 rx=0.024 ry=0.044 rz=0.024
+}
+let ball_gir_arm_w = union {
+    capsule -0.03 7.74 0.09   -0.175 7.815 0.135 r=0.026
+    capsule -0.175 7.815 0.135 -0.20 7.92 0.15  r=0.024
+    cylinder -0.20 7.945 0.15 r=0.055 h=0.04 axis=y
+    cylinder -0.20 8.045 0.15 r=0.024 h=0.20 axis=y
+    ellipsoid -0.20 8.185 0.15 rx=0.024 ry=0.044 rz=0.024
+}
+let ball_gir_wax = union {
+    cylinder  0.20 8.045 0.15 r=0.024 h=0.20 axis=y
+    cylinder -0.20 8.045 0.15 r=0.024 h=0.20 axis=y
+}
+let ball_gir_flame = union {
+    ellipsoid  0.20 8.185 0.15 rx=0.019 ry=0.042 rz=0.019
+    ellipsoid -0.20 8.185 0.15 rx=0.024 ry=0.044 rz=0.024
+}
+let ball_gir_metal = union { ball_gir_plate ball_gir_arm_e ball_gir_arm_w }
+let ball_gir = union { ball_gir_metal ball_gir_wax ball_gir_flame }
+
+# ================================================================================================
+# A ROCAILLE CRESTING — the ornament over a mirror or a window, breaking over the cornice
+# ================================================================================================
+#
+# Same local frame again. Asymmetric ON PURPOSE and in three ways at once — the two C-scrolls are
+# different sizes and at different heights, the palm sprays are three different lengths, and the
+# whole thing leans east. A symmetrical cartouche is baroque; the asymmetry IS the rococo, and it
+# is the first thing anybody straightening this file will "fix".
+#
+# It runs from 9.24 — inside the head of a mirror frame — up to 10.42, which is 0.52 ABOVE the
+# cornice and well onto the cove. Everything past 9.90 is laid onto the cove's curve by the
+# intersection with `ball_relief` at the bottom of this section.
+
+# the shell: a fan of seven ribs on a boss, built at the origin and lifted, because `around` turns
+# about the axis through the origin and a fan drawn at y = 9.36 would swing in a 9 m circle.
+let ball_roc_fan = around { capsule 0.05 0 0.045   0.20 0 0.085 r=0.028 } count=14 axis=z
+# THE FAN IS CUT AT 9.30 AND NOT AT 9.36, WHICH IS ITS OWN CENTRE. Cut on the centre line, the two
+# ribs that happen to lie horizontal are sliced down their middle and their outer ends come away as
+# single voxels — four of them, one per north cresting. Cut 0.06 lower, every rib is either whole or
+# stops short, and each one still starts at radius 0.05 inside the boss, so none can come loose.
+let ball_roc_shell = intersection {
+    translate { ball_roc_fan } 0 9.36 0.0
+    box -0.26 9.30 -0.06   0.26 9.62 0.20
+}
+let ball_roc_boss = sphere 0 9.36 0.07 r=0.055
+let ball_roc_stalk = capsule 0 9.24 0.06   0 9.40 0.07 r=0.032
+
+# THE GROUND BEHIND IT, AND IT IS STRUCTURE AND NOT DECORATION. Every member above stands between
+# 0.015 and 0.13 OFF the finished face — a scroll that touched the wall would not be a scroll — so
+# without this plate the whole cresting is held on by whatever happens to graze the mirror frame
+# under it or the cove over it, and the five over the WINDOWS graze neither. It reaches from 0.05
+# inside the panelling to 0.06 proud of it, which is far enough out to bed the fan's ribs and every
+# tie along its whole length. It also reads correctly: a raised boiserie panel is what a carved
+# cartouche is applied to.
+let ball_roc_back = box -0.30 9.24 -0.05   0.30 9.68 0.07 round=0.030
+
+# the two C-scrolls, and a straight stem into each from the boss so that a scroll is certainly
+# knitted to the thing it curls off
+#
+# NOTHING FREE-STANDING IN THIS FILE IS UNDER 0.044 ACROSS, AND THIS IS WHERE THAT RULE WAS LEARNED.
+# A rib lying along a surface can be 0.030 wide and one voxel — the trellis and the fold ribs in the
+# silk are, and the marquetry in the floor is painted at exactly that — because it is knitted to
+# what it lies on down its whole length. A SCROLL STANDING OFF THE WALL IS NOT: at r = 0.015 to
+# 0.021 these came back as nine separate clusters of eight to eleven voxels apiece, one per scroll,
+# and no render would have shown it. The tubes below are 0.052 to 0.064, which is 1.7 to 2 voxels
+# at metre 32, and the ties run PAST each scroll's outer tip rather than up to it, so the join is
+# an overlap and not a tangency.
+#
+# AND EVERY SCROLL HAS AN EYE, WHICH IS NOT DECORATION. A logarithmic spiral swept as a tube winds
+# in to a radius of 0.065 to 0.075 and stops, and its last centimetre is a rounded tip whose field
+# the sampler does not always find: nine of these came back as one and two loose voxels sitting in
+# the middle of the curl. A boss over the eye covers the whole of the inner coil and knits the tip
+# to the rest of the tube — and it is what a carved rocaille scroll actually has in the middle.
+let ball_roc_scr_e = spiral 0.315 9.45 0.075  r=0.135 tighten=0.5 tube=0.042 turns=0.85 axis=z
+let ball_roc_eye_e = sphere 0.315 9.45 0.085 r=0.085
+let ball_roc_tie_e = capsule 0.06 9.39 0.07   0.40 9.44 0.075 r=0.028
+let ball_roc_scr_w = spiral -0.245 9.405 0.07 r=0.105 tighten=0.5 tube=0.042 turns=0.70 axis=z
+let ball_roc_eye_w = sphere -0.245 9.405 0.08 r=0.075
+let ball_roc_tie_w = capsule -0.05 9.375 0.07  -0.19 9.405 0.07 r=0.028
+
+# the S that breaks over the cornice and lies down on the cove
+let ball_roc_stem = capsule 0.0 9.55 0.075   0.09 10.06 0.10 r=0.030
+let ball_roc_scr_c = spiral 0.205 10.155 0.10 r=0.115 tighten=0.5 tube=0.036 turns=0.80 axis=z
+let ball_roc_eye_c = sphere 0.205 10.155 0.105 r=0.075
+let ball_roc_tie_c = capsule 0.09 10.06 0.10   0.27 10.155 0.10 r=0.028
+
+# the palms and the reeds — three lengths, none of them the same, and the thinnest cut matter in
+# the room that is not lying on a surface
+let ball_roc_palm = union {
+    capsule -0.02 9.60 0.075  -0.225 10.20 0.10 r=0.024
+    capsule -0.02 9.60 0.075  -0.105 10.34 0.10 r=0.023
+    capsule -0.02 9.60 0.075   0.035 10.42 0.10 r=0.022
+    capsule  0.05 9.58 0.075   0.235 9.94 0.09  r=0.023
+}
+let ball_roc_unit = union {
+    ball_roc_back ball_roc_shell ball_roc_boss ball_roc_stalk
+    ball_roc_scr_e ball_roc_eye_e ball_roc_tie_e ball_roc_scr_w ball_roc_eye_w ball_roc_tie_w
+    ball_roc_stem ball_roc_scr_c ball_roc_eye_c ball_roc_tie_c ball_roc_palm
+}
+
+# ================================================================================================
+# THE SOUTH WALL — window, mirror, window, mirror, window
+# ================================================================================================
+#
+# The architrave round each window is 0.1125 (M/4) wide and projects 0.09. It stops on the jamb
+# lines at +-0.675 and on the head at 8.55, because everything inside those is windows.clip's void
+# and the manifest deletes it.
+let ball_wa_unit = difference {
+    box -0.7875 6.30 -0.05   0.7875 8.6625 0.09  round=0.010
+    box -0.675  6.20 -0.10   0.675  8.55   0.20
+}
+let ball_wa_bead = union {
+    capsule -0.6975 6.30 0.0675  -0.6975 8.5725 0.0675 r=0.022
+    capsule  0.6975 6.30 0.0675   0.6975 8.5725 0.0675 r=0.022
+    capsule -0.6975 8.5725 0.0675  0.6975 8.5725 0.0675 r=0.022
+}
+
+let ball_south_frames = union {
+    translate { union { ball_wa_unit ball_wa_bead } }  8.10 0 -6.51
+    translate { union { ball_wa_unit ball_wa_bead } } 10.80 0 -6.51
+    translate { union { ball_wa_unit ball_wa_bead } } 13.50 0 -6.51
+    translate { union { ball_pn_frame ball_pn_bead } }  9.45 0 -6.51
+    translate { union { ball_pn_frame ball_pn_bead } } 12.15 0 -6.51
+}
+let ball_south_glass = union {
+    translate { ball_pn_glass }  9.45 0 -6.51
+    translate { ball_pn_glass } 12.15 0 -6.51
+}
+let ball_south_gir = union {
+    translate { ball_gir }  9.45 0 -6.51
+    translate { ball_gir } 12.15 0 -6.51
+}
+let ball_south_roc_raw = union {
+    translate { ball_roc_unit }  8.10 0 -6.51
+    translate { ball_roc_unit } 10.80 0 -6.51
+    translate { ball_roc_unit } 13.50 0 -6.51
+    translate { ball_roc_unit }  9.45 0 -6.51
+    translate { ball_roc_unit } 12.15 0 -6.51
+}
+
+# ================================================================================================
+# THE NORTH WALL — four mirrors, a hanging, and the door to the stair
+# ================================================================================================
+#
+# Everything here is the same unit turned half a turn about y, which folds local +z (into the room
+# from the south) into local -z (into the room from the north). A rotation carries no bounding box,
+# so each turned group is caught in a box it already fits inside — the argument vestibule.clip made
+# for `scale`, and the same arithmetic: without it every voxel in my bounds walks the whole north
+# wall.
+let ball_north_frames = intersection {
+    translate { rotate { union {
+        translate { union { ball_pw_frame ball_pw_bead } } -8.10 0 0
+        translate { union { ball_pw_frame ball_pw_bead } } -9.45 0 0
+        translate { union { ball_pw_frame ball_pw_bead } } -10.80 0 0
+        translate { union { ball_pw_frame ball_pw_bead } } -12.15 0 0
+    } } y=0.5 } 0 0 -3.54
+    box 7.30 6.70 -3.70   12.90 9.32 -3.40
+}
+let ball_north_glass = intersection {
+    translate { rotate { union {
+        translate { ball_pw_glass } -8.10 0 0
+        translate { ball_pw_glass } -9.45 0 0
+        translate { ball_pw_glass } -10.80 0 0
+        translate { ball_pw_glass } -12.15 0 0
+    } } y=0.5 } 0 0 -3.54
+    box 7.40 6.85 -3.62   12.80 9.17 -3.50
+}
+let ball_north_gir = intersection {
+    translate { rotate { union {
+        translate { ball_gir } -8.10 0 0
+        translate { ball_gir } -9.45 0 0
+        translate { ball_gir } -10.80 0 0
+        translate { ball_gir } -12.15 0 0
+    } } y=0.5 } 0 0 -3.54
+    box 7.80 7.40 -3.76   12.45 8.26 -3.44
+}
+let ball_north_roc_raw = intersection {
+    translate { rotate { union {
+        translate { ball_roc_unit } -8.10 0 0
+        translate { ball_roc_unit } -9.45 0 0
+        translate { ball_roc_unit } -10.80 0 0
+        translate { ball_roc_unit } -12.15 0 0
+    } } y=0.5 } 0 0 -3.54
+    box 7.30 9.20 -3.80   12.90 10.50 -3.40
+}
+
+# THE DOORCASE. 0.1125 wide like a window's, an eared head, and a supraporte over it — which is
+# where the damask goes, because a hanging over a door is what a German state room did with the
+# one panel it could not fill with mirror.
+let ball_dc_arch = difference {
+    box 13.8375 6.30 -3.54   14.9625 8.8125 -3.63  round=0.010
+    box 13.95   6.20 -3.44   14.85   8.70   -3.80
+}
+let ball_dc_bead = union {
+    capsule 13.9275 6.30 -3.6075   13.9275 8.7225 -3.6075 r=0.022
+    capsule 14.8725 6.30 -3.6075   14.8725 8.7225 -3.6075 r=0.022
+    capsule 13.9275 8.7225 -3.6075 14.8725 8.7225 -3.6075 r=0.022
+}
+let ball_dc_supra = union {
+    box 13.8375 8.8125 -3.54   14.9625 9.27 -3.585 round=0.010
+    box 13.905  8.8875 -3.585  14.895  9.2025 -3.6075 round=0.008
+}
+let ball_doorcase = union { ball_dc_arch ball_dc_bead ball_dc_supra }
+
+# ================================================================================================
+# THE HANGINGS — silk on the east wall, damask in the end bays and over the door
+# ================================================================================================
+#
+# A hanging is a stretched panel 0.045 off the boiserie with vertical fold ribs 0.036 across on a
+# 0.135 (0.3 M) pitch. `velvet` and `damask` are the retro-reflective end of the material range and
+# the exact opposite failure mode from the mirror three metres away, which is why both are in one
+# room and one frame.
+# The field is 0.065 thick and starts 0.02 BEHIND the finished face, so it is knitted to the
+# panelling; the ribs stand 0.036 proud of it, which is one voxel and a bit at metre 32.
+let ball_hang_rib = box -0.018 6.84 0   0.018 9.18 0.101
+let ball_hang_ribs_w = intersection {
+    translate { repeat { ball_hang_rib } x=0.135 nx=3 } 6.93 0 -6.53
+    box 6.54 6.84 -6.54   7.31 9.18 -6.42
+}
+let ball_hang_field_w = box 6.585 6.84 -6.53   7.29 9.18 -6.465
+let ball_hang_ribs_e = intersection {
+    translate { repeat { ball_hang_rib } x=0.135 nx=2 } 14.63 0 -6.53
+    box 14.30 6.84 -6.54   15.01 9.18 -6.42
+}
+let ball_hang_field_e = box 14.33 6.84 -6.53   15.00 9.18 -6.465
+let ball_hang_damask = union {
+    ball_hang_ribs_w ball_hang_field_w ball_hang_ribs_e ball_hang_field_e
+}
+
+# The east wall, in silk, the full height of the panelling.
+#
+# A QUARTER TURN ABOUT y IS y = -0.25 HERE AND NOT y = +0.25. `rotate y=0.25` carries local +z into
+# world +x; the room is on the MINUS x side of the east wall's finished face, so a hanging turned
+# the other way is built 0.08 m inside walls.clip's stone and the clipping box then deletes all but
+# a rind of it. It looked exactly like the panel not being there.
+let ball_silk_rib = box -0.018 6.84 0   0.018 9.18 0.101
+let ball_silk_ribs = intersection {
+    translate { rotate { repeat { ball_silk_rib } x=0.135 nx=9 } y=-0.25 } 15.03 0 -5.025
+    box 14.90 6.84 -6.30   15.04 9.18 -3.75
+}
+let ball_silk_field = box 14.965 6.84 -6.30   15.03 9.18 -3.75
+let ball_silk = union { ball_silk_ribs ball_silk_field }
+
+# ================================================================================================
+# THE CONSOLE TABLES — giallo and rosso on gilt supports, under the two south mirror piers
+# ================================================================================================
+#
+# A slab of coloured marble on a carved frame. The two tops are different stones on purpose: giallo
+# antico at 196,152,84 and rosso antico at 124,44,42, three metres apart under the same white cove,
+# which is the colour-bleed pair the contract asks for at a smaller scale than the rotunda's.
+# Drawn in the same local frame as everything else that stands against a wall: x = 0 on its own
+# axis, z = 0 the finished face, +z into the room. The top is at 7.20 — the floor plus 2 M — and it
+# is 0.48 deep, so it laps under the foot of the mirror frame above it and is certainly joined to
+# it. The legs start at 6.28, inside the floor slab.
+let ball_con_top = box -0.54 7.11 0.0   0.54 7.20 0.48  round=0.014
+let ball_con_apron = union {
+    box -0.495 6.93 0.39   0.495 7.11 0.435 round=0.012
+    box -0.495 6.93 0.0    -0.42 7.11 0.435 round=0.012
+    box  0.42  6.93 0.0     0.495 7.11 0.435 round=0.012
+    box -0.495 6.93 0.0     0.495 7.11 0.09  round=0.012
+    capsule -0.28 6.885 0.4125   0.28 6.885 0.4125 r=0.042
+}
+let ball_con_leg_e = union {
+    capsule  0.435 6.28 0.40    0.455 6.72 0.31 r=0.036
+    capsule  0.455 6.72 0.31    0.435 6.96 0.27 r=0.030
+}
+let ball_con_leg_w = union {
+    capsule -0.435 6.28 0.40   -0.455 6.72 0.31 r=0.036
+    capsule -0.455 6.72 0.31   -0.435 6.96 0.27 r=0.030
+}
+let ball_con_frame = union { ball_con_apron ball_con_leg_e ball_con_leg_w }
+
+let ball_console_giallo = translate { ball_con_top }   9.45 0 -6.51
+let ball_console_rosso  = translate { ball_con_top }  12.15 0 -6.51
+let ball_console_frames = union {
+    translate { ball_con_frame }  9.45 0 -6.51
+    translate { ball_con_frame } 12.15 0 -6.51
+}
+
+# A third on the east wall, under the silk, turned the quarter that carries local +z into world -x.
+let ball_con_e_top = intersection {
+    translate { rotate { ball_con_top } y=-0.25 } 15.01 0 -5.025
+    box 14.50 7.05 -5.60   15.03 7.26 -4.45
+}
+let ball_con_e_frame = intersection {
+    translate { rotate { ball_con_frame } y=-0.25 } 15.01 0 -5.025
+    box 14.50 6.24 -5.60   15.03 7.14 -4.45
+}
+
+# ================================================================================================
+# THE STOVE — faience, in the north-west corner, which is what a German ballroom actually had
+# ================================================================================================
+#
+# A Kachelofen: a moulded base, a tall body of glazed tiles, a cornice and an urn. `faience` is
+# rough=60 with a lacquer, so it is a glazed white body beside plain white plaster and white gesso
+# in the same corner — three whites at three different specular answers, which is the same argument
+# the three golds make on the mirror piers.
+let ball_stv_base = box 6.45 6.28 -4.35   7.35 6.75 -3.45  round=0.018
+let ball_stv_body = box 6.50 6.75 -4.30   7.30 8.55 -3.45  round=0.030
+let ball_stv_belt = box 6.45 8.55 -4.35   7.35 8.685 -3.45 round=0.018
+let ball_stv_cor  = box 6.45 8.685 -4.35  7.35 8.82 -3.45  round=0.018
+let ball_stv_urn  = revolve 6.90 8.78 -3.90 {
+    box 0.0 0.0 -1   0.20 0.09 1
+    box 0.0 0.09 -1  0.10 0.135 1
+    box 0.0 0.135 -1 0.225 0.36 1
+    box 0.0 0.36 -1  0.09 0.50 1
+} axis=y
+# THE TILES. Seven courses of 0.27 (0.6 M) and a joint every 0.20, cut 0.06 into the two faces the
+# room can see and 0.036 wide — a voxel and a bit — so a glazed white body is broken up by a grid of
+# thin dark lines rather than being one smooth prism. THE GROOVES ARE CUT INTO THE FACES AND NOT
+# THROUGH THE STOVE: a course drawn across the whole footprint slices the thing into eight pieces,
+# which is what the first version did and what the component count said about it.
+let ball_stv_h_e = box 7.24 7.65 -4.36   7.36 7.686 -3.40
+let ball_stv_h_s = box 6.44 7.65 -4.36   7.36 7.686 -4.24
+let ball_stv_courses = repeat { union { ball_stv_h_e ball_stv_h_s } } y=0.27 ny=3
+
+let ball_stv_j_e = box 7.24 6.75 -3.918   7.36 8.55 -3.882
+let ball_stv_joints_e = repeat { ball_stv_j_e } z=0.20 nz=2
+let ball_stv_j_s = box 6.882 6.75 -4.36   6.918 8.55 -4.24
+let ball_stv_joints_s = repeat { ball_stv_j_s } x=0.20 nx=2
+
+let ball_stv_tiles = union { ball_stv_courses ball_stv_joints_e ball_stv_joints_s }
+let ball_stv_body_cut = difference { ball_stv_body ball_stv_tiles }
+
+let ball_stove = union { ball_stv_base ball_stv_body_cut ball_stv_belt ball_stv_cor ball_stv_urn }
+
+# ================================================================================================
+# THE TRELLIS — a gold_leaf lattice on the ceiling and both coves, 0.030 wide, 0.055 proud
+# ================================================================================================
+#
+# One voxel across at metre 32, on a diagonal to the grid at 45 degrees so no rib ever lines up with
+# a row of voxels, over 8 m2 of white plaster with no direct light on it. A repeat rotated an eighth
+# of a turn, twice, caught in the ceiling's own box.
+#
+# A RIB IS BEDDED 0.06 INTO THE SLAB AND NOT 0.015. At 0.015 it is half a voxel of engagement, so
+# the whole lattice is a thing lying ON the ceiling rather than a thing joined to it, and it sheds.
+# Thin matter is safe when it is knitted to what it lies on down its whole length and dangerous
+# when it is not; that is the rule the whole of this file is written to.
+let ball_trel_rib = box -0.015 10.74 -6.00   0.015 10.86 6.00
+let ball_trel_set = repeat { ball_trel_rib } x=0.45 nx=9
+let ball_trel_zone = box 7.44 10.73 -5.61   14.11 10.87 -4.44
+let ball_trel_flat = union {
+    intersection { translate { rotate { ball_trel_set } y=0.125 } 10.775 0 -5.025  ball_trel_zone }
+    intersection { translate { rotate { ball_trel_set } y=-0.125 } 10.775 0 -5.025 ball_trel_zone }
+}
+
+# AND THE SAME LATTICE CARRIED DOWN BOTH COVES, which is where it earns its place: a rib 0.030 wide
+# standing 0.055 off a CURVED white surface that has no direct light on it at all. It is drawn as a
+# flat blade and then cut to the cove by a shell between two cylinders on the cove's own axis —
+# 0.055 into the room and 0.045 into the plaster, so every rib is bedded along its whole length.
+# The band stops at 10.70 and not at the ceiling: the inner cylinder runs out at 9.90 + 0.845, and
+# above that line the shell is no longer a shell but the whole thickness of the cove.
+let ball_trel_cov_s = difference {
+    intersection { cylinder 10.575 9.90 -5.61 r=0.945 h=9.75 axis=x
+                   box 6.54 9.85 -6.65   15.01 10.70 -5.55 }
+    cylinder 10.575 9.90 -5.61 r=0.845 h=9.75 axis=x
+}
+let ball_trel_cov_n = difference {
+    intersection { cylinder 10.575 9.90 -4.44 r=0.945 h=9.75 axis=x
+                   box 6.54 9.85 -4.50   15.01 10.70 -3.40 }
+    cylinder 10.575 9.90 -4.44 r=0.845 h=9.75 axis=x
+}
+let ball_trel_blade = box -0.015 9.85 -6.70   0.015 10.85 -3.30
+let ball_trel_blades = translate { repeat { ball_trel_blade } x=0.45 nx=10 } 10.800 0 0
+let ball_trellis = union {
+    ball_trel_flat
+    intersection { ball_trel_blades  union { ball_trel_cov_s ball_trel_cov_n } }
+}
+
+# ================================================================================================
+# A CHANDELIER — drawn once at the origin in plan, hung three times on the long axis
+# ================================================================================================
+#
+# 408 crystals in four tiers, on a gilt corona of 0.90 across. The rose, the stem, the canopy and
+# the corona are gilt; the strands are strung on gilt rods 0.036 across, and the rod is what makes
+# a strand one solid rather than a column of beads that miss each other by half a voxel.
+#
+#   10.80   the ceiling soffit, where the rose is
+#    9.90   the canopy's apex
+#    9.72   the upper ring, radius 0.27
+#    9.53   the outer ring, radius 0.585 — hung off the arms
+#    9.45   THE CORONA, radius 0.45 (M)
+#    9.12   the lower ring, radius 0.315
+#    8.62   the point of the finial. 2.32 m of head height under it, and the brief asks 2.10.
+
+let ball_ch_rose = union {
+    cylinder 0 10.74 0 r=0.20 h=0.15 axis=y
+    torus    0 10.695 0 ring=0.15 tube=0.032 axis=y
+    cylinder 0 10.56 0 r=0.075 h=0.36 axis=y
+}
+let ball_ch_stem   = cylinder 0 10.08 0 r=0.036 h=0.96 axis=y
+let ball_ch_canopy = cone 0 9.60 0 r=0.25 h=0.32 axis=y
+
+let ball_ch_ring1 = torus 0 9.45 0 ring=0.45  tube=0.045 axis=y
+let ball_ch_ring2 = torus 0 9.72 0 ring=0.27  tube=0.040 axis=y
+let ball_ch_ring3 = torus 0 9.12 0 ring=0.315 tube=0.038 axis=y
+let ball_ch_ring4 = torus 0 9.53 0 ring=0.585 tube=0.038 axis=y
+
+# The eight struts that hang each ring off the stem, and THEY ARE 0.060 ACROSS AND NOT 0.040. Every
+# one of them is a raking rod in mid-air, so it has nothing to be knitted to along its length, and
+# at 0.040 — 1.3 voxels — the chandelier on x = 13.50 came apart into thirty-one pieces of four
+# voxels while the two on 8.10 and 10.80 held. That is what a feature at the edge of the grid does:
+# it survives at one phase and not at another, and NOTHING BUT A COMPONENT COUNT WILL TELL YOU.
+let ball_ch_spokes1 = intersection {
+    around { capsule 0 9.62 0   0.45 9.45 0 r=0.030 } count=8 axis=y
+    box -0.50 9.38 -0.50   0.50 9.70 0.50
+}
+let ball_ch_spokes2 = intersection {
+    around { capsule 0.05 9.83 0   0.27 9.72 0 r=0.030 } count=8 axis=y
+    box -0.32 9.64 -0.32   0.32 9.90 0.32
+}
+let ball_ch_spokes3 = intersection {
+    around { capsule 0.45 9.42 0   0.315 9.13 0 r=0.030 } count=8 axis=y
+    box -0.50 9.06 -0.50   0.50 9.48 0.50
+}
+
+# the arms: eight of them, out and up off the corona, each with a pan, a wax taper and its flame
+let ball_ch_arm = union {
+    capsule 0.42 9.47 0   0.60 9.62 0 r=0.028
+    capsule 0.60 9.62 0   0.63 9.77 0 r=0.028
+    capsule 0.60 9.62 0   0.585 9.53 0 r=0.024
+    cylinder 0.63 9.79 0 r=0.075 h=0.045 axis=y
+}
+let ball_ch_arms = intersection {
+    around { ball_ch_arm } count=8 axis=y
+    box -0.72 9.40 -0.72   0.72 9.83 0.72
+}
+let ball_ch_wax = intersection {
+    around { cylinder 0.63 9.90 0 r=0.026 h=0.26 axis=y } count=8 axis=y
+    box -0.68 9.76 -0.68   0.68 10.04 0.68
+}
+let ball_ch_flame = intersection {
+    around { ellipsoid 0.63 10.07 0 rx=0.026 ry=0.048 rz=0.026 } count=8 axis=y
+    box -0.68 10.01 -0.68   0.68 10.13 0.68
+}
+
+# THE DROPS. Four tiers, twenty-four strands each, and every strand is a rod with solids threaded
+# on it. Octahedra, dodecahedra and icosahedra rather than spheres, because the whole question a
+# chandelier asks is what a FACET does to a refracted path and a sphere has none.
+#
+# EVERY ROD RUNS TO THE CENTRE OF ITS LAST DROP AND NOT TO ITS SHOULDER. Ending it where the two
+# surfaces meet leaves 8 mm of overlap on paper and nothing at all on the grid — a quarter of a
+# voxel — and the pendeloques came back as three floating clusters of thirteen voxels each. Through
+# the centre they cannot come apart however the grid falls.
+let ball_ch_str1 = union {
+    capsule 0.45 9.47 0   0.45 8.95 0 r=0.030
+    octa 0.45 9.40 0 r=0.040
+    octa 0.45 9.31 0 r=0.040
+    octa 0.45 9.22 0 r=0.040
+    octa 0.45 9.13 0 r=0.040
+    dodeca 0.45 9.04 0 r=0.042
+    icosa 0.45 8.95 0 r=0.050
+}
+let ball_ch_tier1 = intersection {
+    around { ball_ch_str1 } count=24 axis=y
+    box -0.52 8.89 -0.52   0.52 9.50 0.52
+}
+let ball_ch_str2 = union {
+    capsule 0.27 9.74 0   0.27 9.42 0 r=0.030
+    octa 0.27 9.66 0 r=0.038
+    octa 0.27 9.58 0 r=0.038
+    dodeca 0.27 9.50 0 r=0.040
+    icosa 0.27 9.42 0 r=0.044
+}
+let ball_ch_tier2 = intersection {
+    around { ball_ch_str2 } count=24 axis=y
+    box -0.34 9.36 -0.34   0.34 9.78 0.34
+}
+let ball_ch_str3 = union {
+    capsule 0.315 9.14 0   0.315 8.73 0 r=0.030
+    octa 0.315 9.05 0 r=0.038
+    octa 0.315 8.97 0 r=0.038
+    octa 0.315 8.89 0 r=0.038
+    dodeca 0.315 8.81 0 r=0.040
+    icosa 0.315 8.73 0 r=0.044
+}
+let ball_ch_tier3 = intersection {
+    around { ball_ch_str3 } count=24 axis=y
+    box -0.38 8.67 -0.38   0.38 9.18 0.38
+}
+let ball_ch_str4 = union {
+    capsule 0.585 9.55 0   0.585 9.35 0 r=0.030
+    octa 0.585 9.44 0 r=0.038
+    icosa 0.585 9.35 0 r=0.042
+}
+let ball_ch_tier4 = intersection {
+    around { ball_ch_str4 } count=24 axis=y
+    box -0.65 9.29 -0.65   0.65 9.60 0.65
+}
+
+# The finial: a stem down the middle of the corona, a ball and a big icosahedron on the point of
+# it. 8.64 is the lowest thing in this room and it is 2.34 m over the floor, where the brief asks
+# for 2.10.
+let ball_ch_finial = union {
+    cylinder 0 9.28 0 r=0.030 h=0.72 axis=y
+    sphere 0 8.90 0 r=0.10
+    icosa 0 8.74 0 r=0.10
+}
+
+let ball_ch_gilt = union {
+    ball_ch_rose ball_ch_stem ball_ch_canopy
+    ball_ch_ring1 ball_ch_ring2 ball_ch_ring3 ball_ch_ring4
+    ball_ch_spokes1 ball_ch_spokes2 ball_ch_spokes3 ball_ch_arms
+}
+let ball_ch_drops = union { ball_ch_tier1 ball_ch_tier2 ball_ch_tier3 ball_ch_tier4 ball_ch_finial }
+let ball_chandelier = union { ball_ch_gilt ball_ch_drops ball_ch_wax ball_ch_flame }
+
+# Three of them, on the long axis at z = -5.025, on the window bays at 8.10, 10.80 and 13.50 —
+# 2.70 (3 D) apart, so the caustics under them are 2.70 apart on a floor 8.47 long and they meet.
+let ball_chand_all  = union {
+    translate { ball_chandelier }  8.10 0 -5.025
+    translate { ball_chandelier } 10.80 0 -5.025
+    translate { ball_chandelier } 13.50 0 -5.025
+}
+let ball_chand_gilt = union {
+    translate { ball_ch_gilt }  8.10 0 -5.025
+    translate { ball_ch_gilt } 10.80 0 -5.025
+    translate { ball_ch_gilt } 13.50 0 -5.025
+}
+let ball_chand_drops = union {
+    translate { ball_ch_drops }  8.10 0 -5.025
+    translate { ball_ch_drops } 10.80 0 -5.025
+    translate { ball_ch_drops } 13.50 0 -5.025
+}
+let ball_chand_wax = union {
+    translate { ball_ch_wax }  8.10 0 -5.025
+    translate { ball_ch_wax } 10.80 0 -5.025
+    translate { ball_ch_wax } 13.50 0 -5.025
+}
+let ball_chand_flame = union {
+    translate { ball_ch_flame }  8.10 0 -5.025
+    translate { ball_ch_flame } 10.80 0 -5.025
+    translate { ball_ch_flame } 13.50 0 -5.025
+}
+
+# ================================================================================================
+# ASSEMBLY
+# ================================================================================================
+
+# Every scroll, palm and reed in the room, laid onto the surface it belongs to.
+let ball_rocaille = intersection {
+    union { ball_south_roc_raw ball_north_roc_raw }
+    ball_relief
+}
+
+let ball_mirrors = union { ball_south_glass ball_north_glass }
+let ball_frames  = union { ball_south_frames ball_north_frames ball_doorcase }
+let ball_gir_all = union { ball_south_gir ball_north_gir }
+let ball_gir_wax_all = union {
+    translate { ball_gir_wax }  9.45 0 -6.51
+    translate { ball_gir_wax } 12.15 0 -6.51
+    intersection {
+        translate { rotate { union {
+            translate { ball_gir_wax } -8.10 0 0
+            translate { ball_gir_wax } -9.45 0 0
+            translate { ball_gir_wax } -10.80 0 0
+            translate { ball_gir_wax } -12.15 0 0
+        } } y=0.5 } 0 0 -3.54
+        box 7.80 7.90 -3.76   12.45 8.20 -3.44
+    }
+}
+let ball_gir_flame_all = union {
+    translate { ball_gir_flame }  9.45 0 -6.51
+    translate { ball_gir_flame } 12.15 0 -6.51
+    intersection {
+        translate { rotate { union {
+            translate { ball_gir_flame } -8.10 0 0
+            translate { ball_gir_flame } -9.45 0 0
+            translate { ball_gir_flame } -10.80 0 0
+            translate { ball_gir_flame } -12.15 0 0
+        } } y=0.5 } 0 0 -3.54
+        box 7.80 8.10 -3.76   12.45 8.26 -3.44
+    }
+}
+let ball_consoles = union {
+    ball_console_giallo ball_console_rosso ball_console_frames
+    ball_con_e_top ball_con_e_frame
+}
+let ball_hangings = union { ball_hang_damask ball_silk }
+
+let part_ballroom = union {
+    ball_shell
+    ball_frames ball_mirrors ball_rocaille ball_trellis
+    ball_gir_all ball_hangings ball_consoles ball_stove
+    ball_chand_all
+}
+
+# WHAT THIS PART REMOVES FROM THE BUILDING: the air of the room, less everything standing in it.
+#
+# THE TRAP IS IN THE SECOND HALF OF THAT SENTENCE AND IT HAS BITTEN THIS BUILDING BEFORE. The
+# manifest subtracts every room's void from the whole building in one place, after everything is
+# assembled. A chandelier, a girandole, a console or a stove is BY DEFINITION a thing standing in
+# this room's air, so if the shape subtracted were `ball_air` alone, every one of them would be cut
+# away by its own room and what survived would be the 0.05 m of backplate buried in the wall. That
+# is exactly what happened to every sconce, bench and statue in the building (D608); read the long
+# comment at the bottom of clips/facility.clip. So the difference below is not a formality.
+let ball_air = box 6.54 6.30 -6.51   15.01 10.80 -3.54
+let void_ballroom = difference { ball_air part_ballroom }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Order is the whole of it: a later coat covers an earlier one. The floor first, because the base
+# course stands in the floor's own zone and has to be painted back over it; then the shell; then
+# the applied work; then the metals; then the emissives, which are last because a flame sits inside
+# a taper which sits inside a pan.
+#
+# `below=` IS 0.02 ON THE SHELL AND 0.035 ON EVERYTHING APPLIED, AND THAT SECOND NUMBER IS NOT
+# TASTE. The brief's 0.02 is sized against the manifest's 12 mm of grain and it is right for that.
+# It is NOT enough for a shape that is placed by a `translate`, a `rotate`, an `around` or a
+# `repeat`: a voxel is decided solid by how much of it the shape covers, and a paint rule is decided
+# at the voxel's CENTRE, so a shape whose surface does not land on the grid owns voxels whose centres
+# are outside it by up to half a voxel. At metre 32 that is 0.0156 m, and 0.02 does not clear it.
+#
+# Measured, on a plain box translated by a fraction of a voxel: 0.02 leaves 3% of its own solid
+# unpainted, 0.025 clears it. On a lattice turned an eighth of a turn: 0.02 leaves 16%. On a ray
+# repeated by `around`: 0.02 leaves 4%, 0.03 clears it. In this room, before it was found, the
+# ceiling trellis came back with 1021 voxels of the manifest's LIMESTONE scattered along every rib —
+# a pale rind on gold, exactly the fault the brief warns about, arriving by a different road.
+#
+# So: 0.035 wherever the rule paints a solid this file placed, which is 1.1 voxels of margin; 0.02
+# where the shape is drawn in absolute coordinates and the grid cannot slide under it. The floor's
+# marquetry rules stay at 0.02 for a different reason — they are stencils on a slab and not the
+# surface of anything, so a missed voxel there cannot leave a rind, and 0.02 keeps the painted line
+# at 0.07 rather than widening it to a stripe.
+
+# --- THE FLOOR ------------------------------------------------------------------------------------
+#
+# A large geometric marquetry radiating from the centre of the room at (10.775, -5.025): a field of
+# `parquet`, a border of `ebony` with a `walnut` fillet inside it, an octagonal rosette on the
+# centre, twelve `walnut` ribbons out of it and SIXTEEN EBONY HAIRLINES between them: a 0.030 wide
+# stencil which the paint rule's own reach turns into a line 0.070 across, two voxels at metre 32.
+#
+# THOSE HAIRLINES AND THE FILLET AND THE TWO RINGS ARE PAINTED AND NOT CUT. Two voxels across at
+# the contract's metre 32, with NO GEOMETRY UNDERNEATH to tell a denoiser where the line goes — and
+# the same room has CUT lines of the same width on the cove, on the ceiling and round every mirror,
+# so the two cases can be compared in one frame, on two surfaces four metres apart. That is the
+# whole argument for putting the marquetry here rather than making the floor plain.
+# THE WHOLE SLAB FIRST, AND THEN ITS TOP. The marquetry zone below is only 0.18 m deep, because a
+# paint rule wants to catch a surface and not fill a solid; but the slab is 0.30 m thick and its
+# UNDERSIDE IS THE CEILING OF THE MIRROR SALON, which is nobody else's shape to paint. Left out,
+# 188 000 voxels of it came back as the manifest's base coat of limestone — 8.3% of this part,
+# reported as `limestone` in the material list and invisible from inside the ballroom.
+paint plaster where=ball_floor below=0.02
+
+let ball_fl_zone = box 6.54 6.18 -6.51   15.01 6.36 -3.54
+paint parquet where=ball_fl_zone below=0.02
+
+let ball_fl_field = box 7.08 6.18 -6.06   14.47 6.36 -3.99
+let ball_fl_border = difference { ball_fl_zone ball_fl_field }
+paint ebony where=ball_fl_border below=0.02
+
+let ball_fl_fillet = difference {
+    box 7.17 6.18 -5.97   14.38 6.36 -4.08
+    box 7.206 6.18 -5.934  14.344 6.36 -4.116
+}
+paint walnut where=ball_fl_fillet below=0.02
+
+let ball_fl_ribbon = box 0.585 6.18 -0.09   3.15 6.36 0.09
+let ball_fl_ribbons = intersection {
+    translate { around { ball_fl_ribbon } count=12 axis=y } 10.775 0 -5.025
+    ball_fl_field
+}
+paint walnut where=ball_fl_ribbons below=0.02
+
+let ball_fl_ray = box 0.30 6.18 -0.015   3.15 6.36 0.015
+let ball_fl_rays = intersection {
+    translate { around { ball_fl_ray } count=16 axis=y } 10.775 0 -5.025
+    ball_fl_field
+}
+paint ebony where=ball_fl_rays below=0.02
+
+let ball_fl_rose = intersection {
+    prism 10.775 6.27 -5.025 r=0.72 h=0.36 sides=8 axis=y
+    ball_fl_zone
+}
+paint ebony where=ball_fl_rose below=0.02
+let ball_fl_rose_in = intersection {
+    prism 10.775 6.27 -5.025 r=0.54 h=0.36 sides=8 axis=y turn=0.0625
+    ball_fl_zone
+}
+paint walnut where=ball_fl_rose_in below=0.02
+let ball_fl_rose_eye = intersection {
+    prism 10.775 6.27 -5.025 r=0.225 h=0.36 sides=8 axis=y
+    ball_fl_zone
+}
+paint ebony where=ball_fl_rose_eye below=0.02
+
+let ball_fl_ring_a = intersection { torus 10.775 6.27 -5.025 ring=1.17 tube=0.018 axis=y ball_fl_zone }
+let ball_fl_ring_b = intersection { torus 10.775 6.27 -5.025 ring=1.98 tube=0.018 axis=y ball_fl_zone }
+paint ebony where=ball_fl_ring_a below=0.02
+paint ebony where=ball_fl_ring_b below=0.02
+
+# --- THE SHELL ------------------------------------------------------------------------------------
+paint boiserie where=ball_lin_s below=0.02
+paint boiserie where=ball_lin_n below=0.02
+paint boiserie where=ball_lin_e below=0.02
+paint boiserie where=ball_lin_w below=0.02
+paint boiserie where=ball_wall_w below=0.02
+paint boiserie where=ball_wall_n below=0.02
+paint boiserie where=ball_base below=0.02
+
+paint plaster where=ball_cove below=0.02
+paint plaster where=ball_ceiling below=0.02
+paint gesso   where=ball_cornice below=0.02
+
+# The reveals of the three windows and of the door: the faces the light actually enters over.
+let ball_rev_faces = round { union { ball_win_cuts ball_door_void } } by=0.05
+paint gesso where=ball_rev_faces below=0.02
+
+# --- THE PAINTED ROCAILLE, WHICH HAS NO GEOMETRY UNDER IT ------------------------------------------
+#
+# Gold_leaf scrollwork drawn straight onto the flat boiserie of the panelling: a C-scroll and its
+# tail, 0.036 across, on each of the four end and door bays, and a running line under the cornice.
+# The SAME ornament, in the same gold, is cut in relief thirty centimetres above it over every
+# mirror. One is an edge a sampler can find and the other is a colour change it cannot, and they
+# are in the same square metre of the same wall on purpose.
+let ball_pl_line_s = intersection {
+    box 6.54 9.495 -6.53   15.01 9.531 -6.48
+    ball_lin_s
+}
+paint gold_leaf where=ball_pl_line_s below=0.02
+let ball_pl_line_n = intersection {
+    box 6.54 9.495 -3.55   15.01 9.531 -3.50
+    ball_lin_n
+}
+paint gold_leaf where=ball_pl_line_n below=0.02
+let ball_pl_line_w = intersection {
+    box 6.50 9.495 -6.51   6.56 9.531 -3.54
+    ball_lin_w
+}
+paint gold_leaf where=ball_pl_line_w below=0.02
+
+# The scrollwork itself goes on the two big plain grounds this room has: the west wall, which
+# carries nothing at all, and the north bay east of the last mirror. The end bays on the south are
+# NOT where it went, though that was the first place it was drawn — the damask hangs over them and
+# a later coat covers an earlier one, so the whole ornament was painted and then buried.
+let ball_pl_scroll_w = intersection {
+    union {
+        spiral 6.55 8.10 -5.40 r=0.30 tighten=0.5 tube=0.020 turns=1.15 axis=x
+        spiral 6.55 7.65 -4.65 r=0.21 tighten=0.5 tube=0.018 turns=0.90 axis=x
+        capsule 6.55 8.10 -5.85   6.55 7.20 -4.35 r=0.018
+        capsule 6.55 7.20 -4.35   6.55 8.62 -4.20 r=0.016
+    }
+    box 6.50 7.00 -6.00   6.60 8.90 -4.05
+}
+let ball_pl_scroll_n = intersection {
+    union {
+        spiral 13.35 8.20 -3.52 r=0.27 tighten=0.5 tube=0.020 turns=1.15 axis=z
+        capsule 13.05 7.65 -3.52   13.62 8.72 -3.52 r=0.018
+        capsule 13.05 7.65 -3.52   13.20 7.05 -3.52 r=0.016
+    }
+    box 12.86 6.90 -3.56   13.80 8.90 -3.48
+}
+let ball_pl_scrolls = union {
+    intersection { ball_pl_scroll_w ball_lin_w }
+    intersection { ball_pl_scroll_n ball_lin_n }
+}
+paint gold_leaf where=ball_pl_scrolls below=0.02
+
+# --- THE APPLIED WORK -------------------------------------------------------------------------------
+paint gesso     where=ball_frames below=0.035
+paint gold_leaf where=ball_rocaille below=0.035
+
+# The silver in the rocaille: the lower half of every cresting, so that a white-and-silver ground
+# runs under a gold that breaks over the cornice, which is how these rooms were actually finished.
+let ball_roc_silver = intersection { ball_rocaille box 6.54 9.20 -6.60   15.01 9.62 -3.44 }
+paint silver where=ball_roc_silver below=0.035
+
+paint damask where=ball_hang_damask below=0.035
+paint silk   where=ball_silk below=0.035
+paint faience where=ball_stove below=0.035
+
+paint giallo where=ball_console_giallo below=0.035
+paint rosso  where=ball_console_rosso below=0.035
+paint giallo where=ball_con_e_top below=0.035
+paint gilt   where=ball_console_frames below=0.035
+paint gilt   where=ball_con_e_frame below=0.035
+
+# --- THE METALS -------------------------------------------------------------------------------------
+paint gold_leaf where=ball_trellis below=0.035
+paint mirror where=ball_mirrors below=0.035
+paint ormolu where=ball_gir_all below=0.035
+paint gilt   where=ball_chand_gilt below=0.035
+paint crystal where=ball_chand_drops below=0.035
+
+# --- AND THE LIGHT, LAST ------------------------------------------------------------------------------
+paint wax   where=ball_chand_wax below=0.035
+paint wax   where=ball_gir_wax_all below=0.035
+paint taper where=ball_chand_flame below=0.035
+paint taper where=ball_gir_flame_all below=0.035

@@ -1,0 +1,36 @@
+# salon-probe — the mirror salon on its own, for clipcheck.
+#
+# Not part of the building. It exists so that `part_salon` can be measured, sliced and counted
+# without the other nineteen fragments in the way — and so that `never fired` means something,
+# which it cannot when another file's paint rules are also in the list.
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../salon.clip"
+
+# A BOX ROUND THIS ROOM AND NOTHING ELSE, AND IT IS PHASE-ALIGNED TO THE CONTRACT'S.
+#
+# The contract's box is 34 x 20.9 x 25 m, which at metre 32 is 582 million cells and about 2.8 GB
+# before a voxel of the building exists. That is the right box for the building and the wrong one
+# for one room: it makes a single metre-32 measurement of this fragment a 75-second run that gets
+# killed the moment anything else on the machine wants memory. This box is 11 x 5.625 x 5 m —
+# 10.1 million cells, about 50 MB — and it holds the whole part with better than half a metre of
+# margin on every face, so a part that had drifted would fall OUT of it and be seen at once rather
+# than hidden.
+#
+# EVERY FACE OF IT IS AN EXACT NUMBER OF VOXELS FROM THE CONTRACT'S OWN FACE, at metre 8, 16 and 32
+# alike: 22.000 in x, 1.875 in y, 9.000 in z, which are 176, 15 and 72 voxels at metre 8 and four
+# times that at 32. So the sampling grid falls in exactly the same places it falls in the building,
+# and a one-voxel feature that survives here survives there. A box chosen for tidiness rather than
+# for phase would move every voxel centre by a fraction and quietly change which of this room's
+# one-voxel members exist — which is the whole class of mistake the handover's §4 is about.
+#
+# IT HAS TO COME AFTER `include "../salon.clip"` AND NOT BEFORE IT. Every fragment includes
+# `_contract.clip` itself — that is the whole point of the contract — and each include re-runs its
+# `bounds -17 -0.9 -16.5  17 20 8.5`. Written above the include, this line is silently undone and
+# the report says 34 x 21 x 25 as though nothing had been asked for.
+bounds 5.0 0.975 -7.5   16.0 6.6 -2.5
+
+solid part_salon

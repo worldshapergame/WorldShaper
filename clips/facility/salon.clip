@@ -1,0 +1,825 @@
+# salon — the mirror salon, a rococo Spiegelkabinett in the south-east corner of the main block
+#
+# ================================================================================================
+# WHAT THIS PART PUTS UNDER LOAD — do not "tidy" any of it away.
+#
+# 1. TWO MIRRORS FACING EACH OTHER ACROSS THE ROOM, AND A SECOND PAIR DOWN ITS LENGTH.
+#
+#    `mirror` is rough=6, metal=252, and nothing else in this building paints it. The two long
+#    walls of this room carry pier glasses whose faces are at z = -6.51 and z = -3.36 — EXACTLY
+#    3.15 m (7 M) apart, exactly parallel, and the pairs at x = 9.45 and x = 12.15 are the same
+#    0.90 x 1.80 plate at the same height on both walls, so each one looks straight into its
+#    opposite number. That is the oldest hard case in rendering: a path that never terminates, an
+#    image of an image of an image, and a bounce budget that has to be SPENT rather than exhausted.
+#
+#    IT IS BROKEN INTO PANELS AND THAT IS THE POINT. A single unbroken mirror wall facing another
+#    is a degenerate corridor and tells you nothing. Here the plates are separated by piers 0.45
+#    wide carrying gilt frames that project 0.09 into the room, so every reflected image is
+#    interrupted by real geometry at every bounce, and the recursion carries something to look at
+#    rather than a flat colour. A rococo room would have done it this way anyway.
+#
+#    The short walls carry a second opposed pair, at x = 6.39 and x = 14.76 — 8.37 m apart on the
+#    room's long axis, so there are two mirror corridors at right angles at two very different
+#    scales, and the chandelier stands in both of them at once.
+#
+# 2. FOUR HUNDRED SMALL REFRACTING SOLIDS IN FRONT OF A LIGHT.
+#
+#    The chandelier carries exactly 400 separate `crystal` solids at ior 1.62 — 384 drops in four
+#    hanging tiers of octagon beads and hexagonal pendeloques, and 16 upright spires — between
+#    0.06 and 0.10 m across, and EIGHT WAX TAPERS BURNING INSIDE THE RING THEY HANG FROM. Every
+#    drop is a refraction event in front of an emissive, the caustic they throw is on a parquet
+#    floor at rough=140 with a clearcoat, and their reflections are in nine mirrors at once.
+#    Do not reduce the count and do not make the drops bigger; both of those delete the test.
+#
+# 3. THIN MATTER AT ONE AND TWO VOXELS, CUT AND PAINTED, SIDE BY SIDE.
+#    At the contract's metre 32 a voxel is 0.03125 m. In this room:
+#      cut         the astragal bead round every mirror, 0.03 by 0.045, one voxel by one and a half
+#      cut         the reeds of the dado cap, 0.045 across on a 0.045 pitch, 1.4 voxels
+#      cut         the rocaille scroll tails, tube 0.027, 1.7 voxels
+#      cut         the shell reeds, grooves 0.03 wide and 0.045 deep — one voxel each way
+#      cut         the sunk panel fields, 0.03 deep, one voxel of relief — CUT, not coloured
+#      painted     the parquet marquetry, ebony lines 0.03 wide with NO GEOMETRY UNDER THEM
+#      painted     the ceiling's gilt quadratura ring, 0.03 wide, likewise
+#    The painted lines are the harder half — a denoiser has no edge to hold on to — and having
+#    both in one room, in the same light, is what makes them comparable.
+#
+# 4. GRAZING LIGHT ACROSS A CLEARCOAT.
+#    `parquet` carries lacquer=10 and `boiserie` carries lacquer=6. Three south windows and one
+#    east window put low direct sun across 26 m2 of polished floor and up the panelling, and this
+#    is the only place in the building a clearcoat lobe can be judged against a diffuse one at the
+#    same incidence in the same frame.
+# ================================================================================================
+#
+# THE MODULE, and where every number came from.
+#
+# M = 0.45, D = 0.90. The zone given is x 6.00 .. 15.10, z -6.60 .. -3.00, y 1.80 .. 6.00, and two
+# of those four numbers CANNOT be module multiples: 15.10 is walls.clip's inner face (16.00 less a
+# D wall) and -6.60 is the same on the south. So the room is set out on the 1.35 (3 M) grid the
+# contract calls the spine of the elevation, and the leftovers are buried in wall thickness where
+# nobody can measure them.
+#
+#   1.35   the bay. Every panel centre in this room is a multiple of it: 6.75, 8.10, 9.45, 10.80,
+#          12.15, 13.50, 14.85 — and 8.10, 10.80 and 13.50 are where windows.clip already put the
+#          three south windows, so the panelling was laid on the openings rather than beside them.
+#
+#   Horizontal
+#     6.39    west wall face      the wall runs 5.95 .. 6.39; its east face is the room
+#     14.76   east wall face      the wall runs 14.76 .. 15.15, lapping 0.05 into walls.clip
+#     -6.51   south wall face     walls.clip's -6.60 plus 0.09 (M/5) of boiserie lining
+#     -3.36   north wall face     my own wall, -3.36 .. -2.95, lapping 0.05 past the zone into the
+#                                 east hall's block so the two are certainly one solid
+#     3.15    mirror to mirror, which is 7 M exactly and the reason the north wall is where it is
+#
+#   Vertical
+#     1.80    floor               podium_top, the contract's
+#     2.70    dado cap            1.80 + 2 M, and the same line as windows.clip's sills
+#     4.365   mirror head         the plate is 0.90 x 1.575 (2 M by 3.5 M)
+#     4.455   frame head          and the rocaille cartouche stands astride it, to 4.635
+#     4.68    cornice foot        4.95 - 0.27
+#     4.95    cornice top / cove springing   1.80 + 3.15 (7 M), and doors.clip's side-door head
+#     5.40    ceiling soffit      4.95 + M, the cove being a quarter round of M
+#     6.00    top of the slab     the zone's ceiling; the piano nobile floor is at 6.30
+#
+#   Clear height under the cornice is 3.15 and under the chandelier 2.11 — both past the brief's
+#   2.10 — and the doorway is 3.15 clear, past the 2.40 a door wants.
+#
+# WHERE THE DOOR IS. doors.clip cuts `doors_sd_void_e` at x 4.50 .. 6.30, y 1.80 .. 4.95,
+# z -7.95 .. -5.70: the lesser south door, and it lands 0.30 inside my west wall. So the room is
+# entered at its south-west corner, through an opening 0.90 (2 M) wide in the west wall, and this
+# file cuts that opening itself as well — `salon_door_air` — so that the room reads correctly when
+# it is measured on its own, and so that nothing is left standing between 6.30 and 6.39 where the
+# door's own void stops.
+#
+# WHERE THE WINDOWS ARE. Three in the south wall at x = 8.10 (round-headed), 10.80 and 13.50
+# (square-headed), 1.35 wide, sill 2.70; one in the east wall at z = -5.40, the same square head.
+# This file cuts its own reveals through the lining to exactly those openings and no further, so
+# the panelling frames them instead of being cut in half by them.
+#
+# THE NUMBERS THAT ARE NOT DIMENSIONS. 1.60, 5.95, 15.15, -6.65, -2.95 are the 0.05 laps the brief
+# demands, buried in floor and wall. 0.02 is every paint rule's `below=`, past the manifest's 12 mm
+# of grain. 0.008 .. 0.015 are the arris rounds.
+
+include "_contract.clip"
+
+# ================================================================================================
+# THE DADO AND THE SUNK PANELS — one voxel of relief, all round the room
+# ================================================================================================
+#
+# The dado is 0.90 (2 M) high and its cap lands on 2.70, which is windows.clip's sill line. The
+# panel fields are sunk 0.03 into the lining — ONE VOXEL — and that is the shallowest relief in
+# this room on purpose: halls.clip sinks its dado panels 0.0225 in a room lit by one sconce and
+# reports that only a raking lamp finds them. Here there are three south windows and the sun rakes
+# this wall for half the day, so a one-voxel step is a fair question rather than a lost one.
+#
+# `repeat` is placed by a translate so that the seed sits on 10.80 and the copies land on the 1.35
+# grid — 6.75 through 14.85 — instead of on the world origin, which is in the rotunda.
+let salon_dp_seed_s = box -0.54 1.98 -6.54   0.54 2.475 -6.45
+let salon_dp_seed_n = box -0.54 1.98 -3.42   0.54 2.475 -3.33
+let salon_dado_pans = union {
+    intersection { translate { repeat { salon_dp_seed_s } x=1.35 nx=3 } 10.80 0 0
+                   box 6.750 1.90 -6.60   14.625 2.60 -6.40 }
+    intersection { translate { repeat { salon_dp_seed_n } x=1.35 nx=3 } 10.80 0 0
+                   box 6.975 1.90 -3.50   14.175 2.60 -3.30 }
+}
+
+# THE TWO CORNER PIERS ON THE NORTH WALL, AND WHY THEY ARE NOT A DECISION ABOUT TASTE.
+#
+# windows.clip puts five ground-storey windows in the east front, at z = 0 and +-2.70 and +-5.40.
+# The one at z = -5.40 is mine and this room is built round it. The one at z = -2.70 IS NOT: its
+# opening runs z -3.375 .. -2.025, which is 0.36 north of my room, but its REVEAL runs 1.80 m into
+# the building, from x 16.18 back to x 14.20 — and that is straight through the east end of my
+# north wall. Measured on the assembled building at metre 8: my north wall stands solid to
+# x = 14.20 and then there is a hole 0.56 m wide and 1.80 m tall through it, from the room's
+# north-east corner into the pocket behind, with a glazed sash 1.5 m away at the far end of it.
+#
+# It cannot be closed by making the wall thicker, because the cut takes the wall's whole depth. It
+# is closed by standing 0.18 of pier IN FRONT of it, at z -3.54 .. -3.36, because the cut stops at
+# z = -3.375 and cannot reach past it. So the room's north-east corner is a pier, and the
+# north-west corner is given the same one so that the wall reads as pier / five panels / pier
+# rather than as one panel with a patch on it.
+#
+# The pocket north of this wall is not mine and is still open: whoever ends up owning the fabric
+# between this room and the east hall should look at the windows at z = 0 and z = -2.70, which at
+# the time of writing open into nothing at all.
+let salon_pier_ne = box 14.175 1.80 -3.54   14.76  4.95 -3.36  round=0.012
+let salon_pier_nw = box  6.39  1.80 -3.54    6.975 4.95 -3.36  round=0.012
+let salon_piers   = union { salon_pier_ne salon_pier_nw }
+
+# The silk-hung fields, where the mirrors are not: the two corner piers and the two ends of the
+# south wall, and a narrow one on each short wall beside its glass. Same 0.03 sinking.
+let salon_sp_s_w = box  6.750 2.79 -6.54    7.29  4.365 -6.45
+let salon_sp_s_e = box 14.310 2.79 -6.54   14.625 4.365 -6.45
+let salon_sp_n_w = box  6.525 2.79 -3.60    6.840 4.365 -3.51
+let salon_sp_n_e = box 14.310 2.79 -3.60   14.625 4.365 -3.51
+let salon_sp_e_n = box 14.73  2.79 -6.42   14.82  4.365 -6.165
+let salon_sp_w_n = box  6.33  2.79 -5.49    6.42  4.365 -4.77
+let salon_silk_pans = union {
+    salon_sp_s_w salon_sp_s_e salon_sp_n_w salon_sp_n_e salon_sp_e_n salon_sp_w_n
+}
+
+# THE REEDS OF THE DADO CAP. Three half-rounds 0.045 across on a 0.045 pitch — 1.4 voxels each,
+# 1.4 voxels apart — running the whole 8.10 m of both long walls. Their centres sit ON the wall
+# face so each stands 0.0225 proud and is half buried, which is what a reed is; a reed drawn whole
+# in front of the face would be the 0.045 projection the cornice note refuses.
+let salon_reed_s_one = capsule 6.525 2.61 -6.4875  14.625 2.61 -6.4875 r=0.0225
+let salon_reed_n_one = capsule 6.975 2.61 -3.3825  14.175 2.61 -3.3825 r=0.0225
+let salon_reed_s = translate { repeat { salon_reed_s_one } y=0.045 ny=1 } 0 0.045 0
+let salon_reed_n = translate { repeat { salon_reed_n_one } y=0.045 ny=1 } 0 0.045 0
+let salon_reeds  = union { salon_reed_s salon_reed_n }
+
+# The dado cap itself, and the skirting, both run round all four walls as frames — the difference
+# of two boxes — so every mitre is free.
+let salon_dado_cap = difference {
+    box 6.30 2.61 -6.60   14.85 2.70 -3.27
+    box 6.48 2.55 -6.42   14.67 2.76 -3.45
+}
+let salon_skirt = difference {
+    box 6.30 1.80 -6.60   14.85 1.98 -3.27
+    box 6.48 1.75 -6.42   14.67 2.04 -3.45
+}
+let salon_dado = union { salon_dado_cap salon_skirt salon_reeds }
+
+# What the panelling actually removes: every sunk field, cut 0.03 into the face it is sunk in. It
+# goes into `salon_hollow` below and into the piers, so the relief is CUT and not merely coloured —
+# which is the whole of load note 3's first half, and the thing that makes the painted marquetry on
+# the floor a fair comparison rather than the only line in the room.
+let salon_sunk = union { salon_dado_pans salon_silk_pans }
+
+# ================================================================================================
+# THE SHELL — one block, hollowed
+# ================================================================================================
+#
+# Written as a single block rather than as five walls because walls.clip leaves the inside of the
+# main block EMPTY (`walls_ring` is the difference of two boxes), so there is no interior structure
+# here to hang a lining on and the room has to bring its own. One block also makes the part
+# certainly one component before anything is added to it.
+#
+# It laps 0.05 into walls.clip's south wall at -6.65, into its east wall at 15.15, and 0.20 down
+# into the podium at 1.60. Its north face at -2.95 is 0.05 past the zone's -3.00, into the east
+# hall's own block, which stands at -2.925.
+let salon_block = box 5.95 1.60 -6.65   15.15 6.00 -2.95  round=0.015
+
+# The air of the room. 8.37 x 3.15 x 3.15 in the clear.
+let salon_room_air = box 6.39 1.80 -6.51   14.76 4.95 -3.36
+
+# THE COVE, and why it is a rounded box and not four mouldings.
+#
+# The ceiling opening at the springing is exactly the face of the cornice corona — x 6.615 ..
+# 14.535, z -6.285 .. -3.585 — and the flat soffit above it is x 7.065 .. 14.085, z -5.835 ..
+# -4.035, inset one module all round. A box grown by 0.45 and rounded by the same 0.45 IS that
+# solid of revolution: at the top it is the core box, at 0.45 below it the core grown by 0.45, and
+# between the two a quarter circle. Four cavettos mitred at the corners would have left four seams
+# in the one surface in this room that has no seam in it.
+let salon_cove_air = round { box 7.065 4.05 -5.835   14.085 4.95 -4.035 } by=0.45
+
+# The doorway, cut to doors.clip's own head at 4.95 and its own jamb at -5.70. It runs from 5.90 to
+# 6.615 and back to -6.65 so that it is cut past both faces of my west wall AND past the 6.48 the
+# dado's west leg reaches — see THE PART, below, for what it costs to stop at the wall face. 6.615
+# and not 6.52: at 6.52 it left a sliver of lining 0.005 wide against the silk panel's edge, which
+# the sampler filled conservatively and then reported as 67 floating voxels. Every cut end in this
+# room now stands at least 0.065 clear of the next thing, which is two voxels at metre 32.
+let salon_door_air = box 5.90 1.80 -6.65   6.615 4.95 -5.70
+
+# The window reveals, cut to exactly windows.clip's openings and no further. Square heads at 4.50,
+# the round head springing at 4.05 and crowning at 4.725. The z of the south three runs -6.70 ..
+# -6.45, which is 0.10 into a wall the window already opens and 0.06 into air.
+let salon_win_s_b = box 10.125 2.70 -6.70   11.475 4.50 -6.45
+let salon_win_s_c = box 12.825 2.70 -6.70   14.175 4.50 -6.45
+let salon_win_s_a = union {
+    box 7.425 2.70 -6.70   8.775 4.05 -6.45
+    cylinder 8.10 4.05 -6.575  r=0.675 h=0.30 axis=z
+}
+let salon_win_e   = box 14.71 2.70 -6.075   15.15 4.50 -4.725
+let salon_windows = union { salon_win_s_a salon_win_s_b salon_win_s_c salon_win_e }
+
+# The firebox, cut into the north wall behind the chimney breast. 0.63 x 0.72, going 0.12 into a
+# wall that is 0.41 thick.
+let salon_fire_air = box 10.485 1.80 -3.62   11.115 2.52 -3.24
+
+let salon_hollow = union {
+    salon_room_air salon_cove_air salon_door_air salon_windows salon_fire_air salon_sunk
+}
+let salon_shell  = difference { salon_block salon_hollow }
+let salon_piered = difference { salon_piers salon_sunk }
+
+# ================================================================================================
+# THE CORNICE — 4.68 to 4.95, projecting 0.225 (M/2), and the cove springs off its face
+# ================================================================================================
+#
+# Three members: a fillet 0.09 proud, a cyma reversa swelling from that to 0.225, and a corona
+# fillet at 0.225. NO MEMBER PROJECTS LESS THAN 0.09. vestibule.clip measured a 0.045 projection at
+# metre 32 and got back nought voxels — a moulding is only the swell in FRONT of its core, so a
+# member that stands one voxel out is half a voxel of solid and misses every voxel centre it
+# passes. 0.09 is 2.9 voxels and it is the floor for a projection in this room.
+#
+# Each cyma is given a core box behind it for the same reason: drawn bare it is a ribbon floating
+# in the air 0.09 off the wall.
+
+let salon_cor_s_fil  = box 6.39 4.68 -6.60   14.76 4.77 -6.42  round=0.008
+let salon_cor_s_core = box 6.39 4.77 -6.60   14.76 4.905 -6.42
+let salon_cor_s_cyma = cyma_reversa 6.39 4.77 -6.42   14.76 4.905 -6.285 run=x
+let salon_cor_s_cor  = box 6.39 4.905 -6.60  14.76 4.95 -6.285 round=0.008
+
+let salon_cor_n_fil  = box 6.39 4.68 -3.45   14.76 4.77 -3.27   round=0.008
+let salon_cor_n_core = box 6.39 4.77 -3.45   14.76 4.905 -3.27
+let salon_cor_n_cyma = cyma_reversa 6.39 4.77 -3.45   14.76 4.905 -3.585 run=x
+let salon_cor_n_cor  = box 6.39 4.905 -3.585 14.76 4.95 -3.27   round=0.008
+
+let salon_cor_e_fil  = box 14.67 4.68 -6.51   14.85 4.77 -3.36  round=0.008
+let salon_cor_e_core = box 14.67 4.77 -6.51   14.85 4.905 -3.36
+let salon_cor_e_cyma = cyma_reversa 14.67 4.77 -6.51   14.535 4.905 -3.36 run=z
+let salon_cor_e_cor  = box 14.535 4.905 -6.51 14.85 4.95 -3.36  round=0.008
+
+let salon_cor_w_fil  = box 6.30 4.68 -6.51    6.48 4.77 -3.36   round=0.008
+let salon_cor_w_core = box 6.30 4.77 -6.51    6.48 4.905 -3.36
+let salon_cor_w_cyma = cyma_reversa 6.48 4.77 -6.51   6.615 4.905 -3.36 run=z
+let salon_cor_w_cor  = box 6.30 4.905 -6.51   6.615 4.95 -3.36  round=0.008
+
+let salon_cor_gilt = union {
+    salon_cor_s_cyma salon_cor_s_cor  salon_cor_n_cyma salon_cor_n_cor
+    salon_cor_e_cyma salon_cor_e_cor  salon_cor_w_cyma salon_cor_w_cor
+}
+let salon_cornice = union {
+    salon_cor_gilt
+    salon_cor_s_fil salon_cor_s_core  salon_cor_n_fil salon_cor_n_core
+    salon_cor_e_fil salon_cor_e_core  salon_cor_w_fil salon_cor_w_core
+}
+
+# ================================================================================================
+# ONE MIRROR PANEL, DRAWN ONCE — 0.90 x 1.80 of plate in a frame 0.09 wide and 0.09 proud
+# ================================================================================================
+#
+# Local frame: x across the panel, y from the foot of the plate, z OUT OF THE WALL. Every one of
+# the eight glasses in this room is this unit placed by a translate, and on the three walls whose
+# normal is not +z, by a rotate first — which is why each of those is caught in a box of its own
+# further down. `rotate` is given no bounding box by the field on purpose, and a union cannot cull
+# a child whose box is everywhere.
+#
+# The plate straddles the wall face: -0.03 to 0.03, so the paint rule that names it catches the
+# voxels AT the face and the mirror surface is the wall plane itself. That is what makes two of
+# them exactly 3.15 apart and exactly parallel; a plate set into a rebate would have been 3.15
+# minus whatever the rebate happened to be.
+let salon_pgl_plate = box -0.45 0 -0.03   0.45 1.575 0.03
+
+# The frame. A rectangular ring 0.09 wide, from 0.09 inside the lining to 0.09 proud of it.
+let salon_pgl_frame = difference {
+    box -0.54 -0.09 -0.09   0.54 1.665 0.09  round=0.012
+    box -0.45  0    -0.30   0.45 1.575 0.30
+}
+
+# The astragal on the inner arris — 0.03 across, ONE VOXEL at metre 32, and 7.2 m of it in this
+# room once all eight are placed. Drawn as a zero-thickness ring and rounded into a bead, which is
+# doors.clip's and vestibule.clip's trick: a bead written as a torus mitres badly at a corner and
+# a bead written as four capsules has four seams.
+let salon_pgl_bead = round {
+    difference {
+        box -0.45  0     0.06   0.45  1.575 0.06
+        box -0.435 0.015 0.05   0.435 1.560 0.07
+    }
+} by=0.015
+
+let salon_pgl = union { salon_pgl_frame salon_pgl_bead }
+
+# ================================================================================================
+# THE ROCAILLE — one asymmetric cartouche, drawn once, over every glass
+# ================================================================================================
+#
+# A shell with fourteen reeds cut in it and two C-scrolls of different sizes, because a rococo
+# cartouche that is symmetric is a Louis XIV cartouche. Local frame again: y = 0 sits INSIDE the
+# top rail of the mirror frame, which is what everything here is anchored to — the shell, both
+# scrolls and the tie all reach down past y = 0 into the rail, so the whole cartouche is one solid
+# with the frame and the frame is one solid with the wall.
+let salon_roc_body = intersection {
+    ellipsoid 0 0.045 0  rx=0.225 ry=0.18 rz=0.05
+    box -0.24 0.020 -0.06   0.24 0.24 0.06
+}
+
+# The reeds. 0.03 wide — one voxel — and cut only 0.045 into a shell 0.10 thick, so the shell is
+# never severed and what the grid can miss is a softer arris rather than fourteen loose lobes.
+let salon_roc_reed  = box -0.015 0.06 0.005   0.015 0.32 0.10
+let salon_roc_reeds = intersection {
+    around { salon_roc_reed } count=14 axis=z
+    box -0.26 0.05 -0.02   0.26 0.30 0.12
+}
+let salon_roc_shell = difference { salon_roc_body salon_roc_reeds }
+
+# The two scrolls, tube 0.027 — 1.7 voxels — and deliberately unequal: r 0.135 with 1.75 turns on
+# the left, r 0.18 with 2.0 on the right. A `spiral` starts at radius r along the first cross-axis
+# and winds in, so each one's outer end is at its centre plus r in x, and both of those land inside
+# the tie below.
+let salon_roc_scr_a = spiral -0.285 0.075 0.03  r=0.135 tighten=0.55 tube=0.027 turns=1.75 axis=z
+let salon_roc_scr_b = spiral  0.240 0.090 0.03  r=0.15  tighten=0.50 tube=0.027 turns=2.00 axis=z
+
+# The base rail of the cartouche: it reads as the scrolled bar a rococo shell sits on, and it is
+# also what ties both scrolls and the shell into the mirror frame's top rail.
+let salon_roc_tie = capsule -0.42 0.015 0.02   0.435 0.045 0.02  r=0.027
+
+let salon_roc = union { salon_roc_shell salon_roc_scr_a salon_roc_scr_b salon_roc_tie }
+
+# ================================================================================================
+# WHERE THE GLASSES GO
+# ================================================================================================
+#
+# SOUTH WALL, face z = -6.51. The three windows take x 7.425 .. 8.775, 10.125 .. 11.475 and
+# 12.825 .. 14.175, which leaves two piers of 1.35 between them, centred on 9.45 and 12.15. Those
+# two carry the trumeaux — the pier glasses — 0.90 wide with 0.225 of boiserie stile each side.
+#
+# NORTH WALL, face z = -3.36, blank because the east hall is behind it. Five panels on the 1.35
+# grid at 8.10, 9.45, 10.80, 12.15, 13.50, of which the middle one is taken by the chimney's
+# overmantel and the other four are glass. TWO OF THEM — 9.45 and 12.15 — ARE THE SAME PLATE AT THE
+# SAME HEIGHT AS THE SOUTH TRUMEAUX AND DIRECTLY OPPOSITE THEM. That pair is the load note's first
+# item and the reason the room is 3.15 deep and not 3.42.
+let salon_gl_s_a = translate { union { salon_pgl  translate { salon_roc } 0 1.620 0 } }  9.45 2.79 -6.51
+let salon_gl_s_b = translate { union { salon_pgl  translate { salon_roc } 0 1.620 0 } } 12.15 2.79 -6.51
+
+let salon_gl_north_seed = intersection {
+    rotate { union { salon_pgl  translate { salon_roc } 0 1.620 0 } } y=0.5
+    box -0.70 -0.15 -0.30   0.70 2.35 0.30
+}
+let salon_gl_n_a = translate { salon_gl_north_seed }  8.10 2.79 -3.36
+let salon_gl_n_b = translate { salon_gl_north_seed }  9.45 2.79 -3.36
+let salon_gl_n_c = translate { salon_gl_north_seed } 12.15 2.79 -3.36
+let salon_gl_n_d = translate { salon_gl_north_seed } 13.50 2.79 -3.36
+
+# THE SHORT WALLS, and the second corridor. `rotate y=-0.25` sends local +z to world -x, which is
+# what windows.clip's east front already relies on; `y=0.25` sends it to +x. Both glasses are
+# centred on z = -4.05, so they look at each other down 8.37 m of room with the chandelier in the
+# middle of it.
+let salon_gl_east_seed = intersection {
+    rotate { union { salon_pgl  translate { salon_roc } 0 1.620 0 } } y=-0.25
+    box -0.30 -0.15 -0.70   0.30 2.35 0.70
+}
+let salon_gl_west_seed = intersection {
+    rotate { union { salon_pgl  translate { salon_roc } 0 1.620 0 } } y=0.25
+    box -0.30 -0.15 -0.70   0.30 2.35 0.70
+}
+let salon_gl_e = translate { salon_gl_east_seed } 14.76 2.79 -4.05
+let salon_gl_w = translate { salon_gl_west_seed }  6.39 2.79 -4.05
+
+let salon_glasses = union {
+    salon_gl_s_a salon_gl_s_b
+    salon_gl_n_a salon_gl_n_b salon_gl_n_c salon_gl_n_d
+    salon_gl_e salon_gl_w
+}
+
+# The plates on their own, for the paint rule. Same eight places, same box, no frame.
+let salon_pl_s_a = translate { salon_pgl_plate }  9.45 2.79 -6.51
+let salon_pl_s_b = translate { salon_pgl_plate } 12.15 2.79 -6.51
+let salon_pl_n_a = translate { salon_pgl_plate }  8.10 2.79 -3.36
+let salon_pl_n_b = translate { salon_pgl_plate }  9.45 2.79 -3.36
+let salon_pl_n_c = translate { salon_pgl_plate } 12.15 2.79 -3.36
+let salon_pl_n_d = translate { salon_pgl_plate } 13.50 2.79 -3.36
+let salon_pl_e   = box 14.73 2.79 -4.50   14.79 4.365 -3.60
+let salon_pl_w   = box  6.36 2.79 -4.50    6.42 4.365 -3.60
+let salon_pl_om  = box 10.44 2.79 -3.615  11.16 4.365 -3.555
+let salon_plates = union {
+    salon_pl_s_a salon_pl_s_b
+    salon_pl_n_a salon_pl_n_b salon_pl_n_c salon_pl_n_d
+    salon_pl_e salon_pl_w salon_pl_om
+}
+
+# ================================================================================================
+# THE CHIMNEYPIECE — marble, on the north wall, on the middle window's axis
+# ================================================================================================
+#
+# x = 10.80 is the centre window's axis and the middle of the 1.35 grid, so the chimney faces the
+# window square and its overmantel glass looks straight out of it. The breast is 0.90 wide — the
+# same as a mirror panel — and stands 0.225 (M/2) proud of the wall, which leaves the two piers at
+# 10.125 and 11.475 clear for their sconces.
+let salon_chim_breast = box 10.35 1.80 -3.585   11.25 4.725 -3.36  round=0.015
+
+# The surround: jambs and a lintel round an opening 0.63 x 0.72, rounded like every stone arris in
+# this building. The firebox itself is cut in `salon_hollow`, above.
+let salon_chim_sur = difference {
+    box 10.395 1.80 -3.645   11.205 2.61 -3.36  round=0.012
+    box 10.485 1.75 -3.70    11.115 2.52 -3.30
+}
+let salon_chim_shelf = box 10.26 2.61 -3.72   11.34 2.70 -3.36  round=0.012
+let salon_chim_cyma  = cyma_reversa 10.26 2.52 -3.645   11.34 2.61 -3.72 run=x
+
+# The overmantel, on the breast face at -3.585 rather than on the wall face at -3.36. It is the one
+# glass in the room that is NOT coplanar with any other, which is what a chimney breast does to a
+# panelled wall and is worth having: it puts one reflector at an angle to the seven that are square.
+let salon_chim_gl = intersection {
+    rotate { union { salon_pgl  translate { salon_roc } 0 1.620 0 } } y=0.5
+    box -0.70 -0.15 -0.30   0.70 2.35 0.30
+}
+let salon_chim_glass = translate { salon_chim_gl } 10.80 2.79 -3.585
+let salon_chimney = union {
+    salon_chim_breast salon_chim_sur salon_chim_shelf salon_chim_cyma salon_chim_glass
+}
+
+# ================================================================================================
+# ONE SCONCE, DRAWN ONCE — ormolu, two branches, two wax tapers, two flames
+# ================================================================================================
+#
+# Local frame: x across, y from the foot of the backplate, z out of the wall. Six of these, twelve
+# tapers. The arms are capsules at r 0.045 — 2.9 voxels — and a capsule is one continuous solid from
+# end to end, so a branch cannot come apart the way a chain of small pieces can.
+#
+# EVERY BRANCH IS DRAWN ON +x AND NOWHERE ELSE. `mirror` FOLDS the coordinate — it asks the shape
+# at |x| — so a shape drawn on the minus side is asked for at a coordinate it does not occupy and
+# comes back EMPTY, with no error and no warning. Written first with the arm at x = -0.18, this
+# file's six sconces measured 146 voxels: six backplates, no arms, no nozzles, no tapers and no
+# flames. That is the same picture the manifest's own note reports from playing as "i cant tell
+# what they are", arrived at by a completely different route. The console legs below had it too.
+let salon_scn_plate = intersection {
+    ellipsoid 0 0.18 0.02  rx=0.105 ry=0.20 rz=0.05
+    box -0.12 0 -0.06   0.12 0.38 0.05
+}
+let salon_scn_arm  = capsule 0.02 0.09 0.03   0.18 0.21 0.16  r=0.045
+let salon_scn_noz  = cylinder 0.18 0.255 0.16  r=0.048 h=0.105 axis=y
+let salon_scn_bob  = cylinder 0.18 0.30 0.16   r=0.066 h=0.054 axis=y
+let salon_scn_wax  = cylinder 0.18 0.40 0.16   r=0.036 h=0.20 axis=y
+let salon_scn_fire = ellipsoid 0.18 0.545 0.16 rx=0.045 ry=0.09 rz=0.045
+
+let salon_scn_metal = union { salon_scn_plate  mirror { union { salon_scn_arm salon_scn_noz salon_scn_bob } } axis=x }
+let salon_scn_taper = mirror { salon_scn_wax } axis=x
+let salon_scn_flame = mirror { salon_scn_fire } axis=x
+let salon_scn = union { salon_scn_metal salon_scn_taper salon_scn_flame }
+
+# FOUR ON THE NORTH PIERS, at 8.775, 10.125, 11.475 and 12.825 — the middles of the 0.45 piers
+# between the five north panels, which is where the brief asks for them. Turned a half turn so the
+# branches come out of the wall and not into it, and caught in a box because of it.
+let salon_scn_n_seed = intersection {
+    rotate { salon_scn } y=0.5
+    box -0.34 -0.06 -0.28   0.34 0.72 0.12
+}
+let salon_scn_n_a = translate { salon_scn_n_seed }  8.775 2.925 -3.36
+let salon_scn_n_b = translate { salon_scn_n_seed } 10.125 2.925 -3.36
+let salon_scn_n_c = translate { salon_scn_n_seed } 11.475 2.925 -3.36
+let salon_scn_n_d = translate { salon_scn_n_seed } 12.825 2.925 -3.36
+
+# TWO GIRANDOLES ON THE SOUTH TRUMEAUX — a sconce standing in front of a pier glass, which is what
+# a Spiegelkabinett is for and what doubles its light. It costs a little of the plate and buys a
+# flame with its own reflection 3.15 m away in the opposite mirror, and then that reflection's
+# reflection. Do not move these onto the stiles to keep the glass whole.
+let salon_scn_s_a = translate { salon_scn }  9.45 2.925 -6.51
+let salon_scn_s_b = translate { salon_scn } 12.15 2.925 -6.51
+
+let salon_sconces = union {
+    salon_scn_n_a salon_scn_n_b salon_scn_n_c salon_scn_n_d salon_scn_s_a salon_scn_s_b
+}
+# The two lists the paint rules need, in the same six places.
+let salon_scn_tapers = union {
+    translate { intersection { rotate { salon_scn_taper } y=0.5  box -0.34 -0.06 -0.28 0.34 0.72 0.12 } }  8.775 2.925 -3.36
+    translate { intersection { rotate { salon_scn_taper } y=0.5  box -0.34 -0.06 -0.28 0.34 0.72 0.12 } } 10.125 2.925 -3.36
+    translate { intersection { rotate { salon_scn_taper } y=0.5  box -0.34 -0.06 -0.28 0.34 0.72 0.12 } } 11.475 2.925 -3.36
+    translate { intersection { rotate { salon_scn_taper } y=0.5  box -0.34 -0.06 -0.28 0.34 0.72 0.12 } } 12.825 2.925 -3.36
+    translate { salon_scn_taper }  9.45 2.925 -6.51
+    translate { salon_scn_taper } 12.15 2.925 -6.51
+}
+let salon_scn_flames = union {
+    translate { intersection { rotate { salon_scn_flame } y=0.5  box -0.34 -0.06 -0.28 0.34 0.72 0.12 } }  8.775 2.925 -3.36
+    translate { intersection { rotate { salon_scn_flame } y=0.5  box -0.34 -0.06 -0.28 0.34 0.72 0.12 } } 10.125 2.925 -3.36
+    translate { intersection { rotate { salon_scn_flame } y=0.5  box -0.34 -0.06 -0.28 0.34 0.72 0.12 } } 11.475 2.925 -3.36
+    translate { intersection { rotate { salon_scn_flame } y=0.5  box -0.34 -0.06 -0.28 0.34 0.72 0.12 } } 12.825 2.925 -3.36
+    translate { salon_scn_flame }  9.45 2.925 -6.51
+    translate { salon_scn_flame } 12.15 2.925 -6.51
+}
+
+# ================================================================================================
+# THE CHANDELIER — 400 crystal solids and eight flames, on the centre line
+# ================================================================================================
+#
+# Built about the origin because `around` turns about the y axis through it, and translated to
+# (10.80, -4.95) — the middle window's axis and the room's own centre line to within 0.015 — with
+# no dy, because every height in it is absolute. The whole thing is caught in a box before the
+# translate: `around` is a rotation and a rotation reports infinite bounds, and windows.clip
+# measured what that costs when it is left bare (705 million field evaluations for one part).
+#
+# WHY THE DROPS ARE PRISMS AND NOT BEADS ON WIRES. A chain of small solids threaded on a wire is
+# how a chandelier is made and it is not how one can be VOXELISED: a wire thin enough to look like
+# a wire is under a voxel, so at metre 32 the drops let go of it and the part reports four hundred
+# floating components. Here each string is a stack of octagonal prisms whose intervals OVERLAP, so
+# the string is one continuous solid from the ring it hangs on to its pendeloque — and the ring is
+# one solid with its spoke, the spoke with the stem, and the stem with the ceiling. Four hundred
+# separate solids in the source, one component on the grid. The facets are kept by turning every
+# other prism by half a facet, which is what makes a cut drop twinkle rather than a turned one.
+#
+# Sizes: beads 0.045 circumradius (0.083 across the flats, 2.7 voxels), pendeloques 0.030 (0.052
+# across, 1.7 voxels) and 0.10 long. Both inside the brief's 0.05 .. 0.09.
+
+let salon_ch_canopy = cylinder 0 5.31 0  r=0.135 h=0.18 axis=y
+let salon_ch_stem   = cylinder 0 4.71 0  r=0.12  h=1.14 axis=y
+let salon_ch_knop   = sphere   0 4.95 0  r=0.12
+let salon_ch_ball   = sphere   0 4.14 0  r=0.15
+let salon_ch_fin_a  = sphere   0 4.02 0  r=0.09
+let salon_ch_fin_b  = sphere   0 3.96 0  r=0.045
+
+let salon_ch_ring_a = torus 0 4.86 0  ring=0.45  tube=0.048 axis=y
+let salon_ch_ring_b = torus 0 4.59 0  ring=0.36  tube=0.042 axis=y
+let salon_ch_ring_c = torus 0 4.32 0  ring=0.225 tube=0.042 axis=y
+
+let salon_ch_spoke_a = around { capsule 0 4.86 0   0.46 4.86 0  r=0.048 } count=6 axis=y
+let salon_ch_spoke_b = around { capsule 0 4.59 0   0.37 4.59 0  r=0.045 } count=4 axis=y
+let salon_ch_spoke_c = around { capsule 0 4.32 0   0.235 4.32 0 r=0.045 } count=4 axis=y
+
+# The eight candles, on the corona itself. They are INSIDE the ring the drops hang from, so every
+# tier below is lit from above and behind — which is where the caustic on the parquet comes from.
+let salon_ch_noz   = cylinder 0.45 4.905 0  r=0.05 h=0.09  axis=y
+let salon_ch_bob   = cylinder 0.45 4.965 0  r=0.09 h=0.03  axis=y
+let salon_ch_wax   = cylinder 0.45 5.07 0   r=0.045 h=0.18 axis=y
+let salon_ch_fire  = ellipsoid 0.45 5.190 0 rx=0.048 ry=0.09 rz=0.048
+let salon_ch_cands = around { union { salon_ch_noz salon_ch_bob } } count=8 axis=y
+let salon_ch_waxes = around { salon_ch_wax }  count=8 axis=y
+let salon_ch_fires = around { salon_ch_fire } count=8 axis=y
+
+# ONE STRING: four octagon beads and a pendeloque, drawn at a radius and a height. Written out four
+# times rather than made a function because the language has none, and the four differ anyway.
+
+# tier one — 32 strings of 5 off the corona at 4.86, radius 0.45.  160 solids
+let salon_ch_t1 = around {
+    union {
+        prism 0.45 4.860 0 r=0.045 h=0.06 sides=8 axis=y turn=0
+        prism 0.45 4.810 0 r=0.045 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.45 4.760 0 r=0.042 h=0.06 sides=8 axis=y turn=0
+        prism 0.45 4.710 0 r=0.036 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.45 4.635 0 r=0.030 h=0.10 sides=6 axis=y turn=0
+    }
+} count=32 axis=y
+
+# tier two — 24 strings of 4 off ring B at 4.59, radius 0.36.  96 solids
+let salon_ch_t2 = around {
+    union {
+        prism 0.36 4.590 0 r=0.045 h=0.06 sides=8 axis=y turn=0
+        prism 0.36 4.540 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.36 4.490 0 r=0.036 h=0.06 sides=8 axis=y turn=0
+        prism 0.36 4.415 0 r=0.030 h=0.10 sides=6 axis=y turn=0
+    }
+} count=24 axis=y
+
+# tier three — 20 strings of 4 off ring C at 4.32, radius 0.225.  80 solids
+let salon_ch_t3 = around {
+    union {
+        prism 0.225 4.320 0 r=0.045 h=0.06 sides=8 axis=y turn=0
+        prism 0.225 4.270 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.225 4.220 0 r=0.036 h=0.06 sides=8 axis=y turn=0
+        prism 0.225 4.145 0 r=0.030 h=0.10 sides=6 axis=y turn=0
+    }
+} count=20 axis=y
+
+# tier four — 12 strings of 4 off the bottom ball at 4.14.  48 solids
+let salon_ch_t4 = around {
+    union {
+        prism 0.12 4.140 0 r=0.045 h=0.06 sides=8 axis=y turn=0
+        prism 0.12 4.090 0 r=0.042 h=0.06 sides=8 axis=y turn=0.0625
+        prism 0.12 4.040 0 r=0.036 h=0.06 sides=8 axis=y turn=0
+        prism 0.12 3.965 0 r=0.030 h=0.10 sides=6 axis=y turn=0
+    }
+} count=12 axis=y
+
+# and 16 spires standing UP off ring C, which is the other half of what a cut-glass chandelier does
+# with light: 384 + 16 = 400.
+let salon_ch_t5 = around {
+    prism 0.225 4.395 0 r=0.036 h=0.18 sides=6 axis=y turn=0
+} count=16 axis=y
+
+let salon_ch_box   = box -0.62 3.88 -0.62   0.62 5.42 0.62
+let salon_ch_glass = translate { intersection {
+        union { salon_ch_t1 salon_ch_t2 salon_ch_t3 salon_ch_t4 salon_ch_t5 }
+        salon_ch_box } } 10.80 0 -4.95
+let salon_ch_gilt  = translate { intersection {
+        union { salon_ch_canopy salon_ch_stem salon_ch_knop salon_ch_ball
+                salon_ch_fin_a salon_ch_fin_b
+                salon_ch_ring_a salon_ch_ring_b salon_ch_ring_c
+                salon_ch_spoke_a salon_ch_spoke_b salon_ch_spoke_c salon_ch_cands }
+        salon_ch_box } } 10.80 0 -4.95
+let salon_ch_wicks = translate { intersection { salon_ch_waxes salon_ch_box } } 10.80 0 -4.95
+let salon_ch_lamps = translate { intersection { salon_ch_fires salon_ch_box } } 10.80 0 -4.95
+
+let salon_chandelier = union { salon_ch_gilt salon_ch_glass salon_ch_wicks salon_ch_lamps }
+
+# ================================================================================================
+# THE FURNITURE — two console tables under the trumeaux
+# ================================================================================================
+#
+# It is in `part_salon` and therefore out of `void_salon`, which is the whole point of the note at
+# the bottom of clips/facility.clip: a room's void is the air of the room LESS the room's own
+# stone, and a fitting standing in that air goes with it unless the room owns it. Every sconce,
+# bench and statue in this building was deleted once for exactly that reason.
+let salon_con_top   = box -0.495 2.61 -6.53   0.495 2.70 -6.14  round=0.012
+let salon_con_apron = box -0.405 2.43 -6.51   0.405 2.61 -6.20  round=0.020
+let salon_con_leg_a = capsule 0.36 1.80 -6.24   0.315 2.49 -6.30  r=0.036
+let salon_con_leg_b = capsule 0.36 1.80 -6.47   0.330 2.49 -6.47  r=0.033
+let salon_con_rail  = box -0.405 2.43 -6.53   0.405 2.61 -6.44
+let salon_console = union {
+    salon_con_top salon_con_apron salon_con_rail
+    mirror { union { salon_con_leg_a salon_con_leg_b } } axis=x
+}
+let salon_furniture = union {
+    translate { salon_console }  9.45 0 0
+    translate { salon_console } 12.15 0 0
+}
+let salon_con_tops = union {
+    translate { salon_con_top }  9.45 0 0
+    translate { salon_con_top } 12.15 0 0
+}
+
+# ================================================================================================
+# THE PART
+# ================================================================================================
+
+let salon_built = union {
+    salon_shell
+    salon_piered
+    salon_cornice
+    salon_glasses
+    salon_dado
+    salon_chimney
+    salon_sconces
+    salon_chandelier
+    salon_furniture
+}
+
+# AND THE OPENINGS TAKEN OUT OF THE WHOLE OF IT AGAIN, AFTER THE TRIM IS ON.
+#
+# The shell is cut by `salon_hollow` where it is built, and that is not enough, because the members
+# that stand ON the shell are added afterwards and they do not stop at the wall face. halls.clip
+# spent a whole paragraph on this and it happened here anyway, so it is worth writing down twice:
+# measured as `intersection { part_salon <the doorway> }` at metre 32, this file put **822 voxels
+# of skirting, dado cap and cornice straight across its own door** — three bars, at ankle, waist
+# and head height, in a doorway 0.90 wide. Nobody sees that in a component count, in a volume, in a
+# material list or in a plan slice; the only thing that finds it is asking what of yours is inside
+# the hole.
+#
+# The door cutter reaches 0.135 past the door's own void because the deepest thing standing in the
+# opening is the dado's west leg at x = 6.48 and a void that stops at the wall face cuts the wall
+# and leaves the trim. Same rule for the windows: the cornice foot is at 4.68 and the round-headed
+# window at x = 8.10 crowns at 4.725, so without this the cornice fillet took a lens 0.48 wide and
+# 0.045 deep out of the top of that arch.
+let part_salon = difference { salon_built  salon_door_air  salon_windows }
+
+# WHAT THIS PART REMOVES FROM THE BUILDING: the air of the room, its cove, and the last 0.30 of the
+# side door's passage, LESS everything this file put back in either. Written as the difference
+# against my own mass, and not as a list, for the reason vestibule.clip gives and for the reason
+# the manifest's own note gives at length: the chandelier, six sconces, twelve tapers, two console
+# tables and a chimney breast all stand in this air, and a void written as a bare box would cut
+# every one of them away and leave nothing behind but the 0.09 of backplate buried in the wall.
+# The window reveals and the firebox are NOT in it — they are cut out of my own block, above, so
+# the manifest never has to know they exist and cannot open somebody else's wall with them.
+let salon_air  = union { salon_room_air salon_cove_air salon_door_air }
+let void_salon = difference { salon_air part_salon }
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Order matters: a later coat covers an earlier one. Shell first, then floor, then the mirror
+# plates, then the gilding over their edges, then the hangings, then the fittings. `below=0.02` on
+# every rule and never 0 — the manifest displaces the whole building by 12 mm at the end, and a
+# test at zero misses the voxels displacement made and leaves a pale rind of limestone over the
+# part.
+
+# --- the shell -----------------------------------------------------------------------------------
+paint boiserie where=salon_shell   below=0.02
+paint boiserie where=salon_piered  below=0.02
+paint boiserie where=salon_cornice below=0.02
+paint boiserie where=salon_dado    below=0.02
+
+# The ceiling. The cove is gesso, the flat field is a painted sky in `silk`, and the ring between
+# them is a gilt quadratura line 0.03 wide with NO GEOMETRY UNDER IT — the painted half of load
+# note 3, put on the one surface in the room a grazing light never reaches.
+let salon_cove_face = round { salon_cove_air } by=0.05
+paint gesso where=salon_cove_face below=0.02
+
+let salon_ceil_field = box 7.11 5.30 -5.79   14.04 5.48 -4.08
+paint silk where=salon_ceil_field below=0.02
+
+let salon_ceil_ring = difference {
+    box 7.065 5.30 -5.835   14.085 5.48 -4.035
+    box 7.095 5.30 -5.805   14.055 5.48 -4.065
+}
+paint gold_leaf where=salon_ceil_ring below=0.02
+
+# --- the floor -------------------------------------------------------------------------------------
+#
+# A slab of thin zones from 1.70 to 1.86, straddling the floor plane so every rule catches the
+# surface and nothing under it.
+#
+# THE MARQUETRY IS PAINTED AND NOT CUT. The field is a diagonal lattice of ebony lines 0.03 wide —
+# M/15, one voxel at metre 32 — struck both ways at 0.675 (1.5 M), with a walnut border and an
+# ebony fillet inside it, and a lozenge of walnut under the chandelier where the caustic lands.
+# There is no geometry under any of it. That is the point: the parquet's own arrises are cut (the
+# skirting, the reeds, the sunk panels) and its pattern is not, in the same square metre, under the
+# same sun, so the two can be compared rather than argued about.
+let salon_fl_zone = box 6.39 1.70 -6.51   14.76 1.86 -3.36
+paint parquet where=salon_fl_zone below=0.02
+
+let salon_fl_field  = box 6.615 1.60 -6.285   14.535 1.96 -3.585
+let salon_fl_border = difference { salon_fl_zone salon_fl_field }
+paint walnut where=salon_fl_border below=0.02
+
+let salon_fl_fillet = difference {
+    box 6.60 1.70 -6.30   14.55 1.86 -3.57
+    box 6.63 1.70 -6.27   14.52 1.86 -3.60
+}
+paint ebony where=salon_fl_fillet below=0.02
+
+let salon_fl_bar   = box -0.015 1.70 -18   0.015 1.86 18
+let salon_fl_diag1 = intersection {
+    rotate { repeat { salon_fl_bar } x=0.675 nx=28 } y=0.125
+    salon_fl_field
+}
+let salon_fl_diag2 = intersection {
+    rotate { repeat { salon_fl_bar } x=0.675 nx=28 } y=-0.125
+    salon_fl_field
+}
+paint ebony where=salon_fl_diag1 below=0.02
+paint ebony where=salon_fl_diag2 below=0.02
+
+let salon_fl_loz = intersection {
+    translate { rotate { box -0.90 1.70 -0.90   0.90 1.86 0.90 } y=0.125 } 10.80 0 -4.95
+    box 9.40 1.70 -6.30   12.20 1.86 -3.60
+}
+paint walnut where=salon_fl_loz below=0.02
+
+let salon_fl_lozline = difference {
+    salon_fl_loz
+    intersection {
+        translate { rotate { box -0.87 1.60 -0.87   0.87 1.96 0.87 } y=0.125 } 10.80 0 -4.95
+        box 9.40 1.60 -6.30   12.20 1.96 -3.60
+    }
+}
+paint ebony where=salon_fl_lozline below=0.02
+
+# --- the glass ---------------------------------------------------------------------------------
+#
+# THE ONLY `mirror` IN THE BUILDING. Nine plates: two south trumeaux, four north panels, one
+# overmantel, and one at each end of the room. Painted before the frames, because a rule with
+# below=0.02 reaches 0.02 past its own shape and would otherwise silver the inner arris of every
+# frame it touches.
+paint mirror where=salon_plates below=0.02
+
+# --- the gilding -------------------------------------------------------------------------------
+paint gold_leaf where=salon_glasses below=0.02
+paint gold_leaf where=salon_chim_glass below=0.02
+paint gold_leaf where=salon_cor_gilt below=0.02
+paint ormolu where=salon_reeds below=0.02
+
+# --- the hangings ------------------------------------------------------------------------------
+let salon_silk_face  = round { salon_silk_pans } by=0.03
+let salon_dado_face  = round { salon_dado_pans } by=0.03
+paint silk   where=salon_silk_face below=0.02
+paint damask where=salon_dado_face below=0.02
+
+# --- the chimneypiece --------------------------------------------------------------------------
+paint marble where=salon_chim_breast below=0.02
+paint marble where=salon_chim_sur    below=0.02
+paint marble where=salon_chim_shelf  below=0.02
+paint marble where=salon_chim_cyma   below=0.02
+let salon_fire_face = round { salon_fire_air } by=0.05
+paint iron where=salon_fire_face below=0.02
+
+# --- the fittings ------------------------------------------------------------------------------
+paint ormolu  where=salon_sconces      below=0.02
+paint gilt    where=salon_ch_gilt      below=0.02
+paint crystal where=salon_ch_glass     below=0.02
+paint wax     where=salon_ch_wicks     below=0.02
+paint wax     where=salon_scn_tapers   below=0.02
+paint taper   where=salon_ch_lamps     below=0.02
+paint taper   where=salon_scn_flames   below=0.02
+
+# --- the furniture -----------------------------------------------------------------------------
+paint ormolu where=salon_furniture below=0.02
+paint marble where=salon_con_tops  below=0.02
