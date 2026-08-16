@@ -77,23 +77,49 @@
 //     `n·v` is that integral's grazing shape and nothing more.
 //   - WHAT A SURFACE REFLECTS INDOORS IS THE ROOM, AND THE ROOM HERE IS THE AMBIENT. In the game a
 //     metal's environment comes out of the face's own lobe bins, which hold the room it is standing
-//     in. This viewer has no such measurement, and reflecting the SKY attenuated by how much sky
-//     the lattice can see gives a gilt cornice four metres inside the ballroom almost nothing — so
-//     every gold in the building was drawn as its twelve per cent of diffuse, which is mustard
-//     paint. So a surface reflects the sky where the sky reaches it and the ambient the light grid
-//     already carries where it does not, at the same occlusion the diffuse gets. That last part
-//     matters: handing it the UNOCCLUDED ambient makes every gold four times brighter than the
-//     wall beside it and flattens a whole enfilade.
+//     in. This viewer has no such measurement and was reflecting the SKY attenuated by how much sky
+//     the lattice could find, which four metres inside a state room is nearly nothing. So a surface
+//     reflects the sky where the sky reaches it and the ambient the light grid already carries
+//     where it does not, at the same occlusion the diffuse gets. See the measured table below for
+//     what that is worth and for what it is NOT: it lifts every specular in a room, gilt and
+//     plaster alike, rather than picking the metals out.
 //   - THE COAT REFLECTS THE SAME THING. The game's face path gives the environment to the BASE lobe
-//     only; the coat's share of it arrives through bounces. Without an environment term a lacquer
-//     here would be a sun highlight and nothing else, and — worse — the dimming the game applies to
-//     what is under the coat would be a straight loss, which drew the salon's parquet as slate.
+//     only; the coat's share of it arrives through bounces. Without an environment term the coat
+//     would dim what is under it and give nothing back, which is a lacquer that makes a floor
+//     darker.
 //   - F0 FOR A DIELECTRIC COMES FROM THE RECORD'S `ior`, where the game uses a flat 0.04. The two
 //     agree at ior 1.5, which is glass; this is the viewer's existing behaviour and it is kept
 //     because `crystal` at 1.62 and `water` at 1.33 are declared and mean something.
 //   - THE DIFFUSE'S LOSS TO THE SPECULAR is the HEMISPHERICAL average of Schlick,
 //     `F0 + (1 - F0) / 21`, and not the view-angle one — `resolve.comp` has a long note on why,
 //     and the short version is that taking it at the view angle sent the gilt paterae grey.
+//
+// # The arms, measured rather than argued
+//
+// `facility-salon`, orbit at yaw 1.5708, pitch -0.02, distance 6.2, target (7.2, 0.2, -4.8), at
+// 900x700 — the room's long axis, low sun through the south windows. Each figure is the mean sRGB
+// red of a fixed box, so they are comparable down a column and mean nothing across one.
+//
+//                                        gilt panel   plaster   parquet, sunlit   chandelier
+//   before this change                        92.4      93.8         100.8           80.2
+//   this                                     108.6     113.6         107.1           93.8
+//   ...environment = sky * sky visibility      93.1      94.9         102.5           84.2
+//   ...room's share taken unoccluded          138.2     149.3         114.0          117.9
+//   ...no environment for the coat            108.1     113.6         101.5           93.7
+//
+// Three things that says:
+//
+//   - the room-as-environment fallback is the change that moves the picture, and it moves GILT AND
+//     PLASTER BY THE SAME SIXTH. It is not a metal fix; it is the specular ambient a rasteriser
+//     owes every surface, and the metals were only the loudest thing missing it;
+//   - taking the room's share unoccluded lifts everything by a further quarter to a third, which is
+//     a room with its shadows washed out. The occlusion is not optional;
+//   - the coat's environment is worth about six per cent on sunlit parquet and nothing anywhere
+//     else in this view. It earns its place for what it does at a grazing angle rather than for
+//     what it does to an average.
+//
+// The last three rows are one line of this file changed at a time; `?lobes=` below takes the arms
+// for the lobes themselves without touching it.
 //
 // # A phone
 //
@@ -350,33 +376,31 @@ vec3 ws_shade(WsMaterial m, vec3 n, vec3 v,
     // The sky, diffusely.
     colour += m.albedo * (1.0 - m.metal) * (vec3(1.0) - turnedAway) * ambient * occluded;
 
-    // What this surface has around it to reflect, and THIS IS WHERE THE METALS WERE LOST.
+    // What this surface has around it to reflect.
     //
-    // The environment used to be the sky along the reflection, multiplied by how much sky the
-    // baker's lattice found. Outdoors that is right. Indoors it is nearly zero — a gilt cornice
-    // four metres inside the ballroom sees a tenth of a sky it cannot see at all — so the whole
-    // specular of a metal went away and what was left was its twelve per cent of diffuse. That is
-    // mustard paint, and every gold in the building was drawn as it.
+    // The environment used to be the sky along the reflection and nothing else, attenuated by how
+    // much sky the baker's lattice found. Outdoors that is right. Indoors it is nearly nothing, so
+    // every specular in a state room went out and what was left was diffuse.
     //
-    // The game does not have this problem because a face's lobe bins hold THE ROOM: what a metal
+    // The game does not have this problem because a face's lobe bins hold THE ROOM: what a surface
     // reflects indoors is measured, and it is the room. This viewer has one stand-in for the room
     // and it is the ambient the light grid already carries. So a surface reflects the sky where
-    // the sky reaches it and the room's own light where it does not, and a metal indoors is a
-    // metal rather than a hole.
+    // the sky reaches it and the room's own light where it does not.
     //
     // The room's share is the ambient AS THE DIFFUSE SEES IT — the same occluded — and not the
-    // raw ambient. A metal deep in a hall reflects a dim room and is dim; what tells it from paint
-    // is that it is dim IN ITS OWN COLOUR and gets brighter towards a window. Handing it the
-    // unoccluded ambient made every gold four times brighter than the wall beside it and flattened
-    // the whole enfilade.
+    // raw ambient. Taking it raw lifts a whole room by a quarter and washes its shadows out; the
+    // table at the top of this file is the measurement.
+    vec3 room = ambient * occluded;
     vec3 r = reflect(-v, n);
     vec3 env = sky_colour(r);
-    vec3 around = mix(ambient * occluded, env, shade);
+    vec3 around = mix(room, env, shade);
 
-    // The split-sum, with that blurred towards flat by the surface's own roughness. No PI — a
-    // prefiltered environment is already a radiance, and a mirror has to be exactly as bright as
-    // what it is reflecting.
-    vec3 blurred = mix(around, ambient, m.roughness * m.roughness);
+    // The split-sum, with that blurred towards flat by the surface's own roughness. Flat is the
+    // ROOM and not the raw ambient, for the same reason and by the same number — a fully rough
+    // surface deep in a hall must not be lit by a sky it cannot see. No PI: a prefiltered
+    // environment is already a radiance, and a mirror has to be exactly as bright as what it is
+    // reflecting.
+    vec3 blurred = mix(around, room, m.roughness * m.roughness);
     colour += ws_fresnel(f0, ndv) * blurred;
 
 #if WS_LOBE_SHEEN
@@ -391,18 +415,19 @@ vec3 ws_shade(WsMaterial m, vec3 n, vec3 v,
     // The lacquer's own view of its surroundings, and the same dimming of what is under it that
     // the direct term applies. This is the sky in a polished parquet floor.
     //
-    // WHAT THE COAT SEES IS THE ROOM WHEN IT IS IN ONE, and getting that wrong made a lacquered
-    // floor DARKER than a bare one. The dimming is the game's and it is right: everything under a
-    // coat is seen through it. What the game gets back is the coat's own reflection of the room,
-    // out of a bounce this viewer does not have — so shading the sky term by skyVisible and
-    // leaving it at that took a fifth of the parquet's light away and returned a tenth of the sky.
-    // The salon's floor went from wood to slate. So what the coat reflects is the sky where the
-    // sky reaches it and the room's own ambient where it does not, which is the honest stand-in
-    // for the bounce and conserves roughly what the dimming took.
+    // It reflects the SAME thing the base lobe does — the sky where the sky reaches, the room's
+    // own ambient where it does not — and at the same occlusion, because a coat and the surface
+    // under it are in one place and cannot be standing in two different rooms. Nearly unblurred,
+    // because a lacquer is smooth by definition.
+    //
+    // The game's face path gives the environment to the base lobe only and lets the coat's share
+    // arrive through bounces. This has no bounces, and leaving the term out is not neutral: the
+    // dimming above would then be a straight loss and a lacquered floor would come out DARKER
+    // than a bare one, which is the opposite of what a lacquer does.
     if (m.clearcoat > 0.0) {
         float fc = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
         float take = m.clearcoat * fc;
-        vec3 coatEnv = mix(ambient, env, shade);
+        vec3 coatEnv = mix(around, room, WS_COAT_ROUGH);
         colour = colour * (1.0 - take) + coatEnv * take;
     }
 #endif

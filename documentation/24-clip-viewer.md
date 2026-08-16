@@ -136,8 +136,9 @@ vector before sampling it. Anything else that reaches for a part by name has the
 The viewer shaded one Cook-Torrance lobe. A `VisualRecord` carries six more things, every one of
 them written by real clips, and each one it ignored was a material drawn as grey plastic: the three
 golds of `_contract.clip` — `ormolu` at rough 48, `gilt` at 64, `gold_leaf` at 40, put a stop apart
-so the question "is the metal right" becomes a comparison the eye can make inside one frame — came
-out as one yellow.
+so the question "is the metal right" becomes a comparison the eye can make inside one frame — were
+three shades of the same mustard, and `velvet`, `silk`, `parquet` and `porcelain` were four matte
+paints.
 
 `web/js/features/brdf.js` is the game's own shading, ported. `shaders/pt_material.glsl`'s
 `surface_response` is the reference for the lobes; `shaders/face_terms.glsl` and the composite in
@@ -175,6 +176,35 @@ change.
 The **environment** term is deliberately not multiplied by PI. A prefiltered environment is already
 an outgoing radiance — `F(f0, n·v) * L_env` is what a mirror shows — and a mirror has to be exactly
 as bright as the sky it is reflecting or the reflection is brighter than the thing reflected.
+
+### Indoors, a surface reflects the room, and the room here is the ambient
+
+This is the change that moves the picture most, and it is not one of the lobes. The environment was
+the sky along the reflection attenuated by how much sky the baker's lattice could find from that
+point — right outdoors, and nearly nothing four metres inside a state room, so every specular in the
+salon and the ballroom went out and what was left was diffuse. The game has no such problem because
+a face's lobe bins hold **the room**: what a surface reflects indoors is measured, and it is the
+room. This viewer's one stand-in for the room is the ambient the light grid already carries, so a
+surface now reflects the sky where the sky reaches it and that ambient where it does not, **at the
+same occlusion the diffuse gets**.
+
+Measured on `facility-salon`, orbit at yaw 1.5708, pitch −0.02, distance 6.2, target
+(7.2, 0.2, −4.8), 900×700 — mean sRGB red of a fixed box, comparable down a column only:
+
+| | gilt panel | plaster | parquet, sunlit | chandelier |
+|---|---|---|---|---|
+| before | 92.4 | 93.8 | 100.8 | 80.2 |
+| this | 108.6 | 113.6 | 107.1 | 93.8 |
+| …environment = sky × sky visibility | 93.1 | 94.9 | 102.5 | 84.2 |
+| …room's share taken unoccluded | 138.2 | 149.3 | 114.0 | 117.9 |
+| …no environment for the coat | 108.1 | 113.6 | 101.5 | 93.7 |
+
+Three things worth keeping out of that. It lifts **gilt and plaster by the same sixth** — it is not
+a metal fix, it is the specular ambient a rasteriser owes every surface, and the metals were only
+the loudest thing missing it. Taking the room's share **unoccluded** lifts everything by a further
+quarter to a third, which is a room with its shadows washed out, so the occlusion is not optional.
+And the coat's own environment is worth about six per cent on sunlit parquet and nothing else in
+that view — it earns its place at a grazing angle rather than in an average.
 
 ### What it costs, and how to find out
 
