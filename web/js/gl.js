@@ -60,6 +60,11 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> probes
+// Baked reflection probes. web/js/features/probes.js is the whole of it, including the GLSL below
+// and the one function a screen-space pass may call: `probeReflection(world, N, R, roughness)`.
+import { PROBE_GLSL, Probes } from './features/probes.js';
+// <<< probes
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -125,6 +130,10 @@ uniform float u_cutSide;      // 1 draws only what the slice removes, for the st
 uniform float u_blended;      // 1 on the blended pass, where the material's opacity is used
 
 out vec4 o_colour;
+
+// >>> probes
+${PROBE_GLSL}
+// <<< probes
 
 vec4 material_row(int which) {
     int at = v_material * 4 + which;
@@ -266,9 +275,24 @@ void main() {
     // the reflection lerped towards the flat ambient — cheap, and it is what makes bronze read as
     // metal rather than as brown paint.
     vec3 R = reflect(-V, N);
-    vec3 reflected = mix(sky_colour(R), ambient, rough * rough);
-    vec3 ambientSpecular = reflected * fresnel(f0, ndv) * mix(0.25, 1.0, skyVisible) *
+    // >>> probes
+    // ...and, where a probe stands near enough to say so, what is ACTUALLY along that reflection:
+    // the room, the posts, the wall opposite. The sky term stays as the fallback, because a probe
+    // volume does not cover the open air above a building and does not need to.
+    //
+    // The material's own roughness rather than the clamped one: the clamp exists to keep the GGX
+    // lobe from going singular and it would send mirror (6) and gilt (64) to the same pre-filtered
+    // level, which is the whole distinction these clips were built to show.
+    float probeRough = clamp(surface.r, 0.0, 1.0);
+    vec4 probe = probeReflection(v_world, N, R, probeRough);
+    vec3 reflected = mix(mix(sky_colour(R), ambient, rough * rough), probe.rgb, probe.a);
+    // A probe already knows what it can see -- that is what it is -- so the sky-visibility term
+    // that stands in for it elsewhere is faded out exactly as far as the probe covers the point.
+    // Left in, an interior reflection is darkened twice and a mirror in a hall goes black.
+    float envVisible = mix(mix(0.25, 1.0, skyVisible), 1.0, probe.a);
+    vec3 ambientSpecular = reflected * probeFresnel(f0, ndv, rough) * envVisible *
                            mix(0.4, 1.0, v_ao);
+    // <<< probes
 
     vec3 colour = diffuse + specular + ambientSpecular;
 
@@ -802,6 +826,9 @@ export class Renderer {
         this.cutterWidth = 1;
         this.materials = gl.createTexture();
         this.light = gl.createTexture();
+        // >>> probes
+        this.probes = new Probes(gl);
+        // <<< probes
         this.clip = null;
 
         this.viewProj = new Float32Array(16);
@@ -966,6 +993,10 @@ export class Renderer {
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+
+        // >>> probes
+        this.probes.set(clip);
+        // <<< probes
     }
 
     attributesAt(byteOffset) {
@@ -1028,6 +1059,10 @@ export class Renderer {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_3D, this.light);
         gl.uniform1i(uniforms.u_light, 1);
+
+        // >>> probes
+        this.probes.bind(uniforms);
+        // <<< probes
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each

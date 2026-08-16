@@ -8,7 +8,18 @@
 // Every offset here has a matching one in bake_web.cpp. If you change one, change both — the file
 // carries a version and a magic so a mismatch says so instead of drawing nonsense.
 
-export const FORMAT_VERSION = 2;
+// >>> probes
+import { readProbes, PROBE_FOURCC } from './features/probes.js';
+
+// Version 3 spends the last eight spare bytes of the header on a CHUNK DIRECTORY, so that anything
+// added to the format from here on is a fourcc and a range instead of another fixed offset every
+// block below it has to move for. That is what made version 1 unreadable as version 2, and it is
+// not worth doing twice.
+//
+//   u32 at 200  chunkOffset      u32 at 204  chunkCount
+//   each entry, 16 bytes:  char fourcc[4]   u32 offset   u32 size   u32 reserved
+export const FORMAT_VERSION = 3;
+// <<< probes
 export const HEADER_BYTES = 208;
 export const QUAD_BYTES = 16;
 export const MATERIAL_BYTES = 16;
@@ -64,7 +75,10 @@ export function parseClip(buffer) {
         shapeCount: view.getUint32(188, true),
         cutterCount: view.getUint32(192, true),
         cutterOffset: view.getUint32(196, true),
-        // 200..207 is spare.
+        // >>> probes
+        chunkOffset: view.getUint32(200, true),
+        chunkCount: view.getUint32(204, true),
+        // <<< probes
     };
     // Seven entries: six starts and the end, so a range is start[i]..start[i + 1] everywhere.
     for (let i = 0; i < 7; ++i) {
@@ -110,6 +124,28 @@ export function parseClip(buffer) {
         ? new Uint8Array(buffer, at, cutterBytes)
         : new Uint8Array(0);
     if (clip.cutters.length === 0) clip.cutterCount = 0;
+
+    // >>> probes
+    // The chunk directory: every block added after version 3. Read into a table by fourcc, so a
+    // reader that does not know a chunk skips it rather than mis-reading what follows, and two of
+    // them added independently cannot collide.
+    clip.chunks = {};
+    if (clip.chunkCount > 0 && clip.chunkOffset + clip.chunkCount * 16 <= buffer.byteLength) {
+        for (let i = 0; i < clip.chunkCount; ++i) {
+            const at = clip.chunkOffset + i * 16;
+            const fourcc = String.fromCharCode(view.getUint8(at), view.getUint8(at + 1),
+                                               view.getUint8(at + 2), view.getUint8(at + 3));
+            const offset = view.getUint32(at + 4, true);
+            const size = view.getUint32(at + 8, true);
+            if (offset + size > buffer.byteLength) {
+                throw new Error('chunk "' + fourcc + '" runs to ' + (offset + size) +
+                                ' in a file of ' + buffer.byteLength);
+            }
+            clip.chunks[fourcc] = { offset, size };
+        }
+    }
+    clip.probes = readProbes(buffer, clip.chunks[PROBE_FOURCC]);
+    // <<< probes
 
     clip.size = [
         clip.dims[0] / clip.metre, clip.dims[1] / clip.metre, clip.dims[2] / clip.metre,

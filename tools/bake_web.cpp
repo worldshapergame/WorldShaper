@@ -60,6 +60,9 @@
 #include <unordered_map>
 #include <vector>
 
+// >>> probes
+#include "bake/probes.hpp"
+// <<< probes
 #include "core/jobs.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -691,7 +694,16 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 // the resolved solid, so the header grew to 208 and the version says so. A version 1 file in the
 // cache beside a version 2 viewer is a real state and it must produce a clear error rather than a
 // wrong picture: `reuse` refuses it and rebakes, and `web/js/format.js` throws on it.
-constexpr u32 kFormatVersion = 2;
+//
+// >>> probes
+// Version 3 fills the last eight spare bytes of the header with a CHUNK DIRECTORY, so that
+// everything added after this point is a fourcc and a range rather than another fixed offset
+// nobody can add to without moving the blocks below it. `RPRB` is the reflection probes.
+//
+//   u32 at 200  chunkOffset      u32 at 204  chunkCount
+//   each entry, 16 bytes:  char fourcc[4]   u32 offset   u32 size   u32 reserved
+// <<< probes
+constexpr u32 kFormatVersion = 3;
 constexpr usize kHeaderBytes = 208;
 // 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
 // 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
@@ -1571,6 +1583,41 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                                 static_cast<f64>(clip.size[2]) / static_cast<f64>(metre)};
     const LightGrid light = bake_light(coarse, origin, size_metres, jobs);
 
+    // >>> probes
+    // Reflection probes, cast against the same two grids the light was cast against. See
+    // tools/bake/probes.hpp for where they go and why they are octahedral; this is only the wiring.
+    ws::web::ProbeSet probes;
+    {
+        ws::web::ProbeInput input;
+        input.clip = &clip;
+        input.types = &types;
+        // The CONSERVATIVE grid, not the coarse one the light uses. A `mirror` in these clips is a
+        // coat of paint one voxel thick, and the light grid's copy only fills a cell when a third
+        // of it is solid -- a reflection ray would walk straight through the wall it is supposed to
+        // be showing.
+        input.occupancy.bits = collision.bits.data();
+        input.occupancy.dims[0] = collision.dims[0];
+        input.occupancy.dims[1] = collision.dims[1];
+        input.occupancy.dims[2] = collision.dims[2];
+        input.occupancy.voxels_per_metre = collision.voxels_per_metre;
+        input.light.texels = light.texels.data();
+        input.light.dims[0] = light.dims[0];
+        input.light.dims[1] = light.dims[1];
+        input.light.dims[2] = light.dims[2];
+        input.light.cell = light.cell;
+        input.metre = metre;
+        const f64 sun_length = std::sqrt(kSunDir[0] * kSunDir[0] + kSunDir[1] * kSunDir[1] +
+                                         kSunDir[2] * kSunDir[2]);
+        for (i32 axis = 0; axis < 3; ++axis) {
+            input.origin[axis] = origin[axis];
+            input.size_metres[axis] = size_metres[axis];
+            input.sun[axis] = kSunDir[axis] / sun_length;
+        }
+        probes = ws::web::bake_probes(input, jobs);
+    }
+    const std::vector<u8> probe_bytes = ws::web::probe_chunk(probes);
+    // <<< probes
+
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
     walk.field = &script.field;
@@ -1714,6 +1761,44 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         for (const f32 value : walk.pool) put(value);
     }
 
+    // >>> probes
+    // The chunk directory, in the eight bytes version 2 left spare.
+    //
+    // Everything added to this format after version 3 is a fourcc and a range rather than another
+    // fixed offset, because a fixed offset is something every other block below it has to move for
+    // -- which is what made version 1 unreadable as version 2. A second block merges into this by
+    // pushing one more entry into `chunks` before the directory is emitted; nothing else changes.
+    {
+        struct WebChunk {
+            char fourcc[4];
+            const std::vector<u8>* bytes;
+        };
+        std::vector<WebChunk> chunks;
+        if (!probe_bytes.empty()) chunks.push_back(WebChunk{{'R', 'P', 'R', 'B'}, &probe_bytes});
+
+        if (!chunks.empty()) {
+            const usize directory_at = out.size();
+            put_u32(out, 200, static_cast<u32>(directory_at));
+            put_u32(out, 204, static_cast<u32>(chunks.size()));
+            out.resize(directory_at + chunks.size() * 16, 0);
+            usize payload_at = out.size();
+            for (usize i = 0; i < chunks.size(); ++i) {
+                const usize entry = directory_at + i * 16;
+                for (i32 c = 0; c < 4; ++c) {
+                    out[entry + static_cast<usize>(c)] = static_cast<u8>(chunks[i].fourcc[c]);
+                }
+                put_u32(out, entry + 4, static_cast<u32>(payload_at));
+                put_u32(out, entry + 8, static_cast<u32>(chunks[i].bytes->size()));
+                put_u32(out, entry + 12, 0);
+                payload_at += chunks[i].bytes->size();
+            }
+            for (const WebChunk& chunk : chunks) {
+                out.insert(out.end(), chunk.bytes->begin(), chunk.bytes->end());
+            }
+        }
+    }
+    // <<< probes
+
     baked.id = identifier(relative);
     baked.source = relative.generic_string();
     {
@@ -1757,6 +1842,16 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                 clip.size[0], clip.size[1], clip.size[2], baked.quads, walk.shapes.size(),
                 walk.cutter_count(), mesher.palette().size(),
                 static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
+    // >>> probes
+    if (probes.count > 0) {
+        std::printf("      probes: %u at %.1f m, %dx%d x %d levels, %llu rays, %.2f MB, %.1f s\n",
+                    probes.count, probes.spacing, probes.base, probes.base, probes.levels,
+                    static_cast<unsigned long long>(probes.rays),
+                    static_cast<f64>(probe_bytes.size()) / (1024.0 * 1024.0), probes.seconds);
+    } else {
+        std::printf("      probes: none -- no lattice point in this clip is in air and near matter\n");
+    }
+    // <<< probes
     // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
     // "it worked", which is the whole reason these are counted at all.
     if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||
