@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <string>
 #include <vector>
 
 #include "core/jobs.hpp"
@@ -86,7 +87,13 @@ Clip brute_force(const Field& field, u32 root, const std::vector<PaintRule>& pai
 
 // Reports the first disagreement rather than just a count, because "two voxels differ" is not
 // something anyone can act on and "cell (14, 3, 9) is stone here and air there" is.
-void must_match(const Clip& fast, const Clip& slow, const char* what) {
+// `std::string` and not `const char*`, which is not a style preference. doctest here is built
+// without DOCTEST_CONFIG_TREAT_CHAR_STAR_AS_STRING, so `toString(const char*)` is never declared
+// and a `const char*` handed to INFO falls through to the generic pointer stringifier: the label
+// saying WHICH comparison failed printed as `1`. It only shows on failure, which is why it sat
+// here unnoticed. Defining that macro is not the fix either -- it quotes every fragment, so the
+// message becomes `"solids"": cell (...)"`. A std::string stringifies as itself.
+void must_match(const Clip& fast, const Clip& slow, const std::string& what) {
     REQUIRE(fast.size[0] == slow.size[0]);
     REQUIRE(fast.size[1] == slow.size[1]);
     REQUIRE(fast.size[2] == slow.size[2]);
@@ -408,7 +415,7 @@ TEST_CASE("a small box and a big one agree about the voxels they share") {
 
         CAPTURE(per_metre);
         REQUIRE(!part.clip.empty());
-        const auto same_as = [&](const SampleResult& other, const char* what) {
+        const auto same_as = [&](const SampleResult& other, const std::string& what) {
             for (i32 z = 0; z < part.clip.size[2]; ++z) {
                 for (i32 y = 0; y < part.clip.size[1]; ++y) {
                     for (i32 x = 0; x < part.clip.size[0]; ++x) {
