@@ -26,6 +26,11 @@ const FLY_SPEED = 14.0;
 const STEP_HEIGHT = 0.55;     // three of the building's 0.18 m risers, so stairs are walked up
 const STEP_TRY = 0.05;
 
+// See `fovFor`. The floor is on the HORIZONTAL field, because that is the one a phone held upright
+// takes away.
+const kMinHorizontalFov = 1.75;   // 100 degrees across, whatever shape the window is
+const kMaxVerticalFov = 2.00;     // 115 degrees, so a very narrow window cannot become a fish-eye
+
 // The slice is honoured by the body as well as by the eye. Cutting the front off a building and
 // then walking into the wall that is no longer drawn is the kind of thing that makes a viewer feel
 // broken, and clamping the query box to the kept side is exact rather than approximate.
@@ -75,6 +80,25 @@ export class Controls {
         this.far = 400;
     }
 
+    // WIDER ON A PHONE, and the reason is that a fixed VERTICAL angle is the wrong thing to hold
+    // fixed. A projection is built from the vertical field and the aspect, so on a landscape
+    // monitor 1.15 rad gives about 96 degrees across, and on a phone held upright the same number
+    // gives about 40 -- the same room, seen through a letterbox. Standing in the rotunda you could
+    // see the floor and the ceiling and almost nothing to either side.
+    //
+    // So the HORIZONTAL field is what is held to a floor, and the vertical is whatever delivers it
+    // (the convention a game calls Hor+). A phone gets a much wider vertical angle as a
+    // consequence, which is exactly the "see more" that is wanted; a wide monitor is untouched,
+    // because it already clears the floor and widening further would only bend the edges.
+    //
+    // 1.75 rad is 100 degrees across, and the vertical is capped at 2.0 rad -- 115 degrees -- so
+    // that a very narrow window cannot run away into a fish-eye.
+    fovFor(aspect) {
+        const a = aspect > 0 ? aspect : 1;
+        const wanted = 2 * Math.atan(Math.tan(kMinHorizontalFov * 0.5) / a);
+        return Math.min(kMaxVerticalFov, Math.max(this.fov, wanted));
+    }
+
     // The camera is put where all eight corners of the matter's box are just inside the frustum,
     // which is a closed form and not a search: a corner at `c` from the target needs
     // `d >= |sideways| / tan(half fov) - depth`, and the answer is the largest of the sixteen
@@ -103,7 +127,9 @@ export class Controls {
             right[0] * forward[1] - right[1] * forward[0],
         ];
 
-        const tanVertical = Math.tan(this.fov * 0.5);
+        // The same angle the projection will actually use, or the fit is computed against a
+        // frustum that is not the one drawn and the clip sits too small or runs off the edge.
+        const tanVertical = Math.tan(this.fovFor(aspect || 1) * 0.5);
         const tanHorizontal = tanVertical * (aspect || 1);
         let distance = 0;
         for (let corner = 0; corner < 8; ++corner) {

@@ -299,6 +299,51 @@ TEST_CASE("a file whose braces do not balance is an error rather than a crash") 
     CHECK(mentions_braces);
 }
 
+// AND AT EVERY DEPTH, because the fault under this was not the depth.
+//
+// The test above passed at 4000 while 90, 95, 96, 100, 104, 110 and 1000 segfaulted and 80, 120 and
+// 128 did not. That is not a bound being exceeded, it is a heap read one past the end of the token
+// array: `block()` checks `!done()`, calls `expression()`, a nested `block()` hits the depth limit
+// and sets `at_ = tokens_.size()` to abandon the file, and `block()` then reads `peek().text` for
+// its error message. Whether that crashes depends on what happens to sit after the vector, which is
+// why the same input in a different process behaved differently and why D666 could only record what
+// it saw. AddressSanitizer names it in one line.
+//
+// So this sweeps, and it is worth the second and a half it costs. A single depth proves nothing
+// about a fault that is decided by the allocator.
+TEST_CASE("unbalanced braces are an error at every depth, not only at convenient ones") {
+    for (const int depth : {65, 66, 80, 90, 95, 96, 100, 104, 110, 120, 128, 200, 1000}) {
+        std::string text = "metre 8\nbounds 0 0 0  1 1 1\nlet a = ";
+        for (int i = 0; i < depth; ++i) text += "union { ";
+        text += "sphere 0 0 0 r=0.5\n";
+
+        VoxelTypeTable types;
+        TagRegistry tags;
+        const Script script = parse_clip_script(text, types, tags);
+
+        INFO("depth ", depth);
+        CHECK_FALSE(script.ok());
+        CHECK(!script.errors.empty());
+    }
+}
+
+// The same read, reached without any nesting at all: a file that simply stops in the middle of a
+// block. `expression()` fails on a token that is not a shape, `block()` advances past it, and the
+// loop asks for the next one -- which is not there.
+TEST_CASE("a block that is never closed is an error rather than a read past the last token") {
+    VoxelTypeTable types;
+    TagRegistry tags;
+    for (const char* tail : {"let a = union {",
+                             "let a = union { sphere 0 0 0 r=0.5",
+                             "let a = union { ?",
+                             "let a = union { union { union {"}) {
+        const Script script = parse_clip_script("metre 8\nbounds 0 0 0  1 1 1\n" + std::string(tail),
+                                                types, tags);
+        INFO("tail ", tail);
+        CHECK_FALSE(script.ok());
+    }
+}
+
 TEST_CASE("every cell of a clip with no region belongs to it, however empty") {
     // The mask says which cells are the clip's business, separately from which hold matter, and
     // with no region that is all of them. It matters for stamping: an empty cell *inside* the
