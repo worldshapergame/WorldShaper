@@ -301,7 +301,7 @@ jobs:
       - name: Index what is already there
         run: |
           mkdir -p web/data
-          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
+          code=$(find src tools/bake_web.cpp tools/bake -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
           ./build-web/bin/ws_bake_web --clips clips --out web/data --index-only \
                                       --budget 700000000 --max-metre 32 --part-metre 16 \
                                       --code-hash "$code" \
@@ -426,7 +426,7 @@ jobs:
       # small facility, and there are twenty-eight of them.
       - name: Bake this shard
         run: |
-          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
+          code=$(find src tools/bake_web.cpp tools/bake -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
           ./build-web/bin/ws_bake_web --clips clips --out web/data \
                                       --budget 700000000 --max-metre 32 --part-metre 16 \
                                       --shard ${{ matrix.shard }}/12 \
@@ -493,7 +493,7 @@ jobs:
       # baked here rather than published missing.
       - name: One index over all of them
         run: |
-          code=$(find src tools/bake_web.cpp -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
+          code=$(find src tools/bake_web.cpp tools/bake -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
           ./build-web/bin/ws_bake_web --clips clips --out web/data \
                                       --budget 700000000 --max-metre 32 --part-metre 16 \
                                       --code-hash "$code" \
