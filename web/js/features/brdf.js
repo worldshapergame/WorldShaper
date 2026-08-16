@@ -102,18 +102,18 @@
 //
 //                                        gilt panel   plaster   parquet, sunlit   chandelier
 //   before this change                        92.4      93.8         100.8           80.2
-//   this                                     108.6     113.6         107.1           93.8
-//   ...environment = sky * sky visibility      93.1      94.9         102.5           84.2
-//   ...room's share taken unoccluded          138.2     149.3         114.0          117.9
-//   ...no environment for the coat            108.1     113.6         101.5           93.7
+//   this                                     106.6     111.8         103.7           88.1
+//   ...environment = sky * sky visibility      90.8      92.7          99.0           78.0
+//   ...room's share taken unoccluded          138.2     149.3         114.2          117.9
+//   ...no environment for the coat            106.0     111.8          98.0           88.0
 //
 // Three things that says:
 //
 //   - the room-as-environment fallback is the change that moves the picture, and it moves GILT AND
-//     PLASTER BY THE SAME SIXTH. It is not a metal fix; it is the specular ambient a rasteriser
+//     PLASTER BY THE SAME FIFTH. It is not a metal fix; it is the specular ambient a rasteriser
 //     owes every surface, and the metals were only the loudest thing missing it;
-//   - taking the room's share unoccluded lifts everything by a further quarter to a third, which is
-//     a room with its shadows washed out. The occlusion is not optional;
+//   - taking the room's share unoccluded lifts everything by a further third, which is a room with
+//     its shadows washed out. The occlusion is not optional;
 //   - the coat's environment is worth about six per cent on sunlit parquet and nothing anywhere
 //     else in this view. It earns its place for what it does at a grazing angle rather than for
 //     what it does to an average.
@@ -121,18 +121,53 @@
 // The last three rows are one line of this file changed at a time; `?lobes=` below takes the arms
 // for the lobes themselves without touching it.
 //
-// # A phone
+// # A phone, and what each lobe costs
 //
 // Every lobe is behind a branch on the material's own bytes. `coat` is one byte holding both
 // nibbles, so a surface with neither lacquer nor sheen — which is every stone in the building —
-// pays one integer compare for both. The brush is a second compare. Nothing else was added to the
-// path a plain limestone wall takes, and the one `sky_colour` call the environment needs was
-// already there and is now shared with the coat rather than doubled.
+// pays one integer compare for both. The brush is a second compare. The one `sky_colour` call the
+// environment needs was already there and is now shared with the coat rather than doubled.
+//
+// **The per-lobe frame cost could not be measured on the machine this was written on, and the
+// control that says so is in the table.** `?lobes=` compiles each lobe out; the renderer's own
+// draw was then timed with a readPixels on each end, fastest of five runs of four frames, at a
+// pinned 480x360, on the salon camera above:
+//
+//   all lobes                                  416.7 ms      (software GL, so read RATIOS only)
+//   ...without the lacquer                     409.8
+//   ...without the sheen                       392.6
+//   ...without the brush                       413.6
+//   ...without the emission                    406.1
+//   ...without any of them                     385.5
+//   ...WITHOUT METAL                           495.9   <-- and this is the control
+//
+// `-metal` forces metallic to nought. It removes no instruction: the same multiplies run on
+// different numbers. It came back NINETEEN PER CENT SLOWER than the arm with every lobe on, so the
+// run-to-run spread of this box — a software rasteriser sharing four cores with a dozen other
+// browsers — is at least that, and every per-lobe difference above is inside it. The whole model
+// against no lobes at all is 7.5%, which is also inside it. These numbers say the lobes are not
+// what a frame is spent on here; they do not say what any one of them costs, and nothing that can
+// be run on this machine will.
+//
+// What can be counted exactly is the work, per pixel, on a face that has the lobe:
+//
+//   brush      one cross, two dots, one inversesqrt and about ten multiplies, REPLACING the
+//              isotropic distribution's five. Nothing at all on a face with no grain named.
+//   sheen      two pow(x, 5) and about eight multiplies — one of each in the direct term and in
+//              the ambient one.
+//   lacquer    two pow(x, 5) and about twenty-two multiplies: a second GGX, a second Smith, its
+//              own Fresnel twice, and the mix that dims what is under it.
+//   metal      nothing. It is a mix that was already there.
+//   emission   one branch and three multiplies, on emissive faces only.
+//
+// And the one addition that is NOT behind a branch: the environment falls back to the room rather
+// than to nothing, which is one extra mix — three multiply-adds — on every pixel of every surface.
+// That is the price of the change that moves the picture most.
 //
 // # Turning them off
 //
-// `?lobes=-sheen,-coat,-brush,-metal` in the page's URL compiles the named lobes out, which is the
-// control arm for measuring what each costs. Nothing else reads it and it defaults to all on.
+// `?lobes=-sheen,-coat,-brush,-metal,-emit` in the page's URL compiles the named lobes out, which
+// is the control arm above. Nothing else reads it and it defaults to all on.
 
 const LOBES = ['sheen', 'coat', 'brush', 'metal', 'emit'];
 

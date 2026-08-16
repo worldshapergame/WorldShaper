@@ -194,24 +194,53 @@ Measured on `facility-salon`, orbit at yaw 1.5708, pitch −0.02, distance 6.2, 
 | | gilt panel | plaster | parquet, sunlit | chandelier |
 |---|---|---|---|---|
 | before | 92.4 | 93.8 | 100.8 | 80.2 |
-| this | 108.6 | 113.6 | 107.1 | 93.8 |
-| …environment = sky × sky visibility | 93.1 | 94.9 | 102.5 | 84.2 |
-| …room's share taken unoccluded | 138.2 | 149.3 | 114.0 | 117.9 |
-| …no environment for the coat | 108.1 | 113.6 | 101.5 | 93.7 |
+| this | 106.6 | 111.8 | 103.7 | 88.1 |
+| …environment = sky × sky visibility | 90.8 | 92.7 | 99.0 | 78.0 |
+| …room's share taken unoccluded | 138.2 | 149.3 | 114.2 | 117.9 |
+| …no environment for the coat | 106.0 | 111.8 | 98.0 | 88.0 |
 
-Three things worth keeping out of that. It lifts **gilt and plaster by the same sixth** — it is not
+Three things worth keeping out of that. It lifts **gilt and plaster by the same fifth** — it is not
 a metal fix, it is the specular ambient a rasteriser owes every surface, and the metals were only
 the loudest thing missing it. Taking the room's share **unoccluded** lifts everything by a further
-quarter to a third, which is a room with its shadows washed out, so the occlusion is not optional.
-And the coat's own environment is worth about six per cent on sunlit parquet and nothing else in
-that view — it earns its place at a grazing angle rather than in an average.
+third, which is a room with its shadows washed out, so the occlusion is not optional. And the
+coat's own environment is worth about six per cent on sunlit parquet and nothing else in that view
+— it earns its place at a grazing angle rather than in an average.
 
-### What it costs, and how to find out
+### What it costs, and the measurement that could not be made
 
 Every lobe is behind a branch on the material's own bytes, and `coat` holds both the lacquer and the
 sheen nibble, so a plain stone surface pays **one integer compare** for both and a second for the
-brush. `?lobes=-sheen,-coat,-brush,-metal` in the page's URL compiles the named lobes out, which is
-the control arm for measuring any of them.
+brush. `?lobes=-sheen,-coat,-brush,-metal,-emit` in the page's URL compiles the named lobes out,
+which is the control arm for measuring any of them.
+
+**The per-lobe frame cost could not be measured on the machine this was written on, and the control
+that says so is in the numbers.** The renderer's own draw, timed with a `readPixels` on each end,
+fastest of five runs of four frames, pinned at 480×360, on the salon camera above:
+
+| | |
+|---|---|
+| all lobes | 416.7 ms |
+| …without the lacquer | 409.8 |
+| …without the sheen | 392.6 |
+| …without the brush | 413.6 |
+| …without the emission | 406.1 |
+| …without any of them | 385.5 |
+| **…without metal** | **495.9** |
+
+`-metal` forces `metallic` to nought. It removes **no instruction** — the same multiplies run on
+different numbers — and it came back nineteen per cent *slower* than the arm with every lobe on. So
+the run-to-run spread of a software rasteriser sharing four cores with a dozen other browsers is at
+least that, and every per-lobe difference above sits inside it. What the table does establish is
+that the lobes are not what a frame is spent on here; what it does not establish is what any one of
+them costs.
+
+What can be counted exactly is the work per pixel on a face that carries the lobe: **brush** is one
+cross, two dots, an `inversesqrt` and about ten multiplies *replacing* the isotropic distribution's
+five; **sheen** is two `pow(x, 5)` and about eight multiplies; **lacquer** is two `pow(x, 5)` and
+about twenty-two — a second GGX, a second Smith, its own Fresnel twice, and the mix that dims what
+is under it; **metal** is free, being a mix that was already there. The one addition that is *not*
+behind a branch is the room fallback in the environment: one extra `mix`, three multiply-adds, on
+every pixel of every surface.
 <!-- <<< brdf -->
 
 ## 4. The viewer
