@@ -1052,7 +1052,7 @@ export class Renderer {
         // >>> refract
         // Bound for the opaque pass as well, with the feature off: a sampler in a linked program
         // with nothing on its unit is undefined behaviour rather than an unused uniform.
-        this.refraction.apply(uniforms, false);
+        this.refraction.apply(uniforms, false, this.canvas.width, this.canvas.height);
         // <<< refract
     }
 
@@ -1272,14 +1272,18 @@ export class Renderer {
         // --- glass -----------------------------------------------------------------------------
         if (clip.transparentQuads > 0) {
             // >>> refract
-            // The opaque picture, copied off the framebuffer before a single pane is drawn. This
-            // is what refraction samples and it is why the copy is HERE and not anywhere else:
-            // one frame later would be a frame of lag, and one pane later would be a pane
-            // refracting itself. It copies from whatever framebuffer is bound, so an offscreen
-            // target added around this pass needs no change here.
-            if (this.refraction.capture(width, height)) {
-                this.refraction.apply(this.surface.uniforms, true);
-                this.stats.draws += 1;
+            // The picture behind the glass, found before a single pane is drawn.
+            //
+            // IT TAKES THE SCENE CAPTURE THE RENDERER ALREADY HAS rather than making a second one:
+            // `this.ssr` is features/ssr.js's target -- sky and opaque, this frame's camera, this
+            // frame's clip plane, with depth -- and that is exactly what belongs behind a pane. Its
+            // depth is what lets a refracted sample be refused when it lands on something standing
+            // in front of the glass. Only where there is no such capture does this copy the
+            // framebuffer itself, which is why the call is HERE: one frame later would be a frame
+            // of lag and one pane later would be a pane refracting itself.
+            if (this.refraction.capture(width, height, this.ssr || null)) {
+                this.refraction.apply(this.surface.uniforms, true, width, height);
+                if (!this.refraction.scene) this.stats.draws += 1;
             }
             // <<< refract
             gl.enable(gl.BLEND);

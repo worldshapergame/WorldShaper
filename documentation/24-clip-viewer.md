@@ -162,26 +162,45 @@ be a blended colour and nothing else, so the four things every clip has always d
 `ior`, `absorb`, `translucent`, `opacity` — reached the file, reached the material texture, and were
 read by nobody. Three of them are read now.
 
-**Refraction is screen-space and it is an approximation.** Before the first pane is drawn, the
-opaque picture is copied off the framebuffer into a texture; a glass fragment then samples that
-texture at an offset, and the offset is the refracted vector carried across the material's own
-thickness and projected back to the screen. It is what a phone can afford — no rays, no second view
-— and it is wrong in three ways that are worth knowing rather than discovering:
+**Refraction is screen-space and it is an approximation.** A glass fragment samples the picture of
+the scene with no glass in it at an offset, and the offset is the refracted vector carried across
+the material's own thickness and projected back to the screen. A material that does not bend gives
+an exit point further along the eye ray, which projects to the same pixel — so the offset is purely
+the bend. It is what a phone can afford — no rays, no second view — and it is wrong in two ways
+worth knowing rather than discovering:
 
 - it can only show what is **on screen**, so a pane at the edge of the frame refracts what is beside
   it in the picture rather than what is beside it in the world (the sample is clamped, so the edge
   smears rather than tiles);
-- it has **no depth test** against the picture it samples, so something standing in front of a thick
-  refractor can be pulled a few pixels into it. The offset is clamped to 6% of the screen, which
-  bounds that rather than removing it;
-- the picture it samples was taken **before any transparent surface**, so glass behind glass shows
-  the stone behind both rather than the near pane's own tint.
+- the picture it samples has **no transparent surface in it**, so glass behind glass shows the
+  stone behind both rather than the near pane's own tint.
 
-The copy is one full-screen `copyTexSubImage2D` per frame, and only for a clip that has a material
-with both an `ior` and an `opacity` — asked once at load, so a clip with no glass pays nothing.
-**It copies from whatever framebuffer is bound**, which is how it composes with an offscreen target
-somebody else adds rather than needing one of its own: bound to the canvas it copies the canvas,
-with the multisampling resolved on the way, so the picture keeps its antialiasing.
+The third fault a screen-space sample usually has — pulling in something that stands **in front** of
+the refractor — is gone, because the capture carries depth: both are window-space depths in the same
+projection, so one compare refuses the offset and the pixel straight behind is used instead.
+
+**It does not own a target.** It takes the scene capture `features/ssr.js` already draws — sky and
+opaque, this frame's camera, this frame's clip plane, colour and depth, at half the canvas — which
+is exactly what belongs behind a pane, and means refraction costs no pass of its own. Where there is
+no such capture it falls back to `copyTexSubImage2D` off whatever framebuffer is bound (on the canvas
+that resolves the multisampling on the way and costs the picture no antialiasing), and then there is
+no depth and the offset clamp of 6% of the screen is all that bounds the artefact. Either way it is
+only done for a clip that has a material with both an `ior` and an `opacity`, asked once at load.
+
+**One thing that capture costs, and it is visible.** It is half the canvas in each axis, which is
+right for a reflection — read through a mip chain — and is not right for a look straight through
+nearly-clear glass: on `glass_test` the wall seen through the clear pane has visibly staircased
+edges that the same wall seen beside the pane does not. A full-resolution capture would fix it and
+costs what it costs.
+
+**And the capture is display-space, which changes where the tint goes on.** It is tonemapped and
+gamma-encoded, because `RGBA16F` needs `EXT_color_buffer_float` and a phone may not have it. That is
+fine for this, but transmittance attenuates *radiance*: the encoding has to come off before
+Beer-Lambert goes on and back on afterwards, or a stained window over a sunlit wall comes out far
+too saturated, because ACES has already compressed that wall towards white. `refract_scene_radiance`
+inverts both in closed form — the same closed form as `ws_capture_radiance` in `ssr.js`, and the two
+should become one function. The only cost of an 8-bit capture here is that a very bright background
+seen through strongly absorbing glass can band; nothing in the facility does that.
 
 **Absorption is not an approximation, and it is the half that is still owed a thickness field.**
 `exp(-absorb * path)` over a real path length, in the game's own units — the byte is sixteenths per

@@ -143,7 +143,7 @@ vec3 refract_scene_radiance(vec2 uv) {
 // What a transparent surface finally is: what is behind it, bent and absorbed, with its own lit
 // surface over the top in the proportion its opacity and its angle ask for.
 //
-// `surface` arrives already tonemapped and encoded, because it is the same colour the opaque pass
+// \`surface\` arrives already tonemapped and encoded, because it is the same colour the opaque pass
 // would have written. What comes back through the glass makes the round trip instead — decoded to
 // radiance, attenuated, tonemapped again — for the reason at the top of this file.
 vec4 refract_composite(vec3 surface, float opacity, vec3 world, vec3 N, vec3 V,
@@ -312,25 +312,31 @@ export class Refraction {
         this.wanted = clip ? wantedFor(clip) : false;
     }
 
-    // Take the picture that is on the framebuffer NOW.
+    // Find the picture of the scene with no glass in it.
     //
-    // IT COPIES FROM WHATEVER FRAMEBUFFER IS BOUND, which is the whole of how this composes with
-    // an offscreen target instead of competing with one. Bound to the canvas it copies the canvas
-    // — with its multisampling resolved on the way, which is why this does not need an offscreen
-    // target of its own and does not cost the picture its antialiasing. Bound to somebody else's
-    // colour attachment it copies that, unchanged and with no coordination beyond the binding.
+    // FIRST CHOICE IS SOMEBODY ELSE'S, and that is the whole design. `scene` is the renderer's
+    // shared capture -- features/ssr.js's `Ssr`, or anything with the same four properties:
+    // `captured`, `colour`, `depth`, and a size. It holds sky and opaque drawn with this frame's
+    // camera and this frame's clip plane and nothing transparent, which is exactly what belongs
+    // behind a pane, and taking it means refraction costs no pass of its own. It also carries
+    // depth, which is what lets a sample be refused when it lands on something in front.
     //
-    // What it would want FROM such a target, if one lands: a depth texture. With one, the sample
-    // at the offset can be refused when what it lands on is nearer than the glass, which is the
-    // one artefact the clamp above only bounds. That is a condition in `refract_composite` and
-    // nothing else.
+    // FALLBACK, when there is no such capture: copy the framebuffer. `copyTexSubImage2D` reads
+    // whatever framebuffer is bound, so on the canvas it takes the canvas with its multisampling
+    // resolved on the way and costs the picture no antialiasing. There is no depth to be had that
+    // way, so the guard turns itself off and the offset clamp is all that bounds the artefact.
     //
-    // The texture is rounded up to a multiple of 64 and the viewport is copied into the corner of
-    // it, so the adaptive resolution in app.js — which moves the canvas by a percent at a time —
-    // reallocates rarely instead of every frame. `u_behindScale` is what carries the difference.
-    capture(width, height) {
+    // The fallback texture is rounded up to a multiple of 64 and the viewport is copied into the
+    // corner of it, so the adaptive resolution in app.js -- which moves the canvas by a percent at
+    // a time -- reallocates rarely instead of every frame. `u_behindScale` carries the difference.
+    capture(width, height, scene) {
         const gl = this.gl;
+        this.scene = null;
         if (!this.enabled || !this.wanted) return false;
+        if (scene && scene.captured && scene.colour) {
+            this.scene = scene;
+            return true;
+        }
         const w = Math.max(1, width);
         const h = Math.max(1, height);
         const tw = roundUp(w, 64);
@@ -345,26 +351,49 @@ export class Refraction {
         return true;
     }
 
-    // Bind the texture and every uniform the block above wants. Called for the opaque pass as well
-    // as the blended one, because a sampler in a linked program with nothing bound to its unit is
-    // undefined and not merely unused.
-    apply(uniforms, live) {
+    // Bind whatever `capture` found, and every uniform the block above wants. Called for the
+    // opaque pass as well as the blended one, because a sampler in a linked program with nothing
+    // bound to its unit is undefined and not merely unused.
+    apply(uniforms, live, viewWidth, viewHeight) {
         const gl = this.gl;
+        const scene = live ? this.scene : null;
+        const hasDepth = !!(scene && scene.depth);
+        const fallback = scene ? scene.colour : this.texture;
+
         gl.activeTexture(gl.TEXTURE0 + this.colourUnit);
-        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.bindTexture(gl.TEXTURE_2D, fallback);
+        gl.activeTexture(gl.TEXTURE0 + this.depthUnit);
+        // Never nothing: the depth sampler is read under a uniform branch, and a unit with no
+        // texture on it is undefined rather than unused. The colour texture stands in when there
+        // is no depth, and `u_behindHasDepth` is what stops it being believed.
+        gl.bindTexture(gl.TEXTURE_2D, hasDepth ? scene.depth : fallback);
         gl.activeTexture(gl.TEXTURE0);
-        if (uniforms.u_behind !== undefined) gl.uniform1i(uniforms.u_behind, this.unit);
+
+        const set1i = (name, value) => {
+            if (uniforms[name] !== undefined) gl.uniform1i(uniforms[name], value);
+        };
+        const set1f = (name, value) => {
+            if (uniforms[name] !== undefined) gl.uniform1f(uniforms[name], value);
+        };
+        set1i('u_behind', this.colourUnit);
+        set1i('u_behindDepth', this.depthUnit);
+        set1f('u_behindHasDepth', hasDepth ? 1 : 0);
+        // The shared capture covers the whole screen however many pixels it has, so its uv IS the
+        // screen's uv. The fallback is a corner of a rounded-up texture and is not.
         if (uniforms.u_behindScale !== undefined) {
-            gl.uniform2f(uniforms.u_behindScale, this.viewWidth / this.width,
-                         this.viewHeight / this.height);
+            if (scene) gl.uniform2f(uniforms.u_behindScale, 1, 1);
+            else {
+                gl.uniform2f(uniforms.u_behindScale, this.viewWidth / this.width,
+                             this.viewHeight / this.height);
+            }
         }
         if (uniforms.u_viewportInv !== undefined) {
-            gl.uniform2f(uniforms.u_viewportInv, 1 / this.viewWidth, 1 / this.viewHeight);
+            const w = Math.max(1, viewWidth || this.viewWidth);
+            const h = Math.max(1, viewHeight || this.viewHeight);
+            gl.uniform2f(uniforms.u_viewportInv, 1 / w, 1 / h);
         }
-        if (uniforms.u_refract !== undefined) {
-            gl.uniform1f(uniforms.u_refract, (live && this.enabled && this.wanted) ? 1 : 0);
-        }
-        if (uniforms.u_thickness !== undefined) gl.uniform1f(uniforms.u_thickness, this.thickness);
-        if (uniforms.u_maxOffset !== undefined) gl.uniform1f(uniforms.u_maxOffset, this.maxOffset);
+        set1f('u_refract', (live && this.enabled && this.wanted) ? 1 : 0);
+        set1f('u_thickness', this.thickness);
+        set1f('u_maxOffset', this.maxOffset);
     }
 }
