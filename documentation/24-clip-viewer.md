@@ -88,6 +88,87 @@ filled in from their brightest neighbour, twice, at **half** strength each time.
 quarters first, and every soffit in the halls had a pale band across it where the sky above the
 roof reached through 0.45 m of masonry.
 
+<!-- >>> shadow -->
+### The sun is no longer that lattice, and the number that says why is 3 cm
+
+**A 0.4 m lattice cannot represent a 3 cm bar's shadow at all.** Not softly, not badly: the bar is
+a thirteenth of one cell and there is no value in the volume that knows it is there. The facility
+is built to catch exactly that — `portico.clip` is a hard sun shadow across shafts whose fillets
+are 0.030 m, and `crypt.clip` puts three gratings of **0.030 m iron bars** over a floor and calls
+the stencil they throw the highest-contrast small feature in the building.
+
+So the sun now comes from a **shadow map**: orthographic down the sun, over the clip's own bounds,
+rasterised from the same instanced quads the surface pass draws. Neither the clip nor the sun
+moves, so it is rendered **once at load and never again**. `web/js/features/shadow.js`.
+
+**The texel, measured in the running viewer at 2048, against a 0.030 m bar:**
+
+| | metres across, in the sun's frame | cm per texel | a 3 cm bar is |
+|---|---|---|---|
+| `sampler` | 12.8 | 0.67 | 4.5 texels |
+| `facility/portico` | 16.5 | 0.86 | 3.5 texels |
+| `facility/crypt` | 27.5 | 1.39 | **2.2 texels** |
+| `facility` whole | 45.8 | 2.28 | **1.3 texels** |
+| the near cascade | 16.0 | 0.78 | 3.8 texels |
+
+**One 2048 map resolves a 3 cm bar on every fragment and does NOT resolve it on the whole
+building.** 1.3 texels is under Nyquist — the bar lands on one texel here and none there, and seven
+bars in a row come out as five stripes and a smear, which is the failure `crypt.clip` exists to
+catch. 4096 over the whole building is 2.6 texels, which resolves and aliases, and costs 64 MB of
+depth on a phone. Hence a **near cascade**: a second 2048 map over a 16 m box round the eye,
+re-rendered only when the eye has walked 4 m out of the box it was rendered for, and **not built at
+all** for a clip whose own span is under 20 m — which is every fragment.
+
+The honest limit is not the map. A fragment is baked at 16 voxels to the metre, so a voxel is
+6.25 cm and **a 0.030 m bar is half of one**: the bar the map could carry is not in the mesh to
+begin with. At the contract's own metre 32 it is one voxel and the map has three texels across it.
+
+### The soft term and the sharp term are crossfaded, never added
+
+Both answer the same question — what fraction of the sun's disc reaches this point — so **adding
+them doubles the shadow and multiplying them squares it**. They are split by scale, and the number
+that decides is the distance to the blocker, which one extra fetch of the map gives.
+
+The sun is about half a degree across, so a penumbra is 0.0093 of the throw: 3 mm at a 0.3 m throw,
+and **0.40 m at 43 m — which is the light grid's own cell**. So the grid is not a fallback, it is
+the correct answer for a shadow thrown far enough.
+
+- **throw under 5 m** — the map, its PCF kernel opened to exactly that penumbra width (0.6 to 3
+  texels).
+- **throw over 20 m** — the light grid, which *is* a 0.4 m blur of the same visibility.
+- **between, and outside the map's box** — crossfaded.
+
+Contact shadows are combined with a **minimum, not a product**: whatever the map found, a
+short-range trace can only ever find more, and where the map already says nothing reaches this
+point a product would darken it a second time. The **sky** byte is untouched — the leak above is
+still the grid's and still a half. The sun byte's leak is gone wherever the map covers, because a
+map has no concept of a buried point.
+
+### Which artefacts were traded for which
+
+The grid leaks light through walls. A shadow map has the opposite pair, and these are the ones now
+on screen:
+
+- **acne** — a lit face self-shadowing, because the depth it stores is its own. Bought off with a
+  **normal** offset of 1.6 texels rather than a depth bias: a normal offset moves the sample off
+  the surface instead of down the light, so it costs nothing extra at the grazing angles where a
+  depth bias costs most.
+- **peter-panning** — what that offset buys is a shadow that starts 1.6 texels late and detaches
+  from the foot of what casts it: 1.4 cm on the portico, 3.7 cm on the whole building.
+
+**That detachment is what the contact shadows are for.** A 0.30 m screen-space trace up the sun
+ray, eight steps, against a depth pre-pass, is the scale *below* the map's texel — the join where a
+bench meets a floor, the underside of a moulding, a baluster against its rail — and it closes
+exactly the gap the normal offset opens. It is skipped outright wherever the map already says the
+point is in shadow, which in a portico is most of it.
+
+**What it costs.** The map is not a per-frame cost at all. Per frame there is one depth-only pass
+over the opaque mesh for the trace to read, ten fetches of the map per lit pixel (one for the
+blocker, nine for the kernel), and up to eight of the depth buffer where the trace runs. 16 MB of
+depth per map. It could not be timed here: the only GL available in CI is SwiftShader, and its
+control arm varied by 16% between two runs of *itself*, which is larger than the effect.
+<!-- <<< shadow -->
+
 ### Resolution is a budget, not a list
 
 A clip says how finely it wants to be sampled; the facility says 32 voxels to the metre, which is
