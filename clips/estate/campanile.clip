@@ -816,11 +816,21 @@ let camp_ashlar = union { camp_carved camp_belf_parapet }
 #    curvature over that. Two requests over one scope is therefore not twice the cost, it is the
 #    second one's six-sample curvature multiplied by the first one's — and `overgrown` samples an
 #    OCCLUSION, which is dearer still. So the order is now cracks, desert, overgrown:
-#      `cracks`    is the cheap one and it goes first — its mask is `cell_edge` and `fbm` and it
-#                  never asks the field a geometric question at all.
-#      `desert`    asks one curvature, so it pays six evaluations of a solid the cracks made cheap.
-#      `overgrown` asks an occlusion, so it goes LAST and on the SMALLEST scope, where its mask is
-#                  nought almost everywhere and `Op::Multiply` stops at the first nought factor.
+#    THE EXPENSIVE MASK GOES FIRST, WHICH IS THE OPPOSITE OF WHAT IT LOOKS LIKE IT SHOULD BE, and
+#    the control arm is what settled it. Ordered cracks-desert-overgrown — cheap first — metre 8
+#    cost 308.8 seconds of CPU against 13.8 with the three lines commented out: TWENTY-TWO TIMES,
+#    and worse than the 147.9 the naive scoping had cost. The reason is that a request does not pay
+#    for its own mask once, it pays for every mask BENEATH it once per sample it takes: `cracks`
+#    asks a `cell_edge`, and putting it at the bottom made every one of `desert`'s six curvature
+#    samples and every one of `overgrown`'s occlusion samples pay for a Worley cell lookup.
+#    So the order is by how DEAR a request's own mask is, dearest at the bottom:
+#      `overgrown` asks an OCCLUSION, the dearest thing here, so it goes first and on the SMALLEST
+#                  scope, where its mask is nought almost everywhere and `Op::Multiply` stops at
+#                  the first nought factor.
+#      `desert`    asks one curvature — six samples of a solid whose only extra term is a mask that
+#                  is already nought outside the plinth.
+#      `cracks`    asks the field NOTHING. Its mask is `cell_edge` and `fbm`, so it is free to sit
+#                  on top, where nothing above it ever evaluates it more than once.
 #
 # The damp zone is the two plinth steps and a slab lying against the NORTH face — the face that
 # never sees the sun — both caught in the same skin so the moss is on the outside only.
@@ -886,9 +896,9 @@ paint lamp where=camp_lanterns_glass below=0.02
 # followed to its end: `copper` in the contract is rgb 96,140,124, which is not metal, it is
 # PATINA — the material is already the weathering, and a desert coat over it would only put sand on
 # a green roof.
-weather cracks    0.20 scale=0.90 seed=31 on=camp_weather_skin
-weather desert    0.11 scale=0.90 seed=29 on=camp_weather_skin
 weather overgrown 0.13 scale=0.70 seed=37 on=camp_damp
+weather desert    0.11 scale=0.90 seed=29 on=camp_weather_skin
+weather cracks    0.20 scale=0.90 seed=31 on=camp_weather_skin
 
 variation colour=0.030 rough=0.070 seed=29
 

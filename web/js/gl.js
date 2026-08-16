@@ -16,12 +16,50 @@
 //   opaque       depth written; back faces culled only when nothing is sliced
 //   transparent  blended, depth tested, depth not written
 //
-// The slice is a clip plane and nothing is drawn on the cut. There WAS a third pass that filled
-// the cross-section with a flat quad, found by inverting the stencil over the geometry behind the
-// plane, so a sliced wall read as solid stone instead of as a sheet of paper. It went because it
-// paints over the one thing the slider exists to show. Cutting into a building now shows the
-// building's own faces, from behind, which is what the inside of a voxel clip actually looks
-// like.
+//   cap          the cut face itself, where the plane passes through solid matter
+//
+// # The cap, which has now been wrong in both directions
+//
+// Slicing is a clip plane, and a clip plane through a voxel mesh leaves an OPEN SHELL, because a
+// mesh has only the faces that touch air and solid stone has no faces inside it at all. A wall cut
+// in half is therefore two sheets of paper with a gap between them, and a building cut in half is
+// see-through where it should be stone.
+//
+// It was first filled with a flat grey quad through a stencil parity pass. That was removed,
+// because one flat grey covering the whole cut paints over the rooms the slider exists to open up
+// -- reported as *"make the slicing show the inside of the clip, not culling the faces of sliced
+// voxels"*. And removing it produced the opposite fault, reported next as *"the slicer not showing
+// sliced voxels faces"*: the model went hollow and shredded, every cut wall a pair of shells with
+// daylight between them.
+//
+// BOTH REPORTS ARE THE SAME REQUEST AND A PARITY CAP IS WHAT SATISFIES IT. The stencil inverts on
+// every fragment of the geometry BEHIND the plane, so odd parity falls exactly where the plane is
+// inside matter and nowhere else. A room is air, its parity is even, and it is not filled -- so
+// you still see into it. A wall is stone, its parity is odd, and it is filled -- so it reads as
+// cut stone. The old pass had the right mechanism and the wrong paint.
+//
+// So the cap is drawn, and it is drawn as VOXELS rather than as a plane:
+//
+//   the clip's own stone, not a fixed grey. `capColour` is the clip's commonest opaque material,
+//   taken from the quad histogram at load, so a marble clip cuts marble-coloured and the facility
+//   cuts the colour of what it is mostly made of.
+//   a voxel lattice at the clip's own pitch, because the thing being asked for is the FACES of the
+//   sliced voxels, and a cut through a voxel model is a grid of little square faces. Without it a
+//   cap is a poured slab at any resolution and tells you nothing about how finely the clip is cut.
+//   the light grid, sampled at the cut, so a cap deep inside a building is dark and one at an
+//   outside wall is not -- the same volume every other surface here reads.
+//
+// It is skipped when the eye is on the discarded side, where the parity is counted from the wrong
+// end. AND ITS HONEST LIMIT, because it is a real one: the cap is ONE material per clip. The file
+// carries the exposed surface and a one-bit occupancy grid and no material volume, so there is
+// nothing to ask what the stone at a given point inside a wall is made of. Cutting through the
+// rotunda's porphyry floor shows the building's commonest stone, not porphyry. Fixing that means
+// baking a material volume -- one byte a cell on the occupancy grid -- and is written up in
+// documentation/24-clip-viewer.md.
+
+// The shape record's size and the cutter's are the file's, not this file's opinion of them: they
+// are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
+import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -301,6 +339,89 @@ void main() {
 }`;
 
 
+
+// --- the cut face ----------------------------------------------------------------------------
+//
+// One quad on the slice plane, drawn through the stencil parity the pass before it built, shaded
+// as cut voxels rather than as a poured slab. See the note at the top of this file for why it is
+// a parity cap and not a flat fill, and for the one material it cannot know.
+const CAP_VERTEX = `#version 300 es
+precision highp float;
+uniform mat4 u_viewProj;
+uniform vec3 u_capOrigin;   // a corner of the plane, in metres
+uniform vec3 u_capU;        // and its two spans, so the quad covers the whole clip
+uniform vec3 u_capV;
+out vec3 v_world;
+void main() {
+    vec2 corner = vec2((gl_VertexID & 1), (gl_VertexID >> 1));
+    v_world = u_capOrigin + u_capU * corner.x + u_capV * corner.y;
+    gl_Position = u_viewProj * vec4(v_world, 1.0);
+}`;
+
+const CAP_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp sampler3D;
+in vec3 v_world;
+uniform vec3 u_capColour;
+uniform vec3 u_capNormal;
+uniform float u_capVoxel;     // metres per voxel, for the lattice
+uniform vec3 u_sun;
+uniform vec3 u_sunColour;
+uniform vec3 u_skyUp;
+uniform vec3 u_skyDown;
+uniform float u_exposure;
+uniform sampler3D u_light;
+uniform vec3 u_lightOrigin;
+uniform vec3 u_lightScale;
+uniform vec3 u_lightTexel;
+out vec4 o_colour;
+
+vec3 tonemap(vec3 c) { return (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14); }
+
+void main() {
+    // The lattice. A cut through a voxel model is a grid of little square faces, and this is the
+    // whole of what makes the cap read as sliced voxels rather than as a plane through them. The
+    // line is drawn in the two axes that lie IN the plane, and its width is a fixed fraction of a
+    // voxel so it neither vanishes at a coarse clip nor swamps a fine one.
+    vec3 cell = v_world / max(u_capVoxel, 1e-5);
+    vec3 edge = abs(fract(cell) - 0.5);
+    vec3 wide = fwidth(cell);
+    // The plane's own axis is excluded: along it every point of the cap has the same coordinate,
+    // so its fract() is a constant and would either darken the whole cap or none of it.
+    vec3 keep = 1.0 - abs(u_capNormal);
+    float line = 0.0;
+    for (int i = 0; i < 3; ++i) {
+        float k = keep[i];
+        if (k < 0.5) continue;
+        line = max(line, 1.0 - smoothstep(0.0, max(wide[i], 1e-5) * 1.5, 0.5 - edge[i]));
+    }
+
+    // Sampled half a voxel OUT of the cut, on the side the slice opened, and not into the stone.
+    //
+    // Into the stone is where the matter is and it is the wrong place to ask: a lattice point
+    // buried in a wall has no light of its own, so a cap read from there comes out black. That is
+    // not even honest -- the cut face did not exist until the slider made it, and what lights it
+    // is the opening, not the rock it was quarried from.
+    vec3 at = (v_world + u_capNormal * u_capVoxel * 0.5 - u_lightOrigin) * u_lightScale;
+    at = clamp(at + u_lightTexel, vec3(0.0), vec3(1.0));
+    vec2 visible = texture(u_light, at).rg;
+
+    // ...and a floor under the ambient term, for the same reason. Cut into the middle of a solid
+    // podium and the point just outside the cut is still buried, so its sky term is nearly nothing
+    // and the cross-section disappears into the background. A quarter is enough to read the shape
+    // by and low enough that a cap in a sunlit wall is still obviously brighter than one four
+    // metres inside the building.
+    vec3 N = u_capNormal;
+    vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) *
+                   max(visible.g, 0.25);
+    float ndl = max(dot(N, u_sun), 0.0);
+    vec3 colour = u_capColour * (ambient + u_sunColour * ndl * visible.r);
+    // The lattice darkens rather than lightens: a joint between two voxels is a place light does
+    // not reach, which is the same reason every other seam in this viewer is dark.
+    colour *= mix(1.0, 0.72, line);
+    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
+}`;
+
 // --- the clip before it was voxels ---------------------------------------------------------
 //
 // One instanced box per shape the author wrote, and the fragment shader sphere-traces that shape's
@@ -308,9 +429,19 @@ void main() {
 // whatever distance you look from, which is the entire point of the view.
 //
 // The shape's own space is reached by a 3x4 matrix the baker accumulated on the way down the
-// field, so `eval`'s own descent is what places it and nothing had to be inverted. A shape a
-// `difference` takes away is drawn too, in another colour -- the hole somebody cut is as much a
-// part of the description as the stone it was cut from, and it is usually what you came to look at.
+// field, so `eval`'s own descent is what places it and nothing had to be inverted.
+//
+// **It shows the RESOLVED shape, not the ingredients.** This used to march every leaf alone, with
+// a sign saying whether a `difference` took it away, and draw the taken-away ones in red. So a
+// doorway was a red slab standing in front of its wall instead of a hole through it, and every
+// overlap anybody had written was on screen as raw overlapping primitives. Each shape now carries
+// a range into a pool of CUTTERS -- the leaves of every `difference` subtrahend above it, filtered
+// to the ones whose box actually reaches it -- and the march does `d = max(d, -d_cutter)` for each
+// one. That is exact subtraction, it costs a fetch and an evaluation per cutter per step rather
+// than a walk of the whole tree, and there is no colour for "this one is a hole" any more because
+// the holes are holes.
+//
+// The pool is an RGBA32F texture, six texels a cutter, because WebGL2 has no storage buffers.
 const SHAPE_VERTEX = `#version 300 es
 precision highp float;
 
@@ -319,7 +450,7 @@ layout(location = 1) in vec4 a_row1;
 layout(location = 2) in vec4 a_row2;
 layout(location = 3) in vec4 a_p0;
 layout(location = 4) in vec4 a_p1;
-layout(location = 5) in vec4 a_kind;   // op, sign, scale, unused
+layout(location = 5) in vec4 a_kind;   // op, cut_start, scale, cut_count
 layout(location = 6) in vec3 a_low;
 layout(location = 7) in vec3 a_high;
 
@@ -372,8 +503,14 @@ uniform vec3 u_skyDown;
 uniform float u_exposure;
 uniform vec4 u_clip;
 uniform mat4 u_viewProj;
+uniform highp sampler2D u_cutters;   // six RGBA32F texels a cutter, texelFetch only
+uniform int u_cutterWidth;           // texels across, so an index becomes a row and a column
 
 out vec4 o_colour;
+
+// One shape may subtract at most this many, and the baker warns when it had to drop some. A GLSL
+// ES loop wants a constant upper bound, so this is that bound as well as the cap.
+const int MAX_CUTTERS = 16;
 
 // The baker's own numbering, not the enum's. See web_op in tools/bake_web.cpp for why the enum's
 // values must never reach this file. (No back-quotes in here: this is inside a template string.)
@@ -390,10 +527,7 @@ vec3 along(int axis, vec3 p) {
     return (axis == 0) ? p.yzx : ((axis == 1) ? p.xzy : p.xyz);
 }
 
-float shape_distance(vec3 p) {
-    int op = int(v_kind.x + 0.5);
-    vec4 a = v_p0;
-    vec4 b = v_p1;
+float shape_distance(int op, vec4 a, vec4 b, vec3 p) {
     if (op == OP_SPHERE) {
         return length(p - a.xyz) - a.w;
     } else if (op == OP_BOX) {
@@ -431,6 +565,40 @@ float shape_distance(vec3 p) {
     return 1e9;
 }
 
+// World -> this shape's own space, transposed out of the three attribute rows. Set once in main
+// because the distance below is asked for it seven times a step.
+mat3 g_linear;
+vec3 g_offset;
+float g_scale;
+
+vec4 cutter_texel(int index) {
+    return texelFetch(u_cutters, ivec2(index % u_cutterWidth, index / u_cutterWidth), 0);
+}
+
+// The shape as the clip actually resolves it: itself, minus everything the differences above it
+// take away. max(d, -d_cutter) is exact subtraction, and it is what turns a red slab standing in
+// front of a wall into a doorway through it.
+float resolved_distance(vec3 world) {
+    float d = shape_distance(int(v_kind.x + 0.5), v_p0, v_p1, g_linear * world + g_offset) * g_scale;
+    int start = int(v_kind.y + 0.5);
+    int count = int(v_kind.w + 0.5);
+    for (int i = 0; i < MAX_CUTTERS; ++i) {
+        if (i >= count) break;
+        int base = (start + i) * 6;
+        vec4 r0 = cutter_texel(base + 0);
+        vec4 r1 = cutter_texel(base + 1);
+        vec4 r2 = cutter_texel(base + 2);
+        vec4 ca = cutter_texel(base + 3);
+        vec4 cb = cutter_texel(base + 4);
+        vec4 ck = cutter_texel(base + 5);   // op, scale, unused, unused
+        mat3 cl = mat3(vec3(r0.x, r1.x, r2.x), vec3(r0.y, r1.y, r2.y), vec3(r0.z, r1.z, r2.z));
+        float dc = shape_distance(int(ck.x + 0.5), ca, cb, cl * world + vec3(r0.w, r1.w, r2.w)) *
+                   max(ck.y, 1e-4);
+        d = max(d, -dc);
+    }
+    return d;
+}
+
 vec3 tonemap(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
@@ -441,11 +609,12 @@ void main() {
 
     vec3 direction = normalize(v_world - u_eye);
     // Into the shape's own space, where its distance is written.
-    mat3 L = mat3(vec3(v_linear[0].x, v_linear[1].x, v_linear[2].x),
-                  vec3(v_linear[0].y, v_linear[1].y, v_linear[2].y),
-                  vec3(v_linear[0].z, v_linear[1].z, v_linear[2].z));
+    g_linear = mat3(vec3(v_linear[0].x, v_linear[1].x, v_linear[2].x),
+                    vec3(v_linear[0].y, v_linear[1].y, v_linear[2].y),
+                    vec3(v_linear[0].z, v_linear[1].z, v_linear[2].z));
+    g_offset = v_offset;
+    g_scale = max(v_kind.z, 1e-4);
 
-    float scale = max(v_kind.z, 1e-4);
     float travel = 0.0;
     // The far side of this shape's own box, so a march can never run past what it is allowed to
     // draw and into somebody else's.
@@ -458,27 +627,28 @@ void main() {
     vec3 at = v_world;
     for (int i = 0; i < 96; ++i) {
         at = v_world + direction * travel;
-        float d = shape_distance(L * at + v_offset) * scale;
+        float d = resolved_distance(at);
         if (d < 0.0015) { hit = true; break; }
         travel += max(d, 0.0015);
         if (travel > exit) break;
     }
     if (!hit) discard;
 
-    vec3 local = L * at + v_offset;
+    // The gradient is taken in WORLD space now rather than in the shape's own and rotated back,
+    // because the surface under the ray may belong to a cutter rather than to the shape: the wall
+    // of a doorway is the doorway's normal, not the wall's.
     vec2 h = vec2(0.002, 0.0);
-    vec3 n = normalize(vec3(
-        shape_distance(local + h.xyy) - shape_distance(local - h.xyy),
-        shape_distance(local + h.yxy) - shape_distance(local - h.yxy),
-        shape_distance(local + h.yyx) - shape_distance(local - h.yyx)));
-    vec3 N = normalize(transpose(L) * n);
+    vec3 N = normalize(vec3(
+        resolved_distance(at + h.xyy) - resolved_distance(at - h.xyy),
+        resolved_distance(at + h.yxy) - resolved_distance(at - h.yxy),
+        resolved_distance(at + h.yyx) - resolved_distance(at - h.yyx)));
     vec3 V = normalize(u_eye - at);
     if (dot(N, V) < 0.0) N = -N;
 
-    // Added or taken away. A cut shape is the one you usually came to look at, so it reads clearly
-    // rather than politely.
-    bool cut = v_kind.y < 0.0;
-    vec3 albedo = cut ? vec3(0.42, 0.10, 0.10) : vec3(0.62, 0.60, 0.56);
+    // One colour. Red used to mean "a difference takes this away", and it had a job when a
+    // subtrahend was drawn as a solid of its own; now that a hole is a hole there is nothing left
+    // for it to say.
+    vec3 albedo = vec3(0.62, 0.60, 0.56);
 
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
     float ndl = max(dot(N, u_sun), 0.0);
@@ -488,7 +658,7 @@ void main() {
 
     vec4 clipPos = u_viewProj * vec4(at, 1.0);
     gl_FragDepth = (clipPos.z / clipPos.w) * 0.5 + 0.5;
-    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), cut ? 0.55 : 1.0);
+    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
 }`;
 
 function compile(gl, type, source, name) {
@@ -619,6 +789,7 @@ export class Renderer {
 
         this.surface = link(gl, VERTEX_SOURCE, FRAGMENT_SOURCE, 'surface');
         this.sky = link(gl, SKY_VERTEX, SKY_FRAGMENT, 'sky');
+        this.cap = link(gl, CAP_VERTEX, CAP_FRAGMENT, 'cap');
         this.shapes = link(gl, SHAPE_VERTEX, SHAPE_FRAGMENT, 'shapes');
 
         this.vao = gl.createVertexArray();
@@ -626,6 +797,9 @@ export class Renderer {
         this.shapeVao = gl.createVertexArray();
         this.shapeBuffer = gl.createBuffer();
         this.shapeCount = 0;
+        this.cutters = gl.createTexture();
+        this.cutterCount = 0;
+        this.cutterWidth = 1;
         this.materials = gl.createTexture();
         this.light = gl.createTexture();
         this.clip = null;
@@ -673,29 +847,56 @@ export class Renderer {
         }
         gl.bindVertexArray(null);
 
-        // The clip as it was written. 112 bytes a shape, straight into a buffer.
+        // The colour the cut face is painted, and it is the clip's own rather than a constant.
+        //
+        // The commonest opaque material BY AREA -- a quad is a merged rectangle, so counting quads
+        // would let a thousand little trim pieces outvote a wall. Area is what the eye sees and it
+        // is what the cap stands in for. It is ONE colour for the whole clip because the file has
+        // no material volume to ask; the note at the top of this file says what that costs.
+        {
+            const area = new Map();
+            const q = new DataView(clip.opaque.buffer, clip.opaque.byteOffset,
+                                   clip.opaque.byteLength);
+            for (let i = 0; i < clip.opaqueQuads; ++i) {
+                const at = i * 16;
+                const w = q.getUint16(at + 6, true) + 1;
+                const h = q.getUint16(at + 8, true) + 1;
+                const m = q.getUint16(at + 10, true);
+                area.set(m, (area.get(m) || 0) + w * h);
+            }
+            let best = -1, most = -1;
+            for (const [m, a] of area) if (a > most) { most = a; best = m; }
+            // sRGB in the file, linear in the shader, like every other colour here.
+            this.capColour = (best >= 0 && best < clip.materialCount)
+                ? [0, 1, 2].map(k => Math.pow(clip.materials[best * 16 + k] / 255, 2.2))
+                : [0.36, 0.34, 0.32];
+        }
+
+        // The clip as it was written. SHAPE_BYTES a shape, straight into a buffer.
         this.shapeCount = clip.shapeCount;
         if (this.shapeCount > 0) {
             gl.bindVertexArray(this.shapeVao);
             gl.bindBuffer(gl.ARRAY_BUFFER, this.shapeBuffer);
             gl.bufferData(gl.ARRAY_BUFFER, clip.shapes, gl.STATIC_DRAW);
-            // op 0..3, sign 4..7, scale 8..11, placement 12..59, parameters 60..91,
-            // box 92..115. Written by the loop at the end of bake_root.
-            const stride = 116;
+            // op 0..3, cut_start 4..7, scale 8..11, placement 12..59, parameters 60..91,
+            // box 92..115, cut_count 116..119. Written by the loop at the end of bake_root.
+            const stride = SHAPE_BYTES;
             const layout = [
                 [0, 4, 12], [1, 4, 28], [2, 4, 44],   // the 3x4 placement, a row to an attribute
                 [3, 4, 60], [4, 4, 76],               // eight parameters
                 [6, 3, 92], [7, 3, 104],              // the box it lands in
             ];
-            // The head is op (a uint) then sign and scale (floats); the shader wants all three as
-            // floats, so the op is converted here rather than reinterpreted there.
+            // The head is op, cut_start and cut_count (uints) with scale (a float) among them; the
+            // shader wants all four as floats, so they are converted here rather than
+            // reinterpreted there.
             const head = new Float32Array(this.shapeCount * 4);
             const view = new DataView(clip.shapes.buffer, clip.shapes.byteOffset,
                                       clip.shapes.byteLength);
             for (let i = 0; i < this.shapeCount; ++i) {
                 head[i * 4 + 0] = view.getUint32(i * stride, true);
-                head[i * 4 + 1] = view.getFloat32(i * stride + 4, true);
+                head[i * 4 + 1] = view.getUint32(i * stride + 4, true);
                 head[i * 4 + 2] = view.getFloat32(i * stride + 8, true);
+                head[i * 4 + 3] = view.getUint32(i * stride + 116, true);
             }
             this.shapeHead = this.shapeHead || gl.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, this.shapeHead);
@@ -711,6 +912,33 @@ export class Renderer {
                 gl.vertexAttribDivisor(index, 1);
             }
             gl.bindVertexArray(null);
+        }
+
+        // The cutter pool. WebGL2 has no storage buffer, so it is an RGBA32F texture read with
+        // texelFetch — six texels a cutter, and a shape's range into it comes down the instanced
+        // attributes. There is always a texture, even a 1x1 one, because a sampler bound to
+        // nothing is undefined behaviour and not a blank hole.
+        this.cutterCount = clip.cutterCount || 0;
+        {
+            const texels = Math.max(1, this.cutterCount * CUTTER_TEXELS);
+            // A multiple of CUTTER_TEXELS so a cutter never straddles two rows, which keeps the
+            // index arithmetic in the shader to one divide and one modulo.
+            this.cutterWidth = Math.min(1020, texels);
+            const height = Math.ceil(texels / this.cutterWidth);
+            const padded = new Float32Array(this.cutterWidth * height * 4);
+            if (this.cutterCount > 0) {
+                // .slice() rather than a view: the pool starts wherever the blocks before it
+                // ended, which is not a multiple of four bytes, and Float32Array wants alignment.
+                padded.set(new Float32Array(clip.cutters.slice().buffer));
+            }
+            gl.bindTexture(gl.TEXTURE_2D, this.cutters);
+            gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, this.cutterWidth, height, 0, gl.RGBA,
+                          gl.FLOAT, padded);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         }
 
         // Materials, verbatim: each VisualRecord is four RGBA8 texels and the shader fetches the
@@ -818,16 +1046,21 @@ export class Renderer {
         gl.uniform3fv(u.u_skyDown, this.skyDown);
         gl.uniform1f(u.u_exposure, this.exposure);
         gl.uniform4fv(u.u_clip, plane);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.cutters);
+        gl.uniform1i(u.u_cutters, 0);
+        gl.uniform1i(u.u_cutterWidth, this.cutterWidth);
 
         gl.enable(gl.DEPTH_TEST);
         gl.depthMask(true);
         // No culling: the eye is inside a shape's own box as often as not, and a box whose front
         // faces are gone is a shape that vanishes when you walk up to it.
         gl.disable(gl.CULL_FACE);
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 14, this.shapeCount);
+        // And no blending: every shape is opaque now. The half-transparent red was what a
+        // subtrahend drawn as a solid of its own needed to not hide the stone behind it, and there
+        // are no subtrahends drawn as solids any more.
         gl.disable(gl.BLEND);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 14, this.shapeCount);
         gl.bindVertexArray(null);
         this.stats.draws += 1;
     }
@@ -910,7 +1143,94 @@ export class Renderer {
         }
         this.drawFaces(this.surface.uniforms, clip.opaqueFace, 0, 0);
 
-        // Nothing is drawn ON the cut, and that is the change the slider was asked for.
+        // --- the cut face ----------------------------------------------------------------------
+        //
+        // Two passes: parity, then one quad through it. `u_cutSide` flips the surface shader to the
+        // DISCARDED side, so the stencil counts the faces the slice threw away -- entering matter
+        // and leaving it -- and lands on odd wherever the plane is inside stone.
+        //
+        // WHICH SIDE THE EYE IS ON DECIDES WHETHER THERE IS A CAP AT ALL, and the sign of that
+        // test is the whole of what makes parity work. The count has to be of the surfaces BETWEEN
+        // THE EYE AND THE PLANE, and those are exactly the ones the slice threw away -- which is
+        // why the parity pass draws the discarded side and why it only means anything when the eye
+        // is over there looking in. A ray from such an eye enters matter and does not leave it
+        // again before the plane precisely when the plane is inside stone, so odd parity IS the
+        // cut face.
+        //
+        // From the other side there is nothing between the eye and the plane to count, the parity
+        // comes out zero everywhere, and there is no cap -- correctly, because from there the plane
+        // is behind the matter that was kept and a cap would be hidden by it anyway.
+        //
+        // Getting this backwards costs nothing visible except that no cap ever appears, which is
+        // indistinguishable from not having written one. It was backwards here first.
+        const eyeSide = slice
+            ? (camera.eye[0] * plane[0] + camera.eye[1] * plane[1] + camera.eye[2] * plane[2] +
+               plane[3])
+            : -1;
+        if (slice && eyeSide > 0 && clip.opaqueQuads > 0) {
+            gl.enable(gl.STENCIL_TEST);
+            gl.stencilMask(0xFF);
+            gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
+            gl.stencilOp(gl.KEEP, gl.INVERT, gl.INVERT);
+            gl.colorMask(false, false, false, false);
+            gl.depthMask(false);
+            gl.disable(gl.DEPTH_TEST);
+            gl.disable(gl.CULL_FACE);
+            gl.uniform1f(this.surface.uniforms.u_cutSide, 1);
+            this.drawFaces(this.surface.uniforms, clip.opaqueFace, 0, 0);
+            gl.uniform1f(this.surface.uniforms.u_cutSide, 0);
+            gl.colorMask(true, true, true, true);
+
+            // ...and the quad, only where the parity came out odd.
+            gl.stencilFunc(gl.EQUAL, 1, 1);
+            gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthMask(true);
+            gl.useProgram(this.cap.program);
+            const u = this.cap.uniforms;
+            const a = slice.axis;
+            const b = (a + 1) % 3, c = (a + 2) % 3;
+            const lo = [clip.origin[0], clip.origin[1], clip.origin[2]];
+            const span = [clip.dims[0] / clip.metre, clip.dims[1] / clip.metre,
+                          clip.dims[2] / clip.metre];
+            const originV = [lo[0], lo[1], lo[2]];
+            originV[a] = slice.at;
+            const spanA = [0, 0, 0]; spanA[b] = span[b];
+            const spanB = [0, 0, 0]; spanB[c] = span[c];
+            // Facing the eye, which is the side the slice opened. Pointed the other way -- into
+            // the stone that was kept -- the sun term is zero, the sky mix reads the ground, and
+            // the cap comes out black. It did.
+            const normal = [0, 0, 0]; normal[a] = slice.sign;
+            gl.uniformMatrix4fv(u.u_viewProj, false, this.viewProj);
+            gl.uniform3fv(u.u_capOrigin, originV);
+            gl.uniform3fv(u.u_capU, spanA);
+            gl.uniform3fv(u.u_capV, spanB);
+            gl.uniform3fv(u.u_capColour, this.capColour);
+            gl.uniform3fv(u.u_capNormal, normal);
+            gl.uniform1f(u.u_capVoxel, 1 / clip.metre);
+            gl.uniform3fv(u.u_sun, this.sun);
+            gl.uniform3fv(u.u_sunColour, this.sunColour);
+            gl.uniform3fv(u.u_skyUp, this.skyUp);
+            gl.uniform3fv(u.u_skyDown, this.skyDown);
+            gl.uniform1f(u.u_exposure, this.exposure);
+            const size = [clip.lightDims[0] * clip.lightCell, clip.lightDims[1] * clip.lightCell,
+                          clip.lightDims[2] * clip.lightCell];
+            gl.uniform3fv(u.u_lightOrigin, clip.origin);
+            gl.uniform3fv(u.u_lightScale, [1 / size[0], 1 / size[1], 1 / size[2]]);
+            gl.uniform3fv(u.u_lightTexel, [0.5 / clip.lightDims[0], 0.5 / clip.lightDims[1],
+                                           0.5 / clip.lightDims[2]]);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_3D, this.light);
+            gl.uniform1i(u.u_light, 1);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            gl.disable(gl.STENCIL_TEST);
+            this.stats.draws += 1;
+
+            gl.bindVertexArray(this.vao);
+            gl.useProgram(this.surface.program);
+        }
+
+        // The cut shows the mesh's own faces as well as the cap.
         //
         // It used to fill the cross-section with a flat grey quad, found with a stencil parity
         // pass, so that a sliced wall read as solid stone rather than as a sheet of paper. That is

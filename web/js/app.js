@@ -203,7 +203,10 @@ function describe() {
         ['surface', clip.quads.toLocaleString() + ' quads, ' + clip.transparentQuads.toLocaleString() +
                     ' of them clear'],
         ['materials', String(clip.materialCount)],
-        ['shapes', clip.shapeCount ? clip.shapeCount.toLocaleString() + ' as written' : 'not baked'],
+        ['shapes', clip.shapeCount
+            ? clip.shapeCount.toLocaleString() + ' as written, ' +
+              (clip.cutterCount || 0).toLocaleString() + ' cut out of them'
+            : 'not baked'],
         ['download', (entry.bytes / (1024 * 1024)).toFixed(2) + ' MB'],
         ['baked', state.index ? state.index.built : ''],
         // Which clips these are. The site follows whichever branch was pushed last, so without
@@ -525,7 +528,7 @@ async function main() {
         state.shapes = !state.shapes;
         $('shapes').classList.toggle('on', state.shapes);
         toast(state.shapes
-            ? state.clip.shapeCount.toLocaleString() + ' shapes, as written — red is cut away'
+            ? state.clip.shapeCount.toLocaleString() + ' shapes, as written — cut as the clip cuts them'
             : 'voxels');
     };
     $('info').onclick = () => $('panel').classList.toggle('hidden');

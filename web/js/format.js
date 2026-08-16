@@ -8,11 +8,16 @@
 // Every offset here has a matching one in bake_web.cpp. If you change one, change both — the file
 // carries a version and a magic so a mismatch says so instead of drawing nonsense.
 
-export const HEADER_BYTES = 192;
+export const FORMAT_VERSION = 2;
+export const HEADER_BYTES = 208;
 export const QUAD_BYTES = 16;
 export const MATERIAL_BYTES = 16;
-// op, sign, scale, a 3x4 world-to-local matrix, eight parameters, and the box it ends up in.
-export const SHAPE_BYTES = 116;
+// 0 op, 4 cut_start, 8 scale, 12..59 a 3x4 world-to-local matrix, 60..91 eight parameters,
+// 92..115 the world box it ends up in, 116 cut_count.
+export const SHAPE_BYTES = 120;
+// Six RGBA32F texels a cutter: three matrix rows, eight parameters, then (op, scale, pad, pad).
+export const CUTTER_BYTES = 96;
+export const CUTTER_TEXELS = 6;
 
 // 0 +X   1 -X   2 +Y   3 -Y   4 +Z   5 -Z
 export const FACE_NORMAL = [
@@ -27,7 +32,14 @@ export function parseClip(buffer) {
                                       view.getUint8(3));
     if (magic !== 'WSCV') throw new Error('not a clip file (magic "' + magic + '")');
     const version = view.getUint32(4, true);
-    if (version !== 1) throw new Error('clip file version ' + version + ', this viewer reads 1');
+    // Version 1 packed the header into exactly 192 bytes with nothing spare, so version 2 — which
+    // adds the cutter pool that makes the shapes view show holes rather than red ghosts — moved
+    // every block offset. There is no reading one as the other, and a stale file in a cache beside
+    // a fresh viewer is a real state: it says so here rather than drawing nonsense.
+    if (version !== FORMAT_VERSION) {
+        throw new Error('clip file version ' + version + ', this viewer reads ' + FORMAT_VERSION +
+                        ' — it needs baking again');
+    }
 
     const clip = {
         dims: [view.getInt32(8, true), view.getInt32(12, true), view.getInt32(16, true)],
@@ -50,6 +62,9 @@ export function parseClip(buffer) {
         // 180..187 is the key the baker stamps to know whether this file still holds; the viewer
         // does not care what it is.
         shapeCount: view.getUint32(188, true),
+        cutterCount: view.getUint32(192, true),
+        cutterOffset: view.getUint32(196, true),
+        // 200..207 is spare.
     };
     // Seven entries: six starts and the end, so a range is start[i]..start[i + 1] everywhere.
     for (let i = 0; i < 7; ++i) {
@@ -74,13 +89,27 @@ export function parseClip(buffer) {
     clip.collision = new Uint8Array(buffer, at, (collisionCells + 7) >> 3);
     at += (collisionCells + 7) >> 3;
 
-    // The clip as it was written: every shape the author typed, with the transform that places it.
-    // Absent from files baked before this existed, which is why the length is checked rather than
-    // trusted -- an old file in the cache beside a new one is a real state.
+    // The clip as it was written: every shape the author typed, with the transform that places it
+    // and the slice of the cutter pool that is subtracted from it. Absent from files baked before
+    // this existed, which is why the length is checked rather than trusted.
     clip.shapes = (clip.shapeCount > 0 && at + clip.shapeCount * SHAPE_BYTES <= buffer.byteLength)
         ? new Uint8Array(buffer, at, clip.shapeCount * SHAPE_BYTES)
         : new Uint8Array(0);
     if (clip.shapes.length === 0) clip.shapeCount = 0;
+    at += clip.shapeCount * SHAPE_BYTES;
+
+    // The cutter pool: every `difference` subtrahend, in world space, pointed at by the shapes it
+    // actually cuts. The baker writes where it starts as well as how big it is, so a reader that
+    // computes the offset and a reader that reads it either agree or one of them says so.
+    const cutterBytes = clip.cutterCount * CUTTER_BYTES;
+    if (clip.cutterCount > 0 && clip.cutterOffset !== at) {
+        throw new Error('cutter pool says it is at ' + clip.cutterOffset + ', the blocks end at ' +
+                        at);
+    }
+    clip.cutters = (clip.cutterCount > 0 && at + cutterBytes <= buffer.byteLength)
+        ? new Uint8Array(buffer, at, cutterBytes)
+        : new Uint8Array(0);
+    if (clip.cutters.length === 0) clip.cutterCount = 0;
 
     clip.size = [
         clip.dims[0] / clip.metre, clip.dims[1] / clip.metre, clip.dims[2] / clip.metre,

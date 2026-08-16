@@ -1,0 +1,35 @@
+# walls-corner — the north-east corner of the wall ring, at full resolution, for clipcheck.
+# Not part of the building.
+#
+#   bash tools/clipcheck.sh clips/facility/requests/walls-corner.clip --slice y@2.42
+#   bash tools/clipcheck.sh clips/facility/requests/walls-corner.clip --slice z@7.55
+#
+# `--slice` draws one character per STEP voxels, and the step is max(size)/110 on the two axes the
+# picture is drawn on. Over the whole 32 m block that is a step of nine at metre 32: a plan in
+# which a 0.03 m sliver and a 0.90 m wall are the same character. This box is 4 m square in plan,
+# so `--slice y@h` has a step of ONE at metre 32 and the picture IS the voxels. That is the slice
+# that measures a wall: read the run of `#` across it and the thickness is in the number.
+#
+# A SECTION IS COARSER AND THAT IS DELIBERATE. The box is the full height of the wall, so `--slice
+# x@` and `--slice z@` step by three at metre 32. They are for finding which course something is
+# in; cut the y range down to one storey if a section has to resolve a voxel.
+#
+# It is the corner because that is where everything meets: the ring, the five horizontal channels,
+# the vertical joints, the quoin stack, the string course and its mitre.
+#
+# PHASE. The low corner is (13.0, 1.60, 4.50), which is 30.00, 2.50 and 21.00 m from the contract's
+# own (-17, -0.9, -16.5) — a whole number of voxels at metre 8, 16 and 32. The grid falls where it
+# falls in the building.
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../walls.clip"
+
+metre 32
+bounds 13.0 1.60 4.50   17.0 11.95 8.50
+
+variation colour=0.030 rough=0.070 seed=17
+
+solid part_walls

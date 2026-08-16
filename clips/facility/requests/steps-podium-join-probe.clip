@@ -1,0 +1,36 @@
+# WHERE THE STEPS MEET THE PODIUM — the two fragments together, in a box cut to the junction.
+# Not part of the building.
+#
+# The question this file exists to answer is the one neither part can answer alone: a person
+# climbs the flight and walks onto the terrace, and the last riser is the one that crosses from
+# one author's stone to another's. Both fragments claim the same datum — the top tread's top and
+# the podium's terrace are both y = 1.80, and the top nosing is ON the podium's south face at
+# z = -13.05 — and a section through the pair is the only thing that shows whether they are.
+#
+# It is also the control for the other direction. `part_podium` here is the SAME podium as in the
+# manifest, and its volume, its component count and its grooves must not change because the steps
+# are standing against it: neither file exposes a void, and every `difference` in either takes
+# matter only out of that file's own shapes. If a number here differs from the same number in
+# podium-cuts-probe.clip by more than the clipping of this smaller box, one of them has reached
+# into the other.
+#
+#   tools/clipcheck.sh clips/facility/requests/steps-podium-join-probe.clip --metre 32 --slice x@0
+#   tools/clipcheck.sh clips/facility/requests/steps-podium-join-probe.clip --metre 32 --part part_podium
+#
+# The box clips the podium — it is 33 m wide and this is 20.5 — so the podium's own volume and
+# component count out of THIS file mean nothing on their own. The section does.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../podium.clip"
+include "../steps.clip"
+
+let probe_join = union { part_podium part_steps }
+
+# Multiples of 0.125, so the lattice is the manifest's at metre 8, 16 and 32 alike.
+bounds -10.25 -0.625 -16.875   10.25 3.75 -11.875
+
+solid probe_join

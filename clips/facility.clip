@@ -170,9 +170,34 @@ let furnished = union { hollowed  difference { part_fittings void_doors void_win
 
 # --- surface --------------------------------------------------------------------------------------
 #
-# Twelve millimetres of grain over everything, which is under half a voxel at full detail, so it
-# moves no wall — and is the difference between a face that reads as carved stone and one that
-# reads as a drawing of carved stone.
+# Twelve millimetres of grain over everything — AND THE SAMPLER DROPS IT, AT EVERY RESOLUTION THIS
+# GAME IS EVER BUILT AT. The line stays; the comment that used to sit here does not, because it was
+# wrong and it was the load-bearing sentence in two other documents.
+#
+# It read: "under half a voxel at full detail, so it moves no wall — and is the difference between
+# a face that reads as carved stone and one that reads as a drawing of carved stone." Both halves
+# cannot be true at once, and `usable_displacement` in src/forge/clip_script.cpp quotes this exact
+# line back and says why: being under a voxel is not what makes a displacement harmless, it is
+# precisely what makes it DITHER, because a displacement too small to move a wall is still large
+# enough to flip the voxels the wall is made of. On the flat axis-aligned faces this building is
+# mostly made of, the whole face dithers at once — a raspy speckle that became black pepper once
+# the renderer had real sun and sky, because a flipped voxel exposes a face pointing a different
+# way and a differently-facing face is several times darker.
+#
+# So anything under HALF A VOXEL is dropped rather than scaled up, and 0.012 m is 0.38 of a voxel
+# at metre 32 and 0.10 at metre 8. There is no resolution this building is sampled at where this
+# line does anything at all, and the log has said so in two WARN lines on every single build:
+#
+#     displace amount 0.012 m is 0.38 of a voxel at metre 32 -- ... Dropped.
+#     weather  amount 0.0045 m is 0.14 of a voxel at metre 32 -- ... Dropped.
+#
+# THE BEHAVIOUR IS CORRECT AND IS NOT BEING CHANGED HERE. Raising the amount to 0.016 would make it
+# apply and would bring back the pepper; the honest answer at this grid is the undisplaced surface,
+# which is what the sampler already gives. What was wrong was a comment claiming a visual effect
+# the build has not produced for as long as the number has read 0.012 — and BRIEF.md rule 5, whose
+# whole justification for `below=0.02` was this grain pushing voxels outside their own shape. It
+# does not. The rind that rule prevents is real, but it comes from coverage-versus-centre on
+# transformed geometry, which is why that rule now names 0.035 as well.
 let all = displace { furnished grain_fine } amount=0.012
 
 
