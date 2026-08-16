@@ -60,6 +60,9 @@
 #include <unordered_map>
 #include <vector>
 
+// >>> paintexport
+#include "bake/paint.hpp"
+// <<< paintexport
 #include "core/jobs.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -137,6 +140,13 @@ struct Options {
     // out of the index rather than half-written into it, and the real bake replaces the lot.
     bool index_only = false;
     bool verbose = false;
+    // >>> paintexport
+    // Print the paint stack and the field graph of one ALREADY BAKED clip and do nothing else.
+    // Reading the bytes back rather than printing what was about to be written is the point: it
+    // checks the layout, the chunk directory and the writer at once, which is what makes it an
+    // acceptance test rather than an echo.
+    std::string dump_paint;
+    // <<< paintexport
 };
 
 // The direction the sun is in for every bake, and it is a decision rather than a default.
@@ -691,7 +701,14 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 // the resolved solid, so the header grew to 208 and the version says so. A version 1 file in the
 // cache beside a version 2 viewer is a real state and it must produce a clear error rather than a
 // wrong picture: `reuse` refuses it and rebakes, and `web/js/format.js` throws on it.
-constexpr u32 kFormatVersion = 2;
+// >>> paintexport
+// Version 3 fills the last eight spare bytes of the header with a CHUNK DIRECTORY, so that anything
+// added after this needs no more of the header and moves none of the blocks in front of it: a
+// four-character name, an offset and a size, listed at the end of the file. The first two entries
+// are `FLDG` and `PANT`, the field graph and the paint stack, which is what lets the ◉ view shade
+// with the clip's own materials instead of one flat grey.
+constexpr u32 kFormatVersion = 3;
+// <<< paintexport
 constexpr usize kHeaderBytes = 208;
 // 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
 // 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
@@ -714,6 +731,63 @@ void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
         out.push_back(0);
     }
 }
+
+// >>> paintexport
+// --------------------------------------------------------------------------------------
+// The chunk directory
+//
+// Everything above this comment is at a fixed offset, and every one of those offsets moved the last
+// time something was added — version 1 to version 2 cost a rebake of every clip in the cache and a
+// hard error in the viewer, because there was no room left in the header to say where a new block
+// was. There is room for exactly one more such change, and this is it spent well: eight bytes that
+// point at a LIST of blocks, each with a name, so the next thing to be added costs an entry and
+// moves nothing.
+//
+//   header 200   u32 chunkOffset, where the directory starts
+//   header 204   u32 chunkCount
+//   each entry   char fourcc[4]; u32 offset; u32 size; u32 reserved     -- 16 bytes
+//
+// Payloads are written before the directory and each is padded to sixteen bytes, so a reader may
+// take a typed-array view straight onto one. The padding is not counted in `size`.
+// --------------------------------------------------------------------------------------
+
+struct WebChunk {
+    char fourcc[4]{' ', ' ', ' ', ' '};
+    std::vector<u8> bytes;
+};
+
+WebChunk make_chunk(const char* name, std::vector<u8> bytes) {
+    WebChunk chunk;
+    for (i32 i = 0; i < 4; ++i) chunk.fourcc[i] = name[i];
+    chunk.bytes = std::move(bytes);
+    return chunk;
+}
+
+// Appends every payload, then the directory, then fills in the two header words. Returns where the
+// directory landed, which is what goes at offset 200.
+void append_chunks(std::vector<u8>& out, const std::vector<WebChunk>& chunks) {
+    std::vector<u32> offsets(chunks.size(), 0);
+    for (usize i = 0; i < chunks.size(); ++i) {
+        while ((out.size() & 15u) != 0) out.push_back(0);
+        offsets[i] = static_cast<u32>(out.size());
+        out.insert(out.end(), chunks[i].bytes.begin(), chunks[i].bytes.end());
+    }
+    while ((out.size() & 15u) != 0) out.push_back(0);
+    const u32 directory = static_cast<u32>(out.size());
+    for (usize i = 0; i < chunks.size(); ++i) {
+        for (i32 c = 0; c < 4; ++c) out.push_back(static_cast<u8>(chunks[i].fourcc[c]));
+        const u32 words[3] = {offsets[i], static_cast<u32>(chunks[i].bytes.size()), 0u};
+        for (const u32 word : words) {
+            out.push_back(static_cast<u8>(word & 0xFFu));
+            out.push_back(static_cast<u8>((word >> 8) & 0xFFu));
+            out.push_back(static_cast<u8>((word >> 16) & 0xFFu));
+            out.push_back(static_cast<u8>((word >> 24) & 0xFFu));
+        }
+    }
+    put_u32(out, 200, chunks.empty() ? 0u : directory);
+    put_u32(out, 204, static_cast<u32>(chunks.size()));
+}
+// <<< paintexport
 
 // --------------------------------------------------------------------------------------
 // The clip before it was voxels
@@ -840,6 +914,22 @@ i32 web_op(ws::forge::Op op) {
 }
 
 bool is_shape_leaf(ws::forge::Op op) { return web_op(op) != kShapeUnknown; }
+
+// >>> paintexport
+// The paint field graph numbers these eight solids exactly as `web_op` does, so one GLSL `sdf()`
+// serves the shapes view and the paint field both. Two tables that must agree and nothing checking
+// that they do is how a cylinder gets drawn as a capsule, so this is asked once at startup and the
+// bake refuses rather than writing a file whose two halves disagree.
+bool op_numbering_agrees() {
+    using ws::forge::Op;
+    const Op solids[8] = {Op::Sphere, Op::Box,   Op::Cylinder, Op::Capsule,
+                          Op::Torus,  Op::Cone,  Op::Plane,    Op::Ellipsoid};
+    for (const Op op : solids) {
+        if (static_cast<u32>(web_op(op)) != ws::bake::field_op(op)) return false;
+    }
+    return true;
+}
+// <<< paintexport
 
 struct ShapeWalk {
     const ws::forge::Field* field = nullptr;
@@ -1584,6 +1674,80 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     }
     walk_shapes(walk, shapes_from, Placement{}, 0, {});
 
+    // >>> paintexport
+    // ---- the paint stack, so the shapes above can be shaded ------------------------------------
+    //
+    // A shape has no material in this language: colour comes from the rules, in order, each painting
+    // over the last, and every one of them is a field asked at the point. The marcher has the true
+    // surface point, so it can run the same stack -- given the rules and the fields they need.
+    //
+    // Three things are decided here and each of them is a way of getting this wrong.
+    //
+    // **The space.** `apply_origin` translates every rule's `test` and `bake_root` gives a part the
+    // same shift before `shapes_from` is walked, so the rules and the shapes are already in one
+    // space and nothing is done to them. What `apply_origin` does NOT move is `rule.place`, and the
+    // box derived from it is shifted in `rule_region` -- see the header of tools/bake/paint.hpp.
+    //
+    // **The region.** A rule is pruned only when its own box misses everywhere the viewer could put
+    // a hit point, which is the union of the boxes the shapes are marched inside. Not the sampled
+    // box: a fragment is baked out of the whole building's parse and carries the whole building's
+    // paint stack, weathering coats and all, so most of that stack is about somewhere else entirely.
+    //
+    // **The materials.** A rule names a `VoxelTypeId`, and the file's material table is interned by
+    // what a material LOOKS like. `material_of` is the mesher's own interning, so a rule and a quad
+    // that name the same matter name the same record -- and a material that no voxel happens to
+    // carry is appended to the table here rather than being missing from it, which costs sixteen
+    // bytes and is the difference between a rule that can be drawn and one that cannot.
+    f64 shape_low[3] = {walk.low[0], walk.low[1], walk.low[2]};
+    f64 shape_high[3] = {walk.high[0], walk.high[1], walk.high[2]};
+    if (!walk.shapes.empty()) {
+        for (i32 axis = 0; axis < 3; ++axis) {
+            shape_low[axis] = 1e30;
+            shape_high[axis] = -1e30;
+        }
+        for (const Shape& shape : walk.shapes) {
+            for (i32 axis = 0; axis < 3; ++axis) {
+                shape_low[axis] = std::min(shape_low[axis], static_cast<f64>(shape.low[axis]));
+                shape_high[axis] = std::max(shape_high[axis], static_cast<f64>(shape.high[axis]));
+            }
+        }
+    }
+    f64 paint_amplitude = 0.0;
+    (void)script.field.undisplaced(root, paint_amplitude);
+    // Every material in the palette at this moment is one some VOXEL carries, because the mesher has
+    // built and nothing else has touched it. That is the control on the pruning below.
+    const usize materials_from_voxels = mesher.palette().size();
+    const ws::bake::PaintExport painted = ws::bake::build_paint_export(
+        script.field, script.paint, paint_amplitude, script.origin_shift, shape_low, shape_high,
+        [&mesher](ws::VoxelTypeId type) -> u32 { return mesher.material_of(type); });
+    if (painted.unknown_ops > 0 || painted.order_faults > 0) {
+        WS_LOG_WARN("bake_web", "{}: {} paint nodes have no op number and {} are out of order",
+                    walk.clip, painted.unknown_ops, painted.order_faults);
+    }
+
+    // Did the pruning throw away a rule that actually fires?
+    //
+    // Not an argument, a control. The sampler has just painted this clip with the WHOLE stack, and
+    // every material in the palette above is one it put on a voxel. If a rule that survived pruning
+    // cannot account for one of them, a rule that did not survive was painting it, and the box that
+    // said otherwise is wrong. It is the only check on this that is not downstream of the same
+    // reasoning the pruning is made of -- and three audits agreeing is not evidence when all three
+    // read one source.
+    {
+        std::vector<u8> reachable(materials_from_voxels, 0);
+        for (const ws::bake::PaintRecord& rule : painted.rules) {
+            if (rule.material < materials_from_voxels) reachable[rule.material] = 1;
+        }
+        usize orphans = 0;
+        for (const u8 seen : reachable) { if (!seen) ++orphans; }
+        if (orphans > 0) {
+            WS_LOG_WARN("bake_web",
+                        "{}: {} of {} materials on the voxels are painted by no surviving rule",
+                        walk.clip, orphans, materials_from_voxels);
+        }
+    }
+    // <<< paintexport
+
     // Where the matter actually is, which is what the viewer frames on. The sampled box is nearly
     // always bigger, and framing on it puts a building in the corner of the screen.
     const ws::forge::Measurement measured = ws::forge::measure(clip, metre);
@@ -1714,6 +1878,17 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         for (const f32 value : walk.pool) put(value);
     }
 
+    // >>> paintexport
+    // The named blocks, after everything at a fixed offset. Two of them today; anything added later
+    // is a third entry and moves none of this.
+    {
+        std::vector<WebChunk> chunks;
+        chunks.push_back(make_chunk("FLDG", ws::bake::field_chunk(painted)));
+        chunks.push_back(make_chunk("PANT", ws::bake::paint_chunk(painted)));
+        append_chunks(out, chunks);
+    }
+    // <<< paintexport
+
     baked.id = identifier(relative);
     baked.source = relative.generic_string();
     {
@@ -1768,6 +1943,16 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                     walk.sub_intersections, walk.sub_differences, walk.cutters_skipped,
                     static_cast<f64>(walk.cutter_count() * kCutterBytes) / (1024.0 * 1024.0));
     }
+    // >>> paintexport
+    // What the shading has to walk. Printed for every clip because it is the number the budget
+    // conversation starts from and there is no picture that shows it.
+    std::printf("      paint: %zu of %zu rules (%zu pruned, %zu placed, %zu costly)  "
+                "%zu nodes deep %zu  FLDG %.1f kB  PANT %.1f kB\n",
+                painted.rules.size(), painted.rules_in, painted.rules_pruned, painted.rules_placed,
+                painted.rules_costly, painted.nodes.size(), painted.deepest,
+                static_cast<f64>(painted.field_bytes()) / 1024.0,
+                static_cast<f64>(painted.paint_bytes()) / 1024.0);
+    // <<< paintexport
     if (options.verbose) {
         std::printf("      box  %.2f %.2f %.2f  ..  %.2f %.2f %.2f      matter  %.2f %.2f %.2f  "
                     ".. %.2f %.2f %.2f\n",
@@ -1777,6 +1962,180 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     }
     return true;
 }
+
+// >>> paintexport
+// --------------------------------------------------------------------------------------
+// Reading the paint back out of a baked file
+//
+// This is the acceptance test for the two chunks above and it is worth more here than a picture
+// would be. There is nothing to look at: the output is data, and the only question that matters is
+// whether the rules in the file are the rules the `.clip` actually wrote, in the order it wrote
+// them, with the materials it named. So the file is read back the way the viewer will read it --
+// through the chunk directory, off the bytes on disk, with nothing kept from the bake -- and
+// printed beside the numbers a person can check against the source.
+//
+// It prints the material's colour rather than its name, because a name is not in the file and a
+// colour is: `material moss rgb=64,112,54` in the source and `rgb 64,112,54` here is a check that
+// crosses the format rather than one taken from inside it.
+// --------------------------------------------------------------------------------------
+
+void dump_node(const std::vector<u8>& bytes, usize base, u32 count, u32 index, i32 depth,
+               i32 max_depth) {
+    if (index >= count) {
+        std::printf("%*s<node %u, and there are %u>\n", depth * 2 + 6, "", index, count);
+        return;
+    }
+    const usize at = base + 4 + static_cast<usize>(index) * ws::bake::kFieldNodeBytes;
+    const u32 op = static_cast<u32>(read_u32(bytes, at));
+    const u32 children = static_cast<u32>(read_u32(bytes, at + 4));
+
+    char args[256];
+    usize written = 0;
+    i32 last = -1;
+    for (i32 i = 0; i < 8; ++i) {
+        if (read_f32(bytes, at + 24 + static_cast<usize>(i) * 4) != 0.0f) last = i;
+    }
+    for (i32 i = 0; i <= last && written + 16 < sizeof(args); ++i) {
+        const f32 value = read_f32(bytes, at + 24 + static_cast<usize>(i) * 4);
+        const int put = std::snprintf(args + written, sizeof(args) - written, " %g",
+                                      static_cast<f64>(value));
+        if (put > 0) written += static_cast<usize>(put);
+    }
+    args[written] = '\0';
+
+    const f32 lo0 = read_f32(bytes, at + 56);
+    const bool boxed = std::abs(static_cast<f64>(lo0)) < 1e29;
+    std::printf("%*s[%u] %s%s%s\n", depth * 2 + 6, "", index, ws::bake::field_op_name(op), args,
+                boxed ? "" : "   (no box)");
+    if (children == 0) return;
+    if (depth >= max_depth) {
+        std::printf("%*s... %u more\n", (depth + 1) * 2 + 6, "", children);
+        return;
+    }
+    for (u32 c = 0; c < children && c < 4; ++c) {
+        dump_node(bytes, base, count, static_cast<u32>(read_u32(bytes, at + 8 + c * 4)), depth + 1,
+                  max_depth);
+    }
+}
+
+int dump_paint(const Options& options) {
+    const fs::path file = options.out / (options.dump_paint + ".wsc");
+    std::ifstream stream(file, std::ios::binary | std::ios::ate);
+    if (!stream) {
+        std::printf("no baked clip at %s\n", file.string().c_str());
+        return 1;
+    }
+    const std::streamsize size = stream.tellg();
+    stream.seekg(0);
+    std::vector<u8> bytes(static_cast<usize>(size));
+    if (!stream.read(reinterpret_cast<char*>(bytes.data()), size)) {
+        std::printf("cannot read %s\n", file.string().c_str());
+        return 1;
+    }
+    if (bytes.size() < kHeaderBytes || bytes[0] != 'W' || bytes[1] != 'S' || bytes[2] != 'C' ||
+        bytes[3] != 'V') {
+        std::printf("%s is not a clip file\n", file.string().c_str());
+        return 1;
+    }
+    const u32 version = static_cast<u32>(read_u32(bytes, 4));
+    if (version != kFormatVersion) {
+        std::printf("%s is version %u and this reads %u\n", file.string().c_str(), version,
+                    kFormatVersion);
+        return 1;
+    }
+
+    const u32 materials = static_cast<u32>(read_u32(bytes, 48));
+    const u32 directory = static_cast<u32>(read_u32(bytes, 200));
+    const u32 chunks = static_cast<u32>(read_u32(bytes, 204));
+    std::printf("%s  %.2f MB  %u materials  %u chunks at %u\n", file.string().c_str(),
+                static_cast<f64>(bytes.size()) / (1024.0 * 1024.0), materials, chunks, directory);
+
+    usize field_at = 0, field_size = 0, paint_at = 0, paint_size = 0;
+    for (u32 i = 0; i < chunks; ++i) {
+        const usize entry = static_cast<usize>(directory) + static_cast<usize>(i) * 16;
+        if (entry + 16 > bytes.size()) break;
+        const char name[5] = {static_cast<char>(bytes[entry]), static_cast<char>(bytes[entry + 1]),
+                              static_cast<char>(bytes[entry + 2]),
+                              static_cast<char>(bytes[entry + 3]), '\0'};
+        const usize at = static_cast<usize>(read_u32(bytes, entry + 4));
+        const usize length = static_cast<usize>(read_u32(bytes, entry + 8));
+        std::printf("  %-4s  offset %8zu  %8zu bytes\n", name, at, length);
+        if (std::strcmp(name, "FLDG") == 0) {
+            field_at = at;
+            field_size = length;
+        } else if (std::strcmp(name, "PANT") == 0) {
+            paint_at = at;
+            paint_size = length;
+        }
+    }
+    if (field_size == 0 || paint_size == 0) {
+        std::printf("  no FLDG or no PANT in this file\n");
+        return 1;
+    }
+
+    const u32 node_count = static_cast<u32>(read_u32(bytes, field_at));
+    const u32 rule_count = static_cast<u32>(read_u32(bytes, paint_at));
+    if (4 + static_cast<usize>(node_count) * ws::bake::kFieldNodeBytes != field_size) {
+        std::printf("  ! FLDG says %u nodes, which is not %zu bytes\n", node_count, field_size);
+        return 1;
+    }
+    if (4 + static_cast<usize>(rule_count) * ws::bake::kPaintRuleBytes != paint_size) {
+        std::printf("  ! PANT says %u rules, which is not %zu bytes\n", rule_count, paint_size);
+        return 1;
+    }
+    std::printf("  %u nodes, %u rules\n\n", node_count, rule_count);
+
+    const i32 max_depth = options.verbose ? 64 : 4;
+    for (u32 i = 0; i < rule_count; ++i) {
+        const usize at = paint_at + 4 + static_cast<usize>(i) * ws::bake::kPaintRuleBytes;
+        const u32 root = static_cast<u32>(read_u32(bytes, at));
+        const f32 below = read_f32(bytes, at + 4);
+        const f32 above = read_f32(bytes, at + 8);
+        const i32 facing = static_cast<i32>(read_u32(bytes, at + 12));
+        const f32 facing_at = read_f32(bytes, at + 16);
+        const u32 material = static_cast<u32>(read_u32(bytes, at + 20));
+        const u32 flags = static_cast<u32>(read_u32(bytes, at + 24));
+
+        char colour[32] = "?";
+        if (material < materials) {
+            const usize record = kHeaderBytes + static_cast<usize>(material) * 16;
+            std::snprintf(colour, sizeof(colour), "%u,%u,%u", bytes[record], bytes[record + 1],
+                          bytes[record + 2]);
+        }
+        char band[64];
+        std::snprintf(band, sizeof(band), "[%s, %s]",
+                      (above <= -1e29f) ? "-inf" : std::to_string(above).c_str(),
+                      (below >= 1e29f) ? "+inf" : std::to_string(below).c_str());
+        char face[48] = "";
+        if (facing >= 0) {
+            std::snprintf(face, sizeof(face), "  facing %c %s %g", "xyz"[facing & 3],
+                          (facing_at >= 0.0f) ? ">=" : "<=", static_cast<f64>(facing_at));
+        }
+        std::printf("rule %-3u  material %-3u rgb %-12s band %-24s%s\n", i, material, colour, band,
+                    face);
+        std::printf("         flags%s%s%s%s%s%s%s\n",
+                    (flags & ws::bake::kRuleMetric) ? " metric" : "",
+                    (flags & ws::bake::kRuleBounded) ? " bounded" : "",
+                    (flags & ws::bake::kRuleFacing) ? " facing" : "",
+                    (flags & ws::bake::kRuleBoxed) ? " boxed" : "",
+                    (flags & ws::bake::kRulePlaced) ? " placed" : "",
+                    (flags & ws::bake::kRuleCostly) ? " costly" : "",
+                    (flags & ws::bake::kRuleUndercoat) ? " undercoat" : "");
+        if (flags & ws::bake::kRuleBoxed) {
+            std::printf("         box  %.2f %.2f %.2f  ..  %.2f %.2f %.2f\n",
+                        static_cast<f64>(read_f32(bytes, at + 28)),
+                        static_cast<f64>(read_f32(bytes, at + 32)),
+                        static_cast<f64>(read_f32(bytes, at + 36)),
+                        static_cast<f64>(read_f32(bytes, at + 40)),
+                        static_cast<f64>(read_f32(bytes, at + 44)),
+                        static_cast<f64>(read_f32(bytes, at + 48)));
+        }
+        dump_node(bytes, field_at, node_count, root, 0, max_depth);
+        std::printf("\n");
+    }
+    return 0;
+}
+// <<< paintexport
 
 }  // namespace
 
@@ -1818,6 +2177,10 @@ int main(int argc, char** argv) {
             options.shards = std::max(1, std::stoi(value.substr(slash + 1)));
         } else if (arg == "--code-hash") {
             options.code_hash = next("--code-hash");
+        // >>> paintexport
+        } else if (arg == "--dump-paint") {
+            options.dump_paint = next("--dump-paint");
+        // <<< paintexport
         } else if (arg == "--index-only") {
             options.index_only = true;
         } else if (arg == "--force") {
@@ -1838,13 +2201,27 @@ int main(int argc, char** argv) {
                 "  --code-hash H    a hash of the sampler's own sources; changing it rebakes all\n"
                 "  --force          bake every clip even if its key says it is unchanged\n"
                 "  --shard I/N      bake only every Nth clip, starting at I, for a parallel bake\n"
-                "  --index-only     index what is already baked and sample nothing\n");
+                "  --index-only     index what is already baked and sample nothing\n"
+                // >>> paintexport
+                "  --dump-paint ID  print the paint stack and field graph of a baked clip\n"
+                // <<< paintexport
+                );
             return 0;
         } else {
             std::printf("unknown argument %s\n", arg.c_str());
             return 2;
         }
     }
+
+    // >>> paintexport
+    // Before anything is read or written: the two op tables must agree, or the file's shapes and
+    // its paint fields disagree about what a cylinder is.
+    if (!op_numbering_agrees()) {
+        std::printf("the shapes view and the paint field number the solids differently\n");
+        return 2;
+    }
+    if (!options.dump_paint.empty()) return dump_paint(options);
+    // <<< paintexport
 
     if (!fs::exists(options.clips)) {
         std::printf("no clips at %s\n", options.clips.string().c_str());
