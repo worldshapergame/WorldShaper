@@ -52,7 +52,52 @@
 #
 # DO NOT ADD A LIGHT IN HERE. A sconce would make this room easy and it would delete the whole
 # point of it. fittings.clip owns lamps; the vestibule is the one interior that must stay dark.
+#
+# AND IT IS NOT DARK, BECAUSE THERE IS A FIRST-FLOOR WINDOW IN THE CEILING. Measured, not guessed:
+# the run of air at (x 3.0, z -6.0) is 10.062 m from this floor, closed at both ends, where the room
+# is 4.95 — the ceiling slab is simply not there at x = ±2.20 .. ±3.30. It is there in
+# `--part part_vestibule`, which applies no voids and measures 5.000 m at the same point, so it is
+# somebody's cutter. It is windows.clip's piano nobile opening, 1.98 m deep against a 0.90 wall,
+# and it is the fault `requests/walls-thickness.md` already exists about. It measures the SAME
+# before and after everything below, so it is not the enlargement's doing. Written up with its
+# second half — the sill at 6.30 is below this ceiling at 6.75 whatever the cutter depth is — in
+# clips/facility/requests/vestibule-ceiling.md.
 # ================================================================================================
+#
+# WALKABLE, AND THESE ARE THE MEASUREMENTS RATHER THAN THE INTENTION (2026-08-16).
+#
+# The player is 1.80 m standing, 0.60 m wide, and steps risers to 0.55. Every figure is `clipcheck`
+# on the WHOLE BUILDING at metre 16, the `clear` line of `--gap` — the longest unbroken run of air
+# with stone at both ends — with the control arm taken from `git archive` in the same session.
+#
+#   what                                   probe                          before   after
+#   head on the axis, mid room             gap y@0,-6.0                    5.000    5.062
+#   head 0.9 m in from the door            gap y@0,-6.9                    4.500    4.938
+#   head at x 3.3                          gap y@3.3,-6.0                 10.062   10.062  *
+#   great door, clear WIDTH                gap x@-0.70,-7.30               2.750    2.750
+#   great door, clear HEAD                 gap y@0,-7.30                   4.500    4.500
+#   screen, clear WIDTH between shafts     gap x@-0.70,-5.175              2.250    2.250
+#   screen, clear HEAD under architrave    gap y@0,-5.175                  4.062    4.062
+#   floor east-west at dado height         gap x@-1.30,-6.20               7.125    7.125
+#   floor east-west above the dado         gap x@-0.70,-6.20               7.750    7.750
+#   FLOOR NORTH-SOUTH, x = 0               gap z@0,-1.30                   3.250    3.250 **
+#   FLOOR NORTH-SOUTH, x = 1.5             gap z@1.5,-1.30                 1.188    1.625
+#   the same at plinth height              gap z@1.5,-1.60                 1.125    1.562
+#   FLOOR NORTH-SOUTH, x = 2.5             gap z@2.5,-1.30                 1.625    2.062
+#   FLOOR NORTH-SOUTH, x = 3.3             gap z@3.3,-1.30                 1.875    2.312
+#
+#   *  the hole in the ceiling, above. Identical in both arms.
+#   ** open at the far end: at x = 0 the run goes on through the screen into the rotunda and the
+#      probe box ends before the stone does. It is not a constriction, it is the doorway.
+#
+# THE FOUR NORTH-SOUTH FIGURES ARE WHY THIS ROOM WAS ENLARGED. 1.125 m at plinth height, in the
+# band x 1.35 .. 1.6875 where the door architrave and the screen column stand opposite one another,
+# is a corridor. A person is 0.60 wide, so it was passable; it was also the tightest thing in the
+# building, in the room that is the way into it. It is 1.562 now, and the worst figure anywhere on
+# this floor is 1.562 against a floor of 1.20.
+#
+# Nothing here is a lip: the floor is flat at 1.80 and the deepest thing cut into it is a 0.036 m
+# worn saucer, a fifteenth of the 0.55 a player steps up without noticing.
 #
 # THE MODULE, and where every number came from.
 #
@@ -72,9 +117,9 @@
 #   x -3.60 .. 3.60   the clear room, 16 M
 #   x  3.60 .. 4.50   the side walls, 2 M thick, centred on the portico column axis at 4.05, their
 #                     outer face landing exactly on the jamb of the side door at 4.50
-#   z -6.60           the inner face of the south wall. walls.clip's, from the contract's 7.50 less
-#                     a 2 M wall. IT IS NOT A MODULE MULTIPLE and it cannot be — 7.50 is not — so
-#                     the room's depth is not either, and every number measured off it is marked.
+#   z -7.05           the inner face of the south wall: the contract's 7.50 less ONE M, not two.
+#                     IT IS NOT A MODULE MULTIPLE and it cannot be — 7.50 is not — so the room's
+#                     depth is not either, and every number measured off it is marked.
 #   z -5.40 .. -4.95  the screen: two columns of D = 0.45 on the axis z = -5.175
 #
 # WHY THE CEILING IS AT 6.75 AND NOT AT 6.30. The brief said "about 6.30". 6.30 leaves 4.50 of
@@ -84,12 +129,38 @@
 # 9 M and an entablature of 2 M — and it leaves 0.45 of wall over the door head for the door's own
 # architrave, which 6.30 does not. One module of difference bought the whole interior order.
 #
-# WHY THE ROOM IS ONLY 1.20 DEEP IN THE CLEAR. Because that is all there is. The contract puts the
-# rotunda's inner radius at 4.80 on the origin and the block's inner face at z = -6.60, which
-# leaves 1.80 m between them on the centre line, and the screen takes 0.45 of it. EVERY PIECE OF
-# STONE IN THIS FILE STANDS OUTSIDE r = 4.80 — the nearest is the north face of the screen at
-# z = -4.95, with 0.15 to spare — so whatever the rotunda cuts for itself cannot eat any of it.
-# If you widen this room, widen it in x, and stop at 4.50 because the side door is there.
+# WHY THE ROOM IS 2.10 DEEP IN THE CLEAR AND WAS 1.65, AND WHY THE 0.45 CAME OUT OF THE WALL.
+#
+# The old note said 1.20 and meant 1.65, and both were written as "because that is all there is":
+# the contract puts the rotunda's inner radius at 4.80 on the origin and walls.clip's inner face at
+# z = -6.60, which leaves 1.80 m between them on the centre line, and the screen takes 0.45 of it.
+# That is true of the space BETWEEN two things somebody else fixed. It is not true of the room,
+# because the wall on the south side of it is 0.90 thick and only half of that is doing anything.
+#
+# 1.65 m is not a room. Measured on the finished building at ankle height, the walkable strip in
+# front of the screen came out **0.9075 m** between the door architrave's outer fascia at z = -6.42
+# and the screen column's plinth at z = -5.5125, in the band x 1.35 .. 1.6875 where the two are
+# opposite each other. A person is 0.60 wide, so it is passable and it is the width of a corridor
+# in a service stair, in the room that is supposed to be the entrance to the building.
+#
+# So the south face of this room is now at z = -7.05, which is the contract's block_z less M. It is
+# a RECESS into walls.clip's wall and not a change to it: that wall is 2 M thick and keeps 1 M of
+# stone between this room and the portico, everywhere, and the recess is confined to x -3.60 .. 3.60
+# and y 1.80 .. 6.75, which is the footprint of this room and nothing else. Checked rather than
+# assumed, part by part, over exactly that box: part_walls fills 100% of it and NOTHING ELSE IS IN
+# IT — not doors, not windows, not the stair, not the pilasters, not a fitting, not a neighbouring
+# room. `doors_gd_void` already punches to z = -5.70, 1.35 m past the new face, so the great door's
+# reveal shortens from 0.90 to 0.45 and no leaf, fascia or patera moves.
+#
+# It buys 0.45 m: the same measurement is now **1.3575 m**, the clear depth is 2.10, and the floor
+# pattern did not have to move at all — the border simply went from 0.225 south and 0.75 north to
+# 0.675 (1.5 M) on both, which is the plinth's own depth and the tidier number of the two.
+#
+# EVERY PIECE OF STONE IN THIS FILE STILL STANDS OUTSIDE r = 4.80 — the nearest is the north face
+# of the screen at z = -4.95, with 0.15 to spare — so whatever the rotunda cuts for itself cannot
+# eat any of it. If you widen this room, widen it in x, and stop at 4.50 because the side door is
+# there; if you deepen it further, you are into the last 1 M of somebody else's wall and that IS a
+# request rather than an edit.
 #
 # WHAT I LEFT FOR SOMEBODY ELSE. The north face of the screen entablature is a plain plane at
 # z = -4.95. It is the rotunda's elevation, not mine, and mouldings run out from it would have
@@ -100,11 +171,17 @@
 # a module fraction (0.015 = M/30 is the finest, and it is the entablature's own sixtieth). These
 # are tolerances and are never seen:
 #
-#   1.70, 1.75, -6.65   0.05 and 0.10 buried in the floor or the south wall — the brief's overlap
+#   1.70, 1.75, -7.10   0.05 and 0.10 buried in the floor or the south wall — the brief's overlap
+#   -7.55, -7.00        the sill slab, 0.05 past the wall's outer face and 0.05 under the floor
 #   -4.725              where the floor runs out under the screen's plinths, which overhang it
 #   6.73, 6.80          0.02 under the ceiling soffit, 0.05 over it: a cut past an arris, and a join
+#   2.72, 3.55, 3.555   where the wall's true half laps its wandering half, and the two limits the
+#                       wander is clipped between — see the displacement over the side walls
+#   0.036, 0.396        the depth of the worn hollows and the semi-axis that makes it, which is a
+#                       construction: 2.16 - 0.396 = 1.764, and 1.80 - 1.764 is the number meant
 #   0.006               the capital's knit, a fifth of a voxel — see the screen, below
-#   0.02                every paint rule's `below=`, past the manifest's 12 mm of grain
+#   0.02 / 0.035        every paint rule's `below=`; 0.035 wherever a transform or a displacement
+#                       put the shape where it is, which is BRIEF.md rule 5
 
 include "_contract.clip"
 
@@ -116,11 +193,46 @@ include "_contract.clip"
 # part stands on something of its own, and so the pattern below has a shape of mine to key on. It
 # runs out to x = +-4.50 under the side walls and back to z = -4.725 under the screen's plinths,
 # which overhang the beam.
-let vestibule_floor = box -4.50 1.35 -6.65   4.50 1.80 -4.725
+let vestibule_floor = box -4.50 1.35 -7.10   4.50 1.80 -4.725
 
-# The threshold, through the 0.90 reveal of the great door and out to the wall face. doors.clip's
-# void opens the wall from -7.95, so this is the stone a foot lands on coming in.
-let vestibule_sill = box -1.35 1.35 -7.50   1.35 1.80 -6.60
+# The threshold, through the 0.45 reveal of the great door and out to the wall face. doors.clip's
+# void opens the wall from -7.95, so this is the stone a foot lands on coming in. It laps the floor
+# slab above by 0.05, which is the brief's overlap and is buried.
+let vestibule_sill = box -1.35 1.35 -7.55   1.35 1.80 -7.00
+
+# ================================================================================================
+# THE WEAR — the two hollows a quarter of a million feet have worn into this floor
+# ================================================================================================
+#
+# A threshold that has been walked over for two hundred years has a saucer worn into it, and so has
+# the strip of floor between two doors that everybody crosses. It is the single cheapest true thing
+# a scanned interior has that a modelled one does not, and this is the room to put it in: the great
+# door is the only way into the building and the screen is the only way out of this room, so every
+# foot that has ever been in here has crossed both of these two patches and nothing else.
+#
+# 0.036 at the deepest, struck as very oblate ellipsoids so the fall is smooth. A player steps up
+# risers of 0.55 without noticing; this is a fifteenth of one and it slopes, so it cannot be a lip
+# and cannot be tripped over. The threshold's is 1.80 across (the door's own 2.70 less a foot of
+# jamb either side) and the screen's is 2.25, between the two column plinths.
+#
+# THEY ARE IN `void_vestibule` AND NOT SUBTRACTED FROM MY OWN FLOOR, and that is not a stylistic
+# choice. This room's floor slab is 0.45 of stone lying on a podium that is SOLID to 1.80 under all
+# of it — measured, `part_podium` fills 100.00% of the band y 1.72 .. 1.80 under this room — so a
+# hollow taken out of my slab is backfilled by the podium in the same voxel and the floor comes
+# back flat. A hollow in the floor of a room is room air, and the void is what room air goes in.
+#
+# BOUNDED SO THEY CANNOT REACH doors.clip. `doors_plinth_band` runs y 1.71 .. 2.16 at z -7.68 ..
+# -7.35 and its lower 0.09 is deliberately buried under the opening as the stone every leaf laps
+# into. Both hollows stop at z = -7.30, which is 0.05 clear of it.
+# The two OVERLAP, and they have to: a worn floor is one continuous lane from the door to the
+# screen, not two saucers with a strip of pristine stone between them. The sill's reaches to -6.76
+# and the lane's starts at -6.95, so they run into one another and the fall is smooth all the way.
+let vestibule_wear_sill = ellipsoid 0 2.16 -7.03  rx=0.90  ry=0.396 rz=0.27
+let vestibule_wear_walk = ellipsoid 0 2.16 -6.15  rx=1.125 ry=0.396 rz=0.80
+let vestibule_wear = intersection {
+    union { vestibule_wear_sill vestibule_wear_walk }
+    box -1.20 1.755 -7.30   1.20 1.81 -5.40
+}
 
 # ================================================================================================
 # THE SIDE WALLS — 2 M thick, with a niche in each
@@ -128,24 +240,91 @@ let vestibule_sill = box -1.35 1.35 -7.50   1.35 1.80 -6.60
 #
 # From 1.75 (0.05 into the floor) to 7.20, the top of the ceiling slab. Their north end at -4.95
 # is the anta of the screen; their south end runs 0.05 into the wall walls.clip built.
-let vestibule_wall_e = box 3.60 1.75 -6.65   4.50 7.20 -4.95  round=0.015
+let vestibule_wall_e = box 3.60 1.75 -7.10   4.50 7.20 -4.95  round=0.015
 
 # THE NICHE. 0.60 across (4M/3), 0.30 deep (2M/3), from the dado top at 2.70 to 4.50, half round in
 # plan and half domed at the head — so it is a hollow with no flat surface in it anywhere and no
 # direct light on any of it. This is the contract's "soft gradient inside a niche", put in the one
 # room where there is no direct light to help it.
 #
-# Centred at z = -6.00, which is the middle of the 1.20 m of wall the room actually shows: the wall
-# runs to -4.95 but its last 0.45 is the anta. It is NOT on the coffer's centre line at -6.15, and
+# Centred at z = -6.225, which is the middle of the 1.65 m of wall the room actually shows: the wall
+# runs to -4.95 but its last 0.45 is the anta. It is NOT on the coffer's centre line at -6.375, and
 # it should not be — the coffer is centred in the ceiling the cornice leaves and the niche in the
-# wall the anta leaves, and those are two different pieces of wall.
-let vestibule_niche_shaft = cylinder 3.60 3.45 -6.00  r=0.30 h=1.50 axis=y
-let vestibule_niche_head  = sphere   3.60 4.20 -6.00  r=0.30
+# wall the anta leaves, and those are two different pieces of wall. It moved 0.225 south with the
+# room, and the 0.225 between the two centre lines is what stops them reading as one axis.
+let vestibule_niche_shaft = cylinder 3.60 3.45 -6.225  r=0.30 h=1.50 axis=y
+let vestibule_niche_head  = sphere   3.60 4.20 -6.225  r=0.30
 let vestibule_niche_e     = union { vestibule_niche_shaft vestibule_niche_head }
 
+# THE ARCHITRAVE ROUND IT. A niche 0.60 across in a plaster wall with no dressing at all is a
+# gouge; what makes it read as a niche is the band round its mouth, and the band has to have a
+# SECTION rather than being a flat plate. So it is the shell between a cutter 0.135 (0.3 M) larger
+# and the cutter itself, taken where it crosses the wall face — which follows the jamb up and round
+# the half dome on its own, with no arithmetic per member, and returns across the sill as its base.
+# The same construction rotunda.clip uses round its four niches, at this room's smaller scale.
+#
+# 0.135 wide and standing 0.09 (M/5) proud. The projection is the number that matters twice over.
+# Once because a member that projects one voxel is a member that is not there — this file's own
+# entablature note measures that failure twice. And once because the wall behind it now WANDERS by
+# up to 0.045 (see the displacement below, which is clipped so it can come no further into the room
+# than that): a band at the 0.045 an undisturbed wall would want could be swallowed by its own
+# plaster, and at 0.09 it stands at least 0.045 proud of the worst of it, everywhere.
+let vestibule_niche_big  = union {
+    cylinder 3.60 3.45 -6.225  r=0.435 h=1.77 axis=y
+    sphere   3.60 4.20 -6.225  r=0.435
+}
+let vestibule_niche_band = box 3.51 2.565 -6.75   3.69 4.725 -5.70
+let vestibule_niche_dr_e = intersection {
+    difference { vestibule_niche_big vestibule_niche_e }
+    vestibule_niche_band
+}
+
 let vestibule_wall_cut_e = difference { vestibule_wall_e vestibule_niche_e }
-let vestibule_walls      = mirror { vestibule_wall_cut_e } axis=x
-let vestibule_niches     = mirror { vestibule_niche_e } axis=x
+
+# THE PLASTER IS NOT A MATHEMATICAL PLANE, AND THIS IS THE ONE LINE THAT SAYS SO.
+#
+# These two walls are 1.65 x 4.95 m of flat render each, they are the largest unbroken surface in
+# the room, and the whole point of this fragment is that they are lit by a beam of sun a metre and
+# a half away and by nothing else. A dead-flat plane under a grazing light is the one thing that
+# reads instantly as computer graphics: real float-finished plaster on real brick undulates by two
+# or three centimetres over a metre and the light crawls along it.
+#
+# 0.030 is 0.96 of a voxel at the contract's metre 32 — just past the sampler's half-voxel floor,
+# so the surface genuinely moves rather than dithering, which is the failure the manifest's own
+# 0.012 grain is dropped for. `grain_broad` (fbm size=0.90) and not a fine noise: a long wavelength
+# is a float mark, a short one is sandpaper.
+#
+# DISPLACED BEFORE THE MIRROR, SO THE TWO WALLS STAY IDENTICAL. A `mirror` folds x to |x| and hands
+# the same child to both sides, so a displacement inside it is sampled at the same coordinate twice
+# and the room stays symmetric; put it outside and the noise is evaluated at +x and -x separately
+# and the two sides drift apart, which is exactly what BRIEF.md rule 3 forbids the shell.
+#
+# AND IT IS CLIPPED BACK TO A BOX ON FIVE OF ITS SIX FACES. A displacement moves EVERY surface of
+# the shape it is given, and five of this wall's six are datums somebody else lands on: x = 4.50 is
+# the jamb of the side door, z = -4.95 is the anta line the screen entablature dies into, z = -7.10
+# and y = 1.75 are the 0.05 laps into walls.clip and into the floor, and y = 7.20 is the top of the
+# ceiling slab. Only the face that looks into the room is allowed to wander, so the intersection
+# squares the other five off again wherever the noise pushed them out. Where it pushes them IN it
+# cannot open anything: the two laps are 0.05 and the worst case leaves 0.02 of them.
+#
+# AND IT STARTS AT THE DADO TOP AND NOT AT THE FLOOR. Everything below 2.70 has a member standing
+# on it — the dado body 0.045 proud, its cap 0.09, the skirting 0.135 — and a wall face allowed to
+# wander 0.045 into the room would have swallowed the first of those and half of the second. So the
+# bottom 0.90 is left true, the wander is confined to the 4.05 m of open plaster above it, and the
+# step between the two lands at 2.70 where the dado's own cap stands 0.09 in front of it and hides
+# it. The two halves lap by 0.02 so they are certainly one solid.
+let vestibule_wall_true = intersection {
+    vestibule_wall_cut_e
+    box 3.55 1.70 -7.15   4.50 2.72 -4.95
+}
+let vestibule_wall_wob = intersection {
+    displace { vestibule_wall_cut_e grain_broad } amount=0.030
+    box 3.555 2.70 -7.15   4.50 7.20 -4.95
+}
+let vestibule_wall_render = union { vestibule_wall_true vestibule_wall_wob }
+let vestibule_walls       = mirror { vestibule_wall_render } axis=x
+let vestibule_niches      = mirror { vestibule_niche_e } axis=x
+let vestibule_niche_dress = mirror { vestibule_niche_dr_e } axis=x
 
 # ================================================================================================
 # THE SCREEN — two columns of the order at half size, on the axis z = -5.175
@@ -282,7 +461,7 @@ let vestibule_entab = union {
 # ================================================================================================
 #
 # A slab 0.45 (M) thick over the whole room and both walls, running 0.05 into the south wall.
-let vestibule_ceiling_slab = box -4.50 6.75 -6.65   4.50 7.20 -4.95 round=0.015
+let vestibule_ceiling_slab = box -4.50 6.75 -7.10   4.50 7.20 -4.95 round=0.015
 
 # ONE COFFER, drawn as the hollow it is, from y = 0 upward. 0.90 (D) across and 0.45 (M) deep in z,
 # 0.225 (M/2) into the slab, stepping back in three courses 0.045 tall whose faces are 0.0225 wide.
@@ -291,15 +470,20 @@ let vestibule_ceiling_slab = box -4.50 6.75 -6.65   4.50 7.20 -4.95 round=0.015
 # grid misses it is a softer arris rather than a member that vanishes. It is the same sub-voxel
 # edge the order puts in `coffer_unit`, kept at the order's size rather than scaled with the room.
 #
-# It is not the order's own `coffer_unit`, which is 0.90 square, because the ceiling it hangs in is
-# 0.90 clear between the south wall at -6.60 and the corona at -5.70. So the coffer is 0.90 by 0.45
-# and the band round it is 0.45 (M) east and west and 0.225 (M/2) north and south: HALF the
-# coffer's own dimension on each axis, which is the classical 2:1 the order asks for, both ways.
-let vestibule_cof_a    = box -0.45   0.000 -0.225    0.45   0.045 0.225   round=0.012
-let vestibule_cof_b    = box -0.4275 0.045 -0.2025   0.4275 0.090 0.2025  round=0.012
-let vestibule_cof_c    = box -0.405  0.090 -0.180    0.405  0.135 0.180   round=0.012
-let vestibule_cof_pan  = box -0.36   0.130 -0.135    0.36   0.225 0.135   round=0.012
-let vestibule_cof_rose = box -0.09   0.150 -0.045    0.09   0.225 0.045   round=0.018
+# AND IT IS NOW SQUARE, WHICH IS WHAT THE DEEPER ROOM BOUGHT.
+#
+# It used to be 0.90 by 0.45 — an oblong coffer, which no order has — and the note here used to
+# explain why: the ceiling it hangs in was 0.90 clear between the south wall at -6.60 and the corona
+# at -5.70, and 0.45 of that had to be band. With the south face at -7.05 the clear soffit is 1.35,
+# so the coffer is the order's own 0.90 SQUARE (`coffer_unit`'s proportion) with 0.45 (M) of band
+# east and west and 0.225 (M/2) north and south. The east-west band is the classical 2:1 exactly;
+# the north-south is half of it, and 1.35 is what there is. An oblong coffer is a mistake anybody
+# can see and a narrow band is one only a draughtsman can, which is the trade taken here.
+let vestibule_cof_a    = box -0.45   0.000 -0.45     0.45   0.045 0.45    round=0.012
+let vestibule_cof_b    = box -0.4275 0.045 -0.4275   0.4275 0.090 0.4275  round=0.012
+let vestibule_cof_c    = box -0.405  0.090 -0.405    0.405  0.135 0.405   round=0.012
+let vestibule_cof_pan  = box -0.36   0.130 -0.36     0.36   0.225 0.36    round=0.012
+let vestibule_cof_rose = box -0.09   0.150 -0.09     0.09   0.225 0.09    round=0.018
 
 let vestibule_coffer = difference {
     union { vestibule_cof_a vestibule_cof_b vestibule_cof_c vestibule_cof_pan }
@@ -310,11 +494,11 @@ let vestibule_coffer = difference {
 # and the outermost is 0.45 clear of the wall. The seed sits at x = 0 so that no copy straddles a
 # cell boundary, which would make the repeat infinitely slack and stop the sampler skipping.
 # Dropped 0.02 below the soffit so the opening is cut past the rounding of its own first arris.
-let vestibule_coffers = repeat { translate { vestibule_coffer } 0 6.73 -6.15 } x=1.35 nx=2
+let vestibule_coffers = repeat { translate { vestibule_coffer } 0 6.73 -6.375 } x=1.35 nx=2
 
 # The bosses, named again so they can be gilded. They add no matter — they are what the coffer
 # leaves standing — and they hang 0.075 (M/6) below the back of the pan.
-let vestibule_ros_seed = box -0.09 6.880 -6.195   0.09 6.955 -6.105 round=0.018
+let vestibule_ros_seed = box -0.09 6.880 -6.465   0.09 6.955 -6.285 round=0.018
 let vestibule_rosettes = repeat { vestibule_ros_seed } x=1.35 nx=2
 
 let vestibule_ceiling = difference { vestibule_ceiling_slab vestibule_coffers }
@@ -329,18 +513,47 @@ let vestibule_ceiling = difference { vestibule_ceiling_slab vestibule_coffers }
 # The body runs the FULL height of the dado including the ovolo's band, not up to the ovolo's foot.
 # A moulding is only the swell in front of its own first corner's face; drawn without a core behind
 # it, the ovolo was a ribbon floating 0.045 off the wall, which is what the component count found.
-let vestibule_dado_s      = box -3.60 1.70 -6.60   3.60 2.655 -6.555 round=0.010
-let vestibule_dado_s_ov   = ovolo -3.60 2.655 -6.555   3.60 2.565 -6.51 run=x
-let vestibule_dado_s_cap  = box -3.60 2.655 -6.60   3.60 2.70 -6.51 round=0.008
+let vestibule_dado_s      = box -3.60 1.70 -7.05   3.60 2.655 -7.005 round=0.010
+let vestibule_dado_s_ov   = ovolo -3.60 2.655 -7.005   3.60 2.565 -6.96 run=x
+let vestibule_dado_s_cap  = box -3.60 2.655 -7.05   3.60 2.70 -6.96 round=0.008
 
-let vestibule_dado_e      = box 3.555 1.70 -6.60   3.60 2.655 -5.40 round=0.010
-let vestibule_dado_e_ov   = ovolo 3.555 2.655 -6.60   3.51 2.565 -5.40 run=z
-let vestibule_dado_e_cap  = box 3.51 2.655 -6.60   3.60 2.70 -5.40 round=0.008
+let vestibule_dado_e      = box 3.555 1.70 -7.05   3.60 2.655 -5.40 round=0.010
+let vestibule_dado_e_ov   = ovolo 3.555 2.655 -7.05   3.51 2.565 -5.40 run=z
+let vestibule_dado_e_cap  = box 3.51 2.655 -7.05   3.60 2.70 -5.40 round=0.008
 let vestibule_dado_east   = union { vestibule_dado_e vestibule_dado_e_ov vestibule_dado_e_cap }
+
+# ================================================================================================
+# AND THE SKIRTING UNDER IT — a plinth with a section, which the dado never had
+# ================================================================================================
+#
+# A dado that runs straight into the floor is a board, not a dado. Every one ever built stands on a
+# plinth, and the plinth is where the moulding is: the wall is telling you it has a thickness and a
+# footing, at exactly the height a person looks when they walk into a room and check the floor.
+#
+#   1.800 - 1.935   plinth    0.3 M    standing 0.135 (0.3 M) proud of the wall — three times the
+#                             dado's own 0.045, which is what makes it read as a plinth and not as
+#                             another fascia of the dado
+#   1.935 - 2.025   congé     M/5      a cavetto dying back onto the dado's face at 3.555 / -7.005
+#
+# It starts at 1.70, under the floor, for the same reason the dado does: 0.10 buried is a certain
+# join and a coincident plane is not.
+#
+# THE CAVETTO'S CORNERS ARE (face, bottom) THEN (projection, top), which is the order this whole
+# building writes a moulding in: the first corner is in the stone and the second is in the air. The
+# south run and the two side runs are the same section three times, turned — the `run=` key is what
+# says which way the section is read, and it is not cosmetic: with the wrong one the section is
+# drawn in the wrong plane and the moulding runs the wrong way along the wall.
+let vestibule_skirt_s     = box -3.60 1.70 -7.05   3.60 1.935 -6.915 round=0.010
+let vestibule_skirt_s_cav = cavetto -3.60 1.935 -7.005   3.60 2.025 -6.915 run=x
+let vestibule_skirt_e     = box 3.465 1.70 -7.05   3.60 1.935 -5.40 round=0.010
+let vestibule_skirt_e_cav = cavetto 3.555 1.935 -7.05   3.465 2.025 -5.40 run=z
+let vestibule_skirt_east  = union { vestibule_skirt_e vestibule_skirt_e_cav }
 
 let vestibule_dado = union {
     vestibule_dado_s vestibule_dado_s_ov vestibule_dado_s_cap
+    vestibule_skirt_s vestibule_skirt_s_cav
     mirror { vestibule_dado_east } axis=x
+    mirror { vestibule_skirt_east } axis=x
 }
 
 # ================================================================================================
@@ -352,21 +565,21 @@ let vestibule_dado = union {
 # and an astragal on the inner arris. It runs from the floor to 6.30, which is where doors.clip's
 # void stops, and its head fills 6.30 to 6.75, which is where my ceiling starts. That exact fit is
 # the reason the ceiling is at 6.75: at 6.30 there would have been no head at all.
-let vestibule_arch_j1 = box 1.35  1.70 -6.60   1.53 6.30 -6.51  round=0.010
-let vestibule_arch_j2 = box 1.53  1.70 -6.60   1.665 6.30 -6.465 round=0.010
-let vestibule_arch_j3 = box 1.665 1.70 -6.60   1.80 6.30 -6.42  round=0.010
+let vestibule_arch_j1 = box 1.35  1.70 -7.05   1.53 6.30 -6.96  round=0.010
+let vestibule_arch_j2 = box 1.53  1.70 -7.05   1.665 6.30 -6.915 round=0.010
+let vestibule_arch_j3 = box 1.665 1.70 -7.05   1.80 6.30 -6.87  round=0.010
 let vestibule_arch_jamb = union { vestibule_arch_j1 vestibule_arch_j2 vestibule_arch_j3 }
 
-let vestibule_arch_h1 = box -1.53 6.30  -6.60   1.53 6.48  -6.51  round=0.010
-let vestibule_arch_h2 = box -1.665 6.48 -6.60   1.665 6.615 -6.465 round=0.010
-let vestibule_arch_h3 = box -1.80 6.615 -6.60   1.80 6.75  -6.42  round=0.010
+let vestibule_arch_h1 = box -1.53 6.30  -7.05   1.53 6.48  -6.96  round=0.010
+let vestibule_arch_h2 = box -1.665 6.48 -7.05   1.665 6.615 -6.915 round=0.010
+let vestibule_arch_h3 = box -1.80 6.615 -7.05   1.80 6.75  -6.87  round=0.010
 
 # The astragal on the inner arris, drawn as a plate and rounded into a bead — doors.clip's trick,
 # and the reason it is here is that a 0.045 bead is one and a half voxels and it runs the whole
 # 4.50 m height of the opening, straight down the edge where the light changes fastest.
 let vestibule_arch_plate = union {
-    box 1.35 1.70  -6.5325   1.3725 6.3225 -6.5325
-    box 0    6.30  -6.5325   1.3725 6.3225 -6.5325
+    box 1.35 1.70  -6.9825   1.3725 6.3225 -6.9825
+    box 0    6.30  -6.9825   1.3725 6.3225 -6.9825
 }
 let vestibule_arch_bead = round { mirror { vestibule_arch_plate } axis=x } by=0.0225
 
@@ -382,7 +595,7 @@ let vestibule_architrave = union {
 
 let vestibule_mass = union {
     vestibule_floor vestibule_sill
-    vestibule_walls
+    vestibule_walls vestibule_niche_dress
     vestibule_columns vestibule_antae vestibule_entab
     vestibule_ceiling
     vestibule_dado vestibule_architrave
@@ -390,14 +603,20 @@ let vestibule_mass = union {
 
 let part_vestibule = vestibule_mass
 
-# What this part removes from the building: the air of the room itself, and nothing else. It is
-# the gross volume of the room less everything I built in it, so it takes away anything ANOTHER
-# fragment leaves standing in here — the rotunda's wall, most likely, which has every reason to
-# want the ground the screen stands on — while it cannot touch a stone of mine. The coffers and the
-# niches are not in it: they are cut out of my own slab and my own walls, above, so the manifest
-# never has to know they exist.
-let vestibule_air = box -3.60 1.80 -6.60   3.60 6.75 -4.95
-let void_vestibule = difference { vestibule_air vestibule_mass }
+# What this part removes from the building: the air of the room itself, and the two hollows worn
+# into its floor. The air is the gross volume of the room less everything I built in it, so it takes
+# away anything ANOTHER fragment leaves standing in here — the rotunda's wall, most likely, which
+# has every reason to want the ground the screen stands on — while it cannot touch a stone of mine.
+# The coffers and the niches are not in it: they are cut out of my own slab and my own walls, above,
+# so the manifest never has to know they exist.
+#
+# THE AIR NOW REACHES z = -7.05 AND IT USED TO STOP AT -6.60, which is the 0.45 of walls.clip's
+# 2 M wall this room is recessed into. That is the one line in this file that removes somebody
+# else's stone, it is the whole of the enlargement, and the header says what was measured to be
+# sure it is the only thing in there. It cannot reach a fitting: the manifest unions `part_fittings`
+# back on AFTER every room void, which is what D608 is written up for.
+let vestibule_air = box -3.60 1.80 -7.05   3.60 6.75 -4.95
+let void_vestibule = union { difference { vestibule_air vestibule_mass }  vestibule_wear }
 
 # ================================================================================================
 # PAINT
@@ -410,7 +629,15 @@ let void_vestibule = difference { vestibule_air vestibule_mass }
 # made and leaves a pale rind of the base coat over the part.
 
 # --- the shell -----------------------------------------------------------------------------------
-paint plaster where=vestibule_walls   below=0.02
+#
+# `below=0.035` ON THE WALLS AND NOT 0.02, BECAUSE THEY ARE DISPLACED. BRIEF.md rule 5 names the
+# transforms that push a shape's own solid voxels outside its own test — translate, rotate, around,
+# repeat — and a displacement is the same failure by the same mechanism and a larger one: the
+# surface is decided by coverage and the paint by a test at the cell's centre, and 0.030 of noise
+# separates the two by up to a whole voxel. Missed, they fall through to the manifest's limestone
+# base coat and the plaster comes back speckled with pale grit. 0.035 costs nothing here: the rule
+# is keyed on the wall's own shape and there is no other part within 0.035 of it.
+paint plaster where=vestibule_walls   below=0.035
 paint plaster where=vestibule_ceiling below=0.02
 
 # The inside of a coffer, grown enough to catch the voxels that line it rather than the air in it.
@@ -431,7 +658,19 @@ paint stucco where=vestibule_cof_face below=0.02
 # flutes, ONE VOXEL at metre 32 — with no geometry underneath to tell a denoiser where the line
 # goes. Half of this pattern is in the sun through the door and half is in shadow, in the same
 # square metre, and that is the whole argument for putting it here rather than on a terrace.
-let vestibule_fl_zone = box -3.60 1.70 -6.60   3.60 1.83 -4.95
+#
+# THIS IS THE ONE FLOOR IN THE BUILDING WHOSE JOINTS MUST STAY PAINT. rotunda.clip now cuts its own
+# pavement into real stones with real 0.030 grooves and says why; here the ABSENCE of geometry under
+# the line is the load, and the two rooms are four metres apart, so the comparison a denoiser has to
+# pass is one turn of the head away rather than one screenshot away.
+#
+# THE FIELD DID NOT MOVE WHEN THE ROOM GREW, AND THAT IS WHERE THE 0.45 WAS TAKEN FROM. The room
+# went from -6.60 .. -4.95 to -7.05 .. -4.95, so its middle went from -5.775 to -6.00 — and the field
+# was already at -6.375 .. -5.625, centred on -6.00. The nine squares are now centred in the room
+# instead of shoved against its north side, and the border came out 0.675 (1.5 M) at both ends
+# instead of 0.225 south and 0.75 north. 0.675 is the screen plinth's own depth exactly, which is
+# what the old 0.75 was reaching for and missing by a twentieth.
+let vestibule_fl_zone = box -3.60 1.70 -7.05   3.60 1.83 -4.95
 paint marble where=vestibule_fl_zone below=0.02
 
 let vestibule_fl_field  = box -3.375 1.60 -6.375   3.375 1.93 -5.625
@@ -455,8 +694,28 @@ paint verde where=vestibule_fl_lines below=0.02
 
 # The threshold, in something hard and dark, because it is the one piece of floor in this room the
 # sun lands on square and the one a foot lands on every time.
-let vestibule_fl_sill = box -1.35 1.70 -7.50   1.35 1.83 -6.60
+let vestibule_fl_sill = box -1.35 1.70 -7.55   1.35 1.83 -7.00
 paint granite where=vestibule_fl_sill below=0.02
+
+# AND THE TWO WORN PATCHES, IN `onyx`, WHICH IS WHAT WEAR ACTUALLY LOOKS LIKE.
+#
+# Not a darker colour — a SMOOTHER one. A million feet polish a stone long before they stain it, so
+# the hollow at the door and the strip across to the screen are the same warm stone family as the
+# floor around them at roughness 90 against granite's 225 and marble's 140. Onyx is also translucent
+# at 160, which puts a subsurface material in the one square metre of this room the sun lands on
+# square — the widest-dynamic-range argument at the top of this file, asked of a material rather
+# than of a shape.
+#
+# THE ZONE IS THE HOLLOW GROWN INTO THE STONE AROUND IT AND NOT THE HOLLOW. Every voxel that lines
+# a subtracted surface is a voxel the cutter MISSED — it is the first one outside — so a rule keyed
+# on the cut itself paints the half of the lining that happens to fall inside and leaves the rest
+# grey. `round { } by=0.06` reaches into the stone under the dish, where nothing can see it, and the
+# clip to the floor slab keeps it off the wall. `below=0.035`: two ellipsoids placed by translation.
+let vestibule_fl_worn = intersection {
+    round { vestibule_wear } by=0.06
+    box -1.35 1.70 -7.55   1.35 1.83 -5.40
+}
+paint onyx where=vestibule_fl_worn below=0.035
 
 # --- the stone that stands on it -----------------------------------------------------------------
 paint verde  where=vestibule_dado         below=0.02
@@ -468,6 +727,10 @@ paint marble where=vestibule_architrave   below=0.02
 # The niche linings, grown the same way the coffers are.
 let vestibule_niche_face = round { vestibule_niches } by=0.05
 paint marble where=vestibule_niche_face below=0.02
+
+# And the architrave round each of them, last of the stone, so it wins back the 0.045 of wall face
+# the lining zone above reaches out onto. `below=0.035` — a `mirror` put it where it is.
+paint marble where=vestibule_niche_dress below=0.035
 
 # --- and the gilt, last --------------------------------------------------------------------------
 paint gilt where=vestibule_rosettes below=0.02

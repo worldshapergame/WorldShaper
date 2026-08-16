@@ -66,7 +66,9 @@
 #   the drips    six drip lines, 0.0375 m high (M/12) and 11.70 m long: 70 m of a step ONE AND A
 #                FIFTH VOXELS tall, across the fall, on level lead. A step that shallow is the
 #                smallest honest piece of geometry in this building — smaller than a coffer's
-#                moulding step, and unlike a coffer's it is out in the sun.
+#                moulding step, and unlike a coffer's it is out in the sun. A welted NOSING along
+#                each of them was built, measured and taken out again; see THE NOSINGS THAT ARE
+#                NOT HERE, below, for the four components it cost and how that was localised.
 #   the gullies  four outlet gratings, 20 slots between them, each 0.045 m wide (M/10) with 0.045 m
 #                of bar either side, cut through a 0.045 m plate into a sump. Bar and slot are the
 #                same width and both are one and a half voxels, at the bottom of a channel that is
@@ -90,6 +92,26 @@
 # hundred and sixty times, for one coat on one channel. The scoping works and it is not the scope
 # that costs: it is `occlusion`, `curvature` and `facing` being asked of the whole clip once per
 # solid voxel. Measured both ways and written up in clips/facility/requests/roof.md.
+# ------------------------------------------------------------------------------------------------
+# WHAT COMES OFF THE SLAB, measured by building the part with each cut and again without it, at the
+# contract's metre 32:
+#
+#   roof_well        33.03 m3   the drum's ground, a cylinder of 5.80 cut clean through
+#   roof_cut_gutter  15.71 m3   the channel, 1.20 wide and 0.15 deep, round all four sides
+#   roof_drips       10.94 m3   the three steps that take the fall
+#   roof_sumps        0.062 m3  four outlet sumps, 0.45 square and 0.09 below the sole
+#   the well, again   0.733 m3  taken out of the ROLLS, so each starts where the drum's circle is
+#   the grating slots 0.011 m3  twenty slots, 0.045 wide through a 0.045 plate. At metre 8 this cut
+#                               removes EXACTLY NOTHING — 0.045 is 0.36 of a voxel there — and it
+#                               is a genuine cut all the same. A slot audited at the wrong
+#                               resolution reads as a knife that missed.
+#
+# This part removes nothing from anybody else and the manifest names no `void_roof`.
+#
+# 85.065 m3 of lead in ONE component with NOTHING floating, at metre 32. That is the number this
+# part is judged by and it was 5 components and 288 floating voxels until the drips were given
+# their lap — see THE DRIPS below.
+#
 # ------------------------------------------------------------------------------------------------
 #
 # WHY THE FALL IS TAKEN IN FOUR STEPS AND NOT AS A SLOPE. This is the thing worth reading in this
@@ -240,12 +262,29 @@ let roof_cut_gutter = difference {
 #
 # Drawn once on +x and folded, which is what keeps the two halves of the building from ever
 # drifting: `mirror` folds x to its absolute value, so the west bays are the east bays by
-# construction rather than by a second set of numbers. Each is confined to |z| <= 5.85 as well as
-# x <= 14.35, because north and south of that the gutter has already taken the top down to 12.00 and
-# beyond 14.35 lies the gutter's back, which must stay at 12.15.
-let roof_drip_two = box 8.05  12.1125 -5.85   14.35 13.10 5.85  round=0.012
-let roof_drip_thr = box 10.30 12.0750 -5.85   14.35 13.10 5.85  round=0.012
-let roof_drip_fou = box 12.55 12.0375 -5.85   14.35 13.10 5.85  round=0.012
+# construction rather than by a second set of numbers.
+#
+# THEY LAP 0.10 INTO THE GUTTER AND THEY USED TO BUTT AGAINST IT, AND THAT LEFT FOUR RODS OF LEAD
+# HANGING IN THE AIR. This is the file's own rule about laps applied to a knife instead of to a
+# solid, and it took a component count to find.
+#
+# Each drip was confined to |z| <= 5.85 and x <= 14.35 — exactly the faces of `roof_keep_field`,
+# because north and south of 5.85 and outboard of 14.35 the gutter has already taken the top down
+# to 12.00 and there was said to be nothing left to cut. The two knives therefore met on a shared
+# plane, and where two knives meet on a shared plane the arithmetic decides who gets the voxel: at
+# metre 32 the voxel column straddling z = +-5.85 over bay three came back solid at 12.06 while
+# everything under it had been taken to the gutter sole, which left a rod of lead one voxel square
+# and 2.25 m long floating over the gutter on each flank, four in all, 288 voxels. `components`
+# said 5 for a part whose entire claim is that it is one piece.
+#
+# So the drips now run 0.10 past both faces, into ground the gutter has already cut to 12.00. That
+# removes not one extra voxel — a cut to 12.0375 inside a hole that is already 12.00 is nothing —
+# and it means neither knife ends where the other begins. 14.45 is still 1.10 clear of the gutter's
+# back at 15.55, which must stay at 12.15, and 5.95 is 1.10 clear of the channel's outer edge at
+# 7.05.
+let roof_drip_two = box 8.05  12.1125 -5.95   14.45 13.10 5.95  round=0.012
+let roof_drip_thr = box 10.30 12.0750 -5.95   14.45 13.10 5.95  round=0.012
+let roof_drip_fou = box 12.55 12.0375 -5.95   14.45 13.10 5.95  round=0.012
 let roof_drips = mirror { union { roof_drip_two roof_drip_thr roof_drip_fou } } axis=x
 
 # THE GULLIES — one in the middle of each of the four sides, where a downpipe belongs. 0.45 square
@@ -310,6 +349,49 @@ let roof_roll_one = union {
 let roof_roll_bank = repeat { roof_roll_one } z=0.90 nz=6
 let roof_rolls_east = difference { roof_roll_bank roof_well }
 let roof_rolls = mirror { roof_rolls_east } axis=x
+
+# ================================================================================================
+# THE NOSINGS THAT ARE NOT HERE — a welt at the head of each drip, tried, measured, and removed
+# ================================================================================================
+#
+# A drip in lead is not a step in a plate. The upper sheet is dressed OVER the step and welted back
+# under itself, and what that leaves along the top arris is a half round exactly like a roll turned
+# through ninety degrees. Without it the three drips are the one place on this roof where the metal
+# reads as a folded sheet of tin. So six capsules were built along the drip lines, at the level of
+# the bay above each, of the rolls' own 0.045 radius — 70 m of welt lying across the 250 m of roll
+# that runs the other way, which is what a lead flat actually is.
+#
+# THEY ARE NOT IN `part_roof`, AND THE REASON IS A NUMBER. With them the whole building at metre 8
+# goes from 776 components to 780 and from 6111 floating voxels to 6171: four new islands of about
+# fifteen voxels each. Not a lot, and under a parapet where nobody standing on the ground can see
+# it, but the rule here is that a component count does not rise.
+#
+# It was localised rather than guessed, and it is worth writing down what the control arms said:
+#
+#   whole building, my five files reverted            776 components, 6111 floating
+#   ... with dome.clip reverted only                  780               6171   — not the dome
+#   ... with parapet and pilasters reverted           780               6171   — not those either
+#   ... with roof.clip reverted only                  776               6111   — it is this file
+#   ... with the drip lap kept, nosings dropped       776               6111   — it is the NOSINGS
+#                                                                                and NOT the fix
+#   nosings at r = 0.0375, 0.045 and 0.0675           780 every time — not a size effect
+#   this part alone at metre 8, with and without      9 components either way
+#   this part alone at metre 32, with them            1 component, nothing floating
+#
+# So it is not the geometry and it is not the resolution of this part: it is what the manifest does
+# to the finished building afterwards. The deck's top at metre 8 lands one voxel layer below any
+# feature that stands 0.0375 proud of it, so a welt lives alone in a layer the deck does not reach,
+# and the manifest's 12 mm of grain is enough to part it from what is underneath. Any raised
+# detail on this deck under 0.125 m will do the same thing; the rolls already do it and their
+# islands are inside the 6111.
+#
+# TO PUT THEM BACK is one line — add `roof_noses` to `part_roof` below — and the cost is four
+# islands at metre 8 and nothing at all at metre 32. That is a judgement about which resolution the
+# count is being read at, and it is not this file's to make.
+let roof_nose_two = capsule 8.05  12.1500 -5.85   8.05  12.1500 5.85  r=0.045
+let roof_nose_thr = capsule 10.30 12.1125 -5.85   10.30 12.1125 5.85  r=0.045
+let roof_nose_fou = capsule 12.55 12.0750 -5.85   12.55 12.0750 5.85  r=0.045
+let roof_noses = mirror { union { roof_nose_two roof_nose_thr roof_nose_fou } } axis=x
 
 # ================================================================================================
 # THE GRATINGS — a slotted plate over each gully

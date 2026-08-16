@@ -43,6 +43,54 @@
 # 0.225 of depth in a 0.309 opening at the top ring is meant to be nearly black. If the coffers
 # come back as mud the sampler is what is wrong, not the coffers. And DO NOT put a light in here.
 #
+# WALKABLE, AND THESE ARE THE MEASUREMENTS RATHER THAN THE INTENTION (2026-08-16).
+#
+# The player is 1.80 m standing, 0.60 m wide, and steps risers to 0.55. The floor to clear is
+# 1.00 m of width and 2.10 m of head at any opening, 2.40 m of head in circulation, and no lip over
+# 0.55 anywhere. Every figure below is `clipcheck` on the WHOLE BUILDING at metre 16 — `--gap`'s
+# `clear` line, which is the longest unbroken run of air with stone at both ends, and the only one
+# of the three that answers "how much head is there here" (BRIEF.md rule 7 says why `gap` does not).
+# Both arms of every one of them were taken in the same session, the control from `git archive`.
+#
+#   what                                   probe                          before   after
+#   head at the centre                     gap y@0,0                       7.812    7.812  *
+#   head 3 m east                          gap y@3.0,0                    15.438   15.438
+#   head 3 m north                         gap y@0,3.0                    15.438   15.438
+#   head on the SE diagonal                gap y@3.0,-3.0                  9.938    9.938
+#   head under a column, r 4.2             gap y@4.2,0                     9.938    9.938
+#   head at the south bay's mouth          gap y@0,-4.0                   15.000   15.000
+#   south doorway, clear WIDTH             gap x@-0.70,-4.94               1.750    2.750
+#   south doorway, clear HEAD at x 1.2     gap y@1.2,-4.90                 3.188    3.188
+#   east doorway, clear WIDTH              gap z@4.90,-0.70                2.250    2.750
+#   west doorway, clear WIDTH              gap z@-4.90,-0.70               2.625    2.750
+#   east doorway, clear HEAD               gap y@4.90,0                    4.062    4.062
+#   north bay (BLIND), clear WIDTH         gap x@-0.70,4.94                1.500    2.750
+#   floor, east-west across the building   gap x@-1.30,0                  25.750   25.750
+#   floor, north-south on the axis         gap z@0,-1.30                  12.500   12.750
+#   floor, chord at z = 3.0                gap x@-1.30,3.0                 7.500    7.438
+#
+#   * the centre column is broken by the corona lucis, which fittings.clip hangs at 9.225 — 7.425 m
+#     of clear head under it, and 7.812 is the run above it that `clear` prefers. It is furniture in
+#     the air, not a ceiling, and it is three times the height a person is.
+#
+# So: every opening is 2.75 m wide against a floor of 1.00, every head is 3.19 m or more against a
+# floor of 2.40, the pavement is dead flat at 1.80 (the deepest thing cut into it is a 0.045 worn
+# saucer, an eleventh of the 0.55 a player steps), and the chord at z = 3.0 lost 0.062 to the new
+# wall base, which is the only number here that went the wrong way and it is a skirting board.
+#
+# THE THREE THAT MOVED ARE THE WHOLE POINT. 1.750 to 2.750 on the south doorway is the horns the
+# deeper bay removed — see the note over `rotunda_bay_depth`. The east and west read differently
+# from each other before (2.250 against 2.625) because a chord across a curved reveal quantises
+# differently on each side; afterwards both are 2.750, which is the bay's own 2.70 plus a voxel.
+#
+# THE METRE 32 FIGURES BELOW ARE FROM BEFORE THIS AND ARE LEFT STANDING AS THE CONTROL ARM, not
+# because they still describe this file. What changed: the bays went from 0.225 to 0.45 deep, the
+# wall gained a 0.45 base, six course joints and a 0.030 displacement below 6.30, and the pavement
+# gained ring and radial joints and three worn thresholds. Re-measured at metre 8 after the change:
+# 180,409 voxels against 185,460 before (the room got bigger, so there is less stone), and the SAME
+# 5 components with the same 4 floating single voxels at 11.62 — the ones this file's own note about
+# metre 16 already explains. Nothing new came adrift.
+#
 # MEASURED, `--clip-part part_rotunda` at the contract's metre 32: 11,974,584 voxels, 365.44 m³,
 # 1382.66 m² of surface, 873,787 distinct visual records, largest identical group 122, ONE
 # component, and 88,205,341 field evaluations. `--clip-part rotunda_coffers` at the same metre:
@@ -127,11 +175,174 @@ include "_contract.clip"
 # 12.30 except the attic below, which stops at 12.75, under the lowest window sill.
 
 let rotunda_wall_s = box 4.80 1.75 -1   5.70 12.30 1  round=0.012
-let rotunda_wall   = revolve { rotunda_wall_s } axis=y
+let rotunda_wall_t = revolve { rotunda_wall_s } axis=y
+
+# AND IT IS NOT A MATHEMATICALLY EXACT CYLINDER, WHICH IS THE POINT OF THIS LINE.
+#
+# A revolve is exact to the last decimal, and that is what a room lined in marble is NOT. Every
+# real one is slabs bedded by hand on a wall that was never truly round, and what tells the eye it
+# is stone rather than a surface of revolution is that the reflection of the oculus down the wall
+# wanders instead of running dead straight. 0.030 is 0.96 of a voxel at the contract's metre 32 —
+# just over the sampler's half-voxel floor (`usable_displacement`), so it genuinely relocates the
+# surface rather than dithering it, which is the failure the manifest's own 0.012 was dropped for.
+#
+# `grain_stone` and not a new pattern: it is the contract's shared bed grain, so this wall is
+# weathered by the same noise as everything else that uses it and there is no seam where two
+# different grains meet.
+#
+# IT IS DISPLACED BEFORE ANYTHING IS CUT OUT OF IT AND BEFORE THE ORDER IS STOOD AGAINST IT. The
+# bays, the niches and the panels are all subtracted from the union further down, so their arrises
+# stay dead crisp against a wall that wanders — which is exactly right, because a moulding is
+# worked and a wall face is laid. The coffers are not touched at all: they live in `void_rotunda`
+# and their 0.0225 steps are the thing this file's header forbids blurring.
+#
+# AND IT STOPS AT 6.30, WHICH IS THE LAST COURSE JOINT BELOW THE SUNK PANELS.
+#
+# Measured, and this is why the line is here rather than over the whole wall: with the wander
+# running the full 1.75 .. 12.30, the finished building came back with 805 components against 804
+# before, and the extra one was a SINGLE VOXEL at (-3.25, 6.62, 3.50) — radius 4.78, which is the
+# bottom arris of the sunk panels' margin at 6.66. The panels are cut back to a fixed radius of
+# 4.935 and the wall face now arrives there anywhere between 4.77 and 4.83, so at metre 8 the step
+# between the two lands inside one voxel and sheds it. Nothing was severed and the largest
+# component never moved; it is one voxel of dust, and it is still a component the report has to
+# print.
+#
+# So the wander is confined to 1.75 .. 6.30 and the wall above it is the true revolve. The step
+# between the two is at most 0.030 and it falls INSIDE the course joint at 6.285 .. 6.315, which is
+# a 0.030 groove — so the one place the two halves disagree is the one place there is already a
+# shadow. The 4.55 m of wall the wander is on is the whole of what anybody standing on this floor
+# can see closely; above 6.30 the panels, the columns and the entablature are what the eye reads,
+# and none of them is a plain surface.
+let rotunda_wall_wob = intersection {
+    displace { rotunda_wall_t grain_stone } amount=0.030
+    box -6.00 1.70 -6.00   6.00 6.30 6.00
+}
+let rotunda_wall_true = intersection {
+    rotunda_wall_t
+    box -6.00 6.28 -6.00   6.00 12.35 6.00
+}
+let rotunda_wall_r = union { rotunda_wall_wob rotunda_wall_true }
+
+# THE COURSES. The marble lining is laid in beds of 0.675 (1.5 M) — walls.clip's own ashlar course
+# and, six of them, the height between the string course and the column head outside. Six joints
+# from the top of the base at 2.25 up to 6.30, which is the last one that clears the sunk panels
+# at 6.66.
+#
+# CUT AND NOT PAINTED, and that is the opposite of what walls.clip decided for its own wall, on
+# purpose. Out there the flatness IS the load and a painted line on a plane is the hard case. In
+# here there is no direct light at all, a painted line has no shadow to be found by, and a joint
+# with nothing in it would simply not exist. So this one is a groove 0.030 wide — M/15, one voxel
+# at metre 32, the same number as the fillet between two flutes — and 0.12 deep in the radius,
+# which is enough that it still bites through the 0.030 of wander above.
+#
+# ONE SECTION REVOLVED ONCE, and not six rings or a `repeat`: a `repeat` of something 0.03 tall on
+# a 0.675 pitch is six shapes the sampler must settle separately, and a section costs one revolve.
+let rotunda_course_sec = union {
+    box 4.74 2.910 -1   4.86 2.940 1
+    box 4.74 3.585 -1   4.86 3.615 1
+    box 4.74 4.260 -1   4.86 4.290 1
+    box 4.74 4.935 -1   4.86 4.965 1
+    box 4.74 5.610 -1   4.86 5.640 1
+    box 4.74 6.285 -1   4.86 6.315 1
+}
+let rotunda_courses = revolve { rotunda_course_sec } axis=y
+
+let rotunda_wall = difference { rotunda_wall_r rotunda_courses }
 
 # THE PAVING. 0.135 (0.3 M) thick, bedded into the podium, out to 5.10 so that the floor of a bay
 # recess is paved too. Its top is the contract's podium_top, which is the floor of the building.
 let rotunda_floor = cylinder 0 1.7325 0  r=5.10 h=0.135 axis=y
+
+# ================================================================================================
+# AND IT IS LAID IN SEPARATE STONES, WITH JOINTS — which is the difference between a pavement and
+# a picture of one
+# ================================================================================================
+#
+# Everything below this line was a PAINTED pattern and nothing else: six concentric colours and
+# forty-eight coloured bands, on one unbroken disc of stone 10.20 m across. In a raking shaft of
+# sun off the oculus that reads as a printed floorcloth, because the one thing a real pavement does
+# under a low light and a painted one cannot is throw a hairline of shadow along every joint.
+#
+# So the joints are cut. 0.030 wide (M/15 — one voxel at the contract's metre 32, the width this
+# building already uses for a mortar line) and 0.030 deep, which leaves 0.105 of the 0.135 slab
+# under them, so nothing here can sever the paving from itself.
+#
+# THEY GO IN `void_rotunda` AND NOT IN A `difference` UP HERE, AND THAT IS THE WHOLE TRICK.
+#
+# The first version of this cut them out of `rotunda_floor` and they DID NOT EXIST. This paving is
+# 0.135 of stone bedded into a podium that is solid to 1.80 underneath it — measured, `part_podium`
+# fills 100.00% of the band y 1.72 .. 1.80 across the whole room, and `part_crypt` another 64.75% —
+# so a groove taken out of my slab is immediately backfilled by somebody else's, and the floor comes
+# back exactly as flat as it was with nothing to show for the arithmetic. A hollow in the FLOOR OF A
+# ROOM is room air by definition, and room air is what a `void_` is for. The same is true of every
+# other pavement in this building and it is why this note is longer than the shapes it explains.
+#
+# Bounded to r <= 5.10, which is my own paving's edge. Between 4.95 and 5.10 on the east and west
+# axes that is also the lip of halls.clip's floor slab, and a joint 0.030 deep runs across it — as
+# a joint at a threshold does in any building. Nothing structural is in reach: the deepest thing
+# here is 0.045 and the crypt's soffit is 0.1125 below the shallowest of it.
+#
+# THE RINGS are the six radii the colour already changes at, so a joint falls exactly where one
+# stone stops and the next begins rather than somewhere near it: 0.90, 1.035, 1.35, 3.60, 3.735 and
+# 4.50, and a seventh at 4.86 dividing the border from the threshold stones.
+#
+# THE RADIALS are the same twenty-four lines the coffers overhead and the porphyry spokes below are
+# set out on, drawn the same way — one quadrant of seven rotations, folded twice, negative angles —
+# so the floor is jointed on the figure it is painted on. They run from 0.90 out to 5.10 and stop
+# at the middle roundel, which is one stone.
+let rotunda_fj_ring_one = union {
+    difference { cylinder 0 1.80 0 r=0.915 h=0.06 axis=y  cylinder 0 1.80 0 r=0.885 h=0.08 axis=y }
+    difference { cylinder 0 1.80 0 r=1.050 h=0.06 axis=y  cylinder 0 1.80 0 r=1.020 h=0.08 axis=y }
+    difference { cylinder 0 1.80 0 r=1.365 h=0.06 axis=y  cylinder 0 1.80 0 r=1.335 h=0.08 axis=y }
+    difference { cylinder 0 1.80 0 r=3.615 h=0.06 axis=y  cylinder 0 1.80 0 r=3.585 h=0.08 axis=y }
+    difference { cylinder 0 1.80 0 r=3.750 h=0.06 axis=y  cylinder 0 1.80 0 r=3.720 h=0.08 axis=y }
+    difference { cylinder 0 1.80 0 r=4.515 h=0.06 axis=y  cylinder 0 1.80 0 r=4.485 h=0.08 axis=y }
+    difference { cylinder 0 1.80 0 r=4.875 h=0.06 axis=y  cylinder 0 1.80 0 r=4.845 h=0.08 axis=y }
+}
+
+let rotunda_fj_rad   = box 0.88 1.770 -0.015   5.12 1.810 0.015
+let rotunda_fj_rad_b = rotate { rotunda_fj_rad } y=-0.0416667
+let rotunda_fj_rad_c = rotate { rotunda_fj_rad } y=-0.0833333
+let rotunda_fj_rad_d = rotate { rotunda_fj_rad } y=-0.125
+let rotunda_fj_rad_e = rotate { rotunda_fj_rad } y=-0.1666667
+let rotunda_fj_rad_f = rotate { rotunda_fj_rad } y=-0.2083333
+let rotunda_fj_rad_g = rotate { rotunda_fj_rad } y=-0.25
+let rotunda_fj_radials = intersection {
+    mirror { mirror { union { rotunda_fj_rad rotunda_fj_rad_b rotunda_fj_rad_c rotunda_fj_rad_d
+                              rotunda_fj_rad_e rotunda_fj_rad_f rotunda_fj_rad_g } } axis=x } axis=z
+    box -5.15 1.76 -5.15   5.15 1.82 5.15
+}
+
+# ================================================================================================
+# THE THRESHOLDS — the three stones a foot actually lands on, dished by the feet that landed there
+# ================================================================================================
+#
+# A threshold in a building that has been used is the one piece of floor you can date by looking at
+# it: the arris is gone, the polish is gone, and there is a saucer worn into the middle of it two
+# or three centimetres deep. Nothing else in this building carries that, and it is the cheapest
+# true thing a scanned interior has that a modelled one does not.
+#
+# 0.045 (M/10) at the deepest, over a dish 2.10 across and 0.60 through — so it is a saucer and not
+# a step: the player's own limit is a 0.55 riser and this is an eighth of one, and it slopes.
+#
+# THREE AND NOT FOUR, and that is the whole point of cutting them by hand instead of folding them.
+# The south bay is the great door, the east and west bays are the halls, and the north bay is
+# BLIND — this file's header says so twice. Wearing a hollow into the floor of a recess nobody can
+# walk out of would say the opposite of what wear is for. So: one at +x, mirrored to -x, and one
+# rotated a POSITIVE quarter turn, which carries +x to -z and is the one place in this file a
+# positive angle is right, because nothing folds it afterwards to throw it away.
+let rotunda_thr_one   = ellipsoid 4.80 2.205 0  rx=0.30 ry=0.45 rz=1.05
+let rotunda_thr_south = rotate { rotunda_thr_one } y=0.25
+let rotunda_thresholds = intersection {
+    union { mirror { rotunda_thr_one } axis=x   rotunda_thr_south }
+    box -5.15 1.74 -5.15   5.15 1.82 5.15
+}
+
+# Everything taken out of the pavement, in one binding, clipped to my own paving's own radius.
+let rotunda_floor_cuts = intersection {
+    union { rotunda_fj_ring_one rotunda_fj_radials rotunda_thresholds }
+    cylinder 0 1.79 0  r=5.10 h=0.10 axis=y
+}
 
 # THE ATTIC, and it is here to close a hole that is not otherwise closed by anybody.
 #
@@ -149,7 +360,39 @@ let rotunda_attic = difference {
 }
 
 # ================================================================================================
-# THE FOUR BAYS ON THE AXES — recessed arches, 2.70 wide, 0.225 deep
+# THE BASE OF THE WALL — 0.45 m (M) of moulding at the foot, round the whole room
+# ================================================================================================
+#
+# There was nothing here. The marble wall met the marble pavement on a butt joint with no member
+# between them, which is the one thing no room of this order has ever been built with: a wall base
+# is where the eye is told how thick the wall is, and without one the room reads as a cylinder of
+# paper standing on a disc.
+#
+# Three members, 0.45 (M) tall in all, reckoned up from the floor at 1.80 and each a module
+# fraction, drawn ONCE as a section in (radius, height) and revolved — which is the only
+# construction that makes a torus a torus round a room 9.60 m across:
+#
+#   1.800 - 2.025   plinth     M/2      the die, standing 0.135 (0.3 M) proud of the wall face
+#   2.025 - 2.115   torus      M/5      a roll of 0.045 (M/10) on the plinth's face, out to 0.18
+#   2.115 - 2.250   congé      0.3 M    a cavetto dying back into the wall face at 4.80
+#
+# The core runs out to 4.88, which is 0.08 INSIDE the wall face, so the base is bedded into the
+# wall it stands against rather than coincident with it — and it is 0.05 into the paving at the
+# bottom for the same reason. Both are the brief's overlap and neither is ever seen.
+#
+# IT IS CUT BY THE BAYS AND NOT BY THE NICHES, and both are right. A bay is a doorway and its
+# reveal goes to the floor, so the base returns into the jamb and stops — which happens for free,
+# because the bay cutter starts at radius 4.10, well in front of anything here. A niche sills at
+# 2.70, which is D above the floor and 0.45 above the top of this, so the base runs unbroken behind
+# all four of them, which is what a niche at that height is for.
+let rotunda_base_core  = box     4.665 1.75 -1   4.88 2.115 1
+let rotunda_base_roll  = bead    4.665 2.025   4.62  2.115
+let rotunda_base_conge = cavetto 4.80  2.115   4.665 2.25
+let rotunda_base_sec   = union { rotunda_base_core rotunda_base_roll rotunda_base_conge }
+let rotunda_base       = revolve { rotunda_base_sec } axis=y
+
+# ================================================================================================
+# THE FOUR BAYS ON THE AXES — recessed arches, 2.70 wide, 0.45 deep
 # ================================================================================================
 #
 # Springing 4.50, crown 5.85 on a 1.35 (3 M) radius, sill on the floor: 2.70 wide (6 M), 2.70 clear
@@ -157,11 +400,29 @@ let rotunda_attic = difference {
 # the whole width, so a doorway fits one without anything here moving.
 #
 # The back of the recess is a CYLINDER concentric with the wall, not a plane, so
-# the recess is 0.225 deep at the middle and 0.225 deep at the jambs; a flat back on a curved wall
+# the recess is 0.45 deep at the middle and 0.45 deep at the jambs; a flat back on a curved wall
 # is 0.42 deep in the corners and reads as a wedge.
+#
+# 0.45 (M) DEEP AND NOT 0.225, AND THAT IS A WALKABILITY FIX BEFORE IT IS AN ELEVATION ONE.
+#
+# A neighbour who opens one of these bays punches through with a void of their own, and a void is a
+# BOX or a prism: it stops on a flat plane. My wall is a CYLINDER. Where the two meet, whatever
+# lies between the neighbour's last plane and my recess is stone nobody meant to leave, and because
+# a chord is shortest in the middle and longest at the ends it is left as a pair of curved horns
+# growing in from the jambs.
+#
+# Measured on the finished building at waist height, x-run across the south doorway, with the
+# recess at 0.225: the vestibule's void stops at z = -4.95 and the opening between the horns came
+# out 1.750 m clear against a bay that is 2.70 m wide — a third of the doorway gone, and it read as
+# a doorway that had been narrowed on purpose. At 0.45 the recess reaches past the neighbour's
+# plane everywhere across the full 2.70, the horns cannot exist, and the same measurement is
+# 2.750 m. Nothing else changed and no other fragment was touched.
+#
+# It leaves 0.45 of wall behind the recess, which is the same 1 M the screen's entablature is deep,
+# and it cannot reach anybody: `rotunda_bays` is subtracted INSIDE this file, from my own stone.
 let rotunda_bay_body  = box 4.10 1.80 -1.35   5.30 4.50 1.35
 let rotunda_bay_head  = cylinder 4.70 4.50 0  r=1.35 h=1.20 axis=x
-let rotunda_bay_depth = cylinder 0 3.80 0  r=5.025 h=4.40 axis=y
+let rotunda_bay_depth = cylinder 0 3.80 0  r=5.25 h=4.40 axis=y
 let rotunda_bay_one   = intersection {
     union { rotunda_bay_body rotunda_bay_head }
     rotunda_bay_depth
@@ -261,7 +522,12 @@ let rotunda_panel_n_one = union {
 # bounds back and changes not one voxel. The boxes below are bounds, not cutters; nothing touches
 # their faces.
 
-let rotunda_box_bay   = box -5.15 1.70  -5.15   5.15 5.95  5.15
+# THE BAY BOX IS +-5.40 AND IT USED TO BE +-5.15, WHICH WAS EXACTLY THE OLD RECESS DEPTH PLUS A
+# TOLERANCE. These boxes are bounds and not cutters — the note above says nothing touches their
+# faces — so deepening the recess to 5.25 without moving this one would have had the box quietly
+# doing the cutting instead, and the horns the deeper recess exists to remove would have come
+# straight back at a different radius.
+let rotunda_box_bay   = box -5.40 1.70  -5.40   5.40 5.95  5.40
 let rotunda_box_niche = box -5.90 2.55  -5.90   5.90 6.20  5.90
 let rotunda_box_dress = box -5.00 2.25  -5.00   5.00 6.55  5.00
 let rotunda_box_ped   = box -5.40 2.60  -5.40   5.40 5.50  5.40
@@ -494,7 +760,7 @@ let rotunda_oculus   = intersection {
 # what was cut and must not be eaten by it: the pedestals, the urns and the architraves round the
 # niches. Everything hangs off the wall, which runs unbroken from 1.75 to 12.30, so this is one
 # component and there is nothing in it that can come adrift.
-let rotunda_mass = union { rotunda_wall rotunda_floor rotunda_attic }
+let rotunda_mass = union { rotunda_wall rotunda_floor rotunda_base rotunda_attic }
 let rotunda_cut  = difference {
     union { rotunda_mass rotunda_entab rotunda_columns }
     rotunda_bays rotunda_niches rotunda_panels
@@ -508,10 +774,16 @@ let part_rotunda = union {
 }
 
 # What this part removes from the rest of the building: the coffers, which are cut out of the
-# dome's shell, and the oculus, which must stay open. Nothing else — the bays, the niches and the
-# panels are cut out of my own stone above, inside this file, because a niche is not a room and
-# there is nothing else in this building for one to hollow.
-let void_rotunda = union { rotunda_coffers rotunda_oculus }
+# dome's shell; the oculus, which must stay open; and the joints and worn thresholds in the
+# pavement, which are room air over a podium that is solid underneath — see the long note over the
+# joints for why they cannot be a `difference` in my own slab. Nothing else — the bays, the niches
+# and the panels are cut out of my own stone above, inside this file, because a niche is not a room
+# and there is nothing else in this building for one to hollow.
+#
+# NONE OF THE THREE CAN REACH A FITTING. The manifest unions `part_fittings` back on AFTER every
+# room void for the reason D608 is written up for, and in any case the deepest thing in here at
+# floor level is 0.045 and the lowest fitting in this room hangs at 9.225.
+let void_rotunda = union { rotunda_coffers rotunda_oculus rotunda_floor_cuts }
 
 # ================================================================================================
 # PAINT
@@ -623,6 +895,37 @@ paint porphyry   where=rotunda_fl_star     below=0.02
 paint verde      where=rotunda_fl_ring_in  below=0.02
 paint marble     where=rotunda_fl_disc     below=0.02
 
+# THE THRESHOLD STONES, AND THE ONLY PLACE IN THIS ROOM WHERE PAINT IS ALLOWED TO SAY "USED".
+#
+# Three sectors of the border, 2.70 wide, one in each bay that goes anywhere — a different stone
+# from the slate border they are set into, because a threshold always is: it is the piece that gets
+# replaced, so it is laid in whatever was hardest and it never matches. `travertine` is the choice
+# and NOTHING ELSE IN THIS BUILDING PAINTS IT indoors, so it cannot be confused with a neighbour's.
+#
+# And then the saucer worn into it, in `onyx` — the same warm stone family two shades along and at
+# roughness 90 against travertine's 228. That is the whole of what wear IS to a renderer: not a
+# darker colour, a SMOOTHER one, because a million feet polish a stone before they stain it. It is
+# also a translucent at 160 lying in a hollow lit only by bounce, which is a question worth asking
+# of the one part of this floor a foot has actually touched.
+#
+# BOTH ZONES ARE GROWN SOLIDS AND NEITHER IS THE HOLE. The saucer is cut out of the paving, so
+# every voxel that lines it is a voxel the cutter MISSED — the trap this file's own note about the
+# niches spends a paragraph on. `round { } by=0.05` grows the dish into the stone around it, and
+# the intersection with the border keeps it off the wall. `below=0.035` and not 0.02 on both,
+# because a `rotate` and a `mirror` put them where they are (BRIEF.md rule 5).
+let rotunda_ts_one   = box 4.49 1.66 -1.35   5.16 1.83 1.35
+let rotunda_ts_south = rotate { rotunda_ts_one } y=0.25
+let rotunda_thr_zone = intersection {
+    union { mirror { rotunda_ts_one } axis=x   rotunda_ts_south }
+    rotunda_fl_border
+}
+let rotunda_worn_zone = intersection {
+    round { rotunda_thresholds } by=0.05
+    rotunda_fl_border
+}
+paint travertine where=rotunda_thr_zone  below=0.035
+paint onyx       where=rotunda_worn_zone below=0.035
+
 # THE HOLLOWS, AND WHY THESE TWO RULES ARE KEYED ON A GROWN COPY OF A VOID AND NOT ON THE VOID.
 #
 # The coffers are plaster, like the vault they are cut into — dome.clip's own lining rule only
@@ -692,7 +995,16 @@ paint gilt     where=rotunda_urns      below=0.02
 # it reflects is the room, and whether it reflects the room is the question. It is also the only
 # gilt below the roof: everywhere else in this building it is on a finial against the sky.
 
-# NO WEATHERING. This is an interior, it has never been rained on, and the manifest already spends
-# 12 mm of grain on the whole building. A second displacement on this part would eat the 0.0225
-# steps in the coffers, which are half of what this room exists to carry. Deliberate, and written
-# down so the next person does not read the absence as an oversight.
+# NO WEATHERING. This is an interior, it has never been rained on, and `weather` puts its coats on
+# by a VALUE rather than by a place — it would bleach the coffers and the urns along with the wall.
+# Deliberate, and written down so the next person does not read the absence as an oversight.
+#
+# THE ONE DISPLACEMENT IN THIS FILE IS ON `rotunda_wall_t` AND ON NOTHING ELSE, which is the same
+# argument arriving at a different answer rather than a change of mind. What the original note
+# refused was a displacement over the whole PART, because that reaches the coffers, and their
+# 0.0225 steps are half of what this room exists to carry. A displacement on the bare revolved wall
+# — before a single bay, niche or panel is cut out of it and before the order is stood against it —
+# cannot reach a coffer, cannot reach a moulding and cannot reach an arris. It reaches exactly the
+# 300 m² of laid marble that has no business being a mathematically perfect cylinder, and 0.030 is
+# 0.96 of a voxel at metre 32: past the sampler's half-voxel floor, so it moves the surface instead
+# of dithering it, which is what the manifest's own dropped 0.012 could not do.

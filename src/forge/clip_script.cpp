@@ -1160,6 +1160,28 @@ void apply_origin(Script& script) {
         rule.test = f.translate(rule.test, by);
     }
 
+    // AND THE NAMES THE FILE BOUND, which is the part this was quietly not doing while the comment
+    // above claimed nothing was left behind.
+    //
+    // `script.parts` is how a tool asks for one piece of a clip on its own -- `--part part_dome`,
+    // and the clip viewer bakes every fragment of the facility through it. Those entries pointed at
+    // the nodes as the author wrote them while the solid, the rules and the BOUNDS all moved 3.50 m,
+    // so asking for a part sampled an unmoved shape inside a box that had dropped. It does not
+    // fail, it answers: `part_dome` came back an 11.75 x 1.00 x 11.75 m saucer wearing one material
+    // instead of six -- the 1.05 m of a 4.15 m dome that happened to still fall inside the moved
+    // box, painted by whatever rule was 3.50 m lower. `part_pilasters` reported eleven materials on
+    // a part that paints two, the other nine being the site's and the podium's coats arriving from
+    // above.
+    //
+    // Two separate agents measuring two different parts each concluded their fragment was broken
+    // before either found the instrument was. The shipped building was never affected -- it is
+    // built from `solid`, which moved correctly -- so nothing but the measurements was ever wrong,
+    // and that is exactly what makes it worth fixing: every number anybody took through `--part`
+    // was taken against the wrong box.
+    for (auto& entry : script.parts) {
+        entry.second = f.translate(entry.second, by);
+    }
+
     // The bounds are in the same space and have to come along, or the clip is cut where it used to
     // be rather than where it now is.
     script.settings.low.x += dx;

@@ -1,10 +1,11 @@
 # doors — the great bronze south door, its pedimented doorcase, and the side doors east and west
 #
 # Everything here is cut into the SOUTH FACE OF THE MAIN BLOCK, z = -7.50, standing on the podium
-# floor at y = 1.80, inside the portico. Nothing in this file needs to know anything about the
-# wall it pierces except where its face is: the openings are punched 1.80 m northward, which is
-# deeper than any wall this building can plausibly have, and the manifest takes them away at the
-# end. Add a wing beside this next month without reading a line of it.
+# floor at y = 1.80, inside the portico. It needs walls.clip's `wall_cut` — 1.00 — and nothing else
+# about the wall, and the first version of this file said it needed nothing at all: it punched
+# every opening 1.80 m northward because that is "deeper than any wall this building can plausibly
+# have", which through a 0.90 m wall is 0.90 m of hole hanging in the room beyond. The note over
+# the voids at the foot of this file is the wall, the depth, and what the extra 0.90 was eating.
 #
 # ------------------------------------------------------------------------------------------------
 # WHAT THIS FILE PUTS UNDER LOAD: bronze, and a subtracted detail on a curved surface.
@@ -469,13 +470,63 @@ let part_doors = union { doors_stone doors_leaves }
 
 # What is taken out of the building: every opening, MINUS the leaves standing in it. The manifest
 # subtracts this from everything after everything is assembled, so writing the leaves back into
-# the void here is what leaves them standing in a hole that goes clean through the wall — and it
-# guarantees the sunk panels stay sunk however thick somebody else's wall turns out to be.
+# the void here is what leaves them standing in a hole that goes clean through the wall.
 #
-# 1.80 m of northward punch (4M) is more than any wall this building can have; 0.45 southward is
-# air under the portico.
-let doors_gd_void   = box -1.35 1.80 -7.95   1.35 6.30 -5.70
-let doors_sd_void_e = box  4.50 1.80 -7.95   6.30 4.95 -5.70
+# ------------------------------------------------------------------------------------------------
+# THE DEPTH IS THE WALL'S. IT USED TO BE 1.80 AND THAT WAS A BUG.
+#
+# These three boxes used to run north to z = -5.70 — "1.80 m of northward punch (4M) is more than
+# any wall this building can have" — and being more than the wall is exactly what was wrong with
+# them. A door void is not a room's void. facility.clip subtracts a room's void from `built`
+# alone; it subtracts THIS from `built` AND from `part_fittings`, because nothing may stand in an
+# opening. So everything one of these boxes reaches is DELETED, and 1.80 m through a 0.90 m wall
+# spends the other 0.90 deleting whatever happens to stand behind it.
+#
+# walls.clip now states the wall as three dials at the top of its own file, which is where this
+# number should always have come from (requests/walls-thickness.md):
+#
+#   wall_thick   0.90   the outer wall, at every height, on all four faces. D, or 2 M
+#   wall_cut     1.00   how deep a cutter must reach from the outer face to come out the far side
+#   wall_relief  0.18   the most anything on that wall stands proud of its face
+#
+#   z = -7.50   the outer face — the contract's block outline, what every dressing here stands on
+#   z = -6.60   the inner face — that outline less D, and it is written down in seven other files
+#   z = -6.50   where these cuts stop: -7.50 + wall_cut, 0.10 past the inner face and no more
+#
+# MEASURED, and not reasoned. The whole building was sampled twice at metre 16 over a box round
+# the doors — once as it stands, once with `void_doors` struck out of the manifest — and the two
+# diffed voxel by voxel. What the old 1.80 boxes took away BEYOND the wall's inner face, that no
+# room's own void was asking for:
+#
+#   3500 voxels of the CHAPEL, 0.854 m3, gouged out of `chapel_block`'s south-east corner at
+#   x -6.30 .. -6.00, z -6.60 .. -5.70, the full height of the west lesser door. chapel.clip says
+#   in its own header that "nothing of mine crosses x = -6.00" and puts its entrance passage at
+#   z -5.175 .. -3.825; it never asked for that hole, cannot see it from inside, and had already
+#   moved its oval's south flank to z = -5.625 to keep clear of a cutter it could not control.
+#   0.793 m3 of it comes back with this change and the rest is inside the wall, where it belongs.
+#
+#   Nothing of the SALON, and only by luck: salon.clip cuts `salon_door_air` = box 5.90 1.80 -6.65
+#   6.615 4.95 -5.70 for itself, which is the whole of its west doorway, so the east lesser door
+#   opens into the salon whatever this file does. The over-reach was cutting a hole that was
+#   already cut.
+#
+#   Nothing behind the GREAT door either, because everything there is the vestibule's own air. The
+#   one thing behind it that is not air is vestibule.clip's dado, which returns straight across the
+#   opening and stands 0.09 (M/5) proud of the inner face to z = -6.51. THAT still has to go, or
+#   the great doorway has a 0.90 m high band across its foot — and it does go: -6.50 is past
+#   -6.51, by 0.010, which is the whole of the margin and is worth knowing about.
+#
+# SOUTHWARD IS UNCHANGED at -7.95 and it is NOT slack. `doors_plinth_cap`'s cavetto reaches
+# z = -7.725 and the plinth is the one piece of this file's own stone that runs ACROSS all three
+# openings, so the void has to take it away where the doorways are or a 0.45 m block stands on
+# each threshold. And the same diff found the removed set reaching z = -7.812 — 0.087 south of
+# that cavetto — in six voxels at x = +-5.50, y 4.19 .. 4.25, which is the axis and the flame
+# height of the portico's outer fitting. Pulling the south face back to the plinth would leave
+# those standing in mid air in a doorway, so it stays where it is.
+# ------------------------------------------------------------------------------------------------
+
+let doors_gd_void   = box -1.35 1.80 -7.95   1.35 6.30 -6.50
+let doors_sd_void_e = box  4.50 1.80 -7.95   6.30 4.95 -6.50
 let doors_sd_void   = mirror { doors_sd_void_e } axis=x
 
 let void_doors = difference {

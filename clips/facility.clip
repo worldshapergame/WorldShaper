@@ -106,6 +106,52 @@ let built = union { shell inside }
 # fragments that need to remove matter — a doorway through a wall, a window through it, the
 # rooms themselves — each expose one shape named `<part>_void`, and they are all taken away
 # here, in one place, where the order is visible.
+#
+# TWENTY-SEVEN PARTS AND TWELVE VOIDS, AND EVERY ONE OF EACH IS ACCOUNTED FOR. Fourteen parts in
+# `shell`, eleven in `inside`, part_fittings and part_terrace joined below: twenty-seven, which is
+# every `part_` bound in clips/facility/, each named exactly once. Twelve `void_` are bound and
+# twelve are subtracted here, so there is no void without a part and no part whose void is left
+# out. The three parts that expose no void say so in their own files, in as many words:
+# surface.clip ("there is no void_surface"), terrace.clip ("it removes nothing from anybody") and
+# fittings.clip.
+#
+# WHAT EACH VOID ACTUALLY REMOVES, and this is measured rather than reasoned. Each row is the
+# building sampled twice at metre 8 — once as it ships, once with that one void left out of this
+# difference — and the difference between the two volumes. `hollowed` is 1,860,941 voxels, 179
+# material records, 719 components.
+#
+#     void            removed by it alone     what it is
+#     void_crypt              281,083         the basement excavated out of the podium
+#     void_windows             54,809         every window opening   ** and 276 components **
+#     void_doors                9,422         the great door and the two side doors
+#     void_halls                6,436         the two arches into the rotunda
+#     void_vestibule            5,022         the vestibule's air, less its own stone
+#     void_rotunda              3,400         the coffers, and the oculus that must stay open
+#     void_library                145         a cornice of somebody else's left in the room
+#     void_enfilade                78         the five niches, where they reach the halls' block
+#     void_stair                        0     a buried point; 8 voxels at metre 16, invisible
+#     void_salon                        0     4,600 voxels at metre 32, ALL of it also void_doors
+#     void_chapel                      -6     nothing
+#     void_ballroom                   -54     nothing
+#
+# THE MATERIAL COUNT IS 179 ON EVERY ONE OF THE THIRTEEN ROWS. No void in this building removes
+# the last voxel of any material.
+#
+# THE NEGATIVE NUMBERS ARE NOT MATTER MOVING. A set difference cannot add matter, and `despeckle`
+# states in its own header that it changes no geometry, so -6 and -54 on 1.86 million voxels are
+# the sampler settling blocks differently for a CSG tree with one operand fewer. They are read as
+# zero, and the reading is confirmed the other way round: `intersection { built void_chapel }` and
+# `intersection { built void_ballroom }` are both EMPTY at metre 16 AND at metre 32.
+#
+# A VOID THAT REMOVES NOTHING IS NOT AUTOMATICALLY A BUG, and steps.clip is the reason that sentence
+# is here rather than an alarm: it had a cut that removed nothing because `offset ... by=-0.045`
+# grew the shape instead of shrinking it, and it sampled to the identical voxel count on both sides.
+# The four quiet voids here are the other thing. void_chapel, void_ballroom and void_salon are
+# `difference { <room>_air part_<room> }` over rooms that carve their own air inside their own mass,
+# so there is nothing of anybody else's left in them TO remove — which is what a correct room void
+# looks like when every neighbour has behaved. They are the guard, not the excavation, and the day a
+# fragment leaves a wall in the ballroom they will start removing it. Do not delete them for being
+# quiet; check them by putting something in the room and watching it go.
 let hollowed = difference {
     built
     void_doors void_windows void_vestibule void_rotunda void_halls void_stair
@@ -145,19 +191,77 @@ let hollowed = difference {
 #
 # The two kinds of void are not the same kind of thing and it took a wrong picture to see it:
 #
-#   void_vestibule, void_rotunda, void_halls, void_stair   the AIR OF A ROOM. A fitting stands in
-#       a room's air by definition, and subtracting these deleted every sconce, bench and statue
-#       indoors (D608). They must not touch part_fittings.
-#   void_doors, void_windows                               an OPENING THROUGH A WALL. Nothing may
-#       stand in one -- not a fitting, not anything -- because the hole is the point. These must
-#       still cut part_fittings, exactly as they did before D608.
+#   THE AIR OF A ROOM. A fitting stands in a room's air by definition, and subtracting these
+#   deleted every sconce, bench and statue indoors (D608). They must not touch part_fittings:
 #
-# LEFT FOR fittings.clip AND NOT FIXED HERE: the outer portico sconce is at x = +-5.40 and the side
-# door's void is x = 4.50 .. 6.30, so it is placed squarely in a doorway and comes out cut in half.
-# That is where it was before D608 too; the change only made it visible for a day. The file's own
-# note reasons the placement from "the great door's dressing stops at 2.025 and the antae start at
-# 6.05" and never mentions the side doorcase, which runs 4.05 .. 6.75 straight through the middle
-# of that span. Moving it is an elevation decision and belongs in the file that draws the elevation.
+#       void_vestibule  void_rotunda  void_halls  void_stair
+#       void_crypt  void_salon  void_chapel  void_ballroom  void_library  void_enfilade
+#
+#   AN OPENING THROUGH A WALL. Nothing may stand in one -- not a fitting, not anything -- because
+#   the hole is the point. These must still cut part_fittings, exactly as they did before D608:
+#
+#       void_doors  void_windows
+#
+# THE SIX ROOMS ON THE FIRST LIST WERE ADDED AFTER THAT RULE WAS WRITTEN, and the whole point of
+# an audit is that being in the right list is not the same as being written in the right list.
+# Every one of the six is `difference { <room>_air part_<room> }`, which is the room-air form, and
+# every one is subtracted from `built` alone. Checked by measurement rather than by reading, at
+# metre 32, as `intersection { part_fittings void_<room> }`:
+#
+#     void_salon  void_chapel  void_ballroom  void_library  void_enfilade   EMPTY
+#     void_crypt                                                           1,508 voxels
+#
+# THE CRYPT ONE IS THE REASON TO DO THIS BY MEASUREMENT. Nothing about a crypt two storeys down
+# suggests it can reach a statue standing outdoors under the portico, and it does: `void_crypt`
+# runs up to y 1.844 beneath the portico floor, and fittings.clip beds the foot of its plinths and
+# torchere pedestals to y 1.750 so they cannot float. 0.094 m of overlap, x +-3.60 .. 4.50 and
+# +-1.875 .. 2.625, z -8.312 .. -8.000. On the wrong list that void saws the feet off four pieces
+# of furniture in the one room everybody looks at first.
+#
+# FIXED IN fittings.clip, NOT LEFT: the outer portico sconce was at x = +-5.40 and the side door's
+# void is x = 4.50 .. 6.30, so it stood squarely in a doorway. The note that used to sit here said
+# it "comes out cut in half". It did not. Measured as `intersection { part_fittings void_doors }`
+# at metre 32: 1,768 voxels in two components, and a whole sconce is 884 voxels -- so BOTH copies
+# went entirely, and the portico's four sconces had been two for the whole of this building's life.
+# fittings.clip now places it at x = +-3.15, which is the only plain wall this elevation has
+# (doors_gd_case ends at 2.031, doors_sd_case begins at 3.96, the statue's plinth holds
+# 3.594 .. 4.500), and the same intersection is EMPTY.
+# THREE THINGS THIS AUDIT FOUND THAT THIS FILE CANNOT FIX, written down here because this is the
+# file that would have to know about them and none of the three has any symptom in the report.
+#
+# 1. `part_surface` IS ENTIRELY EATEN BY `void_crypt`, AND IT IS THE ONLY GEOMETRY surface.clip HAS.
+#    Its setting-out stone is a 0.225 cube at (0, 0.675, -2.25) which its own file calls "buried in
+#    the middle of the podium's mass, granite on all six sides of it". The crypt was excavated out
+#    of that podium afterwards. Measured at metre 32: `surface_datum` is 420 voxels,
+#    `intersection { surface_datum void_crypt }` is 420 voxels — all of it — and
+#    `intersection { hollowed surface_datum }` is EMPTY. So is a probe of the 0.30 box around it:
+#    there is not even neighbouring stone, the datum stands in open crypt air.
+#    THE CONSEQUENCE IS A PAINT RULE THAT CANNOT FIRE. surface.clip's `paint granite
+#    where=surface_datum below=0.02` has no voxel to land on. That is the failure clipcheck's
+#    "never fired" line exists to catch, arriving from a direction nobody was watching: not a rule
+#    written wrong, a rule whose stone another fragment carried away two storeys down.
+#    IT IS NOT FIXABLE HERE. Moving `part_surface` out of `inside` so the voids miss it would leave
+#    a 0.225 granite cube floating in the crypt's air — a mystery block in a room, and one more
+#    component. The datum has to move, and only surface.clip can move it.
+#
+# 2. `void_rotunda` IS BOTH KINDS OF VOID IN ONE BINDING. It is `union { rotunda_coffers
+#    rotunda_oculus }`. The coffers are recesses in a ceiling and belong on the room list, exactly
+#    where they are. The oculus does not: rotunda.clip's own words for it are "taken away by the
+#    manifest after everything in the building is assembled, so that nothing added to this scene
+#    later can close the one aperture the whole interior is lit through" — which IS the door and
+#    window argument, word for word. On today's geometry it makes no difference:
+#    `intersection { part_fittings void_rotunda }` is EMPTY at metre 32, because the corona's four
+#    rods stop at y 17.70 on a 1.80 radius and the coffering begins outside them. Splitting it needs
+#    rotunda.clip to expose the oculus as a void of its own; naming `rotunda_oculus` from here would
+#    make one fragment's private binding part of the manifest's contract, which BRIEF.md rule 2
+#    forbids. Left as it is, deliberately, and written down so the next hanging light is checked.
+#
+# 3. `void_windows` IS THE ONLY VOID IN THE BUILDING THAT SHATTERS MATTER. Every other void leaves
+#    the component count at 719; without void_windows the building is 443 components, so it is
+#    making 276 of them on its own. That is `clips/facility/requests/walls-thickness.md` seen from
+#    the assembly end — a cutter punching 1.80 m through a 0.90 m wall carries 0.90 m on into the
+#    room and slices whatever is standing there into islands. windows.clip owns the cutter.
+#
 # AND THE ROOF GARDEN WITH THE FURNITURE, for the same reason and not quite the same one.
 #
 # `part_terrace` is pots, seats, lanterns, an armillary sphere and a cistern standing on the lead
@@ -166,6 +270,12 @@ let hollowed = difference {
 # least two and a half metres below the deck it stands on. So it joins here rather than in
 # `inside`, and it does NOT go through the door-and-window difference: passing it through one
 # would be a subtraction that can only ever remove something by accident.
+#
+# CHECKED, ALL TWELVE, at metre 32: `intersection { part_terrace void_<any> }` is EMPTY for every
+# void in the building. So both halves of the paragraph above are true and neither is load-bearing
+# today — the terrace would survive being put anywhere in this assembly. It stays here because the
+# argument is about what a future void may reach, not about what today's do, and the crypt is the
+# standing proof that a void reaches further than its name suggests.
 let furnished = union { hollowed  difference { part_fittings void_doors void_windows }  part_terrace }
 
 # --- surface --------------------------------------------------------------------------------------
@@ -219,4 +329,17 @@ solid all
 # `origin` and not a translate around the solid. A translate moves the stone and leaves every paint
 # rule at the height it was drawn for, which put the plinth course and the ground line partway up
 # the walls — geometry right, colour wrong. This moves both.
+#
+# AND IT SILENTLY BREAKS EVERY `--part` MEASUREMENT TAKEN ON THIS FILE, which cost most of a session
+# to notice. `apply_origin` translates the node bound to `solid` and every paint rule, and shifts the
+# clip's bounds to match — it does NOT translate the other 2,500 named bindings, because nothing
+# reaches them. `clipcheck --part <name>` then swaps an UNTRANSLATED node into `script.solid` while
+# the bounds have already moved 3.50 m down, so a part is sampled in model space against a box that
+# has been shifted out from under it. Everything above model y 16.50 falls outside the box and is
+# reported as if it were not there: `--part dome_lan_ball` on the gilt ball at 19.51 says EMPTY, and
+# `--part part_fittings` reports the corona's hanging rods stopping dead at 16.500.
+#
+# THE WHOLE BUILDING IS FINE — `all` is the translated node, so the shipped sample is right, and this
+# is a measuring fault and not a building one. But any `--part` figure taken from a clip with an
+# `origin` is only trustworthy below `bounds.high.y + shift`. Comment this line out while probing.
 origin 0 -3.50 0

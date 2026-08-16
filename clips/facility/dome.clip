@@ -47,7 +47,50 @@
 #
 # The third is thin matter in the ordinary way: eight colonnettes 0.135 m across (four voxels at
 # the contract's metre 32) and twenty-four ribs 0.135 m wide standing 0.09 m proud of a curved
-# surface, which is the sampler's problem, not the modeller's.
+# surface, which is the sampler's problem, not the modeller's. Five welted cross-rolls cross them
+# at 0.09 of relief on a 0.18 band — the ribs' width at two thirds their height — so the same
+# curved surface is asked for two depths of fold at once.
+#
+# ------------------------------------------------------------------------------------------------
+# DO NOT CHECK THIS PART WITH `--part part_dome` AGAINST clips/facility.clip. IT LIES.
+#
+# The manifest ends with `origin 0 -3.50 0`, and `apply_origin` moves the solid, the paint rules
+# AND THE BOUNDS. It does not move the name `part_dome`, because a name is not part of the tree it
+# was folded into. So that command samples an unshifted dome inside a box that has dropped 3.50 m:
+# the box tops out at 16.50, the dome stands 15.45 to 19.60, and what comes back is the bottom
+# 1.05 m of it with every paint rule 3.50 m below the stone. Reported: 11.750 x 1.000 x 11.750 m,
+# ONE material, limestone. A twelve-metre saucer four fifths of a metre tall. Nothing is wrong with
+# the dome; the box is in the wrong place, and the same arithmetic quietly beheads the drum and the
+# parapet too.
+#
+# clips/facility/requests/cuts-probe-dome.clip is the same fragment in a box that has not moved.
+# It reports 15.438 .. 19.594, radius 5.875, and the six materials this file paints.
+# ------------------------------------------------------------------------------------------------
+#
+# WHAT EACH CUT ACTUALLY REMOVES, measured by building the part twice — once with the cut and once
+# without it — and differencing. The part itself is 85.02 m3 at metre 32, in ONE component with
+# nothing floating.
+#
+#   dome_above     69.67 m3   (at metre 8) the lower half of both ellipsoids. Without it the part
+#                             reaches down to y = 13.00: a bowl, not a dome. This is the one
+#                             intersection here that is load-bearing rather than tidy.
+#   dome_void     108.57 m3   (at metre 8) the inside. The shell it leaves is 0.90 at the haunch and
+#                             0.45 at the crown, measured 0.533 m vertically at r = 3.0, which is
+#                             the same thing said down a plumb line instead of along a normal.
+#   dome_oculus     1.709 m3  the bore and the splay, through the crown. `--gap y@0,0` at metre 32
+#                             reads 4.125 m of unbroken air up the axis, open at the bottom and
+#                             closed at 19.30 by the corona: the hole is a hole all the way.
+#   dome_lights     0.518 m3  eight openings through a 0.135 wall, 0.065 m3 apiece.
+#   dome_lan_bore   0.843 m3  the well, hollowing the lantern drum from 18.25 to 19.30.
+#   dome_rib_hub    0.0027 m3 EIGHTY-EIGHT VOXELS, and none at all at metre 8. See its own note.
+#
+# and the two things that are added rather than taken away, weighed the same way:
+#
+#   dome_ribs       2.818 m3  twenty-four standing seams
+#   dome_welts      1.952 m3  five cross-rolls
+#
+# Nothing else in this file removes anything, and nothing in it is subtracted from another
+# fragment: `part_dome` exposes no void and the manifest names none.
 # ------------------------------------------------------------------------------------------------
 #
 # THE MODULE. D = 0.90, M = 0.45, and everything across is a multiple or a simple fraction of one
@@ -148,6 +191,75 @@ let dome_rib_fan  = mirror { mirror { dome_rib_quad } axis=x } axis=z
 # (2.5 M), under the lantern's plinth, which is 1.26 across, so the last 0.135 of each is buried.
 let dome_rib_hub  = cylinder 0 16.90 0 r=1.125 h=3.60 axis=y        # 15.10 .. 18.70
 let dome_ribs     = difference { intersection { dome_rib_out dome_rib_fan dome_above } dome_rib_hub }
+
+# THE HUB SUBTRACTION IS VERY NEARLY A GUARD, AND AT METRE 8 IT IS EXACTLY ONE. Measured, not
+# assumed: the same part built with the `difference` and without it comes back at 42080 voxels BOTH
+# TIMES at metre 8 — bit for bit the same clip — and at metre 32 the two differ by EIGHTY-EIGHT
+# voxels, 2.7 litres, in a part of 2.79 million.
+#
+# The reason is that two other shapes have already taken almost everything inside r = 1.125: the
+# oculus splay is a cone of radius 1.35 at y = 17.30 narrowing to 0.90 at the crown, so it is wider
+# than the hub anywhere below y = 17.75, and the lantern plinth is a solid cylinder of r = 1.26
+# from 17.90 to 18.25, which fills back in everything above. Between 17.75 and 17.90 there is a
+# 0.15 m band where the cone has drawn inside 1.125 and the plinth has not yet arrived, and the
+# ends of twenty-four ribs in that band are the eighty-eight voxels.
+#
+# It is kept, and it is kept knowingly: it is free, it is the only thing that would stop a rib
+# reaching the axis if the oculus or the lantern ever moved, and it does in fact do a little work.
+# What it must not be read as is a load-bearing cut, which is what its old comment implied.
+
+# ================================================================================================
+# THE WELTS — five copper seams across the bays, on the same construction as the ribs
+# ================================================================================================
+#
+# A dome is not covered in one sheet of copper. It cannot be: the metal comes off a roll about a
+# metre wide, and what a coppersmith does with it is lay it in bays between standing seams — which
+# is what the twenty-four ribs are — and join one sheet to the next DOWN the bay with a welt across
+# it. The ribs on their own are half the trade: 100 m2 of dead-smooth metal between them, which is
+# the one thing on this building the eye reads as a rendering rather than as a roof.
+#
+# So: five rings at 2 D, 3 D, 4 D, 5 D and 6 D of radius — 1.80, 2.70, 3.60, 4.50, 5.40, a sheet
+# apart in plan — each standing 0.09 (0.2 M) proud and 0.18 (0.4 M) across: the ribs' own width, at
+# two thirds their relief, so the two read as the same fold of the same metal with the standing
+# seam the taller of them, which is what they are.
+#
+# 0.09 AND NOT 0.0675, AND THE FIRST TRY WAS 0.0675. A welt half the ribs' height is the right
+# drawing and it is the wrong solid: at 0.0675 proud on a 0.09 band the innermost ring, at r = 1.80
+# where this dome is only eight degrees off flat, came back BROKEN — the part went from 9
+# components to 57 and shed 104 voxels into the air, all of them in eighty-odd specks along that
+# one ring, four-fold symmetric because the sampler's grid is. A ridge 2.2 voxels tall on a 2.9
+# voxel band lying almost parallel to the voxel layers is not a ridge, it is a row of dashes. At
+# 0.09 on 0.18 — 2.9 voxels on 5.8 — it is one ring, and the count went back to 9. Measured both
+# ways; the arithmetic of it is the same arithmetic that made roof.clip take its fall in steps.
+#
+# BUILT THE RIBS' WAY AND FOR THE RIBS' REASON. `offset` moves a surface along its own normal, so
+# a band cut out of the extrados grown by 0.0675 stands 0.0675 proud at the springing, at the
+# crown and everywhere between, and never has to know what shape it is lying on. The cutter is a
+# revolved section — an annular wall of vertical faces — because that is exact at every point in
+# the world and a stack of tori would not be: a torus of ring 5.40 does not lie on this ellipsoid,
+# it crosses it.
+#
+# `by=` IS NEGATIVE TO GROW, the same way round as the ribs above. Written the intuitive way the
+# seams are carved INTO the copper instead of standing on it, they are then unioned with the shell,
+# and the dome comes back exactly as smooth as it was before with no error anywhere.
+#
+# Nothing here needs cutting where a rib crosses it: a rib stands 0.135 proud and a welt 0.0675, so
+# `union` swallows the welt into the rib for the 0.18 they share, which is what a welt dies into a
+# standing seam looks like. And nothing here reaches the lantern: the innermost ring is at 1.80 and
+# the plinth is 1.26.
+let dome_welt_out = offset { dome_hull } by=-0.09
+let dome_welt_sec = union {
+    box 1.71 15.40 -1   1.89 19.00 1
+    box 2.61 15.40 -1   2.79 19.00 1
+    box 3.51 15.40 -1   3.69 19.00 1
+    box 4.41 15.40 -1   4.59 19.00 1
+    box 5.31 15.40 -1   5.49 19.00 1
+}
+let dome_welts = intersection {
+    dome_welt_out
+    revolve { dome_welt_sec } axis=y
+    dome_above
+}
 
 # ================================================================================================
 # THE OCULUS - 1.80 m (2 D) across, and it is a hole all the way through
@@ -252,13 +364,25 @@ let dome_lan_ball   = sphere   0 19.51 0 r=0.09                     # tops out a
 #
 # Everything solid, then everything hollow taken out of it in one go, and only then the three
 # pieces that must not be hollowed: the ring hanging below the soffit, and the cap on the lantern.
-let dome_mass = union { dome_outer dome_ribs dome_roll dome_lan_solid }
+#
+# THE LIGHTS ARE ROUNDED BY 0.020 AND NOT BY 0.010, AND THAT ONE NUMBER IS WORTH EIGHT VOXELS AND
+# A COMPONENT COUNT. A lantern light is a straight-sided opening cut through a round wall, so its
+# jamb crosses the outer face at a glancing angle and the last sliver of pier before the opening is
+# a knife edge. At metre 32 that edge shed ONE VOXEL at every one of the eight arch heads, at
+# y = 18.91 and r = 1.03 — eight pieces of copper floating in the air inside the colonnade, which
+# is what `components 9 (8 floating)` was, and which is invisible from anywhere a person stands.
+#
+# It is the lights and only the lights: built with them left out, this part comes back as ONE
+# component with nothing floating, which is the control arm that settled it. Growing the opening by
+# a further 0.010 moves the edge off the tangent and the whole part comes back as one piece. It
+# also widens the aperture by 0.02, which is the one direction this file is allowed to move it.
+let dome_mass = union { dome_outer dome_ribs dome_welts dome_roll dome_lan_solid }
 
 let dome_hollow = union {
     dome_void
     dome_oculus
     dome_lan_bore
-    round { dome_lights } by=0.010
+    round { dome_lights } by=0.020
 }
 
 let dome_body = difference { dome_mass dome_hollow }
@@ -275,6 +399,28 @@ let part_dome = union { dome_body dome_rim dome_lan_cupola dome_lan_neck dome_la
 
 # Copper over the whole mass first; everything after this is an exception to it.
 paint copper where=dome_mass below=0.02
+
+# AND THE CROWNS OF THE WELTS, WHICH THE LINE ABOVE MISSES BY EXACTLY THEIR OWN HEIGHT.
+#
+# `union` is `min` and `intersection` is `max`, and `max` is an OVERESTIMATE outside the shape: a
+# point 5 mm off a welt can be told it is 150 mm away, because the annulus that cut the welt out of
+# the offset shell is the nearest of the three operands and it answers for the whole thing. So at a
+# voxel on a welt crown the union's smallest honest number is `dome_outer`'s, and that is 0.09 —
+# the welt's own relief — which is four times the 0.02 the rule tests. 728 voxels of the finest
+# copper on this building came back LIMESTONE, a scatter of pale grit along five rings, and nothing
+# in the report says so except a seventh material appearing in a list of six.
+#
+# The cure is a shape whose distance is honest where the welts are: the offset shell itself, whose
+# zero surface passes exactly through their crowns. Every other outward face of the dome is 0.09
+# inside it and is painted copper too, which it already was, and every exception below still comes
+# after this and still wins.
+# It takes both of these to clear it: the offset shell answers for the crowns, and the welts' own
+# shape — tested loosely, at 0.12, because `max` is exactly what is being compensated for — answers
+# for the shoulders where the band's vertical face meets the shell. 728 voxels of limestone, then
+# 408, then none. Nothing within 0.12 of a welt is anything but copper, so a loose test here cannot
+# reach anything it should not.
+paint copper where=dome_welt_out below=0.02
+paint copper where=dome_welts    below=0.12
 
 # The patina, mottled. A copper roof is not one green. These key on the dome's own surface pushed
 # about by the contract's shared grain, so the test only passes on voxels of MY shell - outside it

@@ -1,0 +1,4 @@
+# cuts-probe.clip with the box cut to the drum alone, for a metre 32 run. NOT part of the building.
+include "cuts-probe.clip"
+bounds -6.0 11.2 -6.0   6.0 15.7 6.0
+solid part_drum
