@@ -100,10 +100,13 @@ export const LADDER = [
     },
     {
         name: 'low',
+        // The first rung that runs the LEAN BUILD of the surface and cap programs rather than the
+        // full one with its lobes branched around — see the note beside ws_has in web/js/gl.js.
+        // Every optional lobe is off here, which is what lets the compiler delete them.
         scale: [0.45, 0.60],
         flags: { bloom: false, bloomMips: 0, bloomBase: 4, fxaa: false, fog: true,
                  skyReflection: false, coat: false, brushed: false, capLattice: false,
-                 lightFilter: true, translucency: true, shapeSteps: 48 },
+                 lightFilter: true, translucency: false, shapeSteps: 48 },
     },
     {
         name: 'minimum',
@@ -168,15 +171,19 @@ export class Budget {
         // is over the guard, so nothing is ever recorded, the frame time sits at its initial value
         // for ever and the quality never drops. The thing that rejects a hitch is the median
         // below — this only has to reject the pathological.
-        if (wall > 0 && wall < 1000) {
+        if (wall > 0 && wall < 5000) {
             this.history.push(wall);
             if (this.history.length > 40) this.history.shift();
             this.frameMs += (wall - this.frameMs) * 0.1;
         }
         this.frameStart = now;
         this.current = [];
-        this.sampling = (this.frameIndex % this.cadence) === 0 &&
-                        (this.mode !== 'gpu' || this.slots.length < 4);
+        // Every frame on the clock, one in six on the card. A timer query per pass every frame is
+        // itself a cost and a queue to drain; a performance.now() is neither, and on a scene slow
+        // enough to matter a cadence of six can mean no sample at all inside a settle window.
+        this.sampling = this.mode !== 'gpu'
+            ? true
+            : ((this.frameIndex % this.cadence) === 0 && this.slots.length < 4);
         this.readback();
     }
 
@@ -206,8 +213,45 @@ export class Budget {
         }
         // The flush belongs INSIDE the bracket: it is what makes the number the pass's own cost
         // rather than the cost of describing it. It is also why this mode is not the default.
-        if (this.mode === 'sync') gl.finish();
+        //
+        // AND gl.finish() ALONE IS NOT A FLUSH HERE. In a browser the WebGL calls are commands in
+        // a buffer that another process drains, and finish() was measured returning in a tenth of
+        // a millisecond while the frame it was inside took a hundred — it queues a fence and comes
+        // back. A one-pixel readPixels cannot: the answer has to travel back, so the call does not
+        // return until the pass that produced the pixel has actually happened. The format is asked
+        // for rather than assumed, because the target may be RGBA8 or RGBA16F depending on whether
+        // features/post.js is running.
+        if (this.mode === 'sync') {
+            gl.finish();
+            this.drain();
+        }
         this.current.push({ name: pass.name, ms: performance.now() - pass.cpuStart });
+    }
+
+    // One pixel, read back, which is the cheapest thing that cannot be deferred.
+    drain() {
+        const gl = this.gl;
+        // Asked once a frame and not once a pass: a getParameter is itself a round trip in a
+        // browser, so asking three times a frame doubles what the probe costs.
+        if (this.readFormat === undefined || this.readFrame !== this.frameIndex) {
+            this.readFormat = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_FORMAT);
+            this.readType = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_TYPE);
+            this.readFrame = this.frameIndex;
+        }
+        const format = this.readFormat;
+        const type = this.readType;
+        const wide = type !== gl.UNSIGNED_BYTE;
+        if (!this.pixel || (this.pixelWide !== wide)) {
+            this.pixel = wide ? new Float32Array(4) : new Uint8Array(4);
+            this.pixelWide = wide;
+        }
+        try {
+            gl.readPixels(0, 0, 1, 1, format, type, this.pixel);
+        } catch (error) {
+            // A target this browser will not read back from. The mode is still useful — finish()
+            // is at least a flush — and saying so beats throwing inside a profiler.
+            this.mode = 'cpu';
+        }
     }
 
     endFrame() {

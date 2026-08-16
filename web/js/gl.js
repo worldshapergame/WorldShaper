@@ -101,7 +101,19 @@ const int FEATURE_BRUSHED = 4;
 const int FEATURE_TRANSLUCENCY = 8;
 const int FEATURE_CAP_LATTICE = 16;
 
+// A UNIFORM BRANCH IS NOT FREE, AND THAT IS WHY THE LADDER LINKS TWO OF THIS PROGRAM.
+//
+// Switching a lobe off with a uniform leaves its code in the shader. A compiler that allocates
+// registers for the whole function still allocates them for the branch nobody takes, and on a
+// hardware scheduler that is fewer threads in flight on EVERY pixel — including the pixels of a
+// plain stone clip with no glass, no mirror and no flame in it. So the lean build makes ws_has a
+// constant, which lets the compiler delete the branches rather than skip them, and the ladder
+// picks the program instead of setting a uniform.
+#ifdef WS_LEAN
+bool ws_has(int feature) { return false; }
+#else
 bool ws_has(int feature) { return (u_features & feature) != 0; }
+#endif
 
 vec3 ws_air(vec3 direction) {
     return mix(u_skyDown, u_skyUp, clamp(direction.y * 0.5 + 0.5, 0.0, 1.0));
@@ -166,11 +178,13 @@ void ws_output(vec3 colour, float alpha, vec3 emissive) {
 // The shared blocks go in after the declarations the shader makes for itself, because they read
 // its uniforms — `u_sun`, `u_skyUp`, `u_exposure` — and GLSL wants a name declared before it is
 // used. Every fragment source here marks the spot with `//@shared`.
-function withShared(source, wantsEmissive) {
+function withShared(source, wantsEmissive, lean) {
     const at = source.indexOf('//@shared');
     if (at < 0) throw new Error('a fragment shader has no //@shared line to inject into');
     let head = source.slice(0, at);
     const tail = source.slice(at + '//@shared'.length);
+    // The define has to be above everything, and #version has to be above the define.
+    if (lean) head = head.replace('#version 300 es', '#version 300 es\n#define WS_LEAN 1');
     // GLSL ES 3.00 wants EVERY output located once there is more than one of them, and the error
     // it gives — "must explicitly specify all locations when using multiple fragment outputs" —
     // names the output that already had no location rather than the one just added.
@@ -991,16 +1005,31 @@ export class Renderer {
         this.fog = [3.912 / 8000.0, 0.90, 0.80, 400.0];
         const wantsEmissive = this.post.wantsEmissive;
         this.emissiveCompiled = wantsEmissive;
-        const surfaceFragment = withShared(FRAGMENT_SOURCE, wantsEmissive);
-        const skyFragment = withShared(SKY_FRAGMENT, wantsEmissive);
-        const capFragment = withShared(CAP_FRAGMENT, wantsEmissive);
-        const shapeFragment = withShared(SHAPE_FRAGMENT, wantsEmissive);
         // <<< post
 
-        this.surface = link(gl, VERTEX_SOURCE, surfaceFragment, 'surface');
-        this.sky = link(gl, SKY_VERTEX, skyFragment, 'sky');
-        this.cap = link(gl, CAP_VERTEX, capFragment, 'cap');
-        this.shapes = link(gl, SHAPE_VERTEX, shapeFragment, 'shapes');
+        this.surface = link(gl, VERTEX_SOURCE, withShared(FRAGMENT_SOURCE, wantsEmissive, false),
+                            'surface');
+        this.sky = link(gl, SKY_VERTEX, withShared(SKY_FRAGMENT, wantsEmissive, false), 'sky');
+        this.cap = link(gl, CAP_VERTEX, withShared(CAP_FRAGMENT, wantsEmissive, false), 'cap');
+        this.shapes = link(gl, SHAPE_VERTEX, withShared(SHAPE_FRAGMENT, wantsEmissive, false),
+                           'shapes');
+
+        // >>> post
+        // The second build of the two programs the ladder can trim, with the optional lobes
+        // COMPILED OUT rather than branched around. Linked lazily, on the first frame that asks
+        // for it, so a page that never goes below the middle of the ladder never pays to build it.
+        this.lean = null;
+        this.noVariants = typeof window !== 'undefined' && !!window.__wsNoVariants;
+        this.buildLean = () => {
+            if (this.lean || this.noVariants) return;
+            this.lean = {
+                surface: link(gl, VERTEX_SOURCE, withShared(FRAGMENT_SOURCE, wantsEmissive, true),
+                              'surface lean'),
+                cap: link(gl, CAP_VERTEX, withShared(CAP_FRAGMENT, wantsEmissive, true),
+                          'cap lean'),
+            };
+        };
+        // <<< post
 
         this.vao = gl.createVertexArray();
         this.buffer = gl.createBuffer();
@@ -1044,6 +1073,18 @@ export class Renderer {
         const wasFilter = this.features.lightFilter;
         this.features = Object.assign({}, this.features, flags);
         this.post.setQuality(this.features);
+
+        // The lean build of the surface and cap programs, when the rung has switched off every
+        // lobe they are allowed to switch off. Swapping the object rather than adding a branch at
+        // every use means nothing downstream of here knows there are two of them.
+        this.rich = this.rich || { surface: this.surface, cap: this.cap };
+        const wantsLean = !this.features.skyReflection && !this.features.coat &&
+                          !this.features.brushed && !this.features.translucency &&
+                          !this.features.capLattice;
+        if (wantsLean) this.buildLean();
+        const use = (wantsLean && this.lean) ? this.lean : this.rich;
+        this.surface = use.surface;
+        this.cap = use.cap;
         if (this.clip && wasFilter !== this.features.lightFilter) {
             // Trilinear across a light volume is eight fetches and a blend on every shaded pixel.
             // Nearest costs one, and what it loses is the smooth gradient of sky visibility across

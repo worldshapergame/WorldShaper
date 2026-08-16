@@ -27,6 +27,10 @@ import { Quality, LADDER } from './features/budget.js';
 //   ?stats=1       show the breakdown on screen without opening the panel
 const params = new URLSearchParams(location.search);
 if (params.get('post') === '0') window.__wsNoPost = true;
+// ?fat=1 keeps the FULL surface program on every rung, so the lean build can be measured against
+// the same shader with its lobes merely branched around. That difference is the answer to "does a
+// feature nobody switched on still cost something", and it is the reason the flag exists.
+if (params.get('fat') === '1') window.__wsNoVariants = true;
 // <<< post
 
 window.__format = format;
