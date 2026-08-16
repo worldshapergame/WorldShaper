@@ -71,6 +71,11 @@ one `RG8` volume texture and one trilinear fetch.
 **Occupancy.** One bit per 12.5 cm cell. It is what the walker collides with, and it is why you
 cannot walk through a wall.
 
+<!-- >>> matvol -->
+**A material volume and a thickness field**, on those same cells. What the stone at a point inside
+a wall is made of, and how far a ray would travel through it. §6.
+<!-- <<< matvol -->
+
 ### Why the light is a lattice and not vertex colour
 
 The obvious place for baked light is the vertex, and it does not survive greedy meshing: two faces

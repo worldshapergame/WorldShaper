@@ -252,6 +252,21 @@ inline Volume build(const i32 size[3], i32 voxels_per_metre, i32 cells_per_metre
                                 const i32 material = material_at(x, y, z);
                                 if (material < 0) continue;
                                 if (thick > thickest) thickest = thick;
+                                // A VOXEL THE AIR TOUCHES IS WORTH TWO, and this is not a
+                                // tie-break dodge. Nearly every colour in the facility is a coat
+                                // two centimetres deep -- porphyry in the rotunda's floor bands,
+                                // verde in its niche linings, lapis in the halls -- and a cell is
+                                // twelve and a half. A straight majority erases every one of them
+                                // and paints the cell the structural stone underneath, so the cap
+                                // would come out limestone right beside a quad drawn porphyry: the
+                                // volume and the mesh have to AGREE where they meet, because they
+                                // are drawn touching each other.
+                                i32 weight = 1;
+                                if (!solid_at(x - 1, y, z) || !solid_at(x + 1, y, z) ||
+                                    !solid_at(x, y - 1, z) || !solid_at(x, y + 1, z) ||
+                                    !solid_at(x, y, z - 1) || !solid_at(x, y, z + 1)) {
+                                    weight = 2;
+                                }
                                 i32 found = -1;
                                 for (i32 k = 0; k < kinds; ++k) {
                                     if (tally_material[k] == material) {
@@ -260,10 +275,10 @@ inline Volume build(const i32 size[3], i32 voxels_per_metre, i32 cells_per_metre
                                     }
                                 }
                                 if (found >= 0) {
-                                    ++tally_count[found];
+                                    tally_count[found] += weight;
                                 } else if (kinds < 64) {
                                     tally_material[kinds] = material;
-                                    tally_count[kinds] = 1;
+                                    tally_count[kinds] = weight;
                                     ++kinds;
                                 }
                             }
@@ -330,44 +345,6 @@ inline Volume build(const i32 size[3], i32 voxels_per_metre, i32 cells_per_metre
             }
             to_value[i] = pick;
             out.remapped_cells += occurrences[i];
-        }
-    }
-
-    // ---- PROBE ---------------------------------------------------------------------------
-    {
-        for (i32 dim : {4, 8, 16}) {
-            i32 nb[3];
-            for (i32 a = 0; a < 3; ++a) nb[a] = (out.dims[a] + dim - 1) / dim;
-            usize um = 0, ut = 0, ub = 0, total = 0;
-            for (i32 bz = 0; bz < nb[2]; ++bz)
-             for (i32 by = 0; by < nb[1]; ++by)
-              for (i32 bx = 0; bx < nb[0]; ++bx) {
-                ++total;
-                bool um_ = true, ut_ = true;
-                u16 fm = 0; u8 ft = 0; bool first = true;
-                for (i32 lz = 0; lz < dim; ++lz)
-                 for (i32 ly = 0; ly < dim; ++ly)
-                  for (i32 lx = 0; lx < dim; ++lx) {
-                    const i32 cx = bx*dim+lx, cy = by*dim+ly, cz = bz*dim+lz;
-                    u16 m = 0; u8 t = 0;
-                    if (cx < out.dims[0] && cy < out.dims[1] && cz < out.dims[2]) {
-                        const usize at = static_cast<usize>(cx) + static_cast<usize>(cy)*static_cast<usize>(out.dims[0]) + static_cast<usize>(cz)*static_cast<usize>(out.dims[0])*static_cast<usize>(out.dims[1]);
-                        m = cell_material[at]; t = cell_thickness[at];
-                    }
-                    if (first) { fm = m; ft = t; first = false; }
-                    else { if (m != fm) um_ = false; if (t != ft) ut_ = false; }
-                  }
-                if (um_) ++um;
-                if (ut_) ++ut;
-                if (um_ && ut_) ++ub;
-              }
-            const usize cellsper = static_cast<usize>(dim)*dim*dim;
-            std::printf("      PROBE dim %2d: blocks %zu  mat-uniform %zu (%.2f MB)  "
-                        "thick-uniform %zu (%.2f MB)  both %zu (%.2f MB joint)\n",
-                dim, total, um,
-                (total*4 + (total-um)*cellsper)/1048576.0,
-                ut, (total*4 + (total-ut)*cellsper)/1048576.0,
-                ub, (total*4 + (total-ub)*cellsper*2)/1048576.0);
         }
     }
 
