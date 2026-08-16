@@ -60,6 +60,14 @@
 // The shape record's size and the cutter's are the file's, not this file's opinion of them: they
 // are written down once in web/js/format.js and once in tools/bake_web.cpp, and nowhere else.
 import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
+// >>> refract
+// Glass, refraction, translucency and coloured volumes. Everything that block does — including
+// what it assumes about the thickness field somebody else is baking — is written down in
+// web/js/features/refract.js, which is the only file it lives in.
+import {
+    Refraction, GLSL_DECLARATIONS, GLSL_TRANSLUCENCY, GLSL_COMPOSITE,
+} from './features/refract.js';
+// <<< refract
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -125,6 +133,9 @@ uniform float u_cutSide;      // 1 draws only what the slice removes, for the st
 uniform float u_blended;      // 1 on the blended pass, where the material's opacity is used
 
 out vec4 o_colour;
+// >>> refract
+${GLSL_DECLARATIONS}
+// <<< refract
 
 vec4 material_row(int which) {
     int at = v_material * 4 + which;
@@ -227,12 +238,9 @@ void main() {
 
     vec3 diffuse = albedo * (1.0 - metal) * (direct + ambient * occluded);
 
-    // Translucent matter lights from behind: leaves, thin marble, wax. One term, and it is the
-    // only place in this shader where light arrives through something.
-    if (translucency > 0.0) {
-        float through = max(dot(-N, L), 0.0) * 0.6 + 0.25;
-        diffuse += albedo * translucency * through * u_sunColour * sunVisible;
-    }
+// >>> refract
+${GLSL_TRANSLUCENCY}
+// <<< refract
 
     // Brushed metal. A voxel world has no UVs and no tangent frame, so a VisualRecord can name
     // exactly one thing here — which of the three world axes the grain runs along — and that is
@@ -288,19 +296,21 @@ void main() {
         colour += glow * emissive * 6.0;
     }
 
-    // Beer-Lambert, over a thickness nobody knows. A rasteriser has no path length, so this takes
-    // the material's absorption as a tint on what shows through and says so rather than pretending
-    // to integrate anything.
+// >>> refract
+    // Beer-Lambert over a real path length, and what is behind the glass drawn where the glass
+    // actually puts it. It used to be a flat tint over "a thickness nobody knows", which is a
+    // coloured surface -- and _contract.clip's whole point about absorb is that a stained window
+    // (no back-quotes in here: this is inside a template string, and one closes it)
+    // is a coloured VOLUME. See web/js/features/refract.js for what the path length is and for the
+    // three ways a screen-space sample is an approximation.
+    //
+    // The surface is tonemapped and encoded BEFORE the composite rather than after, because the
+    // picture behind it has already been through both and must not go through them twice.
     float alpha = (u_blended < 0.5) ? 1.0 : opacity;
-    if (alpha < 1.0) {
-        vec3 absorb = vec3(1.0) - depth.rgb * 0.75;
-        colour *= absorb;
-        // Glancing angles of a pane are more reflective and less see-through, which is the one
-        // thing about glass everybody notices when it is missing.
-        alpha = clamp(alpha + (1.0 - alpha) * pow(1.0 - ndv, 4.0), 0.0, 1.0);
-    }
-
-    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), alpha);
+    vec3 encoded = pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2));
+${GLSL_COMPOSITE}
+    o_colour = vec4(encoded, alpha);
+// <<< refract
 }`;
 
 const SKY_VERTEX = `#version 300 es
@@ -803,6 +813,11 @@ export class Renderer {
         this.materials = gl.createTexture();
         this.light = gl.createTexture();
         this.clip = null;
+        // >>> refract
+        // What glass does, on texture unit 2. It owns its own copy of the framebuffer and asks
+        // nothing of the rest of the renderer except to be told when the opaque picture is done.
+        this.refraction = new Refraction(gl);
+        // <<< refract
 
         this.viewProj = new Float32Array(16);
         this.invViewProj = new Float32Array(16);
@@ -831,6 +846,11 @@ export class Renderer {
     setClip(clip) {
         const gl = this.gl;
         this.clip = clip;
+        // >>> refract
+        // Whether anything in this clip refracts at all, asked once. A clip with no material that
+        // has both an index of refraction and an opacity never pays for the framebuffer copy.
+        this.refraction.setClip(clip);
+        // <<< refract
 
         gl.bindVertexArray(this.vao);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
@@ -1028,6 +1048,11 @@ export class Renderer {
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_3D, this.light);
         gl.uniform1i(uniforms.u_light, 1);
+        // >>> refract
+        // Bound for the opaque pass as well, with the feature off: a sampler in a linked program
+        // with nothing on its unit is undefined behaviour rather than an unused uniform.
+        this.refraction.apply(uniforms, false);
+        // <<< refract
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each
@@ -1245,6 +1270,17 @@ export class Renderer {
 
         // --- glass -----------------------------------------------------------------------------
         if (clip.transparentQuads > 0) {
+            // >>> refract
+            // The opaque picture, copied off the framebuffer before a single pane is drawn. This
+            // is what refraction samples and it is why the copy is HERE and not anywhere else:
+            // one frame later would be a frame of lag, and one pane later would be a pane
+            // refracting itself. It copies from whatever framebuffer is bound, so an offscreen
+            // target added around this pass needs no change here.
+            if (this.refraction.capture(width, height)) {
+                this.refraction.apply(this.surface.uniforms, true);
+                this.stats.draws += 1;
+            }
+            // <<< refract
             gl.enable(gl.BLEND);
             gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE,
                                  gl.ONE_MINUS_SRC_ALPHA);
