@@ -710,6 +710,11 @@ LightGrid bake_light(const BitGrid& coarse, const f64 origin[3], const f64 size_
 constexpr u32 kFormatVersion = 3;
 // <<< paintexport
 constexpr usize kHeaderBytes = 208;
+// >>> chunkdir
+constexpr usize kChunkOffsetAt = 200;
+constexpr usize kChunkCountAt = 204;
+constexpr usize kChunkEntryBytes = 16;
+// <<< chunkdir
 // 0 op, 4 cut_start, 8 scale, 12..59 the 3x4 placement, 60..91 eight parameters,
 // 92..115 the world box, 116 cut_count. Matched by SHAPE_BYTES in web/js/format.js.
 constexpr usize kShapeBytes = 120;
@@ -751,43 +756,55 @@ void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
 // take a typed-array view straight onto one. The padding is not counted in `size`.
 // --------------------------------------------------------------------------------------
 
-struct WebChunk {
+// <<< paintexport
+// >>> chunkdir
+// FOUR agents wrote this mechanism independently, each told to write it "as if you are the first".
+// That was right about the intent and wrong about the mechanics: two implementations of one thing
+// do not merge, and all four were correct on their own. This is the reconciliation and there is
+// now exactly one of it — the ambient-occlusion agent's writer, which is the one shaped to be
+// PUSHED INTO rather than edited, with the sixteen-byte payload padding the format was specified
+// with so a reader may take a typed-array view straight onto a payload. `web/js/format.js` holds
+// the matching reader, `clip.chunk('FOUR')`, which is the irradiance agent's.
+//
+// Anybody adding a baked term pushes one `Chunk` here and reads it with one `clip.chunk()`. That
+// is the whole contract, and it is the reason nothing after version 3 has to move a byte.
+struct Chunk {
     char fourcc[4]{' ', ' ', ' ', ' '};
     std::vector<u8> bytes;
 };
 
-WebChunk make_chunk(const char* name, std::vector<u8> bytes) {
-    WebChunk chunk;
+Chunk make_chunk(const char* name, std::vector<u8> bytes) {
+    Chunk chunk;
     for (i32 i = 0; i < 4; ++i) chunk.fourcc[i] = name[i];
     chunk.bytes = std::move(bytes);
     return chunk;
 }
 
-// Appends every payload, then the directory, then fills in the two header words. Returns where the
-// directory landed, which is what goes at offset 200.
-void append_chunks(std::vector<u8>& out, const std::vector<WebChunk>& chunks) {
-    std::vector<u32> offsets(chunks.size(), 0);
-    for (usize i = 0; i < chunks.size(); ++i) {
-        while ((out.size() & 15u) != 0) out.push_back(0);
-        offsets[i] = static_cast<u32>(out.size());
-        out.insert(out.end(), chunks[i].bytes.begin(), chunks[i].bytes.end());
+// The directory first, then the payloads, then the two header words that point at the directory.
+// Every payload starts on a sixteen-byte boundary; the padding is not counted in `size`.
+void append_chunks(std::vector<u8>& out, const std::vector<Chunk>& chunks) {
+    if (chunks.empty()) {
+        put_u32(out, kChunkOffsetAt, 0);
+        put_u32(out, kChunkCountAt, 0);
+        return;
     }
     while ((out.size() & 15u) != 0) out.push_back(0);
-    const u32 directory = static_cast<u32>(out.size());
+    const usize directory = out.size();
+    put_u32(out, kChunkOffsetAt, static_cast<u32>(directory));
+    put_u32(out, kChunkCountAt, static_cast<u32>(chunks.size()));
+    out.resize(directory + chunks.size() * kChunkEntryBytes, 0);
     for (usize i = 0; i < chunks.size(); ++i) {
-        for (i32 c = 0; c < 4; ++c) out.push_back(static_cast<u8>(chunks[i].fourcc[c]));
-        const u32 words[3] = {offsets[i], static_cast<u32>(chunks[i].bytes.size()), 0u};
-        for (const u32 word : words) {
-            out.push_back(static_cast<u8>(word & 0xFFu));
-            out.push_back(static_cast<u8>((word >> 8) & 0xFFu));
-            out.push_back(static_cast<u8>((word >> 16) & 0xFFu));
-            out.push_back(static_cast<u8>((word >> 24) & 0xFFu));
-        }
+        while ((out.size() & 15u) != 0) out.push_back(0);
+        const usize at = directory + i * kChunkEntryBytes;
+        for (i32 c = 0; c < 4; ++c) out[at + static_cast<usize>(c)] =
+            static_cast<u8>(chunks[i].fourcc[c]);
+        put_u32(out, at + 4, static_cast<u32>(out.size()));
+        put_u32(out, at + 8, static_cast<u32>(chunks[i].bytes.size()));
+        put_u32(out, at + 12, 0);
+        out.insert(out.end(), chunks[i].bytes.begin(), chunks[i].bytes.end());
     }
-    put_u32(out, 200, chunks.empty() ? 0u : directory);
-    put_u32(out, 204, static_cast<u32>(chunks.size()));
 }
-// <<< paintexport
+// <<< chunkdir
 
 // --------------------------------------------------------------------------------------
 // The clip before it was voxels
@@ -1882,7 +1899,7 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     // The named blocks, after everything at a fixed offset. Two of them today; anything added later
     // is a third entry and moves none of this.
     {
-        std::vector<WebChunk> chunks;
+        std::vector<Chunk> chunks;
         chunks.push_back(make_chunk("FLDG", ws::bake::field_chunk(painted)));
         chunks.push_back(make_chunk("PANT", ws::bake::paint_chunk(painted)));
         append_chunks(out, chunks);

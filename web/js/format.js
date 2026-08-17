@@ -8,7 +8,14 @@
 // Every offset here has a matching one in bake_web.cpp. If you change one, change both — the file
 // carries a version and a magic so a mismatch says so instead of drawing nonsense.
 
-export const FORMAT_VERSION = 2;
+// >>> gi
+// Version 3 turns the last eight bytes of the header into a CHUNK DIRECTORY. Everything in front
+// of byte 200 is exactly what version 2 held, and a chunk is a named block appended after all of
+// them — so a baked block can be added without any offset in front of it moving, and without two
+// people needing the same spare word. A reader that does not know a tag ignores it.
+export const FORMAT_VERSION = 3;
+export const CHUNK_ENTRY_BYTES = 16;
+// <<< gi
 export const HEADER_BYTES = 208;
 export const QUAD_BYTES = 16;
 export const MATERIAL_BYTES = 16;
@@ -64,7 +71,10 @@ export function parseClip(buffer) {
         shapeCount: view.getUint32(188, true),
         cutterCount: view.getUint32(192, true),
         cutterOffset: view.getUint32(196, true),
-        // 200..207 is spare.
+        // >>> gi
+        chunkOffset: view.getUint32(200, true),
+        chunkCount: view.getUint32(204, true),
+        // <<< gi
     };
     // Seven entries: six starts and the end, so a range is start[i]..start[i + 1] everywhere.
     for (let i = 0; i < 7; ++i) {
@@ -110,6 +120,27 @@ export function parseClip(buffer) {
         ? new Uint8Array(buffer, at, cutterBytes)
         : new Uint8Array(0);
     if (clip.cutters.length === 0) clip.cutterCount = 0;
+
+    // >>> gi
+    // The chunk directory: a table of (four-character tag, offset, size, spare) sitting past every
+    // block above. `clip.chunk('GIRR')` hands back a view of one, or null — no copy, and nothing
+    // about what is in it is decoded here. That is the whole point: whoever bakes a chunk owns
+    // reading it, and this file stays the one description of the fixed layout.
+    clip.chunks = new Map();
+    if (clip.chunkCount > 0 &&
+        clip.chunkOffset + clip.chunkCount * CHUNK_ENTRY_BYTES <= buffer.byteLength) {
+        for (let i = 0; i < clip.chunkCount; ++i) {
+            const entry = clip.chunkOffset + i * CHUNK_ENTRY_BYTES;
+            const tag = String.fromCharCode(view.getUint8(entry), view.getUint8(entry + 1),
+                                            view.getUint8(entry + 2), view.getUint8(entry + 3));
+            const offset = view.getUint32(entry + 4, true);
+            const size = view.getUint32(entry + 8, true);
+            if (offset + size > buffer.byteLength) continue;
+            clip.chunks.set(tag, new Uint8Array(buffer, offset, size));
+        }
+    }
+    clip.chunk = (tag) => clip.chunks.get(tag) || null;
+    // <<< gi
 
     clip.size = [
         clip.dims[0] / clip.metre, clip.dims[1] / clip.metre, clip.dims[2] / clip.metre,
