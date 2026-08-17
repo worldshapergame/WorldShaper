@@ -15,8 +15,8 @@
 //   extent        and the worldbox, which is where the part really is
 //   components    1, or a list of what is floating and where
 //   materials     including THE RULES THAT PAINTED NOTHING, which is the failure that looks like
-//                 success — and it is two failures, `never asked` and `never matched`, which the
-//                 one line this used to print could not tell apart
+//                 success — and it is three different things, `never asked`, `never matched` and
+//                 `too coarse`, which the one line this used to print could not tell apart
 //   spans         head height and doorway width, on request
 //   a slice       when a number will not do
 //   THE CUTS      what every `difference` actually removed, and whose matter it was
@@ -884,11 +884,37 @@ std::string cut_slice_text(const Clip& clip, const std::vector<u8>& mask, u8 bit
 struct RuleLife {
     bool matched = false;         // its band contained the answer at some solid voxel
     bool matched_facing = false;  // ... and the facing test passed there too
+
+    // Only filled in for a rule that matched nothing. See `probe_rule_finer`.
+    i32 finer = 0;                // the multiple of --metre the probe used; 0 = not probed
+    bool finer_found = false;
+    bool outside = false;         // its shape does not reach the sampled box at all
+    bool gave_up = false;         // the finer sweep ran out of time; NOT checked
+    Vec3 finer_at{0, 0, 0};
 };
 
 bool near_box(const Aabb& box, Vec3 p, f64 reach) {
     return p.x >= box.low.x - reach && p.x <= box.high.x + reach && p.y >= box.low.y - reach &&
            p.y <= box.high.y + reach && p.z >= box.low.z - reach && p.z <= box.high.z + reach;
+}
+
+// The cull the descent applies before it ever evaluates a rule: the rule's box, and the pieces its
+// zone is really made of. Factored out because the probe below has to apply exactly the same one —
+// a probe more permissive than the scan would call a rule alive on a point the sampler never
+// offered it.
+bool rule_reaches(const forge::SamplePlan& plan, usize i, Vec3 p, f64 reach) {
+    if (i < plan.rule_box.size() && !near_box(plan.rule_box[i], p, reach)) return false;
+    if (i + 1 < plan.rule_piece_at.size() && !plan.rule_piece.empty()) {
+        const u32 from = plan.rule_piece_at[i];
+        const u32 to = plan.rule_piece_at[i + 1];
+        if (from != to) {
+            for (u32 q = from; q < to; ++q) {
+                if (near_box(plan.rule_piece[q], p, reach)) return true;
+            }
+            return false;
+        }
+    }
+    return true;
 }
 
 std::vector<RuleLife> rules_that_painted(const forge::Field& field, const forge::SamplePlan& plan,
@@ -912,18 +938,7 @@ std::vector<RuleLife> rules_that_painted(const forge::Field& field, const forge:
                 for (usize i = 0; i < plan.widened.size(); ++i) {
                     if (life[i].matched && life[i].matched_facing) continue;
                     const forge::PaintRule& rule = plan.widened[i];
-                    if (i < plan.rule_box.size() && !near_box(plan.rule_box[i], p, reach)) continue;
-                    if (i + 1 < plan.rule_piece_at.size() && !plan.rule_piece.empty()) {
-                        const u32 from = plan.rule_piece_at[i];
-                        const u32 to = plan.rule_piece_at[i + 1];
-                        if (from != to) {
-                            bool near_a_piece = false;
-                            for (u32 q = from; q < to && !near_a_piece; ++q) {
-                                near_a_piece = near_box(plan.rule_piece[q], p, reach);
-                            }
-                            if (!near_a_piece) continue;
-                        }
-                    }
+                    if (!rule_reaches(plan, i, p, reach)) continue;
                     const f64 value = field.eval(rule.test, p);
                     if (value < rule.low || value > rule.high) continue;
                     if (!life[i].matched) {
@@ -954,6 +969,135 @@ std::vector<RuleLife> rules_that_painted(const forge::Field& field, const forge:
         }
     }
     return life;
+}
+
+// A rule that matched nothing gets asked again, FINER — the same treatment the cut audit gives a
+// zero, and for the same reason.
+//
+// A rule keyed to a shape THINNER THAN A VOXEL matches nothing at that resolution and everything at
+// a finer one, and without asking twice the two are one line. `windows_glass` is a 0.045 m pane,
+// 0.36 of a voxel at metre 8: it matches nothing there, and at metre 32 — which is what the contract
+// asks for and what the building ships at — `--part part_windows` paints 300,268 voxels of glass.
+// Reporting that as a dead rule is a report somebody acts on, and the action is to delete a pane.
+//
+// `surface.clip`'s `paint granite where=surface_datum` is the other kind: its shape is buried inside
+// the podium and the crypt's void has since eaten the podium, so there is no voxel for it at any
+// resolution. That one is worth finding.
+//
+// Order matters for what this costs. The rule's own test is a small subtree and the SOLID is the
+// whole building, so the band is asked first and the matter only where the band already matched —
+// a genuinely dead rule therefore never evaluates the building at all.
+struct RuleProbe {
+    i32 factor = 0;
+    bool found = false;
+    bool outside = false;
+    bool gave_up = false;
+    Vec3 at{0, 0, 0};
+};
+
+// A point budget is not enough on its own, and finding that out cost two runs.
+//
+// A weathering coat is keyed on an occlusion or a curvature, and those evaluate their child
+// fourteen and seven times — of the whole building. A sweep of a building-sized box at four times
+// the metre is then not slow, it is unbounded, and the first version of this sat on the facility
+// past ten minutes without printing. So the probe carries a DEADLINE, and a rule it ran out of time
+// on is reported as not checked rather than as clear.
+//
+// And a budget on its own gets the interesting case WRONG rather than slow. `windows_glass` is one
+// 0.045 m pane, but there is a window on every bay of every elevation, so the rule's box is the
+// whole building: 585 million points at metre 32, over any budget worth setting, so the rule the
+// owner asked about came back "not re-asked" — honest, and no use.
+//
+// What rescues it is that the rule's test is usually a DISTANCE. `SamplePlan::rule_slack` already
+// says which rules those are (anything under `kInfiniteSlack`), and for one of them the value at a
+// point bounds how far away the band can possibly be. So the sweep MARCHES: out in the open air
+// twelve metres from the nearest pane, the answer is twelve metres and the row skips almost all of
+// itself. The same 585 million points become a few million real evaluations, and a pane thinner
+// than a voxel is found in under a second.
+//
+// Rules keyed on a pattern — a noise says nothing about the next point along — cannot be marched
+// and keep the point budget, which is the same distinction `plan_sample` itself is built on.
+RuleProbe probe_rule_finer(const forge::Field& field, const forge::SamplePlan& plan, usize i,
+                           const forge::SampleSettings& settings, u64 budget, f64 deadline_s) {
+    RuleProbe out;
+    // The rule's box cut to the box that was actually sampled. Matter exists nowhere else, so a
+    // rule whose shape does not meet it cannot paint at any resolution — and that is a different
+    // sentence from "it matched nothing", so it gets one.
+    Aabb box = (i < plan.rule_box.size()) ? plan.rule_box[i] : Aabb{};
+    const f64 lo[3]{std::max(box.low.x, settings.low.x), std::max(box.low.y, settings.low.y),
+                    std::max(box.low.z, settings.low.z)};
+    const f64 hi[3]{std::min(box.high.x, settings.high.x), std::min(box.high.y, settings.high.y),
+                    std::min(box.high.z, settings.high.z)};
+    for (u32 axis = 0; axis < 3; ++axis) {
+        if (hi[axis] < lo[axis]) { out.outside = true; return out; }
+    }
+    const f64 span[3]{hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]};
+
+    // Whether the rule's test is a distance, and so whether a row of it can be marched rather than
+    // walked. Taken from the plan, not guessed: this is the same question the sampler settles a
+    // whole box with, answered by the same number.
+    const f64 slack = (i < plan.rule_slack.size()) ? plan.rule_slack[i] : forge::Field::kInfiniteSlack;
+    const bool metric = slack < forge::Field::kInfiniteSlack;
+
+    for (const i32 factor : {4, 2}) {
+        const f64 step = 1.0 / static_cast<f64>(settings.voxels_per_metre * factor);
+        if (!metric) {
+            f64 points = 1.0;
+            for (u32 axis = 0; axis < 3; ++axis) points *= std::floor(span[axis] / step) + 1.0;
+            if (points > static_cast<f64>(budget)) continue;
+        }
+        out.factor = factor;
+        const f64 reach = step * 0.8660254037844386;
+        const forge::PaintRule& rule = plan.widened[i];
+        const i32 n[3]{static_cast<i32>(span[0] / step) + 1, static_cast<i32>(span[1] / step) + 1,
+                       static_cast<i32>(span[2] / step) + 1};
+        const auto started = std::chrono::steady_clock::now();
+        u64 since_clock = 0;
+        for (i32 k = 0; k < n[2]; ++k) {
+            for (i32 j = 0; j < n[1]; ++j) {
+                for (i32 a = 0; a < n[0]; ++a) {
+                    if (++since_clock >= 1024) {
+                        since_clock = 0;
+                        if (std::chrono::duration<f64>(std::chrono::steady_clock::now() - started)
+                                .count() > deadline_s) {
+                            out.gave_up = true;
+                            return out;
+                        }
+                    }
+                    const Vec3 p{lo[0] + (static_cast<f64>(a) + 0.5) * step,
+                                 lo[1] + (static_cast<f64>(j) + 0.5) * step,
+                                 lo[2] + (static_cast<f64>(k) + 0.5) * step};
+                    if (!rule_reaches(plan, i, p, reach)) continue;
+                    const f64 value = field.eval(rule.test, p);
+                    if (value < rule.low || value > rule.high) {
+                        // How far this row can jump without stepping over the band. A distance
+                        // changes by at most one metre per metre travelled, plus whatever
+                        // displacement can hide, so anything nearer than that cannot match either.
+                        if (metric) {
+                            const f64 away = (value > rule.high) ? (value - rule.high)
+                                                                 : (rule.low - value);
+                            const f64 clear = away - slack;
+                            if (clear > step) {
+                                // Clamped to the row. A band open at one end makes `away` 1e30,
+                                // which is a correct "the rest of this row cannot match" and an
+                                // undefined conversion to int if it is taken literally.
+                                const f64 cells = std::min(clear / step,
+                                                           static_cast<f64>(n[0] - a));
+                                a += static_cast<i32>(cells) - 1;
+                            }
+                        }
+                        continue;
+                    }
+                    if (field.eval(plan.root, p) >= 0.0) continue;   // no matter here to paint
+                    out.found = true;
+                    out.at = p;
+                    return out;
+                }
+            }
+        }
+        return out;
+    }
+    return out;
 }
 
 // One base, one frame, and every cut that carves it. The voxel pass runs once per group rather
@@ -1555,16 +1699,23 @@ int main(int argc, char** argv) {
         for (usize i = 0; i < built.rule_evaluations.size(); ++i) {
             if (built.rule_evaluations[i] == 0) unreached.push_back(i);
         }
-        const auto say = [&](const char* label, const std::vector<usize>& which, const char* what) {
+        const auto note_for = [&](usize) -> std::string { return {}; };
+        const auto say_with = [&](const char* label, const std::vector<usize>& which,
+                                  const char* what, const auto& note) {
             if (which.empty()) return;
             std::printf("%-13s %zu of %zu rules %s%s\n", label, which.size(), rules, what,
                         only_part.c_str());
             for (usize n = 0; n < which.size() && n < 40; ++n) {
-                std::printf("              %s\n", which[n] < script.paint_source.size()
-                                                      ? script.paint_source[which[n]].c_str()
-                                                      : "?");
+                std::printf("              %-44s%s\n",
+                            which[n] < script.paint_source.size()
+                                ? script.paint_source[which[n]].c_str()
+                                : "?",
+                            note(which[n]).c_str());
             }
             if (which.size() > 40) std::printf("              ... and %zu more\n", which.size() - 40);
+        };
+        const auto say = [&](const char* label, const std::vector<usize>& which, const char* what) {
+            say_with(label, which, what, note_for);
         };
         say("never asked", unreached, "were never EVALUATED — culled everywhere, cost nothing");
 
@@ -1572,7 +1723,7 @@ int main(int argc, char** argv) {
         // finished clip, because the sampler counts evaluations and not matches; see
         // `rules_that_painted` for exactly how faithful that is and which way it errs.
         const forge::SamplePlan plan = forge::plan_sample(script.field, script.solid, script.paint);
-        const std::vector<RuleLife> life =
+        std::vector<RuleLife> life =
             rules_that_painted(script.field, plan, built.clip, built.origin_voxel,
                                script.settings.voxels_per_metre);
         std::vector<usize> unmatched;
@@ -1582,16 +1733,66 @@ int main(int argc, char** argv) {
             if (!life[i].matched) unmatched.push_back(i);
             else if (!life[i].matched_facing) facing_only.push_back(i);
         }
-        say("never matched", unmatched,
-            "were asked and MATCHED NO VOXEL — they cost the build and paint nothing");
-        if (!unmatched.empty()) {
-            // The same resolution trap the cut audit has: a rule keyed to a feature thinner than a
-            // voxel matches nothing here and everything a step finer. `windows_glass` is a 0.045 m
-            // pane and a voxel at metre 8 is 0.125 m.
-            std::printf("              (at metre %d — a rule keyed to something thinner than a "
-                        "voxel matches nothing here; re-ask finer before deleting one)\n",
-                        script.settings.voxels_per_metre);
+
+        // And the same second question the cut audit asks of a zero: is this a dead rule or a
+        // resolution? Asked in parallel over the rules, because a rule that really is dead pays a
+        // full sweep of its own box and those are the ones worth waiting for.
+        jobs.parallel_for(unmatched.size(), 1, [&](usize begin, usize end) {
+            for (usize n = begin; n < end; ++n) {
+                const usize i = unmatched[n];
+                const RuleProbe probe =
+                    probe_rule_finer(script.field, plan, i, script.settings, 8000000, 6.0);
+                life[i].finer = probe.factor;
+                life[i].finer_found = probe.found;
+                life[i].outside = probe.outside;
+                life[i].gave_up = probe.gave_up;
+                life[i].finer_at = probe.at;
+            }
+        });
+
+        // Split, because they are two different findings and only one of them is a fault. Saying
+        // them in one list is what sent a `windows_glass` that paints 300,268 voxels at the
+        // resolution the building ships at to the owner as a dead rule.
+        std::vector<usize> dead;
+        std::vector<usize> too_coarse;
+        std::vector<usize> unchecked;
+        for (const usize i : unmatched) {
+            if (life[i].finer_found) too_coarse.push_back(i);
+            else if (life[i].gave_up || (life[i].finer == 0 && !life[i].outside)) unchecked.push_back(i);
+            else dead.push_back(i);
         }
+        // How often the sampler actually asked it. A rule asked four million times that matched
+        // nothing is a finding whatever the resolution, and it is the number that separates a rule
+        // the probe could not afford to sweep from one that was never in play.
+        const auto asked = [&](usize i) -> std::string {
+            if (i >= built.rule_evaluations.size()) return {};
+            char buffer[64];
+            std::snprintf(buffer, sizeof buffer, "asked %llu times",
+                          static_cast<unsigned long long>(built.rule_evaluations[i]));
+            return buffer;
+        };
+        char what[224];
+        std::snprintf(what, sizeof what,
+                      "matched NO VOXEL, and none when re-asked at up to metre %d either — these "
+                      "paint nothing at any resolution asked",
+                      script.settings.voxels_per_metre * 4);
+        say_with("never matched", dead, what, [&](usize i) -> std::string {
+            return life[i].outside ? "its shape does not reach the sampled box at all" : asked(i);
+        });
+        std::snprintf(what, sizeof what,
+                      "match nothing at metre %d but DO at a finer one — real geometry thinner than "
+                      "a voxel, NOT a fault", script.settings.voxels_per_metre);
+        say_with("too coarse", too_coarse, what, [&](usize i) -> std::string {
+            char buffer[96];
+            std::snprintf(buffer, sizeof buffer, "paints at metre %d, near %.2f %.2f %.2f",
+                          script.settings.voxels_per_metre * life[i].finer, life[i].finer_at.x,
+                          life[i].finer_at.y, life[i].finer_at.z);
+            return buffer;
+        });
+        say_with("not re-asked", unchecked,
+                 "matched nothing, and the finer sweep of their boxes ran out of budget or time — "
+                 "NOT checked, rather than cleared",
+                 asked);
         say("facing never", facing_only,
             "matched their band but never their facing=; the sampler may still paint them where a "
             "whole box settles");
