@@ -81,10 +81,18 @@
 // sampled to the identical 2,423,674 voxels. This mode reported `steps_joints  REMOVED NOTHING` on
 // the tree that had it.
 //
-// The zero has ONE false alarm and it is worth knowing about: a cut narrower than a voxel removes
-// nothing at that resolution and everything at a finer one. So a zero is printed with how thick the
-// cut's own box is IN VOXELS whenever that is under two, which is the difference between a bug and
-// a `--metre` that is too coarse to see the answer.
+// A zero is therefore printed as one of THREE verdicts, and the headline says which:
+//
+//   REMOVED NOTHING, and none at metre N either   measured twice. A real finding.
+//   nothing here, but it DOES cut at metre N      a cut thinner than a voxel at this resolution.
+//                                                 Real geometry, not a fault.
+//   NOT MEASURED ... this is not a clean bill     the finer sweep did not fit. Nobody knows.
+//
+// The third exists because the first used to swallow it. An operand with no bounding box of its own
+// — a `plane`, a non-uniform `scale`, a polar fold — was reported as `REMOVED NOTHING, and covers no
+// matter`, which reads as a dead cut and is a confession of ignorance. Seven of those went out
+// across the six estate clips and every one was a live cut, one of them hiding 503.6 m3 of belfry
+// openings. See where `clip_box` is applied below for what was actually wrong underneath the wording.
 //
 // # Whose matter was it
 //
@@ -524,6 +532,7 @@ struct Cut {
     u32 group = 0;        // which audit pass it belongs to (one per base + frame)
     bool smooth = false;
     bool audited = true;  // false when the frame cannot be inverted
+    bool boxless = false; // its own box came out everywhere; the clip's own box stands in for it
     const char* refused = "";
     std::string name;
     Frame frame;
@@ -554,6 +563,8 @@ struct Tally {
     // Only filled in for a cut that removed nothing. See `probe_finer`.
     i32 finer = 0;                  // the multiple of --metre the probe used; 0 = not probed
     bool finer_found = false;
+    bool gave_up = false;           // the finer sweep ran out of time; NOT checked
+    bool outside = false;           // its shape does not reach the sampled box at all
     Vec3 finer_at{0, 0, 0};
 };
 
@@ -571,31 +582,80 @@ struct Tally {
 struct Probe {
     i32 factor = 0;
     bool found = false;
+    bool gave_up = false;
+    bool outside = false;   // its shape does not reach the sampled box at all
     Vec3 at{0, 0, 0};
 };
 
 Probe probe_finer(const forge::Field& field, const Cut& cut, u32 base, const Frame& base_frame,
-                  i32 per, u64 budget) {
+                  i32 per, u64 budget, f64 deadline_s) {
     Probe out;
     if (cut.world_box.infinite()) return out;
     const f64 span[3]{cut.world_box.high.x - cut.world_box.low.x,
                       cut.world_box.high.y - cut.world_box.low.y,
                       cut.world_box.high.z - cut.world_box.low.z};
+    // An empty box after the clip clamp is not a failure to measure. It is the answer: this cut's
+    // shape lies wholly outside the volume that was sampled, so there is no resolution at which it
+    // could take anything. `void_miss` in the check clip is a sphere ten metres away and this is the
+    // line that names it.
+    for (u32 axis = 0; axis < 3; ++axis) {
+        if (span[axis] < 0.0) { out.outside = true; return out; }
+    }
+
+    // Whether the operand is a distance, so a row of it can be MARCHED rather than walked. Asked of
+    // the library rather than assumed: `metric_slack` answers kInfiniteSlack for an expression that
+    // says nothing about its neighbourhood. Without this, a cut whose box is the whole clip — which
+    // is now every previously boxless cut — is past any point budget at four times the metre, and
+    // the answer would be "not re-asked" for exactly the cases this was rewritten to reach.
+    const f64 slack = field.metric_slack(cut.node);
+    const bool metric = slack < forge::Field::kInfiniteSlack;
+
     for (const i32 factor : {4, 2}) {
         const f64 step = 1.0 / static_cast<f64>(per * factor);
-        f64 points = 1.0;
-        for (u32 axis = 0; axis < 3; ++axis) points *= std::floor(span[axis] / step) + 1.0;
-        if (points > static_cast<f64>(budget)) continue;
+        if (!metric) {
+            f64 points = 1.0;
+            for (u32 axis = 0; axis < 3; ++axis) points *= std::floor(span[axis] / step) + 1.0;
+            if (points > static_cast<f64>(budget)) continue;
+        }
         out.factor = factor;
+        out.gave_up = false;   // a timeout at a finer step must not stain a coarser one that finished
         const i32 n[3]{static_cast<i32>(span[0] / step) + 1, static_cast<i32>(span[1] / step) + 1,
                        static_cast<i32>(span[2] / step) + 1};
-        for (i32 k = 0; k < n[2]; ++k) {
-            for (i32 j = 0; j < n[1]; ++j) {
+        const auto started = std::chrono::steady_clock::now();
+        u64 since_clock = 0;
+        bool timed_out = false;
+        for (i32 k = 0; k < n[2] && !timed_out; ++k) {
+            for (i32 j = 0; j < n[1] && !timed_out; ++j) {
                 for (i32 i = 0; i < n[0]; ++i) {
+                    if (++since_clock >= 1024) {
+                        since_clock = 0;
+                        if (std::chrono::duration<f64>(std::chrono::steady_clock::now() - started)
+                                .count() > deadline_s) {
+                            // Out of time at THIS step. Drop to the coarser one and sweep that
+                            // rather than giving up: half the resolution still answers the question
+                            // for anything thicker than a voxel there, and a definite answer at
+                            // metre 16 beats "not measured". The theatre's `th_anal_in` used to be
+                            // cleared at metre 16 and started reporting NOT MEASURED when marching
+                            // let it reach for metre 32 and time out — a strictly worse report from
+                            // a strictly better probe.
+                            timed_out = true;
+                            break;
+                        }
+                    }
                     const Vec3 p{cut.world_box.low.x + (static_cast<f64>(i) + 0.5) * step,
                                  cut.world_box.low.y + (static_cast<f64>(j) + 0.5) * step,
                                  cut.world_box.low.z + (static_cast<f64>(k) + 0.5) * step};
-                    if (field.eval(cut.node, to_local(cut.frame, p)) >= 0.0) continue;
+                    const f64 d = field.eval(cut.node, to_local(cut.frame, p));
+                    if (d >= 0.0) {
+                        if (metric) {
+                            const f64 clear = d - slack;
+                            if (clear > step) {
+                                const f64 cells = std::min(clear / step, static_cast<f64>(n[0] - i));
+                                i += static_cast<i32>(cells) - 1;
+                            }
+                        }
+                        continue;
+                    }
                     if (field.eval(base, to_local(base_frame, p)) >= 0.0) continue;
                     out.found = true;
                     out.at = p;
@@ -603,6 +663,7 @@ Probe probe_finer(const forge::Field& field, const Cut& cut, u32 base, const Fra
                 }
             }
         }
+        if (timed_out) { out.factor = 0; out.gave_up = true; continue; }
         return out;
     }
     return out;
@@ -1047,21 +1108,23 @@ RuleProbe probe_rule_finer(const forge::Field& field, const forge::SamplePlan& p
             if (points > static_cast<f64>(budget)) continue;
         }
         out.factor = factor;
+        out.gave_up = false;   // a timeout at a finer step must not stain a coarser one that finished
         const f64 reach = step * 0.8660254037844386;
         const forge::PaintRule& rule = plan.widened[i];
         const i32 n[3]{static_cast<i32>(span[0] / step) + 1, static_cast<i32>(span[1] / step) + 1,
                        static_cast<i32>(span[2] / step) + 1};
         const auto started = std::chrono::steady_clock::now();
         u64 since_clock = 0;
-        for (i32 k = 0; k < n[2]; ++k) {
-            for (i32 j = 0; j < n[1]; ++j) {
+        bool timed_out = false;
+        for (i32 k = 0; k < n[2] && !timed_out; ++k) {
+            for (i32 j = 0; j < n[1] && !timed_out; ++j) {
                 for (i32 a = 0; a < n[0]; ++a) {
                     if (++since_clock >= 1024) {
                         since_clock = 0;
                         if (std::chrono::duration<f64>(std::chrono::steady_clock::now() - started)
                                 .count() > deadline_s) {
-                            out.gave_up = true;
-                            return out;
+                            timed_out = true;   // fall back to the coarser step; see probe_finer
+                            break;
                         }
                     }
                     const Vec3 p{lo[0] + (static_cast<f64>(a) + 0.5) * step,
@@ -1095,6 +1158,7 @@ RuleProbe probe_rule_finer(const forge::Field& field, const forge::SamplePlan& p
                 }
             }
         }
+        if (timed_out) { out.factor = 0; out.gave_up = true; continue; }
         return out;
     }
     return out;
@@ -1167,6 +1231,35 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
         std::vector<u8> seen(field.size(), 0);
         walk_for_cuts(field, script.solid, Frame{}, true, "", 1, seen, walk);
     }
+    // An operand with NO BOX is not an operand with no effect, and the two were the same line.
+    //
+    // A `plane`, a non-uniform `scale` and a polar fold all bound to `everywhere()`, and everywhere
+    // is 1e30. That number went into the box-to-voxel-index arithmetic below, where converting
+    // 8e30 to an `i32` is undefined and on this hardware yields INT_MIN — so the high index came
+    // out below the low one, the group was skipped without being scanned, and EVERY cut in it,
+    // boxed or not, reported `REMOVED NOTHING, and covers no matter`. Seven such lines across the
+    // six estate clips were checked by hand and all seven were live cuts; one of them was hiding
+    // 503.6 m3 of belfry openings.
+    //
+    // The fix is the one thing that is always true: matter only exists inside the clip's own box,
+    // and that box is finite by construction. So an unbounded operand is cut to it and measured
+    // like any other, which is exact rather than a bound — a `plane` intersected with the sampled
+    // volume is a perfectly ordinary shape. `boxless` is kept only so the report can say the box
+    // came from the clip rather than from the operand.
+    // The box of the VOXEL CENTRES that were actually sampled, not `settings.low/high`.
+    //
+    // A sample rounds its size up, so the outermost voxel centre can sit a fraction past the box the
+    // author asked for. Clamping to the author's box therefore drops that layer, and it is not
+    // theoretical: it moved the grotto's `cylinder#52` from 56.039 to 55.406 m3 — a measured cut
+    // quietly losing half a cubic metre as a side effect of a fix to a different cut. Clamped to the
+    // centres instead, no voxel this pass would have visited can be excluded.
+    const Aabb clip_box{
+        {(static_cast<f64>(built.origin_voxel[0]) + 0.5) / per,
+         (static_cast<f64>(built.origin_voxel[1]) + 0.5) / per,
+         (static_cast<f64>(built.origin_voxel[2]) + 0.5) / per},
+        {(static_cast<f64>(built.origin_voxel[0] + raw.size[0] - 1) + 0.5) / per,
+         (static_cast<f64>(built.origin_voxel[1] + raw.size[1] - 1) + 0.5) / per,
+         (static_cast<f64>(built.origin_voxel[2] + raw.size[2] - 1) + 0.5) / per}};
     for (Cut& cut : walk.cuts) {
         const auto found = names.find(cut.node);
         if (found != names.end()) {
@@ -1177,6 +1270,13 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
                           cut.node);
             cut.name = buffer;
         }
+        cut.boxless = cut.world_box.infinite();
+        cut.world_box.low = {std::max(cut.world_box.low.x, clip_box.low.x),
+                             std::max(cut.world_box.low.y, clip_box.low.y),
+                             std::max(cut.world_box.low.z, clip_box.low.z)};
+        cut.world_box.high = {std::min(cut.world_box.high.x, clip_box.high.x),
+                              std::min(cut.world_box.high.y, clip_box.high.y),
+                              std::min(cut.world_box.high.z, clip_box.high.z)};
     }
 
     if (walk.cuts.empty()) {
@@ -1260,10 +1360,18 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
         const f64 reach_low[3]{group.reach.low.x, group.reach.low.y, group.reach.low.z};
         const f64 reach_high[3]{group.reach.high.x, group.reach.high.y, group.reach.high.z};
         for (u32 axis = 0; axis < 3; ++axis) {
-            const f64 a = reach_low[axis] * per - static_cast<f64>(built.origin_voxel[axis]) - 0.5;
-            const f64 b = reach_high[axis] * per - static_cast<f64>(built.origin_voxel[axis]) - 0.5;
-            lo[axis] = std::max(0, static_cast<i32>(std::ceil(a)));
-            hi[axis] = std::min(raw.size[axis] - 1, static_cast<i32>(std::floor(b)));
+            // Clamped as DOUBLES and only then converted. Out-of-range double-to-int is undefined
+            // and on x86 returns INT_MIN for an overflow in either direction, so a `1e30` box used
+            // to make the high index INT_MIN, put it below the low one, and skip the whole group in
+            // silence. Every cut in that group then reported a confident zero.
+            const f64 last = static_cast<f64>(raw.size[axis] - 1);
+            const f64 a = std::ceil(reach_low[axis] * per -
+                                    static_cast<f64>(built.origin_voxel[axis]) - 0.5);
+            const f64 b = std::floor(reach_high[axis] * per -
+                                     static_cast<f64>(built.origin_voxel[axis]) - 0.5);
+            if (b < 0.0 || a > last) { any = false; continue; }
+            lo[axis] = static_cast<i32>(std::clamp(a, 0.0, last));
+            hi[axis] = static_cast<i32>(std::clamp(b, 0.0, last));
             if (hi[axis] < lo[axis]) any = false;
         }
         if (!any) continue;
@@ -1365,9 +1473,11 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
                 const Cut& cut = walk.cuts[index];
                 const Probe probe = probe_finer(field, cut, groups[cut.group].base,
                                                 groups[cut.group].frame,
-                                                script.settings.voxels_per_metre, 8000000);
+                                                script.settings.voxels_per_metre, 8000000, 6.0);
                 tally[index].finer = probe.factor;
                 tally[index].finer_found = probe.found;
+                tally[index].gave_up = probe.gave_up;
+                tally[index].outside = probe.outside;
                 tally[index].finer_at = probe.at;
             }
         });
@@ -1421,30 +1531,43 @@ void run_cut_audit(const forge::Script& script, const forge::SampleResult& built
             }
             if (best.size() > 4) victims += " ...";
         }
-        const char* flag = "";
-        char thin[160];
-        thin[0] = '\0';
-        if (t.removed == 0 && t.finer_found) {
-            std::snprintf(thin, sizeof thin,
-                          "  (but it DOES cut at metre %d, near %.2f %.2f %.2f — thinner than a "
-                          "voxel here, not a fault)",
+        // THREE verdicts for a zero, and the HEADLINE carries which one it is.
+        //
+        // The suffix used to carry it and the headline always read `REMOVED NOTHING`, so a cut
+        // nobody had managed to measure was printed with the same first six words as a cut measured
+        // and found dead. Seven of those went out across the estate clips and all seven were live.
+        // A verdict that has to be read to the end of the line to be understood is a verdict that
+        // will be quoted from its beginning.
+        char flag[200];
+        flag[0] = '\0';
+        if (t.removed > 0 && t.only == 0) {
+            std::snprintf(flag, sizeof flag,
+                          "  <-- nothing of its own: every voxel another cut took too");
+        } else if (t.removed == 0 && t.finer_found) {
+            std::snprintf(flag, sizeof flag,
+                          "  <-- nothing at metre %d, but it DOES cut at metre %d near %.2f %.2f "
+                          "%.2f — thinner than a voxel here, NOT a fault",
+                          script.settings.voxels_per_metre,
                           script.settings.voxels_per_metre * t.finer, t.finer_at.x, t.finer_at.y,
                           t.finer_at.z);
-        } else if (t.removed == 0 && t.finer > 0) {
-            std::snprintf(thin, sizeof thin, "  (and nothing at metre %d either)",
-                          script.settings.voxels_per_metre * t.finer);
-        } else if (t.removed == 0 && cut.audited) {
-            // Not "it is fine". NOT ASKED — its box is unbounded or too big to sweep finely — and
-            // saying so is the difference between a checked zero and an unchecked one.
-            std::snprintf(thin, sizeof thin, "  (%s, so NOT re-asked finer)",
-                          cut.world_box.infinite() ? "its box is unbounded" : "its box is too big");
+        } else if (t.removed == 0 && t.outside) {
+            std::snprintf(flag, sizeof flag,
+                          "  <-- REMOVED NOTHING: its shape does not reach the sampled box at all");
+        } else if (t.removed == 0 && t.finer > 0 && !t.gave_up) {
+            std::snprintf(flag, sizeof flag,
+                          "  <-- REMOVED NOTHING, and none at metre %d either — %s",
+                          script.settings.voxels_per_metre * t.finer,
+                          t.on_air == 0 ? "it covers no matter" : "it is all cutting air");
+        } else if (t.removed == 0) {
+            std::snprintf(flag, sizeof flag,
+                          "  <-- NOT MEASURED: nothing here, and the finer sweep %s. This is not a "
+                          "clean bill",
+                          t.gave_up ? "ran out of time" : "did not fit its budget");
         }
-        if (t.removed == 0 && t.on_air == 0) flag = "  <-- REMOVED NOTHING, and covers no matter";
-        else if (t.removed == 0) flag = "  <-- REMOVED NOTHING, it is all cutting air";
-        else if (t.only == 0) flag = "  <-- nothing of its own: every voxel another cut took too";
         std::printf("  %-24s %-20s %9.3f %9.3f  %s%s%s%s\n", cut.name.c_str(), carves,
                     static_cast<f64>(t.removed) * litre, static_cast<f64>(t.only) * litre,
-                    victims.c_str(), cut.smooth ? "  (smooth: a lower bound)" : "", flag, thin);
+                    victims.c_str(), cut.smooth ? "  (smooth: a lower bound)" : "",
+                    cut.boxless ? "  (no box of its own; cut to the clip's)" : "", flag);
     }
     if (unaudited > 0) {
         std::printf("  not audited  %zu cut%s whose place cannot be mapped back to these "
