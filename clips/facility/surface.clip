@@ -7,6 +7,30 @@
 # cornice worn round while the hollow behind them keeps its edge; moss and lichen on the north
 # side, where the wall never dries.
 #
+# ------------------------------------------------------------------------------------------------
+# TWO FAULTS WERE REPORTED OFF THE BUILT CLIP — "some noise on walls" and "the green on the doors"
+# — AND BOTH WERE THIS FILE. What they turned out to be, because both answers are worth having:
+#
+#   THE NOISE WAS THE PATTERNS, NOT THE RULES. Every pattern here carried octaves finer than a
+#   voxel — `s_grit` was `fbm 0.08 octaves 3`, whose third octave is 0.02 m against a voxel of
+#   0.03125 — and a threshold taken against sub-voxel content is a coin toss per cell. It did not
+#   make a ragged edge, it made a pepper of single stray voxels round every stain in the building:
+#   201 single dark-green voxels from the north shade film alone, and 120 single pale ones showing
+#   through the south bleach. Every pattern is band-limited now and every threshold was re-solved to
+#   the same coverage, so the amount of paint is unchanged and only its arrangement is different.
+#   The arithmetic and the counts are in THE GRAMMAR below.
+#
+#   THE GREEN WAS TOO MUCH GREEN IN TOO STRAIGHT A LINE. A third of the bronze in the three doorways
+#   was not bronze: 17.7% verdigris in a belt 1.48 m tall with a level top, 14.2% polished ormolu in
+#   a belt right above it running the full width of every leaf, and green flecks scattered to the
+#   head of the door. It is 5.4% verdigris fading out by 2.70, 1.2% runnels inside it, and 2.8%
+#   polish in a patch beside each ring handle. Section 7 has the counts.
+#
+#   AND THE GREAT DOOR HAD NO BEAD, which is not this file's but is why the leaves read as flat
+#   brown rectangles for the green to sit on. `doors.clip` had `offset ... by=0.045` where it needed
+#   `by=-0.045`; positive shrinks. It is fixed there and written up there.
+# ------------------------------------------------------------------------------------------------
+#
 # THE FILE IS IN TWO HALVES AND THEY ARE NOT THE SAME KIND OF THING. Down to the two `weather`
 # statements is the ENGINE's weathering — two lines that put `Weather::Desert`, `Weather::
 # Overgrown`, `Op::Curvature`, `Op::Occlusion`, `Op::Facing` and `WeatherRequest::scope` under
@@ -238,6 +262,40 @@ let surface_damp = union { surface_damp_foot surface_damp_ledge }
 weather desert    0.18 scale=1.00 level=-0.45 seed=83 on=surface_sun
 weather overgrown 0.18 scale=0.90 seed=89 on=surface_damp
 
+# ------------------------------------------------------------------------------------------------
+# THESE TWO DEFORM THE SURFACE BY A QUARTER OF A VOXEL AND `usable_displacement` CANNOT SEE IT.
+# CHECKED, AND CLEARED — which is written down because it is the first thing anybody hunting a
+# speckle in this building will suspect, and the arithmetic makes it look guilty.
+#
+# `apply_weather` writes `displace(solid, mask, 0.05 * scale)` for desert and `0.045 * scale` for
+# overgrown, and `usable_displacement` is handed THAT number: 0.050 and 0.0405, which are 1.6 and
+# 1.3 voxels at metre 32, so both sail through the half-voxel floor. But `Op::Displace` is
+# `field + amount * pattern`, and the pattern is a mask bounded by the AMOUNT the line asks for —
+# `f.constant(a)` for desert, `f.constant(-a)` for overgrown, a = 0.18. So the surface can actually
+# move at most
+#
+#   desert     0.05   x 1.00 x 0.18 = 0.0090 m = 0.29 of a voxel
+#   overgrown  0.045  x 0.90 x 0.18 = 0.0073 m = 0.23 of a voxel
+#
+# which is exactly the regime the guard exists to refuse. The guard tests the amount and not the
+# amount times the mask's reach, and there is no dial in this file that separates the two: `amount`
+# is both the displacement's size and every coat's threshold, and `scale` is also the occlusion
+# radius and the clump size, so buying a legal displacement costs either a ruin or a finer pattern.
+#
+# SO IT WAS MEASURED INSTEAD OF ARGUED. Two arms over the same 6.0 x 1.2 x 1.4 m box of the north
+# wall foot at metre 32, this line in and commented out:
+#
+#   with     129,536 voxels   31,824 faces   1 component, 0 floating
+#   without  129,278 voxels   31,870 faces   1 component, 0 floating
+#
+# 258 voxels of difference, and the face count went DOWN — so what a quarter-voxel displacement does
+# here is lay a thin continuous film into the hollows, not scatter loose voxels over the wall. It is
+# not the noise, it costs nothing to leave, and the amounts stay where the note above argues for
+# them. If `usable_displacement` is ever given the mask's reach as well as the amount, these two
+# lines are what it will start warning about, and the warning will be right and the picture will not
+# change.
+# ------------------------------------------------------------------------------------------------
+
 # ================================================================================================
 # THE FINISHING COAT — the weathering that is written by hand, and why it is not `weather`
 # ================================================================================================
@@ -287,8 +345,9 @@ weather overgrown 0.18 scale=0.90 seed=89 on=surface_damp
 #
 #   WEAR FOLLOWS PEOPLE.            The portico floor and the great door's threshold are walked
 #                                   dark and smooth down the middle; the door leaves are polished
-#                                   bright at 1.08 m above the floor, which is where the ring
-#                                   handles are and where a hand goes.
+#                                   bright at 1.08 m above the floor, in a patch half a metre wide
+#                                   BESIDE EACH RING HANDLE — not in a band across the leaf, which
+#                                   is what it used to be and what a person reads as a stripe.
 #
 #   AND SOME OF IT IS MATTER.       At 32 voxels to the metre a voxel is 31 mm, so a moss cushion
 #                                   and a cove of soil in the angle of a wall are SHAPE and not
@@ -334,21 +393,81 @@ weather overgrown 0.18 scale=0.90 seed=89 on=surface_damp
 # THE GRAMMAR — five patterns, and every stain in the building is made of them
 # ================================================================================================
 #
+# ------------------------------------------------------------------------------------------------
+# THE ONE RULE THIS SECTION NOW OBEYS: NO OCTAVE FINER THAN FOUR VOXELS.
+#
+# A voxel at the contract's metre 32 is 0.03125 m. An `fbm size=S octaves=N` is a sum of octaves at
+# S, S/2, S/4 ... S/2^(N-1), so the FINEST one is what the grid actually sees, and if that octave is
+# at or under the voxel pitch then the value of the pattern changes completely from one cell to the
+# next. Fed to a `paint` threshold, that does not make a ragged edge — it makes a COIN TOSS PER
+# VOXEL wherever the coarse part of the pattern is anywhere near the threshold, which is a band
+# several centimetres wide all the way round every stain in the building.
+#
+# `usable_displacement` already refuses a displacement under half a voxel for exactly this reason
+# and says so in a WARN. Nothing warns about a THRESHOLD taken against the same sub-voxel content,
+# and this file was doing it in every rule it has:
+#
+#     s_grit   fbm 0.08 octaves 3   ->  octaves at 0.08, 0.04, 0.02 m  =  2.6, 1.3 and 0.6 voxels
+#     s_patch  fbm 0.60 octaves 4   ->  finest 0.075 m = 2.4 voxels
+#     s_run    fbm 0.36 octaves 4   ->  finest 0.045 m = 1.4 voxels
+#     s_moss_n fbm 0.28 octaves 3   ->  finest 0.070 m = 2.2 voxels
+#
+# and `s_grit` was then blended into all three working patterns at 18 to 25 per cent, so every one
+# of the seventeen rules carried it.
+#
+# MEASURED, at metre 32, on the real planes of the elevation, at the SAME coverage before and after
+# — the thresholds below were re-solved so that each rule paints the same fraction of its zone as it
+# did, and the only thing that changed is how that fraction is arranged:
+#
+#                        separate patches         single stray voxels
+#   north streak, tuff     150  ->   33              54  ->   1
+#   north streak, slate     79  ->   16              32  ->   0
+#   splash band            150  ->   37              60  ->   3
+#   north shade film       474  ->  104             201  ->   7      <- the worst in the building
+#   south sun bleach        86  ->    9              49  ->   2
+#   portico dust            51  ->    2              27  ->   0
+#   iron stain              16  ->    5               2  ->   0
+#   lichen                  93  ->   66              15  ->   3
+#
+# and, because a coat above three quarters cover is speckled by its HOLES rather than by its paint,
+# the same count taken of what is left unpainted inside it:
+#
+#   south sun bleach       271 holes -> 73        120 single-voxel holes -> 9
+#   portico dust           282       -> 86        117                    -> 11
+#   cornice tops            87       -> 32         40                    ->  2
+#
+# So: every pattern below is band-limited to the grid the site bakes on. The finest octave of each,
+# in metres and in voxels at metre 32:
+#
+#   s_run     0.36 / 2  ->  0.18   =  5.8 voxels
+#   s_run_bd  0.90 / 3  ->  0.225  =  7.2 voxels
+#   s_patch   0.60 / 3  ->  0.15   =  4.8 voxels
+#   s_grit    0.27 / 2  ->  0.135  =  4.3 voxels
+#   s_moss_n  0.28 / 2  ->  0.14   =  4.5 voxels
+#
+# An edge still wiggles — four voxels is 0.125 m, which is a stone-sized wobble and reads as
+# weathering. It just no longer wiggles at 0.03 m, which reads as a fault in the renderer.
+#
+# IF THE SITE EVER BAKES FINER THAN METRE 32 these five numbers are the ones to halve. They are the
+# whole of this file's relationship with the grid.
+# ------------------------------------------------------------------------------------------------
+#
 # `scale` with unequal factors is what turns a blob into a run. The field evaluates the child at
 # p/(1, 8, 1), so a feature 0.36 m across becomes 0.36 across and 2.9 m long — which is a stain
 # that ran down a wall rather than a patch of noise. It costs the node its bounding box (an
 # unequal scale under-reports distance and `field.cpp` refuses to bound it), and that costs
 # nothing here because every one of these is used inside a `max` with a zone, and `max` takes the
 # tighter box of the two.
-let s_run    = scale { fbm size=0.36 octaves=4 seed=311 } x=1 y=8 z=1
+let s_run    = scale { fbm size=0.36 octaves=2 seed=311 } x=1 y=8 z=1
 let s_run_bd = scale { fbm size=0.90 octaves=3 seed=317 } x=1 y=6 z=1
 
 # The mottle a piece of stone weathers in, and the grit that keeps every edge in this file ragged.
 # Nothing below is thresholded on a smooth noise alone: a smooth threshold draws a smooth line and
-# a smooth line is a drawing.
-let s_patch  = fbm size=0.60 octaves=4 seed=331
-let s_grit   = fbm size=0.08 octaves=3 seed=337
-let s_moss_n = fbm size=0.28 octaves=3 seed=349
+# a smooth line is a drawing. `s_grit` is the ragged edge, and 0.27 is 0.6 M — coarse enough to be
+# four voxels across at its finest, fine enough to be a third of the size of the patch it roughens.
+let s_patch  = fbm size=0.60 octaves=3 seed=331
+let s_grit   = fbm size=0.27 octaves=2 seed=337
+let s_moss_n = fbm size=0.28 octaves=2 seed=349
 
 # The three working patterns. `blend { a b } t` is a*(1-t) + b*t, so each of these is the broad
 # shape of a stain with a fifth of the fine grit mixed into it, and no threshold in this file is
@@ -459,12 +578,27 @@ let s_sun_ashlar  = mirror { box  7.70  5.90 -7.66  16.12  9.85 -7.45 } axis=x
 # all day rather than in the shadow of its own cornice.
 let s_sun_podium  = box   -16.60  1.45 -13.12  16.60  1.78 -12.76
 let s_sun_zone    = union { s_sun_cornice s_sun_ashlar s_sun_podium }
-let s_sun_face    = max { s_sun_zone  add { constant -0.10  negate { s_bloom } } }
+# -0.105 and not -0.10, and every threshold in this file moved by about that much when the patterns
+# were band-limited: the same fraction of the same zone, arranged in whole patches instead of
+# patches with a pepper of single voxels round them. The old figure is kept in the note beside each
+# so the pair can be checked. WAS -0.10 -> 78.98% cover in 86 patches with 49 single stray voxels;
+# is -0.105 -> 78.98% cover in 9 patches with 2.
+let s_sun_face    = max { s_sun_zone  add { constant -0.105  negate { s_bloom } } }
 paint marble_hot where=s_sun_face below=0.035
 
 # North: a dark film of algae on the wall face between the top of the overgrown zone (2.40) and the
 # bottom of the string course (5.31). It is heaviest at the bottom, where the wall stays wet
 # longest, so the fade runs the other way — one at 2.45 and nought at 5.30.
+#
+# THIS WAS THE NOISIEST RULE IN THE BUILDING and it is why the file was looked at. `verde` is
+# 62,92,74 against a limestone wall of 208,203,190 — the highest contrast any coat here puts on a
+# flat face — and on the old patterns it came out over the north elevation, fade and all, in 474
+# separate patches, 201 of which were ONE VOXEL. Two hundred dark green specks on a pale wall is not
+# a film of algae; it is what a person calls noise on a wall.
+#
+# THE THRESHOLD IS THE ONE IN THIS FILE THAT DID NOT HAVE TO MOVE. Solved the same way as all the
+# others and it came back 0.08 to three figures: the same 22.25 per cent of the band, in 104 patches
+# with 7 singles instead of 474 with 201.
 let s_shade_zone = box -16.12 2.45 7.45  16.12 5.30 7.66
 let s_shade_fade = smoothstep { axis of=y } from=5.30 to=2.45
 let s_shade_wet  = multiply { s_shade_fade s_bloom }
@@ -475,8 +609,10 @@ paint verde where=s_shade_face below=0.02
 # 3 — THE RUN-OFF, over the top of the aspect
 # ================================================================================================
 
-# The grime. About a fifth of the band, in runs a third of a metre wide and two or three long.
-let s_str_run = max { s_str_zone  add { constant 0.24  negate { s_str_wet } } }
+# The grime. A twentieth of the band, in runs a third of a metre wide and two or three long — a
+# fifth was the claim and 5.60% is the measurement, taken over the north face at metre 32.
+# WAS 0.24 -> 5.60% in 150 patches with 54 single stray voxels; is 0.272 -> 5.60% in 33 with 1.
+let s_str_run = max { s_str_zone  add { constant 0.272  negate { s_str_wet } } }
 paint tuff where=s_str_run below=0.035
 
 # And the few near-black runnels inside them, where the same water has run down the same line for
@@ -488,7 +624,9 @@ paint tuff where=s_str_run below=0.035
 # report that said so was a material histogram with `slate` at zero. `clipcheck` cannot see it:
 # the rule fired, the components are unchanged, and 183,312 evaluations look like a rule doing its
 # job. TWO OF THE SEVENTEEN RULES IN THIS FILE WERE WRITTEN THIS WAY AND BOTH WERE INVISIBLE.
-let s_str_dark = max { s_str_zone  add { constant 0.34  negate { s_str_wet } } }
+#
+# WAS 0.34 -> 1.93% in 79 patches with 32 single stray voxels; is 0.387 -> 1.93% in 16 with 0.
+let s_str_dark = max { s_str_zone  add { constant 0.387  negate { s_str_wet } } }
 paint slate where=s_str_dark below=0.035
 
 # THE SPLASH BAND. Rain hitting the terrace and the ground throws earth back up against whatever
@@ -505,7 +643,8 @@ let s_spl_pod_e    = box 16.36 0.45 -12.90  16.49 1.10  7.94
 let s_spl_pod_w    = box -16.49 0.45 -12.90  -16.36 1.10 7.94
 let s_spl_zone   = union { s_spl_wall_s s_spl_wall_n s_spl_wall_e s_spl_wall_w
                            s_spl_pod_s s_spl_pod_n s_spl_pod_e s_spl_pod_w }
-let s_splash     = max { s_spl_zone  add { constant 0.06  negate { s_bloom } } }
+# WAS 0.06 -> 47.11% in 150 patches with 60 single stray voxels; is 0.068 -> 47.11% in 37 with 3.
+let s_splash     = max { s_spl_zone  add { constant 0.068  negate { s_bloom } } }
 paint sandstone where=s_splash below=0.035
 
 # ================================================================================================
@@ -552,9 +691,16 @@ let s_sof_zone  = union { s_sof_pod_s s_sof_pod_n s_sof_pod_e s_sof_pod_w
                           s_sof_str_s s_sof_str_n s_sof_str_e s_sof_str_w
                           s_sof_cor_s s_sof_cor_n s_sof_cor_e s_sof_cor_w
                           s_sof_port }
-# Nearly all of it, but not all: -0.45 leaves about a fifth of each soffit unpainted, so the pale
-# is a coat with holes in it and not a second material with a hard edge.
-let s_soffit    = max { s_sof_zone  add { constant -0.45  negate { s_bloom } } }
+# NEARLY ALL OF IT, AND THE CLAIM THAT IT WAS "ABOUT A FIFTH" UNPAINTED WAS NEVER TRUE. Measured
+# over the north cornice soffit at metre 32: -0.45 paints 99.92 per cent of the band and leaves
+# SEVEN voxels of limestone in the whole of it, three of them single. That is not a coat with holes,
+# it is a second material with a hard edge and a little pepper — the exact thing the sentence above
+# says it is avoiding.
+#
+# -0.21 leaves a tenth, and leaves it as holes rather than as specks: 10.07 per cent unpainted in 26
+# patches averaging 32 voxels, one of which is a single. A fifth is available at about -0.12 and is
+# too much; the soffit is meant to read as clean, not as patchy.
+let s_soffit    = max { s_sof_zone  add { constant -0.21  negate { s_bloom } } }
 paint plaster where=s_soffit below=0.035
 
 # ================================================================================================
@@ -606,7 +752,9 @@ let s_top_zone  = union { s_top_str_s s_top_str_n s_top_str_e s_top_str_w
                           s_top_cor_s s_top_cor_n s_top_cor_e s_top_cor_w
                           s_top_rail_s s_top_rail_n s_top_rail_e s_top_rail_w
                           s_top_ter_s s_top_ter_n s_top_ter_e s_top_ter_w }
-let s_tops      = max { s_top_zone  add { constant -0.28  negate { s_bloom } } }
+# WAS -0.28 -> 94.93% cover, and the 5% left over came out as 87 holes of which 40 were one voxel
+# — a pepper of pale stone in a grey ledge. -0.301 is the same 94.93% with 32 holes and 2 singles.
+let s_tops      = max { s_top_zone  add { constant -0.301  negate { s_bloom } } }
 paint tuff where=s_tops below=0.035
 
 # ================================================================================================
@@ -624,7 +772,9 @@ paint tuff where=s_tops below=0.035
 # stone except where a channel has taken it away, and the channel floor at 7.365 is what is left.
 let s_moss_bed  = translate { repeat { box -16.12 -0.055 7.36  16.12 0.055 7.47 } y=0.60 ny=2 }
                             0 3.60 0
-let s_moss_face = max { s_moss_bed  add { constant -0.05  negate { s_moss_n } } }
+# WAS -0.05 -> 62.91% of the channel section; is -0.057 -> the same 62.91% on the band-limited moss
+# noise, in 36 patches rather than 44.
+let s_moss_face = max { s_moss_bed  add { constant -0.057  negate { s_moss_n } } }
 paint hedge where=s_moss_face below=0.035
 
 # PALE LICHEN ON THE TOPS THAT STAND IN THE OPEN. A crustose lichen wants light and rain and no
@@ -633,7 +783,8 @@ paint hedge where=s_moss_face below=0.035
 # A different seed from the grime, so the patches are not the same patches paler.
 let s_lich_zone = union { s_top_cor_s s_top_cor_n s_top_cor_e s_top_cor_w
                           s_top_rail_s s_top_rail_n s_top_rail_e s_top_rail_w }
-let s_lichen    = max { s_lich_zone  add { constant 0.34  negate { s_moss_n } } }
+# WAS 0.34 -> 6.76% in 93 patches with 15 single stray voxels; is 0.378 -> 6.76% in 66 with 3.
+let s_lichen    = max { s_lich_zone  add { constant 0.378  negate { s_moss_n } } }
 paint travertine where=s_lichen below=0.035
 
 # ================================================================================================
@@ -657,27 +808,88 @@ paint travertine where=s_lichen below=0.035
 # 3.96 to 6.84 with a void of 4.50 to 6.30 cut out of it. Inside those voids there is no stone at
 # all — `doors_gd_void` and `doors_sd_void` take the wall, the dado band and its cap away — so
 # everything these two zones can reach is bronze.
-let s_door_gd = box  -1.34 1.82 -7.70   1.34 6.25 -7.42
+# -7.76 AND NOT -7.70, and the number moved with `doors.clip`'s bead. The great door's face is at
+# z = -7.65 on the centre line and the bead now stands 0.045 proud of it, so the southernmost voxel
+# centres of the leaf are at -7.719 — OUTSIDE the old zone, and reached only by the rule's own
+# 0.035. Nothing stands south of this inside the opening for the extra 0.06 to touch: `doors_gd_void`
+# takes the plinth and its cavetto away between x = +-1.35 and puts only the leaves back.
+let s_door_gd = box  -1.34 1.82 -7.76   1.34 6.25 -7.42
 let s_door_sd = mirror { box 4.56 1.82 -7.47  6.24 4.90 -7.30 } axis=x
 let s_door    = union { s_door_gd s_door_sd }
 
-# Verdigris where the water creeps: the bottom of a leaf, and the vertical runs down it. The first
-# is broad and low, the second is narrow and long and goes on top of it.
-let s_verd_low = box -6.30 1.82 -7.75  6.30 3.30 -7.28
-let s_verd_z   = intersection { s_door s_verd_low }
-let s_verd     = max { s_verd_z  add { constant -0.12  negate { s_bloom } } }
+# ------------------------------------------------------------------------------------------------
+# THIS SECTION WAS REPORTED AS "THE GREEN ON THE DOORS" AND THE COMPLAINT WAS EXACTLY RIGHT.
+#
+# Counted at metre 32 with a marker material on every rule, over `doors_leaves` — 84,548 voxels of
+# bronze in the three doorways — what the three coats below used to make of it:
+#
+#   copper     14,975   17.7%   a band 1.48 m tall over EVERY leaf, at 80% cover inside it
+#   ormolu     12,039   14.2%   a band 0.54 m tall across the FULL WIDTH of every leaf, at 89%
+#   malachite   1,433    1.7%   scattered over the whole leaf in 125 flecks averaging ten voxels
+#
+# So a third of the bronze was not bronze: a solid green belt at the bottom, a solid gold belt just
+# above it, and green pepper up to the head of the door. That is bronze that has been painted, and
+# painted in stripes. What it should be is bronze that has weathered, which means three separate
+# things and none of them is a belt:
+#
+#   VERDIGRIS IS WHERE WATER STANDS. These leaves are under a five metre soffit and rain never
+#   touches them; the only water they see is what splashes off the portico floor and what runs off
+#   a hand. So it belongs at the THRESHOLD and dies out within a metre, and it must fade rather
+#   than stop, because a green band with a level top is a stripe however ragged its edge is.
+#
+#   A HANDLED SURFACE STAYS BROWN, AND ONLY WHERE THE HAND IS. The ring handles hang at x = +-0.675
+#   on the great door; the side doors have no furniture and are pushed on the meeting stile. A hand
+#   is 0.15 m across and an arm's sweep on a door is about half a metre — not 2.70 m of leaf.
+#
+#   AND THE TWO MUST OVERLAP, or neither explains the other. The polish now starts at 2.58 and the
+#   verdigris is still going at 2.70, so where a hand reaches down into the green it takes it off,
+#   which is why the gold is highest where the green is thickest.
+#
+# WHAT IT COMES TO, the same count taken the same way on the same shape — 87,626 voxels now, because
+# `doors.clip`'s bead exists as of this change and adds 3,078 of them:
+#
+#   bronze     74,016   84.5%   was 61.4%
+#   copper      4,765    5.4%   was 17.7%, and it is a foot to the door rather than a belt
+#   ormolu      2,416    2.8%   was 14.2%, in four patches beside the four places a hand goes
+#   malachite   1,043    1.2%   was  1.7%, inside the verdigris instead of scattered over the leaf
+#
+# and the rest is `doors.clip`'s own gilt paterae (3,601) and the walked path's dark line across the
+# threshold (1,592), neither of which changed.
+#
+# The fade is written FIRST inside each `multiply` for the reason section 1 gives: `Op::Multiply`
+# stops at the first factor that is nought, so above 2.70 the fbm behind it is never evaluated.
+# And both thresholds are POSITIVE, which they have to be for a fade to work at all — multiplying a
+# signed noise by a mask that falls to nought drives the value TOWARDS ZERO, so a negative threshold
+# would have painted MORE as the fade died, not less. The old -0.12 could not have been faded.
+# ------------------------------------------------------------------------------------------------
+
+# THE VERDIGRIS. One at the threshold, gone by 2.70 — 0.90 m, which is D, and about a fifth of the
+# height of the great door's leaf.
+let s_verd_fade = smoothstep { axis of=y } from=2.70 to=1.85
+let s_verd_wet  = multiply { s_verd_fade s_bloom }
+let s_verd_low  = box -6.30 1.82 -7.75  6.30 2.72 -7.28
+let s_verd_z    = intersection { s_door s_verd_low }
+let s_verd      = max { s_verd_z  add { constant 0.085  negate { s_verd_wet } } }
 paint copper where=s_verd below=0.035
 
-let s_verd_run = max { s_door  add { constant 0.46  negate { s_streak } } }
+# THE RUNNELS, in the same zone under the same fade, so they are a subset of the green above by
+# construction and cannot appear where the verdigris does not — which is what the old rule, keyed
+# on the whole leaf, could not promise and did not keep.
+let s_verd_run_wet = multiply { s_verd_fade s_streak }
+let s_verd_run     = max { s_verd_z  add { constant 0.38  negate { s_verd_run_wet } } }
 paint malachite where=s_verd_run below=0.035
 
-# And the hand. The ring handles hang 1.08 m above the floor, so at y = 2.88 on a threshold of
-# 1.80, and a door that is pushed every day is polished bright in a band round them and dulls
-# again above and below. This is the one coat in the file that makes a surface BRIGHTER, and it is
-# the reason the verdigris reads as verdigris rather than as green paint: the two are 0.4 m apart
-# on the same leaf.
-let s_hand_z = intersection { s_door  box -6.30 2.62 -7.75  6.30 3.16 -7.28 }
-let s_hand   = max { s_hand_z  add { constant -0.35  negate { s_grit } } }
+# AND THE HAND. This is the one coat in the file that makes a surface BRIGHTER, and it is the reason
+# the verdigris reads as verdigris rather than as green paint — but only if it is the size of a
+# hand. Two reaches on the great door, round the rings at x = +-0.675; one on each side door, on the
+# meeting stile at x = +-5.40, because a leaf with no ring on it is pushed where it shuts.
+let s_hand_reach = union {
+    mirror { box 0.40 1.80 -7.95   0.95 6.40 -7.20 } axis=x
+    mirror { box 5.10 1.80 -7.95   5.70 4.99 -7.20 } axis=x
+}
+let s_hand_band = intersection { s_door  box -6.30 2.58 -7.75  6.30 3.18 -7.28 }
+let s_hand_z    = intersection { s_hand_band s_hand_reach }
+let s_hand      = max { s_hand_z  add { constant 0.055  negate { s_grit } } }
 paint ormolu where=s_hand below=0.035
 
 # ================================================================================================
@@ -690,11 +902,18 @@ paint ormolu where=s_hand below=0.035
 # 70,72,78 at roughness 190 against granite's 126,124,120 at 225 — which is exactly the difference
 # between a walked flag and one nobody stands on.
 #
-# The band is 4.8 m wide at the door and the pattern frays it, so it is a path and not a carpet.
-# It runs BETWEEN the two inner columns, whose plinths stand at x 0.675..2.025 on z = -11.15, and
-# so it takes the bottom 0.06 m of those two plinths with it. That is left in deliberately: a dark
-# line where a column foot meets a floor people walk on is what a walked floor does, and the
-# alternative — a path that stops short of the columns — is a carpet again.
+# The band is 4.8 m wide at the door. It runs BETWEEN the two inner columns, whose plinths stand at
+# x 0.675..2.025 on z = -11.15, and so it takes the bottom 0.06 m of those two plinths with it. That
+# is left in deliberately: a dark line where a column foot meets a floor people walk on is what a
+# walked floor does, and the alternative — a path that stops short of the columns — is a carpet.
+#
+# THIS RULE ALSO USED TO CLAIM "the pattern frays it, so it is a path and not a carpet", AND IT IS
+# THE ONE COAT WHERE THAT IS FALSE AND IS MEANT TO BE. -0.34 paints 99.69 per cent of the band; the
+# threshold is so far into the tail of `s_wash` that the pattern is doing nothing at all. Left as it
+# is, because the middle of a walked flagstone floor IS solid, and the sentence is corrected instead
+# of the number. What frays a path in a photograph is its EDGE, and this band's edge is fixed by the
+# box; giving it a frayed edge means a fade in |x| and is a change to make when somebody is looking
+# at the portico floor rather than at the walls.
 let s_walk_z = box -2.40 1.72 -12.60  2.40 1.86 -7.30
 let s_walk   = max { s_walk_z  add { constant -0.34  negate { s_wash } } }
 paint slate where=s_walk below=0.02
@@ -708,7 +927,9 @@ let s_dust_a = mirror { box 1.90 1.82 -7.60  4.30 6.85 -7.45 } axis=x
 let s_dust_b = mirror { box 6.50 1.82 -7.60  7.60 6.85 -7.45 } axis=x
 let s_dust_c = box -7.60 6.90 -7.60  7.60 9.85 -7.45
 let s_dust_z = union { s_dust_a s_dust_b s_dust_c }
-let s_dust   = max { s_dust_z  add { constant -0.20  negate { s_bloom } } }
+# WAS -0.20 -> 90.29% cover, and the tenth left over was 282 holes of which 117 were one voxel.
+# -0.216 is the same 90.29% with 86 holes and 11 singles.
+let s_dust   = max { s_dust_z  add { constant -0.216  negate { s_bloom } } }
 paint gravel where=s_dust below=0.035
 
 # THE IRON STAIN. A classical cornice is cramped to the wall behind it with iron, and iron in a
@@ -727,7 +948,11 @@ let s_rust_n = box  -16.34 11.48   8.02  16.34 11.92   8.30
 let s_rust_e       = box 16.52 11.48 -8.30  16.80 11.92 8.30
 let s_rust_w       = box -16.80 11.48 -8.30  -16.52 11.92 8.30
 let s_rust_z = union { s_rust_s s_rust_n s_rust_e s_rust_w }
-let s_rust   = max { s_rust_z  add { constant 0.42  negate { s_streak } } }
+#
+# WAS 0.42 -> 4.74% of the band in 16 flecks averaging eleven voxels; is 0.466 -> 4.76% in 5 runs
+# averaging thirty-seven. A rust run is a run; sixteen flecks of terracotta was the fine grain
+# talking, not the iron.
+let s_rust   = max { s_rust_z  add { constant 0.466  negate { s_streak } } }
 paint terracotta where=s_rust below=0.035
 
 # ================================================================================================

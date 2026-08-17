@@ -313,7 +313,64 @@ let doors_gd_cut4 = translate { doors_gd_cut1 } 0 3.24 0
 #
 # The bars stop at z = -7.52, which is south of the leaf's own back everywhere under a panel, so
 # the bead runs into the door and nothing pokes through into the vestibule behind.
-let doors_gd_bead_out = offset { doors_gd_slab } by=0.045
+#
+# ------------------------------------------------------------------------------------------------
+# THE SIGN, AND THE FACT THAT THIS BEAD HAS NEVER EXISTED IN ANY BUILD.
+#
+# It was written `by=0.045`. A POSITIVE `by` SHRINKS — `offset` is `field + by`, and BRIEF.md says
+# so in capitals because `steps.clip` lost every joint in the great stair to exactly this. So
+# `doors_gd_bead_out` was not the leaf grown by 45 mm, it was the leaf's own CORE, 45 mm inside a
+# skin only 135 mm thick, and the bead was the four bars intersected with a sheet buried in the
+# middle of the door. Measured at metre 32, on one leaf:
+#
+#   doors_gd_slab       29,492 voxels, 11 voxels deep      the leaf
+#   doors_gd_bead_out    8,151 voxels,  7 voxels deep      SMALLER than the leaf, and inside it
+#   doors_gd_bead1         200 voxels                      against 2,613 in the bars it came from
+#
+# 200 voxels, all of them already solid leaf, so the union added nothing at all. This is the failure
+# with no symptom: no error, no floating voxel, no missing material, and a part that measures one
+# clean component — because the thing that is missing was never there to come loose. The comment
+# above has claimed for the life of this file that the bead is "what makes the difference between a
+# bronze door and a brown rectangle", and every build has shipped the brown rectangle.
+#
+# The side doors are the control again and they told the truth all along: their bead is eight plain
+# boxes with no `offset` in it, so THEY have one, and the great door — the thing in the middle of
+# the elevation that a person walks up to — did not.
+#
+# NEGATIVE GROWS. Same expression, same argument in the paragraph above, the sign it needed. With
+# it, at metre 32:
+#
+#   doors_gd_bead_out   50,321 voxels, 14 voxels deep     the leaf, grown — bigger, as it must be
+#   doors_gd_bead1         752 voxels                     a ring standing 0.045 proud, not 200
+#   doors_gd_leaf_e     26,831 voxels                     was 25,274
+#   part_doors         341,948 voxels, ONE component, 0 floating   was 339,098, one, none
+#
+# and the whole building at metre 8 is 660 components before and 660 after, with the same four
+# floating pieces in the same four places — so the bead this file spent four versions trying to make
+# survive the grain has now been added, and the count that was the whole worry did not move. The
+# history above is left in because the reasoning in it is right; it was solving the wrong problem.
+#
+# `clipcheck --part doors_gd_leaves --metre 32 --slice y@2.43` — a plan section through the middle of
+# the lowest panel, south at the bottom, trimmed to the middle 80 of its 96 columns. The extra rows
+# are the bead: on the two outer stiles at the ends, and round the mouth of the panel in the middle.
+#
+#   by=0.045  (as it was)                              50,148 voxels
+#   ..##.....##############################################################.....##..
+#   ..............####################################################..............
+#   .................##############################################.................
+#   ...............................########..########...............................
+#   .................................######..######.................................
+#
+#   by=-0.045 (as it is)                               53,226 voxels
+#   ..##.....##############################################################.....##..
+#   ...##.........####################################################.........##...
+#   ....##...........##############################################...........##....
+#   ...............................########..########...............................
+#   ................................#######..#######................................
+#   ................................##............##................................
+#   .................................#............#.................................
+# ------------------------------------------------------------------------------------------------
+let doors_gd_bead_out = offset { doors_gd_slab } by=-0.045
 let doors_gd_bead_ring = union {
     box 0.2025 1.9575 -7.95   0.2475 2.9025 -7.52 round=0.012
     box 1.1025 1.9575 -7.95   1.1475 2.9025 -7.52 round=0.012
@@ -535,10 +592,49 @@ let void_doors = difference {
 }
 
 # ================================================================================================
-# PAINT — only my own shapes, always below=0.02
+# PAINT — only my own shapes, and 0.035 for everything a transform put where it is
 # ================================================================================================
+#
+# BRIEF.md rule 5 names two numbers and this file was using the wrong one on four of its five rules.
+# 0.02 is for a shape drawn where it stands; 0.035 is for a shape placed by `translate`, `rotate`,
+# `around`, `repeat` or `mirror`, because a voxel is decided SOLID by coverage and PAINTED by a rule
+# tested at the cell's centre, and for a surface that no longer lies near a voxel boundary those two
+# disagree. The voxels that fall through do not vanish and do not warn: they take the base coat.
+#
+# MEASURED HERE, at metre 32, on `doors_leaves` — 84,548 voxels of bronze, with a marker material
+# on every one of the 410 paint rules in the building so each stray voxel could be charged to the
+# rule that actually won it:
+#
+#   at below=0.02    226 voxels wearing `walls.clip`'s sandstone, because the bronze rule did not
+#                    reach them and the last rule before it that did was the wall's
+#   at below=0.035     0
+#
+# 226 voxels is a quarter of one per cent, so it moves nothing in a material share and `clipcheck`
+# cannot see it — but it is a pale stone speck every few centimetres along the arrises of a bronze
+# door in the deepest shadow in the scene, which is exactly what it looks like. The ballroom found
+# the same fault at 1,021 voxels on one ceiling; this is the same fault on a second part, which
+# makes it systemic rather than a slip, and the floors are being checked for it as this is written.
+#
+# `doors_plinth` keeps 0.02: it is a box and a cavetto drawn at the coordinates they stand at, with
+# no transform anywhere in it, which is the case the smaller number is for.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT 0.035 DOES NOT FIX, BECAUSE IT IS NOT THIS FILE'S FAULT — SAID HERE SO THE NEXT PERSON DOES
+# NOT SPEND THE AFTERNOON I SPENT.
+#
+# 220 voxels of the leaves are still not bronze at ANY reach — the same 220 at below=0.035, 0.08 and
+# 0.20, which is what proves it is not a reach problem. They are won by two rules in OTHER fragments
+# that come after this one in the manifest and paint over geometry that is not theirs:
+#
+#   194 voxels   crypt.clip     `paint limestone where=crypt_zone_ceiling`
+#    26 voxels   fittings.clip  `paint granite   where=fittings_bases`
+#
+# A later rule beats an earlier one wherever both match, so no amount of reach here can win them
+# back; the zones have to stop covering somebody else's bronze. That is BRIEF.md rule 5's first
+# half — paint only your own shapes — and it belongs in those two files, not this one.
+# ------------------------------------------------------------------------------------------------
 
-paint marble  where=doors_stone  below=0.02
+paint marble  where=doors_stone  below=0.035
 paint granite where=doors_plinth below=0.02
 
 # The tympanum in porphyry. A marble doorcase on a limestone wall is two pale stones four points
@@ -547,11 +643,11 @@ paint granite where=doors_plinth below=0.02
 # gable is also exactly what the thing is for: it is the one place on a Roman front where coloured
 # stone is used, and it gives the path tracer a saturated red bouncing up into a white raking
 # cornice 0.27 m in front of it.
-paint porphyry where=doors_ped_tympanum below=0.02
+paint porphyry where=doors_ped_tympanum below=0.035
 
-paint bronze  where=doors_leaves below=0.02
+paint bronze  where=doors_leaves below=0.035
 
 # The paterae last, so they win over the bronze under them. Clipped to the leaves so a cylinder
 # that runs on through the reveal cannot colour anybody else's stone.
 let doors_paterae = intersection { union { doors_gd_pats doors_sd_pats } doors_leaves }
-paint gilt where=doors_paterae below=0.02
+paint gilt where=doors_paterae below=0.035
