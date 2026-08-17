@@ -8,6 +8,9 @@
 // Every offset here has a matching one in bake_web.cpp. If you change one, change both — the file
 // carries a version and a magic so a mismatch says so instead of drawing nonsense.
 
+// >>> probes
+import { readProbes, PROBE_FOURCC } from './features/probes.js';
+// <<< probes
 // >>> gi
 // Version 3 turns the last eight bytes of the header into a CHUNK DIRECTORY. Everything in front
 // of byte 200 is exactly what version 2 held, and a chunk is a named block appended after all of
@@ -141,6 +144,12 @@ export function parseClip(buffer) {
     }
     clip.chunk = (tag) => clip.chunks.get(tag) || null;
     // <<< gi
+
+    // >>> probes
+    // The probe atlas, decoded here rather than in the renderer because it is the same shape as
+    // every other block: bytes in the file, a typed-array view over them, nothing rebuilt.
+    clip.probes = readProbes(clip.chunk(PROBE_FOURCC));
+    // <<< probes
 
     clip.size = [
         clip.dims[0] / clip.metre, clip.dims[1] / clip.metre, clip.dims[2] / clip.metre,

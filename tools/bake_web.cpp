@@ -69,6 +69,9 @@
 // >>> ao
 #include "bake/occlusion.hpp"
 // <<< ao
+// >>> probes
+#include "bake/probes.hpp"
+// <<< probes
 #include "core/jobs.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -1753,6 +1756,40 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         kAoRadiusMetres, kAoRays, jobs);
     const f64 ao_seconds = static_cast<f64>(ws::now_ns() - ao_began) / 1e9;
     // <<< ao
+    // >>> probes
+    // Reflection probes, cast against the same two grids the light was cast against. See
+    // tools/bake/probes.hpp for where they go and why they are octahedral; this is only the wiring.
+    ws::web::ProbeSet probes;
+    {
+        ws::web::ProbeInput input;
+        input.clip = &clip;
+        input.types = &types;
+        // The CONSERVATIVE grid, not the coarse one the light uses. A `mirror` in these clips is a
+        // coat of paint one voxel thick, and the light grid's copy only fills a cell when a third
+        // of it is solid -- a reflection ray would walk straight through the wall it is supposed to
+        // be showing.
+        input.occupancy.bits = collision.bits.data();
+        input.occupancy.dims[0] = collision.dims[0];
+        input.occupancy.dims[1] = collision.dims[1];
+        input.occupancy.dims[2] = collision.dims[2];
+        input.occupancy.voxels_per_metre = collision.voxels_per_metre;
+        input.light.texels = light.texels.data();
+        input.light.dims[0] = light.dims[0];
+        input.light.dims[1] = light.dims[1];
+        input.light.dims[2] = light.dims[2];
+        input.light.cell = light.cell;
+        input.metre = metre;
+        const f64 sun_length = std::sqrt(kSunDir[0] * kSunDir[0] + kSunDir[1] * kSunDir[1] +
+                                         kSunDir[2] * kSunDir[2]);
+        for (i32 axis = 0; axis < 3; ++axis) {
+            input.origin[axis] = origin[axis];
+            input.size_metres[axis] = size_metres[axis];
+            input.sun[axis] = kSunDir[axis] / sun_length;
+        }
+        probes = ws::web::bake_probes(input, jobs);
+    }
+    const std::vector<u8> probe_bytes = ws::web::probe_chunk(probes);
+    // <<< probes
 
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
@@ -2004,6 +2041,12 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
             chunks.push_back(make_chunk("AOCC", std::move(ao_bytes)));
         }
     // <<< ao
+    // >>> probes
+        // The reflection probes: an octahedral atlas and the grid that says which probe is where.
+        // Empty on a clip where no lattice point is in air and near matter, and a reader that gets
+        // null for `RPRB` falls back to the sky exactly as it did.
+        if (!probe_bytes.empty()) chunks.push_back(make_chunk("RPRB", probe_bytes));
+    // <<< probes
     // >>> paintexport
         append_chunks(out, chunks);
     }
@@ -2058,6 +2101,16 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                 static_cast<f64>(occlusion.texels.size()) / (1024.0 * 1024.0), ao_seconds,
                 static_cast<f64>(occlusion.radius), occlusion.rays);
     // <<< ao
+    // >>> probes
+    if (probes.count > 0) {
+        std::printf("      probes: %u at %.1f m, %dx%d x %d levels, %llu rays, %.2f MB, %.1f s\n",
+                    probes.count, probes.spacing, probes.base, probes.base, probes.levels,
+                    static_cast<unsigned long long>(probes.rays),
+                    static_cast<f64>(probe_bytes.size()) / (1024.0 * 1024.0), probes.seconds);
+    } else {
+        std::printf("      probes: none -- no lattice point in this clip is in air and near matter\n");
+    }
+    // <<< probes
     // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
     // "it worked", which is the whole reason these are counted at all.
     if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||

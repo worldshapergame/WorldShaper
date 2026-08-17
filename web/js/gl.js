@@ -122,6 +122,11 @@ export const UNIT = {
     shapePaintMaterials: 4,
 };
 // <<< units
+// >>> probes
+// Baked reflection probes. web/js/features/probes.js is the whole of it, including the GLSL below
+// and the one function a screen-space pass may call: `probeReflection(world, N, R, roughness)`.
+import { PROBE_GLSL, Probes } from './features/probes.js';
+// <<< probes
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -193,6 +198,10 @@ ${GI_FRAGMENT_UNIFORMS}
 
 ` + ao.AO_FRAGMENT + `
 out vec4 o_colour;
+
+// >>> probes
+${PROBE_GLSL}
+// <<< probes
 
 vec4 material_row(int which) {
     int at = v_material * 4 + which;
@@ -360,13 +369,29 @@ void main() {
     // the reflection lerped towards the flat ambient — cheap, and it is what makes bronze read as
     // metal rather than as brown paint.
     vec3 R = reflect(-V, N);
-    vec3 reflected = mix(sky_colour(R), ambient, rough * rough);
-    // The reflected sky is occluded too, and by the square root of the same term rather than by
-    // the term: a recess still sees a sliver of sky in its own reflection, and multiplying a
-    // specular lobe by a diffuse occlusion in full is what makes polished stone in a niche read as
-    // soot. The gilt urns standing in the rotunda's four niches are the case that decides it.
-    vec3 ambientSpecular = reflected * fresnel(f0, ndv) * mix(0.25, 1.0, skyVisible) *
+    // >>> probes
+    // ...and, where a probe stands near enough to say so, what is ACTUALLY along that reflection:
+    // the room, the posts, the wall opposite. The sky term stays as the fallback, because a probe
+    // volume does not cover the open air above a building and does not need to.
+    //
+    // The material's own roughness rather than the clamped one: the clamp exists to keep the GGX
+    // lobe from going singular and it would send mirror (6) and gilt (64) to the same pre-filtered
+    // level, which is the whole distinction these clips were built to show.
+    float probeRough = clamp(surface.r, 0.0, 1.0);
+    vec4 probe = probeReflection(v_world, N, R, probeRough);
+    vec3 reflected = mix(mix(sky_colour(R), ambient, rough * rough), probe.rgb, probe.a);
+    // A probe already knows what it can see -- that is what it is -- so the sky-visibility term
+    // that stands in for it elsewhere is faded out exactly as far as the probe covers the point.
+    // Left in, an interior reflection is darkened twice and a mirror in a hall goes black.
+    float envVisible = mix(mix(0.25, 1.0, skyVisible), 1.0, probe.a);
+    // ...times the baked occlusion, by its SQUARE ROOT rather than by the term: a recess still
+    // sees a sliver of sky in its own reflection, and multiplying a specular lobe by a diffuse
+    // occlusion in full is what makes polished stone in a niche read as soot. That factor is the
+    // ambient-occlusion branch's and it survives the probe rewrite of this line -- the gilt urns
+    // in the rotunda's four niches are the case that decides both halves of it.
+    vec3 ambientSpecular = reflected * probeFresnel(f0, ndv, rough) * envVisible *
                            mix(0.4, 1.0, v_ao) * sqrt(baked);
+    // <<< probes
 
     vec3 colour = diffuse + specular + ambientSpecular;
 
@@ -936,6 +961,9 @@ export class Renderer {
         //   window.__state.renderer.aoDisabled = true
         this.aoDisabled = false;
         // <<< ao
+        // >>> probes
+        this.probes = new Probes(gl);
+        // <<< probes
         this.clip = null;
 
         this.viewProj = new Float32Array(16);
@@ -1122,6 +1150,9 @@ export class Renderer {
         // existed has none, and draws exactly as it did.
         this.gi.setClip(clip);
         // <<< gi
+        // >>> probes
+        this.probes.set(clip);
+        // <<< probes
     }
 
     attributesAt(byteOffset) {
@@ -1218,6 +1249,9 @@ export class Renderer {
             gl.uniform1f(uniforms.u_aoFloor, ao.AO_FLOOR);
         }
         // <<< ao
+        // >>> probes
+        this.probes.bind(uniforms);
+        // <<< probes
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each

@@ -25,6 +25,7 @@ clips/*.clip  ->  ws_bake_web  ->  web/data/*.wsc  ->  web/js  ->  a page
 | `web/js/format.js` | reads that file — a header, four typed-array views, nothing decoded |
 | `web/js/gl.js` | the rasteriser: instanced quads, one Cook-Torrance lobe, a stencil cap |
 | `web/js/features/shapeshade.js` | what a shape in the ◉ view is made of, shaded as the voxels are | <!-- // >>> shapeshade // <<< shapeshade -->
+| `tools/bake/probes.hpp` | casts the reflection probes; `web/js/features/probes.js` samples them |
 | `web/js/controls.js` | orbit, and a body that walks, crouches, jumps and flies |
 | `web/js/app.js` | the page, and the loop that watches the index for changes |
 | `.github/workflows/pages.yml` | bakes on every push that can change a clip, and publishes |
@@ -76,6 +77,14 @@ that does not know a tag skips it, and `clip.chunk('GIRR')` in `web/js/format.js
 of one without decoding anything — whoever bakes a chunk owns reading it.
 <!-- <<< gi -->
 
+<!-- >>> probes -->
+**The version is 3.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
+of §4a moved every block offset; there is no reading one as the other. Version 3 spends the eight
+bytes version 2 left over on a chunk directory, so it is the last time an addition moves anything.
+`reuse` in the baker refuses an older file and rebakes it, and `parseClip` throws on one rather than
+drawing a wrong picture — a cached `web/data` from before the change is a real state and it has to
+say so.
+<!-- <<< probes -->
 
 **Materials.** Every `VisualRecord` used, verbatim, sixteen bytes each. Colour, opacity,
 roughness, metallic, index of refraction, emission and its tint, Beer-Lambert absorption,
@@ -259,6 +268,89 @@ find. The portico's shafts gain a little and the coffers, the soffit panels, the
 heads and the wall-to-floor joints gain a lot. At 32 voxels to the metre the flutes would be real
 and so would their occlusion.
 <!-- <<< ao -->
+<!-- >>> probes -->
+**Reflection probes.** A sparse lattice of small octahedral maps of what the clip's open space can
+see, cast in the baker and read at run time, in the `RPRB` chunk. §2a is the whole of it.
+
+### The version is 3, and the last eight bytes of the header are a directory
+
+Version 2 left bytes 200..207 spare. They now hold a **chunk directory** — `u32 chunkOffset`,
+`u32 chunkCount`, then 16 bytes an entry (`char fourcc[4]`, `u32 offset`, `u32 size`, `u32
+reserved`) — so that everything added to the format from here is a fourcc and a range rather than
+another fixed offset every block below it has to move for. That is what made a version 1 file
+unreadable as version 2, and it was not worth arranging twice. A reader that does not know a fourcc
+skips it; two chunks added by two hands cannot collide.
+
+## 2a. Reflection probes
+
+Nothing in the viewer reflected anything, and the clips were built to. `salon.clip` and
+`ballroom.clip` face walls of `mirror` (roughness 6, metal 252) at each other; `pavilion.clip`
+stands in a basin of still water; the contract declares three golds a stop apart — `ormolu` 48,
+`gilt` 64, `gold_leaf` 40 — precisely so that metal can be judged. All of it rendered as flat
+diffuse, because a rasteriser's only opinion about what a surface can see is the analytic sky.
+
+**A probe is a lattice point that is in air and can see matter.** Fourteen short rays, at least
+three of which have to hit something within six metres: that puts probes in rooms and above floors
+and keeps them out of the open air above a building, where a probe holds nothing the sky term does
+not already draw better. The spacing is a budget rather than a number — it starts at two metres and
+doubles until the atlas fits a megabyte, and the resolution goes to 64×64 only when 32×32 would
+have left three quarters of that budget unspent.
+
+| | probes | spacing | size | probe bytes | bake added |
+|---|---|---|---|---|---|
+| `mirror_test` | 20 | 4 m | 64² | 0.67 MB | 1.3 s on 0.3 s of sampling |
+| `facility-salon` | 17 | 2 m | 64² | 0.67 MB | 1.8 s on 506 s of sampling |
+
+**Octahedral, not a cubemap.** One 2D texture and one atlas, against six faces and six sets of seams
+per probe with no way to pack many into one binding. The octahedral square's edges fold onto
+themselves by a rule that a border of one texel satisfies exactly — and an atlas needs that border
+anyway to stop one probe bleeding into the next, so the seam costs nothing that was not already
+being paid. The mapping is **edge-aligned**: texel 0 sits at uv −1 and texel *size*−1 at +1, so the
+boundary lands on texel centres and the fold is an integer reflection rather than a half-texel
+guess.
+
+**Pre-filtered into five levels**, laid out left to right inside a probe's tile, each half the width
+of the one before. Level 0 is the raw cast; levels 1..4 are integrated from it with a lobe whose
+width is the **larger** of what the roughness asks for and what one texel of that level subtends, so
+a level is never sharper than the texels it is stored in. Roughness reaches a level through
+`pow(roughness, 1/1.5) * 4`, which spreads the clips' own materials rather than bunching them: the
+three golds land at 1.17, 1.31 and 1.59, and `mirror` at 0.33.
+
+**Said plainly: a 32×32 probe is not a mirror.** Three degrees a texel is a soft reflection however
+low the roughness goes. That is the division of labour with the screen-space pass — SSR is sharp and
+sees only what is on screen, a probe is soft and sees everything, including what is behind the
+camera, which is most of what a mirror facing you shows. The probe path is what SSR falls back to,
+through one function:
+
+```glsl
+vec4 probeReflection(vec3 world, vec3 normal, vec3 reflectDir, float roughness);
+vec3 probeFresnel(vec3 f0, float ndv, float roughness);
+```
+
+`.rgb` is linear radiance pre-tonemap at the sharpness `roughness` asked for; `.a` is how much of
+the point's probe neighbourhood actually had probes in it, so 0 means fall back to the sky and the
+caller decides how.
+
+**It reuses the light grid's machinery, and one grid rather than the other.** The rays are a
+two-level DDA — skip a coarse cell at a time, step voxel by voxel inside an occupied one — and what
+a hit is *shaded* with is the light grid already cast at that point, so a probe agrees with the wall
+it is looking at instead of being a second opinion about it. The acceleration grid is the
+**conservative** collision grid and not the light grid's copy: the light grid fills a cell only when
+a third of it is solid, and a `mirror` in these clips is a coat of paint one voxel thick that a ray
+would walk straight through.
+
+**Parallax-corrected against the clip's own matter box.** Without it a reflection slides across a
+surface as the camera moves and it is the first thing anybody notices. Its limit is the one every
+box-projected probe has: it is right when the geometry roughly *is* the box, which a room is and an
+open field with four posts standing in the middle of it is not.
+
+Two honest costs. A probe's tile is as tall as level 0 and levels 1..4 are half that and less, so
+about two fifths of the atlas is never sampled — reclaiming it means packing the small levels under
+each other and is worth about 0.25 MB a clip. And **the run-time cost is real**: up to eight lattice
+corners, two roughness levels each, is sixteen texture fetches a pixel in the worst case. Measured
+on SwiftShader — a software rasteriser with no texture cache, so an upper bound rather than a phone
+number — `mirror_test` at 900×700 goes from 0.42 s to 1.96 s a frame with probes on.
+<!-- <<< probes -->
 
 ### Resolution is a budget, not a list
 
