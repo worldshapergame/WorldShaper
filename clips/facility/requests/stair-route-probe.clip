@@ -1,0 +1,298 @@
+# stair-route-probe — CAN A PERSON WALK FROM THE FOOT OF THE GRAND STAIR TO EVERY ROOM ON THE
+#                     PIANO NOBILE? Measured, as shapes, against the assembled building.
+#
+# stair.clip's own `stair_probe_head` tests THIS PART AGAINST ITSELF and says so in its own words:
+# "Something another fragment hangs over the passage later will not show up here." A ROUTE is
+# exactly that case — it leaves the stair at the gallery's south edge and crosses two other
+# fragments before it reaches a room — so it cannot be measured from inside any one file. This is
+# the manifest that measures it.
+#
+# WHAT IS ON THE PIANO NOBILE, and it is a short list. There are four rooms at y = 6.30 in this
+# building and no others: the two stair galleries (stair.clip, north strip of each wing), the two
+# picture galleries (enfilade.clip, east and west strips), the BALLROOM (east, south front) and the
+# LIBRARY (west, south front). vestibule.clip stops at 6.30, rotunda.clip has no gallery, halls.clip
+# is solid to 6.975, and terrace.clip is on the roof at 11.75 with no stair to it. So the whole
+# question is: from the top of the grand stair, can you reach the picture gallery, the ballroom and
+# the library — and the same three in the west wing.
+#
+# TWO KINDS OF MEASUREMENT, AND THE SECOND IS THE ONE NOTHING ELSE MAKES
+#
+#   `sr_head_*`   the volume a person sweeps through — 2.40 m tall, and as wide as the building
+#                 actually gives — INTERSECTED with the assembled building. MUST BE EMPTY.
+#                 Anything it reports is something standing in the way.
+#
+#   `sr_floor_*`  a skin 0.10 m thick immediately under the walking surface, MINUS the assembled
+#                 building. MUST BE EMPTY. Anything it reports is a place with NO FLOOR — which is
+#                 the fault this whole probe exists for, and which a head-height check cannot see
+#                 at all: a doorway opening onto a four-metre drop measures as perfectly clear.
+#
+# HOW TO RUN IT
+#
+#   bash tools/clipcheck.sh clips/facility/requests/stair-route-probe.clip --metre 16 --part <name>
+#   bash tools/clipcheck.sh clips/facility/requests/stair-route-probe.clip --metre 32 --part <name>
+#
+# WHAT EACH ONE SHOULD SAY, as it stands on 2026-08-17. Two of them are NOT empty and both readings
+# are somebody else's member, named, measured and written up in requests/stair.md §8:
+#
+#   sr_head_all     56 voxels     library.clip's lower cornice frieze, soffit 8.315, crossing its
+#                                 own doorway at 2.015 m clear (§8.5). Everything else EMPTY.
+#   sr_head_foot    EMPTY         the passage at the foot of the stair, 1.22 x 2.40
+#   sr_head_rake    EMPTY         the twenty-three treads, the half landing and the gallery
+#   sr_head_brg     EMPTY         the gallery's east end and the bridge, 1.29 x 2.40
+#   sr_head_gall    EMPTY         the picture gallery, 1.00 x 2.40, both wings
+#   sr_head_door    56            the two doorways, at the aperture each of them actually has
+#   sr_floor_all    174 voxels    the 23 mm the room slabs and enfilade.clip's do not lap (§8.3).
+#                                 It was 1,922 before the bridge.
+#   sr_floor_join   the same 174, on its own, so it cannot be mistaken for anything else
+#   sr_thresh_e     MATTER, in TWO components — the control arm for the line above
+#   sr_cut_check    EMPTY         nothing of part_stair inside anybody's void
+#   sr_who_lib      56            whose stone the 56 are; the other four sr_who_* are EMPTY
+#
+# THE ASSEMBLY BELOW IS THE MANIFEST'S, NOT A SIMPLIFICATION. clips/facility.clip subtracts the
+# room voids and the opening voids from `built` and then unions the fittings back after the ROOM
+# voids but still cut by the OPENING voids. A route probe that skipped that would test a building
+# nobody ships: `void_windows` alone deletes matter 1.00 m in from every outer face, and the last
+# 0.10 m of both picture galleries is inside it.
+#
+# `metre` and `bounds` come AFTER EVERY include and not before — every fragment includes
+# _contract.clip again and the contract re-states the building's own 34 x 21 x 25 m box, which at
+# metre 32 is 582 million cells. The box below is the two north-south strips, both wings, plus the
+# stair, which is 15% of it.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+paint limestone
+
+include "../podium.clip"
+include "../walls.clip"
+include "../windows.clip"
+include "../doors.clip"
+include "../halls.clip"
+include "../stair.clip"
+include "../enfilade.clip"
+include "../ballroom.clip"
+include "../library.clip"
+include "../fittings.clip"
+
+let sr_built = union {
+    part_podium part_walls part_windows part_doors
+    part_halls part_stair part_enfilade part_ballroom part_library
+}
+let sr_rooms = difference {
+    sr_built
+    void_halls void_stair void_ballroom void_library void_enfilade
+}
+let sr_all = union {
+    difference { sr_rooms void_doors void_windows }
+    difference { part_fittings void_doors void_windows }
+}
+
+# ================================================================================================
+# THE ROUTE, EAST WING — foot of the stair, up, along the gallery, over the bridge, through the
+#                        picture gallery, into the ballroom
+# ================================================================================================
+#
+# Every box below is 2.40 m tall, standing on the surface a foot is on, and as wide as the building
+# gives at that point. Where a box is narrower than the 1.20 m a circulation route wants, the
+# number is written beside it and the reason is in requests/stair.md.
+
+# 1. THE FOOT. The passage under the stair, east of the first riser at x = 13.54 and its newel
+#    (which reaches 13.6525), north of enfilade.clip's ground block (which reaches z 3.115), west of
+#    walls.clip's inner face at 15.10. 1.22 m wide.
+let sr_foot_e = box 13.66 1.80 3.16   14.88 4.20 6.44
+
+# 2. THE FLIGHTS AND THE LANDING are stair.clip's own per-tread volumes, re-asked here against the
+#    WHOLE building rather than against the stair alone — which is a sterner question and the one
+#    that would catch a fragment hanging something over the well.
+let sr_rake_e = union { stair_probe_ra stair_probe_rb stair_probe_land stair_probe_gall }
+
+# 3. THE BRIDGE AND THE TURN. The east end of the gallery, the crossing of its south balustrade
+#    line, and the bridge south to enfilade.clip's north archway. 1.31 m wide in x, between the
+#    bridge's own balustrade (which reaches 13.7025) and walls.clip's inner face at 15.10. Its south
+#    end stops at z = 3.13, which is 0.015 north of enfilade.clip's west wall (3.115).
+#
+#    IT IS THE SAME NUMBERS AS `stair_probe_brg` IN stair.clip AND THAT IS DELIBERATE. There the box
+#    is intersected with the stair alone and says nothing of MINE is in the way; here it is
+#    intersected with the assembled building and says nothing of ANYBODY'S is. One shape, two
+#    questions, and the second is the only one that means anything on a bridge whose two ends are
+#    other people's stone.
+#    THE EAST LIMIT IS 15.04 AND NOT 15.06, AND THAT IS A MEASUREMENT. At 15.06 this box came back
+#    with 168 voxels a side at metre 16 and 2 a side at metre 8: enfilade.clip's own architrave
+#    round the east light at z = 2.70 stands 0.045 proud of walls.clip's face at 15.10, so its jamb
+#    at z 3.3745..3.4805 and its head at y 8.542..8.648 reach x = 15.047 — and BOTH of them are
+#    NORTH of enfilade.clip's own end face at 3.115, standing in the stair well rather than in the
+#    passage they belong to. They take nothing off this route: the clear here is 13.7025 to 15.047,
+#    which is 1.3445 m. The box is 1.29 and clears the architrave by 7 mm.
+let sr_brg_e = box 13.75 6.30 3.13    15.04 8.70 6.52
+let sr_brg_w = box -15.04 6.30 3.13  -13.75 8.70 6.52
+
+# 4. THROUGH THE PICTURE GALLERY, AND THIS LEG IS 1.00 m AND NOT 1.20, WHICH IS THE ONE PLACE ON
+#    THE WHOLE ROUTE WHERE THE BUILDING IS UNDER THE CIRCULATION FIGURE. The strip is 1.15 m of
+#    stone to stone — halls.clip's block face at 13.95 against walls.clip's inner face at 15.10 —
+#    and enfilade.clip's own words for it are "every millimetre there is". 1.20 does not fit between
+#    those two faces at all, so this is arithmetic and not a measurement. What IS measured is what
+#    stands inside the 1.15: the base course cap to 13.995 and 15.055, the impost to the same two at
+#    y 8.685, and the girandoles and sconces to 14.045. 14.05 .. 15.05 is what is left, and it is
+#    enfilade.clip's own `enf_walk_u` band asked 0.30 m taller — 2.40 rather than 2.10.
+#
+#    A FIRST CUT OF THIS BOX WAS 14.00 .. 15.05 AND IT WAS NOT EMPTY: `sr_head_all` carried 364
+#    voxels of `wax`, `taper`, `gilt` and `ormolu` at metre 16, which are the girandole arms and
+#    their flames standing at 14.045. That is the measurement behind the 0.045, and it is why the
+#    request in stair.md asks enfilade.clip for the WALL rather than for the fittings: the fittings
+#    are already pulled back as far as that file can pull them.
+let sr_gall_e = box 14.05 6.30 -2.90   15.05 8.70 3.16
+
+# 5. THROUGH THE BALLROOM DOOR — 0.89 m WIDE BECAUSE THAT IS ALL THERE IS, AND 2.10 TALL BECAUSE
+#    THAT IS THE FIGURE AN OPENING IS HELD TO. Every other box here is 2.40, which is the figure for
+#    circulation; a doorway is allowed 2.10 and asking it for 2.40 would report the two state rooms'
+#    own cornices as faults when they are not.
+#
+#    ballroom.clip cuts 13.725 .. 14.85 and calls it 1.125 (2.5 M) — but the west 0.225 of that opens
+#    onto enfilade.clip's own wall face at 13.95, which stands across it from z = -2.965 northward,
+#    so the APERTURE a person walks through is 13.95 .. 14.85 = 0.90 m. That is 0.10 under the 1.00 m
+#    an opening is held to. The request is in requests/stair.md. The box is the aperture less 5 mm
+#    a side.
+let sr_door_e = box 13.955 6.30 -3.60   14.845 8.40 -2.88
+
+# ================================================================================================
+# THE ROUTE, WEST WING — the same, and NOT a mirror of it: the library is not the ballroom
+# ================================================================================================
+#
+# stair.clip and enfilade.clip are both `mirror { } axis=x`, so the west halves of 1 to 4 are the
+# same shapes folded. The library's door is not, and it fails the 1.00 m in a DIFFERENT WAY from the
+# ballroom's, which is what makes the pair of them worth stating together.
+#
+# `library_door` is x -15.00 .. -13.95, 1.05 m, and every millimetre of it is clear on the CORRIDOR
+# side — its east jamb is flush with the halls block, so unlike the ballroom's nothing of
+# enfilade.clip stands in it. It is the ROOM side that closes it:
+#
+#   -14.85   `library_room`, the library's own air, begins here — the west 0.15 m of the doorway
+#            opens onto that room's own 0.25 m of west lining, floor to vault.
+#   -13.995  `lib_low_ends`, the board that closes the press carcase where the doorway cuts it,
+#            over z -4.08 .. -3.40 and floor to 8.325: the last 45 mm of the east side.
+#
+# So the aperture into the library is -14.85 .. -13.995 = 0.855 m, and the box below is 0.847.
+# A 1.00 m box caught 488 voxels at metre 16 — ALL of it `part_library`'s own stone, which is what
+# `sr_who_lib` says and what `sr_who_enf`, `sr_who_wal`, `sr_who_hal` and `sr_who_fit` deny.
+#
+# THE TWO STATE ROOMS FAIL THE SAME FIGURE FOR OPPOSITE REASONS: the ballroom's door is blind on
+# the corridor side against somebody else's wall, the library's is blind on the room side against
+# its own. Both give about 0.87 m where 1.00 is asked for.
+#
+# AND THE LIBRARY'S BOX IS 2.10 TALL AND STILL NOT EMPTY — 56 voxels of `gilt` at metre 16, which is
+# `lib_lco_frieze`, the library's own lower cornice frieze, running unbroken across its own doorway.
+# Its outer box is `-14.90 8.325 -6.65 -6.70 8.415 -3.40 round=0.010`, so its soffit is 8.315 and the
+# clear height at that threshold is 2.015 m. THAT READING IS LEFT IN rather than tuned out: it is a
+# real member at a real height on the only route into that room, and it is exactly the fault
+# enfilade.clip warns about at the head of its own trim section — "salon.clip measured 822 voxels of
+# its own skirting, dado cap and cornice standing straight across its own doorway, which nothing in a
+# component count, a volume or a material list will ever report". See requests/stair.md §8.5.
+let sr_foot_w = box -14.88 1.80 3.16   -13.66 4.20 6.44
+let sr_gall_w = box -15.05 6.30 -2.90   -14.05 8.70 3.16
+let sr_door_w = box -14.845 6.30 -3.60   -13.998 8.40 -2.88
+
+# ================================================================================================
+# THE FIVE HEAD-HEIGHT PARTS — four of these report an EMPTY CLIP and the fifth is §8.5
+#
+# The five boxes are disjoint, so `sr_head_all` is exactly their sum and a reading in it can be put
+# in one leg by its worldbox alone. Run the legs when the sum is not zero.
+# ================================================================================================
+
+let sr_head_foot  = intersection { sr_all union { sr_foot_e sr_foot_w } }
+let sr_head_rake  = intersection { sr_all sr_rake_e }
+let sr_head_brg   = intersection { sr_all union { sr_brg_e sr_brg_w } }
+let sr_head_gall  = intersection { sr_all union { sr_gall_e sr_gall_w } }
+let sr_head_door  = intersection { sr_all union { sr_door_e sr_door_w } }
+
+let sr_head_all = intersection {
+    sr_all
+    union { sr_foot_e sr_foot_w sr_rake_e sr_brg_e sr_brg_w sr_gall_e sr_gall_w sr_door_e sr_door_w }
+}
+
+# ================================================================================================
+# THE FLOOR PARTS — a skin 0.10 m under the walking surface, MINUS the building. EMPTY or there is
+#                   no floor there.
+# ================================================================================================
+#
+# 6.12 .. 6.22 is inside every floor slab on this storey: stair.clip's gallery is 5.895 .. 6.30,
+# enfilade.clip's is 6.00 .. 6.30 and ballroom.clip's and library.clip's are 6.00 .. 6.30.
+#
+# THE SKINS STOP ON THE FRAGMENT FACES AND ONE DOES NOT, ON PURPOSE. `sr_floor_join` straddles the
+# joint between ballroom.clip's floor slab (which ends at z -2.988 once its round=0.012 is taken)
+# and enfilade.clip's (which begins at -2.965). Those two do not touch: there is 23 mm of nothing
+# between them, closed only by the fact that a voxel is solid if any of it is. It is measured here
+# by itself so it cannot be mistaken for the bridge.
+
+let sr_floor_gall_e = difference { box 13.80 6.12 4.70   15.05 6.22 6.50   sr_all }
+let sr_floor_brg_e  = difference { box 13.80 6.12 3.16   15.05 6.22 4.70   sr_all }
+let sr_floor_pic_e  = difference { box 14.00 6.12 -2.90  15.05 6.22 3.16   sr_all }
+let sr_floor_room_e = difference { box 13.97 6.12 -3.60  14.83 6.22 -2.94  sr_all }
+
+let sr_floor_gall_w = difference { box -15.05 6.12 4.70  -13.80 6.22 6.50  sr_all }
+let sr_floor_brg_w  = difference { box -15.05 6.12 3.16  -13.80 6.22 4.70  sr_all }
+let sr_floor_pic_w  = difference { box -15.05 6.12 -2.90 -14.00 6.22 3.16  sr_all }
+let sr_floor_room_w = difference { box -14.98 6.12 -3.60 -13.97 6.22 -2.94 sr_all }
+
+let sr_floor_all = difference {
+    union {
+        box 13.80 6.12 3.16   15.05 6.22 6.50
+        box 14.00 6.12 -2.90  15.05 6.22 3.16
+        box 13.97 6.12 -3.60  14.83 6.22 -2.94
+        box -15.05 6.12 3.16  -13.80 6.22 6.50
+        box -15.05 6.12 -2.90 -14.00 6.22 3.16
+        box -14.98 6.12 -3.60 -13.97 6.22 -2.94
+    }
+    sr_all
+}
+
+let sr_floor_join = difference {
+    union {
+        box 13.97 6.12 -3.10   14.83 6.22 -2.90
+        box -14.98 6.12 -3.10 -13.97 6.22 -2.90
+    }
+    sr_all
+}
+
+# AND THE CONTROL ARM FOR IT, which is the same box the other way round: what IS there rather than
+# what is not. A difference against a CSG tree this deep is a bound and not an exact field, so a
+# reading of 174 voxels on a 23 mm gap is a number that has to be checked from the other side before
+# it is believed. `sr_thresh_*` is EXPECTED TO REPORT MATTER — a slab 0.86 x 0.10 x 0.40 m of it —
+# and its z extent is the answer: if it runs the full -3.30 .. -2.70 the floor is continuous in
+# voxels and the 23 mm is an SDF gap that a voxel closes; if it stops at -2.988 the enfilade's slab
+# is genuinely not there and the doorway has a step at its threshold.
+let sr_thresh_e = intersection { sr_all box 13.97 6.12 -3.30   14.83 6.22 -2.70 }
+let sr_thresh_w = intersection { sr_all box -14.98 6.12 -3.30 -13.97 6.22 -2.70 }
+
+# ================================================================================================
+# WHOSE STONE IS IT — the same box asked of one part at a time
+# ================================================================================================
+#
+# `sr_head_door` came back with 488 voxels at metre 16 and every one of them in the WEST doorway. A
+# volume of the assembled building says THAT something is in the way and never WHOSE, and on a route
+# that crosses four fragments that is the only question worth asking next. So the same box is
+# intersected with one part at a time; exactly one of these reports matter.
+let sr_who_lib = intersection { part_library   sr_door_w }
+let sr_who_enf = intersection { part_enfilade  sr_door_w }
+let sr_who_wal = intersection { part_walls     sr_door_w }
+let sr_who_hal = intersection { part_halls     sr_door_w }
+let sr_who_fit = intersection { part_fittings  sr_door_w }
+
+# ================================================================================================
+# THE CUTTER CHECK — the fault that has no symptom
+# ================================================================================================
+#
+# `void_enfilade` is the air of the picture gallery and the cabinet, and the manifest subtracts it
+# from the whole building AFTER assembly. stair.clip's bridge lands 0.05 into enfilade.clip's floor
+# slab at z = 3.05, which is 0.05 from the mouth of its north archway (`enf_dr_un`, y 6.30 .. 8.70,
+# x 13.95 .. 15.10, z 3.00 .. 3.15). Anything of the stair's inside that box is deleted with no
+# error, no floating voxel and no change in any count — the same fault the arched north window was
+# taking out of the half landing for the whole life of stair.clip.
+#
+#     --part sr_cut_check      -> "the clip is empty"
+let sr_cut_check = intersection { part_stair union { void_enfilade void_ballroom void_library } }
+
+metre 32
+bounds -15.40 1.70 -3.90   15.40 8.90 7.00
+
+solid sr_all
