@@ -1,0 +1,84 @@
+# grotto-probe — the grotto on its own, IN ITS PLACE IN THE FACILITY, for clipcheck.
+#
+# The contract for the dimensions and the materials, the order because the manifest loads it before
+# any fragment and a fragment is entitled to reach for it, then the fragment itself. Same shape as
+# `terrace-probe.clip`; what is different is the box, and the box is the point of this file.
+#
+#     build\bin\WorldShaper.exe --clip-file clips\facility\requests\grotto-probe.clip ^
+#                               --clip-metre 8 --clip-part part_grotto
+#
+# ITERATE AT METRE 8. The contract's box is the whole complex and sampling it to look at one
+# building in the north-west corner is 100 M cells of mostly air. This file cuts it down to a box
+# round the grotto AND NOWHERE ELSE — 23.0 x 9.0 x 15.0 m, which is the part's own 22.0 x 8.0 x 14.0
+# with half a metre of margin on every side so that nothing of it is clipped by the box it is being
+# measured in. At metre 8 that is 184 x 72 x 120 = 1.59 M cells and comes back in seconds; at the
+# contract's metre 32 it is 736 x 288 x 480 = 101 M cells and does not.
+#
+# WHERE THE BOX COMES FROM, because it is a facility box and not the estate one and that is the
+# whole conversion in one line. `grotto.clip` translates by (-34, 0, 22), so the estate original's
+# -11.0 -0.65 -1.5 .. 11.0 7.35 12.5 lands at -45.0 -0.65 20.5 .. -23.0 7.35 34.5. Round out:
+#
+#     x  -45.5 .. -22.5
+#     y   -1.0  ..   8.0
+#     z   20.0  ..  35.0
+#
+# IF THIS PROBE COMES BACK EMPTY OR CLIPPED, THE FIRST THING TO CHECK IS THAT NUMBER, not the
+# fragment. A part measured against a box that has been shifted out from under it reports as if it
+# were not there — the same fault `clips/facility.clip` records at its `origin` line — and here the
+# box and the translate are two places holding one fact.
+#
+# WHAT A CORRECT RESULT LOOKS LIKE. All measured at metre 8, `--clip-part part_grotto`, against
+# `clips/estate/grotto.clip` sampled the same way, which is the control this fragment was converted
+# against and the arm to take again before believing any change to `grotto.clip`:
+#
+#                          estate (control)          this probe
+#     sampled box          176 x 64 x 112            184 x 72 x 120
+#     volume               496,095 voxels            496,099 voxels
+#     surface              106,068 faces             106,084 faces
+#     roughness            0.21                      0.21
+#     components           9, largest 496,086        9, largest 496,090
+#     materials            21                        23
+#     water                  4,631   0.93%             4,612   0.93%
+#     rules that fired     all 32                    all 32
+#     worldbox             -11.000 -0.625 -1.500     -45.125 -0.625 20.500
+#                           11.000  7.250 12.000     -22.875  7.250 34.000
+#
+# FOUR VOXELS OF VOLUME IN HALF A MILLION IS THE BOX AND NOT THE BUILDING. The estate clip's own
+# bounds are x -11.000 .. 11.000 exactly, and its mound and apron END at x = +-11.000, so its box
+# clips them flush. This probe has half a metre of margin, so the voxel whose far edge touches
+# x = +-11 is caught by coverage and counted. That is the whole of the difference: the matter extent
+# goes from 176 columns to 178, and nothing else about the geometry moved. NO MATTER MOVED IN THIS
+# CONVERSION and the volume is the evidence for it.
+#
+# 23 MATERIALS AND NOT 21, AND THE TWO EXTRA ARE THE POINT OF THE `below=` CHANGE. `iron` (48
+# voxels) and `wax` (8) do not appear in the control at all. They are the thinnest matter in the
+# building — 45 mm grille bars and 35 mm tapers, well under a metre-8 voxel — and at `below=0.02`
+# every voxel of them fell outside its own rule's band and was painted by the base coat. At 0.035
+# they are caught. Measured directly: the same fragment with every `below=` forced back to 0.02
+# reports 21 materials, no `iron`, no `wax`, and 628 more voxels of `tuff`. That is BRIEF.md rule 5
+# in one table, and if this probe ever reports 21 materials again, a `below=` has gone back to 0.02.
+#
+# NINE COMPONENTS IS CORRECT AND MUST NOT BE "FIXED". Eight of them are one or two voxels apiece:
+# chips knocked off the two faces of the facade by `weather cracks`, which opens a 29 mm fissure and
+# sometimes meets itself round a corner. `despeckle` does not remove them because `despeckle`
+# repaints colour and does not delete matter. The control reports the same 9 in the same places.
+# What WOULD be worth chasing is a floating piece of shellwork inside a room — that is the mask
+# fault written up at `grot_tight` in `grotto.clip` — and there is none.
+#
+# THE ONE FAULT THIS PROBE CANNOT SEE ON ITS OWN is a paint rule left on an untranslated shape that
+# still overlaps something. A rule pointed 34 m away fires on nothing, and a rule that fires on
+# nothing AT ALL is reported — but a rule that catches a handful of stray voxels is not. The check
+# for that is the material table: every share matching the control to a fraction of a per cent is
+# the evidence that all 26 rules found their own geometry and not somebody's air. `water` at 0.93%
+# in both is the one to read first, because this building exists for one small opening and for the
+# light that arrives by bounce off that basin.
+
+include "../_contract.clip"
+include "../_order.clip"
+include "../grotto.clip"
+
+# AFTER the includes, so these win over the contract's `metre 32` / `bounds -17 -0.9 -16.5 17 20 8.5`.
+metre 32
+bounds -45.5 -1.0 20.0   -22.5 8.0 35.0
+
+solid part_grotto

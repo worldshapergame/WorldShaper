@@ -1,0 +1,1072 @@
+# grotto — a baroque nymphaeum cut into the terrace wall: a rusticated front of three arches, and
+#          behind it a cave. Buontalenti at the Boboli, the shell grotto at Margate, Nymphenburg.
+#
+# THIS IS A FRAGMENT OF `clips/facility.clip` AND NOT A CLIP. It declares no `metre`, no `bounds`,
+# no `origin`, no `variation` and no `solid`, and it does NOT include `_contract.clip`: the manifest
+# includes the contract before any fragment, and a second include redefines every parameter in it.
+# It declares exactly one part, `part_grotto`, already standing at its place on the estate. Nothing
+# here is a whole-clip statement and nothing here paints anything but this fragment's own shapes.
+#
+# It was converted from `clips/estate/grotto.clip`, which is a standalone clip and STAYS one. That
+# file is still the place to open the building on its own; this one is the copy that stands in the
+# facility. When either changes, so does the other.
+#
+#     build\bin\WorldShaper.exe --clip-file clips\facility\requests\grotto-probe.clip ^
+#                               --clip-metre 8 --clip-part part_grotto
+#
+# ------------------------------------------------------------------------------------------------
+# WHERE IT STANDS, AND IT IS NOT WHERE THE ESTATE FILE SAYS.
+#
+# The translate is (-34, 0, 22) — dx -34, dy 0, dz 22 — and the estate original's header says
+# (-34, 0, 20). THE ESTATE HEADER IS THE OLD NUMBER AND THIS ONE IS THE BUILT ONE. The grotto has
+# moved 2 m NORTH, in +z, to clear the garden theatre, which is being placed in front of it and
+# reaches z 17.9. At z 20 the grotto's apron begins at facility z 18.5 and leaves 0.6 m between two
+# buildings; at z 22 it begins at 20.5 and leaves 2.6 m, which is a walk rather than a crack. The
+# 2 m is in z only, so nothing about the front's relation to the module or to the estate's cross
+# axis changes, and dy = 0 keeps every height in this file — the water line at 0.00, the oculus at
+# 6.30, the `weather sea` tide line at 0.00 — reading exactly as it is written.
+#
+# WHERE THAT PUTS IT. The building is drawn in its own coordinates about the centre of its facade,
+# and the box it occupied there was -11.0 -0.65 -1.5 .. 11.0 7.35 12.5. Translated, that box lands
+# in the facility at:
+#
+#     x  -45.0 .. -23.0        (facade centre line at x = -34)
+#     y   -0.65 ..  7.35       (unmoved: the pavement of the hall is still y = 0)
+#     z   20.5  ..  34.5       (facade front face at z = 22, the hill cut off at z = 34)
+#
+# — north-west of the block, whose own envelope stops at x -17.1 and z 8.56, so this stands clear of
+# everything the facility has built and meets it only across the lawn.
+#
+# ------------------------------------------------------------------------------------------------
+# IT REMOVES NOTHING FROM ANYBODY, AND THERE IS NO `void_grotto` FOR THE MANIFEST TO SUBTRACT.
+#
+# This fragment carves a cave, and a carve is the reason the convention exists, so it is worth
+# saying plainly why this one does not need it. `grot_void` — the three rooms, the basin, the three
+# arch bores, the two passages and the oculus — is subtracted from `grot_mass` and from nothing
+# else, and `grot_mass` is `grot_mound`, `grot_apron`, `grot_facade` and `grot_herms`: four shapes
+# bound in THIS file. THE HILL IT CUTS INTO IS A HILL IT BUILDS ITSELF. The difference never leaves
+# the file, so there is nothing for the manifest to take away from the rest of the building, and
+# no other fragment has any matter inside this box to be taken away — `site.clip`'s ground is
+# `box -17.100 -0.900 -16.560  17.100 -0.180 8.560` and does not reach here, which is also why this
+# building brings its own apron and its own mound rather than standing on the lawn.
+#
+# So the manifest names no `void_grotto`, exactly as `surface.clip`, `terrace.clip`, `parapet.clip`
+# and `pediment.clip` name none. The three lines in the manifest are the include, the union into
+# `built`, and nothing in the `hollowed` difference.
+#
+# ------------------------------------------------------------------------------------------------
+# A TRANSLATE MOVES THE STONE AND LEAVES THE PAINT BEHIND, AND THAT IS THE ONE THING IN THIS
+# CONVERSION THAT CAN FAIL WITHOUT SAYING SO.
+#
+# `clips/facility.clip` has the long version of this at its `origin` line. The short version: the
+# geometry is bound in local coordinates and moved once, at the assembly, by
+# `translate { grot_assembly } -34 0 22`. Every paint rule tests a SHAPE, and a shape that has not
+# been moved by the same vector is tested where the building no longer is — so the rule either
+# fires on nothing or, worse, fires on somebody else's stone. Nothing reports it: `components` is
+# still 1, the rule that hit nothing does not warn unless it hit nothing at all, and the part comes
+# back geometrically perfect wearing the wrong colours.
+#
+# So EVERY shape named in a `paint ... where=` or a `weather ... on=` below has a translated twin
+# bound `<name>_at`, by the same vector, and the rule names the twin. There are 26 paint rules and
+# 3 weather rules; there are 26 twins, because `part_grotto` is itself the translated binding and
+# needs none, and `grotto_crust_at` and `grotto_pebbles_at` are each named by a paint rule and a
+# weather rule both. Each twin is bound immediately above the rules that use it rather than in one
+# block at the top, so that a group's zone, its twin and its rule can be read together and a rule
+# added later has the thing to copy three lines away. THE TWIN IS TAKEN AT THE OUTERMOST BINDING
+# and not at its parts, which is what makes the encrustation follow: `grot_enc_shell` is
+# `intersection { grotto_crust grot_lump_top }`, and `grot_lump_top` is a `cells` field with no
+# position of its own — translating the intersection asks the field at the untranslated point, so
+# the shell is still painted ON the lump that grew it. Translating `grotto_crust` alone and leaving
+# the field where it was would have slid the pattern 34 m sideways off its own geometry.
+#
+# AND EVERY `below=` GOES UP FROM 0.02 TO 0.035, which is BRIEF.md rule 5: a voxel is solid by
+# coverage and painted by a test at its centre, and for a shape a transform put where it is those
+# two disagree for 3 to 16 per cent of the shape's own solid voxels. At 0.02 those fall through to
+# whatever coat is under them; at 0.035 they are caught. Every shape in this file is now placed by
+# a transform, so every rule in it takes 0.035. The `facing=y at=0.55` keys on the turf and the
+# gravel are unchanged — only the shape and the `below=` differ from the estate original.
+#
+# ------------------------------------------------------------------------------------------------
+# THE BOX, COUNTED RATHER THAN GUESSED, and it is now the manifest's box and not this file's. The
+# part occupies 22.0 x 8.0 x 14.0 m of it. The brief allowed for 22 x 8 x 18; the last four metres
+# were depth of solid hill BEHIND the chambers doing nothing, so the hill is cut off at local
+# z = 12.0 — facility z = 34.0 — which still leaves 3.45 m of rock behind the back wall of the hall.
+# Everything else is as briefed.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT THIS PART PUTS UNDER LOAD
+#
+# 1. ONE OPENING, ONE ROOM, AND EVERYTHING ELSE ARRIVES BY BOUNCE — OFF WATER.
+#    A 1.35 m oculus, twenty-two module-halves above the floor, over a 4.5 m basin of still black
+#    water directly beneath it. The rotunda of the facility is that building's hardest indirect
+#    case and it has an oculus AND sixteen drum windows; this has an oculus, six tapers, and a
+#    doorway. The shaft lands on WATER, so what lights the vault of this room is the second bounce
+#    off a specular surface — the term that fails first and fails as blotches — and after that off
+#    a floor of loose rounded pebbles. The front arches are open to the garden, because a grotto
+#    front must be; they light the first three metres and nothing past them. Everything from the
+#    basin backwards — the cascade, the mask, the god, the whole encrusted vault — is lit by what
+#    came off the water.
+#
+# 2. THE ROUGHEST SURFACE IN THE PROJECT, BY A LONG WAY — AND `roughness` IS THE WRONG NUMBER
+#    FOR IT, WHICH IS THE FINDING AND NOT AN EXCUSE.
+#    The shellwork is REAL MATTER and not a texture: a 45 mm skin lying in the stone behind every
+#    interior surface, displaced outward into the room by two `cells` fields, so that shell,
+#    pebble and stone alternate WITH the geometry rather than beside it.
+#
+#    The brief asked for `roughness` — faces per voxel — and said several times 1.0 would show it.
+#    It does not, and the control says why. Measured at metre 32, `--part grotto_crust`, against
+#    the SAME clip with the two displacements taken out so the crust is a plain 45 mm shell:
+#
+#                              volume        surface        roughness
+#      encrusted             12.65 m3       765.4 m2          1.89
+#      plain 45 mm shell     10.59 m3       665.4 m2          1.96
+#
+#    The encrustation makes the number go DOWN. `roughness` is surface over volume, and the
+#    extreme of that ratio is a smooth sheet one voxel thick — so a thin shell scores high because
+#    it is thin, and lumping it adds volume slightly faster than it adds face. The number is a
+#    thinness meter, not a texture meter, and on `part_grotto` as a whole (nine hundred cubic
+#    metres of solid hill) it reads 0.06 and means nothing at all.
+#
+#    WHAT DOES SHOW IT IS EXPOSED SURFACE AGAINST THE SMOOTH ROOM. `--part grot_hollow` at metre
+#    32 — the air of the three chambers, so its surface IS the room's boundary as drawn — is
+#    461.50 m3 of air inside 520.19 m2 of wall. The encrustation adds 100.0 m2 of exposed face to
+#    that for 2.06 m3 of added stone: a fifth again as much surface as the whole room had, out of
+#    two cubic metres of shells. A painted texture adds nought, which is the comparison that
+#    matters and the one to make on any part that claims to be built rather than drawn.
+#
+# 3. CAUSTICS FROM A DAYLIGHT SHAFT ONTO A ROUGH RECEIVER THROUGH A SMALL APERTURE.
+#    Sun through a 1.35 m hole, into `water` at ior 1.33 half a metre deep, onto a bowl lined with
+#    displaced pebbles of granite, travertine, jasper and rosso. A caustic on a flat floor is the
+#    easy version of this; the floor here is loose stone and the aperture is small.
+#
+# 4. TRANSLUCENT STONE WITH A LIGHT INSIDE IT.
+#    `alabaster` is translucent=210 — stone you can see INTO — and the river god is 3.6 m of it
+#    reclining on the cascade with an emissive core buried in his shoulder under 0.15 m of it.
+#    `marble` at translucent=110 is half of this and nothing else in the project asks the rest.
+#
+# 5. THIN MATTER, in two kinds that break different things: seven 45 mm iron bars per side arch,
+#    which is one and a half voxels at metre 32; and several hundred travertine stalactites 0.05
+#    to 0.30 m long hanging off a doubly curved vault, which is thin matter that is not aligned
+#    to anything.
+# ------------------------------------------------------------------------------------------------
+#
+# THE MODULE STILL GOVERNS THE FRONT, and the front only. The facade is architecture and belongs
+# to the same estate as the orangery and the bell tower: it is 30 M wide and 16 M high, its centre
+# arch is 8 M, its side arches 4 M, its piers 2 M and 5 M, its impost at 6 M and its cornice at
+# 12 M. Every number in it is a multiple of M = 0.45. THE INSIDE IS A CAVE and is not on the
+# module and is not meant to be — the two ellipsoids the vaults are struck from are chosen so the
+# rooms clear the head heights measured below, and nothing else.
+#
+# THE SIGN OF A DISPLACEMENT, because it is the trap `documentation/20-clip-forge.md` §6 records
+# and it is the mechanism this whole building is made of. `displace` ADDS to how far away the
+# surface says it is, so a POSITIVE amount eats into the solid and a NEGATIVE one grows it. Every
+# encrustation here is written `amount=-1.0` against a field that is already in metres, so the
+# amount reads as "grow outward by whatever this field says", which is checkable in a slice and
+# cannot be got backwards by accident.
+#
+# WHY THE LUMP FIELDS ARE MASKED BY A `smoothstep` OF THE SKIN, AND WHY THERE ARE TWO OF THEM. A
+# `cells` site that happens to fall clear of the surface grows a blob of its own with nothing under
+# it, and `components` finds it as a floating voxel: 18 components on a bare test sphere with no
+# mask at all, 1 with one. The second mask is tighter and exists because a mask alone is not
+# enough once a lump cone is steeper than forty-five degrees — the whole argument, with the three
+# measurements that settle it, is at `grot_tight` below.
+#
+# WHAT IS UNIONED BACK AFTER THE CARVE, and it is the trap the manifest of the facility has a long
+# comment about at its foot. The rooms are cut out of a hill. EVERYTHING THAT STANDS IN A ROOM —
+# the encrustation, the stalactites, the pebbles, the cascade, the water, the god, the tapers, the
+# grilles — is unioned after the difference, or the room eats it. The only things subtracted from
+# the added layers again afterwards are the oculus and the three arch bores, because those must
+# stay open and a 0.30 m stalactite growing out of the vault beside the oculus would otherwise be
+# free to lean into it.
+
+# No `include`, no `metre`, no `bounds`: the manifest owns all three. See the head of this file.
+
+# ================================================================================================
+# THE FIELDS THE SURFACE IS MADE OF
+# ================================================================================================
+#
+# A `cells` field answers with the distance in metres to the nearest of a scatter of sites, so it
+# is zero at a site and about 0.8 of its `size` at the far corner between four. Remapped backwards
+# it becomes a cone standing ON each site, in metres, which is exactly the argument `displace`
+# wants: `amount=-1.0` then means "grow the surface outward by this many metres".
+#
+# THE SAME FIELDS ARE READ TWICE, once to move the stone and once to colour it, and that is the
+# whole point of §6 of the forge document applied deliberately instead of as wear: the shell is
+# not painted NEAR the lump, it is painted ON the lump, because both rules ask the same question
+# of the same field at the same point.
+
+let grot_shell_sites = cells size=0.200 seed=311
+let grot_grit_sites  = cells size=0.075 seed=947
+let grot_peb_sites   = cells size=0.090 seed=1153
+let grot_stal_sites  = cells size=0.300 seed=613
+
+# The stalactite field, stretched fourteen times along y so its cells are columns rather than
+# blobs. `scale` divides the query point and multiplies the answer back by the SMALLEST factor,
+# which is 1 here, so the value is untouched and only the shape of the cells changes. A columnar
+# field displacing a down-facing vault grows a cone that hangs, and — because the field barely
+# changes along y — the cone stays joined to the vault the whole way down instead of shedding its
+# tip. That is why the stalactites come back as one component.
+let grot_stal_col = scale { grot_stal_sites } x=1 y=14 z=1
+
+# The broad grains that decide which encrustation goes where. Not `cells`: a patch of shellwork is
+# metres across and irregular, and fbm is what irregular-at-a-metre looks like.
+let grot_patch_a = fbm size=1.60 octaves=3 seed=77
+let grot_patch_b = fbm size=1.10 octaves=3 seed=181
+let grot_patch_c = fbm size=2.40 octaves=2 seed=233
+
+# ================================================================================================
+# THE HILL
+# ================================================================================================
+#
+# A grotto is a room pretending to be a cave, and what makes it one rather than a shed is that
+# there is a hill on top of it. This is that hill: one ellipsoid, cut off at the ground, at the
+# terrace face in front and at z = 12.0 behind.
+#
+# Its summit is 7.20 (16 M) at z = 6.30, which is 1.13 m of cover over the crown of the hall's
+# vault and enough for the oculus to be a hole through rock rather than a hole through a sheet.
+# It falls to 3.21 at the outer edge of the facade and to nothing at x = +-11, so the facade
+# stands proud of a bank rather than being pasted on a cliff — which is what "cut into the terrace
+# wall" means and is the whole reason the front reads as a grotto and not as a garden building.
+let grot_mound_body = ellipsoid 0 -1.35 6.30  rx=11.50 ry=8.55 rz=10.35
+let grot_mound_cut  = box -11.0 -0.45 0.00   11.0 7.30 12.00
+let grot_mound      = intersection { grot_mound_body grot_mound_cut }
+
+# The garden apron in front of the terrace, so the front of the building has ground to stand on
+# and the weathering has somewhere to run out to. It laps the mound by 0.05 in z.
+let grot_apron = box -11.0 -0.45 -1.50   11.0 0.00 0.05
+
+# ================================================================================================
+# THE FACADE — 30 M wide, 16 M high, and the only part of this building on the module
+# ================================================================================================
+#
+#   x  -6.75 .. -4.50   outer pier          5 M
+#      -4.50 .. -2.70   side arch           4 M     springing 2.70 (6 M), crown 3.60 (8 M)
+#      -2.70 .. -1.80   middle pier         2 M
+#      -1.80 ..  1.80   centre arch         8 M     springing 3.15 (7 M), crown 4.95 (11 M)
+#       1.80 ..  2.70   middle pier         2 M
+#       2.70 ..  4.50   side arch           4 M
+#       4.50 ..  6.75   outer pier          5 M
+#
+#   y   0.00 ..  5.40   the rusticated wall                  12 M
+#       5.40 ..  5.85   the cornice, projecting 0.225         1 M
+#       5.85 ..  6.30   the attic                             1 M
+#       6.30 ..  7.20   the broken segmental pediment         2 M
+#
+# 1.35 (3 M) thick, from the front face at z = 0 to the front wall of the hall at z = 1.35.
+let grot_fac_wall = box -6.75 -0.45 0.00   6.75 5.40 1.35  round=0.02
+
+# THE IMPOST. A band right across the front at the springing of the side arches, 6 M up, standing
+# 0.09 proud. It is what makes three arches of two different sizes read as one order.
+let grot_fac_impost = box -6.80 2.700 -0.09   6.80 2.925 0.10
+
+# THE CORNICE. A corona and a cyma over it. The moulding's two corners are back-and-bottom first
+# and front-and-top second, and `run=x` puts the section in (z, y) — so the first corner is at the
+# wall face and the second is 0.225 out in front of it and 0.45 higher.
+let grot_fac_corona = box -6.975 5.400 -0.225   6.975 5.625 0.10
+let grot_fac_cyma   = cyma -6.975 5.625 0.10   6.975 5.850 -0.225  run=x
+let grot_fac_attic  = box -6.75 5.850 -0.05   6.75 6.300 1.35  round=0.02
+
+# THE BROKEN SEGMENTAL PEDIMENT. An arc through (-2.70, 6.30), (0, 7.20) and (2.70, 6.30) is a
+# circle of radius 4.50 (10 M) centred at (0, 2.70) — 1.8 R = 2.70^2/0.90 + 0.90, done once here
+# so nobody does it again differently. The band is 0.45 (1 M) deep and the middle 3 M of it is
+# taken out, which is what "broken" means.
+let grot_ped_ring = difference {
+    cylinder 0 2.70 0.675  r=4.500 h=1.05 axis=z
+    cylinder 0 2.70 0.675  r=4.050 h=1.20 axis=z
+}
+let grot_ped_break = box -0.675 6.85 -0.40   0.675 7.40 1.60
+let grot_pediment = difference {
+    intersection { grot_ped_ring  box -2.75 6.25 -0.15   2.75 7.25 1.40 }
+    grot_ped_break
+}
+
+# THE HERMS. Four terms of travertine, on the two middle piers and the two outer ones, standing
+# from 3 M up to the cornice at 12 M: a plinth, a tapering shaft (a term tapers DOWNWARD, which is
+# what tells it from a pilaster), shoulders, and a head. Built on +x and folded, so the two halves
+# cannot drift apart. Each is bedded 0.15 into the wall face at z = 0.
+let grot_herm_plinth = box -0.180 1.350 -0.240   0.180 1.620 0.15  round=0.012
+let grot_herm_taper = union {
+    box -0.135 1.570 -0.180   0.135 2.750 0.15  round=0.012
+    box -0.180 2.650 -0.225   0.180 3.875 0.15  round=0.012
+    box -0.225 3.775 -0.270   0.225 4.325 0.15  round=0.012
+}
+let grot_herm_shoulder = box -0.270 4.275 -0.300   0.270 4.550 0.15  round=0.02
+let grot_herm_head     = ellipsoid 0 4.815 -0.105  rx=0.180 ry=0.360 rz=0.225
+let grot_herm_cap      = box -0.225 5.130 -0.270   0.225 5.420 0.15  round=0.02
+let grot_herm_one = union {
+    grot_herm_plinth grot_herm_taper grot_herm_shoulder grot_herm_head grot_herm_cap
+}
+let grot_herms = intersection {
+    mirror {
+        union {
+            translate { grot_herm_one } 2.250 0 0
+            translate { grot_herm_one } 5.625 0 0
+        }
+    } axis=x
+    box -6.10 1.30 -0.35   6.10 5.45 0.20
+}
+
+let grot_facade = union {
+    grot_fac_wall grot_fac_impost grot_fac_corona grot_fac_cyma grot_fac_attic grot_pediment
+}
+
+# ================================================================================================
+# THE ROOMS — the air, before anything is taken out of the hill
+# ================================================================================================
+#
+# THE CENTRAL HALL. 9.00 x 7.20 m of floor — x -4.50 .. 4.50, z 1.35 .. 8.55 — with vertical walls
+# to 2.70 and an irregular vault over them crowning at 6.00. The vault is an ellipsoid 4.95 x 3.30
+# x 5.85 on the springing at 2.70, clipped to the room's own plan: rx is deliberately LARGER than
+# the room's half width, so the vault meets the side walls at 4.07 and curves in from there
+# instead of leaving a soffit ledge round the top of the wall.
+#
+# THE VAULT'S BOX RUNS FROM THE FLOOR AND NOT FROM THE SPRINGING, AND THAT IS THE ONE THING IN
+# THIS FILE THAT MUST NOT BE TIDIED. The obvious way to write it is to clip the ellipsoid to
+# y 2.65 .. 6.20, since below the springing it is inside the walls anyway and contributes nothing.
+# It contributes nothing to the SHAPE. It contributes everything to the FIELD.
+#
+# A union answers with the smallest of its children's distances and an intersection with the
+# largest. Clipped at 2.65, the vault says "+0.03, outside me" at a point 80 mm under the top of
+# the wall box — and the wall box says "-0.08, just inside my top face", which is a face that is
+# not a surface of anything, because the vault is above it. So the union answers -0.08 for a point
+# that is a metre from any real boundary of the room, and every displacement grown off this field
+# reads that as "the wall is 80 mm away" and grows a lump in mid air.
+#
+# MEASURED, at metre 8 with the weathering off, which is the control that settled it: 442
+# components with the vault clipped at the springing and 3 with it clipped at the floor. The 439
+# were single lumps of shellwork hanging 0.08 m under the springing line of the hall and 0.13 m
+# under the springing of the chambers — which is exactly where the two wall boxes have their tops.
+let grot_hall_walls = box -4.50 0.00 1.35   4.50 2.70 8.55
+let grot_hall_dome  = ellipsoid 0 2.70 4.95  rx=4.95 ry=3.30 rz=5.85
+let grot_hall_vault = intersection {
+    grot_hall_dome
+    box -4.50 0.00 1.35   4.50 6.20 8.55
+}
+let grot_hall_air = union { grot_hall_walls grot_hall_vault }
+
+# THE TWO SIDE CHAMBERS. 3.60 x 4.50 each, x 5.40 .. 9.00 and z 2.25 .. 6.75, walls to 2.25 and a
+# vault crowning at 4.50. Built on +x and folded.
+let grot_ch_walls = box 5.40 0.00 2.25   9.00 2.25 6.75
+let grot_ch_dome  = ellipsoid 7.20 2.25 4.50  rx=1.98 ry=2.25 rz=2.475
+let grot_ch_vault = intersection {
+    grot_ch_dome
+    box 5.40 0.00 2.25   9.00 4.60 6.75
+}
+let grot_ch_one = union { grot_ch_walls grot_ch_vault }
+let grot_chambers = intersection {
+    mirror { grot_ch_one } axis=x
+    box -9.05 -0.05 2.20   9.05 4.65 6.80
+}
+
+# THE BASIN. A bowl 4.5 m across (r = 2.25) and 0.55 deep sunk in the floor of the hall, centred
+# on z = 5.40 so that it is directly under the oculus. Its lip is the floor: the water surface
+# stands at y = 0.00 exactly, flush with the pavement, which is what makes it read as a still
+# black mirror rather than as a puddle in a hole — and it is also what guarantees the water body
+# touches the film coming down the cascade without a hairline anywhere.
+let grot_bowl = cylinder 0 -0.275 5.40  r=2.25 h=0.56 axis=y
+
+# What the crust and the pebbles are grown off. Deliberately NOT the arches, the passages or the
+# oculus: those must stay clear, and a skin taken off them would encrust the one route through the
+# building and the one hole the light comes in by.
+let grot_hollow = union { grot_hall_air grot_chambers grot_bowl }
+
+# THE THREE ARCHES, as bores through the facade. Each is a box to its springing and a cylinder on
+# its axis for the head, run from 0.10 in front of the face to 0.10 past the back of it so no
+# hairline of stone is left in either plane.
+let grot_arch_c = union {
+    box -1.80 -0.05 -0.10   1.80 3.15 1.45
+    cylinder 0 3.15 0.675  r=1.80 h=1.55 axis=z
+}
+let grot_arch_s_one = union {
+    box 2.70 -0.05 -0.10   4.50 2.70 1.45
+    cylinder 3.60 2.70 0.675  r=0.90 h=1.55 axis=z
+}
+let grot_arch_s = intersection {
+    mirror { grot_arch_s_one } axis=x
+    box -4.55 -0.10 -0.15   4.55 3.65 1.50
+}
+let grot_arches = union { grot_arch_c grot_arch_s }
+
+# THE TWO PASSAGES from the hall into the side chambers, through the 0.90 of rock at x 4.50..5.40.
+# 1.35 (3 M) wide, round-headed, crown 3.15 — measured at 3.23 off `--slice z@4.3` at metre 8, and
+# clear of the brief's 2.40 through a door by three quarters of a metre.
+#
+# HEAD HEIGHT IN THIS BUILDING IS MEASURED OFF SLICES AND NOT OFF `--gap y@`, AND THAT IS NOT A
+# PREFERENCE. `gap_along` reports the run from the FIRST air cell in the column to the LAST, and
+# this building has sky over it — so every vertical probe anywhere inside it comes back "8.000 m of
+# air along y (BROKEN)", which is the height of the box. The facility can use `--gap y@` because
+# the facility has a roof. A `--slice z@` at metre 8 gives the whole profile across x at 0.125 m
+# instead, which is more readings for one sample, and the numbers are in the ledger at the foot of
+# this file.
+#
+# (And `--gap y@a,b` has its arguments crossed in `tools/clipcheck.cpp` besides: for the y axis it
+# scales `a` by the z origin and then uses it as an x index. On a clip whose bounds do not start at
+# the same number on both axes — this one starts at x -11 and z -1.5 — `y@0,3` probes x -9.5,
+# z 12.5. It is written up in grotto.md; nothing here works around it, because slices are better.)
+let grot_pass_one = union {
+    box 4.35 -0.05 3.60   5.55 2.475 4.95
+    cylinder 4.95 2.475 4.275  r=0.675 h=1.30 axis=x
+}
+let grot_passes = intersection {
+    mirror { grot_pass_one } axis=x
+    box -5.60 -0.10 3.55   5.60 3.20 5.00
+}
+
+# THE OCULUS. 1.35 m (3 M) across, one of them, bored straight up out of the crown of the hall's
+# vault at x = 0, z = 5.40 — over the middle of the basin — and out through 1.13 m of hill to the
+# sky. The vault at that axis stands at 5.99 and the hill at 7.13, so this is a light WELL with a
+# metre and an eighth of rock in it and not a hole in a sheet, which is the whole reason the shaft
+# has an edge. NO SPLAY: a cone under it was drawn first and does nothing, because everything it
+# would have widened is already air.
+let grot_oculus = cylinder 0 6.30 5.40  r=0.675 h=2.60 axis=y
+
+let grot_void = union { grot_hollow grot_arches grot_passes grot_oculus }
+
+# What must stay clear whatever is added back afterwards.
+let grot_keep_clear = union { grot_arches grot_passes grot_oculus }
+
+# ================================================================================================
+# THE ENCRUSTATION — real matter, not a texture
+# ================================================================================================
+#
+# A skin 45 mm thick lying in the STONE just behind every interior surface. It is already part of
+# the hill, so unioning it back changes not one voxel — until it is displaced, and then every
+# millimetre it moves is stone that was not there before, growing INTO the room.
+#
+# `by=-0.045` AND NOT `by=0.045`. `offset` ADDS its number to the distance, so a POSITIVE value
+# shrinks a shape and a negative one grows it — the same sign convention as `displace` and the
+# opposite of what the name suggests. Written the obvious way round, `offset { hollow } by=0.045`
+# is the room made SMALLER, the difference with the room itself is the empty set, and what came
+# out was a crust grown off a surface 45 mm inside the room with nothing joining it to the hill.
+# It measured plausibly and it was wrong. The same slip is in the water film and the grilles below
+# and all three are written negative here.
+let grot_skin = difference { offset { grot_hollow } by=-0.045   grot_hollow }
+
+# Inside-ness of that skin, which every lump field below is multiplied by. Without it a site that
+# lands clear of the surface grows a bead of its own in mid air.
+#
+# TWO MASKS, AND THE TIGHT ONE IS THE WHOLE OF WHY THIS BUILDING IS ONE COMPONENT.
+#
+# A displaced skin is solid wherever `lump(p) > distance(p)`. Take one `cells` site sitting a
+# height h clear of the surface, carrying a cone A tall and R across. At the site itself the test
+# is A > h. Half way back down to the surface it is A(1 - (h/2)/R) > h/2. If the cone is STEEPER
+# than forty-five degrees — A > R — the second can fail while the first holds, and what you get is
+# a bead of shellwork hanging in the air with a gap under it. Work it through and the cone is
+# joined to its own surface for every site iff **A <= R**, or else iff the mask is already nought
+# by h = R·A/(A-R).
+#
+# The coarse lump is 0.12 tall on a 0.06 radius, which is a cone at sixty-three degrees, because a
+# shell set in mortar is a steep thing and flattening it to forty-five costs a fifth of the
+# roughness. Measured on a test sphere at metre 32, one displaced skin, nothing else:
+#
+#   A 0.12 / R 0.06, loose mask     roughness 1.85     72 components, 154 floating
+#   A 0.12 / R 0.12, loose mask     roughness 1.49      3 components,   2 floating
+#   A 0.12 / R 0.06, TIGHT mask     roughness 1.85      1 component,    0 floating
+#
+# So the cone keeps its shape and the mask is cut off at 0.058 — just under the 0.06 at which a
+# 0.12/0.06 cone can strand itself. The stalactites keep the loose mask and are safe on it for a
+# different reason: their field is columnar, so walking back up towards the vault does not move
+# you out of the cone at all. The pebbles keep it because 0.036 is small enough that the loose
+# mask has already fallen below h by the time h reaches 0.03.
+let grot_near  = smoothstep { grot_skin } from=0.40  to=-0.10
+let grot_tight = smoothstep { grot_skin } from=0.058 to=-0.02
+
+# THE SHELLWORK, on everything above the dado at 3 M. Two scales: 0.20 m sites carrying a 0.12 m
+# cone, which is the shell and the pebble, and 0.075 m sites carrying 0.045, which is the grit and
+# the mortar between them. `max` and not `add`, so the fine scale roughens the coarse one instead
+# of inflating it — added, the two fill each other's hollows and the surface comes back smooth and
+# fat, which was the first pass and measured 1.11 where this measures 2.
+let grot_lump_c = remap { grot_shell_sites } from=0.0 to=0.060 low=0.120 high=0.0
+let grot_lump_f = remap { grot_grit_sites }  from=0.0 to=0.024 low=0.045 high=0.0
+let grot_lump_h = remap { axis of=y }        from=1.15 to=1.55 low=0.0   high=1.0
+let grot_lump   = multiply { max { grot_lump_c grot_lump_f }  grot_lump_h  grot_tight }
+
+# THE STALACTITES. The columnar field again, a cone 0.15 m across standing 0.30 m tall on every
+# site, scaled by height so that the ones near the crown at 6.00 are the full 0.30 and the ones at
+# the haunch are 0.05. Several hundred of them: the vault above 4.35 is about forty square metres
+# and the sites are 0.30 apart.
+let grot_stal_cone = remap { grot_stal_col } from=0.0 to=0.075 low=0.300 high=0.0
+let grot_stal_high = remap { axis of=y }     from=4.35 to=5.70 low=0.02  high=1.0
+let grot_stal_amt  = multiply { grot_stal_cone grot_stal_high grot_near }
+
+# THE PEBBLED FLOOR. 0.09 m sites carrying 0.036, over the pavement and down the whole of the
+# basin's bowl — which is the point of taking it below the water line as well as above it, because
+# the receiver the caustic lands on is the bottom of the basin and not the floor round it.
+let grot_peb_cone = remap { grot_peb_sites } from=0.0 to=0.030 low=0.036 high=0.0
+let grot_peb_low  = remap { axis of=y }      from=0.30 to=0.10 low=0.0   high=1.0
+let grot_peb_amt  = multiply { grot_peb_cone grot_peb_low grot_near }
+
+# And the two skins, each cut to where its own displacement belongs, then grown.
+let grot_skin_up = intersection { grot_skin  box -9.30 1.30 1.25   9.30 6.30 8.65 }
+let grot_skin_fl = intersection { grot_skin  box -9.30 -0.70 1.25   9.30 0.12 8.65 }
+
+# TWO DISPLACEMENTS ON ONE SKIN AND NOT TWO SKINS: the shellwork first, the stalactites on top of
+# what the shellwork made. `skip_slack()` sums the reach of EVERY displace node in the whole field
+# whether it is used or not, so nesting saves nothing there — but it saves a second shell, and a
+# stalactite that grows off an already-encrusted vault is joined to it by construction.
+#
+# WHAT THIS BUILDING COSTS AND WHERE THE COST IS, because at metre 32 it is the headline number and
+# it is worth being able to point at the term responsible. The sampler may only skip ahead by
+# `distance - skip_slack`, and `skip_slack` is TWICE the summed reach of every displacement:
+#
+#   the shellwork lumps        0.120      the encrustation
+#   the stalactites            0.300      <- 58% of the whole budget, in one term
+#   the pebbles                0.036
+#   weather overgrown          0.022
+#   weather cracks             0.027
+#   weather sea                0.014
+#   ----------------------------------
+#   sum                        0.519  ->  skip_slack 1.039 m
+#
+# A metre of slack in a 22 x 8 x 14 box that is two fifths solid rock means essentially nothing is
+# ever skipped: every one of the eighty million cells is evaluated. That is the price of building
+# the encrustation as matter rather than as a texture, it is bought deliberately, and the one dial
+# that would halve it is the stalactites' 0.30 — which is the length the brief asked for.
+let grot_crust_a = displace { grot_skin_up grot_lump }     amount=-1.0
+let grotto_crust = displace { grot_crust_a grot_stal_amt } amount=-1.0
+let grotto_pebbles = displace { grot_skin_fl grot_peb_amt } amount=-1.0
+
+# ================================================================================================
+# THE SPRING — a mask, a fall, a cascade, and the basin
+# ================================================================================================
+#
+# THE MASK. A face of travertine on the back wall of the hall at 7 M, with the water coming out of
+# its mouth. Two eyes and a mouth taken out of one ellipsoid and a beard under it: it does not
+# have to be good sculpture, it has to be a thing with a hole in it that reads as a head.
+let grot_mask_face  = ellipsoid 0 3.30 8.50  rx=0.90 ry=0.78 rz=0.50
+let grot_mask_beard = ellipsoid 0 2.70 8.52  rx=0.62 ry=0.55 rz=0.42
+let grot_mask_brow  = box -0.92 3.55 8.00   0.92 3.74 8.60  round=0.06
+let grot_mask_eye_l = sphere -0.34 3.38 8.16  r=0.15
+let grot_mask_eye_r = sphere  0.34 3.38 8.16  r=0.15
+let grot_mask_mouth = box -0.24 2.90 8.02   0.24 3.10 8.62  round=0.05
+let grot_mask = difference {
+    union { grot_mask_face grot_mask_beard grot_mask_brow }
+    grot_mask_eye_l grot_mask_eye_r grot_mask_mouth
+}
+
+# THE CASCADE. Four steps of 0.45 rise and 0.225 run, from 1.80 at the back wall down to the lip
+# of the basin at z = 7.65. NOT A STAIR and not written as one: nobody climbs it, and the brief's
+# 0.18 and 0.32 are for treads a person walks on.
+let grot_casc = union {
+    box -1.80 -0.05 8.325   1.80 1.80 8.60
+    box -1.80 -0.05 8.100   1.80 1.35 8.330
+    box -1.80 -0.05 7.875   1.80 0.90 8.105
+    box -1.80 -0.05 7.650   1.80 0.45 7.880
+}
+
+# THE WATER, in four bodies that all touch each other.
+#
+#   the basin      r 2.25, half a metre deep, its surface at 0.00 — the floor's own level
+#   the film       a 50 mm shell over the cascade, which is what a sheet of water running over
+#                  four steps actually is, and two voxels thick at the contract's metre
+#   the fall       from the mask's mouth at 3.00 down to the top step at 1.80
+#   the spill      the short body over the lip that laps the film and the basin together, because
+#                  two shapes that meet exactly at a plane do not necessarily share a voxel
+# AND THE PEBBLES ARE PAINTED AFTER IT, which is why the paint stack below ends water, THEN
+# pebbles, and not the other way about. Water has to go on late, because the film lies over stone
+# that is itself painted late; but painted over an unbroken cylinder it also covers every pebble
+# in the bottom of the basin — and the bottom of the basin is the receiver the caustic lands on
+# and the whole reason the pebbles go below the water line as well as above it. One rule after the
+# other costs nothing; the first version of this subtracted the pebble layer from the water body
+# instead and doubled the sample time, because it put a displacement inside a shape that had none.
+let grot_water_basin = cylinder 0 -0.275 5.40  r=2.250 h=0.55 axis=y
+let grot_water_film  = intersection {
+    difference { offset { grot_casc } by=-0.05   grot_casc }
+    box -1.35 -0.10 7.55   1.35 1.95 8.60
+}
+let grot_water_fall  = box -0.28 1.28 8.12   0.28 3.06 8.30
+let grot_water_spill = box -0.62 -0.10 7.50   0.62 0.14 7.82
+let grotto_water = union {
+    grot_water_basin grot_water_film grot_water_fall grot_water_spill
+}
+
+# ================================================================================================
+# THE RIVER GOD — 3.6 m of alabaster with a light inside his shoulder
+# ================================================================================================
+#
+# A large irregular translucent mass, reclining on the cascade, spanning x -1.88 .. 1.78. The
+# drapery under him is a slab bedded 0.12 into the third step, so the contact with the rock is a
+# surface and not a tangent; every other piece overlaps the one before it by at least 0.05, which
+# is what keeps 3.6 m of loose anatomy at one component.
+let grot_god_drape = box -1.85 0.78 7.86   1.85 1.10 8.32  round=0.09
+let grot_god_hips  = ellipsoid -0.75 1.40 8.09  rx=0.65 ry=0.42 rz=0.38
+let grot_god_torso = ellipsoid  0.10 1.45 8.09  rx=0.78 ry=0.42 rz=0.38
+let grot_god_chest = ellipsoid  0.95 1.60 8.06  rx=0.60 ry=0.48 rz=0.40
+let grot_god_neck  = capsule 1.30 1.82 8.06   1.52 1.96 8.06  r=0.17
+let grot_god_head  = sphere 1.60 2.04 8.06  r=0.28
+let grot_god_legs  = capsule -1.15 1.30 8.09  -1.60 1.05 8.25  r=0.28
+let grot_god_arm   = capsule  1.42 1.82 7.84   0.46 1.24 7.80  r=0.17
+let grot_god_urn   = ellipsoid 0.30 1.06 7.78  rx=0.30 ry=0.30 rz=0.27
+let grotto_god = union {
+    grot_god_drape grot_god_hips grot_god_torso grot_god_chest
+    grot_god_neck grot_god_head grot_god_legs grot_god_arm grot_god_urn
+}
+
+# THE LIGHT INSIDE HIM. Buried in the chest with 0.15 m of alabaster over it on every side, so
+# nothing of it is visible as a surface and the only way it can reach the room is THROUGH the
+# stone. That is the subsurface case, and it is why this figure is alabaster and not marble.
+let grotto_god_lamp = ellipsoid 0.95 1.60 8.14  rx=0.28 ry=0.24 rz=0.20
+
+# ================================================================================================
+# THE IRON GRILLES — seven bars of 45 mm to a side arch
+# ================================================================================================
+#
+# `repeat` at 0.225 with nx=3 gives seven bars either side of the arch axis at x = 3.60, and the
+# 0.045 bar fits comfortably inside its own 0.225 period, which is the condition `repeat` needs
+# before it can say anything honest about distance.
+#
+# The whole grille is then cut to the arch bore GROWN by 0.06, so every bar runs 60 mm into the
+# jamb, the sill and the arch ring rather than butting them — which is the difference between one
+# component and fifteen.
+let grot_bar_one   = box 3.5775 -0.10 0.6175   3.6225 3.70 0.6625
+let grot_bar_fan   = repeat { grot_bar_one } x=0.225 nx=3
+let grot_rail_low  = box 2.60 0.855 0.6125   4.60 0.900 0.6675
+let grot_rail_high = box 2.60 1.980 0.6125   4.60 2.025 0.6675
+let grot_grille_one = intersection {
+    union { grot_bar_fan grot_rail_low grot_rail_high }
+    offset { grot_arch_s_one } by=-0.06
+}
+let grotto_grilles = intersection {
+    mirror { grot_grille_one } axis=x
+    box -4.65 -0.15 0.55   4.65 3.70 0.72
+}
+
+# ================================================================================================
+# THE SIX TAPERS — three to a side chamber, and nothing else in them
+# ================================================================================================
+#
+# On the outer wall of each chamber at x = 9.00, at 4 M above the floor. A backplate bedded 20 mm
+# into the wall, an arm, a bowl, a taper of `wax` and a flame of `taper`. Built on +x and folded,
+# which is also what makes them six rather than three.
+let grot_tp_plate = box 8.855 1.62 -0.14   9.080 2.02 0.14  round=0.02
+let grot_tp_arm   = capsule 8.95 1.80 0   8.62 1.99 0  r=0.055
+let grot_tp_bowl  = cylinder 8.62 2.015 0  r=0.110 h=0.075 axis=y
+let grot_tp_wax   = cylinder 8.62 2.145 0  r=0.035 h=0.230 axis=y
+let grot_tp_flame = ellipsoid 8.62 2.295 0  rx=0.034 ry=0.068 rz=0.034
+let grot_tp_metal = union { grot_tp_plate grot_tp_arm grot_tp_bowl }
+
+let grot_brackets_e = union {
+    translate { grot_tp_metal } 0 0 3.15
+    translate { grot_tp_metal } 0 0 4.50
+    translate { grot_tp_metal } 0 0 5.85
+}
+let grot_wax_e = union {
+    translate { grot_tp_wax } 0 0 3.15
+    translate { grot_tp_wax } 0 0 4.50
+    translate { grot_tp_wax } 0 0 5.85
+}
+let grot_flames_e = union {
+    translate { grot_tp_flame } 0 0 3.15
+    translate { grot_tp_flame } 0 0 4.50
+    translate { grot_tp_flame } 0 0 5.85
+}
+let grotto_brackets = intersection {
+    mirror { grot_brackets_e } axis=x
+    box -9.15 1.55 2.95   9.15 2.10 6.05
+}
+let grotto_tapers = intersection {
+    mirror { grot_wax_e } axis=x
+    box -9.05 2.02 3.05   9.05 2.27 5.95
+}
+let grotto_flames = intersection {
+    mirror { grot_flames_e } axis=x
+    box -9.05 2.22 3.05   9.05 2.38 5.95
+}
+
+# ================================================================================================
+# ASSEMBLY
+# ================================================================================================
+#
+# The mass, then the carve, and then everything that stands in what was carved — with the oculus
+# and the three arch bores taken back out of the added layers, so that no stalactite and no lump
+# of shellwork can close the one hole the light comes in by or the one way in.
+let grot_mass = union { grot_mound grot_apron grot_facade grot_herms }
+
+let grot_carved = difference { grot_mass  grot_void }
+
+let grot_added = difference {
+    union { grotto_crust grotto_pebbles grot_casc grot_mask }
+    grot_keep_clear
+}
+
+let grot_assembly = union {
+    grot_carved
+    grot_added
+    grotto_god
+    grotto_god_lamp
+    grotto_water
+    grotto_grilles
+    grotto_brackets
+    grotto_tapers
+    grotto_flames
+}
+
+# AND THE ONE PLACE THE BUILDING MOVES. Everything above is drawn about the centre of the facade at
+# the front face of the terrace wall, because that is where every number in this file was worked
+# out and a building is easier to reason about at its own origin. This is the only line that knows
+# where on the estate it stands, and the `_at` block under PAINT is the only other thing that
+# carries the same vector. If the grotto is ever moved again, those are the two places to change
+# and they must change together — see the note at the head of this file for what happens if only
+# one of them does.
+let part_grotto = translate { grot_assembly } -34 0 22
+
+# ================================================================================================
+# PAINT
+# ================================================================================================
+#
+# Every rule keys on a shape bound in THIS file, every rule names the TRANSLATED twin of that
+# shape, and every one tests `below=0.035` and never `below=0.02` — because after the conversion
+# there is no shape in this file that a transform did not put where it is, and 0.02 leaves 3 to 16
+# per cent of a moved shape's own solid voxels outside its own centre test, wearing whatever coat
+# is under them. BRIEF.md rule 5. Nothing else about these rules changed in the conversion: the
+# materials, the order, the `facing=y at=0.55` keys and the zones are the estate original's.
+#
+# HOW A PATTERN BECOMES A SHAPE, because half the rules below depend on it and it is not obvious.
+# `paint <material> where=<pattern> on=<shape>` exists, but `on=` is only a BOUNDING BOX — it does
+# not mask the rule to the shape — so on a building where the box round the encrustation is the
+# box round the whole room it would paint the floor and the grilles as well. Instead every zone
+# here is written as an INTERSECTION of one of my own shapes with a remapped field:
+#
+#     remap { field } from=hi to=lo low=-0.05 high=0.05
+#
+# is negative where the field is above the threshold and positive where it is below, which is
+# exactly what "inside" means to everything else in this language. Intersected with a real shape
+# it is a real shape, with a real bounding box, that the sampler can settle for a whole block.
+#
+# The order is the order a grotto is built in: the rock, the turf on it, the front, the floor, the
+# encrustation, and last the things standing in the room.
+
+# THE GROUND COAT, and it is the one rule with no twin because `part_grotto` IS the twin — it is
+# the translated binding, so this already tests the shape where the stone actually is. It is keyed
+# on this fragment's own part and reaches nothing else in the building, which is what makes a coat
+# this broad legal in a fragment at all; a bare `paint tuff` with no `where=` would have repainted
+# the whole facility, and that is the line the conversion had to be careful about.
+paint tuff where=part_grotto below=0.035
+
+# THE TURF. Up-facing surfaces of the mound only, and the zone deliberately excludes a box round
+# the rooms — otherwise the rule reaches the floor of the hall, which is inside the hill, faces
+# up, and would come back as lawn.
+let grot_turf_zone = difference {
+    grot_mound
+    box -9.60 -0.70 1.20   9.60 2.70 8.70
+}
+let grot_turf_zone_at = translate { grot_turf_zone } -34 0 22
+let grot_apron_at     = translate { grot_apron } -34 0 22
+paint lawn where=grot_turf_zone_at below=0.035 facing=y at=0.55
+paint gravel where=grot_apron_at below=0.035 facing=y at=0.55
+
+# THE FRONT. Granite ground and tuff courses over it: the courses are a `stripes` field at 0.90
+# (2 M) turned into a shape and intersected with the facade, so the rustication is a real banding
+# of two stones and not a wash.
+#
+# AND THE COURSES ARE STRUCK IN LOCAL COORDINATES AND MOVED WITH THE STONE, which is the whole
+# argument of the note at the head of this file in its smallest case. `stripes axis=y` has no
+# position of its own, so the twin is taken at `grot_fac_courses` — the intersection — and the
+# stripe is asked at the untranslated point. dy is 0 here, so this particular banding would have
+# survived being left behind; `grot_patch_a`, `grot_shell_sites` and the rest below would not, and
+# they are all written the same way so that none of them is a special case anybody has to remember.
+let grot_course_band = remap { stripes axis=y period=0.90 duty=0.5 } from=0.55 to=0.45 low=-0.05 high=0.05
+let grot_fac_courses = intersection { grot_facade grot_course_band }
+let grot_facade_at      = translate { grot_facade } -34 0 22
+let grot_fac_courses_at = translate { grot_fac_courses } -34 0 22
+let grot_herms_at       = translate { grot_herms } -34 0 22
+paint granite where=grot_facade_at below=0.035
+paint tuff    where=grot_fac_courses_at below=0.035
+paint travertine where=grot_herms_at below=0.035
+
+# THE ENCRUSTATION. Tuff is the ground it is set into; the shell, the faience, the porcelain and
+# the two coloured stones are set ON the lumps, keyed on the SAME `cells` fields that made them.
+# That is the whole of what §6 of the forge document means by weathering following the shape, done
+# deliberately rather than as wear: the shell is not near the lump, it IS the lump.
+let grot_lump_top  = remap { grot_shell_sites } from=0.055 to=0.030 low=0.05 high=-0.05
+let grot_grit_top  = remap { grot_grit_sites }  from=0.022 to=0.012 low=0.05 high=-0.05
+let grot_enc_shell = intersection { grotto_crust grot_lump_top }
+let grot_enc_grit  = intersection { grotto_crust grot_grit_top }
+let grot_enc_faie  = intersection { grot_enc_shell  remap { grot_patch_a } from=0.28 to=0.14 low=-0.05 high=0.05 }
+let grot_enc_porc  = intersection { grot_enc_shell  remap { grot_patch_b } from=0.32 to=0.18 low=-0.05 high=0.05 }
+let grot_enc_mala  = intersection { grot_enc_grit   remap { grot_patch_c } from=0.30 to=0.16 low=-0.05 high=0.05 }
+let grot_enc_onyx  = intersection { grot_enc_grit   remap { grot_patch_a } from=-0.18 to=-0.32 low=-0.05 high=0.05 }
+
+# THE SIX TWINS THAT MATTER MOST IN THIS FILE. Every one of these is an intersection of a displaced
+# shell with a `cells` or `fbm` field that has no position of its own, so the translate has to be
+# taken HERE, at the intersection, and not at `grotto_crust` inside it. Taken here, the field is
+# asked at the untranslated point and the shell is still painted on the lump that grew it. Taken
+# one level down, the geometry would move 34 m and the pattern would not, and what comes back is a
+# vault of plain tuff with the shellwork, the faience and the porcelain painted on empty air 34 m
+# away — which fires no warning, keeps `components` at 1, and is exactly the failure this whole
+# conversion was told to watch for.
+let grotto_crust_at   = translate { grotto_crust } -34 0 22
+let grot_enc_shell_at = translate { grot_enc_shell } -34 0 22
+let grot_enc_faie_at  = translate { grot_enc_faie } -34 0 22
+let grot_enc_porc_at  = translate { grot_enc_porc } -34 0 22
+let grot_enc_mala_at  = translate { grot_enc_mala } -34 0 22
+let grot_enc_onyx_at  = translate { grot_enc_onyx } -34 0 22
+
+paint tuff      where=grotto_crust_at below=0.035
+paint shellwork where=grot_enc_shell_at below=0.035
+paint faience   where=grot_enc_faie_at below=0.035
+paint porcelain where=grot_enc_porc_at below=0.035
+paint malachite where=grot_enc_mala_at below=0.035
+paint onyx      where=grot_enc_onyx_at below=0.035
+
+# THE STALACTITES, keyed on the columnar field that grew them and cut to the vault above 4.20 so
+# the rule cannot reach the haunch of the room where the same field is only moving the surface by
+# a few millimetres.
+let grot_stal_zone = intersection {
+    grotto_crust
+    remap { grot_stal_col } from=0.060 to=0.030 low=0.05 high=-0.05
+    box -4.55 4.20 1.30   4.55 6.25 8.60
+}
+let grot_stal_zone_at = translate { grot_stal_zone } -34 0 22
+paint travertine where=grot_stal_zone_at below=0.035
+
+# WHAT STANDS IN THE ROOM. Last, so nothing above can reach it. THE WATER IS IN THIS GROUP AND IS
+# THE ONE TO CHECK AFTER ANY CHANGE TO THIS FILE: this building exists for one small opening and
+# for light arriving off the basin, so a `water` share that has moved means the basin has moved,
+# and a `water` rule that fired on nothing means there is no basin to bounce off and the room
+# behind it goes dark. It is four bodies that all touch — basin, film, fall, spill — under one
+# binding, so one twin covers all four.
+let grot_mask_at       = translate { grot_mask } -34 0 22
+let grot_casc_at       = translate { grot_casc } -34 0 22
+let grotto_god_at      = translate { grotto_god } -34 0 22
+let grotto_god_lamp_at = translate { grotto_god_lamp } -34 0 22
+let grotto_grilles_at  = translate { grotto_grilles } -34 0 22
+let grotto_brackets_at = translate { grotto_brackets } -34 0 22
+let grotto_tapers_at   = translate { grotto_tapers } -34 0 22
+let grotto_flames_at   = translate { grotto_flames } -34 0 22
+let grotto_water_at    = translate { grotto_water } -34 0 22
+paint travertine where=grot_mask_at below=0.035
+paint tuff       where=grot_casc_at below=0.035
+paint alabaster  where=grotto_god_at below=0.035
+paint lamp       where=grotto_god_lamp_at below=0.035
+paint iron       where=grotto_grilles_at below=0.035
+paint bronze     where=grotto_brackets_at below=0.035
+paint wax        where=grotto_tapers_at below=0.035
+paint taper      where=grotto_flames_at below=0.035
+paint water      where=grotto_water_at below=0.035
+
+# THE PEBBLED FLOOR, AND IT IS LAST FOR A REASON. Four stones, each keyed on a broad grain so the
+# pebbles come in drifts rather than in a salt-and-pepper that averages to grey at any distance;
+# every rule is intersected with the pebble layer itself, so none of them can reach a wall. They go
+# on AFTER the water, so that the pebbles in the bottom of the basin are pebbles and not a flat
+# sheet of blue — which is the difference between a caustic with a rough receiver and a caustic on
+# a mirror, and the rough one is the case this building was asked for.
+let grot_peb_jasper = intersection { grotto_pebbles  remap { grot_patch_a } from=0.30 to=0.16 low=-0.05 high=0.05 }
+let grot_peb_rosso  = intersection { grotto_pebbles  remap { grot_patch_b } from=0.34 to=0.20 low=-0.05 high=0.05 }
+let grot_peb_trav   = intersection { grotto_pebbles  remap { grot_patch_c } from=-0.16 to=-0.30 low=-0.05 high=0.05 }
+let grotto_pebbles_at  = translate { grotto_pebbles } -34 0 22
+let grot_peb_trav_at   = translate { grot_peb_trav } -34 0 22
+let grot_peb_jasper_at = translate { grot_peb_jasper } -34 0 22
+let grot_peb_rosso_at  = translate { grot_peb_rosso } -34 0 22
+paint granite    where=grotto_pebbles_at below=0.035
+paint travertine where=grot_peb_trav_at  below=0.035
+paint jasper     where=grot_peb_jasper_at below=0.035
+paint rosso      where=grot_peb_rosso_at below=0.035
+
+# ================================================================================================
+# WEATHERING — the main tool here, not a finishing touch
+# ================================================================================================
+#
+# EVERY ONE NAMES ONE OF MY OWN SHAPES. Without `on=` a weathering acts on the whole clip: it
+# would bleach the lawn on top of the hill, scour the herms and sand the water, because the coats
+# it adds are keyed on a value rather than on a place and they go on after everything painted
+# above. That is why the facility shipped with none at all for its whole first life.
+#
+#   overgrown   on the encrustation, which is the wet surface: a grotto vault drips, and what
+#               grows on it grows in the hollows between the lumps, which is where `occlusion`
+#               already says the damp is
+#   sea         round the basin, and `level=` is the tide line, so it is set to the water surface
+#               at 0.00 — salt bleaching above it, barnacle standing proud below it
+#   cracks      on the facade, which is the one part of this building that was ever built and is
+#               therefore the one part that can be seen to have failed
+# AND THE CRACKS ARE SCOPED ON THE FACADE **AS CARVED**, WHICH IS NOT THE SAME SHAPE AS THE
+# FACADE. `weather`'s scope mask is one everywhere INSIDE the named shape, and `grot_facade` is
+# the block before its three arches are bored out of it — so the iron grilles, which stand in the
+# middle of the side arches and are therefore inside that block, were being cracked as if they
+# were masonry. Measured on the facade alone at metre 32: 82 components with the uncarved scope
+# and 1 with this one, and every one of the eighty-one was a piece of a 45 mm bar with a 29 mm
+# fissure bitten out of it.
+#
+# `on=` TAKES A TRANSLATED TWIN EXACTLY AS `where=` DOES, and for the same reason — the scope mask
+# is an inside-ness test against the named shape, so a scope left in local coordinates confines the
+# weathering to a volume 34 m from the building and weathers nothing at all. That is the silent
+# version: the deformation and both coats simply never appear, and the part still measures as one
+# component with no rule reported dead, because the rule did fire, on the handful of voxels the
+# untranslated box happened to overlap.
+#
+# `level=0.00` IS UNCHANGED AND IS CORRECT UNCHANGED. It is the tide line for `weather sea` and it
+# is a y coordinate; dy is 0 in the translate, so the water surface is still at y = 0.00 in the
+# facility and the salt line still lands on it. If this building is ever moved in y, this number
+# moves with it — it is the one number in the file that a dy would break silently.
+#
+# WHAT DOES CHANGE, AND IT IS NOT A FAULT: a weathering's own noise is evaluated in WORLD space, so
+# moving the building 34 m in x and 2 m in z re-rolls which voxels the fissures, the lichen, the
+# moss, the weed and the barnacle land on. The same weathering at the same amount, in different
+# places. Measured at metre 8, the five weathered materials together:
+#
+#   estate original                8,390 voxels   1.691% of the part
+#   this fragment                  8,695 voxels   1.753%
+#   this fragment at below=0.02    8,701 voxels   1.754%
+#
+# The third line is the control that says which change did it. Forcing every `below=` back to 0.02
+# leaves the figure where the fragment has it, so ALL of that movement is the move and none of it
+# is the paint tolerance — and the 311 voxels the weathering gained came off `tuff`, the base coat,
+# which fell by 314 over the same arm. Nothing that is not weathered moves at all: `lawn`, `gravel`,
+# `alabaster`, `bronze` and `lamp` are identical to the voxel across the move.
+let grot_fac_weathered = difference { grot_facade grot_arches }
+let grot_fac_weathered_at = translate { grot_fac_weathered } -34 0 22
+
+weather overgrown 0.55 scale=0.9 seed=71 on=grotto_crust_at
+weather sea 0.40 scale=0.7 seed=137 level=0.00 on=grotto_pebbles_at
+weather cracks 0.25 scale=1.2 seed=29 on=grot_fac_weathered_at
+
+# No `variation` and no `solid`: both are whole-clip statements and the manifest owns both. The
+# estate original ends `variation colour=0.045 rough=0.090 seed=61` and `solid part_grotto`; here
+# the manifest's own `variation colour=0.030 rough=0.070 seed=17` covers the whole building and
+# `solid all` is the only `solid` in it. `clips/facility/requests/grotto-probe.clip` supplies the
+# `solid part_grotto` needed to look at this part on its own.
+
+# ================================================================================================
+# WHAT THE CONVERSION MEASURES — three arms at metre 8, and what is still unmeasured
+# ================================================================================================
+#
+# All three `--clip-part part_grotto` at `--clip-metre 8`. Arm A is `clips/estate/grotto.clip`, the
+# standalone this was converted from, sampled in its own box. Arm C is this file through
+# `requests/grotto-probe.clip`. Arm B is C with every `below=` forced back to 0.02 in a throwaway
+# copy, which is the control that says which of the two changes in this conversion — the move, or
+# the paint tolerance — is responsible for each number that moved.
+#
+#                            A estate         B moved, 0.02    C this file
+#   volume                   496,095          496,099          496,099
+#   surface                  106,068          106,084          106,084
+#   roughness                0.21             0.21             0.21
+#   components               9 / 496,086      9 / 496,090      9 / 496,090
+#   materials                21               21               23
+#   rules that fired         all 32           all 32           all 32
+#
+#   tuff                     351,912          351,598          350,970
+#   lawn                     103,190          103,190          103,186
+#   granite                   15,120           15,108           15,026
+#   fissure                    5,837            6,121            6,119
+#   water                      4,631            4,629            4,612
+#   travertine                 4,424            4,452            4,520
+#   gravel                     3,720            3,720            3,720
+#   rosso                      1,591            1,593            1,759
+#   lichen                     1,218            1,244            1,244
+#   jasper                     1,022            1,017            1,080
+#   weed                         947              926              924
+#   alabaster                    803              803              799
+#   onyx                         619              627              814
+#   moss                         336              362              362
+#   shellwork                    273              278              345
+#   porcelain                    127              116              172
+#   faience                      119              112              169
+#   bronze                       102              102              114
+#   iron                           -                -               48
+#   barnacle                      52               48               46
+#   lamp                          32               32               38
+#   malachite                     20               21               24
+#   wax                            -                -                8
+#
+# WHAT EACH ARM SAYS.
+#
+# A -> B IS THE MOVE, AND THE MOVE CHANGES ONLY THE WEATHERING. `lawn`, `gravel`, `alabaster` and
+# `bronze` are identical to the voxel; `lamp` is identical; nothing not weathered moves by more than
+# a few voxels of stipple boundary. `fissure` gains 284, `lichen` and `moss` 26 each, `weed` loses
+# 21 and `barnacle` 4 — the five weathered materials go 8,390 -> 8,701, and `tuff` pays for it by
+# falling 314. A weathering's noise is read in WORLD space, so 34 m in x and 2 m in z re-roll which
+# voxels the fissures bite out of. Same weathering, same amount, different voxels. NOT A FAULT, and
+# there is no way to move a building without it.
+#
+# B -> C IS THE `below=` 0.02 -> 0.035, AND IT IS BRIEF.md RULE 5 IN A TABLE. Volume, surface and
+# components are IDENTICAL — paint does not move matter. `tuff`, the ground coat, falls by 628, and
+# every one of those 628 voxels goes to the rule that owns it: `onyx` +187, `rosso` +166, `travertine`
+# +68, `shellwork` +67, `jasper` +63, `faience` +57, `porcelain` +56, `bronze` +12, `lamp` +6. That
+# is the pale rind the rule describes — voxels solid by coverage but outside their own rule tested at
+# centre — and at 0.02 every one of them was wearing the base coat.
+#
+# AND IT BROUGHT BACK TWO MATERIALS THAT WERE NOT THERE AT ALL. `iron` and `wax` have no voxel in
+# arm A or arm B and 48 and 8 in arm C. They are the thinnest matter in the building — 45 mm grille
+# bars and 35 mm tapers, a third of a metre-8 voxel — so EVERY voxel of them fell outside its own
+# rule at 0.02 and the grilles were tuff-coloured iron. This is the clearest measurement of rule 5
+# anywhere in this repository, because it is not a share moving, it is a material existing or not.
+#
+# THE FOUR VOXELS OF VOLUME (A -> B) ARE THE PROBE BOX AND NOT THE BUILDING. The estate clip's own
+# bounds are x -11.000 .. 11.000 exactly and its mound and apron end at x = +-11.000, so its box
+# clips them flush; the probe has half a metre of margin, so the boundary voxel is caught by
+# coverage. Matter extent goes 176 -> 178 columns in x and nothing else changes. NO MATTER MOVED IN
+# THIS CONVERSION, and that is what makes the oculus and the basin safe: the geometry section of
+# this file is byte-for-byte the estate original's, the assembly is the same union under a new name,
+# and 496,099 against 496,095 is the measurement that says so.
+#
+# WHAT IS NOT MEASURED HERE, PLAINLY. This conversion was checked at metre 8 only. It has NOT been
+# sampled at the contract's metre 32 in its facility position, and it has NOT been photographed —
+# no contact sheet, no view of the oculus shaft, no view of the god. The oculus was checked by the
+# volume argument above and NOT by a slice through it: `--clip-slice y@7.0` came back as a slice
+# along x and the argument form was not chased further. Somebody integrating this should take a
+# `-Views inside` contact sheet before believing the room reads as it did on the estate.
+#
+# THE ESTATE ORIGINAL'S OWN METRE-32 LEDGER, kept because it is the only metre-32 figure anybody has
+# for this building and the conversion moves no matter. It is arm A's box, not the facility's:
+#
+# THE BOX. 704 x 256 x 448 = 80,740,352 cells, 22.0 x 8.0 x 14.0 m, 404 MB in the game at five
+# bytes a cell.
+#
+# THE WHOLE PART, `clipcheck clips/estate/grotto.clip --metre 32`:
+#
+#   volume        31,069,650 voxels   948.17 m3   38.48% of the box
+#   surface       1,760,108 faces     1718.86 m2
+#   roughness     0.06 faces per voxel   — a hill; see the note in the load list above
+#   materials     24 distinct, and NO rule that never fired
+#   components    87, largest 31,069,550, one hundred floating voxels
+#   worldbox      -11.000 -0.656 -1.500   11.000 7.188 12.000 m
+#   peak memory   1,135,108 kB = 1.11 GB
+#   wall clock    2,543 s = 42 min 23 s
+#
+# THE WALL CLOCK IS NOT A FIGURE ANYBODY SHOULD COMPARE ANYTHING TO. Thirteen other agents were
+# building on this machine while it ran, at a load average of eighteen, and the same file at metre
+# 16 took 97 s early in the session and 296 s late in it for identical output. What IS comparable
+# is the memory, which is a function of the box, and the arithmetic of `skip_slack` written out at
+# the encrustation above: 1.039 m of slack in a box two fifths full of rock means no cell is ever
+# skipped, and eighty million field evaluations is what this building costs by construction.
+#
+# EIGHTY-SEVEN COMPONENTS AND A HUNDRED FLOATING VOXELS, AND WHAT THEY ARE. One to three voxels
+# each, all of them on the two faces of the facade at z = -0.12 and z = 1.34, and they are chips
+# knocked off by `weather cracks`. Measured on a bare block with the same crack setting and nothing
+# else in the clip: 15 islands of 15 voxels. It is what that weathering does — it opens a fissure
+# 29 mm deep and sometimes the fissure meets itself round a corner. `despeckle` does not remove
+# them because `despeckle` repaints colour specks and does not delete matter. The number that was
+# worth chasing was the 850 components the same file reported before the two connectivity fixes
+# above (the false union face, and the 63-degree lump cone), and those are gone.
+#
+#   metre 16      3,885,885 voxels, 51 components, 58 floating, 54.7 MB, 296 s
+#   metre  8        495,646 voxels, 12 components, 12 floating
+#
+# HEAD HEIGHT, and it is measured off `--slice z@` at metre 8 and not off `--gap y@` — see the note
+# at the passages for why a building with sky over it cannot be probed with `--gap` along y. Every
+# figure below is the clear height above the floor at that (x, z), to the 0.125 m of a metre-8
+# voxel, and the encrustation and the stalactites are IN it:
+#
+#   z = 1.60  hall, just inside the front wall   2.85 at x -4.4 (hard against the wall)
+#                                                5.47 on the centre line
+#   z = 2.50  hall                               3.35 at x -4.4 ... 5.85 at x 0
+#             side chambers                      2.35 at x +-8.9 and +-5.6 ... 3.73 at x +-7.1
+#   z = 4.30  hall                               4.22 at x -4.4 ... 6.10 at x 0
+#             the two passages                   3.23 at x +-4.6 and +-5.1
+#             side chambers                      3.35 ... 4.60
+#   z = 6.00  hall                               4.10 ... 5.97, and OPEN TO THE SKY at x 0, which
+#                                                is the oculus and is the check that it is bored
+#             side chambers                      2.35 ... 4.10
+#   z = 7.50  hall                               2.85 at x -4.4 ... 5.60 on the centre line
+#   z = 0.70  through the centre arch            4.10 ... 5.10
+#             through the side arches            0.85, WHICH IS THE IRON GRILLE, and is the point
+#                                                of a grille: they are windows, not ways in
+#
+# The lowest figure anywhere a person can stand is 2.35 m, in the side chambers with a shoulder
+# against the wall, against the brief's 2.10. The lowest through anything is 3.23 m in the two
+# passages, against the brief's 2.40. Nothing in this building is tight.
+#
+# THE ENCRUSTATION, `--part grotto_crust` at metre 32: 12.65 m3 of stone carrying 765.38 m2 of
+# exposed face, against 10.59 m3 and 665.40 m2 for the same skin undisplaced. It reports 144
+# components ON ITS OWN and that is not a fault: it is three shells, one per room, and two of them
+# are the side chambers at 77,350 and 77,193 voxels. In `part_grotto` they are part of the hill.
