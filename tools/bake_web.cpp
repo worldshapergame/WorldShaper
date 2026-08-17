@@ -66,6 +66,9 @@
 // >>> paintexport
 #include "bake/paint.hpp"
 // <<< paintexport
+// >>> ao
+#include "bake/occlusion.hpp"
+// <<< ao
 #include "core/jobs.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -159,6 +162,22 @@ struct Options {
 // across the wall behind them, and still reaches down the oculus. A sun overhead lights nothing
 // interesting and a sun in the north lights the back of the building.
 constexpr f64 kSunDir[3] = {0.42, 0.80, -0.43};
+
+// >>> ao
+// How far the ambient-occlusion hemisphere reaches, and how many rays it takes to get there.
+//
+// 0.45 m is chosen against the building rather than against a rule of thumb. A coffer in the dome
+// is 0.225 m deep and between 0.309 and 1.004 m across, a flute is 0.12 m across, a niche is
+// 0.675 m deep, a window reveal is a third of a metre: a radius under a quarter of a metre sees
+// none of them as a recess, and one over half a metre starts closing whole rooms and doing the
+// light grid's job badly. It is the scale that lies between the one voxel corner occlusion covers
+// and the 0.4 m lattice the light grid samples, which is the entire reason this term exists.
+//
+// Thirty-two rays because the directions are FIXED -- see occlusion.hpp -- so the count buys
+// smoothness in space and not noise, and sixteen shows the Fibonacci spiral on a large flat floor.
+constexpr f64 kAoRadiusMetres = 0.45;
+constexpr i32 kAoRays = 32;
+// <<< ao
 
 // --------------------------------------------------------------------------------------
 // Small helpers
@@ -1704,6 +1723,36 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         &gi_stats);
     gi_stats.seconds = static_cast<f64>(ws::now_ns() - gi_began) / 1e9;
     // <<< gi
+    // >>> ao
+    // Ambient occlusion, one texel per exposed voxel face.
+    //
+    // The quads are handed over in EXACTLY the order they are written to the file below -- every
+    // opaque face group in face order, then every transparent one -- because that order is the
+    // allocation. The viewer re-derives where each quad's run starts by prefix-summing `w * h`
+    // over the quads it already has, so the file carries no per-quad offset; the total is written
+    // down and checked at load, so the two derivations either agree or one of them says so.
+    //
+    // tools/bake/occlusion.hpp is what this is, why it is an atlas rather than a volume, and why
+    // it is a different term from the corner occlusion in the quad record, which it does not
+    // touch.
+    std::vector<ws::bake::AoQuad> ao_quads;
+    for (i32 pass = 0; pass < 2; ++pass) {
+        const std::array<std::vector<Quad>, 6>& lists =
+            (pass == 0) ? mesher.opaque() : mesher.transparent();
+        for (i32 face = 0; face < 6; ++face) {
+            for (const Quad& q : lists[static_cast<usize>(face)]) {
+                ao_quads.push_back(ws::bake::AoQuad{static_cast<i32>(q.x), static_cast<i32>(q.y),
+                                                    static_cast<i32>(q.z), static_cast<i32>(q.w),
+                                                    static_cast<i32>(q.h), face});
+            }
+        }
+    }
+    const u64 ao_began = ws::now_ns();
+    const ws::bake::Occlusion occlusion = ws::bake::bake_occlusion(
+        [&mesher](i32 x, i32 y, i32 z) { return mesher.solid(x, y, z); }, ao_quads, metre,
+        kAoRadiusMetres, kAoRays, jobs);
+    const f64 ao_seconds = static_cast<f64>(ws::now_ns() - ao_began) / 1e9;
+    // <<< ao
 
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
@@ -1938,6 +1987,23 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         // carry, and a reader that asks for `GIRR` and gets null simply does without it.
         if (!gi.empty()) chunks.push_back(make_chunk("GIRR", gi.chunk()));
     // <<< gi
+    // >>> ao
+        // `AOCC`, the ambient-occlusion atlas: a small header, then one byte per exposed voxel
+        // face. The viewer re-derives where each quad's run starts by prefix-summing `w * h`, so
+        // the file carries no per-quad offset; the total is written down at 12 and checked at
+        // load, so the two derivations either agree or one of them says so.
+        {
+            std::vector<u8> ao_bytes(32, 0);
+            put_u32(ao_bytes, 0, 1);   // the chunk's own version, which is not the file's
+            put_u32(ao_bytes, 4, occlusion.texel_count);
+            put_u32(ao_bytes, 8, occlusion.atlas_width);
+            put_u32(ao_bytes, 12, opaque_total + transparent_total);
+            put_f32(ao_bytes, 16, occlusion.radius);
+            put_u32(ao_bytes, 20, occlusion.rays);
+            ao_bytes.insert(ao_bytes.end(), occlusion.texels.begin(), occlusion.texels.end());
+            chunks.push_back(make_chunk("AOCC", std::move(ao_bytes)));
+        }
+    // <<< ao
     // >>> paintexport
         append_chunks(out, chunks);
     }
@@ -1986,6 +2052,12 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                 clip.size[0], clip.size[1], clip.size[2], baked.quads, walk.shapes.size(),
                 walk.cutter_count(), mesher.palette().size(),
                 static_cast<f64>(out.size()) / (1024.0 * 1024.0), seconds);
+    // >>> ao
+    std::printf("      ao: %u texels at 1/%d m  %.2f MB  %.1f s  radius %.2f m  %u rays\n",
+                occlusion.texel_count, metre,
+                static_cast<f64>(occlusion.texels.size()) / (1024.0 * 1024.0), ao_seconds,
+                static_cast<f64>(occlusion.radius), occlusion.rays);
+    // <<< ao
     // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
     // "it worked", which is the whole reason these are counted at all.
     if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||

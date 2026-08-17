@@ -48,10 +48,22 @@ A 208-byte header, then the blocks, in the layout the card wants so that loading
 and a handful of `subarray` views. Every offset is written down in both `tools/bake_web.cpp` and
 `web/js/format.js`, and the file carries a magic and a version so a mismatch says so.
 
-**The version is 2.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
-of §4a moved every block offset; there is no reading one as the other. `reuse` in the baker refuses
-a version 1 file and rebakes it, and `parseClip` throws on one rather than drawing a wrong picture —
-a cached `web/data` from before the change is a real state and it has to say so.
+<!-- >>> ao -->
+**The version is 3, and the header's last eight bytes are a chunk directory.** Version 1's header
+was 192 bytes with nothing spare, so version 2 — which adds the cutter pool of §4a — moved every
+block offset; there is no reading one as the other. Version 3 does not move anything: bytes 200..207
+became `chunkOffset` and `chunkCount`, and each 16-byte entry is a four-character name, an offset, a
+size and a spare word. Everything in front of the directory is byte for byte what version 2 wrote,
+which is the point — the format is being added to by many hands at once, and doing the version 2
+move again for each of them is a chance to serve a file one reader agrees with and another does not.
+A reader that does not know a chunk simply never asks for it.
+
+`reuse` in the baker refuses a file of the wrong version and rebakes it, and `parseClip` throws on
+one rather than drawing a wrong picture — a cached `web/data` from before a change is a real state
+and it has to say so.
+
+Chunks so far: `AOCC`, the ambient-occlusion atlas of §2a.
+<!-- <<< ao -->
 
 <!-- >>> gi -->
 **The version is 3, and the last eight bytes of the header are now a chunk directory.** Everything
@@ -159,6 +171,94 @@ which was the crude stand-in for indirect light before this existed, so an inter
 both. Removing it is a change to the look of every clip and belongs in its own pass, not in the one
 that adds the volume. Measured on `facility/rotunda` cut in half, the interior lifts by about 45 of
 255 and the sky is byte-identical.
+<!-- >>> ao -->
+## 2a. Ambient occlusion, which is neither of the two things that were called that
+
+Two terms already existed and neither of them is ambient occlusion:
+
+- **corner occlusion**, four two-bit values on a quad, from the eight voxels round each corner. The
+  classic Minecraft vertex darkening. It is **one voxel wide** and knows nothing outside its own
+  cell.
+- **sky visibility** in the light grid, on a **0.4 m** lattice. That is the room a surface stands
+  in.
+
+Between one voxel and forty centimetres is the entire middle scale, and it is the scale this
+building is made of: 120 coffers in the dome, twenty-four flutes on every shaft, the dentils under
+the cornice, the niches, the reveal of every window, the joint where a wall meets a floor.
+`clips/facility/rotunda.clip` had already written down what the failure looks like — a coffer's
+whole appearance is "a soft gradient from a bright lip to a dark pan", and "if ambient occlusion is
+wrong, a coffer reads as a flat dark square". It did, and that was the acceptance test.
+
+So the baker casts a **hemisphere of thirty-two rays about each exposed voxel face's own normal, out
+to 0.45 m**, distance-weighted, against the clip's own voxels at the resolution it was sampled at.
+`tools/bake/occlusion.hpp`, read by `web/js/features/ao.js`.
+
+**It is an atlas, one texel per exposed voxel face, and not a volume.** The volume was the obvious
+answer — the light grid is one — and it was rejected on three counts, of which the first is measured
+and the second is the one that actually decides it:
+
+- **A volume is n³ and a surface is n².** The rotunda fragment is a 12.6 × 11.6 × 12.6 m box. A
+  0.1 m volume of it is 1.84 M cells; its whole exposed surface at the 16/m it is sampled at is
+  **353 k texels, 0.34 MB**. The atlas is five times smaller *and* sharper — 6.25 cm against 10 cm —
+  and the gap widens with every clip that is more air than stone, which is every clip.
+- **A lattice point has no normal.** Hemisphere-sampled against the surface normal is what ambient
+  occlusion *is*; a point in space can only carry sphere openness, which says the same thing about
+  the floor and the ceiling of a 0.3 m recess. Every quad here is axis-aligned and knows which of
+  six directions it faces, so the hemisphere is free.
+- **A volume leaks through walls.** A trilinear fetch near a 0.15 m wall blends the open room in
+  front with the stone behind — the fault the light grid needed its "half, twice" neighbour fill to
+  survive. At a 0.1 m cell the leak is *worse*, because the fetch reaches further in voxels.
+
+**It survives greedy meshing, and that is why it is a texture rather than a vertex.** Two faces
+merge only when everything about them agrees, so a smooth gradient at the vertices makes every voxel
+face its own quad and the mesh stops being a mesh — the same argument as the light grid above. A
+texture is read per fragment and merging cannot see it, so a wall stays one quad and still has a
+shadow in its corner.
+
+**The file carries no per-quad UV.** Runs are allocated in the order the quads are written — every
+opaque face group in face order, then every transparent one — so where a quad's run starts is the
+prefix sum of `w * h` over the quads in front of it, and the viewer computes that from the quads it
+already has. Four bytes a quad is 1.6 MB on the whole facility for a number that is a sum of two
+fields sitting next to it. Two things deriving one layout from one description is what D204 is named
+for, so the chunk writes down its total and the viewer throws if its walk does not land on the same
+number.
+
+Filtering is **four `texelFetch`es and a lerp by hand**, clamped inside the quad's own run. A run
+wraps at the edge of the atlas and sits against its neighbour's with no border, so a hardware
+bilinear fetch would blend a windowsill into whatever was meshed after it; and a one-texel border
+round every quad is half as much memory again on a mesh with four hundred thousand of them.
+
+What it costs, measured at `--budget 8000000`, which lands these fragments on 16 voxels to the metre:
+
+| | quads | texels | added | file was | bake added |
+|---|---|---|---|---|---|
+| `facility/rotunda` | 54,739 | 352,942 | 0.34 MB (+30%) | 1.11 MB | 3.3 s onto 100 |
+| `facility/dome` | 94,563 | 129,752 | 0.13 MB (+8%) | 1.56 MB | 0.6 s onto 55 |
+| `facility/portico` | 15,327 | 110,764 | 0.11 MB (+28%) | 0.39 MB | 0.3 s onto 15 |
+| `sampler` | 28,612 | 78,582 | 0.08 MB (+16%) | 0.47 MB | 1.9 s onto 1.4 |
+
+That last row is the honest shape of the cost and not an outlier: the rays stop at the first
+blocker, so a clip that is mostly open faces runs every ray to its full length and a clip full of
+recesses does not. On a small clip the atlas can therefore cost more than the sampling did, in
+absolute seconds that are still under two.
+
+Per frame it is one `R8UI` texture, one instanced `uint` attribute and four `texelFetch`es in the
+fragment shader — no extra pass, no extra draw and no per-frame work proportional to the clip.
+**The number is not quoted because it was not measured.** The only harness available here is
+SwiftShader, and the two arms of the control flag came out 145 ms and 1281 ms on the *same* arm at
+the rotunda: the page's own resolution scaler is chasing the load and the box is shared. A figure
+off that is worse than none.
+
+**Corner occlusion is untouched.** It is a different term at a different scale and the two multiply:
+one is the voxel's own shape, one is the recess it sits in.
+
+**Where it does not show, said plainly: the flutes.** Twenty-four flutes on a 0.9 m shaft are
+0.12 m apart and a couple of centimetres deep, which at 16 voxels to the metre is two voxels wide
+and a third of a voxel deep — there is almost no geometry in the sampled clip for a hemisphere to
+find. The portico's shafts gain a little and the coffers, the soffit panels, the capitals, the niche
+heads and the wall-to-floor joints gain a lot. At 32 voxels to the metre the flutes would be real
+and so would their occlusion.
+<!-- <<< ao -->
 
 ### Resolution is a budget, not a list
 

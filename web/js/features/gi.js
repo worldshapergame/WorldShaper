@@ -38,7 +38,7 @@ const CHUNK_HEADER_BYTES = 32;
 const FACES = 6;
 
 // Bound at this texture unit. 0 is the materials and 1 is the light grid; see setShared in gl.js.
-export const GI_TEXTURE_UNIT = 2;
+export const GI_TEXTURE_UNIT = 2;   // UNIT.gi in web/js/gl.js, which is the register
 
 // The uniforms the fragment shader needs. Declared here rather than in gl.js so that the block and
 // its declarations cannot drift apart.
