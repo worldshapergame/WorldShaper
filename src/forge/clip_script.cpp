@@ -301,6 +301,16 @@ bool is_moulding(const std::string& s) {
 // inside it descends about log4(n) levels. A chain would have made every sample near the tree walk
 // all n unions in turn, which is the difference between a tree costing what a wall costs and a
 // tree costing what the rest of the clip costs.
+//
+// # One trap, and it is somebody else's hard-won note
+//
+// **Do not displace a whole branch.** `clips/_trees.clip` found this building its trees by hand:
+// a displacement applies to everything under it, and 0.032 m of bark grain into a twig of radius
+// 0.019 ERASES THE TWIG wherever the noise is negative. It does not fail — it silently drops
+// lengths of the tree and leaves whatever they carried floating. So displace the trunk and leave
+// the thin limbs alone, which here means splitting the union by radius: build the tree twice with
+// different `levels` and displace only the shallow one, or intersect the displacement's reach with
+// a box round the bole.
 
 constexpr usize kMostCapsules = 1500;
 

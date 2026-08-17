@@ -1263,3 +1263,46 @@ TEST_CASE("stretch= runs a grain one way, and leaving it off is the grain that w
     }
     CHECK(moved > 300);
 }
+
+TEST_CASE("fewer levels is the same tree with its outer limbs left off") {
+    // This is what makes the bark recipe work, so it is asserted rather than assumed.
+    //
+    // `clips/_trees.clip` found the trap the hard way: a displacement applies to everything under
+    // it, and 0.032 m of bark grain into a twig of radius 0.019 ERASES THE TWIG wherever the noise
+    // is negative -- silently, dropping lengths of tree and leaving whatever they carried floating.
+    // The cure is to displace the thick wood only, and the cheapest way to say that here is to
+    // grow the same tree twice at two depths and displace the shallow one.
+    //
+    // That only works if `levels` truncates rather than reshapes: the limbs a shallow tree grows
+    // must be exactly the limbs the deep one grows, in the same places, so the two union without a
+    // seam. They are -- a limb's direction, length and radius come from its own identity and the
+    // seed, and nothing in the walk consults how much deeper it is going to go.
+    VoxelTypeTable types;
+    TagRegistry tags;
+    const Script script = parse_clip_script(
+        "material bark rgb=90,70,50\n"
+        "let bole = branch 0 0 0 h=1.2 r=0.05 levels=2 count=3 spread=0.11 seed=5\n"
+        "let full = branch 0 0 0 h=1.2 r=0.05 levels=5 count=3 spread=0.11 seed=5\n"
+        "paint bark\nsolid full\n",
+        types, tags);
+    REQUIRE(script.errors.empty());
+    u32 bole = 0, full = 0;
+    REQUIRE(script.part("bole", bole));
+    REQUIRE(script.part("full", full));
+
+    // Everywhere the shallow tree is matter, the deep one is matter too -- and nowhere is the
+    // shallow one nearer, because the deep one is the same wood plus more of it.
+    const Field& f = script.field;
+    usize inside = 0;
+    for (int i = -14; i <= 14; ++i) {
+        for (int j = 0; j <= 20; ++j) {
+            for (int k = -14; k <= 14; ++k) {
+                const Vec3 p{i * 0.06, j * 0.08, k * 0.06};
+                const f64 shallow = f.eval(bole, p);
+                REQUIRE(f.eval(full, p) <= shallow + 1e-9);
+                if (shallow < 0.0) ++inside;
+            }
+        }
+    }
+    CHECK(inside > 0);   // a tree that is nowhere would satisfy the above for nothing
+}
