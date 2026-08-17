@@ -890,6 +890,49 @@ let pav_dry = displace { union { pav_cut pav_fittings } grain_fine } amount=0.01
 let part_pavilion = union { pav_dry pav_water }
 
 # ================================================================================================
+# THE WALKING PROBES — two, and both must report an EMPTY clip
+# ================================================================================================
+#
+#     ./build/clipcheck clips/estate/pavilion.clip --metre 32 --part pav_probe_room
+#     ./build/clipcheck clips/estate/pavilion.clip --metre 32 --part pav_probe_doors
+#
+# Nothing below is unioned into the part. They are the volume a person's head sweeps through on
+# the only two routes this building has, intersected with the finished building — the grain and
+# all, because the grain is what a shoulder actually meets.
+#
+# THE ROOM. The floor is 0.90 and the probe runs 0.95 to 3.05, so it is the brief's 2.10 m of head
+# with 0.05 of margin for the grain under it, over a circle 7.60 m across.
+#
+# 3.80 AND NOT 4.40, AND THE PROBE IS WHAT SAID SO. The dado stands at apothem 4.83 but only on
+# the piers, so its nearest point to the axis is 5.00; the girandole arms reach in to 4.75 on the
+# corner bearings; the chandelier's lowest drop hangs at 4.23, a metre and a fifth over the
+# probe's own ceiling. None of those is the binding constraint. THE EIGHT OPEN DOOR LEAVES ARE:
+# each stands at right angles against its jamb at |z| 1.35 .. 1.41 and reaches in to x = 3.60, so
+# its inner corner is 3.845 from the axis. At r = 4.40 this probe came back with 1.05 m3 in TEN
+# pieces — eight of them iron and glass at exactly that radius, one per leaf — which is not a low
+# ceiling, it is a door standing where a door stands. So the clear circle of this room is 7.60 m
+# across and the leaves are what set it. The vault is 6.30 over the floor at the crown and 3.60
+# at the wall.
+let pav_probe_room = intersection {
+    part_pavilion
+    cylinder 0 2.00 0  r=3.80 h=2.10 axis=y
+}
+
+# THE FOUR DOORS. 1.20 m of the 2.70 m opening, from inside the room at radius 4.30 out past the
+# socle's face at 5.625 to 6.60, at the same 0.95 .. 3.05. The two glazed leaves stand open against
+# the jambs at |z| 1.35 .. 1.41, which is outside the opening they came out of, so they take
+# nothing off the clear width; the transom rail's soffit is at 3.33 and the head under it is 2.43.
+# Drawn on +x, symmetric about its own z, and carried to the other three axial faces the way every
+# eight-fold member in this file is.
+let pav_prb_door_a = box 4.30 0.95 -0.60   6.60 3.05 0.60
+let pav_prb_door_c = rotate { pav_prb_door_a } y=-0.25
+let pav_prb_doors  = intersection {
+    mirror { mirror { union { pav_prb_door_a pav_prb_door_c } } axis=x } axis=z
+    box -6.70 0.90 -6.70   6.70 3.10 6.70
+}
+let pav_probe_doors = intersection { part_pavilion pav_prb_doors }
+
+# ================================================================================================
 # PAINT
 # ================================================================================================
 #
@@ -973,6 +1016,15 @@ paint crystal where=pav_ch_drip    below=0.02
 # surface: 0.0. Above it, salt and bleaching on the quay; below it, barnacles on what the light
 # reaches and weed in what it does not — which is the line the reflection is cut at, and the only
 # thing in the scene that says how deep the water is.
+# AND `desert` PUTS NO SAND ON THIS BUILDING, WHICH IS RIGHT AND IS NOT AN ACCIDENT. The request
+# adds two coats. `bleached` fires — it wants `0.6 x up + 0.4 x grit` over 0.5325, which the top of
+# a lead dome gives it. `sand` cannot: its threshold is `1.15 - 0.75a` = 1.1125 and its test is
+# `0.5 x up + 0.5 x cavity` plus a HEIGHT term that is a smoothstep from `level` DOWN over 1.5 x
+# scale — so on a bell whose lowest point is 5.20 m above the datum that term is nought, the other
+# two cannot exceed 1.0 between them, and the coat matches no voxel at any resolution. `clipcheck`
+# says so now (`never matched`, and splitting the three statements into arms puts one of the two in
+# this request). Sand drifted on a cupola would be wrong anyway; what this weathering is here for is
+# the bleach.
 weather sea       0.16 scale=0.9 seed=29 level=0.0 on=pav_waterline
 weather overgrown 0.10 scale=0.7 seed=13 on=pav_coping
 weather desert    0.05 scale=1.1 seed=41 on=pav_bell_hull

@@ -1002,6 +1002,69 @@ let part_colonnade = colon_built
 
 solid part_colonnade
 
+# ================================================================================================
+# THE TWO WALKING PROBES — and this building is the tightest thing on the estate
+# ================================================================================================
+#
+#     ./build/clipcheck clips/estate/colonnade.clip --metre 16 --part colon_probe_in
+#     ./build/clipcheck clips/estate/colonnade.clip --metre 16 --part colon_probe_walk
+#
+# Neither is unioned into the part. Each is the volume a person sweeps — 0.60 m across, which is
+# the player's own width, and 2.10 m of head starting 0.05 above the stylobate's top step — placed
+# on the two routes this building has. They are taken against `part_colonnade` and not against the
+# weathered solid, for the reason the campanile's probe gives: the two weathering coats move the
+# surface by up to 0.05 and the clearances here are 0.02, so the geometry is the honest measure and
+# the coats are inside the margin.
+#
+# WHAT THE NUMBERS ARE, because they are the answer to "can a person get in" and they are tighter
+# than anything else on this estate. The shaft is 0.90 at the foot and swells to 0.926 at the
+# entasis crown 1.95 m up, which is exactly chest height for somebody standing on the stylobate:
+#
+#   ALONG a walk, between two rows          1.80 centres  -  0.926  =  0.874 m clear
+#   ACROSS the outer row, between two rays  2.025 centres -  0.926  =  1.099 m clear
+#   ACROSS the INNER row, between two rays  1.573 centres -  0.926  =  0.647 m clear
+#
+# The last of those is the way IN from the court, and it is the tightest passage on the estate: a
+# person 0.60 across gets through it with 23 mm either side. It is not a fault to be fixed by
+# moving a column — the four rows at 4 M and the bay at 4.5 M of arc on the OUTER row are the
+# module, and a radial layout on an oval shortens every inner bay by the ratio of the radii, which
+# is what makes the rows shear and is the whole visual effect this part exists for. It is a fact
+# about the building that belongs in writing, and the probe is what keeps it true.
+#
+# THE PROBE STARTS AT 1.00 AND NOT AT 0.59, AND THE FIRST DRAFT OF IT IS WHY. Written from 0.05
+# over the stylobate it came back with 0.151 m3 in seven pieces, every one of them between y 0.538
+# and 1.038 — which is not a wall, it is the COLUMN BASES. A Tuscan base is wider than its shaft
+# by construction: the plinth is 1.26 SQUARE to 0.185, the torus 1.17 round to 0.36, the fillet
+# 0.99 to 0.45. So the clear width between two rows is not one number, it is four, and only the
+# last of them is what a body meets:
+#
+#   0.54 .. 0.73   between the plinths   1.80 - 1.26 = 0.54 m     (0.185 tall — a step, not a wall)
+#   0.73 .. 0.90   between the tori      1.80 - 1.17 = 0.63 m
+#   0.90 .. 0.99   between the fillets   1.80 - 0.99 = 0.81 m
+#   0.99 and up    between the shafts    1.80 - 0.926 = 0.874 m
+#
+# Every one of those bases is under the 0.55 m riser a person climbs, so a person walking a colonnade
+# walks OVER the bases and their body is in the 0.874 band. That is what the probe measures, and it
+# is why its floor is at 1.00 — the honest question is whether a body passes, not whether a boot
+# clears a plinth it is standing on.
+#
+# THE WAY IN, midway between the rays at stations 11 and 12, where the ray IS the ellipse's normal
+# and the squeeze is therefore at its worst. The two midpoints are (24.174, 1.063) and
+# (18.784, 0.825), and the line through them passes 3 mm from the centre of the oval — so the
+# corridor is a box on +x turned by the mid-bearing, 2.524 degrees = 0.007011 turns, and `rotate`
+# with a NEGATIVE turn carries +x toward +z.
+let colon_probe_in = intersection {
+    part_colonnade
+    rotate { box 18.20 1.00 -0.30   24.90 3.10 0.30 } y=-0.007011
+}
+
+# THE WALK, between rows two and three at the same station, running along the arc for three bays.
+# 21.60 is the mid radius between the columns at 22.50 and 20.70.
+let colon_probe_walk = intersection {
+    part_colonnade
+    box 21.30 1.00 -1.30   21.90 3.10 1.30
+}
+
 # --- paint --------------------------------------------------------------------------------------
 #
 # Base coat first, then the ground, then everything standing on it, in the order a later coat
