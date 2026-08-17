@@ -50,24 +50,87 @@
 # numbers are the spine of the whole south elevation: every window, every pilaster, every step
 # in the entablature above lines up with one of them or with the middle between two.
 
-# The sampled box, and why it is exactly this tight.
+# The sampled box, and why it is no longer cut to one building.
 #
-# A clip is a DENSE array over its whole bounds, four bytes a cell plus one for the mask,
-# whether or not there is anything there. This box is 34 x 20.9 x 25 metres, which at thirty-two
-# voxels to the metre is 582 million cells and about 2.8 gigabytes of memory before a single
-# voxel of the building exists. A generous margin of lawn on all four sides would have doubled
-# that for nothing but grass.
+# UNTIL 2026-08-17 THIS BOX WAS 34 x 20.9 x 25 m — the main block plus a metre — and the comment
+# here argued at length that it had to be. The argument was sound and its conclusion was wrong,
+# and both halves are worth keeping because the wrong half is the instructive one.
 #
-# So the box is cut to the building plus a metre: x to the wing corners, z from the bottom step
-# to the north wall, y from just under the ground to just over the lantern. The site fragment
-# fills what is left, and the site is small on purpose.
+# What it said: a clip is a DENSE array over its whole bounds, four bytes a cell plus one for the
+# mask, whether or not there is anything there. True, and unchanged: see `clip.voxels.assign` in
+# src/forge/sample.cpp. 34 x 20.9 x 25 m at metre 32 is 582 million cells and about 2.8 GB before
+# a single voxel of stone exists, so a generous margin of lawn would have doubled that for grass.
+# All true. `clips/estate/BRIEF.md` reasoned from the same place to the conclusion that an estate
+# a hundred metres across can only ever be a FAMILY of clips, and `colonnade.clip` says in capitals
+# that it must never be added to this one.
 #
-# It also means this clip cannot be used to test anything about distance — streaming, continuous
-# detail, the summary tree, distant thumbnails. Those need hundreds of metres and hundreds of
-# metres do not fit in a dense array. They are the world's problem, not this building's, and
-# pretending otherwise here would only make the building slower.
+# WHAT IT MISSED IS THAT THE GAME NEVER SAMPLES THE WHOLE CLIP AT metre 32. `--clip-coarse`
+# defaults to 4: the up-front build samples at metre 8 and scales 4x on paste, and every node after
+# that is sharpened INDIVIDUALLY, each one a `forge::sample` over its own small box with its own
+# settings (src/app/main.cpp, the refine worker). The dense array over these bounds is only ever
+# allocated at the COARSE metre. High detail is paid for per node, in boxes a few metres across,
+# and only where something is being looked at.
+#
+# So the three numbers that decide whether this is a scene are these, and they are arithmetic and
+# not opinion:
+#
+#     125.5 x 37.5 x 110.5 m  =  520,092 m3
+#
+#     metre  8   (what the game allocates)      266 M cells      1.33 GB     a scene
+#     metre 16                                 2,130 M cells    10.6  GB     only on a big machine
+#     metre 32   (whole-clip, tooling only)   17,040 M cells    85.2  GB     not on any machine
+#
+# THE CONSEQUENCE, AND IT IS A REAL COST: nothing can measure this clip whole at metre 32 any
+# more. `clipcheck --metre 32` over these bounds asks for 85 GB and will not run. That is why
+# every building in the complex carries its own probe in `requests/`, with its OWN tight bounds
+# around its OWN position, and why those probes are now the only way to check a part at the
+# resolution it is authored for. Whole-clip checks run at metre 8. This is not a formality: it is
+# the resolution rule that half the faults in this repository hid behind, and it now has to be
+# obeyed one building at a time instead of all at once.
+#
+# The box is cut to the complex plus about a metre. It is mostly air — the buildings occupy
+# perhaps a fifth of it — and that is the price of an estate in one array, paid deliberately.
 metre 32
-bounds -17 -0.9 -16.5   17 20 8.5
+bounds -53 -2 -46   72.5 35.5 64.5
+
+# --- the site plan: where every building in the complex stands ----------------------------------
+#
+# North is +z, east is +x, the facility faces SOUTH, and its ground is y = 0. Every building on
+# this estate was authored as a standalone clip in ITS OWN coordinates with its own origin at a
+# sensible point of itself, because a tight box round a building at the origin is far cheaper than
+# the same building sixty metres away with sixty metres of empty array in front of it. Folding
+# them into one clip is therefore a TRANSLATION per fragment, and this table is the one place the
+# vectors are written down.
+#
+#     fragment        translate by            occupies (facility coordinates)
+#     part_theatre    -36,  0   , +8          x -52.2 .. -19.8   z  -8.2 .. 17.9
+#     part_grotto     -34,  0   , +22         x -45.0 .. -23.0   z  20.5 .. 34.5
+#     part_colonnade    0,  0   , -29         x -26.6 ..  26.6   z -45.7 ..-14.2
+#     part_fountain     0,  0   , +26.55      x -14.4 ..  14.4   z  16.2 .. 38.3
+#     part_pavilion     0, -0.90, +52         x -14.1 ..  14.1   z  40.2 .. 63.9
+#     part_campanile  +30,  0   , +14         x  24.5 ..  35.5   z   8.5 .. 19.5
+#     part_orangery   +42.30, +0.90, -5.25    x  12.6 ..  72.0   z -12.0 .. -0.2
+#
+# THREE OF THOSE ARE NOT WHAT THE BUILDING'S OWN HEADER SAYS, and each was moved for a collision
+# that only appears once they are in one frame:
+#
+#   the theatre  was (-30, 0, +16). 32.4 m wide, it reached x -13.8 and drove through the west
+#                wing, which runs out to x -16; and at z +16 it ran into the grotto. Now 2.8 m
+#                clear of the facility and 2.6 m clear of the grotto.
+#   the grotto   was (-34, 0, +20), moved 2 m north for the same collision, from the other side.
+#   the pavilion was (0, -0.90, +46). The fountain court reaches z 38.25 and the pavilion's basin
+#                began at 40.15 — clear, but only just, and two sheets of water 1.9 m apart on the
+#                same axis read as one pool. At +52 they are two.
+#
+# The dy on the pavilion is not a collision fix and must not be "tidied": its floor sits at y 0.90
+# in its own coordinates and has to land on the facility's ground at y 0.00, which sinks its basin
+# 0.90 into the garden. That is what a miroir d'eau is.
+#
+# A TRANSLATE MOVES THE STONE AND LEAVES THE PAINT BEHIND. Every fragment here is placed by a
+# transform, so every one of them must translate the shape named in each of its own
+# `paint ... where=` rules by the SAME vector, and raise `below=` to 0.035 per BRIEF.md rule 5.
+# The failure is silent — right geometry, wrong colours, no error, nothing in `components` — and
+# the long comment at `origin` in clips/facility.clip is the same fault found the expensive way.
 
 # --- the order, as dials -------------------------------------------------------------------
 #

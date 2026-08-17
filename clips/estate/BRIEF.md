@@ -5,29 +5,54 @@ grotto, a belvedere, a bell tower, a fountain court, a colonnade and a garden th
 century and a half between the Renaissance and the Rococo. Each is **its own clip in its own
 file**, and that is a decision with a reason, written down below so nobody undoes it.
 
-## Why these are separate clips and not more fragments of the facility
+## These were separate clips, and on 2026-08-17 they stopped being
 
-`clips/facility.clip` is one clip made of twenty-odd included fragments, and it can be, because
-they all stand inside one 34 × 21 × 25 m box. **A clip is a dense array over its bounds** — five
-bytes a cell in the game, and rather more in the measuring tool — so that box is already 582
-million cells and about 2.8 GB before a single voxel exists. `_contract.clip` says so at length
-and cuts the bounds to the building plus a metre for exactly that reason.
+**REVERSED BY THE OWNER, and the reasoning that is struck through below is kept because being
+wrong in an interesting way is the most useful thing a document here can record.** Every building
+in this folder is now ALSO a fragment of `clips/facility.clip`, standing at its place on the site
+plan, and the facility is the whole complex rather than the one neoclassical building. See D672.
 
-An estate is a hundred metres across. Put in one clip at the contract's metre 32 that is eleven
-billion cells, and there is no machine on which that is a scene. Measured rather than assumed:
-a 120 × 27 × 120 m box at **metre 8** — a quarter of the authored detail — samples to 199 M cells
-and peaks at **2.2 GB**, which is the whole budget spent on voxels four times too big.
-
-So the estate is a FAMILY of clips. Each building is authored at metre 32, full detail, in a box
-cut to itself, and each is opened on its own — from the game's library, or with
+The originals in this folder stay exactly as they are and still open on their own:
 
 ```
 build\bin\WorldShaper.exe --clip-file clips\estate\orangery.clip
 ```
 
-That is not a compromise on what the user asked for. It is the only shape in which "a full
-complex" is a thing anybody can load. The buildings share a module, a material list, a site plan
-and a north point, so they belong to one place whether or not they are ever in one array.
+That is deliberate. A standalone clip is a tight box round one building, which is the only way to
+measure that building at the metre 32 it is authored for — see "the cost", below. The fragment in
+`clips/facility/` is a converted COPY, not a move.
+
+### The argument this folder used to make, and the one thing it missed
+
+It said: `clips/facility.clip` is one clip of twenty-odd fragments, and it can be, because they
+all stand inside one 34 × 21 × 25 m box. **A clip is a dense array over its bounds** — five bytes
+a cell — so that box is already 582 million cells and about 2.8 GB before a voxel exists. An
+estate is a hundred metres across; at metre 32 that is eleven billion cells, and there is no
+machine on which that is a scene. Measured rather than assumed: 120 × 27 × 120 m at metre 8
+samples to 199 M cells and peaks at 2.2 GB, the whole budget spent on voxels four times too big.
+
+Every number there is correct. **What it missed is that the game never samples the whole clip at
+metre 32.** `--clip-coarse` defaults to 4, so the up-front build allocates the dense array at
+**metre 8** and scales 4× on paste; every node after that is sharpened individually, each one a
+`forge::sample` over its own small box. High detail is paid for per node, a few metres at a time,
+and only where somebody is looking. The dense array is only ever allocated at the coarse metre.
+
+So the complex — 125.5 × 37.5 × 110.5 m, 520,092 m³ — costs **1.33 GB at metre 8**, which is a
+scene, and it was measured: the enlarged box samples in 32 seconds with 96% of its cells settled
+in bulk, because empty air is exactly what a signed-distance descent is good at.
+
+### The cost, which is real and is not memory
+
+**Nothing can measure this clip whole at metre 32 any more.** Over the complex's bounds that is
+17 billion cells and 85 GB, and it will not run. So:
+
+- each building carries its own probe in `clips/facility/requests/<name>-probe.clip`, with its own
+  tight bounds around its own position, and **those probes are now the only way to check a part at
+  the resolution it is authored for**;
+- whole-clip checks run at **metre 8**;
+- and the rule "check at metre 32 before you finish" now has to be obeyed one building at a time
+  rather than all at once. It is not optional — half the faults in this repository were features
+  that existed at one resolution and not another.
 
 ## The shared contract
 
