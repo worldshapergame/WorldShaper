@@ -38,13 +38,24 @@
 // and the sharp, quantised term into the quad — is what lets a wall stay one quad and still get
 // darker as it goes into a room.
 //
-// # Resolution is chosen by a budget, not written down
+// # Resolution: the clip's own, and the budget is a backstop rather than a policy
 //
-// A clip says how finely it wants to be sampled and the answer is usually 32 voxels to the metre,
-// which for the facility is 582 million cells and minutes of sampling. So the baker halves the
-// authored resolution until the cell count fits a budget. That keeps a small clip at full detail,
-// keeps a building at a detail a phone can hold, and — the part that matters — needs no list of
-// per-clip resolutions that somebody has to remember to edit when a fragment grows.
+// A clip says how finely it wants to be sampled and the answer is 32 voxels to the metre — the
+// game's own, 3.125 cm. **That is what is baked.** The budget still exists and still halves, but it
+// is set high enough in CI that nothing reaches it, and `--part-metre` (which capped fragments at
+// 16) is gone from every call site.
+//
+// It was the other way round, and the owner's words settle it: *"most clips are 16/m level of
+// detail, all clips must be 32/m always"*. A fragment at 16 is not a cheaper view of the building,
+// it is a different building: at 16 a voxel is 6.25 cm and every one-voxel feature in the clips —
+// the glazing bars at 0.030, the flute floors, the 0.036 incised lettering in the crypt, the
+// 0.030 course joints — is under half a cell and simply not there. The parts most worth looking at
+// are the parts that vanish first.
+//
+// What that costs is real and is not hidden: the facility is 568 million cells at 32 and takes tens
+// of minutes rather than one. The shard clock is sized for it, the per-clip cache means only what
+// changed is re-sampled, and the early deploy publishes the site out of the previous bake so the
+// page is never waiting on it.
 
 #include <algorithm>
 #include <array>
@@ -352,6 +363,29 @@ public:
         return clip_.voxels[i];
     }
 
+    // A NEIGHBOUR ONLY HIDES A FACE IF YOU CANNOT SEE THROUGH IT.
+    //
+    // The test used to be `solid(neighbour)`, which is right for stone and wrong for everything the
+    // clips actually put glass in front of. A pane is solid, so the wall behind it had its face
+    // culled -- and the pane is then drawn transparent over nothing at all. Look through any window
+    // in the facility and the room behind it was missing its near surface: you saw the glass, and
+    // then the far wall through where the near one should have been.
+    //
+    // Two conditions hide a face, and they are different reasons:
+    //   the neighbour is OPAQUE          nothing behind it can be seen, so the face is wasted
+    //   the neighbour is the SAME record two voxels of one pane share a surface; a face between
+    //                                    them would be an internal sheet inside the glass, drawn
+    //                                    and blended for nothing, and visible as a bright seam
+    //                                    where two blended layers overlap
+    // Anything else keeps its face: opaque behind clear, and clear behind a *different* clear
+    // (a leaded light against a window pane is two surfaces and reads as two).
+    bool hidden_by(i32 x, i32 y, i32 z, u16 mine) {
+        if (!solid(x, y, z)) return false;
+        const u16 theirs = material_of(type_at(x, y, z));
+        if (theirs == mine) return true;
+        return palette_[theirs].opacity >= 255;
+    }
+
     // The palette, interned by what a material LOOKS like rather than by its type id. Two types
     // that differ only in their tags shade identically and there is no reason to send both.
     u16 material_of(ws::VoxelTypeId type) {
@@ -427,9 +461,10 @@ public:
                         cell[u] = i;
                         cell[v] = j;
                         if (!solid(cell[0], cell[1], cell[2])) continue;
+                        const u16 material = material_of(type_at(cell[0], cell[1], cell[2]));
                         i32 air[3]{cell[0], cell[1], cell[2]};
                         air[axis] += kFaceSign[face];
-                        if (solid(air[0], air[1], air[2])) continue;
+                        if (hidden_by(air[0], air[1], air[2], material)) continue;
 
                         u8 ao = 0;
                         for (i32 corner = 0; corner < 4; ++corner) {
@@ -439,7 +474,6 @@ public:
                                 ao | static_cast<u8>(corner_ao(cell[0], cell[1], cell[2], face, du, dv)
                                                      << (corner * 2)));
                         }
-                        const u16 material = material_of(type_at(cell[0], cell[1], cell[2]));
                         const usize at = static_cast<usize>(i) + static_cast<usize>(j) * static_cast<usize>(su);
                         // Bit 31 marks the cell as carrying a face at all, so that a legitimate
                         // material 0 with ambient occlusion 0 is not read as empty.
