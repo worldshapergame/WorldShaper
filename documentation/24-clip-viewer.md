@@ -1014,6 +1014,71 @@ Three things it got wrong first, all of them visible immediately and none of the
   everywhere, and a two-billion-metre impostor flattens the depth buffer for everything else on
   screen. There are sixty-five planes in the facility.
 
+// >>> fieldeval
+## 4c. Running the clip's own fields in the browser
+
+A shape has no material. Colour comes from a stack of paint rules, and a rule is a **field**, a range
+that field must fall in, and optionally a direction the surface must face. So the ◉ view can only
+stop being flat grey if something in the shader can answer *what is this field, here* at the point
+the ray hit. `web/js/features/field.js` is that: `float field_eval(uint node, vec3 p)`, the same
+function `src/forge/field.cpp`'s `eval` is, over the `FLDG` chunk.
+
+**Recursion is an explicit stack, and it is a transliteration of `Field::mirror_eval`** — the
+non-recursive twin already in `field.cpp`, written there precisely so the shader would be a
+transliteration of something already proved. One frame per node on the way down; a `step` counter
+over SAMPLE POINTS rather than over children, which is what lets `curvature` ask its child seven
+times, `occlusion` fourteen, `facing` six and `repeat` up to eight.
+
+The obvious alternative — evaluate the array forward into a scratch value per node, which the export
+order allows because a child index is always below its parent's — is not available here: that is one
+float per node of private memory, and `facility/terrace` is 4,829 nodes. The stack is bounded by the
+graph's **depth** instead, which for the same clip is 54.
+
+**The depth is compiled in**, taken from the graph the page loaded rather than guessed: `sampler` is
+depth 4 and gets a stack of 4. The ceiling is 64. Past it the walk is **refused** —
+`field_eval_ok` returns false, which a rule reads as no match — rather than truncated, because
+"I could not" and "the answer is nought" must never be the same reply.
+
+### It is checked numerically, because a screenshot cannot check noise
+
+A rule keyed on `above=0.55` paints somewhere else entirely if the hash, the octave seeds or the
+octave weights differ by anything, and the picture stays perfectly plausible. So every op is held
+against `Field::eval` over 1024 points in a clip-sized box and 1024 thirty metres out, with the
+node arguments narrowed to `f32` on both sides so the comparison measures the shader's arithmetic
+rather than the exporter's rounding. Worst absolute difference:
+
+| | near | at 30 m | cells crossed |
+|---|---|---|---|
+| `noise` | 2.6e-6 | 4.3e-5 | 0 |
+| `fbm` | 3.8e-6 | 4.9e-5 | 0 |
+| `ridged` | 1.6e-6 | 2.8e-5 | 0 |
+| `rasp` | 9.6e-6 | 1.4e-4 | 0 |
+| `cells` | 2.3e-7 | 3.4e-6 | 0 |
+| `cell_edge` | 2.5e-7 | 3.0e-6 | 0 |
+| every solid | 6.5e-7 | 8.3e-6 | — |
+
+Those are values in [-1, 1], and the column that matters is the last one: **not one sample of twelve
+thousand landed in a different noise cell.** A cell boundary crossed is not a nearer answer, it is a
+different number, and it is the only way this could have been wrong in a way that still looked right.
+
+**Everything with a sine in it is the driver's error, not the port's.** `rotate`, `around`, `twist`,
+`bend`, `sine` and `waves` differ by up to 1.9e-4 — and a control shader that computes `sin(x)` with
+no field in it at all is **1.894e-4** from the double-precision answer on the same renderer, which is
+the same number. GLSL ES 3.00 promises sin and cos only to 2^-11. Under a `rotate` at thirty metres
+that becomes a centimetre of position, which no paint rule can see and a march would.
+
+### What it costs, and the one shape of rule that is unaffordable
+
+One evaluation per fragment per rule, at the marched **hit point** — not per march step. Measured on
+the software rasteriser the check runs on, cost is linear in node visits at about **3 µs a visit**
+(one leaf 3.1 µs, an eight-node union 25 µs, a twenty-nine-deep chain 80 µs); real hardware is
+two orders faster, but the shape holds. So a rule keyed on a pattern or on a wall is nothing, and
+**a rule keyed on a whole building's solid is not affordable at any resolution** — 4,829 visits per
+fragment. `curvature`, `occlusion` and `facing` are ported and correct (worst 9.9e-6, 5.1e-8 and
+1.2e-5) but multiply their subtree by 7, 14 and 6, so a fragment with 22 rules reaching them is the
+case to watch.
+
+// <<< fieldeval
 ## 4b. A clip that has not changed is not baked again
 
 Every baked file carries, in two words of its header, the key of what produced it: the spliced
