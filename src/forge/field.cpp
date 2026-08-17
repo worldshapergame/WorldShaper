@@ -1808,6 +1808,48 @@ Field::Aabb overlapped(Field::Aabb a, Field::Aabb b) {
     return box;
 }
 
+// The room ONE scattered copy needs, before it is tiled: the child's own box widened for
+// everything its cell may draw at it.
+//
+// Written once because two readers want it and they want it for opposite reasons. `build_bounds`
+// asks so it can put a box round the whole bed; `metric_slack` asks so it can decide whether a
+// copy still fits inside its own cell, which is what makes a gravel bed settleable. Derived twice,
+// those two drift, and the way they drift is silent: a footprint that is right for the box and
+// wrong for the fit test promises the sampler an honest distance it is not getting.
+//
+// **The shrink is the one that looks harmless and is not.** A copy scaled about its own origin
+// moves TOWARD that origin, so a child modelled at arm's length — a pebble at x = 0.06, say —
+// sweeps out MORE room as it shrinks, not less: [0.06, 0.08] scaled by a half is [0.03, 0.04], and
+// the pair of them span [0.03, 0.08], which is wider than either. Taking the child's box as the
+// footprint was wrong in exactly that case and only in that case, which is why it is spelled out.
+Field::Aabb scatter_footprint(const f64* a, Field::Aabb child) {
+    if (child.infinite()) return child;
+    const f64 jitter = clamp(a[6], 0.0, 1.0);
+
+    // Every size a cell can draw, from the smallest to one, is covered by the union of the box and
+    // the box at the smallest.
+    const f64 smallest = std::max(1.0 - jitter, 1e-6);
+    child.low = {std::min(child.low.x, child.low.x * smallest),
+                 std::min(child.low.y, child.low.y * smallest),
+                 std::min(child.low.z, child.low.z * smallest)};
+    child.high = {std::max(child.high.x, child.high.x * smallest),
+                  std::max(child.high.y, child.high.y * smallest),
+                  std::max(child.high.z, child.high.z * smallest)};
+
+    // Spun through any angle it may be spun through, which is the circle its own corners reach.
+    if (a[7] != 0.0) {
+        const u32 spin = scatter_spin_axis(a);
+        u32 u = 0, v = 0;
+        other_axes(spin, u, v);
+        const f64 reach =
+            std::hypot(std::max(std::abs(axis_of(child.low, u)), std::abs(axis_of(child.high, u))),
+                       std::max(std::abs(axis_of(child.low, v)), std::abs(axis_of(child.high, v))));
+        child.low = with_axis(with_axis(child.low, u, -reach), v, -reach);
+        child.high = with_axis(with_axis(child.high, u, reach), v, reach);
+    }
+    return child;
+}
+
 }  // namespace
 
 Field::Aabb Field::bounds_of(u32 node) const {
@@ -2217,38 +2259,12 @@ void Field::build_bounds() {
 
             // The same, with the three things a cell draws allowed for in the order the copy is
             // built: scaled about its own origin, spun about its own axis, moved within its cell,
-            // and only then tiled.
-            //
-            // Each of the three is taken at its WORST rather than at the value any particular cell
-            // drew, because a box is a claim about every copy at once. Shrinking is the one that
-            // looks harmless and is not: a copy whose box does not straddle the origin moves
-            // TOWARD the origin as it shrinks, so a shape modelled at arm's length would walk out
-            // of a box built round its full-sized self.
+            // and only then tiled. The first two are `scatter_footprint`, which the settling test
+            // reads as well so the two cannot disagree about how much room a copy takes.
             case Op::Scatter: {
-                Aabb child = bounds_of(n.child[0]);
+                Aabb child = scatter_footprint(a, bounds_of(n.child[0]));
                 if (child.infinite()) { box = child; break; }
                 const f64 jitter = clamp(a[6], 0.0, 1.0);
-
-                const f64 smallest = std::max(1.0 - jitter, 1e-6);
-                child.low = {std::min(child.low.x, child.low.x * smallest),
-                             std::min(child.low.y, child.low.y * smallest),
-                             std::min(child.low.z, child.low.z * smallest)};
-                child.high = {std::max(child.high.x, child.high.x * smallest),
-                              std::max(child.high.y, child.high.y * smallest),
-                              std::max(child.high.z, child.high.z * smallest)};
-
-                if (a[7] != 0.0) {
-                    const u32 spin = scatter_spin_axis(a);
-                    u32 u = 0, v = 0;
-                    other_axes(spin, u, v);
-                    const f64 reach =
-                        std::hypot(std::max(std::abs(axis_of(child.low, u)),
-                                            std::abs(axis_of(child.high, u))),
-                                   std::max(std::abs(axis_of(child.low, v)),
-                                            std::abs(axis_of(child.high, v))));
-                    child.low = with_axis(with_axis(child.low, u, -reach), v, -reach);
-                    child.high = with_axis(with_axis(child.high, u, reach), v, reach);
-                }
 
                 bool unlimited = false;
                 for (u32 axis = 0; axis < 3; ++axis) {
@@ -2678,6 +2694,10 @@ void Field::union_children(u32 at, std::vector<Part>& out) const {
         // ends `difference { built ... }` reported ONE part, so the sampler charged every box in
         // the building the worst slack of anything in it, almost nothing settled, and a building
         // that had taken nine seconds took eight minutes.
+        // The chamfered three are deliberately absent, and it costs nothing worth having. A
+        // chamfer is a treatment of ONE seam between two adjacent shapes -- an arris, a stop, a
+        // drip -- so the thing it stands over is small, and leaving it whole charges a small box
+        // its own slack instead of two smaller ones. Nobody chamfers a manifest.
         const bool flatten = n.op == Op::Union || n.op == Op::SmoothUnion ||
                              n.op == Op::Difference || n.op == Op::SmoothDifference;
         if (!flatten) {
@@ -2892,24 +2912,29 @@ f64 Field::metric_slack(u32 at) const {
         case Op::Scatter: {
             const f64 base = metric_slack(n.child[0]);
             if (base >= kInfiniteSlack) return kInfiniteSlack;
-            Aabb child = bounds_of(n.child[0]);
+            const Aabb child = scatter_footprint(n.a, bounds_of(n.child[0]));
             const f64 jitter = clamp(n.a[6], 0.0, 1.0);
-            if (n.a[7] != 0.0 && !child.infinite()) {
-                const u32 spin = scatter_spin_axis(n.a);
-                u32 u = 0, v = 0;
-                other_axes(spin, u, v);
-                const f64 reach = std::hypot(
-                    std::max(std::abs(axis_of(child.low, u)), std::abs(axis_of(child.high, u))),
-                    std::max(std::abs(axis_of(child.low, v)), std::abs(axis_of(child.high, v))));
-                child.low = with_axis(with_axis(child.low, u, -reach), v, -reach);
-                child.high = with_axis(with_axis(child.high, u, reach), v, reach);
-            }
             for (u32 axis = 0; axis < 3; ++axis) {
                 const f64 period = n.a[axis];
                 if (period <= 0.0) continue;
                 if (child.infinite()) return kInfiniteSlack;
-                const f64 extent = axis_of(child.high, axis) - axis_of(child.low, axis);
-                if (extent + period * jitter > period) return kInfiniteSlack;
+                // INSIDE its own cell, and not merely narrower than one. `repeat` can get away
+                // with the weaker test because all of its copies sit the same way in their cells,
+                // so one that hangs over an edge hangs over every edge by the same amount and the
+                // leaning neighbour is still the nearest thing. A scatter's copies are placed
+                // INDEPENDENTLY, so one that hangs over can be beaten by a copy two cells away
+                // that jittered toward the point — and that is an over-statement, the direction
+                // that makes a sampler skip over matter that is there.
+                //
+                // Found by demanding the field be a distance: a bed of pebbles modelled 0.06 m
+                // off their own origin reported a slack of nought and then moved 0.0098 m over a
+                // step of 0.003. The remedy an author wants is the one they would have chosen
+                // anyway — model the thing on its own origin — so the message this sends is a
+                // refusal to promise rather than a different answer.
+                const f64 half = period * 0.5;
+                const f64 travel = period * jitter * 0.5;
+                if (axis_of(child.low, axis) - travel < -half) return kInfiniteSlack;
+                if (axis_of(child.high, axis) + travel > half) return kInfiniteSlack;
             }
             return base;
         }

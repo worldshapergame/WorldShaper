@@ -379,6 +379,10 @@ void grow_limb(Field& f, const BranchPlan& plan, Vec3 from, Vec3 dir, f64 length
     else if (plan.axis == 1) grow.y = 1.0;
     else grow.z = 1.0;
 
+    // Turns, like every angle an author writes in this language — `rotate`, `around`, `arc` and
+    // `revolve` all take them, so `spread=` does too and nobody has to remember a second unit.
+    constexpr f64 kTurn = 6.283185307179586;
+
     const Vec3 tip = from + dir * length;
     for (u32 c = 0; c < plan.count; ++c) {
         const u32 kid = id * 7919u + c + 1u;
@@ -386,9 +390,8 @@ void grow_limb(Field& f, const BranchPlan& plan, Vec3 from, Vec3 dir, f64 length
         // bearing and the whole fork never looks turned from a template.
         const f64 spacing = 1.0 / static_cast<f64>(plan.count);
         const f64 azimuth =
-            (static_cast<f64>(c) * spacing + branch_unit(kid, 1u) * spacing) * 2.0 * 3.14159265358979323846;
-        const f64 angle = plan.spread * 2.0 * 3.14159265358979323846 *
-                          (0.6 + 0.8 * branch_unit(kid, 2u));
+            (static_cast<f64>(c) + branch_unit(kid, 1u)) * spacing * kTurn;
+        const f64 angle = plan.spread * kTurn * (0.6 + 0.8 * branch_unit(kid, 2u));
         Vec3 out_dir = dir * std::cos(angle) +
                        (side * std::cos(azimuth) + other * std::sin(azimuth)) * std::sin(angle);
         // ...and then pulled back toward the growth axis. This one line is the difference between
@@ -856,6 +859,11 @@ bool Parser::call(u32& out) {
         // `smooth` unread, and the next pass took it for a statement — so the error arrived under
         // the word `smooth`, on a later line, saying "unknown statement". Two clips carry a comment
         // explaining the workaround and one of them explains it twice.
+        //
+        // The one form this could take a key AWAY from is a braceless one-child op wrapping a
+        // combining call — `shell union { a b } thickness=0.1`, where the `thickness` now belongs
+        // to the union rather than to the shell. Nothing in `clips/` is written that way and the
+        // control arm says so; the cure if it ever is, is the brace the rest of the file uses.
         keys_into(keys);
         const f64 smooth = keys.number("smooth", 0.0);
         // `chamfer=` is the flat seam to `smooth=`'s round one, and it is what a mason cuts: the

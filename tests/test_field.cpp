@@ -1785,3 +1785,53 @@ TEST_CASE("a stretched grain still says how far it can swing, so a displacement 
     REQUIRE(!box.infinite());
     CHECK(box.high.x == doctest::Approx(0.22));
 }
+
+TEST_CASE("a copy that hangs out of its own cell is refused a promise, however wide the cell") {
+    // Two holes, both found by demanding that a field with a slack of nought really is a distance.
+    //
+    // The first was in `metric_slack` and not in the box, which is why it would have been
+    // invisible: the bed looked right and sampled right, and the sampler was being told it could
+    // settle a whole block from one reading when it could not. A copy is scaled about its OWN
+    // origin, so a child modelled away from that origin walks toward it as it shrinks. The pebble
+    // below is a 0.04 m ball centred on x = 0.06, so its box spans [0.04, 0.08]; at half size it
+    // spans [0.02, 0.04], and the two together span [0.02, 0.08] — 0.06 m of room for a 0.04 m
+    // stone. That is `scatter_footprint`, written once and read by the box and by this.
+    //
+    // The second was the test itself. "Narrower than a cell" is what `repeat` asks and it is not
+    // enough here: `repeat`'s copies all sit the same way in their cells, a scatter's are placed
+    // independently, and an independently placed copy that hangs over its own cell edge can be
+    // beaten by one two cells away that jittered toward the point. Widening the cell does not fix
+    // it, which is the surprising part and the reason this test widens the cell and still expects
+    // a refusal: 0.06 m of stone with 0.075 m of travel reaches 0.1175 m out of a cell that only
+    // owns 0.075 m of it. Measured before the fix, that bed moved 0.0098 m over a step of 0.003.
+    Field crowded;
+    const u32 offset_pebble = crowded.sphere({0.06, 0, 0}, 0.02);
+    const u32 tight = crowded.scatter(offset_pebble, {0.09, 0, 0.09}, {4, 0, 4}, 0.5, 0.0);
+    crowded.build_bounds();
+    CHECK(crowded.metric_slack(tight) >= Field::kInfiniteSlack);
+
+    Field wider;
+    const u32 same_pebble = wider.sphere({0.06, 0, 0}, 0.02);
+    const u32 loose = wider.scatter(same_pebble, {0.15, 0, 0.15}, {4, 0, 4}, 0.5, 0.0);
+    wider.build_bounds();
+    CHECK(wider.metric_slack(loose) >= Field::kInfiniteSlack);
+
+    // The same stone modelled where it belongs — on its own origin — fits, and the field there
+    // really is a distance, which is what the slack of nought promises.
+    Field centred;
+    const u32 on_origin = centred.sphere({0, 0, 0}, 0.02);
+    const u32 bed = centred.scatter(on_origin, {0.15, 0, 0.15}, {4, 0, 4}, 0.5, 0.5);
+    centred.build_bounds();
+    CHECK(centred.metric_slack(bed) == doctest::Approx(0.0));
+
+    const f64 step = 0.003;
+    f64 worst = 0.0;
+    for (int i = -160; i <= 160; ++i) {
+        for (int k = -20; k <= 20; ++k) {
+            const Vec3 p{i * step, 0.0, k * step * 4.0};
+            const Vec3 q{p.x + step, p.y, p.z};
+            worst = std::max(worst, std::abs(centred.eval(bed, q) - centred.eval(bed, p)));
+        }
+    }
+    CHECK(worst <= step + 1e-9);
+}

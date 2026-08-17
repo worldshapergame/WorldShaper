@@ -216,9 +216,17 @@ enum class Op : u8 {
     // The scaling is exact — a uniform scale multiplies the distance back by the same factor — and
     // the fold consults the leaning neighbours exactly as `repeat` does, so the answer is the true
     // distance to the nearest copy and not to the copy in this cell. That is what lets a bed of
-    // gravel settle boxes rather than be asked about voxel by voxel, and it holds only while a
-    // copy fits inside its own cell; `metric_slack` checks that, jitter and spin included, and
-    // refuses when it does not.
+    // gravel settle boxes rather than be asked about voxel by voxel.
+    //
+    // It holds only while a copy lies INSIDE its own cell, and that is a stricter demand than the
+    // one `repeat` makes. `repeat` needs only "narrower than a cell", because all its copies sit
+    // the same way in theirs and one that hangs over an edge hangs over every edge equally.
+    // A scatter's copies are placed independently, so one that hangs over can be beaten by a copy
+    // two cells away that jittered toward the point — which OVER-states the distance, and an
+    // over-stated distance is a sampler stepping through matter that is there. So `metric_slack`
+    // checks the position and not just the width, shrink and spin and jitter included, and refuses
+    // to promise anything when a copy does not fit. **Model the thing on its own origin** and it
+    // always does; a pebble modelled 0.06 m off to one side is what found this.
     //
     // Cost is `repeat`'s — one to eight evaluations of the child — plus three hashes and, when
     // `turn` is not zero, one sine and one cosine.
@@ -270,8 +278,8 @@ enum class Op : u8 {
     Cells,         // distance to the nearest of a scattered set of points: size a[0], seed a[1],
                    // stretch a[2..4]
     CellEdge,      // how near the boundary *between* two cells: size a[0], seed a[1], stretch
-                   // a[2..4]. This is
-                   // what a crack is — cells are not the pattern, the seams between them are
+                   // a[2..4]. This is what a crack is — cells are not the pattern, the seams
+                   // between them are
 
     // --- what the shape is doing here, rather than what is here -------------------------
     //
