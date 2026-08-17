@@ -133,6 +133,11 @@ import { PROBE_GLSL, Probes } from './features/probes.js';
 // as the sun's, and a deferred pass would need a G-buffer this viewer does not have.
 import { LightSet, LAMP_UNIFORMS, LAMP_SHADING } from './features/lights.js';
 // <<< lights
+// >>> matvol
+// The material volume and the thickness field. The GLSL is pasted into whichever shaders want it
+// and the class owns the three textures; see web/js/features/matvol.js for the signatures.
+import { MATVOL_GLSL, Matvol } from './features/matvol.js';
+// <<< matvol
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -525,6 +530,10 @@ uniform sampler3D u_light;
 uniform vec3 u_lightOrigin;
 uniform vec3 u_lightScale;
 uniform vec3 u_lightTexel;
+// >>> matvol
+uniform sampler2D u_materials;
+${MATVOL_GLSL}
+// <<< matvol
 out vec4 o_colour;
 
 vec3 tonemap(vec3 c) { return (c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14); }
@@ -562,11 +571,35 @@ void main() {
     // and the cross-section disappears into the background. A quarter is enough to read the shape
     // by and low enough that a cap in a sunlit wall is still obviously brighter than one four
     // metres inside the building.
+    // >>> matvol
+    // WHAT THE STONE AT THIS POINT ACTUALLY IS.
+    //
+    // This was one colour for the whole clip -- u_capColour, the commonest opaque material by
+    // area -- because the file had no material volume and there was nothing to ask. There is one
+    // now, so a cut through the rotunda's floor comes out porphyry where the bands are, lapis in
+    // the ring and verde in the outer field, instead of the building's limestone everywhere.
+    // (No back-quotes anywhere in here: this is inside a template string.)
+    //
+    // Half a CELL back from the plane rather than on it: the cut face did not exist until the
+    // slider made it, the point exactly on it is on the boundary between the cell that was kept
+    // and the cell that was thrown away, and floor() there answers whichever way the arithmetic
+    // falls. The plane itself is tried second, for a sheet thinner than a cell where stepping back
+    // walks straight out of it, and the clip's commonest stone is still the answer when both miss.
+    vec3 albedo = u_capColour;
+    int material = ws_material_at(v_world - u_capNormal * 0.5 / u_matvolCells);
+    if (material < 0) material = ws_material_at(v_world);
+    if (material >= 0) {
+        int row = material * 4;
+        vec4 base = texelFetch(u_materials, ivec2(row & 255, row >> 8), 0);
+        albedo = base.rgb * base.rgb;   // sRGB in the file, linear here, like every other colour
+    }
+    // <<< matvol
+
     vec3 N = u_capNormal;
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) *
                    max(visible.g, 0.25);
     float ndl = max(dot(N, u_sun), 0.0);
-    vec3 colour = u_capColour * (ambient + u_sunColour * ndl * visible.r);
+    vec3 colour = albedo * (ambient + u_sunColour * ndl * visible.r);
     // The lattice darkens rather than lightens: a joint between two voxels is a place light does
     // not reach, which is the same reason every other seam in this viewer is dark.
     colour *= mix(1.0, 0.72, line);
@@ -1006,6 +1039,10 @@ export class Renderer {
         // it is where to look when a room is lit wrongly.
         this.lights = new LightSet(gl);
         // <<< lights
+        // >>> matvol
+        this.matvol = new Matvol(gl);
+        this.matvol.uploadEmpty();
+        // <<< matvol
         this.clip = null;
 
         this.viewProj = new Float32Array(16);
@@ -1199,6 +1236,13 @@ export class Renderer {
         // >>> probes
         this.probes.set(clip);
         // <<< probes
+        // >>> matvol
+        // What the matter inside the clip is, and how thick it is. Straight from the file to three
+        // textures -- see web/js/features/matvol.js. A clip baked before this existed has no MVOL
+        // chunk and gets an empty volume, which answers "no matter" everywhere and leaves the cap
+        // on its one colour.
+        this.matvol.upload(clip);
+        // <<< matvol
     }
 
     attributesAt(byteOffset) {
@@ -1530,6 +1574,14 @@ export class Renderer {
             gl.activeTexture(gl.TEXTURE1);
             gl.bindTexture(gl.TEXTURE_3D, this.light);
             gl.uniform1i(u.u_light, 1);
+            // >>> matvol
+            // The material table, so the cap can paint the stone the volume names, and the volume
+            // itself on units 2, 3 and 4.
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.materials);
+            gl.uniform1i(u.u_materials, 0);
+            this.matvol.bind(u, UNIT.matvol);
+            // <<< matvol
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             gl.disable(gl.STENCIL_TEST);
             this.stats.draws += 1;

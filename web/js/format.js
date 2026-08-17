@@ -44,7 +44,8 @@ export function parseClip(buffer) {
     const version = view.getUint32(4, true);
     // Version 1 packed the header into exactly 192 bytes with nothing spare, so version 2 — which
     // adds the cutter pool that makes the shapes view show holes rather than red ghosts — moved
-    // every block offset. There is no reading one as the other, and a stale file in a cache beside
+    // every block offset. Version 3 spends the last spare word on a chunk directory so that never
+    // has to happen again. There is no reading one as the other, and a stale file in a cache beside
     // a fresh viewer is a real state: it says so here rather than drawing nonsense.
     if (version !== FORMAT_VERSION) {
         throw new Error('clip file version ' + version + ', this viewer reads ' + FORMAT_VERSION +

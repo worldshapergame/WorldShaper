@@ -72,6 +72,11 @@
 // >>> probes
 #include "bake/probes.hpp"
 // <<< probes
+// >>> matvol
+// The material volume and the thickness field. Header-only, and it lives beside this file rather
+// than in src/ because it is the viewer's format and nothing the game builds knows about it.
+#include "bake/matvol.hpp"
+// <<< matvol
 #include "core/jobs.hpp"
 #include "core/log.hpp"
 #include "core/time.hpp"
@@ -751,6 +756,7 @@ constexpr usize kShapeBytes = 120;
 // floats carry meaning and two are padding, because a texel is four.
 constexpr usize kCutterFloats = 24;
 constexpr usize kCutterBytes = kCutterFloats * sizeof(f32);
+
 
 void append_quads(std::vector<u8>& out, const std::vector<Quad>& quads) {
     for (const Quad& q : quads) {
@@ -1701,6 +1707,32 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         }
     }
 
+    // >>> matvol
+    // What the stone inside a wall is made of, and how far a ray travels through it.
+    //
+    // On the collision grid's own cells, so the viewer already has the pitch; built HERE, before
+    // the header is written, because asking for a voxel's material interns it and a stone that
+    // only ever exists inside a wall has no palette index until this asks for one. Building it
+    // after `put_u32(out, 48, palette.size())` would write a material count the material block
+    // then disagrees with. See tools/bake/matvol.hpp.
+    const u64 matvol_began = ws::now_ns();
+    const ws::bake::matvol::Volume volume = ws::bake::matvol::build(
+        clip.size, metre, collision.voxels_per_metre, mesher.palette(),
+        [&mesher](i32 x, i32 y, i32 z) { return mesher.solid(x, y, z); },
+        [&mesher](i32 x, i32 y, i32 z) {
+            const ws::VoxelTypeId type = mesher.type_at(x, y, z);
+            if (type == ws::kAir) return -1;
+            return static_cast<i32>(mesher.material_of(type));
+        });
+    const f64 matvol_seconds = static_cast<f64>(ws::now_ns() - matvol_began) / 1e9;
+    if (volume.dropped_materials > 0) {
+        WS_LOG_WARN("bake_web", "{}: {} materials past the material volume's {}, {} cells painted "
+                                "as the nearest kept stone",
+                    relative.generic_string(), volume.dropped_materials,
+                    ws::bake::matvol::kMaxPalette, volume.remapped_cells);
+    }
+    // <<< matvol
+
     const f64 origin[3] = {settings.low.x, settings.low.y, settings.low.z};
     const f64 size_metres[3] = {static_cast<f64>(clip.size[0]) / static_cast<f64>(metre),
                                 static_cast<f64>(clip.size[1]) / static_cast<f64>(metre),
@@ -2063,6 +2095,19 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         // sun and sky exactly as it did.
         if (!lights.lights.empty()) chunks.push_back(make_chunk("LGTS", ws::web::write_lights(lights)));
     // <<< lights
+    // >>> matvol
+        // `MVOL` is what the matter INSIDE the clip is -- a paged material volume with a block
+        // index -- and `THCK` is how thick it is, which is the second channel of MVOL's own pages
+        // and is meaningless without it. The two go together or neither goes.
+        {
+            std::vector<u8> material_bytes = ws::bake::matvol::material_chunk(volume);
+            if (!material_bytes.empty()) {
+                chunks.push_back(make_chunk("MVOL", std::move(material_bytes)));
+                chunks.push_back(make_chunk("THCK",
+                                            ws::bake::matvol::thickness_chunk(volume)));
+            }
+        }
+    // <<< matvol
     // >>> paintexport
         append_chunks(out, chunks);
     }
@@ -2151,6 +2196,31 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         }
     }
     // <<< lights
+    // >>> matvol
+    // The volume's real size against its dense size, per clip, every bake. This is the number the
+    // decision to ship it rests on and it is not an estimate: a dense byte-pair per occupancy cell
+    // is what the brief asked for and what the facility cannot afford, and the ratio here is what
+    // says the block index earns its complexity.
+    if (!volume.empty()) {
+        std::printf("      matvol: %d x %d x %d cells  %zu materials  %zu solid  "
+                    "%zu uniform + %zu paged blocks  %.2f MB packed vs %.2f MB dense (%.1f%%)  "
+                    "%.1f s\n",
+                    volume.dims[0], volume.dims[1], volume.dims[2], volume.palette.size(),
+                    volume.solid_cells, volume.uniform_blocks, volume.page_blocks,
+                    static_cast<f64>(volume.packed_bytes()) / (1024.0 * 1024.0),
+                    static_cast<f64>(volume.dense_bytes()) / (1024.0 * 1024.0),
+                    volume.dense_bytes() > 0 ? 100.0 * static_cast<f64>(volume.packed_bytes()) /
+                                                   static_cast<f64>(volume.dense_bytes())
+                                             : 0.0,
+                    matvol_seconds);
+        if (volume.dropped_materials > 0 || volume.clamped_cells > 0) {
+            std::printf("      matvol: %zu materials dropped past %zu (%zu cells remapped)  "
+                        "%zu cells thicker than 255 voxels, held there\n",
+                        volume.dropped_materials, ws::bake::matvol::kMaxPalette,
+                        volume.remapped_cells, volume.clamped_cells);
+        }
+    }
+    // <<< matvol
     // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
     // "it worked", which is the whole reason these are counted at all.
     if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||
