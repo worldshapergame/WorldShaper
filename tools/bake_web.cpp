@@ -60,6 +60,9 @@
 #include <unordered_map>
 #include <vector>
 
+// >>> gi
+#include "bake/irradiance.hpp"
+// <<< gi
 // >>> paintexport
 #include "bake/paint.hpp"
 // <<< paintexport
@@ -1678,6 +1681,30 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                                 static_cast<f64>(clip.size[2]) / static_cast<f64>(metre)};
     const LightGrid light = bake_light(coarse, origin, size_metres, jobs);
 
+    // >>> gi
+    // ...and the light that has BOUNCED, with the colour it bounced off. The grid above is a
+    // visibility term and cannot carry colour; this one is six RGB values a point at half its
+    // pitch, gathered against the same coarse copy of the clip, iterated twice so a wall lit by a
+    // floor lit by the sun is lit. tools/bake/irradiance.hpp is the whole of it.
+    ws::bakeweb::IrradianceSettings gi_settings;
+    for (i32 axis = 0; axis < 3; ++axis) {
+        gi_settings.origin[axis] = origin[axis];
+        gi_settings.size_metres[axis] = size_metres[axis];
+    }
+    {
+        const f64 length = std::sqrt(kSunDir[0] * kSunDir[0] + kSunDir[1] * kSunDir[1] +
+                                     kSunDir[2] * kSunDir[2]);
+        for (i32 axis = 0; axis < 3; ++axis) gi_settings.sun[axis] = kSunDir[axis] / length;
+    }
+    gi_settings.cell = light.cell * 2.0;
+    ws::bakeweb::IrradianceStats gi_stats;
+    const u64 gi_began = ws::now_ns();
+    const ws::bakeweb::IrradianceVolume gi = ws::bakeweb::bake_irradiance(
+        clip, types, coarse, light.texels, light.dims, light.cell, metre, gi_settings, jobs,
+        &gi_stats);
+    gi_stats.seconds = static_cast<f64>(ws::now_ns() - gi_began) / 1e9;
+    // <<< gi
+
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
     walk.field = &script.field;
@@ -1850,7 +1877,10 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     // that reads it, or one of the two is wrong and says so.
     put_u32(out, 192, static_cast<u32>(walk.cutter_count()));
     // 196 is filled in below, once the blocks in front of it have been appended.
-    // 200..207 is spare.
+    // >>> gi
+    // 200..207 is the chunk directory, and it is filled in below for the same reason 196 is: it
+    // points past every block in front of it. See `chunks`, at the end of this function.
+    // <<< gi
 
     for (const ws::VisualRecord& record : mesher.palette()) {
         const u8* bytes = reinterpret_cast<const u8*>(&record);
@@ -1896,12 +1926,19 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     }
 
     // >>> paintexport
-    // The named blocks, after everything at a fixed offset. Two of them today; anything added later
-    // is a third entry and moves none of this.
+    // The named blocks, after everything at a fixed offset. Anything added later is one more
+    // entry in this vector and moves none of the file in front of it.
     {
         std::vector<Chunk> chunks;
         chunks.push_back(make_chunk("FLDG", ws::bake::field_chunk(painted)));
         chunks.push_back(make_chunk("PANT", ws::bake::paint_chunk(painted)));
+    // <<< paintexport
+    // >>> gi
+        // The colour bounce, one RGB per lattice point. Absent on a clip that has no bounce to
+        // carry, and a reader that asks for `GIRR` and gets null simply does without it.
+        if (!gi.empty()) chunks.push_back(make_chunk("GIRR", gi.chunk()));
+    // <<< gi
+    // >>> paintexport
         append_chunks(out, chunks);
     }
     // <<< paintexport
@@ -1970,6 +2007,15 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
                 static_cast<f64>(painted.field_bytes()) / 1024.0,
                 static_cast<f64>(painted.paint_bytes()) / 1024.0);
     // <<< paintexport
+    // >>> gi
+    // What the indirect volume cost, every time, so a lattice that has quietly grown to megabytes
+    // is a number somebody reads rather than a file that got bigger.
+    std::printf("      indirect: %d x %d x %d at %.2f m  %zu of %zu points lit  %zu surfaces "
+                "(%zu emitting)  %.0f KB  %.1f s\n",
+                gi.dims[0], gi.dims[1], gi.dims[2], static_cast<f64>(gi.cell), gi_stats.lit_points,
+                gi_stats.points, gi_stats.surface_cells, gi_stats.emissive_cells,
+                static_cast<f64>(gi_stats.bytes) / 1024.0, gi_stats.seconds);
+    // <<< gi
     if (options.verbose) {
         std::printf("      box  %.2f %.2f %.2f  ..  %.2f %.2f %.2f      matter  %.2f %.2f %.2f  "
                     ".. %.2f %.2f %.2f\n",

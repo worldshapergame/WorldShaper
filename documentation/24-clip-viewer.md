@@ -53,6 +53,18 @@ of §4a moved every block offset; there is no reading one as the other. `reuse` 
 a version 1 file and rebakes it, and `parseClip` throws on one rather than drawing a wrong picture —
 a cached `web/data` from before the change is a real state and it has to say so.
 
+<!-- >>> gi -->
+**The version is 3, and the last eight bytes of the header are now a chunk directory.** Everything
+in front of byte 200 is exactly what version 2 held; 200 is `chunkOffset` and 204 is `chunkCount`,
+and a chunk is sixteen bytes of table — a four-character tag, an offset, a size and a spare word —
+pointing at a block appended after every block the fixed layout knows about. That exists because
+the viewer is being extended by many hands at once and the alternative is everybody needing the
+same spare word: a new baked block now costs a tag and no offset in front of it moves. A reader
+that does not know a tag skips it, and `clip.chunk('GIRR')` in `web/js/format.js` hands back a view
+of one without decoding anything — whoever bakes a chunk owns reading it.
+<!-- <<< gi -->
+
+
 **Materials.** Every `VisualRecord` used, verbatim, sixteen bytes each. Colour, opacity,
 roughness, metallic, index of refraction, emission and its tint, Beer-Lambert absorption,
 translucency, the brush-grain flags, clearcoat and sheen. Nothing is quantised on the way out —
@@ -68,6 +80,12 @@ the viewer draws six ranges and sorts nothing. The whole facility at 16 voxels t
 **A light grid.** A lattice of points 0.4 m apart, each holding how much of the sun and how much of
 the sky reaches it, ray cast in the baker against a coarse copy of the clip. In the browser it is
 one `RG8` volume texture and one trilinear fetch.
+
+<!-- >>> gi -->
+**An irradiance volume**, the `GIRR` chunk: a second lattice at 0.8 m holding the light that has
+**bounced**, with the colour it bounced off — six RGB values a point, one per world axis. It is
+what makes a white vault go warm over a porphyry floor, and it is the section below.
+<!-- <<< gi -->
 
 **Occupancy.** One bit per 12.5 cm cell. It is what the walker collides with, and it is why you
 cannot walk through a wall.
@@ -88,6 +106,59 @@ trilinear fetch near a wall blends the air in front with the stone behind. So bu
 filled in from their brightest neighbour, twice, at **half** strength each time. It was three
 quarters first, and every soffit in the halls had a pale band across it where the sky above the
 roof reached through 0.45 m of masonry.
+
+<!-- >>> gi -->
+### The bounce is a second lattice, in colour, and it is an ambient cube
+
+The grid above is a **visibility** term. Two bytes cannot carry a colour, so until this existed
+nothing in the viewer bounced light off a red floor onto a white vault — which is the single most
+visible thing a path tracer does, and the thing `clips/facility/rotunda.clip` was built to put
+under load ("if the vault comes back neutral white, the bounce is carrying luminance and not
+spectrum"). So there is a second lattice, the `GIRR` chunk, holding **indirect radiance with its
+colour**. The sun's direct term and the sky have not moved: they are still the two visibility
+bytes, and this holds only light that has bounced, so nothing is counted twice — a gather ray that
+reaches the sky contributes **nothing** here, because the sky's own arrival is already the sky byte.
+
+**Six RGB values a point, one per world axis — the Half-Life 2 ambient cube — and here it is exact
+rather than approximate.** Every surface this rasteriser draws is a merged voxel face, and a voxel
+face's normal is one of ±X ±Y ±Z: it is `u_normal`, a *uniform*, set once per draw call. So the
+face of the cube a fragment wants is known before any fragment runs, and the whole basis costs one
+bound 3D texture per face pass and one trilinear fetch. Second-order spherical harmonics would be
+nine RGB rather than six, would need reconstructing per fragment, and would ring — dark haloes on
+exactly the surfaces this exists for. What a cube cannot do is hold a sharp directional lobe; that
+is the right thing to give up for a term that is low-frequency by construction.
+
+**Two bounces, by iterating one gather.** Every surface cell of a coarse copy of the clip takes its
+direct light out of the grid already cast and radiates `albedo × E + emission`; every lattice point
+gathers that over 64 Fibonacci directions with a 3D-DDA march; every surface then re-reads the
+result along its own normal and radiates again; and the second gather is what is written. So a wall
+lit by a floor lit by the sun is lit. **Emissive voxels are sources in the first pass** at the same
+6× scale `web/js/gl.js` draws them at, so a sconce lights the wall behind it by the amount it is
+seen to glow — which matters because the facility's halls are lit by nothing else.
+
+The march is a DDA and not the visibility rays' fixed half-cell step, and the difference is not
+speed: a fixed step crossing a cell corner diagonally walks through a one-cell wall, which costs a
+visibility term one part in thirty-two of a sky fraction and costs this one a room the colour of
+the room next door.
+
+**Storage decided it, and the lattice is half the light grid's — 0.8 m.** Eighteen bytes a point
+against the light grid's two is only affordable at an eighth of the points. Measured: the rotunda's
+light lattice is 34 × 32 × 34 = 36,992 points, so a full-resolution ambient cube would be **666 KB
+against a whole baked clip of 1.1 MB**. At 0.8 m it is 18 × 17 × 18 = 5,508 points and **97 KB, an
+8.5% bigger file**; `facility/vestibule` pays 17 KB and `sampler` 25 KB. Indirect light does not
+miss the resolution. Values are `L = (v/255)² × 4.0` — a square because it is one multiply on a
+phone, a curve rather than a linear ramp because a linear 8-bit encoding of 0..4 steps by 0.0157,
+which is a third of the whole indirect term in a dark interior and bands visibly across a vault.
+
+Buried points are filled from their brightest neighbour at **half** strength, twice, exactly as the
+visibility grid is and for the same reason. `tools/bake/irradiance.hpp` is the bake and
+`web/js/features/gi.js` is the browser's half.
+
+**The one thing it knowingly over-counts.** The fragment shader still adds its flat `ambient` term,
+which was the crude stand-in for indirect light before this existed, so an interior is now lit by
+both. Removing it is a change to the look of every clip and belongs in its own pass, not in the one
+that adds the volume. Measured on `facility/rotunda` cut in half, the interior lifts by about 45 of
+255 and the sky is byte-identical.
 
 ### Resolution is a budget, not a list
 
