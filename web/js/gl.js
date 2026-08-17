@@ -127,6 +127,7 @@ export const UNIT = {
     shapeMaterials: 2,
     shapeRules: 3,
     shapePaintMaterials: 4,
+    shapeField: 5,      // usampler2D, the FLDG graph the paint stack's tests are walked from
 };
 // <<< units
 // >>> probes
@@ -181,6 +182,32 @@ import {
 // that same sky prefiltered by the lobe reading it. THE TWO HAVE TO MOVE TOGETHER.
 import { BRDF_GLSL } from './features/brdf.js';
 // <<< brdf
+// >>> paintstack
+// A shape has no material — colour is the clip's own stack of paint rules evaluated at a point, so
+// the shapes view asks for it at the point the ray hit. See web/js/features/paint.js.
+import {
+    PAINT_GLSL, FIELD_EVAL_STUB_GLSL, paintFromClip, paintMode, uploadRules,
+} from './features/paint.js';
+// The evaluator the stack calls. It lives in its own module; while that module is not here, the
+// stub in paint.js stands in for it and the page says so in the console rather than drawing a
+// picture that claims to be the clip's own field.
+let FIELD_GLSL = FIELD_EVAL_STUB_GLSL;
+// The graph texture that GLSL reads, through the same caught import. A `usampler2D` with nothing
+// on its unit is not an unused uniform, so there is a 1x1 empty graph when there is no module and
+// when there is no chunk.
+let FieldTexture = null;
+let parseFieldGraph = null;
+try {
+    const field = await import('./features/field.js');
+    if (field && typeof field.fieldGlsl === 'function') FIELD_GLSL = field.fieldGlsl();
+    FieldTexture = field.FieldTexture;
+    parseFieldGraph = field.parseFieldGraph;
+} catch (error) {
+    console.warn('paint: no features/field.js — the shapes view is using a STUB field, so its ' +
+                 'colours are the clip\'s own materials in the clip\'s own order but not in the ' +
+                 'clip\'s own places');
+}
+// <<< paintstack
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -726,6 +753,9 @@ uniform vec4 u_clip;
 uniform mat4 u_viewProj;
 uniform highp sampler2D u_cutters;   // six RGBA32F texels a cutter, texelFetch only
 uniform int u_cutterWidth;           // texels across, so an index becomes a row and a column
+// >>> paintstack
+uniform sampler2D u_shapeMaterials;  // the clip's own palette, four RGBA8 texels each
+// <<< paintstack
 
 out vec4 o_colour;
 
@@ -824,6 +854,29 @@ vec3 tonemap(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
+// >>> paintstack
+// The field evaluator, then the paint stack that calls it. The stack needs two functions and does
+// not care which file wrote them: float field_eval(uint, vec3), and
+// bool field_eval_ok(uint, vec3, out float) where false means the evaluator refused -- it ran out
+// of depth at 64 -- and the stack reads that as "no match" and goes on to the rule underneath.
+//
+// FIELD_GLSL is features/field.js's own fieldGlsl() when that module is present, and paint.js's
+// stub -- deterministic noise, and NOT the clip's field -- when it is not. Nothing else in this
+// shader changes between the two. (No back-quotes in here: this is inside a template string, and
+// putting three of them in this very comment is what broke it the first time.)
+` + FIELD_GLSL + PAINT_GLSL + `
+// <<< paintstack
+// >>> paintstack
+// The clip's palette, so a material index becomes a colour. It is the material's base colour only
+// — roughness, metallic and the rest are the shading agent's, and this is the smallest thing that
+// makes the stack's answer visible.
+vec3 shape_albedo(int material) {
+    if (material < 0) return vec3(0.62, 0.60, 0.56);   // no paint in this clip: the old flat grey
+    int at = material * 4;
+    vec4 row = texelFetch(u_shapeMaterials, ivec2(at & 255, at >> 8), 0);
+    return pow(row.rgb, vec3(2.2));   // sRGB in the file, linear in the shader, like everything here
+}
+// <<< paintstack
 
 // >>> shapeshade
 // The material record at a hit point, the light grid read at it, and the surface shader's own
@@ -882,7 +935,21 @@ void main() {
     // hit point now asks the paint stack which material it is and is shaded with that record, by
     // the surface shader's own lighting, out of the same light grid: switching between ◉ and the
     // voxel view changes the resolution and nothing else.
+    // Which material that is comes from the paint stack, through material_at -- the seam
+    // shapeshade.js was written around, wired at the merge and nowhere else. This line is the
+    // whole of "the raw view shows the colours the clip will have in game" rather than a hash.
     vec3 colour = ws_shade_hit(at, N, V);
+    // >>> paintstack
+    // The walk has a budget, and a cap that bites silently reads as "it worked". ?paint=cap says.
+    if (u_paintDebug == 1 && g_paintCapped) colour = vec3(1.0, 0.0, 1.0);
+    // ?paint=cover flags every fragment the shapes view shades, so "cost per pixel" is divided by a
+    // counted number rather than by a guess at how much of the window the clip fills.
+    if (u_paintDebug == 2) { o_colour = vec4(1.0, 0.0, 1.0, 1.0); gl_FragDepth = 0.0; return; }
+    // ?paint=evals writes the number of field walks this pixel paid for into red, and marks itself
+    // covered in green. It is the honest currency of this shader: a millisecond on a software
+    // rasteriser shared with fifteen other jobs varies by a factor of three between two runs of the
+    // same arm, and a field walk per pixel does not vary at all.
+    // <<< paintstack
 
     // The rim is KEPT, at 0.18 where it was 0.5, and it is the one thing here the voxel view does
     // not have. It is not light and it is not pretending to be: this view has no ambient occlusion
@@ -896,6 +963,9 @@ void main() {
     vec4 clipPos = u_viewProj * vec4(at, 1.0);
     gl_FragDepth = (clipPos.z / clipPos.w) * 0.5 + 0.5;
     o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), 1.0);
+    // >>> paintstack
+    if (u_paintDebug == 3) o_colour = vec4(float(g_paintEvals) / 255.0, 1.0, 0.0, 1.0);
+    // <<< paintstack
 }`;
 
 function compile(gl, type, source, name) {
@@ -1074,6 +1144,19 @@ export class Renderer {
         this.matvol = new Matvol(gl);
         this.matvol.uploadEmpty();
         // <<< matvol
+        // >>> paintstack
+        // The field graph the paint stack's tests walk. It has to EXIST even when a clip has no
+        // FLDG chunk: `u_field` is a usampler2D, an unset sampler uniform is unit 0, and unit 0
+        // already holds the cutter pool's sampler2D -- which is
+        // "two textures of different types use the same sampler location" on every draw of the
+        // shapes view, 203 of them in one screenshot, and nothing whatever on screen to say so.
+        this.field = FieldTexture ? new FieldTexture(gl, UNIT.shapeField) : null;
+        this.rules = gl.createTexture();
+        this.ruleCount = 0;
+        this.ruleWidth = 1;
+        this.paintMode = paintMode();
+        this.paintStats = { rules: 0, boxed: 0, source: 'none' };
+        // <<< paintstack
         this.clip = null;
         // >>> refract
         // What glass does, on texture unit 2. It owns its own copy of the framebuffer and asks
@@ -1365,6 +1448,34 @@ export class Renderer {
             this.stats.quads = quads;
         });
         // <<< shadow
+        // >>> paintstack
+        // The paint stack. It is the clip's own rules, in the clip's own order, packed four
+        // RGBA32F texels each — same trick as the cutter pool, and for the same reason. A clip
+        // baked before the exporter existed has none, and then the shapes view keeps the flat grey
+        // it had rather than inventing a colour.
+        //
+        // LAST, and it has to be: this sets UNPACK_ALIGNMENT to 4 for a float texture, and the
+        // light volume above is RG8 and depends on the 1 the material upload left behind. Put
+        // between them, it made every light row misaligned, texImage3D refuse the buffer, and the
+        // whole voxel view come back black — with a console warning and no error anywhere near the
+        // code that caused it.
+        {
+            // The graph first: the stack's rules index into it by node, so a stale graph beside a
+            // fresh stack is a rule testing somebody else's noise.
+            const graphBytes = clip.chunk ? clip.chunk('FLDG') : null;
+            if (this.field) {
+                this.field.upload(graphBytes ? parseFieldGraph(graphBytes)
+                                             : { nodeCount: 0, words: new Uint32Array(0) });
+            }
+            const paint = paintFromClip(clip, { mode: this.paintMode });
+            const uploaded = uploadRules(gl, this.rules, paint.rules);
+            this.ruleCount = uploaded.count;
+            this.ruleWidth = uploaded.width;
+            this.paintStats = {
+                rules: uploaded.count, boxed: uploaded.boxed, source: paint.source,
+            };
+        }
+        // <<< paintstack
     }
 
     attributesAt(byteOffset) {
@@ -1501,17 +1612,35 @@ export class Renderer {
         gl.bindTexture(gl.TEXTURE_2D, this.cutters);
         gl.uniform1i(u.u_cutters, 0);
         gl.uniform1i(u.u_cutterWidth, this.cutterWidth);
+        // >>> paintstack
+        // Units from the register in this file. This branch picked 1 and 2, which the shapes
+        // program already gives to the light volume and the material table -- a sampler3D and a
+        // sampler2D on one unit, which is INVALID_OPERATION on every draw and not a black texture.
+        if (this.field) this.field.bind(u, UNIT.shapeField);
+        gl.activeTexture(gl.TEXTURE0 + UNIT.shapeRules);
+        gl.bindTexture(gl.TEXTURE_2D, this.rules);
+        gl.uniform1i(u.u_rules, UNIT.shapeRules);
+        gl.uniform1i(u.u_ruleWidth, this.ruleWidth);
+        gl.uniform1i(u.u_ruleCount, this.ruleCount);
+        gl.uniform1i(u.u_paintDebug,
+                     this.paintMode === 'cap' ? 1
+                     : (this.paintMode === 'cover' ? 2 : (this.paintMode === 'evals' ? 3 : 0)));
+        gl.activeTexture(gl.TEXTURE0 + UNIT.shapePaintMaterials);
+        gl.bindTexture(gl.TEXTURE_2D, this.materials);
+        gl.uniform1i(u.u_shapeMaterials, UNIT.shapePaintMaterials);
+        gl.activeTexture(gl.TEXTURE0);
+        // <<< paintstack
 
         // >>> shapeshade
         // The material table and the light grid, on the same two units the surface shader uses so
         // that nothing has to be rebound between the two views. Unit 0 is the cutter pool here.
         const clip = this.clip;
-        gl.activeTexture(gl.TEXTURE1);
+        gl.activeTexture(gl.TEXTURE0 + UNIT.shapeLight);
         gl.bindTexture(gl.TEXTURE_3D, this.light);
-        gl.uniform1i(u.u_light, 1);
-        gl.activeTexture(gl.TEXTURE2);
+        gl.uniform1i(u.u_light, UNIT.shapeLight);
+        gl.activeTexture(gl.TEXTURE0 + UNIT.shapeMaterials);
         gl.bindTexture(gl.TEXTURE_2D, this.materials);
-        gl.uniform1i(u.u_materials, 2);
+        gl.uniform1i(u.u_materials, UNIT.shapeMaterials);
         gl.uniform1i(u.u_materialCount, clip.materialCount);
 
         // The same mapping into the light volume the surface shader uses, term for term, because

@@ -978,6 +978,78 @@ says which of the two is live on every load, because "the colours are wrong" and
 hash" look identical in a screenshot.
 <!-- // <<< shapeshade -->
 
+<!-- >>> paintstack -->
+### It is painted, and the paint is the clip's own stack of rules
+
+Every shape used to be the same flat grey, and it had to be: **a shape has no material.** Colour in
+this project is not a property of a shape, it is the result of a stack of rules evaluated at a
+point — `20-clip-forge.md` §2, and the thing that lets one wall be stone, except where it is damp,
+except where the damp has moss, except in the mortar: one shape and four rules rather than four
+shapes.
+
+So the marched hit point is given to that same stack. `web/js/features/paint.js` runs it, on
+information that is strictly better than the sampler's: the point is exact rather than a voxel
+centre, and the normal is the analytic gradient of the resolved distance rather than a six-tap
+difference at voxel spacing.
+
+    material = the first coat
+    for each rule in file order:
+        v = field_eval(rule.node, p)
+        if above <= v <= below and the facing test passes:
+            material = rule.material     <-- the LAST match wins
+
+**Last match wins**, because the stack paints each rule over the last. Reading it as first-match
+gives a picture that looks entirely plausible and is wrong everywhere two rules overlap, which on
+this building is most places — the weathering coats in `surface.clip` are laid over everything.
+
+Three things about the numbers, each of which is a wrong picture rather than an error:
+
+- **`above` is the LOW end of the band and `below` is the HIGH end**, which reads backwards until
+  you remember they are written about the field's *value*. For a rule keyed on a shape that value
+  is a signed distance, so `below=0.02` means "inside that shape, or within 2 cm outside it" —
+  `clips/facility/BRIEF.md` rule 5 is three pages on why it is 0.02 and not 0, and why anything a
+  transform placed needs 0.035.
+- **`facingAxis` is −1 when the rule does not ask for a normal**, and the engine's own `PaintRule`
+  writes 3 for that. A shader testing `axis < 3` reads −1 as "yes, ask about axis −1"; and
+  `int(-1.0 + 0.5)` truncates to 0, which is "ask about x" for every rule in the clip.
+- **The facing test is not symmetric.** The sign of the threshold is the direction: `at=0.6` keeps
+  `n·axis >= 0.6`, `at=-0.6` keeps `n·axis <= -0.6`. An `abs()` there paints the ceiling with the
+  floor's moss.
+
+**Nothing matching is not "no colour".** `sample.cpp` ends with "a cell with matter in it and no
+rule that matched is still matter" and hands back rule 0's material whether or not rule 0's own test
+would have passed. So the walk stops at rule 1 and returns rule 0's material — which is also one
+field evaluation saved at every pixel of every clip.
+
+### What it costs, and the three things that stop it costing that
+
+A facility fragment carries **348 rules**, and `facility/terrace` exports 4,829 field nodes at depth
+54. A hundred-odd field walks per pixel on a phone is not a slow feature, it is not a feature.
+
+- **A box per rule.** `PANT` ships `lo`/`hi` with every rule and a `BOXED` flag saying they mean
+  something. Six floats and a compare, before any field walk. The flag is honoured rather than
+  second-guessed: deriving a tighter box here than the exporter's would reject a rule that should
+  have fired, and the only sign of it is a building that quietly lost its paint.
+- **Walk it backwards and stop at the first match.** Since the last match wins, the first rule that
+  matches walking from the end *is* the answer and everything before it is dead.
+- **A budget of 32 field walks a pixel**, and then the first coat. `?paint=cap` paints magenta
+  wherever it bit, because a silent cap reads as "it worked".
+
+Measured on `sampler`, 24,534 shaded pixels, counted rather than timed — a millisecond under the
+software rasteriser this was measured on varied by a factor of three between two runs of the same
+arm, and a field walk per pixel does not vary at all:
+
+| the stack | field walks per shaded pixel |
+|---|---|
+| the sampler's own four rules, two of them boxed | 2.0 |
+| 133 rules, each boxed to a slice of the clip | 0.55 |
+| 133 rules, none boxed | 32 — the budget, at every pixel |
+
+The last row is what the box test is for: without it the walk hits its cap everywhere, which means
+it is also handing back the first coat everywhere. `?paint=off` compiles the stack out entirely and
+is the other arm of any measurement of it; `?paint=evals` is where that table comes from.
+
+<!-- <<< paintstack -->
 ### The cap, and the one place this is not exact
 
 **Sixteen cutters to a shape.** Over that, the ones with the biggest box overlap are kept — a wall
