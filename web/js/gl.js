@@ -757,6 +757,67 @@ uniform int u_cutterWidth;           // texels across, so an index becomes a row
 uniform sampler2D u_shapeMaterials;  // the clip's own palette, four RGBA8 texels each
 // <<< paintstack
 
+// >>> paintcheck
+// How much of the paint stack this pixel is allowed to walk. See web/js/features/paintcost.js for
+// the ladder these two come off and why each cut is where it is.
+//
+//   u_paintFar       metres from the eye past which the stack is not walked at all and the shape is
+//                    the flat grey it has always been. A building seen from across the site is a
+//                    silhouette, and a silhouette does not need to know where its moss is. The
+//                    degradation is VISIBLE by construction — near geometry is coloured, far
+//                    geometry is grey, and the boundary is a thing you can walk towards — which is
+//                    the whole point: a view that quietly stops doing something is a view nobody
+//                    can trust, and a silent truncation reads as "it worked".
+//   u_paintMaxRules  the most rules one pixel may evaluate. Nought turns painting off entirely.
+//
+// A stack is walked BACK TO FRONT. Last match wins, so going backwards the first rule that fires is
+// the answer and everything in front of it is dead work; that cut is exact and changes no pixel.
+// The cap is the one that is not exact — it drops the EARLIEST rules, which are the undercoats — so
+// a pixel that reaches it can come out the colour of a later coat with no ground under it.
+uniform float u_paintFar;
+uniform int u_paintMaxRules;
+
+// Whether this pixel paints at all, given how far away it landed. One place, so the shading and the
+// budget cannot drift apart.
+bool paint_here(vec3 at, vec3 eye) {
+    return u_paintMaxRules > 0 && distance(at, eye) <= u_paintFar;
+}
+
+// A STAND-IN for one field-node visit, so the cost of a stack can be measured before there is a
+// stack.
+//
+// u_paintProbe is how many node visits to charge this pixel. Nought is off and the shader is what it
+// was. It is not the paint stack and it is not pretending to be: it is one hash and a smoothstep
+// per iteration, which is the arithmetic of a value-noise node with the graph walk taken out, so it
+// UNDER-states a real node rather than over-stating one. What it measures is the slope -- how many
+// microseconds a frame costs per node visit per pixel on the machine actually running it -- and
+// that slope times the counts tools/paintcheck.sh reports is the prediction.
+//
+// The result is fed into the colour with a tiny weight because a loop whose answer nothing reads is
+// a loop the compiler deletes, and a benchmark of deleted code reads as free.
+uniform int u_paintProbe;
+const int MAX_PAINT_PROBE = 4096;
+
+float probe_hash(vec3 p) {
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float paint_probe(vec3 at) {
+    if (u_paintProbe <= 0) return 0.0;
+    float acc = 0.0;
+    vec3 p = at;
+    for (int i = 0; i < MAX_PAINT_PROBE; ++i) {
+        if (i >= u_paintProbe) break;
+        float h = probe_hash(p);
+        acc += smoothstep(0.4, 0.6, h);
+        p = p * 1.37 + vec3(h, acc * 0.001, float(i) * 0.017);
+    }
+    return acc;
+}
+// <<< paintcheck
+
 out vec4 o_colour;
 
 // One shape may subtract at most this many, and the baker warns when it had to drop some. A GLSL
@@ -887,6 +948,23 @@ ${SHAPE_SHADING_GLSL}
 ${SHAPE_SHADE_HIT_GLSL}
 // <<< shapeshade
 
+// >>> paintcheck
+// The flat grey, LIT. Not a second shader and not a different look: the same lobe and the same
+// light grid the painted pixels get, with the clip's own material swapped for the stone grey this
+// view had before any of this existed. It is what a pixel past u_paintFar gets, and it is the
+// honest answer for a facility fragment -- §9 measured 338,060 node evaluations for one pixel of
+// one, which is ~200 ms a frame on a GPU a thousand times faster than this machine.
+// (No back-quotes in here: template string.)
+vec3 ws_shade_hit_flat(vec3 P, vec3 N, vec3 V) {
+    WsMaterial m = ws_material(0);
+    m.albedo = vec3(0.62, 0.60, 0.56);
+    m.opacity = 1.0;
+    vec2 visible = ws_light_at(P, N);
+    return ws_shade(m, N, V, u_sun, visible.r, visible.g, 1.0);
+}
+// <<< paintcheck
+
+
 void main() {
     if (dot(v_world, u_clip.xyz) + u_clip.w > 0.0) discard;
 
@@ -938,7 +1016,29 @@ void main() {
     // Which material that is comes from the paint stack, through material_at -- the seam
     // shapeshade.js was written around, wired at the merge and nowhere else. This line is the
     // whole of "the raw view shows the colours the clip will have in game" rather than a hash.
-    vec3 colour = ws_shade_hit(at, N, V);
+    // >>> paintcheck
+    // ...and the RUNG, which is the paint verification branch's and is the only thing keeping a
+    // facility fragment from asking for 338,060 node evaluations per pixel -- §9 of the
+    // integration plan, and the number is not close. paint_here is the budget: past u_paintFar
+    // metres, or with the rule cap at nought, the stack is not walked at all and the
+    // shape keeps the flat grey it has always had. The degradation is VISIBLE by construction --
+    // near geometry is coloured, far geometry is grey, and the boundary is a thing you can walk
+    // towards -- which is the point. A view that quietly stops doing something is a view nobody
+    // can trust. (No back-quotes in here: template string.)
+    //
+    // That branch left "material_at(at, N) goes here" as a comment, because the stack it gates did
+    // not exist when it was written. This is where it went.
+    vec3 colour;
+    if (paint_here(at, u_eye)) {
+        colour = ws_shade_hit(at, N, V);
+        // The probe stays: it is how the SLOPE was measured -- microseconds a frame per node visit
+        // per pixel -- and the weight is tiny and non-zero on purpose, because a loop nothing reads
+        // is a loop the compiler deletes and a benchmark of deleted code reads as free.
+        colour += vec3(paint_probe(at) * 1e-6);
+    } else {
+        colour = ws_shade_hit_flat(at, N, V);
+    }
+    // <<< paintcheck
     // >>> paintstack
     // The walk has a budget, and a cap that bites silently reads as "it worked". ?paint=cap says.
     if (u_paintDebug == 1 && g_paintCapped) colour = vec3(1.0, 0.0, 1.0);
@@ -1662,6 +1762,14 @@ export class Renderer {
         // costs an eighth of a cell of blur on a term that is smooth over metres.
         gl.uniform1f(u.u_shapeLightBias, clip.lightCell + 0.5 / clip.metre);
         // <<< shapeshade
+        // >>> paintcheck
+        // The rung, applied. `this.paint` is set by whoever owns the policy — app.js, from
+        // web/js/features/paintcost.js — and defaults to full so a page that never sets it draws
+        // everything. Nothing here decides anything: the policy is one thing in one place.
+        gl.uniform1f(u.u_paintFar, this.paint ? this.paint.u_paintFar : 1e9);
+        gl.uniform1i(u.u_paintMaxRules, this.paint ? this.paint.u_paintMaxRules : 4096);
+        gl.uniform1i(u.u_paintProbe, this.paint ? (this.paint.u_paintProbe | 0) : 0);
+        // <<< paintcheck
 
         gl.enable(gl.DEPTH_TEST);
         gl.depthMask(true);
