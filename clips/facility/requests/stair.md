@@ -279,10 +279,36 @@ cornice frieze crossing its own doorway** (§8.5), which `sr_who_lib` reports an
 the route, in either wing, at either level.
 
 **And the same three parts at metre 32, which is the metre this building is sampled at:**
-`sr_head_all` is **486 voxels in ONE component**, `gilt`, at
+
+| part | before the bridge | now |
+|---|---|---|
+| `sr_floor_all` | **11,088** — 5,364 in each wing at the bridge, 192 and 168 at the two thresholds | not yet taken |
+| `sr_head_all` | | **486**, one component |
+| `sr_cut_check` | | **EMPTY** |
+
+The one gap in that table is said rather than assumed. The after arm of `sr_floor_all` at metre 32 is
+the only reading on this route that has not been taken; the metre 16 pair (1,922 → 174) is complete
+and the metre 32 before arm above is what it should be compared against when somebody has an hour of
+a quiet machine. Expect about 360 — the two thresholds of §8.3 and nothing else.
+
+`sr_head_all` at 32 is 486 voxels in ONE component, `gilt`, at
 `x -14.844 .. -14.000, y 8.312 .. 8.406, z -3.594 .. -3.406` — the same library cornice frieze, in
 the same place, eight times as many voxels because the grid is eight times as fine. Everything else
 on the route is clear at 32 as it is at 16.
+
+**AND THE metre 32 BEFORE READING IS AN ACCIDENT WORTH WRITING DOWN, BECAUSE IT NEARLY WENT IN AS AN
+AFTER.** That 11,088 was produced by a run I had intended as the after arm. While it was queued I
+swapped `stair.clip` for `origin/main`'s copy for ninety seconds to take a control arm on the whole
+building, and `clipcheck` parses at start-up: the run began nine seconds inside that window, so it
+sampled the stair WITHOUT the bridge. Nothing in its output says so. It was caught by reading the
+`worldbox` — `z -3.000 .. 4.500`, which reaches the gallery's own south edge and is the shape of the
+hole the bridge fills — against a metre 16 after-reading of 174 whose worldbox is `z -3.062 ..
+-2.875`. A number 64 times larger at twice the resolution is not a resolution effect, and the
+`components 4 (largest 5,364)` line is the before arm's own signature.
+
+**Two lessons, and the second is the one to keep:** a background sample holds the file it parsed and
+not the file on disk; and a probe's `worldbox` is the cheapest check that a reading is of the thing
+you think it is.
 
 Two readings on the way there are worth keeping because they are what the boxes had to be tuned
 against, and both were somebody's real member rather than a probe artefact:
