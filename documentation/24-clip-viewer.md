@@ -179,32 +179,63 @@ as bright as the sky it is reflecting or the reflection is brighter than the thi
 
 ### Indoors, a surface reflects the room, and the room here is the ambient
 
-This is the change that moves the picture most, and it is not one of the lobes. The environment was
-the sky along the reflection attenuated by how much sky the baker's lattice could find from that
-point — right outdoors, and nearly nothing four metres inside a state room, so every specular in the
-salon and the ballroom went out and what was left was diffuse. The game has no such problem because
-a face's lobe bins hold **the room**: what a surface reflects indoors is measured, and it is the
-room. This viewer's one stand-in for the room is the ambient the light grid already carries, so a
-surface now reflects the sky where the sky reaches it and that ambient where it does not, **at the
-same occlusion the diffuse gets**.
+The environment was the sky along the reflection attenuated by how much sky the baker's lattice
+could find from that point — right outdoors, and nearly nothing four metres inside a state room, so
+every specular in the salon and the ballroom went out and what was left was diffuse. The game has no
+such problem because a face's lobe bins hold **the room**: what a surface reflects indoors is
+measured, and it is the room. This viewer's one stand-in for the room is the ambient the light grid
+already carries, so a surface now reflects the sky where the sky reaches it and that ambient where
+it does not, **at the same occlusion the diffuse gets** — taking it unoccluded is a room with its
+shadows washed out.
+
+### And the environment is prefiltered by the lobe reading it, which is what separates two metals
+
+That fallback lifts every specular in a room, gilt and plaster alike, and on its own it is **not a
+metal fix**. What separates one metal from another is roughness, and roughness reached the picture
+only through the sun's own highlight — so in an interior, where there is no sun on anything, a
+mirror at roughness 6 and a bronze at 110 drew the same.
+
+It cannot be fixed by blurring the sky along the reflection, and that is the interesting part. The
+sky is two things added together and they prefilter differently: the **gradient** is smooth over the
+whole hemisphere and survives any lobe, and the **sun's disc** is about four degrees across and is
+spread out by the lobe until it is gone. Blurring their sum by one number leaves every metal in the
+building "sharp", because every metal's lobe is a few degrees wide. So `ws_environment` spreads the
+disc instead: a lobe of half-width *w* reads it over `(w / disc)²` times its solid angle, the peak
+falls by exactly that, and the energy does not change. Below the disc's own width nothing happens at
+all, which is what keeps a mirror showing the sun exactly as the sky draws it.
 
 Measured on `facility-salon`, orbit at yaw 1.5708, pitch −0.02, distance 6.2, target
-(7.2, 0.2, −4.8), 900×700 — mean sRGB red of a fixed box, comparable down a column only:
+(7.2, 0.2, −4.8), 900×700 — mean sRGB of a fixed box, decoded from the screenshot, comparable down a
+column only. Every arm but the first is `?lobes=` on the same build:
 
-| | gilt panel | plaster | parquet, sunlit | chandelier |
-|---|---|---|---|---|
-| before | 92.4 | 93.8 | 100.8 | 80.2 |
-| this | 106.6 | 111.8 | 103.7 | 88.1 |
-| …environment = sky × sky visibility | 90.8 | 92.7 | 99.0 | 78.0 |
-| …room's share taken unoccluded | 138.2 | 149.3 | 114.2 | 117.9 |
-| …no environment for the coat | 106.0 | 111.8 | 98.0 | 88.0 |
+| | gilt panel | ceiling | pilaster | parquet | damask |
+|---|---|---|---|---|---|
+| | metal 225, r64 | plaster | pale, no coat | lacquer 10 | sheen 10 |
+| before | 90, 81, 42 | 76, 81, 89 | 125,129,132 | 82, 69, 67 | 58, 51, 66 |
+| this | 105, 95, 50 | 71, 75, 82 | 128,131,134 | 80, 71, 78 | 55, 48, 63 |
+| …no lacquer | 105, 95, 50 | 71, 75, 82 | 127,130,131 | 71, 56, 51 | 53, 46, 61 |
+| …no sheen | 105, 95, 50 | 71, 75, 82 | 127,131,133 | 80, 71, 78 | 54, 48, 63 |
+| …no metal | 61, 56, 38 | 71, 75, 82 | 122,126,132 | 79, 71, 78 | 55, 48, 64 |
 
-Three things worth keeping out of that. It lifts **gilt and plaster by the same fifth** — it is not
-a metal fix, it is the specular ambient a rasteriser owes every surface, and the metals were only
-the loudest thing missing it. Taking the room's share **unoccluded** lifts everything by a further
-third, which is a room with its shadows washed out, so the occlusion is not optional. And the
-coat's own environment is worth about six per cent on sunlit parquet and nothing else in that view
-— it earns its place at a grazing angle rather than in an average.
+The gilt is up a sixth and warmer while the plaster beside it is down a fifteenth and the pilaster
+has not moved — the metal picks out from the dielectric, which is the whole test. Turning metal off
+now costs the gilt **42 per cent** and the plaster nothing. The lacquer is the sky in the floor:
+parquet goes 71,56,51 without it to 80,71,78 with it, half again as much blue on a brown floor,
+which is a low sky in a polished surface at a grazing angle. And the sheen is worth one unit here,
+because it is `(1 − v·h)⁵` and lives in the last few degrees before an edge — which is what the game
+does and what velvet does.
+
+Outdoors, on `mirror_test` at yaw 0, pitch −0.05, distance 5.0, target (0, 0.95, −1.2):
+
+| | chrome r8 m250 | brushed r110 m220 | gold r40 m240 | red post r200 | floor r18 m30 |
+|---|---|---|---|---|---|
+| before | 174,187,209 | 141,153,174 | 162,142,63 | 141, 59, 66 | 237,237,239 |
+| this | 180,192,213 | 116,128,150 | 165,146,67 | 136, 60, 64 | 234,233,236 |
+
+A metal at roughness 8 and a metal at roughness 110 were 19 per cent apart and are now 35, and the
+one that moved is the **rough** one — down an eighth, because a lobe that wide no longer reads a
+sharp sky. The dielectric moves 3 per cent the other way, losing the share of its diffuse the
+specular turns away. Stone is meant to sit still under this change and it does.
 
 ### What it costs, and the measurement that could not be made
 
@@ -214,33 +245,35 @@ brush. `?lobes=-sheen,-coat,-brush,-metal,-emit` in the page's URL compiles the 
 which is the control arm for measuring any of them.
 
 **The per-lobe frame cost could not be measured on the machine this was written on, and the control
-that says so is in the numbers.** The renderer's own draw, timed with a `readPixels` on each end,
-fastest of five runs of four frames, pinned at 480×360, on the salon camera above:
+that says so is in the numbers.** The renderer's own draw, timed with a `readPixels` fence on each
+end, fastest of seven runs of six draws, pinned at 640×480, on the salon camera above:
 
 | | |
 |---|---|
-| all lobes | 416.7 ms |
-| …without the lacquer | 409.8 |
-| …without the sheen | 392.6 |
-| …without the brush | 413.6 |
-| …without the emission | 406.1 |
-| …without any of them | 385.5 |
-| **…without metal** | **495.9** |
+| all lobes | 424.5 ms |
+| …without the lacquer | 393.6 |
+| …without the sheen | 416.7 |
+| …without the brush | 411.3 |
+| …without the emission | 386.5 |
+| **…without any of them** | **442.8** |
+| all lobes, again | 426.5 |
 
-`-metal` forces `metallic` to nought. It removes **no instruction** — the same multiplies run on
-different numbers — and it came back nineteen per cent *slower* than the arm with every lobe on. So
-the run-to-run spread of a software rasteriser sharing four cores with a dozen other browsers is at
-least that, and every per-lobe difference above sits inside it. What the table does establish is
-that the lobes are not what a frame is spent on here; what it does not establish is what any one of
-them costs.
+Compiling every lobe out came back four per cent *slower* than leaving them all in. And on
+`mirror_test` — which declares no lacquer, no sheen and no brush at all, so those arms are provably
+doing nothing — the two arms simply interleave: 163.1, 156.6, 156.3 with everything on against
+168.0, 149.2, 153.8 with everything off. The run-to-run spread of a software rasteriser sharing four
+cores with a dozen other browsers is wider than anything being asked about. What the table does
+establish is that the lobes are not what a frame is spent on here; what it does not establish is
+what any one of them costs. A phone with a real GPU is where that measurement lives.
 
 What can be counted exactly is the work per pixel on a face that carries the lobe: **brush** is one
 cross, two dots, an `inversesqrt` and about ten multiplies *replacing* the isotropic distribution's
 five; **sheen** is two `pow(x, 5)` and about eight multiplies; **lacquer** is two `pow(x, 5)` and
 about twenty-two — a second GGX, a second Smith, its own Fresnel twice, and the mix that dims what
-is under it; **metal** is free, being a mix that was already there. The one addition that is *not*
-behind a branch is the room fallback in the environment: one extra `mix`, three multiply-adds, on
-every pixel of every surface.
+is under it; **metal** is free, being a mix that was already there. Two additions are *not* behind a
+branch, because every surface has an environment: the room fallback is one extra `mix`, and the
+prefilter is a `max`, a divide, a multiply and a second `mix` — the two `pow` calls it needs were
+already there, one of them now with a computed exponent instead of a literal.
 <!-- <<< brdf -->
 
 ## 4. The viewer

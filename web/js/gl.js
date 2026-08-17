@@ -64,8 +64,9 @@ import { SHAPE_BYTES, CUTTER_TEXELS } from './format.js';
 // Every lobe a VisualRecord declares — lacquer, sheen, the brush grain, metal and emission — as
 // the game's own shaders write them. See web/js/features/brdf.js for what is matched exactly,
 // what is approximated, and the one factor of PI that separates this viewer's units from the
-// path tracer's. It needs `vec3 sky_colour(vec3)` in scope, which is why it is spliced in below
-// that function and not above it.
+// path tracer's. It reads this shader's own sky uniforms — u_sun, u_sunColour, u_skyUp, u_skyDown
+// — and nothing else, and it is spliced in beside `sky_colour` because its `ws_environment` is
+// that same sky prefiltered by the lobe reading it. THE TWO HAVE TO MOVE TOGETHER.
 import { BRDF_GLSL } from './features/brdf.js';
 // <<< brdf
 

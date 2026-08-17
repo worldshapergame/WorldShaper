@@ -80,9 +80,15 @@
 //     in. This viewer has no such measurement and was reflecting the SKY attenuated by how much sky
 //     the lattice could find, which four metres inside a state room is nearly nothing. So a surface
 //     reflects the sky where the sky reaches it and the ambient the light grid already carries
-//     where it does not, at the same occlusion the diffuse gets. See the measured table below for
-//     what that is worth and for what it is NOT: it lifts every specular in a room, gilt and
-//     plaster alike, rather than picking the metals out.
+//     where it does not, at the same occlusion the diffuse gets. It is not a metal fix on its own:
+//     it lifts every specular in a room, gilt and boiserie alike, by about a sixth.
+//   - THE ENVIRONMENT IS PREFILTERED BY THE LOBE, WHICH IS WHAT SEPARATES ONE METAL FROM ANOTHER.
+//     See ws_environment below. The game gets this from the bin count a face's roughness asks for
+//     and from a real measurement of the room; here it is the sun's disc spread over the lobe at
+//     constant energy, which is the same statement about the same quantity. Without it, roughness
+//     reaches the picture only through the sun's own highlight — so an interior, where there is no
+//     sun on anything, drew a mirror and a rough metal identically. It is the one term here that is
+//     not in the game's shaders in this form.
 //   - THE COAT REFLECTS THE SAME THING. The game's face path gives the environment to the BASE lobe
 //     only; the coat's share of it arrives through bounces. Without an environment term the coat
 //     would dim what is under it and give nothing back, which is a lacquer that makes a floor
@@ -98,56 +104,84 @@
 //
 // `facility-salon`, orbit at yaw 1.5708, pitch -0.02, distance 6.2, target (7.2, 0.2, -4.8), at
 // 900x700 — the room's long axis, low sun through the south windows. Each figure is the mean sRGB
-// red of a fixed box, so they are comparable down a column and mean nothing across one.
+// of a fixed box of the picture the page drew, decoded from the screenshot afterwards, so they are
+// comparable DOWN a column and mean nothing across one. Every arm below is `?lobes=` on the same
+// build; the "before" row is the tree without this change at all.
 //
-//                                        gilt panel   plaster   parquet, sunlit   chandelier
-//   before this change                        92.4      93.8         100.8           80.2
-//   this                                     106.6     111.8         103.7           88.1
-//   ...environment = sky * sky visibility      90.8      92.7          99.0           78.0
-//   ...room's share taken unoccluded          138.2     149.3         114.2          117.9
-//   ...no environment for the coat            106.0     111.8          98.0           88.0
+//                       gilt panel      ceiling       pilaster        parquet         damask
+//                    (metal 225,r64)   (plaster)   (pale, no coat)  (lacquer 10)   (sheen 10)
+//   before             90, 81, 42     76,81,89     125,129,132     82, 69, 67     58,51,66
+//   this              105, 95, 50     71,75,82     128,131,134     80, 71, 78     55,48,63
+//   no lacquer        105, 95, 50     71,75,82     127,130,131     71, 56, 51     53,46,61
+//   no sheen          105, 95, 50     71,75,82     127,131,133     80, 71, 78     54,48,63
+//   no metal           61, 56, 38     71,75,82     122,126,132     79, 71, 78     55,48,64
 //
-// Three things that says:
+// Which says, in order:
 //
-//   - the room-as-environment fallback is the change that moves the picture, and it moves GILT AND
-//     PLASTER BY THE SAME FIFTH. It is not a metal fix; it is the specular ambient a rasteriser
-//     owes every surface, and the metals were only the loudest thing missing it;
-//   - taking the room's share unoccluded lifts everything by a further third, which is a room with
-//     its shadows washed out. The occlusion is not optional;
-//   - the coat's environment is worth about six per cent on sunlit parquet and nothing anywhere
-//     else in this view. It earns its place for what it does at a grazing angle rather than for
-//     what it does to an average.
+//   - THE METAL PICKS OUT FROM THE DIELECTRIC, which is the whole test. Gilt is up a sixth and
+//     warmer while the plaster beside it is down a fifteenth and the pilaster has not moved. An
+//     earlier arm of this file lifted gilt and plaster BY THE SAME FIFTH, which was the specular
+//     ambient a rasteriser owes every surface and not a metal at all; the prefiltered environment
+//     is what separated them.
+//   - TURNING METAL OFF COSTS GILT 42 PER CENT and costs the plaster nothing, so the metal is
+//     carrying the panel rather than decorating it. It was worth 8 per cent before this change.
+//   - THE LACQUER IS THE SKY IN THE FLOOR. Parquet goes 71,56,51 without it to 80,71,78 with it:
+//     half again as much blue, on a brown floor, which is a low sky reflected in a polished
+//     surface at a grazing angle. Nothing else in this view moves by more than a unit.
+//   - THE SHEEN IS A SILHOUETTE TERM AND THIS VIEW IS THE WRONG ONE FOR IT: one unit on the
+//     damask. It is `(1 - v·h)^5`, so it lives in the last few degrees before the edge, which is
+//     what the game does and what velvet does.
 //
-// The last three rows are one line of this file changed at a time; `?lobes=` below takes the arms
-// for the lobes themselves without touching it.
+// And the same thing outdoors, where the sun is on everything. `mirror_test`, orbit at yaw 0,
+// pitch -0.05, distance 5.0, target (0, 0.95, -1.2) — a near-mirror ball and a rough one side by
+// side, which is what that clip exists for:
+//
+//                      chrome      brushed        gold      red post       floor
+//                    (r8,m250)   (r110,m220)  (r40,m240)   (r200,m0)   (r18,m30)
+//   before          174,187,209  141,153,174  162,142,63   141,59,66  237,237,239
+//   this            180,192,213  116,128,150  165,146,67   136,60,64  234,233,236
+//
+// A metal at roughness 8 and a metal at roughness 110 were 19 per cent apart and are now 35, and
+// the one that moved is the ROUGH one — down an eighth, because a lobe that wide no longer reads a
+// sharp sky. That is the only reading of "is the metal right" this viewer can be given without
+// rays, and it is the reading `_contract.clip` asks for.
+//
+// The dielectric moves 3 per cent the other way: the red post loses the share of its diffuse that
+// the specular turns away. Stone is meant to sit still under this change and it does.
 //
 // # A phone, and what each lobe costs
 //
 // Every lobe is behind a branch on the material's own bytes. `coat` is one byte holding both
 // nibbles, so a surface with neither lacquer nor sheen — which is every stone in the building —
-// pays one integer compare for both. The brush is a second compare. The one `sky_colour` call the
-// environment needs was already there and is now shared with the coat rather than doubled.
+// pays one integer compare for both. The brush is a second compare. The environment's two `pow`
+// calls were already in `sky_colour` and are not doubled: `ws_environment` replaces that function
+// rather than wrapping it, and the coat reads its own lobe out of the same one call.
 //
 // **The per-lobe frame cost could not be measured on the machine this was written on, and the
 // control that says so is in the table.** `?lobes=` compiles each lobe out; the renderer's own
-// draw was then timed with a readPixels on each end, fastest of five runs of four frames, at a
-// pinned 480x360, on the salon camera above:
+// draw was then timed with a readPixels fence on each end, fastest of seven runs of six draws, at
+// a pinned 640x480. On the salon camera above:
 //
-//   all lobes                                  416.7 ms      (software GL, so read RATIOS only)
-//   ...without the lacquer                     409.8
-//   ...without the sheen                       392.6
-//   ...without the brush                       413.6
-//   ...without the emission                    406.1
-//   ...without any of them                     385.5
-//   ...WITHOUT METAL                           495.9   <-- and this is the control
+//   all lobes                                  424.5 ms      (software GL, so read RATIOS only)
+//   ...without the lacquer                     393.6
+//   ...without the sheen                       416.7
+//   ...without the brush                       411.3
+//   ...without the emission                    386.5
+//   ...WITHOUT ANY OF THEM                     442.8   <-- and this is the control
+//   all lobes, again                           426.5
 //
-// `-metal` forces metallic to nought. It removes no instruction: the same multiplies run on
-// different numbers. It came back NINETEEN PER CENT SLOWER than the arm with every lobe on, so the
-// run-to-run spread of this box — a software rasteriser sharing four cores with a dozen other
-// browsers — is at least that, and every per-lobe difference above is inside it. The whole model
-// against no lobes at all is 7.5%, which is also inside it. These numbers say the lobes are not
-// what a frame is spent on here; they do not say what any one of them costs, and nothing that can
-// be run on this machine will.
+// And the same on mirror_test, which declares NO lacquer, NO sheen and NO brush at all — so those
+// three arms cannot possibly be doing anything, and are the null control:
+//
+//   all lobes    163.1   156.6   156.3
+//   none of them 168.0   149.2   153.8
+//
+// Compiling every lobe out came back FOUR PER CENT SLOWER than leaving them all in on the salon,
+// and on a clip where three of them are provably dead the two arms interleave. So the run-to-run
+// spread of this box — a software rasteriser sharing four cores with a dozen other browsers — is
+// wider than anything being asked about. These numbers say the lobes are not what a frame is spent
+// on here; they do not say what any one of them costs, and nothing that can be run on this machine
+// will. A phone with a real GPU is where that measurement lives.
 //
 // What can be counted exactly is the work, per pixel, on a face that has the lobe:
 //
@@ -160,9 +194,15 @@
 //   metal      nothing. It is a mix that was already there.
 //   emission   one branch and three multiplies, on emissive faces only.
 //
-// And the one addition that is NOT behind a branch: the environment falls back to the room rather
-// than to nothing, which is one extra mix — three multiply-adds — on every pixel of every surface.
-// That is the price of the change that moves the picture most.
+// And the two additions that are NOT behind a branch, because every surface has an environment:
+//
+//   the room fallback        one extra mix — three multiply-adds — on every pixel.
+//   the prefilter            ws_environment against the old sky_colour: one max, one divide, one
+//                            multiply and one extra mix. The two pow() calls were already there
+//                            and one of them now has a computed exponent instead of a literal.
+//
+// That is four or five instructions a pixel for the term that separates one metal from another,
+// which is the cheapest thing in this file per unit of what it buys.
 //
 // # Turning them off
 //
@@ -187,8 +227,11 @@ function disabled() {
     return off;
 }
 
-// The GLSL. Written as one string so the surface shader is one splice, and it needs exactly one
-// thing from its host: `vec3 sky_colour(vec3)`, which gl.js defines above the splice point.
+// The GLSL. Written as one string so the surface shader is one splice, and what it needs from its
+// host is four uniforms and no functions: `u_sun`, `u_sunColour`, `u_skyUp`, `u_skyDown`. Those are
+// the sky, and `ws_environment` below is the same sky prefiltered by the lobe reading it — so if
+// gl.js's `sky_colour` ever changes shape, this changes with it or a mirror stops matching what it
+// is reflecting.
 //
 // NO BACK-QUOTES BELOW THIS LINE. The whole shader is a template string, so one back-quote in a
 // GLSL comment ends the string and the page dies on a JavaScript syntax error at the identifier
@@ -314,6 +357,43 @@ vec3 ws_brush_tangent(int axis, vec3 n) {
     return t * inversesqrt(len2);
 }
 
+// The environment, PREFILTERED BY THE LOBE THAT IS GOING TO READ IT. The first half of the split
+// sum, and the half this viewer did not have.
+//
+// It cannot be got by blurring what sky_colour returns, and that is the whole point. That function
+// adds two things together and they prefilter differently: the GRADIENT is smooth over the whole
+// sky and survives any lobe, and the SUN'S DISC is about four degrees across and is spread out by
+// the lobe until it is gone. Blurring their sum by one number is what made ormolu, gilt and
+// gold_leaf — three golds a stop apart, put in the contract precisely so that a metal could be
+// judged against itself inside one frame — come out as one yellow. Their reflected lobes are 3.4,
+// 4.1 and 7.2 degrees wide, and against a gradient all three of those are "sharp".
+//
+// So the disc is spread here instead. A lobe of half-width w reads the disc over (w / disc)^2
+// times its solid angle, so the peak falls by exactly that and the energy does not change:
+// gold_leaf keeps a hard bright sun at 3.0, ormolu a softer one at 2.1, gilt a broad warm glow at
+// 0.66. Below the disc's own width nothing happens at all, which is what keeps a mirror showing
+// the sun exactly as the sky draws it and no brighter.
+//
+// The exponents are sky_colour's own: pow(cos, 400) is a half-width of 0.059 radians, and the wide
+// pow(cos, 8) glow is already broader than any lobe in this building. THIS FUNCTION MIRRORS
+// gl.js's sky_colour AND THE TWO HAVE TO MOVE TOGETHER — at alpha 0 it reproduces it exactly, and
+// that is the test if the sky is ever changed.
+const float WS_SUN_DISC = 0.059;
+
+vec3 ws_environment(vec3 dir, float alpha, vec3 flatly) {
+    float up = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
+    // The gradient, towards flat as the lobe opens out. Four times alpha, because a gradient this
+    // smooth is still legible at a lobe width that has already swallowed the disc whole.
+    vec3 base = mix(mix(u_skyDown, u_skyUp, up), flatly, clamp(alpha * 4.0, 0.0, 1.0));
+    // The reflected lobe is twice the surface's own, and never narrower than the disc it reads.
+    float w = max(2.0 * alpha, WS_SUN_DISC);
+    float shrink = WS_SUN_DISC / w;
+    float towards = max(dot(dir, u_sun), 0.0);
+    base += u_sunColour * pow(towards, 1.386 / (w * w)) * (3.0 * shrink * shrink);
+    base += u_sunColour * pow(towards, 8.0) * 0.05;
+    return base;
+}
+
 // Everything the surface does with light arriving from ONE direction, as a BRDF times the cosine.
 // This is shaders/pt_material.glsl's surface_response with the cosine folded through every term,
 // so the caller multiplies by the irradiance along l and by PI (see the note at the top) and by
@@ -392,6 +472,8 @@ vec3 ws_shade(WsMaterial m, vec3 n, vec3 v,
               vec3 ambient, float skyVisible, float ao) {
     vec3 f0 = mix(vec3(m.f0d), m.albedo, m.metal);
     float ndv = max(dot(n, v), 1e-4);
+    // The GGX width, the same one ws_direct takes and the one ws_environment prefilters by.
+    float alpha = max(m.roughness * m.roughness, 1e-3);
 
     // What the specular turns away never reaches the diffuse under it. The HEMISPHERICAL average
     // of Schlick, F0 + (1 - F0) / 21, because what gets in is a property of the material and not
@@ -427,16 +509,15 @@ vec3 ws_shade(WsMaterial m, vec3 n, vec3 v,
     // table at the top of this file is the measurement.
     vec3 room = ambient * occluded;
     vec3 r = reflect(-v, n);
-    vec3 env = sky_colour(r);
-    vec3 around = mix(room, env, shade);
+    // Prefiltered by this surface's own lobe rather than blurred afterwards: see ws_environment
+    // for why the difference is the whole of whether three golds a stop apart read as three
+    // metals. Flat is the ROOM and not the raw ambient — a fully rough surface deep in a hall
+    // must not be lit by a sky it cannot see.
+    vec3 env = ws_environment(r, alpha, room);
 
-    // The split-sum, with that blurred towards flat by the surface's own roughness. Flat is the
-    // ROOM and not the raw ambient, for the same reason and by the same number — a fully rough
-    // surface deep in a hall must not be lit by a sky it cannot see. No PI: a prefiltered
-    // environment is already a radiance, and a mirror has to be exactly as bright as what it is
-    // reflecting.
-    vec3 blurred = mix(around, room, m.roughness * m.roughness);
-    colour += ws_fresnel(f0, ndv) * blurred;
+    // The split sum. No PI: a prefiltered environment is already a radiance, and a mirror has to
+    // be exactly as bright as what it is reflecting.
+    colour += ws_fresnel(f0, ndv) * mix(room, env, shade);
 
 #if WS_LOBE_SHEEN
     // The dome's share of the fuzz. (1 - n·v)^5 rather than the half vector, because a hemisphere
@@ -462,8 +543,10 @@ vec3 ws_shade(WsMaterial m, vec3 n, vec3 v,
     if (m.clearcoat > 0.0) {
         float fc = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
         float take = m.clearcoat * fc;
-        vec3 coatEnv = mix(around, room, WS_COAT_ROUGH);
-        colour = colour * (1.0 - take) + coatEnv * take;
+        // The coat's own lobe is 0.06 rough, so it reads the environment nearly sharp — its own
+        // prefilter, not the base material's, which is the point of a lacquer over rough wood.
+        vec3 coatEnv = ws_environment(r, WS_COAT_ROUGH * WS_COAT_ROUGH, room);
+        colour = colour * (1.0 - take) + mix(room, coatEnv, shade) * take;
     }
 #endif
 
