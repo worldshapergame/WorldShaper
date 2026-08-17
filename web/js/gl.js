@@ -164,6 +164,14 @@ import { Ssr, SSR_FRAGMENT_GLSL } from './features/ssr.js';
 // twice in one shader is a link error, not a wrong picture, which is the good outcome of the two.
 
 // <<< ssr
+// >>> refract
+// Glass, refraction, translucency and coloured volumes. Everything that block does — including
+// what it assumes about the thickness field somebody else is baking — is written down in
+// web/js/features/refract.js, which is the only file it lives in.
+import {
+    Refraction, GLSL_DECLARATIONS, GLSL_TRANSLUCENCY, GLSL_COMPOSITE,
+} from './features/refract.js';
+// <<< refract
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -307,6 +315,13 @@ ${LAMP_SHADING}
 // string, and one closes it.)
 ${SSR_FRAGMENT_GLSL}
 // <<< ssr
+// >>> refract
+// AFTER the SSR chunk and not before it, which is where this branch put it. Both files wrote the
+// same closed-form ACES inverse; one of them was deleted at the merge, the survivor is
+// ws_decode_capture above, and a function has to be declared before it is called.
+// (No back-quotes: this is inside a template string and one of them closes it.)
+${GLSL_DECLARATIONS}
+// <<< refract
 
 void main() {
     float side = dot(v_world, u_clip.xyz) + u_clip.w;
@@ -398,12 +413,9 @@ void main() {
     vec3 diffuse = albedo * (1.0 - metal) * (direct + ambient * occluded + bounced);
     // <<< gi
 
-    // Translucent matter lights from behind: leaves, thin marble, wax. One term, and it is the
-    // only place in this shader where light arrives through something.
-    if (translucency > 0.0) {
-        float through = max(dot(-N, L), 0.0) * 0.6 + 0.25;
-        diffuse += albedo * translucency * through * u_sunColour * sunVisible;
-    }
+// >>> refract
+${GLSL_TRANSLUCENCY}
+// <<< refract
 
     // Brushed metal. A voxel world has no UVs and no tangent frame, so a VisualRecord can name
     // exactly one thing here — which of the three world axes the grain runs along — and that is
@@ -502,19 +514,22 @@ void main() {
         colour += glow * emissive * 6.0;
     }
 
-    // Beer-Lambert, over a thickness nobody knows. A rasteriser has no path length, so this takes
-    // the material's absorption as a tint on what shows through and says so rather than pretending
-    // to integrate anything.
+// >>> refract
+    // Beer-Lambert over a real path length, and what is behind the glass drawn where the glass
+    // actually puts it. It used to be a flat tint over "a thickness nobody knows", which is a
+    // coloured surface -- and _contract.clip's whole point about absorb is that a stained window
+    // is a coloured VOLUME. See web/js/features/refract.js for what the path length is and for the
+    // three ways a screen-space sample is an approximation. (No back-quotes anywhere in here: this
+    // is inside a template string and one of them closes it, which reads as "Unexpected identifier"
+    // a hundred lines away.)
+    //
+    // The surface is tonemapped and encoded BEFORE the composite rather than after, because the
+    // picture behind it has already been through both and must not go through them twice.
     float alpha = (u_blended < 0.5) ? 1.0 : opacity;
-    if (alpha < 1.0) {
-        vec3 absorb = vec3(1.0) - depth.rgb * 0.75;
-        colour *= absorb;
-        // Glancing angles of a pane are more reflective and less see-through, which is the one
-        // thing about glass everybody notices when it is missing.
-        alpha = clamp(alpha + (1.0 - alpha) * pow(1.0 - ndv, 4.0), 0.0, 1.0);
-    }
-
-    o_colour = vec4(pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2)), alpha);
+    vec3 encoded = pow(tonemap(colour * u_exposure), vec3(1.0 / 2.2));
+${GLSL_COMPOSITE}
+    o_colour = vec4(encoded, alpha);
+// <<< refract
 }`;
 
 const SKY_VERTEX = `#version 300 es
@@ -1102,6 +1117,11 @@ export class Renderer {
         this.matvol.uploadEmpty();
         // <<< matvol
         this.clip = null;
+        // >>> refract
+        // What glass does, on texture unit 2. It owns its own copy of the framebuffer and asks
+        // nothing of the rest of the renderer except to be told when the opaque picture is done.
+        this.refraction = new Refraction(gl);
+        // <<< refract
 
         this.viewProj = new Float32Array(16);
         this.invViewProj = new Float32Array(16);
@@ -1189,6 +1209,11 @@ export class Renderer {
     setClip(clip) {
         const gl = this.gl;
         this.clip = clip;
+        // >>> refract
+        // Whether anything in this clip refracts at all, asked once. A clip with no material that
+        // has both an index of refraction and an opacity never pays for the framebuffer copy.
+        this.refraction.setClip(clip);
+        // <<< refract
 
         // >>> lights
         this.lights.setClip(clip);
@@ -1491,6 +1516,11 @@ export class Renderer {
         // Units 2, 3 and 4: the sun's map, its near cascade, and the depth of this frame.
         this.shadow.bind(uniforms, camera);
         // <<< shadow
+        // >>> refract
+        // Bound for the opaque pass as well, with the feature off: a sampler in a linked program
+        // with nothing on its unit is undefined behaviour rather than an unused uniform.
+        this.refraction.apply(uniforms, false, this.canvas.width, this.canvas.height);
+        // <<< refract
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each
@@ -1769,6 +1799,21 @@ export class Renderer {
 
         // --- glass -----------------------------------------------------------------------------
         if (clip.transparentQuads > 0) {
+            // >>> refract
+            // The picture behind the glass, found before a single pane is drawn.
+            //
+            // IT TAKES THE SCENE CAPTURE THE RENDERER ALREADY HAS rather than making a second one:
+            // `this.ssr` is features/ssr.js's target -- sky and opaque, this frame's camera, this
+            // frame's clip plane, with depth -- and that is exactly what belongs behind a pane. Its
+            // depth is what lets a refracted sample be refused when it lands on something standing
+            // in front of the glass. Only where there is no such capture does this copy the
+            // framebuffer itself, which is why the call is HERE: one frame later would be a frame
+            // of lag and one pane later would be a pane refracting itself.
+            if (this.refraction.capture(width, height, this.ssr || null)) {
+                this.refraction.apply(this.surface.uniforms, true, width, height);
+                if (!this.refraction.scene) this.stats.draws += 1;
+            }
+            // <<< refract
             gl.enable(gl.BLEND);
             gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE,
                                  gl.ONE_MINUS_SRC_ALPHA);

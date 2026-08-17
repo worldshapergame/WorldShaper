@@ -117,13 +117,28 @@ float ws_capture_view_depth(float window_z) {
            (u_ssrFar + u_ssrNear - ndc * (u_ssrFar - u_ssrNear));
 }
 
-// The capture back into radiance. See the note at the top of ssr.js for why it is stored the way
-// it is; this is the closed-form inverse of \`tonemap\` followed by the inverse of the gamma.
-vec3 ws_capture_radiance(vec2 uv, float lod) {
-    vec3 y = pow(textureLod(u_captureColour, uv, lod).rgb, vec3(2.2));
+// THE ONE DECODE, and there used to be two of it.
+//
+// The capture holds a tonemapped, gamma-encoded picture -- see the note at the top of this file
+// for why a float target is not wanted -- and this puts it back to radiance: the closed-form
+// inverse of \`tonemap\` followed by the inverse of the gamma. The ACES fit is a ratio of two
+// quadratics, so solving y = f(x) for x is one square root.
+//
+// The refraction branch wrote the same function independently, character for character apart from
+// which sampler it fetched from, and §5 of the integration plan says delete one. So this takes a
+// COLOUR rather than a fetch: SSR reads a mip of the capture, refraction reads level 0 of it or of
+// its own fallback copy, and both hand the bytes here. It matters where the decode happens as much
+// as that it happens -- it has to come off BEFORE Beer-Lambert and go back on after, because
+// transmittance attenuates radiance and multiplying the encoded value over-saturates.
+vec3 ws_decode_capture(vec3 encoded) {
+    vec3 y = pow(encoded, vec3(2.2));
     vec3 disc = max(vec3(0.0), y * (1.3702 - 1.0127 * y) + 0.0009);
     vec3 x = (vec3(0.03) - 0.59 * y - sqrt(disc)) / (2.0 * (2.43 * y - 2.51));
     return max(x, vec3(0.0)) / max(u_exposure, 1e-4);
+}
+
+vec3 ws_capture_radiance(vec2 uv, float lod) {
+    return ws_decode_capture(textureLod(u_captureColour, uv, lod).rgb);
 }
 
 float ws_hash(vec2 p) {

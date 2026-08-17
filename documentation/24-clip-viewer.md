@@ -602,6 +602,77 @@ and should build its own with the exported `makeTarget`.
 `?ssr=0` turns the whole thing off, `?ssr=capture` captures and does not march, and `?ssr=full`
 captures at full resolution. The three of them are how the cost is split without a rebuild.
 <!-- <<< ssr -->
+<!-- >>> refract -->
+### Glass: what is behind it, bent, and what a metre of it takes out
+
+`web/js/features/refract.js`, and three marked blocks of `web/js/gl.js`. Transparent matter used to
+be a blended colour and nothing else, so the four things every clip has always declared about it —
+`ior`, `absorb`, `translucent`, `opacity` — reached the file, reached the material texture, and were
+read by nobody. Three of them are read now.
+
+**Refraction is screen-space and it is an approximation.** A glass fragment samples the picture of
+the scene with no glass in it at an offset, and the offset is the refracted vector carried across
+the material's own thickness and projected back to the screen. A material that does not bend gives
+an exit point further along the eye ray, which projects to the same pixel — so the offset is purely
+the bend. It is what a phone can afford — no rays, no second view — and it is wrong in two ways
+worth knowing rather than discovering:
+
+- it can only show what is **on screen**, so a pane at the edge of the frame refracts what is beside
+  it in the picture rather than what is beside it in the world (the sample is clamped, so the edge
+  smears rather than tiles);
+- the picture it samples has **no transparent surface in it**, so glass behind glass shows the
+  stone behind both rather than the near pane's own tint.
+
+The third fault a screen-space sample usually has — pulling in something that stands **in front** of
+the refractor — is gone, because the capture carries depth: both are window-space depths in the same
+projection, so one compare refuses the offset and the pixel straight behind is used instead.
+
+**It does not own a target.** It takes the scene capture `features/ssr.js` already draws — sky and
+opaque, this frame's camera, this frame's clip plane, colour and depth, at half the canvas — which
+is exactly what belongs behind a pane, and means refraction costs no pass of its own. Where there is
+no such capture it falls back to `copyTexSubImage2D` off whatever framebuffer is bound (on the canvas
+that resolves the multisampling on the way and costs the picture no antialiasing), and then there is
+no depth and the offset clamp of 6% of the screen is all that bounds the artefact. Either way it is
+only done for a clip that has a material with both an `ior` and an `opacity`, asked once at load.
+
+**One thing that capture costs, and it is visible.** It is half the canvas in each axis, which is
+right for a reflection — read through a mip chain — and is not right for a look straight through
+nearly-clear glass: on `glass_test` the wall seen through the clear pane has visibly staircased
+edges that the same wall seen beside the pane does not. A full-resolution capture would fix it and
+costs what it costs.
+
+**And the capture is display-space, which changes where the tint goes on.** It is tonemapped and
+gamma-encoded, because `RGBA16F` needs `EXT_color_buffer_float` and a phone may not have it. That is
+fine for this, but transmittance attenuates *radiance*: the encoding has to come off before
+Beer-Lambert goes on and back on afterwards, or a stained window over a sunlit wall comes out far
+too saturated, because ACES has already compressed that wall towards white. `refract_scene_radiance`
+inverts both in closed form — the same closed form as `ws_capture_radiance` in `ssr.js`, and the two
+should become one function. The only cost of an 8-bit capture here is that a very bright background
+seen through strongly absorbing glass can band; nothing in the facility does that.
+
+**Absorption is not an approximation, and it is the half that is still owed a thickness field.**
+`exp(-absorb * path)` over a real path length, in the game's own units — the byte is sixteenths per
+metre, exactly what `shaders/node.glsl:node_medium_absorb` reads — and the path is the thickness
+crossed at the **refracted** angle, so a slanted look through a pane is deeper in colour than a
+square one. That is what makes a stained window a coloured **volume** rather than a coloured
+surface, which `clips/facility/_contract.clip` says is the whole point of the three coloured
+glasses. **The thickness is currently a constant** (0.12 m, the facility's own glazing). The
+material-volume bake (fourcc `THCK`, `tools/bake/matvol.hpp` and `web/js/features/matvol.js`) is
+what makes it real, and `refract_thickness` in `refract.js` is one line and one assumed signature —
+`float matvol_thickness(vec3 world, vec3 direction)`, metres of matter along the direction. Until
+it lands, every pane and every body of water in the viewer is 12 cm thick, so the *angle* half of
+the coloured volume is demonstrated and the *depth* half is not.
+
+**Translucency reads the light on the far side, which is the arrangement it exists for.** The one
+line that was here added a wrap term scaled by `sunVisible` — the sun's visibility **in front** of
+the surface, which is nought precisely when the sun is behind it. It now takes a second fetch of
+the same baked light volume at a point **behind** the surface, and carries it through the thickness
+with the game's own depth: six voxels at 32 to the metre, squared in the byte. Marble at 110 reaches
+under a voxel and stays stone; alabaster at 210 reaches four and a thin panel of it lights up. It
+is the sun and the sky that come through, because the sun and the sky are what the light grid holds
+— **a lamp behind alabaster does not glow through it**, and cannot until something bakes local
+light into that volume.
+<!-- <<< refract -->
 
 ## 4a. The clip before it was voxels
 
