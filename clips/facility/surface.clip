@@ -7,6 +7,15 @@
 # cornice worn round while the hollow behind them keeps its edge; moss and lichen on the north
 # side, where the wall never dries.
 #
+# THE FILE IS IN TWO HALVES AND THEY ARE NOT THE SAME KIND OF THING. Down to the two `weather`
+# statements is the ENGINE's weathering — two lines that put `Weather::Desert`, `Weather::
+# Overgrown`, `Op::Curvature`, `Op::Occlusion`, `Op::Facing` and `WeatherRequest::scope` under
+# load, and cost the building six hundred times its sample time to do it. Everything after them is
+# the FINISHING COAT: seventeen hand-written rules that weather the whole ninety-four metres of
+# elevation for a twentieth of that, because a rule keyed on a pattern and placed on a shape has a
+# bounding box and reads nothing but the point it is asked about. Read the header of that section
+# before touching either half; they solve the same problem and they are not interchangeable.
+#
 # ------------------------------------------------------------------------------------------------
 # WHAT THIS FILE PUTS UNDER LOAD: the weathering subsystem, and the three field operations that
 # exist only to serve it.
@@ -66,30 +75,34 @@
 include "_contract.clip"
 
 # ================================================================================================
-# THE PART — 0.225 m of granite that nobody will ever see
+# THE PART — two pieces of weathering that are matter rather than colour
 # ================================================================================================
 #
-# The manifest's unions want a `part_<name>` from every fragment, and this fragment's output is
-# two statements rather than a shape. So this is a setting-out stone: a half-module cube buried in
-# the middle of the podium's mass on the centre line, granite on all six sides of it, adding
-# nothing to any surface in the building.
+# THE SETTING-OUT STONE IS GONE, AND IT WAS NEVER IN THE BUILDING. For this fragment's whole life
+# `part_surface` was one buried half-module cube — `box -0.1125 0.5625 -2.3625 0.1125 0.7875
+# -2.1375` — put in the middle of the podium's mass on the centre line because the manifest's
+# unions want a `part_<name>` from every fragment and this file's output was two statements rather
+# than a shape. It was painted `paint granite where=surface_datum below=0.02`.
 #
-# Buried rather than merely small, on purpose. Anything on a surface would be one more object the
-# next person has to design around, and this fragment's whole claim is that it changes no
-# geometry: it changes what the geometry is made of.
-let surface_datum = box -0.1125 0.5625 -2.3625   0.1125 0.7875 -2.1375 round=0.015
-
-let part_surface = surface_datum
+# It is inside `crypt_room`, which is `box -11.70 -0.4625 -5.70  11.70 1.6875 5.70`, and
+# `void_crypt` is subtracted from `built` in the manifest. So the cube was excavated by the crypt
+# on the first build after crypt.clip was written, the paint rule had no voxel to land on, and both
+# have been dead ever since. Nothing said so: the fragment reported one component, the manifest
+# counted twenty-seven parts and twelve voids and balanced, and `clipcheck` could not tell anybody
+# because its paint diagnostic counted evaluations rather than matches and its counter was never
+# switched on. It was found from the assembly end, by auditing what each `difference` removes.
+#
+# There is no replacement stone because there no longer needs to be one: this fragment now has real
+# geometry, built in section 9 — a cove of soil in the angle where the north wall stands on the
+# terrace, and a row of moss cushions on the north string course. `part_surface` is bound to those
+# two at the bottom of the file, where the noise that displaces them is already defined. Both stand
+# outside every void in the building and both are checked against the ones that come nearest.
+#
+# The claim this file used to make, that it changes no geometry, is no longer true.
 
 # This fragment hollows nothing. Said out loud, as the template asks, so the manifest never has to
 # wonder whether a fragment carved something:
 # there is no void_surface.
-
-# Granite, because it is inside the podium's granite and a voxel of it that somehow reached air
-# should not announce itself. below=0.02 like every other rule in the building: the manifest
-# displaces everything by 12 mm of grain at the end, and a test at zero misses the voxels the
-# grain made.
-paint granite where=surface_datum below=0.02
 
 # ================================================================================================
 # THE ZONES — boxes, and the reason they are boxes
@@ -110,7 +123,7 @@ paint granite where=surface_datum below=0.02
 # --- the sunny side: the great steps and the podium face they climb to -------------------------
 #
 # x to +-9.90 (22 M): the flight is +-9.45 and this is a module beyond its cheek walls.
-# z from -15.75 (35 M) to -12.60 (28 M): the bottom nosing, to a module INSIDE the podium's south
+# z from -16.50 to -12.60 (28 M): past the bottom nosing, to a module INSIDE the podium's south
 # face at -12.825, so the far edge of the mask is buried in stone and cannot show.
 # y from -0.45 (-M) to 1.80 (podium_top): the terrace is the ceiling, which is a real arris.
 #
@@ -119,7 +132,15 @@ paint granite where=surface_datum below=0.02
 # site.clip paints the whole southern approach gravel from the boundary out to z = -13.05. The two
 # reflecting basins start at x = 11.70 and the site's bronze urns stand at x = +-10.575, both
 # well outside +-9.90.
-let surface_sun_steps = box -9.90 -0.45 -15.75   9.90 1.80 -12.60
+#
+# THE NEAR EDGE MOVED WITH THE STAIR AND THIS ZONE HAD NOT. steps.clip's flight used to run
+# z -15.70 to -12.41 and now runs -16.25 to -12.96, because the top nosing had to land on the
+# podium's south face at -13.05 rather than 0.55 m north of it. At -15.75 this zone stopped half a
+# metre short of the bottom four risers, so the one part of the flight that actually collects drift
+# — the foot of it, on the gravel — was outside the desert scope. -16.50 is the clip's own bounds
+# and not a module multiple, which is why it is written here rather than derived: there is no
+# module line left between the bottom nosing at -16.25 and the edge of the sampled box.
+let surface_sun_steps = box -9.90 -0.45 -16.50   9.90 1.80 -12.60
 
 # --- the sunny side: the wash of the main cornice ----------------------------------------------
 #
@@ -216,3 +237,519 @@ let surface_damp = union { surface_damp_foot surface_damp_ledge }
 
 weather desert    0.18 scale=1.00 level=-0.45 seed=83 on=surface_sun
 weather overgrown 0.18 scale=0.90 seed=89 on=surface_damp
+
+# ================================================================================================
+# THE FINISHING COAT — the weathering that is written by hand, and why it is not `weather`
+# ================================================================================================
+#
+# Everything above this line is the ENGINE's weathering, and the request file next door says what
+# it costs: `Weather::Desert` and `Weather::Overgrown` are keyed on `Op::Occlusion`, `Op::Facing`
+# and `Op::Curvature`, all three of which read `script.solid` — the whole assembled building —
+# several times over per voxel, and neither kind can be settled for a block. Two lines cost the
+# cut-down facility 362 ms -> 237,303 ms. They stay, because they are the only thing in this
+# repository that exercises those three field operations and the `on=` scope, and deleting them
+# would make four fifths of `enum class Weather` dead code again.
+#
+# But they are two lines, they reach two places, and the building has ninety-four metres of
+# elevation. So everything below is the same job done with the tool that scales: a paint rule
+# keyed on a PATTERN and placed on a SHAPE, which `sample.cpp` gives a bounding box and prunes,
+# and which reads nothing but the point it is asked about. `walls.clip` invented the idiom for its
+# ashlar joints and it is used here fifteen times over:
+#
+#     let dirty = max { <a zone shape>  add { constant <t>  negate { <a pattern> } } }
+#     paint tuff where=dirty below=0.035
+#
+# `max` is intersection written arithmetically, so this is at most nought only where the point is
+# BOTH inside the zone AND above the threshold; and `Field::bounds_of` gives a `max` the tighter of
+# its children's boxes, so the whole rule carries the zone's box and costs nothing anywhere else.
+# Nothing below evaluates the solid, so nothing below is charged for the building.
+#
+# ------------------------------------------------------------------------------------------------
+# WHAT SEPARATES A SCAN FROM A RENDER, WHICH IS THE WHOLE BRIEF FOR THIS SECTION
+#
+#   DIRT OBEYS GRAVITY AND WATER.   Every stain here runs DOWNWARD, because the noise it is cut
+#                                   from is stretched eight times along y (`scale { fbm } y=8`),
+#                                   and it starts under a drip line and dies out below it, because
+#                                   the threshold is faded by a `smoothstep` of the y coordinate.
+#                                   A soffit that rain cannot reach is PALER than the face beside
+#                                   it, and the top of every horizontal is dirtier than its face.
+#                                   A uniform grime layer is the giveaway and there is none here:
+#                                   every rule is a zone times a pattern times a height.
+#
+#   MATERIALS AGE DIFFERENTLY.      Bronze goes green where water sits on it and stays brown-gold
+#                                   where a hand touches it; limestone bleaches on the south front
+#                                   and blackens on the north; the same wall is four materials
+#                                   between the ground and the cornice.
+#
+#   BIOLOGY LIVES WHERE WATER SITS. Moss is in the bed joints of the NORTH rustication and on the
+#                                   north string course and nowhere else. Lichen is on the tops
+#                                   that stand in the open. Neither is sprayed over a face.
+#
+#   WEAR FOLLOWS PEOPLE.            The portico floor and the great door's threshold are walked
+#                                   dark and smooth down the middle; the door leaves are polished
+#                                   bright at 1.08 m above the floor, which is where the ring
+#                                   handles are and where a hand goes.
+#
+#   AND SOME OF IT IS MATTER.       At 32 voxels to the metre a voxel is 31 mm, so a moss cushion
+#                                   and a cove of soil in the angle of a wall are SHAPE and not
+#                                   colour. Both are built below, in `part_surface`, and both are
+#                                   displaced by a noise so that no two metres of them are alike.
+#
+# WHAT IT DOES NOT DO, AND WHY — said here rather than left to be discovered:
+#
+#   NO CHIPPED ARRISES, NO DISHED TREADS, NO HOLLOWED THRESHOLD. All three are subtractions, and
+#   this fragment cannot subtract. `clips/facility.clip` takes matter away in exactly one place —
+#   `let hollowed = difference { built void_doors void_windows void_vestibule ... }` — and there
+#   is no `void_surface` in that list. A fragment that wants to remove matter from the finished
+#   building needs one line in the manifest and this file is not allowed to write it. Everything
+#   this fragment adds is therefore additive, and the two matter pieces below are the two kinds of
+#   weathering that genuinely ADD material rather than take it away. When somebody adds
+#   `void_surface` to that difference, the chipping belongs here.
+#
+#   NOTHING TOUCHES THE WINDOWS, and the exclusion is arithmetic rather than a promise.
+#   `windows.clip` says DO NOT WEATHER THIS PART: its glazing bars are 0.030 m across, one voxel,
+#   and a displacement of 0.012 is 40% of one. Every joinery bar and every pane in this building
+#   is RECESSED BEHIND THE WALL FACE — `windows_pn_barv` and `windows_ga_barv` sit at local
+#   z = 0.165..0.2475 and the glass at 0.225..0.27, against a wall face at local z = 0 — so on the
+#   south front they are at z = -7.335..-7.2525, on the north at 7.2525..7.4175, and on the ends at
+#   |x| = 15.7525..15.835. EVERY PAINT zone below that touches a wall face stops 0.06 m behind that
+#   face at the deepest (z = -7.45 south, 7.47 north, |x| = 15.94 on the ends), which is 0.09 m
+#   clear of the nearest bar on every front. Two things go deeper and both are checked: the moss
+#   rule is deliberately IN the north rustication channels at z 7.36..7.47, which is still 0.055
+#   short of a bar and three and a half metres below the nearest one; and the soil cove, which is
+#   matter rather than paint, laps to z 7.42 at y 1.72..2.02, against a lowest window sill in this
+#   building of 2.385. The sills, jambs and cornices those windows are set in are stone and are
+#   weathered like the rest of the elevation; the joinery and the glass are not reached at all.
+#
+#   NOTHING IS DECLARED. Every material below is one `_contract.clip` already holds. The contract
+#   is the one place a material is declared and a weathering coat is a poor reason to break that,
+#   so the palette is read rather than extended: `tuff` for grime, `slate` for the black runnels
+#   and the walked path, `sandstone` for splash, `bark` for the soil line, `plaster` for a dry
+#   soffit, `marble_hot` for sun-bleach, `verde` for the damp north, `hedge` for moss,
+#   `travertine` for lichen, `copper` and `malachite` for verdigris, `ormolu` for polished bronze,
+#   `terracotta` for an iron stain, `gravel` for wind-blown dust.
+# ------------------------------------------------------------------------------------------------
+
+# ================================================================================================
+# THE GRAMMAR — five patterns, and every stain in the building is made of them
+# ================================================================================================
+#
+# `scale` with unequal factors is what turns a blob into a run. The field evaluates the child at
+# p/(1, 8, 1), so a feature 0.36 m across becomes 0.36 across and 2.9 m long — which is a stain
+# that ran down a wall rather than a patch of noise. It costs the node its bounding box (an
+# unequal scale under-reports distance and `field.cpp` refuses to bound it), and that costs
+# nothing here because every one of these is used inside a `max` with a zone, and `max` takes the
+# tighter box of the two.
+let s_run    = scale { fbm size=0.36 octaves=4 seed=311 } x=1 y=8 z=1
+let s_run_bd = scale { fbm size=0.90 octaves=3 seed=317 } x=1 y=6 z=1
+
+# The mottle a piece of stone weathers in, and the grit that keeps every edge in this file ragged.
+# Nothing below is thresholded on a smooth noise alone: a smooth threshold draws a smooth line and
+# a smooth line is a drawing.
+let s_patch  = fbm size=0.60 octaves=4 seed=331
+let s_grit   = fbm size=0.08 octaves=3 seed=337
+let s_moss_n = fbm size=0.28 octaves=3 seed=349
+
+# The three working patterns. `blend { a b } t` is a*(1-t) + b*t, so each of these is the broad
+# shape of a stain with a fifth of the fine grit mixed into it, and no threshold in this file is
+# ever taken against a smooth noise on its own.
+let s_streak = blend { s_run   s_grit } t=0.22
+let s_bloom  = blend { s_patch s_grit } t=0.25
+let s_wash   = blend { s_run_bd s_grit } t=0.18
+
+# ================================================================================================
+# THE SKINS — how far a rule is allowed to reach into a face
+# ================================================================================================
+#
+# 0.06 outward and 0.05 inward of the face it names, and both numbers are chosen rather than
+# comfortable. Outward, because `paint ... below` is a distance test at a voxel's CENTRE and a
+# surface voxel's centre can sit a little outside the shape it belongs to. Inward, because a zone
+# that reaches deep into a wall makes the sampler walk every buried voxel of it — a paint rule
+# keyed on a pattern cannot be settled for a block, so the cost of one of these is the SOLID
+# VOLUME OF ITS ZONE and nothing else. Every zone here is a skin over a face for that reason, and
+# the total comes to about forty cubic metres of stone against the building's three thousand.
+#
+# So every face zone below is written to the same three numbers and they are worth reading once:
+#
+#   the south wall face  z = -7.50   ->  a zone from -7.66 to -7.45
+#   the north wall face  z =  7.50   ->  a zone from  7.45 to  7.66
+#   the end wall faces  |x| = 16.00  ->  a zone from 15.95 to 16.17
+#
+# The outer figure clears the quoins, which stand 0.135 proud (`walls_quoins`); the inner figure is
+# the one that keeps every rule off the joinery, as the note at the top works out.
+#
+# The south front is taken in two pieces either side of the portico, |x| from 7.70 outward. Inside
+# the portico the wall is under a 5 m soffit and has never been rained on, which is why the streak
+# rules stop there and a dust rule takes over.
+
+# ================================================================================================
+# 1 — WATER: THE STRING COURSE IS THE BUILDING'S BIGGEST DRIP LINE
+# ================================================================================================
+#
+# `walls.clip` puts a bold string course at y 5.31..5.85 standing 0.18 proud of the face all the
+# way round (`walls_sc_band_n` reaches z = 7.680 against a wall at 7.500). Everything that falls on
+# the piano nobile above it is thrown clear of the wall by that band and lands on the rusticated
+# storey below — so the streaks start at 5.34, under its soffit, and are gone by about 3.4.
+#
+# The fade is what makes that true: `smoothstep { axis of=y } from=3.20 to=5.30` is one at the
+# string course and nought two metres under it, and it MULTIPLIES the pattern, so the threshold is
+# never reached at the bottom of the band however the noise falls. It is also the cheap factor and
+# it is written first, because `Op::Multiply` stops at the first factor that is nought and the fbm
+# after it is then never evaluated at all.
+let s_str_s  = mirror { box  7.70 3.20 -7.66  16.12 5.34 -7.45 } axis=x
+let s_str_n  = box   -16.12 3.20  7.45  16.12 5.34  7.66
+let s_str_ew = mirror { box 15.95 3.20 -7.62  16.17 5.34  7.62 } axis=x
+let s_str_zone = union { s_str_s s_str_n s_str_ew }
+
+let s_str_fade = smoothstep { axis of=y } from=3.20 to=5.30
+let s_str_wet  = multiply { s_str_fade s_streak }
+
+# ================================================================================================
+# 2 — SUN AND SHADE, BEFORE ANYTHING RUNS OVER THEM
+# ================================================================================================
+#
+# The building faces south, so the south front stands in the sun all day and the north front never
+# dries. Two coats, both broad, both under everything else, because an aspect is the ground a
+# stain is seen against and not a mark on top of it.
+#
+# South: the corona and crowning cyma of the main entablature (y 11.52..11.90, out to z = -8.22),
+# the ashlar of the wings above the string course, and the podium's south face. Bleached warm and
+# bright — `marble_hot` is the contract's own sunlit stone.
+let s_sun_cornice = mirror { box  7.70  9.95 -8.30  16.30 11.92 -7.86 } axis=x
+let s_sun_ashlar  = mirror { box  7.70  5.90 -7.66  16.12  9.85 -7.45 } axis=x
+# The podium band starts at 1.45 and not at the ground, and that is a clearance rather than a
+# choice: `site_hedge_s_a` and `site_hedge_s_b` are clipped hedges standing to y = 1.35 against the
+# podium's south face at x 10.35..11.25, and a zone that reached them would have bleached a hedge.
+# 1.45 less the rule's own 0.035 is 0.065 clear of the top of one. The band that is left is the
+# podium's bed mould, fillet and corona — the part of the south face that is actually in the sun
+# all day rather than in the shadow of its own cornice.
+let s_sun_podium  = box   -16.60  1.45 -13.12  16.60  1.78 -12.76
+let s_sun_zone    = union { s_sun_cornice s_sun_ashlar s_sun_podium }
+let s_sun_face    = max { s_sun_zone  add { constant -0.10  negate { s_bloom } } }
+paint marble_hot where=s_sun_face below=0.035
+
+# North: a dark film of algae on the wall face between the top of the overgrown zone (2.40) and the
+# bottom of the string course (5.31). It is heaviest at the bottom, where the wall stays wet
+# longest, so the fade runs the other way — one at 2.45 and nought at 5.30.
+let s_shade_zone = box -16.12 2.45 7.45  16.12 5.30 7.66
+let s_shade_fade = smoothstep { axis of=y } from=5.30 to=2.45
+let s_shade_wet  = multiply { s_shade_fade s_bloom }
+let s_shade_face = max { s_shade_zone  add { constant 0.08  negate { s_shade_wet } } }
+paint verde where=s_shade_face below=0.02
+
+# ================================================================================================
+# 3 — THE RUN-OFF, over the top of the aspect
+# ================================================================================================
+
+# The grime. About a fifth of the band, in runs a third of a metre wide and two or three long.
+let s_str_run = max { s_str_zone  add { constant 0.24  negate { s_str_wet } } }
+paint tuff where=s_str_run below=0.035
+
+# And the few near-black runnels inside them, where the same water has run down the same line for
+# a hundred years. Same zone, same pattern, a higher threshold — so these are a subset of the grey
+# ones by construction and cannot land anywhere the grey does not.
+#
+# 0.34 AND NOT 0.52, for the same reason the iron stain is 0.42 and not 0.58, and found the same
+# way. At 0.52 this rule was asked 183,312 times and painted NOTHING, and the only number in any
+# report that said so was a material histogram with `slate` at zero. `clipcheck` cannot see it:
+# the rule fired, the components are unchanged, and 183,312 evaluations look like a rule doing its
+# job. TWO OF THE SEVENTEEN RULES IN THIS FILE WERE WRITTEN THIS WAY AND BOTH WERE INVISIBLE.
+let s_str_dark = max { s_str_zone  add { constant 0.34  negate { s_str_wet } } }
+paint slate where=s_str_dark below=0.035
+
+# THE SPLASH BAND. Rain hitting the terrace and the ground throws earth back up against whatever
+# stands in it, and it never reaches higher than about two thirds of a metre. So: the foot of the
+# wall above the terrace, and the podium's rusticated die above the ground. Warm and earthy rather
+# than grey, because what is in it is soil and not soot.
+let s_spl_wall_s = mirror { box  7.70 1.78 -7.66  16.12 2.45 -7.45 } axis=x
+let s_spl_wall_n = box   -16.12 1.78  7.45  16.12 2.45  7.66
+let s_spl_wall_e = mirror { box 15.95 1.78 -7.62  16.17 2.45  7.62 } axis=x
+let s_spl_pod_s  = box   -16.50 0.45 -12.90  16.50 1.10 -12.76
+let s_spl_pod_n  = box   -16.50 0.45   7.81  16.50 1.10   7.94
+let s_spl_pod_e  = mirror { box 16.36 0.45 -12.90  16.49 1.10 7.94 } axis=x
+let s_spl_zone   = union { s_spl_wall_s s_spl_wall_n s_spl_wall_e
+                           s_spl_pod_s s_spl_pod_n s_spl_pod_e }
+let s_splash     = max { s_spl_zone  add { constant 0.06  negate { s_bloom } } }
+paint sandstone where=s_splash below=0.035
+
+# ================================================================================================
+# 4 — THE DRY SOFFITS: what rain never reaches stays pale
+# ================================================================================================
+#
+# This is the half of weathering that everybody forgets, and it is the half that makes a
+# photograph look like a photograph: the underside of a projection is CLEANER and LIGHTER than the
+# face above it, because nothing has ever washed over it and nothing has ever stained it. Four of
+# them, taken at their real heights:
+#
+#   1.50   the podium corona's soffit, from the fillet face (16.5375 / -12.9375 / 7.9875) out to
+#          the corona face (16.65 / -13.05 / 8.10) — a 0.1125 m drip all the way round
+#   5.40   the string course's soffit, from the neck (7.590) out to the band's face (7.680)
+#  11.52   the main cornice's soffit, from the ovolo (-7.92) out to the corona face (-8.10)
+#   9.90   the portico ceiling, five metres deep and coffered, which has never seen weather at all
+#
+# THE END WALLS ARE NOT THE SAME NUMBERS TURNED ROUND AND THE FIRST VERSION OF THIS GOT THREE OF
+# THEM WRONG. A south zone is written in z as `-7.50 - projection`; the same band on the east front
+# is `16.00 + projection`, and copying the z figures across gives 16.06..16.30 where the cornice
+# soffit actually is 16.42..16.60 — a zone buried inside the corona's own mass, which fires, paints
+# nothing anybody can see, and looks exactly like success. Every `_e` box below is written from the
+# projection: the entablature stands 0.72 out (corona face 0.60, crown 0.72), the string course
+# 0.18, the parapet 0.18, the podium corona 0.65.
+#
+# The cornice band stops at |z| 7.66 / |x| 16.40 on the inboard side ON PURPOSE: the dentils are
+# 0.090 m blocks with 0.045 m gaps at y 11.22..11.40 and z -7.67..-7.84, and a zone that reached
+# them would paint the one piece of thin matter up there. They are 0.12 m below the bottom of this
+# band and outside it in z as well.
+let s_sof_pod_s = box  -16.72 1.44 -13.12  16.72 1.52 -12.90
+let s_sof_pod_n = box  -16.72 1.44   7.93  16.72 1.52   8.17
+let s_sof_pod_e = mirror { box 16.48 1.44 -13.12  16.72 1.52 8.17 } axis=x
+let s_sof_str_s = mirror { box  7.70 5.34 -7.72  16.24 5.44 -7.56 } axis=x
+let s_sof_str_n = box  -16.24 5.34   7.56  16.24 5.44   7.72
+let s_sof_str_e = mirror { box 16.06 5.34 -7.72  16.24 5.44 7.72 } axis=x
+let s_sof_cor_s = mirror { box  7.70 11.46 -8.16  16.30 11.56 -7.90 } axis=x
+let s_sof_cor_n = box  -16.30 11.46   7.90  16.30 11.56   8.16
+let s_sof_cor_e = mirror { box 16.40 11.46 -8.16  16.66 11.56 8.16 } axis=x
+let s_sof_port  = box   -7.66  9.86 -11.20   7.66  9.98  -7.40
+let s_sof_zone  = union { s_sof_pod_s s_sof_pod_n s_sof_pod_e
+                          s_sof_str_s s_sof_str_n s_sof_str_e
+                          s_sof_cor_s s_sof_cor_n s_sof_cor_e
+                          s_sof_port }
+# Nearly all of it, but not all: -0.45 leaves about a fifth of each soffit unpainted, so the pale
+# is a coat with holes in it and not a second material with a hard edge.
+let s_soffit    = max { s_sof_zone  add { constant -0.45  negate { s_bloom } } }
+paint plaster where=s_soffit below=0.035
+
+# ================================================================================================
+# 5 — THE DIRTY TOPS: every horizontal is dirtier than the face under it
+# ================================================================================================
+#
+# The other half of the same argument. A ledge collects what falls out of the air and holds the
+# water that carries it, so the top of a string course, a cornice, a balustrade rail and the
+# terrace edge are the darkest stone on the elevation.
+#
+# The three terrace pieces take only the OUTER 0.33 m of the ledge and not the whole width of it,
+# and that is a budget decision with a number behind it. A paint rule keyed on a pattern cannot be
+# settled for a block, so a box that overlaps a settled-solid block makes the sampler walk every
+# voxel of that block for this one rule; the terrace bands are the widest zones in the file and
+# they lie flat across the largest solid mass in the building. At 0.66 m wide this rule cost
+# 1,082,655 field evaluations at metre 8, which was a fifth of the whole build's paint before this
+# section existed. The outer third is also where the dirt is: the inner edge against the wall is
+# where the soil cove goes, in section 9, and it is matter rather than colour.
+let s_top_str_s = mirror { box  7.70 5.79 -7.72  16.24 5.89 -7.44 } axis=x
+let s_top_str_n = box  -16.24 5.79   7.44  16.24 5.89   7.72
+let s_top_str_e = mirror { box 15.94 5.79 -7.72  16.24 5.89 7.72 } axis=x
+let s_top_cor_s = mirror { box  7.70 11.84 -8.28  16.40 11.96 -7.66 } axis=x
+let s_top_cor_n = box  -16.40 11.84   7.66  16.40 11.96   8.28
+let s_top_cor_e = mirror { box 16.16 11.84 -8.28  16.78 11.96 8.28 } axis=x
+# THE SIX BRONZE URNS STAND IN THE MIDDLE OF THE RAIL ZONE AND ARE CUT OUT OF IT. `parapet_peds`
+# puts a pedestal at (+-16.00, +-7.50) and at (+-8.10, -7.50) and `parapet_urns` stands the order's
+# urn on each, bedded to y = 12.95 — so `urn_plinth` occupies 12.95..13.135, straight through a
+# band meant for the top of a marble handrail. Grime and lichen on a bronze urn is a material
+# error, not a subtle one: it would read as stone. So a 0.60 m square is taken out round each of
+# the six, which costs six small unweathered patches of rail and keeps every rule in this file off
+# the only bronze up there.
+let s_urn_keepout = mirror { union {
+    box 15.70 12.80  7.20  16.30 13.20  7.80
+    box 15.70 12.80 -7.80  16.30 13.20 -7.20
+    box  7.80 12.80 -7.80   8.40 13.20 -7.20
+} } axis=x
+let s_top_rail_s = difference { mirror { box  7.70 12.94 -7.74  16.20 13.06 -7.44 } axis=x
+                                s_urn_keepout }
+let s_top_rail_n = difference { box  -16.20 12.94   7.44  16.20 13.06   7.74  s_urn_keepout }
+let s_top_rail_e = difference { mirror { box 15.94 12.94 -7.74  16.20 13.06 7.74 } axis=x
+                                s_urn_keepout }
+let s_top_ter_s = box  -16.72 1.74 -13.11  16.72 1.86 -12.78
+let s_top_ter_n = box  -16.72 1.74   7.83  16.72 1.86   8.16
+let s_top_ter_e = mirror { box 16.39 1.74 -13.11  16.72 1.86 8.16 } axis=x
+let s_top_zone  = union { s_top_str_s s_top_str_n s_top_str_e
+                          s_top_cor_s s_top_cor_n s_top_cor_e
+                          s_top_rail_s s_top_rail_n s_top_rail_e
+                          s_top_ter_s s_top_ter_n s_top_ter_e }
+let s_tops      = max { s_top_zone  add { constant -0.28  negate { s_bloom } } }
+paint tuff where=s_tops below=0.035
+
+# ================================================================================================
+# 6 — BIOLOGY, WHERE THE WATER SITS AND ONLY THERE
+# ================================================================================================
+#
+# MOSS IN THE BED JOINTS OF THE NORTH RUSTICATION, and this is the one rule in the file that is
+# aimed at a specific piece of somebody else's geometry rather than at a face. `walls.clip` cuts
+# horizontal channels 0.09 wide and 0.135 deep on a 0.60 course — `walls_hchan` is a
+# `repeat { } y=0.60 ny=2` translated to 3.60, so the beds are at y = 2.40, 3.00, 3.60, 4.20 and
+# 4.80. A zone built the same way lands in them exactly, and a channel on a north wall is where
+# moss on a building actually is: a horizontal slot that holds water on the face that never dries.
+#
+# The zone reaches from z 7.36 to 7.47, so it is INSIDE the wall face at 7.50 — which is solid
+# stone except where a channel has taken it away, and the channel floor at 7.365 is what is left.
+let s_moss_bed  = translate { repeat { box -16.12 -0.055 7.36  16.12 0.055 7.47 } y=0.60 ny=2 }
+                            0 3.60 0
+let s_moss_face = max { s_moss_bed  add { constant -0.05  negate { s_moss_n } } }
+paint hedge where=s_moss_face below=0.035
+
+# PALE LICHEN ON THE TOPS THAT STAND IN THE OPEN. A crustose lichen wants light and rain and no
+# feet, which on this building is the cornice and the balustrade rail and nothing else — not the
+# terrace, which is walked, and not the string course, which is in the splash of the storey above.
+# A different seed from the grime, so the patches are not the same patches paler.
+let s_lich_zone = union { s_top_cor_s s_top_cor_n s_top_cor_e
+                          s_top_rail_s s_top_rail_n s_top_rail_e }
+let s_lichen    = max { s_lich_zone  add { constant 0.34  negate { s_moss_n } } }
+paint travertine where=s_lichen below=0.035
+
+# ================================================================================================
+# 7 — THE BRONZE, WHICH AGES NOTHING LIKE THE STONE IT IS SET IN
+# ================================================================================================
+#
+# `doors.clip` hangs two bronze leaves in the great door (x +-1.35, y 1.80..6.30) and one pair in
+# each side doorway (x 4.50..6.30 and mirrored, y 1.80..4.95). They stand under the portico, so
+# rain does not fall on them — but they are bronze in a damp shaded loggia, which is the classic
+# case: green where water creeps and runs, brown-gold bright where a hand has been on them daily
+# for a century.
+#
+# THE TWO DOORS ARE AT DIFFERENT DEPTHS AND THE FIRST VERSION OF THIS MISSED ONE OF THEM.
+# The great door's leaves are BOWED — `doors_gd_slab` is the skin between two cylinders of radius
+# 5.40 and 5.265 struck from (0, -2.25) — so their face runs from z = -7.65 on the centre line to
+# z = -7.479 at the jamb. The side doors are FLAT: `doors_sd_slab` is a box at z -7.41..-7.32, with
+# its bead offset 0.045 in front of that. A single z band cannot hold both, so there are two.
+#
+# Both zones stop at x = 1.34 / 4.56 / 6.24, which keeps them off the marble doorcases:
+# `doors_gd_f1_jamb` starts at x = 1.35, the astragal plate at 1.5075, and the side doorcase runs
+# 3.96 to 6.84 with a void of 4.50 to 6.30 cut out of it. Inside those voids there is no stone at
+# all — `doors_gd_void` and `doors_sd_void` take the wall, the dado band and its cap away — so
+# everything these two zones can reach is bronze.
+let s_door_gd = box  -1.34 1.82 -7.70   1.34 6.25 -7.42
+let s_door_sd = mirror { box 4.56 1.82 -7.47  6.24 4.90 -7.30 } axis=x
+let s_door    = union { s_door_gd s_door_sd }
+
+# Verdigris where the water creeps: the bottom of a leaf, and the vertical runs down it. The first
+# is broad and low, the second is narrow and long and goes on top of it.
+let s_verd_low = box -6.30 1.82 -7.75  6.30 3.30 -7.28
+let s_verd_z   = intersection { s_door s_verd_low }
+let s_verd     = max { s_verd_z  add { constant -0.12  negate { s_bloom } } }
+paint copper where=s_verd below=0.035
+
+let s_verd_run = max { s_door  add { constant 0.46  negate { s_streak } } }
+paint malachite where=s_verd_run below=0.035
+
+# And the hand. The ring handles hang 1.08 m above the floor, so at y = 2.88 on a threshold of
+# 1.80, and a door that is pushed every day is polished bright in a band round them and dulls
+# again above and below. This is the one coat in the file that makes a surface BRIGHTER, and it is
+# the reason the verdigris reads as verdigris rather than as green paint: the two are 0.4 m apart
+# on the same leaf.
+let s_hand_z = intersection { s_door  box -6.30 2.62 -7.75  6.30 3.16 -7.28 }
+let s_hand   = max { s_hand_z  add { constant -0.35  negate { s_grit } } }
+paint ormolu where=s_hand below=0.035
+
+# ================================================================================================
+# 8 — WEAR FOLLOWS PEOPLE
+# ================================================================================================
+#
+# THE WALKED PATH. Everybody who enters this building crosses the portico floor on the centre line
+# and goes through the great door, and a granite floor walked for a century is darker and smoother
+# down the middle than it is at the edges. `slate` is the contract's dark smooth stone —
+# 70,72,78 at roughness 190 against granite's 126,124,120 at 225 — which is exactly the difference
+# between a walked flag and one nobody stands on.
+#
+# The band is 4.8 m wide at the door and the pattern frays it, so it is a path and not a carpet.
+# It runs BETWEEN the two inner columns, whose plinths stand at x 0.675..2.025 on z = -11.15, and
+# so it takes the bottom 0.06 m of those two plinths with it. That is left in deliberately: a dark
+# line where a column foot meets a floor people walk on is what a walked floor does, and the
+# alternative — a path that stops short of the columns — is a carpet again.
+let s_walk_z = box -2.40 1.72 -12.60  2.40 1.86 -7.30
+let s_walk   = max { s_walk_z  add { constant -0.34  negate { s_wash } } }
+paint slate where=s_walk below=0.02
+
+# THE DUST ON THE SHELTERED WALL. Under a five metre soffit nothing is ever washed, so what
+# collects on the portico's back wall is dry wind-blown dust rather than a stain — pale, even, and
+# with no run in it at all, which is why this is the one rule keyed on the blotchy pattern and not
+# on the stretched one. The three pieces are the piers between the three doorways and the wall
+# above their heads; the doorways themselves are bronze and are painted above.
+let s_dust_a = mirror { box 1.90 1.82 -7.60  4.30 6.85 -7.45 } axis=x
+let s_dust_b = mirror { box 6.50 1.82 -7.60  7.60 6.85 -7.45 } axis=x
+let s_dust_c = box -7.60 6.90 -7.60  7.60 9.85 -7.45
+let s_dust_z = union { s_dust_a s_dust_b s_dust_c }
+let s_dust   = max { s_dust_z  add { constant -0.20  negate { s_bloom } } }
+paint gravel where=s_dust below=0.035
+
+# THE IRON STAIN. A classical cornice is cramped to the wall behind it with iron, and iron in a
+# limestone cornice rusts and bleeds down the face below it in narrow rust-coloured runs. Rare —
+# the threshold is the highest in the file — and only on the corona and crown of the main
+# entablature, which is where the cramps are.
+#
+# 0.42 AND NOT 0.58, AND THE FIRST NUMBER IS WHY `clipcheck` ALONE IS NOT ENOUGH. At 0.58 this
+# rule was evaluated 68,110 times on the whole building at metre 8 and painted NOT ONE VOXEL:
+# `s_streak` is a four-octave fbm blended with a finer one, and it does not reach 0.58 often enough
+# to land on a band 0.28 m deep. It is not in clipcheck's `never fired` list either, because that
+# list is rules whose test was never ASKED, and this one was asked seventy thousand times. The only
+# thing that caught it was the material histogram: terracotta came out 516 before and 516 after.
+let s_rust_s = mirror { box  7.70 11.48 -8.30  16.34 11.92 -8.02 } axis=x
+let s_rust_n = box  -16.34 11.48   8.02  16.34 11.92   8.30
+let s_rust_e = mirror { box 16.52 11.48 -8.30  16.80 11.92 8.30 } axis=x
+let s_rust_z = union { s_rust_s s_rust_n s_rust_e }
+let s_rust   = max { s_rust_z  add { constant 0.42  negate { s_streak } } }
+paint terracotta where=s_rust below=0.035
+
+# ================================================================================================
+# 9 — THE MATTER: two pieces of weathering that are shape and not colour
+# ================================================================================================
+#
+# At the contract's 32 voxels to the metre a voxel is 0.03125 m. A moss cushion on a ledge stands
+# two or three of those proud of it and a fillet of soil against a plinth is five or six across —
+# both are MATTER at this resolution and painting them would be a lie. Both are also ADDITIVE,
+# which is what makes them possible from this file at all (see the note at the top).
+#
+# Both are displaced by a noise at 0.05 m, which is 1.6 voxels at metre 32 and therefore survives
+# `usable_displacement`'s half-a-voxel floor — anything smaller is dropped at parse time with a
+# warning, and the manifest's own 0.012 m of grain is dropped exactly that way today.
+
+# THE SOIL FILLET in the angle where the north wall stands on the podium terrace. Where a wall
+# meets a flat on a side nobody walks, a cove of soil and leaf litter builds up against it; it is
+# one of the most reliable things in a photograph of a building and one of the first things
+# missing from a render. Built as a box in the corner with a cylinder taken out of it, which makes
+# a concave cove rather than a triangular ramp, and lapped into the wall and into the terrace so it
+# can never float — see the note below for how deep and why that number is not 0.05.
+#
+# NOT AT THE FOOT OF THE PLINTH, which was the first place I put it and is already occupied:
+# `site_hedge_skirt_n` is a clipped hedge at z 8.100..8.500 and y -0.090..0.225 running the whole
+# north front, and `site_hedge_skirt_e` does the same at |x| 16.65..17.00. A fillet of soil down
+# there would have been built inside a hedge and painted over it. The terrace ledge north of the
+# wall is 0.60 m of open stone between the wall face at 7.50 and the podium's corona at 8.10, and
+# there is nothing on it: `part_terrace` is the ROOF garden, twelve metres up.
+#
+# THE LAP IS 0.08 AND NOT 0.05, AND THE DISPLACEMENT IS WHY. Rule 4 of the brief asks for 0.05 of
+# overlap so a join cannot open; a displacement of +-0.05 on top of that can take all of it back
+# and leave the cove touching the wall along a line rather than a face. Built at 0.05 it put ONE
+# extra floating voxel into the finished building at metre 8 — 804 components before, 805 after.
+# So the box laps 0.08 behind the wall face (7.42 against 7.50) and 0.08 under the terrace top
+# (1.72 against 1.80), which is 0.03 of overlap left at the worst the noise can do.
+let s_fillet_mass = box -16.00 1.72 7.42   16.00 1.97 7.70
+let s_fillet_cut  = cylinder 0 1.97 7.70  r=0.25 h=33 axis=x
+let s_fillet_raw  = difference { s_fillet_mass s_fillet_cut }
+let s_fillet      = displace { s_fillet_raw s_bloom } amount=0.05
+
+# THE MOSS CUSHIONS on the north string course. The band's top at y 5.85 runs from z 7.455 to
+# 7.635, an 0.18 m ledge on the one elevation that never dries, and moss on a ledge is a cushion
+# with a thickness — not a green film. Lapped 0.05 down into the band (5.80 against a top at 5.85)
+# and displaced by half again its own height, so it is a row of separate cushions rather than a
+# ridge: where the noise is low the surface drops below the stone and there is simply no moss.
+# Same 0.08 lap for the same reason: the box starts at 5.74, which is 0.11 below the band's top at
+# 5.85 and well inside the ovolo underneath it, so the bottom of a cushion is in stone whatever the
+# noise does. The gaps are still there — where the noise runs the other way the top drops below
+# 5.85 and the cushion is simply buried in the stone it sits on — and that is what makes this a row
+# of cushions rather than a green ridge running thirty-two metres.
+let s_cushion_raw = box -16.18 5.74 7.48   16.18 5.90 7.62
+let s_cushion     = displace { s_cushion_raw s_moss_n } amount=0.05
+
+let part_surface = union { s_fillet s_cushion }
+
+# Painted last of everything in the building, which is what being the last include buys.
+#
+# KEYED ON THE DISPLACED SHAPE AND NOT ON THE BOX IT WAS CUT FROM, which is the opposite of what
+# BRIEF.md rule 5 asks for and is right here for the reason that rule exists. The rule says
+# `below=0.02` because the manifest displaces the finished building AFTER a fragment has painted
+# it, so a rule keyed on the undisplaced shape has to reach out to catch the voxels the grain made.
+# These two shapes carry their own displacement INSIDE the node the rule names, so the node's own
+# surface is where the matter is: `below=0.03` on `s_fillet` is exactly the cove and nothing else.
+# Keyed on `s_fillet_raw` instead it would need `below=0.06` to cover the same voxels, and 0.06 of
+# reach off a box that runs the whole north front is a continuous green band on the stone under it
+# — a uniform layer, which is the thing this whole section exists not to be.
+paint bark  where=s_fillet  below=0.03
+paint hedge where=s_cushion below=0.03
