@@ -41,6 +41,14 @@
 #    nothing large to hold on to. It is built as real matter — a `cells` field displacing a rounded
 #    mass — and not as a green box, so what a summary has to summarise is a real surface with real
 #    curvature and not a lie about one.
+#
+#    AND THE CROWN IS NINE MASSES AND NOT ONE. A tree drawn as a sphere on a stick is a silhouette
+#    problem before it is a foliage problem: a sphere is the same shape from every direction, so
+#    nothing about its outline tells the eye where the light is, and sixteen identical ones tell it
+#    the building is a diagram. The crowns here are nine overlapping ellipsoids apiece with sky
+#    between them, over four limbs that divide, on a trunk that tapers because it is a cut cone and
+#    not a capsule — and there are two different trees set out A B A B so no two standing together
+#    are the same. See THE TREE, below, for what each of the three costs and what it is worth.
 # ------------------------------------------------------------------------------------------------
 #
 # WHAT THE ROOF ACTUALLY IS, AND WHY THE PLAN IS TWO COURTS AND NOT ONE ROOM. This is the thing
@@ -106,11 +114,17 @@
 #                      lead at the drum, so the paving reads as a course laid on the roof and not
 #                      as the roof. The lid over a roll channel is 0.09 (M/5) on bay one, and
 #                      0.1275, 0.165 and 0.2025 on the three bays outside it.
+#   12.255             the floor of a paving joint and the top of the four worn hollows: the floor
+#                      less 0.045, which is a voxel and a half at metre 32 and NOTHING at metre 8,
+#                      where no voxel centre lies between 12.255 and 12.30 at all. That is the test
+#                      a piece of detail has to pass here — it may cost the coarse sample nothing.
 #   12.45              kerbs, plinths and pot feet: M/3 above the floor
 #   12.75              the cistern rim and the seats: M above the floor
 #   13.20              the iron rail: 2 M above the floor, 0.20 above the balustrade
+#   14.019             the lantern finials, which are the highest bronze
+#   14.20              the highest leaf on a tub citrus
 #   14.19              the arbour cornice, the highest stone; 14.255 the armillary's meridian ring;
-#                      14.22 the highest leaf. NOTHING reaches 14.30.
+#                      14.22 the highest leaf, which is on the treillage. NOTHING reaches 14.30.
 #
 # WHY THE FLOOR IS AT 12.30 AND NOT AT 12.25. At 12.25 the lid over bay one's channel is 0.04 —
 # one and a quarter voxels at metre 32 and a third of one at metre 8 — and the paving comes apart
@@ -185,8 +199,6 @@ let terr_slot_thr = repeat { box 10.30 11.90 -0.09   12.55 12.1350 0.09 } z=0.90
 let terr_slot_fou = repeat { box 12.55 11.90 -0.09   14.20 12.0975 0.09 } z=0.90 nz=5
 let terr_roll_slot = union { terr_slot_one terr_slot_two terr_slot_thr terr_slot_fou }
 
-let terr_paving = difference { terr_bed_all  terr_well  terr_roll_slot }
-
 # THE FLAGGING. A grid of granite joint bands 0.09 wide on a 0.90 pitch (D), let into the top 0.09
 # of the travertine and offset by 0.45 so that a joint never lands over a roll channel. It is
 # geometry and not a pattern rule, and it is intersected with my own paving, because a bare pattern
@@ -197,10 +209,100 @@ let terr_paving = difference { terr_bed_all  terr_well  terr_roll_slot }
 # to 4.95 on the north and stop at 4.05 on the south, which is a seam the eye finds at once.
 let terr_joint_seed_x = repeat { box -1 12.21 -0.045   20 12.31 0.045 } z=0.90 nz=5
 let terr_joint_seed_z = repeat { box -0.045 12.21 -6   0.045 12.31 6 } x=0.90 nx=15
-let terr_joints = intersection {
-    terr_paving
-    translate { union { terr_joint_seed_x terr_joint_seed_z } } 0.45 0 0.45
+let terr_joint_grid = translate { union { terr_joint_seed_x terr_joint_seed_z } } 0.45 0 0.45
+
+# AND THE JOINT IS A CUT, NOT A STRIPE. The band above painted granite and stopped there, which is
+# a drawing of a joint: one flat plane with a pattern on it, and at a low sun it stays one flat
+# plane because nothing on it can cast a shadow. The same grid raised by 0.045 and SUBTRACTED sinks
+# every joint 0.045 into the floor, so what is left standing between them is 0.90 m slabs with an
+# arris each, and the granite band is now the bottom of the joint rather than a stripe across the
+# top of the stone.
+#
+# 0.045 deep and 0.09 wide is one and a half voxels by three at the contract's metre 32. It is
+# NOTHING at metre 8 and that is deliberate: the groove floor at 12.255 is above the 12.1875 voxel
+# centre that carries the paving there, so no coarse sample loses a single voxel of floor to it and
+# the two-component-per-court result the file's own note records is untouched. Detail that costs
+# the coarse sample nothing is detail that can be afforded.
+let terr_joint_cut = translate { terr_joint_grid } 0 0.045 0
+
+# WHERE FEET FALL, AND WHERE THE FROST GETS IN. Six dishes and five chips, drawn in the quarter
+# and folded in z, all of them MATTER TAKEN AWAY and none of them paint:
+#
+#   the dishes   flattened ellipsoids centred exactly on the floor, so each cuts its own ry into
+#                it and no arithmetic is needed to say how deep it is. They stand where a person
+#                actually stands — in front of the ambulatory seat, on the cross walk, and at the
+#                south kerb of the cistern where you lean over it. 0.040 to 0.050 deep: one and a
+#                half voxels, hollowed over three quarters of a metre, which is what a century of
+#                feet does to a soft stone and what no paint rule can imitate.
+#
+#                EACH ONE SITS INSIDE A SINGLE SLAB, centred on a multiple of 0.90 and never wider
+#                than 0.80, and that is not composition — it is the only arrangement that does not
+#                shed voxels. A dish 1.60 across in front of the seat ran its own shallow rim
+#                THROUGH the joint grooves at x = 7.65 and z = +-0.45, and where a rim that is
+#                rising 0.05 over half a metre crosses a groove that is 0.045 deep, the stone left
+#                between them is one voxel thick and touches its neighbours only at a corner. That
+#                one dish put the part from 38 components to 46 at metre 32; six slab-sized ones
+#                take out MORE stone in total and the count is 38 with the same 94 loose voxels the
+#                armillary has always had. A slab wears in its own middle in any case, because the
+#                joint round it is where the foot lands last.
+#   the chips    spheres straddling the open arris at |z| = 4.95, the one edge on this terrace with
+#                a 0.30 m drop under it and nothing over it. Unequal on purpose.
+#   the chamfer  the same arris, taken off at 45 degrees for 0.05 along its whole length. A plane
+#                confined to a band box, because a chamfer is a plane and a `wedge` can only cut
+#                the other diagonal.
+#   the settled  six single slabs taken down 0.030, 0.0375 or 0.045 — one voxel, one and a fifth,
+#                one and a half at metre 32. A slab bed is sand and no two bays of it settle the
+#                same, so the joint beside a settled slab reads as a STEP rather than as a groove,
+#                and that step is the difference between a floor of slabs and a floor with lines
+#                ruled on it. Each is a whole 0.90 cell of the joint grid — the grid runs at
+#                +-0.45 + 0.90k, so a slab is centred on a multiple of 0.90 — and every one of the
+#                six stands where nothing else does: no kerb, foot, plinth or sill is bedded into
+#                a slab that moves under it.
+let terr_wear_q = union {
+    ellipsoid  7.200 12.30 0.000  rx=0.38 ry=0.050 rz=0.38
+    ellipsoid  7.200 12.30 0.900  rx=0.36 ry=0.040 rz=0.22
+    ellipsoid  9.900 12.30 0.000  rx=0.38 ry=0.045 rz=0.38
+    ellipsoid 10.800 12.30 0.000  rx=0.38 ry=0.045 rz=0.38
+    ellipsoid  9.900 12.30 1.800  rx=0.36 ry=0.040 rz=0.36
+    ellipsoid 10.800 12.30 1.800  rx=0.36 ry=0.040 rz=0.36
+
+    sphere  5.85 12.290 4.95 r=0.075
+    sphere  7.20 12.300 4.95 r=0.045
+    sphere  8.62 12.300 4.95 r=0.055
+    sphere 11.91 12.280 4.95 r=0.065
+    sphere 13.44 12.300 4.95 r=0.050
+
+    box  7.65 12.2625 -0.45    8.55 12.35  0.45
+    box  9.45 12.2550  1.35   10.35 12.35  2.25
+    box  6.75 12.2700  2.25    7.65 12.35  3.15
+    box  7.65 12.2625  3.15    8.55 12.35  4.05
+    box 12.15 12.2550  3.15   13.05 12.35  4.05
+    box  9.45 12.2700 -0.45   10.35 12.35  0.45
+
+    intersection {
+        plane 0 -1 -1 at=-12.16224
+        box -1 12.20 4.85   14.20 12.36 5.05
+    }
 }
+let terr_wear = mirror { terr_wear_q } axis=z
+
+let terr_paving = difference { terr_bed_all  terr_well  terr_roll_slot  terr_joint_cut  terr_wear }
+
+let terr_joints = intersection { terr_paving terr_joint_grid }
+
+# The stone AROUND the dishes, for the coat that goes on it. A hollow worn by feet is not the same
+# colour as the floor beside it — it is burnished rather than weathered, because the one thing that
+# never happens in it is that dust settles and stays. The shapes are the dishes again, grown, and
+# intersected with the paving so the rule cannot reach anything that is not this floor.
+let terr_worn_q = union {
+    ellipsoid  7.200 12.30 0.000  rx=0.44 ry=0.115 rz=0.44
+    ellipsoid  7.200 12.30 0.900  rx=0.42 ry=0.105 rz=0.28
+    ellipsoid  9.900 12.30 0.000  rx=0.44 ry=0.110 rz=0.44
+    ellipsoid 10.800 12.30 0.000  rx=0.44 ry=0.110 rz=0.44
+    ellipsoid  9.900 12.30 1.800  rx=0.42 ry=0.105 rz=0.42
+    ellipsoid 10.800 12.30 1.800  rx=0.42 ry=0.105 rz=0.42
+}
+let terr_worn = intersection { terr_paving  mirror { terr_worn_q } axis=z }
 
 # ================================================================================================
 # THE PARTERRES — box scrollwork on gravel, in a granite kerb
@@ -228,18 +330,32 @@ let terr_hedge_b = translate { terr_par_box } 12.15 0 1.575
 let terr_hedges = union { terr_hedge_a terr_hedge_b }
 
 # The kerb: a granite frame 0.09 thick standing M/3 above the floor, bedded 0.05 into it.
+#
+# ROUNDED AT 0.025 AND NOT AT 0.01, and one sphere out of a corner of each. A kerb is the piece of
+# this terrace a wheelbarrow hits: its arris is never sharp after the first season, and 0.025 is
+# most of a voxel at metre 32 where 0.01 is a third of one and reads as a machined edge. The inner
+# box is rounded too, or the outside is worn and the inside is not, which is the wrong way round —
+# the inside is where the gravel scours it.
 let terr_kerb_a = difference {
-    box  7.65 12.25 0.90    9.45 12.45 2.25  round=0.01
-    box  7.74 12.25 0.99    9.36 12.50 2.16
+    box  7.65 12.25 0.90    9.45 12.45 2.25  round=0.025
+    box  7.74 12.25 0.99    9.36 12.50 2.16  round=0.02
+    sphere 9.45 12.45 1.62 r=0.055
+    sphere 7.65 12.45 2.25 r=0.045
 }
 let terr_kerb_b = difference {
-    box 11.25 12.25 0.90   13.05 12.45 2.25  round=0.01
-    box 11.34 12.25 0.99   12.96 12.50 2.16
+    box 11.25 12.25 0.90   13.05 12.45 2.25  round=0.025
+    box 11.34 12.25 0.99   12.96 12.50 2.16  round=0.02
+    sphere 11.25 12.45 1.17 r=0.050
+    sphere 13.05 12.45 2.25 r=0.060
 }
 let terr_kerbs = union { terr_kerb_a terr_kerb_b }
 
-let terr_gravel_a = box  7.74 12.28 0.99    9.36 12.42 2.16
-let terr_gravel_b = box 11.34 12.28 0.99   12.96 12.42 2.16
+# The gravel, displaced by a cell field so that it is GRAVEL and not a green baize: 0.02 of relief
+# at 0.075 m spacing is two to three stones across a voxel at metre 32, which is the coarsest a
+# gravel can be and still read as loose. It stops 0.03 under the kerb top, as raked gravel does.
+let terr_grit = cells size=0.075 seed=29
+let terr_gravel_a = displace { box  7.74 12.28 0.99    9.36 12.42 2.16   terr_grit } amount=0.02
+let terr_gravel_b = displace { box 11.34 12.28 0.99   12.96 12.42 2.16   terr_grit } amount=0.02
 let terr_gravel = union { terr_gravel_a terr_gravel_b }
 
 # ================================================================================================
@@ -251,35 +367,234 @@ let terr_gravel = union { terr_gravel_a terr_gravel_b }
 # follows from the circle rather than from a choice. The two on the verge stand at x = 13.275, the
 # middle of the M-wide walk, on the same two axes.
 
+# THE POT IS A VESSEL AND NOT A LUMP OF CLAY. The section is the outer wall LESS a core taken out
+# from 12.60 up, which leaves a rim 0.06 thick — two voxels at the contract's metre 32 — with earth
+# standing in the hollow behind it. Every pot on this terrace is seen from above, because the floor
+# it stands on is eleven metres up and the sky is behind it; a pot whose wall has no thickness is
+# read as a painted cylinder the moment anybody looks down into it.
+#
+# THE THROWING RINGS ARE MATTER, AND THEY ARE IN THE SECTION RATHER THAN IN A DISPLACEMENT. Five
+# ridges 0.075 apart standing 0.019 proud of the belly, drawn as a `repeat` INSIDE the profile that
+# is revolved — so they are exact geometry on an exact surface of revolution, and the sampler is
+# never asked to decide whether a voxel is on a bump or beside one.
+#
+# It was a `displace` by a sine first, and the difference is 48 voxels of loose clay. A sine
+# displacement moves the whole surface in and out by 0.018 at a pitch of three voxels; where that
+# rides over the grain's own displacement the surface grows bumps whose voxels touch the pot only
+# at a corner, and 6-connectivity does not call a corner a join. Measured on one pot at metre 32,
+# with the two arms taken back to back:
+#
+#   the old solid pot                       1 component, nothing floating
+#   rings as a displacement, no grain       1 component (plus the probe box's own crop)
+#   grain, no rings                         1 component (ditto)
+#   BOTH displacements                      7 components, 6 loose voxels — every pot, eight times
+#   rings in the section, grain displaced    see below
+#
+# So the rule this file leaves behind: ONE displacement to a surface, and if a second kind of
+# roughness is wanted, cut or build it as geometry. The grain keeps its displacement because
+# out-of-round is exactly what a displacement is for — it is the whole surface moving, not a
+# feature on it — and 0.02 is above the half-voxel floor at metre 32, so it is not dropped.
+#
+# THE HOLLOW IS TAKEN OUT AFTER THE DISPLACEMENT AND NOT BEFORE, and that is the other half of why
+# this pot survives being sampled. Displacing a shell moves BOTH its faces: a wall of 0.06 with
+# 0.038 of displacement on it is 0.06 - 2 x 0.038 at the worst, which is a negative number, and the
+# first version of this pot came back at metre 32 as a rim in twenty-two loose pieces. Displace the
+# solid, then subtract an exact core, and only the outer face ever moves.
+let terr_pot_ridge = repeat { box 0.150 -0.012 -1   0.199 0.012 1 } y=0.075 ny=2
 let terr_pot_sect = union {
     box 0 12.42 -1   0.150 12.48 1  round=0.01
     box 0 12.48 -1   0.180 12.78 1  round=0.01
     box 0 12.78 -1   0.210 12.87 1  round=0.01
-    bead 0.210 12.87   0.240 12.96
+    box 0 12.87 -1   0.245 12.96 1  round=0.028
+    translate { terr_pot_ridge } 0 12.63 0
 }
-let terr_pot_clay = revolve { terr_pot_sect } axis=y
-let terr_pot_foot = box -0.225 12.25 -0.225   0.225 12.45 0.225  round=0.012
+let terr_pot_void = revolve { union {
+    box 0 12.590 -1   0.090 12.78 1
+    box 0 12.780 -1   0.120 13.01 1
+} } axis=y
+#
+# AND THE SIGN OF A DISPLACEMENT IS THE OTHER HALF OF IT. `displace` adds `amount x pattern` to a
+# distance, and a distance is POSITIVE OUTSIDE — so a positive amount over a pattern that is never
+# negative EATS the shape, it does not swell it. `abs { grain_broad }` at +0.02 took 0.02 off the
+# pot everywhere, which cost the base disc its middle layer at metre 16 and left the whole tub
+# standing free of its own plinth in the component list. The same pattern at MINUS 0.02 swells it,
+# is out of round in exactly the way a kiln makes a pot out of round, and cannot thin anything:
+#
+#   +0.02 x |grain|   (erodes)          pot 2 components at metre 32, tub 2 at metre 16
+#   +0.02 x grain     (both ways)       pot 2, tub 2 — 193 loose voxels at metre 16
+#   no displacement at all              pot 10 components at metre 32 — the bare ridge tips shed
+#   -0.02 x |grain|   (swells)          pot 1, tub 1, NOTHING floating at either
+#
+# The last line is what is here. It is also why the ridges are better off under a swelling than on
+# their own: a displacement that only ever adds matter fattens a sub-voxel ridge into something a
+# voxel centre can land in.
+let terr_pot_turned = revolve { terr_pot_sect } axis=y
+let terr_pot_swell  = abs { grain_broad }
+let terr_pot_grain  = displace { terr_pot_turned terr_pot_swell } amount=-0.02
+let terr_pot_clay   = difference { terr_pot_grain terr_pot_void }
+let terr_pot_foot   = box -0.225 12.25 -0.225   0.225 12.45 0.225  round=0.03
 
-let terr_cai_foot = box -0.225 12.25 -0.225   0.225 12.42 0.225  round=0.012
-let terr_cai_tub  = union {
-    box -0.210 12.40 -0.210   0.210 12.87 0.210  round=0.012
-    box -0.240 12.87 -0.240   0.240 12.96 0.240  round=0.012
+# The earth in it, dished as earth in a pot is dished — watered from above and settled 0.03 in the
+# middle. It overlaps the wall by 0.035 all round, so the tree in it is standing in the tub and not
+# balanced on top of it.
+#
+# IT COMES UP TO THE RIM AND NOT TO HALFWAY, and that is a sampling fact rather than a gardening
+# one. The rim is 0.06 through: at metre 8 a voxel centre lands in it or does not, and where the
+# earth stopped 0.055 below the rim the top course of every pot came back as a five-voxel ring
+# with nothing under it. Filled to 0.02 under the rim the ring and the earth share their voxels all
+# the way down, and the pot is one piece at every detail.
+let terr_pot_soil = difference {
+    revolve { union {
+        box 0 12.605 -1   0.110 12.78 1
+        box 0 12.780 -1   0.140 12.94 1
+    } } axis=y
+    ellipsoid 0 13.000 0  rx=0.16 ry=0.09 rz=0.16
 }
+
+let terr_cai_foot = box -0.225 12.25 -0.225   0.225 12.42 0.225  round=0.03
+let terr_cai_tub  = difference {
+    union {
+        box -0.210 12.40 -0.210   0.210 12.87 0.210  round=0.012
+        box -0.240 12.87 -0.240   0.240 12.96 0.240  round=0.020
+    }
+    box -0.150 12.62 -0.150   0.150 13.00 0.150  round=0.02
+}
+let terr_cai_soil = difference {
+    box -0.185 12.60 -0.185   0.185 12.940 0.185
+    ellipsoid 0 13.000 0 rx=0.22 ry=0.09 rz=0.22
+}
+
+# The ironwork on the caisse, which is what holds a Versailles tub together: four corner straps, a
+# band round its waist standing 0.022 proud of the boards, and a bolt through the band into each
+# strap. The bolt heads are 0.06 across and stand 0.03 out — one voxel proud, two across, at metre
+# 32 — and each is half buried in the strap it fixes, so not one of them is a loose speck.
 let terr_cai_strap = union {
     box -0.225 12.44 -0.225  -0.165 12.99 -0.165
     box  0.165 12.44 -0.225   0.225 12.99 -0.165
     box -0.225 12.44  0.165  -0.165 12.99  0.225
     box  0.165 12.44  0.165   0.225 12.99  0.225
+    difference {
+        box -0.232 12.60 -0.232   0.232 12.66 0.232  round=0.008
+        box -0.190 12.58 -0.190   0.190 12.68 0.190
+    }
+    sphere  0.195 12.76  0.225 r=0.030
+    sphere -0.195 12.76  0.225 r=0.030
+    sphere  0.195 12.76 -0.225 r=0.030
+    sphere -0.195 12.76 -0.225 r=0.030
 }
 
-# The tree. A bark trunk out of the earth of the tub, and a crown that is a rounded mass displaced
-# by the leaf field — real matter with a real curvature, which is the whole of load 4.
-let terr_tree_trunk = capsule 0 12.75 0   0 13.38 0  r=0.05
-let terr_tree_crown = displace { sphere 0 13.68 0 r=0.33  terr_leaf } amount=0.06
-let terr_tree_fruit = union {
-    sphere  0.30 13.68  0.00  r=0.070
-    sphere -0.22 13.62  0.18  r=0.070
-    sphere  0.09 13.55 -0.28  r=0.070
+# ================================================================================================
+# THE TREE — and the difference between a tree and a lollipop
+# ================================================================================================
+#
+# What stood here was a capsule with a displaced sphere on top of it. Every one of the sixteen was
+# the same, and a capsule is a shape with ONE radius by definition, so the trunk could not taper
+# even in principle. Three things make it a tree instead, and all three are matter:
+#
+#   the trunk    a cone cut off at the crotch. 0.23 across where it leaves the earth and 0.16 where
+#                the limbs go, which is a real taper and cannot be written as a capsule at all.
+#   the limbs    four primaries out of the crotch, each dividing once into two. 0.096 down to 0.052
+#                across — three voxels to one and a half at the contract's metre 32 — and every
+#                one of them starts INSIDE the trunk, below the top of the cone, so no limb is a
+#                separate component at any detail.
+#   the crown    nine clumps, none of them concentric with the trunk, the mass carried to one side
+#                and one clump hanging low. THE GAPS ARE THE POINT. A single sphere has no
+#                silhouette, only an outline: it is the same shape from every side, so nothing
+#                about it can tell the eye where the light is coming from. Nine overlapping
+#                ellipsoids with sky between them have a lit side, a shaded side, and holes.
+#
+# TWO TREES AND NOT ONE DRAWN TWICE. The four tubs in a quarter alternate A B A B, so no two trees
+# standing together are the same tree, and the fold puts the same pair in the other court. The
+# whole crown is displaced ONCE, as a union — nine displaces would be nine slack allowances laid
+# over each other for the same 0.06 of leaf.
+#
+# NOTHING HERE REACHES 14.30. The highest clump tops out at 14.16 and the leaf field takes it to
+# 14.22, which is the number at the head of this file and is now set by a tree rather than by the
+# treillage.
+
+# The bark is a `rasp` on the TRUNK ONLY and never on the limbs. `rasp` returns -|fbm|, so it only
+# ever cuts: 0.02 of gouge into a stem 0.23 across is bark, and the same 0.02 into a twig 0.052
+# across is a twig in three pieces. That is the whole reason the trunk and the limbs are separate
+# bindings that are unioned at the point of use rather than one shape.
+let terr_bark_cut = rasp size=0.045 seed=37
+let terr_tree_a_stem = intersection {
+    cone 0 12.60 0  r=0.115 h=2.30 axis=y
+    box -0.20 12.56 -0.20   0.20 13.30 0.20
+}
+let terr_tree_a_trunk = displace { terr_tree_a_stem terr_bark_cut } amount=0.02
+let terr_tree_a_limbs = union {
+    capsule 0 13.10 0        0.26 13.62  0.10  r=0.048
+    capsule 0.26 13.62 0.10  0.40 13.86  0.20  r=0.032
+    capsule 0.26 13.62 0.10  0.34 13.92 -0.02  r=0.030
+
+    capsule 0 13.12 0       -0.20 13.58 -0.18  r=0.045
+    capsule -0.20 13.58 -0.18  -0.34 13.80 -0.28  r=0.030
+    capsule -0.20 13.58 -0.18  -0.26 13.88 -0.10  r=0.028
+
+    capsule 0 13.16 0        0.06 13.66 -0.26  r=0.042
+    capsule 0.06 13.66 -0.26   0.14 13.86 -0.38  r=0.029
+    capsule 0.06 13.66 -0.26  -0.06 13.90 -0.30  r=0.027
+
+    capsule 0 13.20 0       -0.10 13.78  0.16  r=0.038
+    capsule -0.10 13.78 0.16  -0.18 13.96  0.26  r=0.026
+}
+let terr_tree_a_mass = union {
+    ellipsoid  0.42 13.84  0.22  rx=0.24 ry=0.20 rz=0.22
+    ellipsoid  0.34 13.94 -0.06  rx=0.21 ry=0.18 rz=0.20
+    ellipsoid -0.36 13.78 -0.30  rx=0.22 ry=0.18 rz=0.21
+    ellipsoid -0.28 13.90 -0.08  rx=0.20 ry=0.17 rz=0.19
+    ellipsoid  0.16 13.86 -0.42  rx=0.22 ry=0.18 rz=0.20
+    ellipsoid -0.08 13.92 -0.30  rx=0.20 ry=0.17 rz=0.18
+    ellipsoid -0.20 13.98  0.28  rx=0.19 ry=0.16 rz=0.18
+    ellipsoid  0.04 13.82  0.04  rx=0.26 ry=0.22 rz=0.24
+    ellipsoid  0.24 13.56 -0.10  rx=0.18 ry=0.13 rz=0.16
+    ellipsoid  0.06 13.40  0.02  rx=0.24 ry=0.20 rz=0.22
+}
+let terr_tree_a_leaf = displace { terr_tree_a_mass terr_leaf } amount=0.06
+let terr_tree_a_crop = union {
+    sphere  0.44 13.68  0.24  r=0.065
+    sphere -0.34 13.62 -0.32  r=0.060
+    sphere  0.18 13.70 -0.44  r=0.060
+    sphere  0.26 13.44 -0.12  r=0.055
+}
+
+let terr_tree_b_stem = intersection {
+    cone 0 12.60 0  r=0.105 h=2.60 axis=y
+    box -0.20 12.56 -0.20   0.20 13.38 0.20
+}
+let terr_tree_b_trunk = displace { terr_tree_b_stem terr_bark_cut } amount=0.02
+let terr_tree_b_limbs = union {
+    capsule 0 13.18 0       -0.24 13.70 -0.06  r=0.046
+    capsule -0.24 13.70 -0.06  -0.38 13.90 -0.16  r=0.030
+    capsule -0.24 13.70 -0.06  -0.30 13.94  0.06  r=0.028
+
+    capsule 0 13.22 0        0.18 13.66  0.20  r=0.044
+    capsule 0.18 13.66 0.20   0.30 13.84  0.30  r=0.029
+    capsule 0.18 13.66 0.20   0.14 13.90  0.14  r=0.027
+
+    capsule 0 13.26 0       -0.04 13.62  0.28  r=0.040
+    capsule -0.04 13.62 0.28  -0.10 13.78  0.40  r=0.027
+
+    capsule 0 13.30 0        0.06 13.84 -0.10  r=0.036
+    capsule 0.06 13.84 -0.10   0.14 13.98 -0.18  r=0.025
+}
+let terr_tree_b_mass = union {
+    ellipsoid -0.40 13.88 -0.18  rx=0.24 ry=0.19 rz=0.21
+    ellipsoid -0.32 13.96  0.08  rx=0.21 ry=0.18 rz=0.20
+    ellipsoid  0.32 13.82  0.32  rx=0.23 ry=0.18 rz=0.21
+    ellipsoid  0.14 13.92  0.14  rx=0.22 ry=0.20 rz=0.21
+    ellipsoid -0.12 13.78  0.42  rx=0.20 ry=0.16 rz=0.19
+    ellipsoid  0.16 13.98 -0.20  rx=0.19 ry=0.16 rz=0.18
+    ellipsoid -0.02 13.74 -0.06  rx=0.25 ry=0.21 rz=0.24
+    ellipsoid -0.14 13.54  0.16  rx=0.17 ry=0.13 rz=0.16
+    ellipsoid -0.06 13.48  0.04  rx=0.24 ry=0.20 rz=0.22
+}
+let terr_tree_b_leaf = displace { terr_tree_b_mass terr_leaf } amount=0.06
+let terr_tree_b_crop = union {
+    sphere -0.42 13.72 -0.20  r=0.065
+    sphere  0.34 13.66  0.34  r=0.060
+    sphere -0.14 13.62  0.44  r=0.055
+    sphere  0.18 13.82 -0.22  r=0.060
 }
 
 let terr_pot_a = translate { terr_pot_clay } 6.843 0 1.35
@@ -300,23 +615,32 @@ let terr_tub_feet = union {
     translate { terr_cai_foot } 13.275 0 1.35
     translate { terr_cai_foot } 13.275 0 4.05
 }
+
+# A B A B round the quarter: the ambulatory pair take one tree each and the verge pair take them the
+# other way about, so neither court has two of the same tree standing next to each other.
 let terr_trunks = union {
-    translate { terr_tree_trunk } 6.843 0 1.35
-    translate { terr_tree_trunk } 5.679 0 4.05
-    translate { terr_tree_trunk } 13.275 0 1.35
-    translate { terr_tree_trunk } 13.275 0 4.05
+    translate { union { terr_tree_a_trunk terr_tree_a_limbs } }  6.843 0 1.35
+    translate { union { terr_tree_b_trunk terr_tree_b_limbs } }  5.679 0 4.05
+    translate { union { terr_tree_b_trunk terr_tree_b_limbs } } 13.275 0 1.35
+    translate { union { terr_tree_a_trunk terr_tree_a_limbs } } 13.275 0 4.05
 }
 let terr_crowns = union {
-    translate { terr_tree_crown } 6.843 0 1.35
-    translate { terr_tree_crown } 5.679 0 4.05
-    translate { terr_tree_crown } 13.275 0 1.35
-    translate { terr_tree_crown } 13.275 0 4.05
+    translate { terr_tree_a_leaf }  6.843 0 1.35
+    translate { terr_tree_b_leaf }  5.679 0 4.05
+    translate { terr_tree_b_leaf } 13.275 0 1.35
+    translate { terr_tree_a_leaf } 13.275 0 4.05
 }
 let terr_fruit_tubs = union {
-    translate { terr_tree_fruit } 6.843 0 1.35
-    translate { terr_tree_fruit } 5.679 0 4.05
-    translate { terr_tree_fruit } 13.275 0 1.35
-    translate { terr_tree_fruit } 13.275 0 4.05
+    translate { terr_tree_a_crop }  6.843 0 1.35
+    translate { terr_tree_b_crop }  5.679 0 4.05
+    translate { terr_tree_b_crop } 13.275 0 1.35
+    translate { terr_tree_a_crop } 13.275 0 4.05
+}
+let terr_soil = union {
+    translate { terr_pot_soil }  6.843 0 1.35
+    translate { terr_pot_soil }  5.679 0 4.05
+    translate { terr_cai_soil } 13.275 0 1.35
+    translate { terr_cai_soil } 13.275 0 4.05
 }
 
 # ================================================================================================
@@ -330,10 +654,14 @@ let terr_fruit_tubs = union {
 #
 # The cornice is kept flush with the screen's own face at 13.50 and projects only outwards, so
 # nothing overhangs the walk. See the head-height note at the top of this file.
-let terr_tre_sill = box 13.50 12.25 0    13.95 12.40 4.95  round=0.012
-let terr_tre_head = box 13.50 13.92 0    13.95 14.10 4.95  round=0.012
-let terr_tre_corn = box 13.50 14.10 0    14.04 14.19 4.95  round=0.012
-let terr_tre_post = repeat { box 13.50 12.25 -0.09   13.95 14.10 0.09  round=0.01 } z=1.35 nz=3
+#
+# The arrises are taken off at 0.03 and not at 0.012. This is joinery standing outdoors eleven
+# metres up: a sill that sheds water has a rounded top, a post that a hand goes round has a
+# rounded corner, and 0.012 is a third of a voxel at metre 32 and therefore no edge at all.
+let terr_tre_sill = box 13.50 12.25 0    13.95 12.40 4.95  round=0.030
+let terr_tre_head = box 13.50 13.92 0    13.95 14.10 4.95  round=0.025
+let terr_tre_corn = box 13.50 14.10 0    14.04 14.19 4.95  round=0.025
+let terr_tre_post = repeat { box 13.50 12.25 -0.09   13.95 14.10 0.09  round=0.025 } z=1.35 nz=3
 let terr_tre_endp = box 13.50 12.25 4.77   13.95 14.10 4.95  round=0.01
 
 let terr_tre_bar_v = repeat { box 13.62 12.35 -0.03   13.74 14.00 0.03 } z=0.225 nz=21
@@ -363,19 +691,43 @@ let terr_tre_fruit = union {
 #
 # Two to a court: one with its back to the drum on the ambulatory, one in the arbour on the verge.
 # Drawn as the z > 0 half of a bench 1.80 long, so the fold makes the whole of it.
-let terr_seat_stone = union {
-    box  6.48 12.25 0.72    6.93 12.72 0.90  round=0.012
-    box  6.48 12.25 0.00    6.93 12.72 0.09  round=0.012
-    box 13.05 12.25 0.72   13.50 12.72 0.90  round=0.012
-    box 13.05 12.25 0.00   13.50 12.72 0.09  round=0.012
+#
+# The stone ends are chamfered at 0.03 and one of them has a corner off it; the slats are rounded
+# at 0.02 rather than 0.008, which is what forty years of a hand and a coat does to the arris of a
+# seat and is two thirds of a voxel at metre 32 instead of a quarter of one. Each slat is bolted
+# down through both bearers, and the bolt heads stand 0.025 proud — the ONE place on this terrace
+# where the fixings of a thing are at eye level for somebody sitting on it.
+let terr_seat_stone = difference {
+    union {
+        box  6.48 12.25 0.72    6.93 12.72 0.90  round=0.030
+        box  6.48 12.25 0.00    6.93 12.72 0.09  round=0.030
+        box 13.05 12.25 0.72   13.50 12.72 0.90  round=0.030
+        box 13.05 12.25 0.00   13.50 12.72 0.09  round=0.030
+    }
+    sphere  6.93 12.72 0.90 r=0.055
+    sphere 13.05 12.72 0.90 r=0.050
 }
 let terr_seat_slats = union {
-    box  6.510 12.70 0    6.600 12.78 0.90  round=0.008
-    box  6.645 12.70 0    6.735 12.78 0.90  round=0.008
-    box  6.780 12.70 0    6.870 12.78 0.90  round=0.008
-    box 13.080 12.70 0   13.170 12.78 0.90  round=0.008
-    box 13.215 12.70 0   13.305 12.78 0.90  round=0.008
-    box 13.350 12.70 0   13.440 12.78 0.90  round=0.008
+    box  6.510 12.70 0    6.600 12.78 0.90  round=0.020
+    box  6.645 12.70 0    6.735 12.78 0.90  round=0.020
+    box  6.780 12.70 0    6.870 12.78 0.90  round=0.020
+    box 13.080 12.70 0   13.170 12.78 0.90  round=0.020
+    box 13.215 12.70 0   13.305 12.78 0.90  round=0.020
+    box 13.350 12.70 0   13.440 12.78 0.90  round=0.020
+}
+let terr_seat_bolts = union {
+    sphere  6.555 12.775 0.81 r=0.028
+    sphere  6.690 12.775 0.81 r=0.028
+    sphere  6.825 12.775 0.81 r=0.028
+    sphere 13.125 12.775 0.81 r=0.028
+    sphere 13.260 12.775 0.81 r=0.028
+    sphere 13.395 12.775 0.81 r=0.028
+    sphere  6.555 12.775 0.00 r=0.028
+    sphere  6.690 12.775 0.00 r=0.028
+    sphere  6.825 12.775 0.00 r=0.028
+    sphere 13.125 12.775 0.00 r=0.028
+    sphere 13.260 12.775 0.00 r=0.028
+    sphere 13.395 12.775 0.00 r=0.028
 }
 
 # ================================================================================================
@@ -385,20 +737,56 @@ let terr_seat_slats = union {
 # Two to a quarter and so eight in the terrace: one on the cross walk beside the parterres, one on
 # the verge between the two caisses. A bronze standard, a cage of four corner posts with the light
 # open between them, and a `lamp` flame standing on the cage floor.
+#
+# A STANDARD IS BOLTED DOWN, AND A LANTERN HAS A ROOF ON IT. What stood here was a plain tube with
+# a cone on the end: nothing said how it was fixed to the floor, nothing shed the rain off the cage,
+# and the flame was behind an opening with no bar across it. So, from the bottom: a flange over the
+# granite foot with four bolts through it standing 0.03 proud, a congé off the flange into the
+# shaft, a knop where a standard is jointed, the hood as it was, a drip ring under its eaves, and a
+# spike and ball on top of it. The ball tops out at 14.018 and nothing here reaches 14.30.
 let terr_lamp_stem = union {
     cylinder 0 12.90 0  r=0.045 h=1.00 axis=y
+    cylinder 0 12.52 0  r=0.090 h=0.14 axis=y
+    cone 0 12.59 0  r=0.078 h=0.11 axis=y
+    cylinder 0 13.10 0  r=0.062 h=0.06 axis=y
     cone 0 13.71 0  r=0.15 h=0.18 axis=y
+    torus 0 13.720 0  ring=0.132 tube=0.024 axis=y
+    capsule 0 13.88 0   0 13.95 0  r=0.018
+    sphere 0 13.980 0 r=0.038
+    sphere  0.068 12.590 0      r=0.030
+    sphere -0.068 12.590 0      r=0.030
+    sphere  0     12.590  0.068 r=0.030
+    sphere  0     12.590 -0.068 r=0.030
 }
 # The cage: a bottom plate, a top plate and four corner posts of 0.06 — two voxels at metre 32 —
 # with the light open between them. The plates are M/5 thick and the openings stop 0.09 short of
 # each, and both of those numbers were measured rather than chosen: at 0.03 the plates are half a
 # voxel at metre 16, they disappear, and every lamp in the terrace comes back as eight loose specks.
-let terr_lamp_cage = difference {
-    box -0.12 13.35 -0.12   0.12 13.71 0.12  round=0.012
-    box -0.06 13.44 -0.30   0.06 13.62 0.30
-    box -0.30 13.44 -0.06   0.30 13.62 0.06
+#
+# And a glazing bar down the middle of each opening, put back INTO it after it is cut: 0.05 by
+# 0.05, running the whole height of the cage so that 0.09 of it is buried in the bottom plate and
+# 0.09 in the top. That is what carries the glass in a lantern this size, and it is the bar the
+# four corner posts need if the thing is to read as a cage rather than as four posts.
+#
+# A MULLION AND NOT A RING, AND THE REASON IS THE SAMPLER. The first version of this was a frame
+# round the waist of the cage, 0.03 by 0.04, and at metre 16 every one of the eight lanterns came
+# back with two loose specks on it: a horizontal bar is sampled where a voxel centre happens to
+# land in it, and the ones that land are in the middle of a face, with air above and below and the
+# corner posts too far away to touch. A VERTICAL bar cannot do that. Whether a voxel centre falls
+# inside it depends on x and z alone, so if it is sampled anywhere in the opening it is sampled at
+# every height in that same column, and the column runs into solid plate at both ends.
+let terr_lamp_cage = union {
+    difference {
+        box -0.12 13.35 -0.12   0.12 13.71 0.12  round=0.012
+        box -0.06 13.44 -0.30   0.06 13.62 0.30
+        box -0.30 13.44 -0.06   0.30 13.62 0.06
+    }
+    box -0.025 13.35  0.090   0.025 13.71  0.140
+    box -0.025 13.35 -0.140   0.025 13.71 -0.090
+    box  0.090 13.35 -0.025   0.140 13.71  0.025
+    box -0.140 13.35 -0.025  -0.090 13.71  0.025
 }
-let terr_lamp_foot = box -0.135 12.25 -0.135   0.135 12.45 0.135  round=0.012
+let terr_lamp_foot = box -0.135 12.25 -0.135   0.135 12.45 0.135  round=0.025
 let terr_lamp_fire = sphere 0 13.45 0 r=0.10
 
 let terr_lamp_bronze = union {
@@ -426,14 +814,62 @@ let terr_lamp_fires = union {
 # The posts are cut to the paving by intersection, which is what removes the two copies of the
 # repeat that would otherwise land on bare lead at 3.60 and 14.40. Where the cistern stands the
 # posts rise out of its own north kerb, which is what a balustrade does when a basin is set into it.
-let terr_rail_post = box -0.03 12.15 -0.03   0.03 13.20 0.03
+#
+# WHAT A RAIL IS MADE OF, AS OPPOSED TO WHAT IT LOOKS LIKE FROM TWENTY METRES. Three changes, all
+# of them section rather than surface:
+#
+#   the standard   0.060 across the run and 0.075 through it. A stanchion is never square: it is
+#                  stiff the way the load comes, which is sideways over the rail, so the deeper
+#                  face is the one you see edge-on from along the walk.
+#   the fixing     a plate 0.15 square and 0.05 thick bedded into the paving under every standard,
+#                  and a collar where the middle bar passes it. Wrought iron is not grown out of
+#                  stone; it is bolted to it, and a rail with no plate under it is the detail a
+#                  photograph of one never fails to show.
+#   the sag        the middle bar is not a straight line. It hangs 0.045 at every midspan and comes
+#                  up to the fixing at every standard — one and a half voxels of dip at metre 32,
+#                  over 1.35 m, which is what a 0.048 bar spanning that far does.
+#
+# THE SAG IS TWELVE CAPSULES WRITTEN OUT AND NOT ONE BAY IN A `repeat`, AND THAT COST TWO AND A
+# HALF SECONDS TO LEARN. A bay drawn from post to post is 1.35 long and its capsule ends carry a
+# radius, so the child of the repeat measures 1.398 across a period of 1.350 — and `metric_slack`
+# returns INFINITE for a repeat whose child is wider than its own period, because the fold can then
+# hand back a distance to a copy that is not the nearest one. Infinite slack anywhere in an
+# expression means the sampler may not skip a single voxel ANYWHERE in the clip: this part went
+# from 2.4 s to 5.3 s at metre 8, and every other thing I measured after it was measuring that.
+# roof.clip's note about an unbounded child inside a repeat is the same trap wearing a different
+# hat. Written out, the whole run is exact and costs nothing.
+#
+# The top rail stays straight and is a FLAT BAR on edge, 0.036 by 0.060 — a handrail is stiff and a
+# hanging one would be wrong. The posts are cut to the paving by intersection, which is what removes
+# the two copies of the repeat that would otherwise land on bare lead at 3.60 and 14.40. Where the
+# cistern stands the posts rise out of its own north kerb, which is what a balustrade does when a
+# basin is set into it.
+let terr_rail_post = union {
+    box -0.030 12.15  -0.0375   0.030 13.20 0.0375
+    box -0.075 12.255 -0.075    0.075 12.33 0.075  round=0.008
+    box -0.048 12.690 -0.048    0.048 12.75 0.048  round=0.010
+}
 let terr_rail_posts = intersection {
     translate { repeat { terr_rail_post } x=1.35 nx=5 } 10.35 0 4.86
     box 4.80 12.20 4.60   13.20 13.30 5.10
 }
+let terr_rail_sag = union {
+    capsule  4.950 12.720 4.86    5.625 12.675 4.86  r=0.024
+    capsule  5.625 12.675 4.86    6.300 12.720 4.86  r=0.024
+    capsule  6.300 12.720 4.86    6.975 12.675 4.86  r=0.024
+    capsule  6.975 12.675 4.86    7.650 12.720 4.86  r=0.024
+    capsule  7.650 12.720 4.86    8.325 12.675 4.86  r=0.024
+    capsule  8.325 12.675 4.86    9.000 12.720 4.86  r=0.024
+    capsule  9.000 12.720 4.86    9.675 12.675 4.86  r=0.024
+    capsule  9.675 12.675 4.86   10.350 12.720 4.86  r=0.024
+    capsule 10.350 12.720 4.86   11.025 12.675 4.86  r=0.024
+    capsule 11.025 12.675 4.86   11.700 12.720 4.86  r=0.024
+    capsule 11.700 12.720 4.86   12.375 12.675 4.86  r=0.024
+    capsule 12.375 12.675 4.86   13.050 12.720 4.86  r=0.024
+}
 let terr_rail_bars = union {
-    capsule 4.95 13.14 4.86   13.05 13.14 4.86  r=0.024
-    capsule 4.95 12.72 4.86   13.05 12.72 4.86  r=0.024
+    box 4.95 13.164 4.830   13.05 13.200 4.890  round=0.008
+    terr_rail_sag
 }
 let terr_rail = union { terr_rail_posts terr_rail_bars }
 
@@ -444,21 +880,61 @@ let terr_rail = union { terr_rail_posts terr_rail_bars }
 # 2.70 x 2.70 (6 M x 6 M) centred on the court's cross walk at x = 10.35 (23 M), its sides on
 # 9.00 (20 M) and 11.70 (26 M). RAISED and not sunk: a granite rim 0.225 (M/2) thick standing 0.45 (M) above the floor,
 # a lead pan 0.06 thick inside it, and 0.30 (M/1.5) of water on the lead. No void anywhere.
+#
+# THE COPING IS THE PART A PERSON TOUCHES, so it is the part with a section on it. The rim is
+# rounded at 0.035 outside and 0.025 in — an arris on a basin that has stood outdoors for a century
+# is not sharp, and 0.012 is a third of a voxel at metre 32 and no arris at all. Round its waist
+# runs a band standing 0.022 proud, a frame and not a slab so it takes nothing out of the water,
+# and two corners are off it: the one a barrow reaches and the one under the spout.
+#
+# The dish in the south coping is where people lean over to look into it. It is 0.035 deep and a
+# metre long and it is the same trick as the dishes in the paving — an ellipsoid centred exactly on
+# the surface it hollows, so its own ry says how deep it goes.
 let terr_cis_rim = difference {
-    box 9.000 12.25 2.250   11.700 12.75 4.950  round=0.012
-    box 9.225 12.28 2.475   11.475 12.80 4.725
+    box 9.000 12.25 2.250   11.700 12.75 4.950  round=0.035
+    box 9.225 12.28 2.475   11.475 12.80 4.725  round=0.025
+    ellipsoid 10.350 12.75 2.360  rx=0.50 ry=0.035 rz=0.11
+    sphere 11.700 12.75 2.250 r=0.075
+    sphere  9.225 12.75 4.725 r=0.055
+}
+let terr_cis_band = difference {
+    box 8.955 12.500 2.205   11.745 12.575 4.995  round=0.02
+    box 9.045 12.480 2.295   11.655 12.595 4.905
 }
 let terr_cis_pan = difference {
-    box 9.225 12.28 2.475   11.475 12.72 4.725
-    box 9.285 12.34 2.535   11.415 12.80 4.665
+    box 9.225 12.28 2.475   11.475 12.72 4.725  round=0.02
+    box 9.285 12.34 2.535   11.415 12.80 4.665  round=0.02
 }
 let terr_cis_water = box 9.285 12.34 2.535   11.415 12.64 4.665
 
-# The spout: a bronze block on the north kerb with a nozzle over the water.
+# The spout: a bronze block on the north kerb with a nozzle over the water, a collar where the
+# nozzle leaves the block, and four bolts holding the block to the stone. The bolts are 0.056
+# across and half of each is buried in the block it fixes.
 let terr_cis_spout = union {
     box 10.245 12.75 4.680   10.455 13.05 4.950  round=0.02
     capsule 10.35 12.86 4.710   10.35 12.86 4.500  r=0.045
+    torus 10.350 12.860 4.690  ring=0.052 tube=0.022 axis=z
+    sphere 10.290 12.990 4.680 r=0.028
+    sphere 10.410 12.990 4.680 r=0.028
+    sphere 10.290 12.800 4.680 r=0.028
+    sphere 10.410 12.800 4.680 r=0.028
 }
+
+# WHERE THE WATER SITS, FOR THE COAT THAT GOES THERE. Two bands and no geometry: the tide line, a
+# 0.09 ring of the pan and the rim's inner face at the water's own surface, and the streak the
+# spout has run down the north wall of the basin since it was first turned on. Both are ragged at
+# the edge because both are DISPLACED by the shared stone grain before they are painted — a straight
+# waterline is a bathtub, and a stain with a machined edge is a decal.
+let terr_cis_tide_hard = intersection {
+    union { terr_cis_pan terr_cis_rim }
+    box 9.10 12.575 2.35   11.60 12.665 4.85
+}
+let terr_cis_tide = displace { terr_cis_tide_hard grain_stone } amount=0.05
+let terr_cis_streak_hard = intersection {
+    union { terr_cis_pan terr_cis_rim }
+    box 10.185 12.34 4.55   10.515 12.700 4.95
+}
+let terr_cis_streak = displace { terr_cis_streak_hard grain_fine } amount=0.04
 
 # ================================================================================================
 # THE ARMILLARY SPHERE — south end of each court
@@ -497,10 +973,14 @@ let terr_arm_frame = union {
 }
 let terr_arm_gilt = translate { union { terr_arm_tilt terr_arm_frame } } 10.35 13.53 -3.60
 
-let terr_arm_stone = union {
-    box  9.900 12.25 -4.050   10.800 12.45 -3.150  round=0.012
-    box 10.125 12.45 -3.825   10.575 12.90 -3.375  round=0.012
-    box 10.050 12.90 -3.900   10.650 13.05 -3.300  round=0.012
+let terr_arm_stone = difference {
+    union {
+        box  9.900 12.25 -4.050   10.800 12.45 -3.150  round=0.030
+        box 10.125 12.45 -3.825   10.575 12.90 -3.375  round=0.025
+        box 10.050 12.90 -3.900   10.650 13.05 -3.300  round=0.030
+    }
+    sphere 10.800 12.45 -3.600 r=0.060
+    sphere 10.050 13.05 -3.300 r=0.050
 }
 let terr_arm_stem = capsule 10.35 12.85 -3.60   10.35 13.53 -3.60  r=0.045
 
@@ -515,10 +995,11 @@ let terr_arm_stem = capsule 10.35 12.85 -3.60   10.35 13.53 -3.60  r=0.045
 # no binding that reaches outside this part.
 
 let terr_travertine = mirror { terr_paving } axis=x
+let terr_worn_m     = mirror { terr_worn } axis=x
 
 let terr_granite_q = union { terr_kerbs terr_tub_feet terr_lamp_feet terr_seat_stone terr_joints }
 let terr_granite   = mirror {
-    union { mirror { terr_granite_q } axis=z   terr_cis_rim terr_arm_stone }
+    union { mirror { terr_granite_q } axis=z   terr_cis_rim terr_cis_band terr_arm_stone }
 } axis=x
 
 let terr_gravel_m  = mirror { mirror { terr_gravel } axis=z } axis=x
@@ -527,9 +1008,14 @@ let terr_clay      = mirror { mirror { terr_pots_clay } axis=z } axis=x
 let terr_oak       = mirror { mirror { union { terr_treillage terr_cai_wood } } axis=z } axis=x
 let terr_walnut    = mirror { mirror { terr_seat_slats } axis=z } axis=x
 
-let terr_iron = mirror { mirror { union { terr_rail terr_cai_straps } } axis=z } axis=x
+let terr_iron = mirror {
+    mirror { union { terr_rail terr_cai_straps terr_seat_bolts } } axis=z
+} axis=x
 
-let terr_bark   = mirror { mirror { terr_trunks } axis=z } axis=x
+# The bark carries the earth in the tubs with it. Soil is not a material this building owns and it
+# does not need one: `bark` is 88,70,54 at roughness 246, which is wet leaf mould exactly, and the
+# trunk standing in it is the same colour for the same reason.
+let terr_bark   = mirror { mirror { union { terr_trunks terr_soil } } axis=z } axis=x
 let terr_citrus = mirror { mirror { union { terr_crowns terr_tre_leaves } } axis=z } axis=x
 let terr_orange = mirror { mirror { union { terr_fruit_tubs terr_tre_fruit } } axis=z } axis=x
 
@@ -541,6 +1027,40 @@ let terr_flame = mirror { mirror { terr_lamp_fires } axis=z } axis=x
 let terr_lead_m = mirror { terr_cis_pan } axis=x
 let terr_water  = mirror { terr_cis_water } axis=x
 let terr_gilt_m = mirror { terr_arm_gilt } axis=x
+
+# --- and the three places that are not a material but a state of one ---------------------------
+#
+# WHERE WATER SITS AND WHERE IT DOES NOT DRY. All three are an intersection of something already in
+# this part with a band or a level, so none of them can reach a voxel that is not mine, and two of
+# them are displaced by the shared grain first so their edges are ragged rather than ruled.
+#
+#   the tide     the waterline in both cisterns, and the streak below the spout
+#   the foot     the bottom 0.20 of every terracotta pot, which stands in its own drip ring on a
+#                floor that does not drain
+#   the joints   the granite of the paving joints and the foot of every kerb and plinth, below
+#                12.34 — the one part of a baking roof that is damp at eight in the morning
+let terr_tide_m   = mirror { union { terr_cis_tide terr_cis_streak } } axis=x
+let terr_clay_wet = intersection {
+    terr_clay
+    displace { box -20 12.40 -20   20 12.60 20   grain_stone } amount=0.05
+}
+#
+# The joints are the only one of the three written as a THRESHOLD rather than as a displaced band,
+# and the reason is measured. A band displaced by the grain still paints wherever it comes within a
+# few centimetres of a joint, and a joint is 0.045 deep and 0.09 wide: every version of it, at every
+# height from 12.18 to 12.30, painted half the joints in the terrace — 2497 voxels at metre 8, 6.7%
+# of the part, which is a green floor and not a mossy one. Written as `max(granite, band, 0.15 -
+# grain)` the coverage is set by the threshold and nothing else, and 0.15 comes out at 468 voxels,
+# which is one joint in four carrying moss and the other three clean.
+#
+# It costs what an unsettleable rule costs: the fbm has no distance in it, so this one is asked per
+# solid voxel inside the granite's box instead of once per block. That is the trade, it was taken
+# deliberately, and it is why there is one of these and not three.
+let terr_joint_wet = intersection {
+    terr_granite
+    box -20 12.10 -20   20 12.30 20
+    negate { add { grain_broad  constant -0.15 } }
+}
 
 # ================================================================================================
 # THE PART
@@ -567,6 +1087,14 @@ let part_terrace = union {
 #
 # Travertine first, because the paving is the largest thing here and everything else is set on it.
 paint travertine where=part_terrace  below=0.02
+
+# The hollows the feet made, BEFORE the joints, so a joint running through a worn patch stays a
+# joint. Marble and not travertine: what feet do to a soft stone is polish it — the dust that
+# weathers the rest of this floor is the first thing that is walked off a tread — so the worn stone
+# is paler and smoother than the stone beside it. rough 140 against 228, at 3.1 cm, in the four
+# places on this terrace a person actually stands.
+paint marble     where=terr_worn_m   below=0.02
+
 paint granite    where=terr_granite  below=0.02
 paint gravel     where=terr_gravel_m below=0.02
 paint boxwood    where=terr_boxwood_m below=0.02
@@ -582,6 +1110,20 @@ paint lead       where=terr_lead_m   below=0.02
 paint water      where=terr_water    below=0.02
 paint gilt       where=terr_gilt_m   below=0.02
 paint lamp       where=terr_flame    below=0.02
+
+# --- and last, the three coats that are water rather than material ------------------------------
+#
+# These go on after every material and before the weathering, because a tide line is a thing that
+# happened TO the lead and the granite and must cover both, and because the weathering that follows
+# is scoped to the paving and the four shaded corners and will not touch any of them.
+#
+# `verde` is a stone in the contract's list — 62,92,74 at roughness 180 — and it is here as the
+# only green in the building dark enough to read as algae rather than as leaf. Nothing else in the
+# list is: `hedge` and `boxwood` are foliage colours, `malachite` is polished and bright, and
+# `copper` is the verdigris of a roof, which is a different green and belongs to drum.clip.
+paint verde      where=terr_tide_m    below=0.02
+paint verde      where=terr_clay_wet  below=0.02
+paint verde      where=terr_joint_wet below=0.02
 
 # --- weathering ---------------------------------------------------------------------------------
 #
