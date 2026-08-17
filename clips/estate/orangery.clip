@@ -71,7 +71,9 @@
 # the sample, the copy it despeckles and the connectivity map are all live at once. That is the same
 # order as the facility's 582 M and it is the price of the one thing this building is for.
 #
-# WHAT IT ACTUALLY MEASURES, at metre 32 and with the two bar decisions below in place:
+# WHAT IT ACTUALLY MEASURES, at metre 32 and with the two bar decisions below in place. THESE FOUR
+# LINES WERE TAKEN BEFORE THE TREES WERE REPLACED and are left standing because they are the only
+# metre 32 figures this building has, and a metre 32 run is eighteen minutes of a shared machine:
 #
 #     volume      65,408,402 voxels   1,996 m3   23.89% of the box
 #     surface     6,684,182 faces     6,527 m2
@@ -82,6 +84,20 @@
 # sampled on its own at metre 32 is one component with nothing floating, so they are the thin-feature
 # rescue meeting a revolved arris at this grid offset, not a fault in the pot. Every one of the
 # thousands of glazing bars is attached.
+#
+# WHAT THE TREES DID TO IT, at metre 8, interleaved four rounds either side so that a neighbouring
+# build cannot be mistaken for a result — minima, and CPU beside wall because the same command
+# measured 12 s and 60 s an hour apart on this machine:
+#
+#                        wall      cpu      volume       surface    components
+#     sphere trees       34.6 s    11.3 s   1,038,878    394,250    1, none floating
+#     citrus_a / _b      35.1 s    11.4 s   1,023,290    393,150    1, none floating
+#
+# One per cent of CPU for twenty-one trees that have branches. Neither arm has an idle paint rule
+# under `clipcheck`'s repaired diagnostic — which reports `never asked` and `never matched`
+# separately and had never printed once before it was fixed, so this is the first run of this
+# building where a rule that matched nothing would have said so. The tree costs are in
+# `clips/_trees.clip`; each tree alone is 1.7x the sphere it replaced, on CPU, at metre 32.
 #
 # A NUMBER TAKEN AT METRE 16 IS ABOUT A DIFFERENT BUILDING, because at metre 16 a bar 0.030 across
 # is under half a voxel and does not exist. The metre 16 figures quoted below the bars are quoted
