@@ -160,6 +160,20 @@ enum : u32 {
 inline u32 field_op(forge::Op op) {
     using forge::Op;
     switch (op) {
+        // Four ops arrived on `main` after this exporter was written -- the chamfered combines
+        // and `Scatter`. They are returned as UNKNOWN rather than mapped onto their plain
+        // equivalents, and the difference matters: a chamfered union is not a union, and a rule
+        // exported as one would paint a band of the wrong width along every join it touches,
+        // silently and plausibly. Unknown makes the rule refuse, which the evaluator already
+        // treats as "no match" and which is visible as a surface wearing the undercoat.
+        //
+        // This switch is deliberately exhaustive with no `default`, which is why adding an op to
+        // `forge::Op` breaks this build rather than this picture. That is the trade `web_op`'s own
+        // comment argues for one file along, and it has now caught exactly the case it predicted.
+        case Op::ChamferUnion:
+        case Op::ChamferDifference:
+        case Op::ChamferIntersection:
+        case Op::Scatter: return kOpUnknown;
         case Op::Sphere: return kOpSphere;
         case Op::Box: return kOpBox;
         case Op::Cylinder: return kOpCylinder;
