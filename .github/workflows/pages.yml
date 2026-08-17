@@ -429,13 +429,54 @@ jobs:
       # small facility, and there are twenty-eight of them.
       - name: Bake this shard
         run: |
+          set -o pipefail
           code=$(find src tools/bake_web.cpp tools/bake -type f | sort | xargs sha1sum | sha1sum | cut -c1-16)
           ./build-web/bin/ws_bake_web --clips clips --out web/data \
                                       --budget 4000000000 --max-metre 32 \
                                       --shard ${{ matrix.shard }}/12 \
                                       --code-hash "$code" \
                                       --branch "${{ needs.plan.outputs.ref }}" \
-                                      --commit "${{ needs.plan.outputs.sha }}"
+                                      --commit "${{ needs.plan.outputs.sha }}" | tee bake.log
+          du -sh web/data
+
+      # A SHARD MUST UPLOAD ONLY THE CLIPS IT OWNS, AND UNTIL NOW IT UPLOADED ITS WHOLE DIRECTORY.
+      #
+      # The shard is `i % 12 == shard` over the clip list in order, so ADDING OR REMOVING ANY CLIP
+      # MOVES EVERY CLIP AFTER IT TO A DIFFERENT SHARD. That happens constantly -- run 60's own log
+      # ends `dropped facility-podium.wsc, which is no longer a clip` and `dropped
+      # facility-crypt.wsc` -- and the per-shard cache is restored across runs by prefix, so a
+      # shard's `web/data` fills up with `.wsc` files for clips that now belong to somebody else.
+      # Shard 1 of run 60 baked SEVEN clips and uploaded TWENTY files.
+      #
+      # `index` then downloads all twelve with `merge-multiple`, and a stale copy landing after a
+      # fresh one replaces it. A stale file's key does not match, so the index rebakes it: run 60
+      # sampled `facility/rotunda.clip` for 289.6 s in shard 1 and then for 289.7 s again in
+      # `index`, and did that for twenty-five clips -- 63 minutes of a 105 minute publish spent
+      # redoing work that was already in an artifact.
+      #
+      # Two things are established and one is inferred, and the difference is worth writing down.
+      # ESTABLISHED: sharding does not change a clip's key -- shard 0's eight clips, baked with
+      # `--shard 0/12` and then read by an unsharded pass over the same directory, all report
+      # `unchanged`, so the baker is not the fault. ESTABLISHED: a shard uploads files it does not
+      # own. INFERRED: that the overwrite order is what loses the fresh copy, because the order two
+      # artifacts merge in is not something the log shows. The fix is aimed at the part that was
+      # measured -- a shard now uploads its own clips and nothing else, which is right whether or
+      # not the inference is.
+      - name: Drop what this shard does not own
+        run: |
+          set -uo pipefail
+          # The baker prints each clip it processes at column 0; `identifier()` turns the path into
+          # the file's stem by dropping `.clip` and mapping `/`, `\`, ` ` and `.` to `-`.
+          grep -E '^[^[:space:]].*\.clip$' bake.log \
+            | sed -e 's|\.clip$||' -e 's|[/\\ .]|-|g' | sort -u > owned.txt
+          echo "this shard owns $(wc -l < owned.txt) clips"
+          dropped=0
+          for f in web/data/*.wsc; do
+            [ -e "$f" ] || continue
+            stem="$(basename "$f" .wsc)"
+            if ! grep -qxF "$stem" owned.txt; then rm -f "$f" "$f.gz"; dropped=$((dropped + 1)); fi
+          done
+          echo "dropped $dropped file(s) belonging to other shards"
           du -sh web/data
 
       - uses: actions/upload-artifact@v4
