@@ -9040,3 +9040,51 @@ racing.
 | D670 | **The site was right and the deploy was wrong** | honesty | Two faults were reported against the baker and the viewer for a day. The bake had been producing `facility.clip` at 32/m, 2,024,749 quads, all along |
 | D670 | **`tr -dc '0-9'` is the wrong reader for a published counter** | fault | A 404 HTML body concatenates into a huge number and refuses every deploy. `awk 'NR==1{print $1+0}'` reads one field of one line |
 | D670 | **The index job re-bakes what the shards already baked** | fault | `facility/rotunda.clip` took 289.6 s in shard 1 and 289.7 s again in `index` — 63 minutes of duplicated sampling per run. Cause not yet established; recorded here rather than guessed at |
+
+## D671 — a plain `0` in a `std::fill` had failed every CI run for a day, and it looked like the game not starting
+
+`ci.yml` had been red on **six consecutive pushes** — 32005747704, 32009572673, 32009931953,
+32013467906, 32014983209, 32015607487 — from 07:25 to 09:30 on 2026-08-17. The message:
+
+```
+xutility(5604): error C2220: the following warning is treated as an error
+xutility(5604): warning C4244: '=': conversion from 'const _Ty' to 'unsigned char'
+tools/bake/irradiance.hpp(477): note: see reference to function template instantiation
+    'void std::fill<...<ws::u8>...,int>(const _FwdIt,const _FwdIt,const int &)'
+```
+
+`bake_irradiance` cleared its `known` vector with `std::fill(known.begin(), known.end(), 0)`.
+`known` is `std::vector<u8>`; the `0` is an `int`. **The narrowing happens inside `<xutility>`, not
+in the file that caused it** — so the error names a standard header, and `irradiance.hpp` appears
+only in the instantiation notes further down. The build is `/W4 /WX`, C4244 becomes C2220, ninja
+stops, `cmake --build` returns non-zero.
+
+It went in with 6727226, whose message is *"WIP: partial work before the session limit stopped this
+agent"* — a commit that says in its own subject line that it was not finished, pushed to `main`.
+
+### Why it presented as "the game will not run"
+
+The owner reported the game not starting: the window closes partway through. `run.bat` calls
+`build.bat`, and on failure prints the reason and does `exit /b 1` — **a double-clicked batch file
+closes its window the instant the script exits**, so the explanation is on screen for a fraction of
+a second. What was actually broken was `ws_bake_web`, a tool for the clip viewer that the game does
+not use or link. `WorldShaper.exe` was fine throughout and had been all along; it was already sitting
+in `build\bin` and ran for 90 seconds unmodified when started directly.
+
+So a target the game does not depend on took the game down, because `cmake --build` with no
+`--target` builds everything and one failure is the whole build's exit code.
+
+### The two arms
+
+The fault reproduced locally on MSVC **14.50.35717** (VS 18 BuildTools) and on the runner's
+**14.51.36231** — same header line, same instantiation chain, so it is not a local toolchain quirk.
+With `u8{0}` in place: `build.bat` returns 0, and `ws_tests` is **623 of 623, 18,832,709
+assertions**. `u8{0}` is the form already used for exactly this at `src/world/region.cpp:157`, so
+the fix is the house idiom rather than a cast invented for the occasion.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D671 | **`std::fill` over a `u8` container takes `u8{0}`, never `0`** | fault | The `int` overload narrows inside `<xutility>`; under `/W4 /WX` that is a build stop whose message names a standard header and not the caller |
+| D671 | **A red CI is not a background condition — D668 said this and it happened again** | honesty | Six pushes landed on `main` over two hours with the build broken, and the next thing to notice was the owner unable to start the game |
+| D671 | **"The game will not start" was a tool the game does not link** | honesty | `run.bat` exits on any build failure, so any target's failure is indistinguishable from the game being broken. The binary was working the whole time |
+| D671 | **A commit whose subject says "WIP: partial work" does not belong on `main`** | decision | 6727226 named itself unfinished and broke the build for a day; the subject line was the warning and nobody read it |
