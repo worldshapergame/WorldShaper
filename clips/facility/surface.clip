@@ -381,6 +381,39 @@ let s_wash   = blend { s_run_bd s_grit } t=0.18
 # The south front is taken in two pieces either side of the portico, |x| from 7.70 outward. Inside
 # the portico the wall is under a 5 m soffit and has never been rained on, which is why the streak
 # rules stop there and a dust rule takes over.
+#
+# AND EVERY EAST/WEST ZONE IS WRITTEN TWICE INSTEAD OF ONCE THROUGH A `mirror`, WHICH LOOKS LIKE
+# BAD STYLE AND IS THE SINGLE BIGGEST COST DECISION IN THIS FILE.
+#
+# `mirror` folds the coordinate, so `Field::bounds_of` has to give it a box covering BOTH copies:
+# a 0.22 m strip standing on the east wall, mirrored, carries a bounding box 32.3 m wide. The
+# sampler uses that box to decide which rules are still open for a block, and a pattern-keyed rule
+# cannot be settled — so every solid block anywhere inside those 32.3 metres has to be walked voxel
+# by voxel for a rule that could only ever apply to two thin strips at the ends of the building.
+# The zone for the string-course streaks was the worst of them: a 14 m³ pair of strips inside a
+# 1,054 m³ box, laid across the whole rusticated storey and the podium under it.
+#
+# And it was worse than a loose box, because `sample.cpp` only carries a zone's pieces separately
+# when they are a real improvement on the one box round all of them: `piece_volume > whole * 0.75`
+# and the pieces are thrown away. Mirrored, the string-course zone's three pieces summed to
+# 1,083 m³ against a whole box of 1,054 — so the test failed, the pieces were discarded, and the
+# rule was asked at every solid voxel in a box round the entire rusticated storey. Written as four
+# boxes the same zone is 43 m³ of pieces in the same 1,054 m³ box, which is four per cent, and the
+# pieces are kept.
+#
+# `sample.cpp` keeps up to sixteen pieces per rule, which is why `s_top_zone` below has exactly
+# sixteen and not seventeen. The south and north zones stay mirrored where they are folded in x,
+# because there the fold is along the run of the band and the box was already the right shape.
+#
+# THE ARITHMETIC ABOVE IS FROM THE SOURCE AND THE CLOCK DOES NOT CONFIRM IT, WHICH IS SAID HERE
+# RATHER THAN LEFT OUT. The whole building at metre 8 came out 341.9 s with these zones mirrored
+# and 371.7 s with them written out, on a four-core machine carrying a load average between 33 and
+# 42 from other work — so the two figures are inside the noise of the box they were taken on and
+# neither is evidence of anything. What IS checkable without a clock is that both builds produce
+# the same 1,900,985 voxels, the same 207 material records and the same 757 components, so the
+# change is output-identical; and that `Field::bounds_of` gives a mirror the box round both copies,
+# which is 1,054 m³ here against 14 m³ of actual strip. Somebody with a quiet machine should take
+# the pair again.
 
 # ================================================================================================
 # 1 — WATER: THE STRING COURSE IS THE BUILDING'S BIGGEST DRIP LINE
@@ -398,8 +431,9 @@ let s_wash   = blend { s_run_bd s_grit } t=0.18
 # after it is then never evaluated at all.
 let s_str_s  = mirror { box  7.70 3.20 -7.66  16.12 5.34 -7.45 } axis=x
 let s_str_n  = box   -16.12 3.20  7.45  16.12 5.34  7.66
-let s_str_ew = mirror { box 15.95 3.20 -7.62  16.17 5.34  7.62 } axis=x
-let s_str_zone = union { s_str_s s_str_n s_str_ew }
+let s_str_e        = box 15.95 3.20 -7.62  16.17 5.34  7.62
+let s_str_w        = box -16.17 3.20 -7.62  -15.95 5.34 7.62
+let s_str_zone = union { s_str_s s_str_n s_str_e s_str_w }
 
 let s_str_fade = smoothstep { axis of=y } from=3.20 to=5.30
 let s_str_wet  = multiply { s_str_fade s_streak }
@@ -463,12 +497,14 @@ paint slate where=s_str_dark below=0.035
 # than grey, because what is in it is soil and not soot.
 let s_spl_wall_s = mirror { box  7.70 1.78 -7.66  16.12 2.45 -7.45 } axis=x
 let s_spl_wall_n = box   -16.12 1.78  7.45  16.12 2.45  7.66
-let s_spl_wall_e = mirror { box 15.95 1.78 -7.62  16.17 2.45  7.62 } axis=x
+let s_spl_wall_e   = box 15.95 1.78 -7.62  16.17 2.45  7.62
+let s_spl_wall_w   = box -16.17 1.78 -7.62  -15.95 2.45 7.62
 let s_spl_pod_s  = box   -16.50 0.45 -12.90  16.50 1.10 -12.76
 let s_spl_pod_n  = box   -16.50 0.45   7.81  16.50 1.10   7.94
-let s_spl_pod_e  = mirror { box 16.36 0.45 -12.90  16.49 1.10 7.94 } axis=x
-let s_spl_zone   = union { s_spl_wall_s s_spl_wall_n s_spl_wall_e
-                           s_spl_pod_s s_spl_pod_n s_spl_pod_e }
+let s_spl_pod_e    = box 16.36 0.45 -12.90  16.49 1.10  7.94
+let s_spl_pod_w    = box -16.49 0.45 -12.90  -16.36 1.10 7.94
+let s_spl_zone   = union { s_spl_wall_s s_spl_wall_n s_spl_wall_e s_spl_wall_w
+                           s_spl_pod_s s_spl_pod_n s_spl_pod_e s_spl_pod_w }
 let s_splash     = max { s_spl_zone  add { constant 0.06  negate { s_bloom } } }
 paint sandstone where=s_splash below=0.035
 
@@ -501,17 +537,20 @@ paint sandstone where=s_splash below=0.035
 # band and outside it in z as well.
 let s_sof_pod_s = box  -16.72 1.44 -13.12  16.72 1.52 -12.90
 let s_sof_pod_n = box  -16.72 1.44   7.93  16.72 1.52   8.17
-let s_sof_pod_e = mirror { box 16.48 1.44 -13.12  16.72 1.52 8.17 } axis=x
+let s_sof_pod_e    = box 16.48 1.44 -13.12  16.72 1.52  8.17
+let s_sof_pod_w    = box -16.72 1.44 -13.12  -16.48 1.52 8.17
 let s_sof_str_s = mirror { box  7.70 5.34 -7.72  16.24 5.44 -7.56 } axis=x
 let s_sof_str_n = box  -16.24 5.34   7.56  16.24 5.44   7.72
-let s_sof_str_e = mirror { box 16.06 5.34 -7.72  16.24 5.44 7.72 } axis=x
+let s_sof_str_e    = box 16.06 5.34 -7.72  16.24 5.44  7.72
+let s_sof_str_w    = box -16.24 5.34 -7.72  -16.06 5.44 7.72
 let s_sof_cor_s = mirror { box  7.70 11.46 -8.16  16.30 11.56 -7.90 } axis=x
 let s_sof_cor_n = box  -16.30 11.46   7.90  16.30 11.56   8.16
-let s_sof_cor_e = mirror { box 16.40 11.46 -8.16  16.66 11.56 8.16 } axis=x
+let s_sof_cor_e    = box 16.40 11.46 -8.16  16.66 11.56 8.16
+let s_sof_cor_w    = box -16.66 11.46 -8.16  -16.40 11.56 8.16
 let s_sof_port  = box   -7.66  9.86 -11.20   7.66  9.98  -7.40
-let s_sof_zone  = union { s_sof_pod_s s_sof_pod_n s_sof_pod_e
-                          s_sof_str_s s_sof_str_n s_sof_str_e
-                          s_sof_cor_s s_sof_cor_n s_sof_cor_e
+let s_sof_zone  = union { s_sof_pod_s s_sof_pod_n s_sof_pod_e s_sof_pod_w
+                          s_sof_str_s s_sof_str_n s_sof_str_e s_sof_str_w
+                          s_sof_cor_s s_sof_cor_n s_sof_cor_e s_sof_cor_w
                           s_sof_port }
 # Nearly all of it, but not all: -0.45 leaves about a fifth of each soffit unpainted, so the pale
 # is a coat with holes in it and not a second material with a hard edge.
@@ -536,10 +575,12 @@ paint plaster where=s_soffit below=0.035
 # where the soil cove goes, in section 9, and it is matter rather than colour.
 let s_top_str_s = mirror { box  7.70 5.79 -7.72  16.24 5.89 -7.44 } axis=x
 let s_top_str_n = box  -16.24 5.79   7.44  16.24 5.89   7.72
-let s_top_str_e = mirror { box 15.94 5.79 -7.72  16.24 5.89 7.72 } axis=x
+let s_top_str_e    = box 15.94 5.79 -7.72  16.24 5.89  7.72
+let s_top_str_w    = box -16.24 5.79 -7.72  -15.94 5.89 7.72
 let s_top_cor_s = mirror { box  7.70 11.84 -8.28  16.40 11.96 -7.66 } axis=x
 let s_top_cor_n = box  -16.40 11.84   7.66  16.40 11.96   8.28
-let s_top_cor_e = mirror { box 16.16 11.84 -8.28  16.78 11.96 8.28 } axis=x
+let s_top_cor_e    = box 16.16 11.84 -8.28  16.78 11.96 8.28
+let s_top_cor_w    = box -16.78 11.84 -8.28  -16.16 11.96 8.28
 # THE SIX BRONZE URNS STAND IN THE MIDDLE OF THE RAIL ZONE AND ARE CUT OUT OF IT. `parapet_peds`
 # puts a pedestal at (+-16.00, +-7.50) and at (+-8.10, -7.50) and `parapet_urns` stands the order's
 # urn on each, bedded to y = 12.95 — so `urn_plinth` occupies 12.95..13.135, straight through a
@@ -555,15 +596,16 @@ let s_urn_keepout = mirror { union {
 let s_top_rail_s = difference { mirror { box  7.70 12.94 -7.74  16.20 13.06 -7.44 } axis=x
                                 s_urn_keepout }
 let s_top_rail_n = difference { box  -16.20 12.94   7.44  16.20 13.06   7.74  s_urn_keepout }
-let s_top_rail_e = difference { mirror { box 15.94 12.94 -7.74  16.20 13.06 7.74 } axis=x
-                                s_urn_keepout }
+let s_top_rail_e = difference { box  15.94 12.94 -7.74   16.20 13.06 7.74  s_urn_keepout }
+let s_top_rail_w = difference { box -16.20 12.94 -7.74  -15.94 13.06 7.74  s_urn_keepout }
 let s_top_ter_s = box  -16.72 1.74 -13.11  16.72 1.86 -12.78
 let s_top_ter_n = box  -16.72 1.74   7.83  16.72 1.86   8.16
-let s_top_ter_e = mirror { box 16.39 1.74 -13.11  16.72 1.86 8.16 } axis=x
-let s_top_zone  = union { s_top_str_s s_top_str_n s_top_str_e
-                          s_top_cor_s s_top_cor_n s_top_cor_e
-                          s_top_rail_s s_top_rail_n s_top_rail_e
-                          s_top_ter_s s_top_ter_n s_top_ter_e }
+let s_top_ter_e    = box 16.39 1.74 -13.11  16.72 1.86  8.16
+let s_top_ter_w    = box -16.72 1.74 -13.11  -16.39 1.86 8.16
+let s_top_zone  = union { s_top_str_s s_top_str_n s_top_str_e s_top_str_w
+                          s_top_cor_s s_top_cor_n s_top_cor_e s_top_cor_w
+                          s_top_rail_s s_top_rail_n s_top_rail_e s_top_rail_w
+                          s_top_ter_s s_top_ter_n s_top_ter_e s_top_ter_w }
 let s_tops      = max { s_top_zone  add { constant -0.28  negate { s_bloom } } }
 paint tuff where=s_tops below=0.035
 
@@ -589,8 +631,8 @@ paint hedge where=s_moss_face below=0.035
 # feet, which on this building is the cornice and the balustrade rail and nothing else — not the
 # terrace, which is walked, and not the string course, which is in the splash of the storey above.
 # A different seed from the grime, so the patches are not the same patches paler.
-let s_lich_zone = union { s_top_cor_s s_top_cor_n s_top_cor_e
-                          s_top_rail_s s_top_rail_n s_top_rail_e }
+let s_lich_zone = union { s_top_cor_s s_top_cor_n s_top_cor_e s_top_cor_w
+                          s_top_rail_s s_top_rail_n s_top_rail_e s_top_rail_w }
 let s_lichen    = max { s_lich_zone  add { constant 0.34  negate { s_moss_n } } }
 paint travertine where=s_lichen below=0.035
 
@@ -682,8 +724,9 @@ paint gravel where=s_dust below=0.035
 # thing that caught it was the material histogram: terracotta came out 516 before and 516 after.
 let s_rust_s = mirror { box  7.70 11.48 -8.30  16.34 11.92 -8.02 } axis=x
 let s_rust_n = box  -16.34 11.48   8.02  16.34 11.92   8.30
-let s_rust_e = mirror { box 16.52 11.48 -8.30  16.80 11.92 8.30 } axis=x
-let s_rust_z = union { s_rust_s s_rust_n s_rust_e }
+let s_rust_e       = box 16.52 11.48 -8.30  16.80 11.92 8.30
+let s_rust_w       = box -16.80 11.48 -8.30  -16.52 11.92 8.30
+let s_rust_z = union { s_rust_s s_rust_n s_rust_e s_rust_w }
 let s_rust   = max { s_rust_z  add { constant 0.42  negate { s_streak } } }
 paint terracotta where=s_rust below=0.035
 
