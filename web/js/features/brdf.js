@@ -54,16 +54,29 @@
 //     Smith is two more square roots for a difference at the very edge of a grazing highlight);
 //   - Schlick's Fresnel, `f0 = mix(dielectric, albedo, metal)`;
 //   - SHEEN, into the diffuse lobe and not the specular one, as `albedo * sheen * (1 - v·h)^5 / PI`.
-//     It is fibre fuzz scattering in every direction, not a reflection off anything flat, and it
-//     is `v·h` — the half vector — rather than `n·v`, which is what makes velvet brightest along
-//     the light rather than merely at the silhouette;
+//     It is fibre fuzz scattering in every direction, not a reflection off anything flat, so it is
+//     added to the diffuse and it takes the same Fresnel-shaped factor everything else here does —
+//     on the HALF VECTOR, which is the game's own choice and is what makes a cloth go bright where
+//     the eye and the light are far apart. **It is not retro-reflection and neither is the game's.**
+//     `(1 - v·h)^5` is nearly NOUGHT when you look straight down the light, so velvet lights up
+//     side-on and backlit, round the edge of a fold, and not along the beam. `_contract.clip`
+//     describes velvet as "brightest where you look along the light"; that is what the material is,
+//     it is not what this lobe or `surface_response` draws, and matching the game was the
+//     instruction. Measured on the salon's silk ceiling it is worth 1 to 3 per cent — see below;
 //   - CLEARCOAT: its own GGX at a fixed roughness of 0.06, its own Smith, its own DIELECTRIC
 //     Fresnel (a coat is clear, so 0.04 whatever the metal under it is doing), and — the part that
 //     makes it read as a coating rather than as a shinier material — `response * (1 - clearcoat *
 //     fc) + coat`, so the base keeps its own roughness and its own colour and is merely seen
 //     THROUGH the lacquer;
 //   - emission, `tint * emissive^2 * 64`, the square included. A torch and a furnace are not one
-//     step apart on a linear scale, and the byte has to span both.
+//     step apart on a linear scale, and the byte has to span both. Worth knowing what that number
+//     means here: every emitter in the facility lands between 22 (`sconce`) and 43 (`taper`) against
+//     a sun of 3.3, so ALL OF THEM CLIP THROUGH THE TONEMAP AND COME OUT WHITE, and their RGB565
+//     tint survives only where a blended surface dims them. That was already true of the old
+//     `emissive * 6`; what the game's curve changes is that an emitter now reads as emitting in a
+//     dark corner — `?lobes=-emit` takes the salon's sconces from 250,250,250 to 80,67,50 — and
+//     that the gap between a candle and a furnace is a gap rather than a step. Fixing the white is
+//     a glare pass, which is the game's answer too and is not this file's business.
 //
 // Approximated, deliberately, with the reason:
 //
@@ -179,9 +192,21 @@
 // Compiling every lobe out came back FOUR PER CENT SLOWER than leaving them all in on the salon,
 // and on a clip where three of them are provably dead the two arms interleave. So the run-to-run
 // spread of this box — a software rasteriser sharing four cores with a dozen other browsers — is
-// wider than anything being asked about. These numbers say the lobes are not what a frame is spent
-// on here; they do not say what any one of them costs, and nothing that can be run on this machine
-// will. A phone with a real GPU is where that measurement lives.
+// wider than anything being asked about.
+//
+// THAT TABLE'S FAULT IS ITS DESIGN AS WELL AS ITS MACHINE, and fixing the design does give a bound.
+// Eight arms run one after another cannot tell a lobe from a busy minute, which is precisely what it
+// reported. Run only the two extreme arms, ALTERNATED, six rounds each, so a slow patch hits both:
+//
+//   all lobes     383.9  272.8  265.9  431.6  441.2  399.6     best 265.9 ms
+//   none of them  263.7  263.6  374.4  382.1  398.7  445.7     best 263.6 ms
+//
+// All five lobes together are worth 0.9 PER CENT of the fastest frame this box will produce, on the
+// salon, where every one of them is in use. The spread WITHIN one arm is 66 per cent, which is why
+// the best of many is the only statistic worth reading and why running the same script again gave
+// "none of them" the slower best — it never caught a quiet patch. The lobes together cost under
+// about one per cent of a software frame; per-lobe attribution is not resolvable here at any number
+// of repeats, and a phone with a real GPU is where that measurement lives.
 //
 // What can be counted exactly is the work, per pixel, on a face that has the lobe:
 //
@@ -437,8 +462,10 @@ vec3 ws_direct(WsMaterial m, vec3 f0, vec3 turnedAway, vec3 n, vec3 v, vec3 l) {
     vec3 diffuse = m.albedo * (1.0 - m.metal) * (vec3(1.0) - turnedAway) / WS_PI;
 #if WS_LOBE_SHEEN
     // Fibre fuzz, on the DIFFUSE lobe: strands standing off the weave in every direction, not a
-    // reflection off anything flat. Grazing on the half vector, which is what makes velvet
-    // brightest where you look along the light.
+    // reflection off anything flat. On the HALF VECTOR, verbatim from surface_response — so it is
+    // brightest where the eye and the light are far apart and nearly nought straight down the
+    // beam. Not retro-reflection; see the note at the top of this file for why that is the game's
+    // answer rather than an approximation of a better one.
     if (m.sheen > 0.0) diffuse += m.albedo * (m.sheen * pow(1.0 - vdh, 5.0)) / WS_PI;
 #endif
 

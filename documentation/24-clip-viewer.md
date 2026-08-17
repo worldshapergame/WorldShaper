@@ -150,8 +150,12 @@ short version is:
   wide across it, the grain being a **world axis** projected into the face. A face the grain runs
   straight out of has no grain, which is why the cut end of a brushed baluster has a round
   highlight and its sides have a stretched one.
-- **`sheen`** — on the **diffuse** lobe, not the specular one, and grazing on the **half vector**.
-  That is what makes velvet brightest along the light rather than merely at the silhouette.
+- **`sheen`** — on the **diffuse** lobe, not the specular one, and Fresnel-shaped on the **half
+  vector**, verbatim from `surface_response`. So a cloth goes bright where the eye and the light are
+  far apart — side-on, backlit, round the edge of a fold — and `(1 − v·h)⁵` is nearly nought when you
+  look straight down the beam. **This is not retro-reflection and neither is the game's.**
+  `_contract.clip` calls velvet "brightest where you look along the light", which is what the
+  material is and is not what either renderer draws; matching the game was the instruction.
 - **`lacquer`** — a second lobe at a fixed roughness of 0.06 with its own dielectric Fresnel, and
   everything underneath **dimmed by what the coat sent back**. That last part is what makes it read
   as a coating rather than as a shinier material.
@@ -222,8 +226,15 @@ has not moved — the metal picks out from the dielectric, which is the whole te
 now costs the gilt **42 per cent** and the plaster nothing. The lacquer is the sky in the floor:
 parquet goes 71,56,51 without it to 80,71,78 with it, half again as much blue on a brown floor,
 which is a low sky in a polished surface at a grazing angle. And the sheen is worth one unit here,
-because it is `(1 − v·h)⁵` and lives in the last few degrees before an edge — which is what the game
-does and what velvet does.
+because it is `(1 − v·h)⁵` and lives where the eye and the light are far apart, which is what the
+game does.
+
+Taken on its own with `?lobes=-sheen`, on the salon's silk ceiling — `silk` is sheen 15, the
+strongest in the building — the term is worth **1.0 per cent** looking down the room and **3.4 per
+cent** with the camera up at the coving where the ceiling is most nearly edge-on, and **exactly
+nothing** on the blue wall or the gilt beside it. It is quiet indoors for the reason it should be:
+what a grazing lobe returns is proportional to the light arriving, and there is very little on that
+ceiling. It is a real term correctly isolated, not a large one in these rooms.
 
 Outdoors, on `mirror_test` at yaw 0, pitch −0.05, distance 5.0, target (0, 0.95, −1.2):
 
@@ -262,9 +273,24 @@ Compiling every lobe out came back four per cent *slower* than leaving them all 
 `mirror_test` — which declares no lacquer, no sheen and no brush at all, so those arms are provably
 doing nothing — the two arms simply interleave: 163.1, 156.6, 156.3 with everything on against
 168.0, 149.2, 153.8 with everything off. The run-to-run spread of a software rasteriser sharing four
-cores with a dozen other browsers is wider than anything being asked about. What the table does
-establish is that the lobes are not what a frame is spent on here; what it does not establish is
-what any one of them costs. A phone with a real GPU is where that measurement lives.
+cores with a dozen other browsers is wider than anything being asked about.
+
+**The fault in that table is its design and not only its machine, and fixing the design does give a
+bound.** Eight arms measured one after another cannot tell a lobe from a busy minute — which is
+exactly what it reported, with "no emission" as the slowest arm of all. Run only the two extreme
+arms, *alternated*, six rounds each, and a slow patch of the machine hits both:
+
+| | | best |
+|---|---|---|
+| all lobes | 383.9  272.8  265.9  431.6  441.2  399.6 | **265.9 ms** |
+| none of them | 263.7  263.6  374.4  382.1  398.7  445.7 | **263.6 ms** |
+
+All five lobes together are worth **0.9 per cent** of the fastest frame this box will produce, on
+the salon, where every one of them is in use. The spread *within* one arm is 66 per cent, which is
+why the best of many is the only statistic worth reading here and why the same script run again gave
+`none of them` the slower best — it simply never caught a quiet patch. So: the lobes together cost
+under about one per cent of a software frame, and per-lobe attribution is not resolvable on this
+machine at any number of repeats. A phone with a real GPU is where that measurement lives.
 
 What can be counted exactly is the work per pixel on a face that carries the lobe: **brush** is one
 cross, two dots, an `inversesqrt` and about ten multiplies *replacing* the isotropic distribution's
