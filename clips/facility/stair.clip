@@ -74,6 +74,25 @@
 # which is the point of moving them: the old 15 mm was half a voxel at the contract's own metre
 # and could not be measured, only asserted.
 #
+# MEASURED, at metre 8, every reading closed at both ends, on `stair_rig` — this stair with its
+# floor, its two walls and a lid, because `--gap` down a column of the whole building measures the
+# sky over the parapet and not the room (see the rig's own note at the bottom of this file). The
+# `was` column is the same query on the stair this replaced, with a rig of the same shape:
+#
+#   --gap y@7.40,5.50    3.125 m  under the half landing            was 2.125   (3.015 built)
+#   --gap y@8.60,6.00    3.375 m  under the upper flight's foot                 (3.296 built)
+#   --gap y@9.60,6.00    3.875 m  under the upper flight, mid-span              (3.859 built)
+#   --gap y@13.50,5.50   4.125 m  under the gallery                 was 4.125   (4.095 built)
+#   --gap z@8.20,4.939   1.375 m  across the lower flight           was 1.000   (1.3575 built)
+#   --gap z@9.00,3.00    2.125 m  of passage beside the spandrel                (2.100 built)
+#   --gap z@11.80,2.00   1.500 m  between the gallery's two piers                (1.350 built)
+#   --gap z@6.50,3.00    3.125 m  between the landing's two piers               (2.910 built)
+#
+# and the head height OVER the flights is `stair_probe_ra` and `stair_probe_rb`, which stand a
+# 2.40 m box on every one of the twenty-three treads and come back EMPTY. The stair this replaced
+# could not carry a 1.20 m path at all: the same 1.20 m box over its half landing catches 138
+# voxels of its own well guard, and between its two lower balustrades 28 voxels of the south one.
+#
 # Secondary loads, all of them free riders on geometry that had to exist anyway:
 #
 #   THE BALUSTERS. Fifty-one of the order's `ionic_baluster` to a stair, a hundred and two in the
