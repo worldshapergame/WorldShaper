@@ -31,11 +31,14 @@
 #   bash tools/clipcheck.sh clips/facility/requests/stair-route-probe.clip --metre 16 --part <name>
 #   bash tools/clipcheck.sh clips/facility/requests/stair-route-probe.clip --metre 32 --part <name>
 #
-# WHAT EACH ONE SHOULD SAY, as it stands on 2026-08-17. Two of them are NOT empty and both readings
-# are somebody else's member, named, measured and written up in requests/stair.md §8:
+# WHAT EACH ONE SHOULD SAY, as it stands on 2026-08-17, at metre 16. Two of them are NOT empty and
+# both readings are somebody else's member, named, measured and written up in requests/stair.md §8:
 #
 #   sr_head_all     56 voxels     library.clip's lower cornice frieze, soffit 8.315, crossing its
 #                                 own doorway at 2.015 m clear (§8.5). Everything else EMPTY.
+#                                 At METRE 32 the same part is 486 voxels in ONE component, all
+#                                 `gilt`, at x -14.844..-14.000, y 8.312..8.406, z -3.594..-3.406 —
+#                                 the same member, eight times as many voxels, nothing else.
 #   sr_head_foot    EMPTY         the passage at the foot of the stair, 1.22 x 2.40
 #   sr_head_rake    EMPTY         the twenty-three treads, the half landing and the gallery
 #   sr_head_brg     EMPTY         the gallery's east end and the bridge, 1.29 x 2.40

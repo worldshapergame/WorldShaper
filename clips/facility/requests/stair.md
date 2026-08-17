@@ -260,7 +260,7 @@ Both other files had already written it down and neither could fix it. `requests
 *"Between them, x 14.05..15.10 by z 3.10..4.515, THERE IS NO FLOOR … Bridging it means taking out
 stair.clip's own south balustrade at z = 4.59, which is that file's line and not mine."*
 
-### Measured, at metre 16, on `stair-route-probe.clip`
+### Measured on `stair-route-probe.clip`, at metre 16 and again at the contract's metre 32
 
 | part | before the bridge | now | what it is |
 |---|---|---|---|
@@ -277,6 +277,12 @@ empty by construction — the five boxes are disjoint — and `sr_head_foot`, `s
 cornice frieze crossing its own doorway** (§8.5), which `sr_who_lib` reports and `sr_who_enf`,
 `sr_who_wal`, `sr_who_hal` and `sr_who_fit` deny. Nothing of any other fragment stands anywhere on
 the route, in either wing, at either level.
+
+**And the same three parts at metre 32, which is the metre this building is sampled at:**
+`sr_head_all` is **486 voxels in ONE component**, `gilt`, at
+`x -14.844 .. -14.000, y 8.312 .. 8.406, z -3.594 .. -3.406` — the same library cornice frieze, in
+the same place, eight times as many voxels because the grid is eight times as fine. Everything else
+on the route is clear at 32 as it is at 16.
 
 Two readings on the way there are worth keeping because they are what the boxes had to be tuned
 against, and both were somebody's real member rather than a probe artefact:
@@ -353,11 +359,15 @@ It meets the standard for an *opening* and it is 0.20 under the standard for *ci
 what a 6 m passage is.
 
 **The ask, and it needs both files:** `halls.clip`'s block above `y = 6.30` is fill — its vaults
-crown at 6.525 and it is flat to 6.975 for a floor nobody has laid — so its east face there can come
-back from 13.95 to **13.85** at no cost to any room. If `enfilade.clip`'s upper west wall follows it,
-the strip is **1.25 m** and the route is over the figure everywhere. The niches are the constraint on
-that file's side: they are 0.225 deep off 13.95 and the wall's back is at 13.585, so moving the face
-to 13.85 leaves 0.04 behind a niche unless the back moves with it.
+crown at 6.525 and it is flat to 6.975 for a floor nobody has laid, and its own room ends at 13.50 —
+so its east face there can come back from 13.95 to **13.85** at no cost to any room, leaving 0.35 of
+wall over the hall's own east wall. (`halls_block` is written `4.95 1.75 -2.925 13.95 6.975 2.925
+round=0.015`, so the face is really at **13.965**; it is only invisible in the picture gallery because
+`void_enfilade` carries away the 15 mm of it that stands in `enf_u_room`. A rebate has to be measured
+from 13.965, not from 13.95.) If `enfilade.clip`'s upper west wall follows it, the strip is **1.25 m**
+and the route is over the figure everywhere. The niches are the constraint on that file's side: they
+are 0.225 deep off 13.95 and the wall's back is at 13.585, so moving the face to 13.85 leaves 0.04
+behind a niche unless the back moves with it.
 
 **The bridge does not have this problem and that is why it is 1.60 m in the clear** rather than
 matching the archway: west of 13.95 there is nothing at all, so `stair.clip` took the 0.45 the rest
