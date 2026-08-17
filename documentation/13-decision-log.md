@@ -8928,3 +8928,46 @@ where a person has to walk.
 | D669 | **`offset by=` is positive to shrink, and the brief said otherwise** | fault | A whole staircase's joints did not exist and nothing said so |
 | D669 | **19 cuts under a `revolve` are "not audited" rather than estimated** | honesty | One world point maps to many local ones; a number that cannot be stood behind is worse than none |
 | D669 | **Agents were told the premise and said it was wrong** | honesty | Two worked from a `main` predating the cutter fix, checked rather than complied, and were right |
+
+### The second wave, and it is all one bug wearing four hats
+
+`offset by=` grows on a negative. Written down backwards in `BRIEF.md`'s own operator table, and by
+the time the audit finished it had silently destroyed **four separate features**, none of which
+reported anything at all:
+
+- every joint in the great stair (`difference { mass core }` empty, 2,423,674 voxels both sides)
+- **the flutes on all six portico columns** — `_order.clip:135`; a metre-32 slice at mid-height is a
+  thirty-voxel circle with no notch in it
+- the egg-and-dart on nineteen capitals (`_order.clip:181`, left as it needs the capital rebuilt)
+- the grotto's hollow, confirmed by the estate audit
+
+**And a second fold with the same shape.** `around { child } count=n` folds the ASKING POINT into one
+fundamental sector centred on +X — `mirror`'s trap in polar coordinates — so a child drawn on +Z is
+copied n times and every copy is empty. Four bindings in `campanile.clip` were written that way:
+**the eight biforate openings the tower exists for, its four colonnettes, its twenty louvres and its
+twelve clock marks were all EMPTY.** The belfry was a solid block with the bell sealed in the dark.
+It also hid a 503.6 m³ cut from the auditor, because the fold made the box unbounded.
+
+**Twenty coffers were filled back in by a neighbour.** `portico.clip` cuts them from its own soffit
+slab; `entablature.clip` unioned a solid block over the same plan from 9.90 to 11.90. The ceiling was
+a flat pan and the gilt rosettes were absent from the exterior entirely — a cut that was made
+correctly and then undone by a union, which no per-file check can see.
+
+### The paint diagnostic, sharpened, and one correction owed
+
+The corrected `never matched` first reported 30 of 364 rules. Twenty of those were real geometry
+thinner than a voxel at the metre asked — `windows_glass` among them, and it was relayed to the
+owner as a fault before being checked, which it was not: the pane is 0.045 m, 0.36 of a voxel at
+metre 8, and `--part part_windows --metre 32` reports **glass at 300,268 voxels, 15.02%**. Re-asking
+each non-matching rule at a finer metre over its own box takes the list to **2 that match nothing at
+any resolution**: `surface_datum`, reached independently from the paint side and agreeing with the
+manifest audit, and **`chapel_ribs`, which nobody had — the chapel's rib gilding is an empty
+intersection**, asked 862 times, matching none.
+
+| # | Decision | Kind | Why |
+|---|---|---|---|
+| D669 | **`around` folds the asking point, so a child off the +X sector is copied empty** | fault | A belfry with no openings, and a 503.6 m³ cut hidden from the auditor behind an unbounded box |
+| D669 | **A cut can be made correctly and undone by a union** | fault | Twenty coffers filled in by the entablature; no per-file check can see it |
+| D669 | **`never matched` re-asks at a finer metre before calling a rule dead** | decision | 30 became 2; the other 20 were real geometry under a voxel, and one was reported to the owner as a fault first |
+| D669 | **`windows_glass` was called a fault on a coarse reading** | honesty | Corrected: 300,268 voxels at the resolution that ships. Check the resolution before believing the instrument |
+| D669 | **A flaky test is fixed rather than re-run** | decision | `submitter_collisions() > 0` needs a race to occur; five seconds was not enough under load. Passes 8 of 8 now, but the load dropped too, so the evidence is not yet clean |
