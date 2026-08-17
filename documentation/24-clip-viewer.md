@@ -1823,3 +1823,44 @@ instead of on a block**: `u32` at 200 says where a directory of `(tag, offset, s
 nothing already in the file moves, and a viewer that has never heard of a tag steps over it rather
 than mis-reading the bytes behind it.
 <!-- <<< matvol -->
+
+## The ◉ view's cutter cap, measured on the facility at 32/m
+
+```
+shapes view: 1805 over the 16-cutter cap (worst 326)  43 unplaceable
+             122 subtrahends with an intersection  34 with a difference
+```
+
+**1,805 shapes are cut by more shapes than the cap allows, and the worst is cut by 326.** A shape
+whose cutter list is truncated keeps the matter those cutters should have taken out, so it draws
+SOLID. That is what "all clips are enclosed in a huge cube" is: a large shape — a site slab, a
+building envelope — rendering with its openings unsubtracted. The truncation is not silent in the
+log, but it is invisible on screen, which is the wrong way round.
+
+It is also the cost. The facility is 14,730 instanced boxes; each fragment marches up to 96 steps,
+each step resolves up to 16 cutters, and the normal costs seven more distance evaluations. Raising
+the cap makes the picture righter and the frame slower in the same move, linearly, which is why the
+answer is not a bigger number.
+
+The shape of a fix, for whoever takes it: a shape needing 326 cutters is a shape that should not be
+one draw. The cutters are already sorted by overlap volume, so the information to split it — by
+region, into several instances each carrying the cutters that actually reach it — is present at the
+point where the truncation happens in `walk_shapes`. `43 unplaceable` is a separate and smaller
+thing: subtrees under an op with no affine placement, listed so they are not mistaken for zero.
+
+## What the facility costs at 32 voxels to the metre
+
+Measured on four cores, one clip, no cache:
+
+| | |
+|---|---|
+| sampling | 1428 s |
+| wall, everything | 1590 s |
+| quads | 2,022,269 |
+| file | 58.6 MB |
+| shapes / cutters | 14,730 / 11,487 |
+| materials | 63 |
+
+The file is the number to watch: 58.6 MB is a real download on a phone, and GitHub Pages serves a
+100 MB per-file ceiling, so the building is now within a factor of two of a hard limit that has
+nothing to do with how it looks.
