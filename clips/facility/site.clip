@@ -1,8 +1,7 @@
-# site — the ground the facility stands on: lawn, gravel forecourt, hedges, boundary, water.
+# site — the ground the facility stands on: forecourt, walks, beds, boundary, water.
 #
 # ------------------------------------------------------------------------------------------------
-# WHAT THIS FILE PUTS UNDER LOAD. Two things, and neither of them is thin matter, because the
-# order already carries that share.
+# WHAT THIS FILE PUTS UNDER LOAD. Three things now, and the third is new.
 #
 #   1. THE WATER. `site_waters` is the ONLY transmissive horizontal surface in the whole clip —
 #      opacity 110, ior 1.33, roughness 24, index of refraction and all — and therefore the only
@@ -26,33 +25,61 @@
 #      the lawn — see the two paragraphs on the waterline further down, both of which are things
 #      that went wrong here and were caught by measuring.
 #
-#   2. THE LAWN. `site_ground` is a single solid 34.0 x 0.90 x 25.0 m — the deepest slab the
-#      contract's bounds allow — of one material with nothing inside it at all. It is around 25
-#      million voxels at metre 32, some forty times the volume of any other part of the building,
-#      and it is the clip's one large uniform region: every brick wholly inside it holds a single
-#      value, and everything else in this building is surface. THE SLAB IS 0.90 m THICK ON PURPOSE.
-#      The manifest displaces the finished building by 12 mm of grain, weathering displaces more,
-#      and a previous facility shipped with a lawn full of holes because its ground was thinner
-#      than the displacement applied to it. 0.60 was the stated floor; this is 0.90 because the
-#      bounds allow it and there is no reason to be mean with the one part that is cheap.
+#   2. THE MASS. `site_bulk` is a single solid 34.2 x 0.72 x 25.1 m of one material with nothing
+#      inside it at all — around 20 million voxels at metre 32, some thirty times the volume of any
+#      other part of the building, and the clip's one large uniform region: every brick wholly
+#      inside it holds a single value, and everything else in this building is surface. IT IS THICK
+#      ON PURPOSE. The manifest displaces the finished building by 12 mm of grain, this fragment
+#      displaces its own top by up to 66 mm more, and a previous facility shipped with a lawn full
+#      of holes because its ground was thinner than the displacement applied to it.
 #
-#   Third, smaller: the hedges are a displaced surface (`site_leaf`), which is the path the
+#      THE MASS IS FLAT AND THE TOP 0.315 m IS NOT, and that separation is the whole reason the
+#      shaped ground below is affordable. A displaced shape is settleable — `metric_slack` gives it
+#      its own amplitude twice over — but every block within reach of it is charged that slack. Put
+#      the roll on the whole 850 m² slab and the charge lands on twenty million voxels of solid
+#      earth that will never be seen. Put it on a 0.315 m crust laid over the top and the mass
+#      underneath settles exactly as it always did.
+#
+#   3. THE GROUND ITSELF, which is new and is the reason this file grew. A flat plane with a colour
+#      on it is what gives a render away, and that is precisely what this fragment was: one 34 x 25
+#      slab with a gravel rectangle painted on the south of it. It is now four surfaces — flags,
+#      setts, gravel, grass — each made of PIECES rather than displaced as one plane, each at its
+#      own level, worn into by the traffic that would actually run over it, and joined to the
+#      building by a dished granite channel with moss in the angle. Every feature in it is at least
+#      one voxel at metre 32 (31.25 mm) because anything smaller is dither and the sampler drops it.
+#
+#      For the sampler that is five nested `displace` nodes where there was one, and the numbers
+#      are in the DISPLACEMENT BUDGET note below the plates. Read it before adding a sixth.
+#
+#   Fourth, smaller: the hedges are a displaced surface (`site_leaf`), which is the path the
 #   pipeline agent's `value_range` rewrite made skippable. If a hedge ever starts costing the
 #   sampler the whole bounding volume again, that regression is back.
 # ------------------------------------------------------------------------------------------------
 #
-# THE MODULE. D = 0.90, M = 0.45. Every number below is a multiple of M/10 = 0.045, with three
+# THE MODULE. D = 0.90, M = 0.45. Every PLAN number below is a multiple of M/10 = 0.045, with the
 # stated exceptions: the contract's own plan numbers (block_z 7.50, the bounds), the baluster's
 # 0.70 which belongs to the order and is argued for there, and the baluster PITCH of 0.30, which
 # is 2M/3 — a simple fraction, chosen because M itself leaves a balustrade too airy to read as one
 # and M/2 closes the gap between two balusters to 0.045, which is a rubble wall at anything under
 # full detail. 0.30 leaves 0.138 of daylight: four voxels at metre 32, two at metre 16.
 #
+# THE RELIEF NUMBERS ARE NOT MODULE NUMBERS AND MUST NOT BE. A rut is 48 mm deep because that is
+# a voxel and a half at metre 32, not because it is a fraction of a column diameter; ground has no
+# order. Everything that sets a LEVEL or an EXTENT here is on the module; everything that says how
+# far a surface wanders off that level is on the voxel. The two are kept in separate paragraphs
+# below so nobody has to guess which kind a number is.
+#
 # ------------------------------------------------------------------------------------------------
 # THE PLAN, and it is set by the neighbours rather than by me. MEASURED, not assumed:
 #
-#   part_podium   x -16.625 .. 16.625   z -13.00 .. 8.125   y -0.50 .. 1.75
-#   part_steps    x  -9.45  ..  9.45    z -15.70 .. -12.41
+#   part_podium   x -16.625 .. 16.625   z -13.05 .. 8.125   y -0.50 .. 1.75
+#                 (`podium_plinth` is box -16.65 -0.45 -13.05 .. 16.65 0.225 8.10, so the face the
+#                  ground meets is z = -13.05 and it is buried 0.45 — nothing I do to the ground
+#                  can undermine it.)
+#   part_steps    x  -9.45  ..  9.45    z -16.25 .. -12.96   and the flight is solid down to
+#                 y = -0.18, not -0.05. The pedestals at its foot are x 8.535..9.465,
+#                 z -16.265..-15.275, also down to -0.18. That 0.18 is the headroom every level
+#                 below was chosen against, and it is generous: nothing here goes below -0.108.
 #
 # THE PODIUM IS ONE RECTANGLE ACROSS THE WHOLE SITE. It is not the portico's footprint with lawn
 # in the crooks beside it — it runs the full 33 m from x -16.65 to 16.65 and from z -13.05 all the
@@ -61,39 +88,327 @@
 # across the SOUTH front, between the site edge and the podium's plinth, plus a 0.35 m verge round
 # the other three sides. That is the site. It is small, and it is small because the contract cut
 # the sampled box to the building plus a metre on purpose — read the note at the top of
-# _contract.clip. Everything here is laid out to that, tight:
+# _contract.clip.
 #
-#   z -16.50 .. -16.20   the verge, lawn, outside the boundary
+# ABOUT FORTY SQUARE METRES OF IT ARE EVER SEEN, and forty square metres is a large room rather
+# than a park, so it gets floored properly rather than covered in one colour. The count: 119 m² of
+# south band, less 62 under the flight, less 20 under the two basins, plus the beds and the verges.
+#
+#   z -16.50 .. -16.25   the threshold: flagged, on the axis, in front of the bottom step
 #   z -16.20 .. -15.75   the balustraded boundary, with a gate pier and an urn either side of the
 #                        approach and a 0.90 m way through into each forecourt beside the steps
-#   z -15.75 .. -13.05   the gravel forecourts: clipped hedges, then a reflecting basin whose far
-#                        coping is the podium's own plinth
-#   z -15.70 .. -12.41   (the great steps, somebody else's, between them on the centre line)
+#   z -15.75 .. -13.05   the gravel forecourts: a sett walk, a kerbed bed, then a reflecting basin
+#                        whose far coping is the podium's own plinth
+#   z -16.25 .. -12.96   (the great steps, somebody else's, between them on the centre line)
+#   z -13.41 .. -13.00   the channel at the foot of the podium
 #   x  16.65 .. 17.00 and z 8.10 .. 8.50   a low clipped hedge round the podium's foot
 #
+# THE STEPS MOVED 0.55 m SOUTH AFTER THIS GROUND WAS FIRST LAID, and this file is the second half
+# of that settlement. steps.clip was built to the contract's plan table and podium.clip and this
+# file were both built to the podium's real face at z = -13.05, so the flight was 0.55 m short and
+# the podium's corona ate its top two treads. The flight is now z -16.25 .. -13.05 and everything
+# in this file that named the OLD flight has been re-cut against the new one:
+#
+#   site_stepbed  now -16.250 .. -12.960, the flight's own faces, so it is still buried 0.18
+#   site_dish     moved from -16.100 to -16.375; the approach it was worn into is now a threshold
+#   the forecourts, the walks, the beds, the basins and the channel are all off the centre line
+#                 and did not move at all — the flight only ever bounded them in x
+#
 # WHAT I ASSUME OF MY NEIGHBOURS, beyond the two boxes measured above:
-#   - the ground is y = 0 and I am everything below it. Anything standing on the site stands on
-#     y = 0 and reaches 0.05 below it, as the brief says. I do not reach up to meet anybody, and
-#     nothing here needs a neighbour to exist.
+#   - the ground is y = 0 and I am everything below it. THAT DATUM HAS NOT MOVED. The flags of the
+#     approach, the setts of the walks and the grass verge are all AT y = 0; only the gravel court
+#     is set down, by M/10 = 0.045, which is what a gravel court is set down by against a paved
+#     one. Nothing standing on this site had to change and no fragment had to be asked for
+#     anything. If you ever need the datum itself moved, that is a request in
+#     clips/facility/requests/, not an edit.
 #   - site.clip is the FIRST part in the manifest, so every other fragment's coats go on over
 #     mine. That is the right way round: the ground is the base coat of the base coat. It also
-#     means that photographing `--clip-part part_site` shows this ground painted GRANITE over the
-#     whole podium footprint, because the podium's own zone rule reaches 0.45 below grade and wins.
-#     That is correct and invisible in the finished building — the podium is standing on it — but
-#     it makes a part-only render of the lawn look grey. Photograph the lawn's colour with a
-#     manifest that includes only this fragment if you need to judge it.
+#     means that photographing `--clip-part part_site` shows this ground wearing other fragments'
+#     colours over the whole podium footprint — three quarters of it comes back limestone, from
+#     rules belonging to the rooms buried under the building. That is correct and invisible in the
+#     finished facility, and it makes a part-only render of the ground useless for judging colour.
+#     Photograph it with a manifest that includes only this fragment. (Measured, so that the next
+#     person does not chase it: site alone reports 85% lawn, 10.5% gravel; the same part inside the
+#     whole facility reports 76% limestone and lawn down in the tail.)
+#   - ONE THING I CHANGED THAT ANOTHER FILE DESCRIBES: `surface.clip` says "site.clip paints the
+#     whole southern approach gravel from the boundary out to z = -13.05", and that is no longer
+#     true — the approach on the axis is now sandstone flags and the walks beside the flight are
+#     granite setts. It does not break `surface_sun_steps`, whose box is x ±9.90, z -15.75..-12.60
+#     and therefore lands on the flight itself; sand drifting down a flight of steps is what sand
+#     does. The sentence in that file wants correcting by whoever owns it — as does the same file's
+#     assumption about where the flight starts, which is now -16.25 and outside its zone.
 # ------------------------------------------------------------------------------------------------
 
 include "_contract.clip"
 
 # ================================================================================================
-# THE GROUND — one slab, y -0.90 .. 0.00
+# THE MASS — flat, cheap, and nine tenths of the volume
 # ================================================================================================
 #
-# The full sampled footprint, x +-17 and z -16.50 .. 8.50. Its four vertical faces are all at the
-# bounds and are never seen; its top is the datum the whole building is measured from.
+# Three flat solids that nothing displaces, so the sampler settles them whole:
+#
+#   site_bulk     everything below -0.180, the full footprint. The shaped crust lands on it.
+#   site_under    the ground under the building, held at y = 0 from the podium's face northward.
+#                 Buried under 0.45 m of podium plinth everywhere except the 0.35 m verges, where
+#                 the skirt hedge stands on it.
+#   site_stepbed  the ground under the flight, held at y = 0 so the steps keep the 0.18 m of burial
+#                 they were drawn with. Its two faces are the FLIGHT'S OWN, -16.250 and -12.960,
+#                 taken from steps.clip after that file moved 0.55 m south — not from the contract's
+#                 plan table, which still says -15.70 and is the number that was wrong.
+#
+# All three run past the bounds in x and z. They are clipped by `bounds` and cost nothing there,
+# and it means no displacement anywhere in this file can pull the ground back inside its own edge
+# and leave a hairline of nothing at the rim of the sampled box.
+let site_bulk    = box -17.100 -0.900 -16.560   17.100 -0.180  8.560
+let site_under   = box -17.100 -0.360 -13.050   17.100  0.000  8.560
+let site_stepbed = box  -9.450 -0.360 -16.250    9.450  0.000 -12.960
 
-let site_slab = box -17 -0.90 -16.50   17 0.00 8.50
+# ================================================================================================
+# THE GRAIN OF THE GROUND — the patterns the four surfaces are made of
+# ================================================================================================
+#
+# Named here, above the shapes, because two of them are used twice — once to move the matter and
+# once to decide the colour — and a joint that is carved in one place and painted in another has
+# to be the same joint or the paint slides off the groove.
+
+# The lie of the land: one broad roll over everything laid, 1.8 m across and ±21 mm high. This is
+# the single most important line in the file. Every other feature here is local — a rut, a dish, a
+# stone — and local features on a plane still read as a plane. The roll is what stops the whole
+# court being flat between them.
+let site_roll     = fbm size=1.800 octaves=3 seed=71
+
+# Grass, 135 mm across: tufts rather than a lawn mower's stripe.
+#
+# 0.090 FIRST, AND IT SPECKLED. A displacement whose wavelength is near the voxel is not a rough
+# surface, it is a cloud of loose voxels: ±21 mm of swing over a 90 mm period is a slope of 1.5,
+# so the surface moves further than a voxel between one voxel and the next and the ones that come
+# adrift survive `despeckle`. Measured on the east court alone at metre 32: forty islands, all of
+# them one voxel, all of them on displaced faces. The rule that came out of it, and it is worth
+# having: A DISPLACEMENT'S WAVELENGTH WANTS TO BE FOUR VOXELS OR MORE — 0.125 m at metre 32 — AND
+# ITS AMPLITUDE NO MORE THAN A QUARTER OF ITS WAVELENGTH. Everything in this file now obeys it
+# except the joint patterns, which are steps rather than waves and make a wall rather than a slope.
+let site_turf     = fbm size=0.135 octaves=3 seed=113
+
+# THE FLAG JOINTS, as a `min` of two stripe patterns and not as `bricks`.
+#
+# `bricks` returns how deep into the joint a point is as a FRACTION of a brick, so it varies
+# smoothly right across the face and displacing by it domes the stone. That is exactly what a
+# granite sett does and exactly what a sawn flag does not. Two stripes taken at their minimum give
+# -1 inside either joint and +1 everywhere else — a step, so the flag is flat and the joint has a
+# wall. 0.900 x 0.450 flags (2M x M) with a 45 mm joint: at metre 32 the joint is 1.4 voxels wide
+# and 1.3 deep, which is the smallest a groove can be and still be a groove.
+let site_joint_x  = stripes axis=x period=0.900 duty=0.05
+let site_joint_z  = stripes axis=z period=0.450 duty=0.10
+let site_joints   = min { site_joint_x site_joint_z }
+
+# And the settlement. Value noise on a 0.45 lattice is very nearly one number per flag, which is
+# what unequal settlement is: not a wave running across the paving but each stone sitting a little
+# differently in its own bed. Added to the joints rather than multiplied, so a flag that has
+# settled takes its joints down with it.
+let site_bedding  = noise size=0.450 seed=53
+let site_flagwork = add { site_joints site_bedding }
+
+# The setts, where `bricks` is right for the same reason it was wrong above: a granite sett IS
+# domed, and running bond is how they are laid. 0.270 x 0.180 (0.6M x 0.4M) with a 36 mm joint.
+#
+# THE SETT SIZE IS SET BY THE JOINT, NOT BY THE SETT, and that is the whole arithmetic of paving at
+# 31 mm voxels. A joint has to be at least one voxel wide to exist as matter at all, so 36 mm is
+# the floor — and a joint that wide eats a fixed area out of whatever stone it surrounds. On the
+# 0.180 x 0.135 setts this started as, that came to FORTY-ONE PER CENT of the walk's surface: a
+# path that is nearly half pale mortar, which is not a sett walk, it is gravel with a grid on it.
+# Measured on the east court at metre 32, `tuff` — the joint colour, shared with the flag joints
+# and the gravel's pale stones — came back at 9.6% of everything in the probe. At 0.270 x 0.180 the
+# joints are 31%, each stone is 8.6 by 5.8 voxels instead of 5.8 by 4.3, and the walk reads as
+# stones with lines between them rather than lines with stones between them.
+#
+# The flags do not have this problem and it is worth seeing why: 0.900 x 0.450 with the same 45 mm
+# joint is 14.5%. Joint fraction goes as the joint's width over the stone's, so a big unit carries
+# a wide joint for nothing and a small one cannot.
+let site_setts    = bricks length=0.270 height=0.180 mortar=0.036 facing=y
+
+# The gravel. `cells` is the distance to the nearest of one scattered point per cell, so its
+# minima are the seams between stones and its maxima are their middles: displaced by it, a surface
+# comes up as separate rounded lumps with creases between them, which is what a shingle is and
+# what no `fbm` will ever be.
+#
+# WRAPPED IN `remap` AND THAT IS NOT COSMETIC. `cells` is a distance and therefore never negative,
+# so used raw it only ever pushes the surface OUT — and `value_range` has to bound it by three
+# times the cell size, which is four times what it ever actually reaches. The sampler is charged
+# twice that as slack over the whole court. `remap from=0 to=0.048 low=-1 high=1` re-centres it so
+# stones sit down as well as up, AND gives `value_range` an exact [-1, 1] to read, which takes the
+# charge from 0.35 m to 0.048 m. Same picture, seven times less slack.
+#
+# 126 mm STONES AND NOT 20 mm ONES, and that is the resolution talking rather than taste. A voxel
+# at metre 32 is 31.25 mm, so real forecourt gravel — 10 to 20 mm — cannot be matter here at all;
+# asked for, it comes back as a dither on a flat plane, which is the thing this whole file exists
+# to stop. 126 mm is four voxels across with 42 mm of swing, which is coarse shingle, which is a
+# real material and reads as separate stones from standing height. Anything finer than about three
+# voxels also breaks the wavelength rule under `site_turf` and comes apart into loose voxels: at
+# 72 mm it did, twenty of them on the worn track alone.
+let site_shingle  = remap { cells size=0.126 seed=29 } from=0 to=0.084 low=-1 high=1
+
+# ================================================================================================
+# THE FOUR SURFACES — plates, each at its own level and each made of its own pieces
+# ================================================================================================
+#
+# THE LEVELS, and every one of them is on the module:
+#
+#   0.000   the flagged apron, the grass verge, the sett walks  — the datum, unmoved
+#  -0.045   the gravel court (M/10). A gravel court IS set down against paving; it is what stops
+#           the gravel wandering onto the flags and what gives the kerbs something to be.
+#  -0.045   the earth in the beds, with the kerb standing 0.045 above the flags
+#
+# THE RELIEF, in voxels at metre 32 rather than in modules:
+#
+#   roll        ±21 mm   0.7 voxel, at 1.8 m — the lie of the land
+#   flags       ±42 mm   joints 1.3 voxels deep, settlement ±0.7 voxel, on 0.90 x 0.45 stones
+#   setts       ±45 mm   domes 1.2 voxels proud of their joints, on 0.27 x 0.18 stones
+#   shingle     ±21 mm   stones 1.3 voxels peak to trough, 126 mm across
+#   turf        ±21 mm   at 135 mm
+#   worn dish    45 mm   1.4 voxels, 8.4 x 0.56 m on the threshold in front of the flight
+#   rut          48 mm   1.5 voxels, 0.67 m wide, down each side walk
+#   track        54 mm   1.7 voxels, 0.50 m wide, along the basin's south side
+#   channel     108 mm   3.5 voxels to the invert
+#
+# DISPLACEMENT BUDGET. Every one of these is charged to the sampler as twice its amplitude of
+# metric slack over the box of the thing it moves, and they NEST: the roll's 21 mm is charged on
+# top of each plate's own. Worst case is the walk — 0.090 (setts) + 0.021 (roll) = 0.111, so
+# 0.222 m of slack over a 0.99 x 0.315 x 3.76 m box. That is affordable because the boxes are
+# small. It stops being affordable the moment somebody displaces `site_ground`, which is 850 m².
+# Add a surface, not a coat over all of them.
+#
+# AND EVERY PLATE OVERLAPS ITS NEIGHBOUR BY 0.09 WITH THE STEP BETWEEN THEM PUT UNDER SOMETHING.
+# Two plates at different levels meet in an exposed vertical face as tall as the difference, and a
+# displaced vertical face is where loose voxels come from — see the note on `site_turf`. So the
+# grass runs on to z = -15.790, half a module under the boundary plinth, and the gravel starts at
+# -15.880 under the grass: the 45 mm step between them is buried in the plinth's own footprint and
+# the only ground anybody sees north of the boundary is gravel. The one step that is left in the
+# open, between the sett walk and the gravel court, is faced with a granite kerb below.
+#
+# THE APRON STOPS AT -16.150 AND NOT AT -15.655, AND THAT IS THE STEPS MOVING AGAIN. It used to run
+# 0.90 m deep in front of a flight that began at -15.70; the flight now begins at -16.25, so all
+# but 0.10 m of that plate would be buried under tread one — a displaced surface, charged to the
+# sampler at twice its amplitude, carving flag joints into ground no ray will ever reach. -16.150
+# leaves 0.10 m tucked under the bottom nosing, which is twice the overlap the brief asks for, and
+# still reaches past the pedestals' south face at -16.265.
+let site_apron_p = box -0.450 -0.315 -16.560   10.395  0.000 -16.150
+let site_verge_p = box 10.305 -0.315 -16.560   17.100  0.000 -15.790
+let site_walk_p  = box  9.405 -0.315 -16.560   10.395  0.000 -12.800
+let site_court_p = box 10.305 -0.315 -15.880   17.100 -0.045 -12.800
+
+# --- what the traffic has worn into them --------------------------------------------------------
+#
+# Cut from each plate BEFORE its own pattern is applied, never after, and that is the difference
+# between a worn path and a trench with a smooth floor. A hollow taken out of the finished setts
+# would be a bowl of sawn granite; taken out first, the setts are laid down into it and the wear
+# runs over them.
+#
+# All three are cylinders and an ellipsoid rather than boxes, because the thing that says "this is
+# ground and not a cut" is that the hollow has no edge — it fades to nothing at its own rim. A
+# large radius held just below the surface is the cheapest exact way to say that: the numbers
+# below are all `centre = radius - depth`, so the arithmetic is visible.
+
+# The desire line: 8.4 m of the threshold in front of the bottom step, worn 45 mm below the rest.
+# rx is 13.5 and ry 0.9 with the centre at 0.855, so the surface only breaks y = 0 where the
+# ellipsoid is within 5% of its own bottom — which is what makes an 8.4 m dish out of a 27 m
+# ellipsoid, and why it is a hollow with no rim rather than a scoop with an edge.
+#
+# CENTRED ON -16.375 AND NOT -16.100, WHICH IS WHERE THE STEPS MOVING PUT IT. The flight used to
+# start at z = -15.70 and the approach in front of it was 0.80 m deep; the flight now starts at
+# -16.25 and the ground in front of it is the 0.25 m between that and the bounds. So the dish that
+# was in the middle of an apron is now in the middle of a THRESHOLD, which is where wear actually
+# concentrates anyway: the strip a flight lands on takes every foot that ever climbed it. Left at
+# -16.100 the whole hollow would have been under tread one, cut into ground nobody can see — a
+# feature that costs a displacement and shows nothing, which is the worst kind.
+let site_dish    = ellipsoid 0 0.855 -16.375 rx=13.500 ry=0.900 rz=0.900
+
+# The rut down the middle of each side walk: 0.67 m wide, 48 mm deep, the full length of it. This
+# is a 0.90 m path between a step cheek and a bed, so there is one worn line and not two — a pair
+# of cart ruts would be a claim that carts came through a 0.90 m gap.
+let site_rut     = cylinder  9.900 1.152 -14.650 r=1.200 h=3.800 axis=z
+
+# And the scuffed track east along the basin's south side, which is the only way from the walk to
+# the water: 0.50 m wide, 54 mm deep, and it takes nearly the whole width of the 0.42 m strip
+# because that strip IS the path.
+#
+# CENTRED ON -15.610 SO ITS NORTH RIM DIES 46 mm SHORT OF THE BED KERB AT -15.315. At -15.520 the
+# rim ran out exactly under the kerb's south-east arris, and the corner of stone left standing over
+# the hollow came away as a loose voxel at metre 8 — two of them, one each side, and they were the
+# only two components this fragment added to the building. Moving the hollow off the corner is the
+# fix; rounding the corner harder is not, because the sliver is a sampling artefact of a face that
+# grazes a voxel boundary and it simply moves somewhere else.
+let site_track   = cylinder 13.500 0.501 -15.610 r=0.600 h=6.400 axis=x
+
+# --- laid ---------------------------------------------------------------------------------------
+let site_apron   = displace { difference { site_apron_p site_dish  } site_flagwork } amount=0.021
+let site_verge   = displace { site_verge_p                          site_turf     } amount=0.021
+let site_walk    = displace { difference { site_walk_p  site_rut   } site_setts    } amount=0.090
+let site_court   = displace { difference { site_court_p site_track } site_shingle  } amount=0.021
+
+let site_laid    = union { site_apron site_verge site_walk site_court }
+let site_rolled  = displace { site_laid site_roll } amount=0.021
+
+# ================================================================================================
+# THE BUILT EDGES — the kerbed bed, and the channel at the wall
+# ================================================================================================
+#
+# These are cut stone and are unioned OVER the rolled surfaces rather than into them, because a
+# kerb that undulates is not a kerb. The whole point of a built edge is that it is the one straight
+# thing in a piece of ground, and the ground reads as uneven precisely by comparison with it.
+
+# THE BED. One kerbed parterre in each forecourt, 0.90 x 1.89 (2M x 4.2M), holding two clipped
+# blocks of box with a panel of bare earth between them. The kerb stands 0.045 above the flags and
+# therefore 0.090 above the gravel it sits in; the earth inside is at the gravel's level, so the
+# bed is a 0.09 m tray, which is what a box parterre is.
+#
+# The kerb is drawn as a solid block and the bed is then cut out of it, so its four returns are one
+# piece of stone with no mitres to open.
+let site_kerb_e  = box 10.350 -0.450 -15.300   11.250 0.045 -13.410 round=0.015
+let site_bed_cut = box 10.395 -0.045 -15.255   11.205 0.400 -13.455
+
+# THE WALK KERB, 0.135 wide (0.3M), the whole length of the walk, its top flush with the setts.
+# Every path has one, and this one has a job as well: the walk stands 45 mm above the gravel court
+# beside it, and without a kerb that step is an exposed face of displaced setts which comes apart
+# into loose voxels for the reason written against `site_turf`. Faced with cut stone it is a kerb
+# instead — undisplaced, straight, and the one hard line the ground is read against.
+let site_wkerb_e = box 10.305 -0.450 -16.560   10.440 0.000 -12.800 round=0.015
+
+# THE CHANNEL, and this is the junction the whole south front is judged on.
+#
+# Ground does not meet a wall. It meets a channel, and the channel meets the wall — because the
+# water coming off 33 m of podium has to go somewhere and because the bottom 300 mm of any plinth
+# standing in open ground is wet, mossy and stained. So: a granite channel 0.41 m wide against the
+# podium's face, its top at the datum and therefore 45 mm proud of the gravel on one side, with a
+# semicircular gutter 0.32 m wide and 108 mm deep cut down the middle of it.
+#
+# The gutter is a cylinder of r = 0.1725 centred 0.0645 above the datum, which is the pair of
+# numbers that puts the invert at -0.108 and brings the cut to nothing 0.16 m either side of the
+# axis — so 45 mm of flat granite is left as a lip on each side and the channel has an edge to it.
+# Solved rather than guessed: r = c + 0.108 and 0.16² = r² - c².
+#
+# It runs x 9.405 .. 11.700 on each side, which is the whole stretch where ground actually reaches
+# the podium: west of that is the flight, and from 11.70 to 16.20 the basin's own north coping IS
+# the podium's plinth, with no ground in between at all. It reaches z = -13.000, half a module past
+# the plinth's face at -13.05, so it is buried in the podium rather than butted against it.
+let site_chan_e   = box  9.405 -0.450 -13.410   11.700 0.000 -13.000 round=0.015
+let site_chan_cut = cylinder 10.5525 0.0645 -13.205 r=0.1725 h=2.400 axis=x
+
+# ================================================================================================
+# THE SOUTH BAND, ASSEMBLED AND FOLDED
+# ================================================================================================
+#
+# FOLDED, AND THE FOLD GOES ROUND EVERYTHING RATHER THAN ROUND THE PIECES. `fbm`, `cells`,
+# `bricks` and `stripes` are all functions of world position and know nothing about x = 0, so a
+# court laid on both sides and then displaced comes out with a different set of stones on the east
+# from the west and `--clip-symmetry` reads tens of thousands of differing cells. The hedges in
+# this file learned that first — the note is still below — and it is the same lesson: fold first,
+# and every pattern is then asked at |x| and the two halves are the same ground.
+#
+# The apron is drawn from x = -0.450 rather than from x = 0 for the reason the hedge note gives:
+# the fold reflects the coordinate, so a face on the centre line would come back as a crease down
+# the middle of the paving. Started behind the fold, there is no face there to crease.
+let site_half     = union { site_rolled site_kerb_e site_wkerb_e site_chan_e }
+let site_shaped   = mirror { difference { site_half site_bed_cut site_chan_cut } } axis=x
 
 # ================================================================================================
 # THE REFLECTING BASINS — one in each forecourt, x +-11.70 .. +-16.20
@@ -109,8 +424,9 @@ let site_slab = box -17 -0.90 -16.50   17 0.00 8.50
 # The rim is a solid block through the whole footprint, sunk 0.45 into the ground and standing
 # 0.135 proud of it; the pan is then cut out of it, 0.135 deep, with its bottom arris rounded so
 # the floor meets the wall in a cove the way a real basin does. What is left is a 0.225 coping all
-# round (M/2), the same 0.135 above the gravel as the boundary's own plinth, so the two read as
-# one kerb running round the forecourt.
+# round (M/2), the same 0.135 above the datum as the boundary's own plinth, so the two read as one
+# kerb running round the forecourt. Against the gravel, which is now set down 0.045, both stand
+# 0.180 — which is why the basin reads as brimming from across the court and did not before.
 #
 # ITS NORTH COPING IS THE PODIUM'S PLINTH AND ITS EAST COPING IS THE BOUNDARY'S. Both are exact
 # meetings on a shared plane rather than gaps — z -13.05 is where `podium_plinth` begins and
@@ -129,7 +445,7 @@ let site_slab = box -17 -0.90 -16.50   17 0.00 8.50
 # into the light that does reach it. It is still three voxels of real water at metre 32, and the
 # refraction through it is still the only one in the clip.
 #
-# THE WATERLINE IS EXACTLY y = 0, THE SAME AS THE LAWN, AND THAT IS NOT A COINCIDENCE.
+# THE WATERLINE IS EXACTLY y = 0, THE SAME AS THE DATUM, AND THAT IS NOT A COINCIDENCE.
 # Two reasons, and both matter.
 #
 #   It is a brimming basin, which is the good kind: with the surface at the coping's foot rather
@@ -141,9 +457,14 @@ let site_slab = box -17 -0.90 -16.50   17 0.00 8.50
 #   climb out of, the flood never leaves it, and the entire building reports about one per cent
 #   walkable. That happened here, twice — once from sinking the water and once from forgetting to
 #   put it in `part_site` at all — and it is a measurement this fragment can break for everybody
-#   else. Level with the lawn, the tie goes to the lawn (the scan finds it first) and the number
-#   means what it is meant to again. If you ever lower this water, check `walkable` before and
-#   after.
+#   else. Level with the datum the tie goes to the ground, and the number means what it is meant
+#   to again. If you ever lower this water, check `walkable` before and after.
+#
+#   THE SHAPED GROUND MOVED THAT LOWEST COLUMN AND IT WAS CHECKED. The deepest standable point in
+#   this fragment is now the invert of the channel at -0.108, and the flood starts there instead.
+#   It gets out: the channel's lip is 0.108 above the invert and the walk beside it is 0.045 above
+#   the lip, against a 0.55 m riser limit. Every hollow in this file is climbable from inside for
+#   the same reason — none of them is deeper than 0.108.
 let site_rim_e   = box 11.700 -0.450 -15.300   16.200 0.135 -13.050 round=0.015
 let site_pan_e   = box 11.925 -0.135 -15.075   15.975 0.585 -13.275 round=0.015
 let site_water_e = box 11.880 -0.225 -15.120   16.020 0.000 -13.230
@@ -152,14 +473,16 @@ let site_rims   = mirror { site_rim_e }   axis=x
 let site_pans   = mirror { site_pan_e }   axis=x
 let site_waters = mirror { site_water_e } axis=x
 
-# The ground with the basins let into it. Everything else in this file stands on this.
-let site_ground = difference { union { site_slab site_rims } site_pans }
+# The ground: the flat mass, the shaped south band, the basins let into it. Everything else in
+# this file stands on this.
+let site_ground = difference { union { site_bulk site_under site_stepbed site_shaped site_rims }
+                               site_pans }
 
 # ================================================================================================
 # THE BOUNDARY — a low balustrade, 0.90 m (2 M) to the top of the rail
 # ================================================================================================
 #
-#   -0.090 .. 0.135   plinth      granite, 0.225 of it above ground and 0.09 buried
+#   -0.180 .. 0.135   plinth      granite, 0.135 of it above ground and 0.18 buried
 #    0.045 .. 0.745   balusters   the order's own, at a 0.30 pitch (2M/3)
 #    0.675 .. 0.900   rail        limestone, overhanging 0.045 all round
 #
@@ -167,14 +490,21 @@ let site_ground = difference { union { site_slab site_rims } site_pans }
 # its cap 0.07 in the rail, which is what leaves a total of exactly 0.90. Every join here overlaps
 # by at least 0.05 and none of them merely touch.
 #
+# THE PLINTH AND THE PIERS NOW START AT -0.180 AND NOT -0.090, and that is the one number the
+# shaped ground forced anywhere else in this file. The east return stands on the gravel court,
+# which is at -0.045 and rolls and shingles another 0.045 below that; at -0.090 the stone had
+# nothing left buried under it at the bottom of a trough, which is a hairline of daylight along the
+# foot of a wall and is exactly the failure BRIEF.md rule 4 is about. Burying it a further 0.09
+# costs nothing, is invisible, and puts 0.135 of stone under the deepest the ground can go.
+#
 # It crosses the south frontage from the gate piers out to the corners and returns north up both
 # flanks as far as the podium, where it dies into the plinth. The approach passes between the two
 # gate piers, and there is a 0.90 m way through beside each cheek of the great steps into the
 # forecourt behind — without it the forecourts are handsome rooms with no door, and `walkable`
-# says so.
+# says so. That way through is the sett walk.
 
 # --- the south run, z -16.20 .. -15.75 ---------------------------------------------------------
-let site_plinth_s = box 10.350 -0.090 -16.200   16.650 0.135 -15.750 round=0.015
+let site_plinth_s = box 10.350 -0.180 -16.200   16.650 0.135 -15.750 round=0.015
 let site_rail_s   = box 10.305  0.675 -16.245   16.695 0.900 -15.705 round=0.015
 
 # 17 balusters between the gate pier's face at 10.80 and the corner pier's at 16.20, 0.30 apart
@@ -188,7 +518,7 @@ let site_bal_s     = translate { site_bal_s_row } 13.500 0 0
 # The plinth runs 0.45 past the podium's face at z -13.05 and is buried in it, which is how this
 # fragment meets that one: an overlap, not a butt joint. The rail and the balusters stop at the
 # end pier, so what is seen is a balustrade dying into a plinth.
-let site_plinth_e = box 16.200 -0.090 -16.200   16.650 0.135 -12.600 round=0.015
+let site_plinth_e = box 16.200 -0.180 -16.200   16.650 0.135 -12.600 round=0.015
 let site_rail_e   = box 16.155  0.675 -16.245   16.695 0.900 -13.500 round=0.015
 
 # 7 balusters between the corner pier at -15.75 and the end pier at -13.50.
@@ -202,24 +532,25 @@ let site_bal_e     = translate { site_bal_e_row } 0 0 -14.625
 # that the two things flanking the foot of the great steps are as tall as the thing at the top of
 # them. The corner and end piers stand 1.35 (3 M), capped and left alone. A pier taller than the
 # rail it interrupts is what stops a balustrade reading as a fence.
-let site_pier_gate  = box 10.350 -0.090 -16.200   10.800 1.800 -15.750 round=0.015
+let site_pier_gate  = box 10.350 -0.180 -16.200   10.800 1.800 -15.750 round=0.015
 let site_cap_gate   = box 10.305  1.665 -16.245   10.845 1.845 -15.705 round=0.015
 
-let site_pier_corn  = box 16.200 -0.090 -16.200   16.650 1.350 -15.750 round=0.015
+let site_pier_corn  = box 16.200 -0.180 -16.200   16.650 1.350 -15.750 round=0.015
 let site_cap_corn   = box 16.155  1.215 -16.245   16.695 1.395 -15.705 round=0.015
 
-let site_pier_end   = box 16.200 -0.090 -13.500   16.650 1.350 -13.050 round=0.015
+let site_pier_end   = box 16.200 -0.180 -13.500   16.650 1.350 -13.050 round=0.015
 let site_cap_end    = box 16.155  1.215 -13.545   16.695 1.395 -13.005 round=0.015
 
 let site_urn_e = translate { urn } 10.575 1.800 -15.975
 
 # ================================================================================================
-# THE HEDGES — clipped, and displaced so they are foliage rather than green boxes
+# THE PLANTING — clipped box in a kerbed bed, and a dwarf skirt round the podium's foot
 # ================================================================================================
 #
-#   forecourt   x 10.35 .. 11.25, two blocks of 0.90 either side of a 0.45 gap, 1.35 tall (3 M).
-#               They flank the gravel walk that comes in beside the steps, and the gap between
-#               them is what lets a person through to the basin.
+#   the bed     x 10.395 .. 11.205 inside the kerb, in two blocks of 0.72 either side of a 0.36
+#               panel of bare earth, 1.35 tall (3 M) above the datum. They stand in the tray the
+#               kerb makes rather than out of the gravel, which is the difference between a bed and
+#               a bush somebody put down.
 #   skirt       x 16.65 .. 17.00 and z 8.10 .. 8.50, and only 0.225 tall (M/2). The 0.35 m verge
 #               left over round the podium on the other three sides, planted rather than left as a
 #               mown ribbon nobody would ever cut. It fills the verge to the bounds exactly, so
@@ -231,10 +562,23 @@ let site_urn_e = translate { urn } 10.575 1.800 -15.975
 #               0.45, which is what this was, the hedge swallowed both of them, and they are
 #               somebody else's work.
 #
-# All of them start at y = -0.09, a good 0.09 into the ground before the leaf displacement is
-# applied, so no amount of it can lift one off the lawn.
-let site_hedge_s_a = box 10.350 -0.090 -15.300   11.250 1.350 -14.400 round=0.045
-let site_hedge_s_b = box 10.350 -0.090 -13.950   11.250 1.350 -13.050 round=0.045
+# The bed's blocks start at y = -0.180 — a good 0.135 below the earth they stand in, before the
+# leaf displacement is applied — so no amount of it can lift one off the ground, and they reach
+# into `site_bulk` so the part stays one component. `round=0.045` takes their outline out to the
+# kerb's own face, and the 45 mm of leaf then overhangs it, which is what a clipped bush does to
+# the kerb it is planted in.
+#
+# THERE ARE NO TREES HERE AND THAT IS DELIBERATE, NOT AN OVERSIGHT. Trees belong to
+# `clips/_trees.clip`, which another fragment owns, and a tree drawn twice in two files is two
+# trees that drift. If one is ever wanted on this site there is exactly one place for it and the
+# ground is already cut for it: the bed, x 10.395..11.205, z -14.760..-13.455 on each side, where
+# a standard on a clear stem would rise out of the box blocks without touching the balustrade rail
+# at 0.90 or the podium's cornice at 1.80. Nothing wider than 0.81 m at the foot will fit between
+# the sett walk and the basin, and nothing on this site may overhang its own base by more than
+# 0.1875 m without becoming the building's worst walkable rise — see the note steps.clip keeps
+# about why its own pedestals carry no urn.
+let site_hedge_s_a = box 10.395 -0.180 -15.255   11.205 1.350 -14.535 round=0.045
+let site_hedge_s_b = box 10.395 -0.180 -14.175   11.205 1.350 -13.455 round=0.045
 let site_hedge_skirt_e = box 16.650 -0.090 -13.050   17.000 0.225 8.500 round=0.045
 
 # The north arm is drawn from x -0.45 rather than from x 0 even though only the +x half of it is
@@ -252,7 +596,7 @@ let site_leaf = fbm size=0.135 octaves=3 seed=71
 #
 # One half built on +x and folded, plus the one piece that is symmetric in itself.
 
-let site_half = union {
+let site_half_stone = union {
     site_plinth_s site_rail_s site_bal_s
     site_plinth_e site_rail_e site_bal_e
     site_pier_gate site_cap_gate
@@ -260,7 +604,7 @@ let site_half = union {
     site_pier_end  site_cap_end
     site_urn_e
 }
-let site_both = mirror { site_half } axis=x
+let site_both = mirror { site_half_stone } axis=x
 
 # THE LEAF DISPLACEMENT GOES INSIDE THE MIRROR, NOT OUTSIDE IT, and that is the difference
 # between a symmetric building and one that is nearly symmetric. `fbm` is a function of world
@@ -287,18 +631,165 @@ let part_site = union { site_ground site_waters site_both site_hedges }
 # Every rule is keyed on one of this file's own shapes and every one says below=0.02, never
 # below=0, because the manifest displaces the finished building by 12 mm and a test at zero misses
 # the voxels that displacement made.
+#
+# THE ORDER IS: LOOSE SURFACES FIRST, CUT STONE LAST. A zone box for gravel or grass is a box, and
+# a box round a piece of ground also contains the bottom of every kerb, coping and plinth standing
+# in it. Rather than carve each zone round its own furniture — six differences, all of them fragile
+# — the stonework simply repaints itself afterwards. That is one line each and it cannot be got
+# wrong by a neighbour moving.
+#
+# AND `on=` IS WHAT MAKES THE PATTERN RULES AFFORDABLE. A rule keyed on a shape is settled for a
+# whole block from one reading at its centre; a rule keyed on a PATTERN cannot be, and without a
+# place it is asked at every solid voxel in the clip — five such rules once accounted for three
+# quarters of all the paint work in a build of this facility. `paint <m> where=<pattern> on=<box>`
+# gives the rule a box to be pruned against, and eight of them then cost what one costs. Every
+# pattern rule below carries one. None of them is keyed on `occlusion` or `curvature`, which are
+# the two that are expensive per ask as well as per voxel.
+#
+# TWO THINGS ABOUT `on=` AND `mirror` THAT COST A DAY BETWEEN THEM, AND BOTH ARE TRAPS ANY GROUND
+# WILL FALL INTO. They were found with a 12 x 0.66 m probe over the threshold flags alone, which is
+# the only way either of them shows: in the whole building both look like a slightly odd colour.
+#
+#   1. `on=mirror { east_box }` DOES NOT CONFINE A RULE TO TWO PLACES. It confines it to ONE box
+#      round both of them. The place is used as a bounding box for a block-level cull, and the box
+#      round a shape and its own reflection spans everything in between — so `on=` a mirrored verge
+#      at |x| 10.35..17.10 admits the whole 20.7 m of centre line between the two verges, and the
+#      grass rules were painting patches of lush green and dry buff across the flagged threshold in
+#      front of the great steps. Every `on=` zone here is therefore `union { east west }` written
+#      out. That is not more expensive: `union_children` splits a union into pieces and the sampler
+#      culls against each piece's own box, so two boxes 20.7 m apart cull exactly.
+#
+#   2. A PATTERN USED FOR PAINT MUST BE FOLDED BY HAND EVEN WHEN THE GEOMETRY IS FOLDED FOR IT.
+#      The ground's own displacements sit INSIDE `mirror { site_half }`, so they are asked at |x|
+#      and the two courts are the same stones. A paint rule is not inside anything — it is tested
+#      at the world point — so `where=site_joints` asks the joint pattern at x, not |x|, and the
+#      painted joints land somewhere other than the carved ones on the west half. The file's own
+#      note about the hedges says exactly this and it still caught me: fold first, and every
+#      pattern is asked at |x|. Hence the `_f` bindings below. They cost nothing — `mirror` on a
+#      pattern is an absolute value on one coordinate — and they are what keeps the paint on the
+#      groove and the two halves of the building identical.
 
-# The lawn: the whole slab, and by far the largest single-material volume in the clip.
+# The base coat of the ground: the whole slab, and by far the largest single-material volume in
+# the clip.
 paint lawn      where=site_ground   below=0.02
 
-# The forecourt. A flat gravel apron across the whole southern approach, from the boundary to the
-# podium's face. The great steps land in the middle of it and are painted by their own fragment;
-# so is the podium, which stands on the northern half of this and hides it.
-let site_gravel = box -16.200 -0.900 -16.200   16.200 0.000 -13.050
-paint gravel    where=site_gravel   below=0.02
+# --- the grass verge ----------------------------------------------------------------------------
+#
+# Two coats over the base green, and that is all grass needs to stop being a green blob: a darker,
+# lusher patch where the ground holds water and a dry pale one where it does not. 0.45 m and 0.36 m
+# across, which is the scale real grass varies at — much finer and it is noise, much coarser and it
+# is a lawn with two halves.
+let site_grass_lush = mirror { fbm size=0.450 octaves=3 seed=43 } axis=x
+let site_grass_dry  = mirror { fbm size=0.360 octaves=2 seed=47 } axis=x
+let site_z_verge_e  = box  10.350 -0.360 -16.560   17.100 0.060 -15.735
+let site_z_verge_w  = box -17.100 -0.360 -16.560  -10.350 0.060 -15.735
+let site_z_verges   = union { site_z_verge_e site_z_verge_w }
+paint hedge     where=site_grass_lush below=-0.30 on=site_z_verges
+# 0.25 AND NOT 0.40. `never matched` said so: at 0.40 this rule is the top fifth of an fbm's range
+# and the verge it is confined to is a 0.30 m ribbon outside the boundary, so whole builds went by
+# without one patch landing in it — the coat existed, cost the sampler its asks, and painted
+# nothing. 0.25 is about the top third and lands two or three patches in each verge.
+paint tuff      where=site_grass_dry  above= 0.25 on=site_z_verges
 
-# The basins, in three coats, and the order of the last two is the whole difference between a
-# pool and a hole in the ground.
+# --- the gravel court ---------------------------------------------------------------------------
+#
+# THE ZONE IS DISPLACED AND THAT IS THE POINT OF IT. A painted boundary between two ground
+# surfaces is the single most artificial thing in a render — real gravel does not stop on a
+# straight line, it is kicked out into the grass and the grass grows back into it. Displacing the
+# zone box by 45 mm of 0.36 m grain makes the colour boundary wander a voxel and a half either way,
+# independently of where the matter changes level. Two ragged edges that disagree slightly is what
+# an edge between two materials looks like.
+let site_edge     = mirror { fbm size=0.360 octaves=3 seed=67 } axis=x
+let site_z_court_e = displace { box  10.350 -0.360 -15.735   17.100 0.000 -12.800 site_edge } amount=0.045
+let site_z_court_w = displace { box -17.100 -0.360 -15.735  -10.350 0.000 -12.800 site_edge } amount=0.045
+let site_z_courts = union { site_z_court_e site_z_court_w }
+paint gravel    where=site_z_courts below=0.02
+
+# And the stones are not all one colour, because no two stones in a load of gravel are. Value
+# noise at 0.108 and 0.126 is about one value per stone at 126 mm, so these read as individual
+# pebbles rather than as clouds: a pale limey one, a warm buff one, and the base grey between.
+let site_grit_pale = mirror { noise size=0.108 seed=31 } axis=x
+let site_grit_warm = mirror { noise size=0.126 seed=37 } axis=x
+paint tuff      where=site_grit_pale above= 0.30 on=site_z_courts
+paint sandstone where=site_grit_warm below=-0.35 on=site_z_courts
+
+# --- the flagged apron --------------------------------------------------------------------------
+#
+# Sandstone, because the building is limestone and a floor the same colour as the wall behind it
+# is a floor nobody sees. The joints are carved as matter and coloured as well — a groove with no
+# colour change in it reads as a scratch, a colour change with no groove reads as a drawing.
+# The apron zone needs no `union { east west }`: it is one box drawn across the centre line
+# already, so its own bounds are honest.
+let site_z_apron = displace { box -10.350 -0.360 -16.560   10.350 0.060 -16.150 site_edge } amount=0.045
+let site_joints_f = mirror { site_joints } axis=x
+paint sandstone where=site_z_apron  below=0.02
+paint tuff      where=site_joints_f below=-0.50 on=site_z_apron
+
+# WEED IN SOME OF THE JOINTS AND NOT ALL OF THEM, which needs two conditions out of a language
+# that tests one. `add` is how: the joint pattern is -1 in a joint and +1 on a flag, a broad 1.35 m
+# grain is -1 to +1, and their sum is below -1.40 only where the point is in a joint AND the grain
+# is under -0.40. So the weed comes in drifts across the paving, which is where weed comes.
+let site_weed_run = fbm size=1.350 octaves=2 seed=61
+let site_weedy    = add { site_joints site_weed_run }
+let site_weedy_f  = mirror { site_weedy } axis=x
+paint boxwood   where=site_weedy_f below=-1.40 on=site_z_apron
+
+# --- the sett walks -----------------------------------------------------------------------------
+#
+# Granite, and the joints between the setts are the same pattern that domed them. `bricks` is
+# positive inside a joint and negative on a stone, so `above=0.00` is exactly the mortar.
+let site_z_walk_e = box   9.405 -0.360 -15.655   10.395 0.060 -12.800
+let site_z_walk_w = box -10.395 -0.360 -15.655   -9.405 0.060 -12.800
+let site_z_walks  = union { site_z_walk_e site_z_walk_w }
+let site_setts_f  = mirror { site_setts } axis=x
+paint granite   where=site_z_walks below=0.02
+paint tuff      where=site_setts_f above=0.00 on=site_z_walks
+
+# The rut down the middle, in mud. A box and not the rut cylinder itself: the cylinder is 1.2 m in
+# radius and reaches up through the hedge beside the walk, and a paint rule keyed on it would put
+# earth on a bush. The box is the bottom 115 mm of the hollow, which is only air anywhere the
+# ground has not fallen into it, so it colours the worn line and nothing else.
+let site_z_mud_e = box 9.560 -0.135 -16.560   10.240 -0.020 -12.800
+let site_z_muds  = mirror { site_z_mud_e } axis=x
+paint bark      where=site_z_muds below=0.02
+
+# --- the beds -----------------------------------------------------------------------------------
+#
+# Dug earth inside the kerb. It carries the shingle displacement like everything else on this
+# plate, which is right — earth that has been turned over is cloddy, and the same lumps that read
+# as gravel out on the court read as clods once they are brown.
+let site_z_bed_e = box 10.395 -0.135 -15.255   11.205 0.000 -13.455
+let site_z_beds  = mirror { site_z_bed_e } axis=x
+paint bark      where=site_z_beds below=0.02
+
+# --- the cut stone, last ------------------------------------------------------------------------
+let site_kerbs = mirror { union { site_kerb_e site_wkerb_e } } axis=x
+let site_chans = mirror { site_chan_e } axis=x
+paint granite   where=site_kerbs below=0.02
+paint granite   where=site_chans below=0.02
+
+# The invert of the channel never dries, so it is not granite-coloured. Slate at roughness 190
+# against granite at 225 is a wet stone beside a dry one, which is most of what "wet" looks like
+# from six feet away.
+let site_chan_wet_e = box 9.405 -0.135 -13.320   11.700 -0.060 -13.090
+let site_chan_wets  = mirror { site_chan_wet_e } axis=x
+paint slate     where=site_chan_wets below=0.02
+
+# AND MOSS IN THE ANGLE, which is the one thing that says a building has stood somewhere. The zone
+# is the 140 mm against the podium's face and 30 mm up it; the rule is patchy rather than a band,
+# because a painted stripe along a wall foot is a skirting board. It reaches 20 mm into the
+# podium's own voxels on purpose — podium.clip is included after this file and repaints them, so
+# the moss stops exactly where that fragment's stone starts and there is no seam to align.
+let site_moss     = mirror { fbm size=0.180 octaves=3 seed=59 } axis=x
+let site_z_angle_e = box   9.405 -0.120 -13.140   11.700 0.030 -13.000
+let site_z_angle_w = box -11.700 -0.120 -13.140   -9.405 0.030 -13.000
+let site_z_angles  = union { site_z_angle_e site_z_angle_w }
+paint boxwood   where=site_moss below=-0.10 on=site_z_angles
+
+# --- the basins ---------------------------------------------------------------------------------
+#
+# Five coats, and the order of them is the whole difference between a pool and a hole in the
+# ground.
 #
 # Granite first, over the whole rim block: coping, walls, floor. Then water, which wins everywhere
 # the water box is — and the water box reaches 0.09 BELOW the pan's floor, on purpose, so that it
@@ -319,6 +810,27 @@ let site_floor_e = box 11.700 -0.450 -15.300   16.200 -0.135 -13.050
 let site_floors  = mirror { site_floor_e } axis=x
 paint marble    where=site_floors   below=0.02
 
+# THE WATERLINE, in two bands, and both are `difference` rings round the pan rather than boxes.
+#
+# A box would cover the water as well as the wall it wets, and painting over the water is painting
+# out the one transmissive surface in the clip. Taking the pan out of the box leaves a 65 mm ring
+# of pan WALL, at the height the water stands, and nothing else.
+#
+#   verde  -0.090 .. 0.000   the algae. It bleeds 20 mm into the water at the top, which is the
+#                            waterline itself, and stops 25 mm clear of the pan floor at -0.150 so
+#                            the marble the basin depends on is untouched. That clearance is why
+#                            the band starts at -0.090 and not at -0.135.
+#   tuff    0.020 .. 0.075   the bloom above it: the dry, limed band a brimming basin leaves on
+#                            the stone it laps. Painted after, so it takes the top of the algae
+#                            back and the two meet on the water's own line.
+let site_wet_e   = difference { box 11.845 -0.090 -15.085   16.055 0.000 -13.195  site_pan_e }
+let site_bloom_e = difference { box 11.855  0.020 -15.095   16.045 0.075 -13.185  site_pan_e }
+let site_wets    = mirror { site_wet_e }   axis=x
+let site_blooms  = mirror { site_bloom_e } axis=x
+paint verde     where=site_wets   below=0.02
+paint tuff      where=site_blooms below=0.02
+
+# --- the planting and the boundary --------------------------------------------------------------
 paint hedge     where=site_hedges   below=0.02
 
 # The boundary. Granite where it meets the ground and takes the wet, limestone above it.
@@ -341,7 +853,7 @@ paint bronze    where=site_urns     below=0.02
 #
 # Hairline seams in the granite plinth of the boundary wall: the wet course, at the foot of a wall
 # standing in grass, which is where stone actually goes first. `on=` is not optional — without it
-# this would bleach the lawn and scour every volute in the building.
+# this would bleach the ground and scour every volute in the building.
 #
 # THE SCOPE IS FOUR BOXES AND NOT `union { site_footings site_uppers site_rims }`, AND THAT IS THE
 # WHOLE DIFFERENCE BETWEEN AFFORDABLE AND UNSHIPPABLE. Measured on this part alone, at metre 16:
@@ -354,8 +866,7 @@ paint bronze    where=site_urns     below=0.02
 # the four-box version costs this part 19.2 s -> 33.0 s and 130 M -> 182 M field evaluations: about
 # two extra asks per voxel, which is what an unskippable pattern rule costs and is the same price
 # the walls fragment pays for its four ashlar rules. That is the honest number, and it buys the
-# only weathering in the building — nothing else in the facility carries a `weather` line, and a
-# facility shipping with none is the exact failure the brief says happened last time.
+# only weathering in the building outside surface.clip.
 #
 # `on=` compiles to
 # `add { pattern  multiply { smoothstep{scope} -1e9 } }`, and a smoothstep reports infinite metric
@@ -370,9 +881,11 @@ paint bronze    where=site_urns     below=0.02
 # clips/facility/requests/site.md.
 #
 # The zone stops at y = 0.180, just above the plinth's own top arris at 0.135, so the soft edge of
-# the mask lands on an edge that is already there and there is no cut line across a flat face. It
-# also keeps the coat off the bronze urns, which the manifest paints before weather coats go on.
-let site_wz_s = box 10.305 -0.135 -16.245   16.695 0.180 -15.705
-let site_wz_e = box 16.155 -0.135 -16.245   16.695 0.180 -13.050
+# the mask lands on an edge that is already there and there is no cut line across a flat face. Its
+# floor went down to -0.225 with the plinth, so the course it weathers is the whole of the stone
+# that is in the ground rather than the top half of it. It also keeps the coat off the bronze urns,
+# which the manifest paints before weather coats go on.
+let site_wz_s = box 10.305 -0.225 -16.245   16.695 0.180 -15.705
+let site_wz_e = box 16.155 -0.225 -16.245   16.695 0.180 -13.050
 let site_weather_zone = mirror { union { site_wz_s site_wz_e } } axis=x
 weather cracks 0.10 scale=0.5 seed=71 on=site_weather_zone
