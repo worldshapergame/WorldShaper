@@ -440,7 +440,8 @@ translates, so are the wear ellipsoids, so is the second pier; all 51 balusters 
 and the raking plinths, the wall strings and the upper flight's waist are `translate { rotate { } }`.
 The granite, the marble and the bronze rules are now **0.035**.
 
-**MEASURED, TWO ARMS, BY THE METHOD `requests/ballroom.md` SETS OUT.** The stair on its own — the
+**MEASURED, TWO ARMS, BY THE METHOD `requests/ballroom.md` SETS OUT** — and that method is now a file
+rather than a paragraph: `clips/facility/requests/stair-rind-probe.clip`. The stair on its own — the
 contract, the order, windows.clip and stair.clip, nothing else — over a base coat of `lawn`, in a box
 narrowed to the stair so a metre 16 run is seconds. Any `lawn` voxel inside `part_stair` is a voxel of
 this fragment's own geometry that no rule of this fragment reached. The two arms differ only in
