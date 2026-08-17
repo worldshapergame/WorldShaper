@@ -500,7 +500,21 @@ let th_grate = intersection { union { th_gr_rim th_gr_bars } th_hard_south }
 
 let th_stage_base   = box -8.10 -0.45 0.00   8.10 0.72 9.05 round=0.02
 let th_stage_boards = box -8.10  0.72 0.00   8.10 0.90 8.15 round=0.010
-let th_bd_joint     = box -0.01875 0.855 -0.10   0.01875 0.95 8.20
+
+# THE JOINT STOPS AT z = 8.05 AND THE PROSCENIUM IS THE REASON. A board joint is a cut 0.095 tall
+# — 0.855 to 0.95, so that it opens the top of a board whose face is at 0.90 — and it ran to
+# z = 8.20, which is 0.115 PAST THE WALL'S OWN FACE at 8.085. The boards stop at 8.15 and there
+# are no boards at all above 0.90, so every millimetre of that overhang was cutting the base of
+# the proscenium instead: thirty-seven notches 0.0375 wide and 0.05 tall along the foot of the
+# wall, each a voxel across at metre 32, which is speckle and not joinery. Measured with a probe
+# of the two shapes intersected — `intersection { th_bd_joints th_pros_wall }` — 0.0131 m3 of wall
+# in thirty-seven pieces at metre 32 before, and an EMPTY clip after.
+#
+# 8.05 rather than 8.085: a cutter that stops exactly on a face it must not reach is the one
+# arrangement this repository has been bitten by twice. The 0.10 of board left unjointed is in
+# the corner where the boards are already buried 0.065 into the wall, and is three voxels of
+# board that nobody standing on the stage can see.
+let th_bd_joint     = box -0.01875 0.855 -0.10   0.01875 0.95 8.05
 let th_bd_joints    = repeat { th_bd_joint } x=0.45 nx=18
 
 # The two side flights, drawn on the east and folded. Five risers of 0.18 and five runs of 0.32 from
@@ -960,6 +974,48 @@ let th_carved = difference { th_mass th_voids }
 let th_fittings = union { th_grate th_herms th_footlights th_standards th_tripods }
 
 # ================================================================================================
+# THE PROBES — two measurements this file makes of itself, and both must report an EMPTY clip
+# ================================================================================================
+#
+#     ./build/clipcheck clips/estate/theatre.clip --metre 32 --part th_probe_joint
+#     ./build/clipcheck clips/estate/theatre.clip --metre 8  --part th_probe_berceau
+#
+# THE FIRST IS THE CUT AND THE SECOND IS THE PERSON, and neither is part of the building: nothing
+# below is unioned into `part_theatre`.
+#
+# `th_probe_joint` is the floor's own joints against the wall they are nowhere near meant to
+# reach. It read 0.0131 m3 in THIRTY-SEVEN pieces along y 0.844 .. 0.969, z 8.094 .. 8.219 —
+# one notch per joint, in the foot of the proscenium — until the joint was stopped at z = 8.05.
+let th_probe_joint = intersection { th_bd_joints th_pros_wall }
+
+# `th_probe_berceau` is the head space of a person walking the leaf tunnel: the ring from the
+# praecinctio floor at 3.96 up 2.10 to 6.06, between radius 13.50 and 14.99. It is inset from
+# both tunnel walls on purpose and the insets are not the same at the two ends, because the two
+# things they clear are not the same:
+#
+#   at 13.50, 1.06 clear of the inner wall, because the six bronze standards stand INSIDE the
+#             tunnel at radius 13.05 on a pedestal 0.54 square — a thing to walk round, and a
+#             probe that included it would report a lamp as a low ceiling;
+#   at 14.99, 0.15 clear of the outer wall, which is the hedge's own leaf displacement (0.09)
+#             plus a little.
+#
+# 1.49 m of clear width at 2.10 m of head, all the way round 43 m of tunnel, against the 1.00 the
+# rule asks for. The vault is a semicircle of radius 1.35 struck at 13.79, so the head over the
+# probe's own two edges is 2.72 and 3.42 and the crown is 3.45.
+# It stops 0.60 short of the diameter at both ends, and that is a fact about the building rather
+# than a convenience: the ANALEMMAE close the two ends of the tunnel, standing 0.36 above the walk
+# (they are the cavea's own profile raised one tier), so the berceau is entered from the six radial
+# stairs and not from its ends. 0.36 is a climb and not a step — under the 0.55 a person takes —
+# but it is a thing to walk over, and a probe that swept through it would report the theatre's own
+# end wall as a low ceiling.
+let th_probe_ring = difference {
+    cylinder 0 5.05 0  r=14.99 h=4.00 axis=y
+    cylinder 0 5.05 0  r=13.50 h=4.20 axis=y
+}
+let th_probe_box = box -16.20 4.00 -16.20   16.20 6.10 -0.60
+# (`th_probe_berceau` itself is at the foot of this file, because it names `part_theatre`.)
+
+# ================================================================================================
 # PAINT
 # ================================================================================================
 #
@@ -1034,10 +1090,28 @@ paint lamp        where=th_tri_fires    below=0.02
 #     is 0.58 of a voxel at metre 32 and therefore a real deformation rather than a dither.
 #   cracks on the proscenium, which is the one large flat stone face in the clip and the one thing
 #     the footlights rake at four degrees, so a crack casts a shadow the length of the wall.
-
+#
+# THE CRACKS ARE 0.26 AND NOT 0.024, AND THE TOOL SAID SO OUT LOUD. A crack's DEPTH is not the
+# statement's amount: `clip_script.cpp` displaces by `0.09 x scale x amount`, so 0.024 at scale
+# 0.7 is 1.5 mm — five hundredths of a voxel at metre 32 — and `usable_displacement` dropped it,
+# with a warning, on every single run:
+#
+#   [WARN ] clip  weather amount 0.001512 m is 0.05 of a voxel at metre 32 ... Dropped.
+#
+# What that leaves is the exact failure `campanile.clip` records at its own weathering: the
+# FISSURE PAINT with no fissure under it — a dark line drawn on a flat face, which throws no
+# shadow at all and therefore does nothing for the one thing this wall is lit to show. The other
+# two statements were never affected: `desert` displaces by `0.05 x scale` and `overgrown` by
+# `0.045 x scale`, and neither reads the amount at all, which is why only this one was silent.
+#
+# 0.26 at scale 0.7 is 16.4 mm, the first depth above the half-voxel floor of 15.6 mm. The scale
+# is left alone because it is the crack's SIZE — `cell_edge 0.55 x scale` — and 0.7 is what puts
+# a seam every 0.4 m on a 16 m wall. The cracks are wider as well as deeper for it (the mask's
+# own upper edge is `0.02s + 0.06s x a`, so 15 mm becomes 25 mm), which is what a crack that has
+# actually been cut looks like beside one that was only painted.
 weather overgrown 0.024 scale=0.9 seed=31 on=th_seat_key
 weather desert    0.018 scale=1.4 seed=17 on=th_cavea
-weather cracks    0.024 scale=0.7 seed=53 on=th_pros_wall
+weather cracks    0.26  scale=0.7 seed=53 on=th_pros_wall
 
 # ================================================================================================
 # THE PART — and why there is NO grain displacement over the whole clip
@@ -1076,6 +1150,10 @@ weather cracks    0.024 scale=0.7 seed=53 on=th_pros_wall
 # This file does the same thing, on purpose, and says so.
 
 let part_theatre = union { th_carved th_fittings }
+
+# The walking probe, against the finished part because the grain is what a shoulder actually meets.
+# See the note at `th_probe_ring`: it must report an EMPTY clip.
+let th_probe_berceau = intersection { part_theatre th_probe_ring th_probe_box }
 
 variation colour=0.030 rough=0.070 seed=19
 

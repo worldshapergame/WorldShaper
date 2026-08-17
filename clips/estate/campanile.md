@@ -1,9 +1,44 @@
-# campanile — four things the language could not do, and what was written instead
+# campanile — five things the language could not do, and what was written instead
 
 Not a report on the building; `campanile.clip`'s own header is that. This is the short list of
 places where the clip is longer or slower than it should be because the language has no word for
 what was meant, written down so the next person meets them as known ground rather than as an
 afternoon.
+
+## 0. `around` DELETES a child that is not inside its own fundamental sector, and this file lost
+##    the motif it exists for that way
+
+Put first because it is not a limit of the language, it is a trap in it, and because it cost this
+building four features at once without a word from anybody.
+
+`Op::PolarRepeat` folds the ASKING POINT by angle into one fundamental sector and evaluates the
+child there — precisely as `mirror` folds a coordinate and evaluates the child at `|x|`. For
+`axis=y` the angle is `atan2(z, x)`, so `count=4` has its fundamental sector centred on **+X**, and
+what `around` builds is four copies of *the child intersected with that sector*. A child drawn on
+**+Z** — the natural place to draw a thing for the face you are looking at — has nothing inside the
+sector, so `around` copies nothing, four times, and the answer is the empty set.
+
+Four members of this file were written that way and all four were absent from every build:
+
+| binding | what it is | `--part` at metre 32, before |
+|---|---|---|
+| `camp_belf_voids` | the eight biforate openings, the motif of the tower | EMPTY |
+| `camp_colonnettes` | the four marble colonnettes in them | EMPTY |
+| `camp_louvres` | the twenty iron louvres | EMPTY |
+| `camp_clock_marks` | the twelve gilt hour marks | EMPTY |
+
+The belfry was therefore a solid block of masonry with a sealed chamber inside it and a bell in the
+dark. Nothing errored, the component count was healthy, the volume was plausible, and the one line
+of `clipcheck` that would have said so — a paint rule that matches no voxel — **could not print
+until the day this was found**, because the diagnostic counted evaluations rather than matches.
+
+All four are explicit rotations now, which every other building on the estate already prefers for a
+different reason (a polar fold declares its metric slack infinite and carries no bounding box).
+
+**What would fix it in the language**: the same diagnostic `pavilion.md` asks for on `mirror` —
+`build_bounds` knows each child's box, and a child whose box lies wholly outside the fundamental
+sector is *always* a mistake, is cheap to detect, and would have caught all four of these before the
+first sample.
 
 ## 1. There is no angular sector, and a spiral stair is nothing else
 
