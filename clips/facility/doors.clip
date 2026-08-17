@@ -622,16 +622,23 @@ let void_doors = difference {
 # WHAT 0.035 DOES NOT FIX, BECAUSE IT IS NOT THIS FILE'S FAULT — SAID HERE SO THE NEXT PERSON DOES
 # NOT SPEND THE AFTERNOON I SPENT.
 #
-# 220 voxels of the leaves are still not bronze at ANY reach — the same 220 at below=0.035, 0.08 and
-# 0.20, which is what proves it is not a reach problem. They are won by two rules in OTHER fragments
-# that come after this one in the manifest and paint over geometry that is not theirs:
+# Some voxels of the leaves are not bronze at ANY reach — the same count at below=0.035, 0.08 and
+# 0.20, which is what proves it is not a reach problem. They are won by rules in OTHER fragments that
+# come after this one in the manifest and paint over geometry that is not theirs. A later rule beats
+# an earlier one wherever both match, so no amount of reach here can win them back; the zone has to
+# stop covering somebody else's bronze, which belongs in those files and not in this one.
 #
-#   194 voxels   crypt.clip     `paint limestone where=crypt_zone_ceiling`
-#    26 voxels   fittings.clip  `paint granite   where=fittings_bases`
+# When this was first counted it was 220 voxels in two rules. `crypt.clip`'s 194 of them went away
+# on its own account the same afternoon — "the crypt was painting the floor of the rooms above it" —
+# and what is left after merging that is:
 #
-# A later rule beats an earlier one wherever both match, so no amount of reach here can win them
-# back; the zones have to stop covering somebody else's bronze. That is BRIEF.md rule 5's first
-# half — paint only your own shapes — and it belongs in those two files, not this one.
+#    26 voxels   fittings.clip   `paint granite where=fittings_bases`
+#     6 voxels   vestibule.clip  `paint granite where=vestibule_fl_sill`
+#
+# 32 voxels is small enough not to be worth anybody's afternoon; it is written down because the
+# METHOD is what matters. A marker material on all 410 paint rules in the building, and then read the
+# histogram of one part: that is how you find out whether a stray voxel is your reach or somebody
+# else's zone, and the two have opposite fixes.
 # ------------------------------------------------------------------------------------------------
 
 paint marble  where=doors_stone  below=0.035
