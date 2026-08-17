@@ -14,6 +14,14 @@ import * as format from './format.js';
 
 // >>> post
 import { Quality, LADDER } from './features/budget.js';
+// <<< post
+// >>> paintcheck
+// How much of the paint stack the ◉ view may walk. `paintcost.js` owns the ladder and this file
+// picks the rung on it — from the clip, once, at load. See the note beside `paintRungFor` for why
+// it is picked from the clip's own work and not from a frame time, and it is applied from here
+// rather than from gl.js because gl.js has no view of a clip beyond the one on screen.
+import * as paintcost from './features/paintcost.js';
+// <<< paintcheck
 
 // What the page was asked for on the way in. Three of these exist only so that a measurement can
 // have two arms and a name:
@@ -48,6 +56,9 @@ const state = {
     sliceFlip: true,
     sliceValue: 1,
     shapes: false,
+    // >>> paintcheck
+    paintRung: 0,          // an index into features/paintcost.js's LADDER
+    // <<< paintcheck
     resolution: Math.min(window.devicePixelRatio || 1, 2),
     frameMs: 16,
     lastFrame: 0,
@@ -61,6 +72,39 @@ const state = {
     showStats: params.get('stats') === '1',
     // <<< post
 };
+
+// >>> paintcheck
+// What one pixel of the ◉ view costs for this clip, out of the clip's own chunks.
+//
+// `PANT` is a four-byte count and 52 bytes a rule; `FLDG` is a four-byte count and 80 bytes a
+// node. Both strides are derived from the chunk rather than assumed, for the same reason
+// `paintcheck` derives them: a format revision should say so rather than be walked off the end of.
+const PANT_RULE_BYTES = 52;
+const FLDG_NODE_BYTES = 80;
+
+function paintWork(clip) {
+    const pant = clip && clip.chunk ? clip.chunk('PANT') : null;
+    const fldg = clip && clip.chunk ? clip.chunk('FLDG') : null;
+    const rules = pant ? Math.max(0, Math.floor((pant.byteLength - 4) / PANT_RULE_BYTES)) : 0;
+    const nodes = fldg ? Math.max(0, Math.floor((fldg.byteLength - 4) / FLDG_NODE_BYTES)) : 0;
+    // Rules times the average graph depth, which over a whole field is nodes when every node
+    // belongs to some rule and an over-estimate otherwise. Over-estimating degrades early rather
+    // than late, which is the safe direction for a number that decides whether a tab answers.
+    return { rules, nodes, perPixel: rules > 0 ? rules * nodes : 0 };
+}
+
+// The rung. The thresholds are the shape of the ladder in features/paintcost.js, in the units
+// paintWork counts: `sampler` is 4 x 4 = 16 and paints in full; a facility fragment is
+// 348 x 4,829 = 1.68 million and paints nothing but its undercoat, with the page saying so.
+function paintRungFor(clip) {
+    const work = paintWork(clip).perPixel;
+    if (work <= 4096) return 0;          // full
+    if (work <= 65536) return 1;         // beyond 48 m: flat
+    if (work <= 262144) return 2;        // beyond 24 m: flat, 256 rules
+    if (work <= 1048576) return 3;       // beyond 12 m: flat, 64 rules
+    return 4;                            // off, and the page says why
+}
+// <<< paintcheck
 
 // --- loading ---------------------------------------------------------------------------------
 
@@ -138,6 +182,29 @@ async function load(entry, keepCamera) {
     try {
         const clip = await fetchClip(entry);
         state.clip = clip;
+        // >>> paintcheck
+        // THE PAINT RUNG, picked from what this clip actually asks for and from nothing else.
+        //
+        // §9 of 26-viewer-integration.md is why there has to be one: `facility/part_terrace` is
+        // 348 rules and 4,829 field nodes, which is 338,060 node evaluations for ONE pixel after
+        // the per-rule box reject, and a GPU a thousand times faster than this machine is still
+        // 200 ms a frame for that one fragment. Left at full, the ◉ button on the building is a
+        // tab that stops answering.
+        //
+        // It is picked from the CLIP'S OWN WORK and deliberately NOT from the frame time. The
+        // only GL in this loop is SwiftShader on a shared box: every frame here is over the 22 ms
+        // ceiling whatever is drawn, so a frame-time ladder drops `sampler` -- four rules and four
+        // nodes -- to flat grey, which is a SwiftShader millisecond making a decision that belongs
+        // to a phone. The rule count and the node count are properties of the clip and mean the
+        // same thing on every machine. `paintcost.chooseRung` is still there, still tested, and is
+        // what to wire the day there is a real mobile GPU to measure on.
+        state.paintRung = paintRungFor(clip);
+        state.renderer.paint = paintcost.uniformsFor(state.paintRung);
+        {
+            const note = paintcost.describe(state.paintRung, paintWork(clip));
+            if (note) toast(note, true);
+        }
+        // <<< paintcheck
         state.current = entry;
         state.renderer.setClip(clip);
         if (!keepCamera) {
@@ -549,6 +616,7 @@ function frame(now) {
     // average. A clip swapping in, or a collection, is one slow frame and not a regression, and it
     // must not cost a quality level; the average lets it, the median does not.
     state.frameMs = state.budget.frameMs;
+
     state.quality.setCeiling(Math.min(window.devicePixelRatio || 1, 2));
     if (state.quality.update(state.budget.median(), now)) {
         state.renderer.setQuality(state.quality.flags);
@@ -645,9 +713,17 @@ async function main() {
         }
         state.shapes = !state.shapes;
         $('shapes').classList.toggle('on', state.shapes);
+        // >>> paintcheck
+        // ...and what the paint rung gave up, said HERE rather than only at load. A view that has
+        // quietly stopped painting is a view nobody can trust, and on a facility fragment the whole
+        // answer is flat grey -- so the line saying why has to be the line on screen when the
+        // button is pressed, not one the clip's own toast replaced four seconds earlier.
+        const note = state.shapes ? paintcost.describe(state.paintRung, paintWork(state.clip)) : '';
+        // <<< paintcheck
         toast(state.shapes
-            ? state.clip.shapeCount.toLocaleString() + ' shapes, as written — cut as the clip cuts them'
-            : 'voxels');
+            ? state.clip.shapeCount.toLocaleString() + ' shapes, as written — cut as the clip cuts ' +
+              'them' + (note ? ' · ' + note : '')
+            : 'voxels', !!note);
     };
     $('info').onclick = () => $('panel').classList.toggle('hidden');
     $('panelClose').onclick = () => $('panel').classList.add('hidden');
