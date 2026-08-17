@@ -51,6 +51,13 @@
 #   sr_cut_check    EMPTY         nothing of part_stair inside anybody's void
 #   sr_who_lib      56            whose stone the 56 are; the other four sr_who_* are EMPTY
 #
+# TWO OF THESE HAVE NOT BEEN TAKEN AT METRE 32 AND THAT IS SAID RATHER THAN ASSUMED: `sr_floor_all`
+# and `sr_cut_check` are metre 16 readings only. Both are expected to hold — the 23 mm the floor
+# slabs miss each other by is smaller than a voxel at either metre, and `sr_cut_check` is exact
+# geometry rather than a sampling question, because this part's top face IS the plane the void
+# starts at. Run them when there is a machine free; the box is 79 million cells at 32 and each run
+# is the better part of an hour.
+#
 # THE ASSEMBLY BELOW IS THE MANIFEST'S, NOT A SIMPLIFICATION. clips/facility.clip subtracts the
 # room voids and the opening voids from `built` and then unions the fittings back after the ROOM
 # voids but still cut by the OPENING voids. A route probe that skipped that would test a building
