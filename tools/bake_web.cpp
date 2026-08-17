@@ -84,6 +84,10 @@
 #include "world/tags.hpp"
 #include "world/voxel_type.hpp"
 
+// >>> lights
+#include "bake/lights.hpp"
+// <<< lights
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -1790,6 +1794,12 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
     }
     const std::vector<u8> probe_bytes = ws::web::probe_chunk(probes);
     // <<< probes
+    // >>> lights
+    // The emitters, as LIGHTS rather than as bright paint: where each fitting is, how big, what
+    // colour, how strong, and a baked cube of visibility per light so a sconce in one hall does not
+    // light the hall next door. tools/bake/lights.hpp is the whole of it.
+    const ws::web::LightBake lights = ws::web::bake_lights(clip, types, origin, metre, jobs);
+    // <<< lights
 
     // And the clip as it was written, before any of the above.
     ShapeWalk walk;
@@ -2047,6 +2057,12 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         // null for `RPRB` falls back to the sky exactly as it did.
         if (!probe_bytes.empty()) chunks.push_back(make_chunk("RPRB", probe_bytes));
     // <<< probes
+    // >>> lights
+        // `LGTS`, every emissive surface of the clip gathered into a list a fragment can walk.
+        // Absent when nothing in the clip emits, and a reader that gets null lights the scene by
+        // sun and sky exactly as it did.
+        if (!lights.lights.empty()) chunks.push_back(make_chunk("LGTS", ws::web::write_lights(lights)));
+    // <<< lights
     // >>> paintexport
         append_chunks(out, chunks);
     }
@@ -2111,6 +2127,30 @@ bool bake_root(const Options& options, Program& program, u32 root, bool is_part,
         std::printf("      probes: none -- no lattice point in this clip is in air and near matter\n");
     }
     // <<< probes
+    // >>> lights
+    // What the light list found, said out loud for the same reason as everything below it: a cap
+    // that bites silently reads as "there were only that many". `unshadowed` is the number the
+    // report has to carry, because an unshadowed lamp is the one that lights the room next door.
+    if (!lights.lights.empty() || lights.clusters > 0) {
+        f64 area = 0.0;
+        f64 brightest = 0.0;
+        for (const ws::web::Light& one : lights.lights) {
+            area += static_cast<f64>(one.area);
+            brightest = std::max(brightest, one.power());
+        }
+        const usize unshadowed = lights.lights.size() - lights.shadowed;
+        std::printf("      lights: %zu from %zu clusters  %zu shadowed  %zu NOT  %.3f m2 emitting  "
+                    "brightest %.2f  atlas %d x %d (%.0f kB)  %.1f s\n",
+                    lights.lights.size(), lights.clusters, lights.shadowed, unshadowed, area,
+                    brightest, lights.atlas_w, lights.atlas_h,
+                    static_cast<f64>(lights.atlas.size()) / 1024.0, lights.seconds);
+        if (lights.dropped > 0 || lights.dark > 0) {
+            std::printf("      lights: %zu past the %zu cap were dropped, %zu clusters emit from no "
+                        "face at all\n",
+                        lights.dropped, ws::web::kMaxLights, lights.dark);
+        }
+    }
+    // <<< lights
     // What the shapes view is not showing exactly, said out loud. A silent truncation reads as
     // "it worked", which is the whole reason these are counted at all.
     if (walk.over_cap > 0 || walk.pool_full > 0 || walk.sub_intersections > 0 ||

@@ -85,6 +85,14 @@ bytes version 2 left over on a chunk directory, so it is the last time an additi
 drawing a wrong picture — a cached `web/data` from before the change is a real state and it has to
 say so.
 <!-- <<< probes -->
+**The version is 3.** Version 1's header was 192 bytes with nothing spare, so adding the cutter pool
+of §4a moved every block offset; there is no reading one as the other. `reuse` in the baker refuses
+an older file and rebakes it, and `parseClip` throws on one rather than drawing a wrong picture —
+a cached `web/data` from before the change is a real state and it has to say so.
+<!-- >>> lights -->
+Version 3 spends the header's last eight spare bytes on a **chunk directory**, so that everything
+added after it is found by a four-character code rather than by moving every offset again. §4c.
+<!-- <<< lights -->
 
 **Materials.** Every `VisualRecord` used, verbatim, sixteen bytes each. Colour, opacity,
 roughness, metallic, index of refraction, emission and its tint, Beer-Lambert absorption,
@@ -635,6 +643,154 @@ About 3.6x per doubling -- sub-linear in voxels, because the field evaluation an
 dominate -- which puts 32 at roughly seventeen minutes for that one clip. A shard holding two like
 it is an hour, and that is why `bake` has three hours rather than ninety minutes, and why `index`
 runs even when a shard did not.
+
+<!-- >>> lights -->
+## 4c. Emissive geometry, as real lights
+
+**The version is 3, and bytes 200..207 are now a chunk directory.** A `u32` offset at 200 and a
+`u32` count at 204 point at a table of 16-byte entries — four characters of code, an offset, a size
+and a spare word — appended after the blocks. A block can be added to the format without every
+reader knowing what it is, which is what lets several people add one to the same file at once.
+`parseClip` hands them back as `clip.chunks`, a `Map` from the code to a `Uint8Array`; a code nobody
+understands costs nothing. The light list's code is `LGTS`.
+
+The viewer used to treat an emitter as bright paint and nothing else. `clips/many_lamps.clip` is a
+sealed hall with no sky and no sun in it, lit by thirty-six fittings, and it drew as **thirty-six
+white rectangles on walls the colour of an ambient constant** — everything the clip exists to test
+was invisible. `clips/facility/fittings.clip` says the same in its own header: two of the halls have
+no window at all and everything past the first bay arrives from a sconce or from nothing.
+
+So `tools/bake/lights.hpp` flood fills the emissive voxels into fittings and reduces each to a
+light: a position, an extent, a colour, and an intensity **derived from the emitting surface area**.
+`fittings.clip` is explicit that its bowls are 0.08 m² in a hall of 143 m² and that they are small on
+purpose — "a big soft area light makes a room easy and tests nothing" — so area is carried rather
+than thrown away, and a light knows the radius of the sphere that stands for it. `web/js/gl.js`
+shades two lobes with them: diffuse falling off with the square of the distance, and a **GGX
+highlight widened by the angle the fitting subtends**. The highlight is why the list exists at all.
+A baked irradiance volume knows how much light arrives at a point and not from *where*, so it can
+never put a reflection of a sconce on a bronze arm.
+
+### The emission curve is the VIEWER's, not the game's
+
+The path tracer reads a `VisualRecord` as `tint * (emissive/255)² * 64`. The viewer paints an
+emissive surface with `glow * emissive * 6.0` — linear, and 6.0 rather than 64. Deriving the *light*
+from the game's curve and leaving the *paint* on the viewer's makes a lamp eight times brighter than
+the thing it comes out of: many_lamps came out with **every wall clipped to white and the sconces on
+it visibly darker than the pools they cast**. A source dimmer than what it lights is the one
+lighting error nobody has to be told to see. So the light list uses the viewer's own constant and
+the two are one number. Whoever reconciles that 6.0 with the game's 64 changes both together.
+
+### Big fittings are cut up, and dark ones are counted
+
+A cluster whose box is longer than a metre on any axis is cut into pieces at that pitch. It is not
+thrift: the corona lucis is a hoop 3.60 m across, and one sphere at the centre of a hoop is a light
+in the one place the fitting has no matter at all. Cut up it is a ring of lights, which is what it
+is. A cluster with no face touching air emits nowhere and is dropped with a count, not silently.
+
+### The cap, and where it is wrong
+
+**Sixteen lamps a draw**, and sixteen is a **choice, not yet a measurement**: it is the largest
+uniform array that fits comfortably inside the ES 3.0 minimum of 224 fragment uniform vectors
+alongside what this shader already holds. Nobody has
+run it against eight or against thirty-two on a phone. Ranked by what each delivers at the camera —
+intensity over distance squared, the same rank `src/world/light_list.cpp` uses for the game's own
+list — and the baker keeps at most 256 in the file. The count, how many a draw is shading, and whether the cap bit are printed
+per clip by the baker and logged once per clip by the viewer, and they are on `renderer.lights`.
+It bites on both clips looked at: many_lamps has 36 and `facility/fittings` has 25.
+
+The honest limitation is that **the rank is by the eye and not by the surface**: a lamp behind the
+camera is scored as if it lit what the camera is looking at. It is visible in an orbit view of
+many_lamps from outside, where all thirty-six lamps are the same distance away and which sixteen
+survive is arbitrary. Inside the building, where the viewer is actually used, the nearest lamps win
+and it does not show.
+
+### Shadowing: a cube of baked distances per light, in one atlas
+
+No rays at run time, and an **unshadowed point light leaks through walls so obviously that it is
+worse than no light at all** — many_lamps is built out of exactly that case, four quarters walled
+off from each other with a lamp bolted to both sides of every partition.
+
+A per-lattice-point visibility mask on the light grid was considered first and rejected on size: it
+costs a bit per light per lattice point, so it grows with the **volume** of the clip, and the
+facility's lattice is half a million points. A shadow cube costs the same per light whatever size
+the building is. Six faces of 48 texels, one byte a texel holding the distance to the first blocker
+along that direction; all of them in one R8 atlas the shader reads with **one bilinear fetch per
+lamp per pixel**. Up to 32 lights get one; 48 texels a face is 1.9° a texel, about 13 cm at four
+metres, which is about the clip's own voxel.
+
+Four things about the cast are not obvious and three of them were wrong first:
+
+- **The lamp is inside its own matter.** A ray from the centre of a fitting starts in solid stone
+  and comes back blocked at the first step. The first atlas was black and every light went out. A
+  ray now ignores blockers until it has left the fitting's own box, grown by a voxel.
+- **A clip is not a closed room.** A ray that walks out of the sampled box has hit nothing; saying
+  "blocked" there puts a black shadow on the far side of every exterior lamp.
+- **The rays walk the clip's own voxels**, not a coarse occupancy grid. Half a metre a cell is
+  bigger than a whole sconce, and the distance such a grid reports is a cell out — which forces a
+  shadow bias larger than the walls this exists to stop light passing through.
+- **The stored byte is rounded up, never down.** Short of the real blocker puts the surface *at* the
+  blocker inside its own shadow, which is acne on every wall a lamp is bolted to. Long by up to one
+  quantum leaks light that far behind an occluder instead, and one quantum is 12 cm on the largest
+  clip here. The viewer's bias is then only paying for the ray's own step: 2.5 voxels.
+
+The atlas is filtered `LINEAR`, and that is what makes the shadow soft — the stored value is a
+*distance*, so a filtered one is a distance partway between two directions and the comparison lands
+partway through a texel rather than on its edge. Each tile's fetch is clamped half a texel inside
+its own edge, because the four texels a bilinear fetch reads at a tile boundary belong to a
+different direction of a different light.
+
+**Lights past the shadow budget are lit unshadowed.** They are the weakest in the clip by
+construction and the last to survive the per-draw cap. What one looks like when it does reach the
+screen is a faint wash that ignores a wall. The baker prints the number; the viewer carries it as
+`renderer.lights.unshadowed`. On the clips looked at, many_lamps has **4 unshadowed of 36** and
+`facility/fittings` has **none of 25**.
+
+### Two arms, on the URL
+
+`?nolamps` turns the whole term off and leaves everything else alone; `?noshadow` keeps the lamps
+and drops their visibility, which lights many_lamps as one room instead of four.
+
+### What it costs
+
+Both baked with `--budget 8000000`, which puts many_lamps at 16 voxels to the metre and the
+fragment at 8; CI bakes at 700 M and `--part-metre 16`, so the facility figures there will be larger.
+
+| | many_lamps | facility/fittings |
+|---|---|---|
+| lights found | 36 from 40 clusters | 25 from 25 |
+| shaded per draw | 16 (the cap bites) | 16 (the cap bites) |
+| shadowed | 32 | 25 |
+| emitting surface | 20.28 m² | 4.72 m² |
+| atlas | 768 × 576, 432 kB | 768 × 480, 360 kB |
+| added to the `.wsc` | 444 kB raw, **~62 kB gzipped** | 361 kB raw |
+| shadow bake | 1.7 s | 18.3 s |
+
+The atlas is nearly all "nothing between here and the range" and gzips about ten to one, and the
+site serves `.wsc.gz`, so what a phone downloads is a fraction of the raw figure.
+
+**The frame cost has not been measured on a GPU.** Everything here was rendered by SwiftShader, a
+software rasteriser, on a box shared with fourteen other jobs. Two paired runs of many_lamps at
+900×700 with the camera a metre from a lit wall, `?nolamps` against the shipped build:
+
+| | lamps off | lamps on (16) |
+|---|---|---|
+| run 1 | 171 ms | 677 ms |
+| run 2 | 221 ms | 1535 ms |
+
+Four to seven times, and both halves of that are untrustworthy for a phone: a software rasteriser
+has no texture-sampling hardware, so the sixteen bilinear atlas fetches cost far more of the frame
+there than they would on any GPU, and the run-to-run spread is larger than the effect being
+measured. What the numbers do establish is that the term is **not free and scales with the cap** —
+whoever puts this on a real device should measure eight against sixteen against thirty-two before
+believing the cap is right.
+
+**A trap for whoever owns `pages.yml`:** its cache key is
+`find src tools/bake_web.cpp`, which does **not** cover `tools/bake/lights.hpp`. An edit to that
+file alone would leave every clip's key valid and serve stale bytes. The format version bump hides
+it this time — a version 3 reader refuses a version 2 file and rebakes — but the next edit to it
+will not have that. The find needs to be `find src tools`.
+
+<!-- <<< lights -->
 
 ## 5. Publishing
 

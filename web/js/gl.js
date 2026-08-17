@@ -127,6 +127,12 @@ export const UNIT = {
 // and the one function a screen-space pass may call: `probeReflection(world, N, R, roughness)`.
 import { PROBE_GLSL, Probes } from './features/probes.js';
 // <<< probes
+// >>> lights
+// Emissive geometry, as real lights. The GLSL is spliced into the surface program below rather
+// than run as a second pass: a lamp's diffuse and its highlight belong in the same lobe evaluation
+// as the sun's, and a deferred pass would need a G-buffer this viewer does not have.
+import { LightSet, LAMP_UNIFORMS, LAMP_SHADING } from './features/lights.js';
+// <<< lights
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -197,6 +203,10 @@ ${GI_FRAGMENT_UNIFORMS}
 // <<< gi
 
 ` + ao.AO_FRAGMENT + `
+// >>> lights
+${LAMP_UNIFORMS}
+// <<< lights
+
 out vec4 o_colour;
 
 // >>> probes
@@ -247,6 +257,13 @@ vec3 tonemap(vec3 x) {
     const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
+
+// >>> lights
+// Below fresnel() and smith() on purpose: a highlight from a lamp is the same lobe as a highlight
+// from the sun, and it is the same two functions that give it its shape. See
+// web/js/features/lights.js. (No back-quotes: this is inside a template string.)
+${LAMP_SHADING}
+// <<< lights
 
 void main() {
     float side = dot(v_world, u_clip.xyz) + u_clip.w;
@@ -394,6 +411,17 @@ void main() {
     // <<< probes
 
     vec3 colour = diffuse + specular + ambientSpecular;
+
+    // >>> lights
+    // The lamps. Both lobes, each with the fitting's own baked visibility on it, so a sconce in one
+    // hall does not light the hall next door. In a room with a window this is a term on top of the
+    // daylight; in the halls of facility/fittings.clip, which have no window at all, it is the only
+    // light there is. (No back-quotes: this is inside a template string.)
+    vec3 lampDiffuse;
+    vec3 lampSpecular;
+    lamps(v_world, N, V, albedo, metal, rough, f0, lampDiffuse, lampSpecular);
+    colour += lampDiffuse + lampSpecular;
+    // <<< lights
 
     if (clearcoat > 0.0) {
         float lacquer = ggx(ndh, 0.1) * smith(ndv, ndl, 0.1) / (4.0 * ndv * max(ndl, 1e-4) + 1e-4);
@@ -829,6 +857,14 @@ function link(gl, vertexSource, fragmentSource, name) {
     for (let i = 0; i < count; ++i) {
         const info = gl.getActiveUniform(program, i);
         uniforms[info.name] = gl.getUniformLocation(program, info.name);
+        // >>> lights
+        // An ARRAY uniform comes back named `u_lampPos[0]`, so looking it up by the name it was
+        // declared with finds nothing and every lamp uniform silently does not get set. Both keys
+        // point at the same location, which is the one glUniform4fv wants for the whole array.
+        if (info.size > 1 && info.name.endsWith('[0]')) {
+            uniforms[info.name.slice(0, -3)] = uniforms[info.name];
+        }
+        // <<< lights
     }
     return { program, uniforms };
 }
@@ -964,6 +1000,12 @@ export class Renderer {
         // >>> probes
         this.probes = new Probes(gl);
         // <<< probes
+        // >>> lights
+        // The emitters of the clip on screen, as lights. Everything about them — how many there
+        // are, how many a draw shades, which of them carry a baked shadow — is on this object, and
+        // it is where to look when a room is lit wrongly.
+        this.lights = new LightSet(gl);
+        // <<< lights
         this.clip = null;
 
         this.viewProj = new Float32Array(16);
@@ -993,6 +1035,10 @@ export class Renderer {
     setClip(clip) {
         const gl = this.gl;
         this.clip = clip;
+
+        // >>> lights
+        this.lights.setClip(clip);
+        // <<< lights
 
         gl.bindVertexArray(this.vao);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
@@ -1252,6 +1298,12 @@ export class Renderer {
         // >>> probes
         this.probes.bind(uniforms);
         // <<< probes
+        // >>> lights
+        // Ranked from where the eye is, capped, and uploaded. Unit 2, because 0 is the materials
+        // and 1 is the light grid.
+        this.lights.rank(camera.eye);
+        this.lights.bind(uniforms, UNIT.lights);
+        // <<< lights
     }
 
     // The clip as it was written, instead of as it came out. One instanced box per shape, each
