@@ -1,0 +1,103 @@
+# campanile-probe — the bell tower on its own, in FACILITY coordinates, so it can be measured
+# without sampling the rest of the complex.
+#
+#   .\build\bin\WorldShaper.exe --clip-file clips\facility\requests\campanile-probe.clip \
+#        --clip-metre 8 --clip-part part_campanile
+#   ... --clip-metre 16 --clip-part part_campanile
+#   ... --clip-metre 32 --clip-part part_campanile
+#   ... --clip-metre 32 --clip-part campanile_probe_head    # must report an EMPTY clip
+#   ... --clip-metre 32 --clip-part campanile_probe_clock   # must report an EMPTY clip
+#
+# Both probe parts are carried by the same (30, 0, 14) as the geometry — a probe left at the model
+# origin measures a place the tower is not and reports EMPTY for that reason, which is a pass that
+# means nothing. Both were run through this file at METRE 8 AND METRE 16 and both report
+# `matter none`. NEITHER WAS RUN AT METRE 32, which is the metre campanile.clip's own head-height
+# section claims them at; three other agents were on the machine and that box is 384 x 1184 x 384.
+# The metre 32 claim is inherited from the estate twin and has not been re-taken since the translate.
+#
+# WHAT THIS PROBE IS FOR, and it is not the geometry. `clips/facility/campanile.clip` is a copy of
+# `clips/estate/campanile.clip` carried to (30, 0, 14), and the estate original is untouched — so
+# the estate clip IS the control arm, and the question this probe answers is whether the copy is
+# the same clip in a different place or a different clip. Run both at the same metre and compare:
+#
+#   .\build\bin\WorldShaper.exe --clip-file clips\estate\campanile.clip \
+#        --clip-metre 8 --clip-part part_campanile          # the control
+#
+# `volume`, `surface` and `components` must match TO THE VOXEL. They can, and that is not luck: at
+# metre 8 a cell is 0.125 m, the translate (30, 0, 14) is a whole number of cells in every axis, and
+# this box's own corner is a whole number of cells from the estate box's corner. So the two runs put
+# the tower on the same grid and a single voxel of difference is a fault rather than a rounding.
+#
+# THE THREE THINGS TO READ, in the order they catch things:
+#
+#   never fired   a rule that painted nothing. Silent, and it looks exactly like success. It is the
+#                 first thing a botched translate shows: if the geometry was carried and the shape a
+#                 rule names was not, the rule asks its question where the tower is not and paints
+#                 nothing. Neither run should print this line at all.
+#   materials     the same seventeen, in the same shares. The five weathering coats -- sand, lichen,
+#                 moss, bleached, fissure -- will not match the control exactly and are not meant
+#                 to: a weather mask is noise asked in WORLD coordinates, so moving the tower slides
+#                 it across the field. The twelve PAINTS have no such excuse and must match.
+#   components    41 at metre 8, largest 281,232, and 217 voxels not joined to it. NOT 1, and
+#                 campanile.clip says at length why: the 0.03 m louvres and the vane's banner are
+#                 one voxel of thin metal at metre 32 and less than that at 8, the crown of the
+#                 pyramid roof comes to a point, and `weather cracks` knocks chips off a corner
+#                 where a 16 mm fissure meets itself. The largest component is 99.92% of the matter.
+#                 What matters is that the fragment reports the SAME count as the control.
+#
+# WHAT A CORRECT RUN LOOKS LIKE — taken, on 2026-08-17, not predicted:
+#
+#                          estate (the control)        this probe, box as written below
+#   volume                 281,448 voxels              281,449 voxels
+#   surface                147,914 faces               147,918 faces
+#   components             41, largest 281,231         41, largest 281,232
+#                          217 not joined              217 not joined
+#   materials              17                          17
+#   never fired            no such line                no such line
+#   worldbox               -5.500 -0.750 -5.500        24.375 -0.750  8.500
+#                           5.500 34.750  5.500        35.500 34.750 19.500
+#
+# THE ONE VOXEL IS THIS FILE'S BOX AND NOT THE FRAGMENT. The estate clip's bounds are -5.5 .. 5.5
+# and its lawn is drawn to -5.45, so its sampler box lands on the matter and clips a cell of lawn
+# edge; the box below has half a metre of margin and does not. Narrow this box to the control's own,
+# carried by the same vector — `bounds 24.5 -1.0 8.5   35.5 35.0 19.5` — and the run comes back
+# 281,448 voxels, 147,914 faces, 41 components, largest 281,231, 217 not joined: the control's
+# numbers to the voxel, with the same eight floating groups at the same places. That is the arm to
+# take if anybody ever needs to prove this copy is still the original in a different place.
+#
+# AND THE SHARES WILL NOT MATCH THE CONTROL, FOR TWO REASONS THAT ARE BOTH WRITTEN UP AND BOTH
+# MEASURED. The estate clip has no base coat and this probe does, so the 1.6% of voxels no rule of
+# the fragment reaches show here as limestone and showed there as sandstone; and every rule in the
+# fragment is `below=0.035` rather than 0.02, which lets each rule reach further and hands surface
+# from the first rule to the twelve after it. Both are argued at length in campanile.clip's header.
+#
+# THE BASE COAT IS HERE ON PURPOSE. `clips/facility.clip` paints bare `limestone` before it includes
+# any fragment, so that is the coat any surface no rule of mine reaches will be wearing. Keeping it
+# here means this probe wears the same fallback the building does — and it is also the rind test:
+# limestone is a material this fragment paints itself (`camp_dressed_at`), so if its share comes
+# back ABOVE the control's, the extra is voxels that fell through every rule. To see the rind on its
+# own rather than by subtraction, swap this line for a material the tower never uses -- `lapis`,
+# `porphyry` -- and count it; anything still wearing it is a rule that did not reach its own stone.
+#
+# THE BOX IS TIGHT AND THAT IS THE ONLY LICENCE IT TAKES. The contract's box is 34 x 21 x 25 m and
+# stops at y 20, which would cut this tower off at its fourth stage; the facility's own box does not
+# reach x 24 at all. The box below is the tower at (30, 0, 14) plus half a metre of margin all
+# round: 12 x 37 x 12 m. `bounds` only says where the sampler looks, and it changes nothing about
+# the fragment.
+
+include "../_contract.clip"
+include "../_order.clip"
+
+# The coat everything starts in, exactly as the manifest has it.
+paint limestone
+
+include "../campanile.clip"
+
+# `metre` and `bounds` come AFTER EVERY include and not before -- _order.clip includes _contract.clip
+# again and the contract re-states the building's box and its metre, so these two lines put anywhere
+# above the last include are quietly undone by it, and the undoing looks exactly like the narrowing
+# having had no effect. Written out in ballroom-probe.clip, which paid for it.
+metre 32
+bounds 24 -1.5 8   36 35.5 20
+
+solid part_campanile
