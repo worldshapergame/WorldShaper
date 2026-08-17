@@ -172,6 +172,15 @@ import {
     Refraction, GLSL_DECLARATIONS, GLSL_TRANSLUCENCY, GLSL_COMPOSITE,
 } from './features/refract.js';
 // <<< refract
+// >>> brdf
+// Every lobe a VisualRecord declares — lacquer, sheen, the brush grain, metal and emission — as
+// the game's own shaders write them. See web/js/features/brdf.js for what is matched exactly,
+// what is approximated, and the one factor of PI that separates this viewer's units from the
+// path tracer's. It reads this shader's own sky uniforms — u_sun, u_sunColour, u_skyUp, u_skyDown
+// — and nothing else, and it is spliced in beside `sky_colour` because its `ws_environment` is
+// that same sky prefiltered by the lobe reading it. THE TWO HAVE TO MOVE TOGETHER.
+import { BRDF_GLSL } from './features/brdf.js';
+// <<< brdf
 
 const VERTEX_SOURCE = `#version 300 es
 precision highp float;
@@ -294,6 +303,10 @@ vec3 sky_colour(vec3 direction) {
     return base;
 }
 
+// >>> brdf
+${BRDF_GLSL}
+// <<< brdf
+
 // ACES, in the fitted form. A path tracer's output needs a curve like this and so does anything
 // with a sun in it: without one every lit face of pale limestone is the same clipped white.
 vec3 tonemap(vec3 x) {
@@ -336,29 +349,28 @@ void main() {
     vec4 depth = material_row(2);
     vec4 extra = material_row(3);
 
-    vec3 albedo = base.rgb * base.rgb;            // close enough to sRGB, and one multiply
-    float opacity = base.a;
-    float rough = clamp(surface.r, 0.045, 1.0);
-    float metal = surface.g;
+    // >>> brdf
+    // The sixteen bytes, unpacked once, in the one place that knows the layout.
+    WsMaterial mat = ws_material(base, surface, depth, extra);
+    vec3 albedo = mat.albedo;
+    float opacity = mat.opacity;
+    float translucency = mat.translucency;
+    float metal = mat.metal;
+    // The GGX-clamped roughness. mat.roughness is the record's own byte and the two are NOT
+    // interchangeable: the clamp keeps the lobe from going singular, and applied to a probe
+    // lookup it sends mirror (6) and gilt (64) to the same prefiltered level.
+    float rough = clamp(mat.roughness, 0.045, 1.0);
+    // The record's index-of-refraction byte, which the glass composite below still wants as a
+    // byte -- ws_material turns it into a reflectance and the two are not the same number.
     float iorByte = surface.b * 255.0;
-    float emissive = surface.a;
-    float translucency = depth.a;
-
-    int flags = int(extra.b * 255.0 + 0.5);
-    int coat = int(extra.a * 255.0 + 0.5);
-    float clearcoat = float(coat & 15) / 15.0;
-    float sheen = float((coat >> 4) & 15) / 15.0;
+    // <<< brdf
 
     vec3 N = u_normal;
     vec3 V = normalize(u_eye - v_world);
     if (dot(N, V) < 0.0) N = -N;                  // the far side of a pane, seen through the near
     vec3 L = u_sun;
-    vec3 H = normalize(L + V);
-
     float ndl = max(dot(N, L), 0.0);
     float ndv = max(dot(N, V), 1e-4);
-    float ndh = max(dot(N, H), 0.0);
-    float vdh = max(dot(V, H), 0.0);
 
     // What the baker cast: how much of the sun and how much of the sky reach this place. Sampled
     // a little along the normal so that a face reads the air in front of it rather than the stone
@@ -377,6 +389,7 @@ void main() {
     sunVisible = ws_sun(v_world, N, L, sunVisible, ndl);
     // <<< shadow
 
+    // >>> ao
     // Corner occlusion is a voxel's own shape and the light grid is the room it stands in; both
     // are needed, and neither substitutes for the other.
     //
@@ -389,17 +402,13 @@ void main() {
     //
     // It multiplies the ambient and never the sun: a face turned away from the sun is already
     // dark, and occluding direct light as well is how a rasteriser gets black under every eave at
-    // noon.
+    // noon. ws_shade is where it is applied, on the ambient in full and on the specular by its
+    // square root.
     float baked = mix(u_aoFloor, 1.0, ao_here());
-    float occluded = mix(0.35, 1.0, v_ao) * mix(0.25, 1.0, skyVisible) * baked;
+    // <<< ao
 
-    float dielectric = (iorByte > 0.5)
-        ? pow((iorByte / 128.0) / (2.0 + iorByte / 128.0), 2.0)
-        : 0.04;
-    vec3 f0 = mix(vec3(dielectric), albedo, metal);
-
+    vec3 f0 = mix(vec3(mat.f0d), albedo, metal);
     vec3 ambient = mix(u_skyDown, u_skyUp, clamp(N.y * 0.5 + 0.5, 0.0, 1.0)) * 0.5;
-    vec3 direct = u_sunColour * ndl * sunVisible;
 
     // >>> gi
     // The bounce, in colour. It is ADDED to the sun and the flat ambient rather than replacing
@@ -410,82 +419,43 @@ void main() {
     // voxel crease, and indirect light really is scarcer in one — but it is scarcer more gently
     // than direct sky is, which is why this is mix(0.5, 1) against the ambient's mix(0.35, 1).
     vec3 bounced = gi_indirect(v_world, N) * mix(0.5, 1.0, v_ao);
-    vec3 diffuse = albedo * (1.0 - metal) * (direct + ambient * occluded + bounced);
     // <<< gi
 
+    // >>> ssr
+    // What is actually along the reflection: the baked probe first, refined by a screen-space
+    // march wherever the screen happens to hold the answer, and the sky where neither does.
+    // envBelief is how much of that is a real surround rather than the sky -- ws_shade uses it
+    // both to blend against its own prefiltered sky and to fade out the sky-visibility term that
+    // stands in for a probe, which is the probe branch's finding and is why a mirror in a hall
+    // does not go black. (No back-quotes here: template string.)
+    //
+    // mat.roughness and not rough, for the reason written where rough is declared.
+    float envBelief = 0.0;
+    vec3 reflected = ws_reflected_radiance(v_world, N, rough, mat.roughness, f0, ndv, envBelief);
+    // <<< ssr
+
+    // >>> brdf
+    // Every lobe the record declares, in one call: the base GGX (anisotropic where the record
+    // named a grain), the sheen on the diffuse, the lacquer over the top, the metal's Fresnel.
+    // web/js/features/brdf.js is where each of those comes from in the game's own shaders. The
+    // four arguments after v_ao are the other branches' terms handed in, because this lobe would
+    // otherwise recompute a sky-only environment and undo every one of them.
+    //
+    // The energy the specular turns away is taken off the diffuse INSIDE the lobe, by the
+    // hemispherical average of Schlick rather than the view-angle one -- so the line the SSR
+    // branch added here to do the same job with fresnel(f0, ndv) is gone, not dropped: doing it
+    // twice is doing it twice.
+    vec3 colour = ws_shade(mat, N, V, L, u_sunColour, sunVisible, ambient, skyVisible, v_ao,
+                           reflected, envBelief, bounced, baked);
+    // <<< brdf
+
+    // The translucency chunk below accumulates into a diffuse term, which is all that is left of
+    // hand-written lobe this file used to have. It is added on afterwards.
+    vec3 diffuse = vec3(0.0);
 // >>> refract
 ${GLSL_TRANSLUCENCY}
 // <<< refract
-
-    // Brushed metal. A voxel world has no UVs and no tangent frame, so a VisualRecord can name
-    // exactly one thing here — which of the three world axes the grain runs along — and that is
-    // what bits 3 and 4 hold. The grain is projected into the face and the highlight is stretched
-    // across it, which is the whole visible difference between brushed bronze and brown paint.
-    // On a face the grain runs straight out of, there is no direction left and it stays round.
-    float distribution = ggx(ndh, rough);
-    int brush = (flags >> 3) & 3;
-    if (brush != 0) {
-        vec3 axis = (brush == 1) ? vec3(1.0, 0.0, 0.0)
-                  : (brush == 2) ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
-        vec3 along = axis - N * dot(N, axis);
-        float reach = length(along);
-        if (reach > 0.05) {
-            along /= reach;
-            vec3 across = cross(N, along);
-            float alpha = rough * rough;
-            float ax = max(alpha * 0.35, 0.002);
-            float ay = max(alpha * 1.60, 0.002);
-            float th = dot(along, H) / ax;
-            float bh = dot(across, H) / ay;
-            float d = th * th + bh * bh + ndh * ndh;
-            distribution = 1.0 / (3.14159265 * ax * ay * d * d + 1e-7);
-        }
-    }
-
-    vec3 specular = fresnel(f0, vdh) * distribution * smith(ndv, ndl, rough) /
-                    (4.0 * ndv * max(ndl, 1e-4) + 1e-4) * direct * ndl;
-
-    // The sky, reflected. A rough surface takes a blurred sky, which here is the sky colour along
-    // the reflection lerped towards the flat ambient — cheap, and it is what makes bronze read as
-    // metal rather than as brown paint.
-    vec3 R = reflect(-V, N);
-    // >>> probes
-    // ...and, where a probe stands near enough to say so, what is ACTUALLY along that reflection:
-    // the room, the posts, the wall opposite. The sky term stays as the fallback, because a probe
-    // volume does not cover the open air above a building and does not need to.
-    //
-    // The material's own roughness rather than the clamped one: the clamp exists to keep the GGX
-    // lobe from going singular and it would send mirror (6) and gilt (64) to the same pre-filtered
-    // level, which is the whole distinction these clips were built to show.
-    // The screen-space march asks the probe FIRST and refines it where the screen happens to
-    // hold the answer, so this one call is both terms -- see ws_reflected_radiance in
-    // web/js/features/ssr.js. surface.r and not rough: the probe wants the material's own
-    // roughness byte, the march wants the GGX-clamped one, and sending mirror and gilt to the
-    // same pre-filtered level is the distinction these clips exist to show.
-    float probeCoverage = 0.0;
-    vec3 reflected = ws_reflected_radiance(v_world, N, rough, surface.r, f0, ndv, probeCoverage);
-    // A probe already knows what it can see -- that is what it is -- so the sky-visibility term
-    // that stands in for it elsewhere is faded out exactly as far as the probe covers the point.
-    // Left in, an interior reflection is darkened twice and a mirror in a hall goes black.
-    float envVisible = mix(mix(0.25, 1.0, skyVisible), 1.0, probeCoverage);
-    // ...times the baked occlusion, by its SQUARE ROOT rather than by the term: a recess still
-    // sees a sliver of sky in its own reflection, and multiplying a specular lobe by a diffuse
-    // occlusion in full is what makes polished stone in a niche read as soot. That factor is the
-    // ambient-occlusion branch's and it survives the probe rewrite of this line -- the gilt urns
-    // in the rotunda's four niches are the case that decides both halves of it.
-    vec3 ambientSpecular = reflected * probeFresnel(f0, ndv, rough) * envVisible *
-                           mix(0.4, 1.0, v_ao) * sqrt(baked);
-    // <<< probes
-
-    // >>> ssr
-    // The reflection REPLACES the specular lobe rather than adding to a full diffuse. At a
-    // grazing angle Schlick goes to one, so without this the water in estate/pavilion and every
-    // polished floor gains the whole room on top of everything they already scattered, and the
-    // clip glows along all its silhouettes. Stone is f0 = 0.04 head-on and barely notices.
-    diffuse *= 1.0 - clamp(fresnel(f0, ndv), 0.0, 1.0);
-    // <<< ssr
-
-    vec3 colour = diffuse + specular + ambientSpecular;
+    colour += diffuse;
 
     // >>> lights
     // The lamps. Both lobes, each with the fitting's own baked visibility on it, so a sconce in one
@@ -498,21 +468,9 @@ ${GLSL_TRANSLUCENCY}
     colour += lampDiffuse + lampSpecular;
     // <<< lights
 
-    if (clearcoat > 0.0) {
-        float lacquer = ggx(ndh, 0.1) * smith(ndv, ndl, 0.1) / (4.0 * ndv * max(ndl, 1e-4) + 1e-4);
-        colour += clearcoat * 0.25 * (lacquer * direct * ndl + reflected * 0.15 * skyVisible);
-    }
-    if (sheen > 0.0) {
-        float rim = pow(1.0 - ndv, 3.0);
-        colour += sheen * rim * albedo * (ambient * skyVisible + direct * 0.3);
-    }
-    if (emissive > 0.0) {
-        int tint = int(extra.r * 255.0 + 0.5) | (int(extra.g * 255.0 + 0.5) << 8);
-        vec3 glow = vec3(float((tint >> 11) & 31) / 31.0,
-                         float((tint >> 5) & 63) / 63.0,
-                         float(tint & 31) / 31.0);
-        colour += glow * emissive * 6.0;
-    }
+    // >>> brdf
+    colour += mat.emission;
+    // <<< brdf
 
 // >>> refract
     // Beer-Lambert over a real path length, and what is behind the glass drawn where the glass

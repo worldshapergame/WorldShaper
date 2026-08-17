@@ -241,7 +241,8 @@ vec3 ws_reflected_radiance(vec3 world, vec3 N, float rough, float rawRough, vec3
     // R goes in UNCORRECTED. probeReflection applies its own parallax correction, and correcting
     // twice bends the reflection off the wall it belongs to.
     vec4 probe = probeReflection(world, N, R, rawRough);
-    coverage = clamp(probe.a, 0.0, 1.0);
+    float probeA = clamp(probe.a, 0.0, 1.0);
+    coverage = probeA;
     // .a is coverage -- how much of this point's probe neighbourhood actually had probes baked.
     // Zero is not "black", it is "nobody looked here", and the sky is the honest answer. Mixed
     // rather than branched, so the edge of a probe volume is a fade and not a seam.
@@ -249,12 +250,17 @@ vec3 ws_reflected_radiance(vec3 world, vec3 N, float rough, float rawRough, vec3
     if (u_ssr < 0.5 || rough > WS_SSR_ROUGH_MAX) return fallback;
     vec3 f = fresnel(f0, ndv);
     if (max(f.r, max(f.g, f.b)) < WS_SSR_MIN_FRESNEL) return fallback;
+    // Everything below adds a SECOND source of belief on top of the probe's coverage, and the
+    // caller wants the total: how much of what comes back is a real surround rather than the sky.
+    // Independent terms, so one minus the product of the two misses.
     float weight = 0.0;
     // Started a little off the surface, or the first step reads the surface's own depth and every
     // polished floor reflects itself.
     vec3 found = ws_screen_reflection(world + N * max(u_ssrReach * 0.002, 0.01), R, rough, weight);
     weight *= 1.0 - smoothstep(WS_SSR_ROUGH_MAX * 0.55, WS_SSR_ROUGH_MAX, rough);
-    return mix(fallback, found, clamp(weight, 0.0, 1.0));
+    weight = clamp(weight, 0.0, 1.0);
+    coverage = 1.0 - (1.0 - probeA) * (1.0 - weight);
+    return mix(fallback, found, weight);
 }
 `;
 

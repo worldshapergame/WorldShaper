@@ -26,6 +26,10 @@ clips/*.clip  ->  ws_bake_web  ->  web/data/*.wsc  ->  web/js  ->  a page
 | `web/js/gl.js` | the rasteriser: instanced quads, one Cook-Torrance lobe, a stencil cap |
 | `web/js/features/shapeshade.js` | what a shape in the ◉ view is made of, shaded as the voxels are | <!-- // >>> shapeshade // <<< shapeshade -->
 | `tools/bake/probes.hpp` | casts the reflection probes; `web/js/features/probes.js` samples them |
+<!-- >>> brdf -->
+| `web/js/gl.js` | the rasteriser: instanced quads, a stencil cap |
+| `web/js/features/brdf.js` | the material model — every lobe a `VisualRecord` declares |
+<!-- <<< brdf -->
 | `web/js/controls.js` | orbit, and a body that walks, crouches, jumps and flies |
 | `web/js/app.js` | the page, and the loop that watches the index for changes |
 | `.github/workflows/pages.yml` | bakes on every push that can change a clip, and publishes |
@@ -502,6 +506,178 @@ they were, because nothing had ever asked for one afterwards. The facility shift
 `part_dome` came out sampled in a box 3.5 m below its own matter — a twelve-metre saucer four
 fifths of a metre tall with one material on it instead of six. The baker moves a part by the same
 vector before sampling it. Anything else that reaches for a part by name has the same trap waiting.
+
+<!-- >>> brdf -->
+## 3a. The material model
+
+The viewer shaded one Cook-Torrance lobe. A `VisualRecord` carries six more things, every one of
+them written by real clips, and each one it ignored was a material drawn as grey plastic: the three
+golds of `_contract.clip` — `ormolu` at rough 48, `gilt` at 64, `gold_leaf` at 40, put a stop apart
+so the question "is the metal right" becomes a comparison the eye can make inside one frame — were
+three shades of the same mustard, and `velvet`, `silk`, `parquet` and `porcelain` were four matte
+paints.
+
+`web/js/features/brdf.js` is the game's own shading, ported. `shaders/pt_material.glsl`'s
+`surface_response` is the reference for the lobes; `shaders/face_terms.glsl` and the composite in
+`shaders/resolve.comp` are the reference for the half a rasteriser has to do differently. The file
+itself carries the full list of what is matched term for term and what is approximated, and the
+short version is:
+
+- **`brush`** — the anisotropic base lobe at `kBrushStretch = 2.45`, narrow along the grain and
+  wide across it, the grain being a **world axis** projected into the face. A face the grain runs
+  straight out of has no grain, which is why the cut end of a brushed baluster has a round
+  highlight and its sides have a stretched one.
+- **`sheen`** — on the **diffuse** lobe, not the specular one, and Fresnel-shaped on the **half
+  vector**, verbatim from `surface_response`. So a cloth goes bright where the eye and the light are
+  far apart — side-on, backlit, round the edge of a fold — and `(1 − v·h)⁵` is nearly nought when you
+  look straight down the beam. **This is not retro-reflection and neither is the game's.**
+  `_contract.clip` calls velvet "brightest where you look along the light", which is what the
+  material is and is not what either renderer draws; matching the game was the instruction.
+- **`lacquer`** — a second lobe at a fixed roughness of 0.06 with its own dielectric Fresnel, and
+  everything underneath **dimmed by what the coat sent back**. That last part is what makes it read
+  as a coating rather than as a shinier material.
+- **`metal`**, **`ior`**, **`emit`** and its tint — `f0 = mix(dielectric, albedo, metallic)`, no
+  diffuse for a metal, and emission on the game's own `tint * emissive^2 * 64` curve.
+
+### The factor of PI, which is why the metals were dark
+
+The game writes a BRDF: `surface_response` returns `f * cos`, its diffuse is `albedo / PI`, and the
+composite multiplies by an irradiance. This viewer has never had the `/ PI` — its diffuse is
+`albedo * sunColour * n·l`, and its exposure, its sky colours and every screenshot ever taken of it
+are tuned around that. Both are defensible and they differ by PI **on the diffuse alone**, so the
+specular was PI times too weak relative to it. A factor of three on the specular of a metal is the
+whole difference between metal and paint.
+
+So the conversion is stated once, in `brdf.js`, and nothing else has to know it: **this viewer's
+surface term is `PI * (the game's surface_response) * irradiance`.** The diffuse comes out exactly
+what the shader drew before, so stone does not move, and the specular arrives at the strength the
+game gives it. The old code also carried `n·l` twice on the specular; that went with the same
+change.
+
+The **environment** term is deliberately not multiplied by PI. A prefiltered environment is already
+an outgoing radiance — `F(f0, n·v) * L_env` is what a mirror shows — and a mirror has to be exactly
+as bright as the sky it is reflecting or the reflection is brighter than the thing reflected.
+
+### Indoors, a surface reflects the room, and the room here is the ambient
+
+The environment was the sky along the reflection attenuated by how much sky the baker's lattice
+could find from that point — right outdoors, and nearly nothing four metres inside a state room, so
+every specular in the salon and the ballroom went out and what was left was diffuse. The game has no
+such problem because a face's lobe bins hold **the room**: what a surface reflects indoors is
+measured, and it is the room. This viewer's one stand-in for the room is the ambient the light grid
+already carries, so a surface now reflects the sky where the sky reaches it and that ambient where
+it does not, **at the same occlusion the diffuse gets** — taking it unoccluded is a room with its
+shadows washed out.
+
+### And the environment is prefiltered by the lobe reading it, which is what separates two metals
+
+That fallback lifts every specular in a room, gilt and plaster alike, and on its own it is **not a
+metal fix**. What separates one metal from another is roughness, and roughness reached the picture
+only through the sun's own highlight — so in an interior, where there is no sun on anything, a
+mirror at roughness 6 and a bronze at 110 drew the same.
+
+It cannot be fixed by blurring the sky along the reflection, and that is the interesting part. The
+sky is two things added together and they prefilter differently: the **gradient** is smooth over the
+whole hemisphere and survives any lobe, and the **sun's disc** is about four degrees across and is
+spread out by the lobe until it is gone. Blurring their sum by one number leaves every metal in the
+building "sharp", because every metal's lobe is a few degrees wide. So `ws_environment` spreads the
+disc instead: a lobe of half-width *w* reads it over `(w / disc)²` times its solid angle, the peak
+falls by exactly that, and the energy does not change. Below the disc's own width nothing happens at
+all, which is what keeps a mirror showing the sun exactly as the sky draws it.
+
+Measured on `facility-salon`, orbit at yaw 1.5708, pitch −0.02, distance 6.2, target
+(7.2, 0.2, −4.8), 900×700 — mean sRGB of a fixed box, decoded from the screenshot, comparable down a
+column only. Every arm but the first is `?lobes=` on the same build:
+
+| | gilt panel | ceiling | pilaster | parquet | damask |
+|---|---|---|---|---|---|
+| | metal 225, r64 | plaster | pale, no coat | lacquer 10 | sheen 10 |
+| before | 90, 81, 42 | 76, 81, 89 | 125,129,132 | 82, 69, 67 | 58, 51, 66 |
+| this | 105, 95, 50 | 71, 75, 82 | 128,131,134 | 80, 71, 78 | 55, 48, 63 |
+| …no lacquer | 105, 95, 50 | 71, 75, 82 | 127,130,131 | 71, 56, 51 | 53, 46, 61 |
+| …no sheen | 105, 95, 50 | 71, 75, 82 | 127,131,133 | 80, 71, 78 | 54, 48, 63 |
+| …no metal | 61, 56, 38 | 71, 75, 82 | 122,126,132 | 79, 71, 78 | 55, 48, 64 |
+
+The gilt is up a sixth and warmer while the plaster beside it is down a fifteenth and the pilaster
+has not moved — the metal picks out from the dielectric, which is the whole test. Turning metal off
+now costs the gilt **42 per cent** and the plaster nothing. The lacquer is the sky in the floor:
+parquet goes 71,56,51 without it to 80,71,78 with it, half again as much blue on a brown floor,
+which is a low sky in a polished surface at a grazing angle. And the sheen is worth one unit here,
+because it is `(1 − v·h)⁵` and lives where the eye and the light are far apart, which is what the
+game does.
+
+Taken on its own with `?lobes=-sheen`, on the salon's silk ceiling — `silk` is sheen 15, the
+strongest in the building — the term is worth **1.0 per cent** looking down the room and **3.4 per
+cent** with the camera up at the coving where the ceiling is most nearly edge-on, and **exactly
+nothing** on the blue wall or the gilt beside it. It is quiet indoors for the reason it should be:
+what a grazing lobe returns is proportional to the light arriving, and there is very little on that
+ceiling. It is a real term correctly isolated, not a large one in these rooms.
+
+Outdoors, on `mirror_test` at yaw 0, pitch −0.05, distance 5.0, target (0, 0.95, −1.2):
+
+| | chrome r8 m250 | brushed r110 m220 | gold r40 m240 | red post r200 | floor r18 m30 |
+|---|---|---|---|---|---|
+| before | 174,187,209 | 141,153,174 | 162,142,63 | 141, 59, 66 | 237,237,239 |
+| this | 180,192,213 | 116,128,150 | 165,146,67 | 136, 60, 64 | 234,233,236 |
+
+A metal at roughness 8 and a metal at roughness 110 were 19 per cent apart and are now 35, and the
+one that moved is the **rough** one — down an eighth, because a lobe that wide no longer reads a
+sharp sky. The dielectric moves 3 per cent the other way, losing the share of its diffuse the
+specular turns away. Stone is meant to sit still under this change and it does.
+
+### What it costs, and the measurement that could not be made
+
+Every lobe is behind a branch on the material's own bytes, and `coat` holds both the lacquer and the
+sheen nibble, so a plain stone surface pays **one integer compare** for both and a second for the
+brush. `?lobes=-sheen,-coat,-brush,-metal,-emit` in the page's URL compiles the named lobes out,
+which is the control arm for measuring any of them.
+
+**The per-lobe frame cost could not be measured on the machine this was written on, and the control
+that says so is in the numbers.** The renderer's own draw, timed with a `readPixels` fence on each
+end, fastest of seven runs of six draws, pinned at 640×480, on the salon camera above:
+
+| | |
+|---|---|
+| all lobes | 424.5 ms |
+| …without the lacquer | 393.6 |
+| …without the sheen | 416.7 |
+| …without the brush | 411.3 |
+| …without the emission | 386.5 |
+| **…without any of them** | **442.8** |
+| all lobes, again | 426.5 |
+
+Compiling every lobe out came back four per cent *slower* than leaving them all in. And on
+`mirror_test` — which declares no lacquer, no sheen and no brush at all, so those arms are provably
+doing nothing — the two arms simply interleave: 163.1, 156.6, 156.3 with everything on against
+168.0, 149.2, 153.8 with everything off. The run-to-run spread of a software rasteriser sharing four
+cores with a dozen other browsers is wider than anything being asked about.
+
+**The fault in that table is its design and not only its machine, and fixing the design does give a
+bound.** Eight arms measured one after another cannot tell a lobe from a busy minute — which is
+exactly what it reported, with "no emission" as the slowest arm of all. Run only the two extreme
+arms, *alternated*, six rounds each, and a slow patch of the machine hits both:
+
+| | | best |
+|---|---|---|
+| all lobes | 383.9  272.8  265.9  431.6  441.2  399.6 | **265.9 ms** |
+| none of them | 263.7  263.6  374.4  382.1  398.7  445.7 | **263.6 ms** |
+
+All five lobes together are worth **0.9 per cent** of the fastest frame this box will produce, on
+the salon, where every one of them is in use. The spread *within* one arm is 66 per cent, which is
+why the best of many is the only statistic worth reading here and why the same script run again gave
+`none of them` the slower best — it simply never caught a quiet patch. So: the lobes together cost
+under about one per cent of a software frame, and per-lobe attribution is not resolvable on this
+machine at any number of repeats. A phone with a real GPU is where that measurement lives.
+
+What can be counted exactly is the work per pixel on a face that carries the lobe: **brush** is one
+cross, two dots, an `inversesqrt` and about ten multiplies *replacing* the isotropic distribution's
+five; **sheen** is two `pow(x, 5)` and about eight multiplies; **lacquer** is two `pow(x, 5)` and
+about twenty-two — a second GGX, a second Smith, its own Fresnel twice, and the mix that dims what
+is under it; **metal** is free, being a mix that was already there. Two additions are *not* behind a
+branch, because every surface has an environment: the room fallback is one extra `mix`, and the
+prefilter is a `max`, a divide, a multiply and a second `mix` — the two `pow` calls it needs were
+already there, one of them now with a computed exponent instead of a literal.
+<!-- <<< brdf -->
 
 ## 4. The viewer
 
