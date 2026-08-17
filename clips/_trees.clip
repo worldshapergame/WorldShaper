@@ -1,0 +1,453 @@
+# Trees. A library of them, not a clip: files whose name starts with `_` are included and are
+# never baked on their own, and this one contributes no geometry and paints nothing by itself —
+# like `facility/_order.clip` it is a dictionary of parts, each drawn once about x = z = 0 and
+# standing on y = 0, for a caller to `translate` into place.
+#
+# ================================================================================================
+# WHY IT EXISTS
+# ================================================================================================
+#
+# Because a tree was a cylinder with a ball on it. `estate/orangery.clip` read
+#
+#     let or_tree_leaf = sphere 0 2.79 0 r=0.855
+#
+# and twenty-one of those stood down the hall — one sphere of leaves each, all the same, all
+# perfectly round. That reads as a lollipop at any distance, and it reads as a lollipop at 3.1 cm
+# voxels, where there is enough resolution to see that it is wrong and nothing there to see.
+#
+# What a tree actually is, and what each of these is built out of, in the order it is built:
+#
+#   1. A TAPERING, WANDERING STEM. Five capsules, each starting where the last ended, the radius
+#      stepping 0.135 -> 0.082 over 1.42 m. The step between two of them is 0.011, a third of a
+#      voxel at metre 32, so the taper reads as continuous rather than as a stack of drums. It
+#      also LEANS, and the lean changes: the azimuth turns 44 degrees a segment and the tilt runs
+#      9, 7.5, 3.5, 5, 8 degrees, so the stem sweeps out to 70 mm and comes back under the fork.
+#      A trunk drawn as one cylinder is a post. This one is a tree that has spent thirty years
+#      reaching for a window.
+#
+#   2. A SECTION THAT IS NOT A CIRCLE. `displace { bole tree_bark } amount=0.032` — an fbm at
+#      0.22 m, so the stem swells and hollows by +-0.032 (a whole voxel at metre 32) over a
+#      distance of a few handspans. That is what makes the section lobed rather than round, and it
+#      is the only thing here that can do it: a capsule is exactly circular by definition.
+#
+#      ONLY THE BOLE IS DISPLACED, and that is not laziness. A displacement applies to the whole
+#      field under it, and 0.032 m of it into a secondary branch of radius 0.019 ERASES THE BRANCH
+#      wherever the noise is negative — which does not fail, it silently drops lengths of the tree
+#      and leaves the foliage they carried floating. So the wood is split at r = 0.048: thick
+#      enough to carry the bark, or left alone. It is also the ONE displacement the tree keeps —
+#      see the budget below — and it keeps it because the bole is five capsules in a box the size
+#      of a bucket, so the slack it forces on the sampler is nowhere near anything.
+#
+#   3. PRIMARIES AND SECONDARIES. Five limbs (four on `citrus_b`) leaving the fork at tilts of 20
+#      to 64 degrees from the vertical, at azimuths that are NOT evenly spaced — 16, 78, 140, 206,
+#      312 — each of a different length and weight, so no view of the tree is the view a quarter
+#      turn round. Each divides into two or three secondaries fanned 46 degrees either side of its
+#      parent, and every limb sheds 13 degrees of tilt per metre as it goes, which is a branch
+#      turning up towards the light. The radii thin 0.045 at the fork to 0.037 at the first
+#      division to 0.024 and 0.016 at the ends — half a voxel at metre 32, which is deliberate:
+#      the last twig is meant to be a hint inside the leaves and not a dowel.
+#
+#   4. FOLIAGE AS MANY CLUMPS, AND HOW THEY ARE GUARANTEED TO BE ONE PIECE. Thirty-odd ellipsoids
+#      walked along the limbs from the fork outward. THE WALK IS THE WHOLE TRICK: the step from
+#      one clump to the next is (r_here + r_next - 0.140), so consecutive clumps overlap by 140 mm
+#      BY CONSTRUCTION rather than by luck, and `rr` is the SMALLEST semi-axis of each ellipsoid
+#      with the other two only ever growing from it, so the guarantee holds in every direction.
+#
+#      This matters more than it sounds. A crown of clumps that merely look as though they touch
+#      comes back from the sampler as thirty floating pieces — the failure `clipcheck` reports as
+#      `components 31`, and which no picture of the field would ever show. 140 mm is over a whole
+#      voxel at metre 8, four at metre 16 and four and a half at metre 32, so it survives every
+#      pitch this repository samples at. All three were checked before a line of this was written.
+#
+#      The clumps are NOT a shell round a sphere. They sit on the limbs, the limbs radiate, and
+#      the middle of the crown is left open — so the gaps are the wedges of air between one spray
+#      and the next, which is where light actually gets through a tree, and the silhouette is the
+#      outline of thirty different ellipsoids rather than the outline of one.
+#
+#   5. AND NOT A LEAF DISPLACEMENT ON TOP, WHICH IS THE ONE THING HERE THAT WAS BUILT, MEASURED
+#      AND THEN TAKEN OUT AGAIN. `tree_leaf` below is still declared and still works, and a caller
+#      with three trees rather than twenty-one should use it. The shipped trees do not, because on
+#      a crown already made of thirty-seven clumps it bought 2.7% more surface for 50% more
+#      sampler, and the budget for this was twice the old sphere. The whole table is under
+#      `tree_leaf`. What it would have added is a bobble of about one voxel; what the clumps
+#      already give is a silhouette made of thirty-seven different ellipsoids.
+#
+# ================================================================================================
+# WHAT IT COSTS, AND WHY IT IS SHAPED THE WAY IT IS
+# ================================================================================================
+#
+# `citrus_a` is 29 capsules, 37 ellipsoids and 11 spheres; `citrus_b` is 28, 36 and 9. That is a
+# great deal beside a sphere, and it is affordable for one reason: THE FIELD IS A GRAPH, so a tree
+# named by twenty-one places in a clip is one subtree asked about twenty-one boxes and not
+# twenty-one trees. Every part carries a tight box, so the sampler only asks about a crown near a
+# crown.
+#
+# THE BUDGET WAS TWICE THE OLD SPHERE AND THAT IS WHAT SET THE SHAPE OF THIS FILE. Marginal cost
+# of ONE tree in its own box at metre 32, over the same box empty, everything interleaved in one
+# run so that the machine's mood cancels out of the comparison, minimum of nine rounds:
+#
+#     the old cylinder, sphere and two rings of fruit    0.292 s     1.00x
+#     citrus_a, as it ships                              0.624 s     2.14x
+#     citrus_b, as it ships                              0.579 s     1.99x
+#     citrus_a with a leaf displacement at 0.022         + 0.09      2.4x
+#     citrus_a with a leaf displacement at 0.040         + 0.24      2.9x
+#
+# THAT IS A NUMBER WITH A WIDE ERROR BAR. This machine is shared, and citrus_a measured between
+# 1.76x and 2.14x over four separate runs of the same comparison; the last two rows are ratios
+# from a different run and are quoted as increments for that reason. What does not move between
+# runs is the ORDER, and the order is the whole finding: the solids cost about twice the sphere
+# and any leaf displacement on top costs about as much again.
+#
+# Two things were cut to get inside the budget and both are worth knowing. The secondaries were
+# built as two capsules each and are now one: at 0.024 m of radius the kink between them was a
+# quarter of a voxel and it cost fourteen solids a tree. And the leaf displacement went, for the
+# reason written in 5 above.
+#
+# On the whole of `estate/orangery.clip` at metre 8, which has twenty-one of these in it, the
+# change does not show at all: minima of five interleaved rounds gave 12.29 s of old trees against
+# 13.22 s of new on a quiet machine and 38.00 against 35.08 on a loaded one — the sign of the
+# difference is not even stable. Twenty-one crowns are about a thousandth of that box.
+#
+# ================================================================================================
+# WHAT A CALLER GETS
+# ================================================================================================
+#
+#   citrus_a_wood   citrus_a_leaf   citrus_a_fruit   citrus_a
+#   citrus_b_wood   citrus_b_leaf   citrus_b_fruit   citrus_b
+#
+# Three parts each, because a tree is three materials and a paint rule has to name a shape that is
+# only the thing it paints — plus the whole, for the solid. Bark on the wood, a leaf green on the
+# foliage, the fruit's own colour on the fruit, and THE FRUIT RULE LAST: each orange is set 105 mm
+# into the clump that carries it with 65 mm standing proud, so the rule that paints it has to win
+# over the rule that paints the leaves.
+#
+# Both stand on y = 0, with the root a further 0.10 m below it so that a caller can bury the foot
+# in whatever it grows out of:
+#
+#     let my_tree = translate { citrus_a } 0 0.675 0
+#
+#   citrus_a   3.19 m over the root, 3.09 above the ground line, head 1.69 x 1.56 m, eleven
+#              oranges. 29 capsules, 37 clumps. The taller and more upright of the two; its
+#              longest limb leans towards 140 degrees and its crown reaches furthest that way.
+#   citrus_b   2.85 m over the root, 2.75 above it, head 1.50 x 1.53 m, nine oranges. 28 capsules,
+#              36 clumps. Squatter, four primaries where A has five, sweeping the other way. It
+#              exists so that a row of these is a row of TREES rather than a row of copies, which
+#              is the other half of what was wrong with the sphere.
+#
+# Those boxes are measured, not intended: `clipcheck` on each tree alone at metre 32, 16 and 8,
+# one component and nothing floating at all three.
+#
+# They are the same species and the same pruning — a citrus in a tub, a clear stem to about 1.3 m
+# with a rounded head on it, which is what an orangery grows and is not a forest tree. Anything
+# that wants a forest tree should add a third entry here rather than stretch one of these.
+
+# ================================================================================================
+# THE TWO GRAINS
+# ================================================================================================
+#
+# `tree_bark` is a plain fbm, and it can be, because the bole it is applied to is 0.17 m thick at
+# the root and nothing 0.032 m deep can cut that in half.
+#
+# `tree_leaf` IS DECLARED, WORKS, AND IS NOT USED BY EITHER TREE. That is the honest state of it
+# and it is left here rather than deleted because it is right for a courtyard with three trees in
+# it and wrong for a hall with twenty-one, and because what it cost is worth the next person's
+# twenty minutes. Two things were settled about it and neither is obvious.
+#
+# THE SIGN, AND `low=0 high=-1` IS NOT A TYPO. A displacement that can be POSITIVE moves the
+# surface INWARD, and inward on a leaf grain a few voxels across shears the caps off a crown made
+# of small clumps. Measured on `citrus_a` alone at metre 32, everything else held:
+#
+#     `cells` at 0.105 remapped to +-0.75, amount 0.045    56 components, 107 voxels floating
+#     the same field pushed OUTWARD only                    1 component
+#     no leaf grain at all                                  1 component
+#
+# Fifty-six pieces of tree, none bigger than six voxels, every one of them in the crown, and not
+# one of them visible in any number except `components`. Clamped to 0 .. -1 the field can bud a
+# bobble of leaves off the surface and can never thin a neck, so the count cannot go up. `rasp`
+# was tried too, and it is cheaper than either: it leaves four loose blobs in the air beside the
+# crown, because a field that is large AWAY from a surface grows an island out there.
+#
+# THE PATTERN, WHICH IS WHERE THE COST IS. The sampler cannot skip as far near a displaced surface
+# — the reach is charged twice, once for reading the field and once for stepping through it — and
+# every voxel of that widened shell then has to evaluate the pattern. Split, on one tree at metre
+# 32: a displacement of a CONSTANT, so the slack is paid and the pattern is free, costs +0.255 s;
+# the two-octave fbm on top of that costs another +0.319; `cells` in its place costs another
+# +0.45. `cells` is the better grain — it returns the distance to the nearest scattered point, so
+# it has a CREASE where two cells meet, and a crease is what the edge of a leaf is — and it costs
+# 81 hashes a sample against a single value-noise octave's 8. It is not worth it for a surface a
+# few per cent rougher, so what is below is one octave of value noise, remapped outward.
+
+let tree_bark = fbm size=0.22 octaves=3 seed=61
+let tree_leaf = remap { noise size=0.16 seed=83 } from=-0.18 to=0.82 low=0 high=-1
+
+# ================================================================================================
+# CITRUS A — the taller of the two: five primaries, eleven oranges
+# ================================================================================================
+
+# The bole: the stem and the first reach of every primary, the wood thick enough that
+# ct_a can carry a bark displacement without the displacement eating it.
+let ct_a_s00 = capsule   0.000 -0.100   0.000     0.040  0.181   0.019  r=0.130
+let ct_a_s01 = capsule   0.040  0.181   0.019     0.053  0.462   0.054  r=0.119
+let ct_a_s02 = capsule   0.053  0.462   0.054     0.046  0.746   0.070  r=0.109
+let ct_a_s03 = capsule   0.046  0.746   0.070     0.023  1.028   0.079  r=0.098
+let ct_a_s04 = capsule   0.023  1.028   0.079    -0.014  1.310   0.065  r=0.087
+let ct_a_bole = union {
+    ct_a_s00 ct_a_s01 ct_a_s02
+    ct_a_s03 ct_a_s04
+}
+
+# The branches: primaries thinning into secondaries. NOT displaced -- see the header.
+let ct_a_b00 = capsule  -0.014  1.310   0.065     0.169  1.615   0.117  r=0.045
+let ct_a_b01 = capsule   0.169  1.615   0.117     0.323  1.940   0.138  r=0.037
+let ct_a_b02 = capsule   0.323  1.940   0.138     0.350  2.377   0.100  r=0.024
+let ct_a_b03 = capsule   0.323  1.940   0.138     0.524  2.449   0.107  r=0.024
+let ct_a_b04 = capsule   0.323  1.940   0.138     0.520  2.324   0.338  r=0.024
+let ct_a_b05 = capsule  -0.014  1.310   0.065     0.031  1.415   0.276  r=0.035
+let ct_a_b06 = capsule   0.031  1.415   0.276     0.116  1.525   0.471  r=0.029
+let ct_a_b07 = capsule   0.116  1.525   0.471     0.316  1.754   0.582  r=0.019
+let ct_a_b08 = capsule   0.116  1.525   0.471     0.225  1.697   0.724  r=0.019
+let ct_a_b09 = capsule  -0.014  1.310   0.065    -0.124  1.704   0.157  r=0.043
+let ct_a_b10 = capsule  -0.124  1.704   0.157    -0.235  2.103   0.228  r=0.035
+let ct_a_b11 = capsule  -0.235  2.103   0.228    -0.231  2.803   0.302  r=0.023
+let ct_a_b12 = capsule  -0.235  2.103   0.228    -0.299  2.756   0.261  r=0.023
+let ct_a_b13 = capsule  -0.235  2.103   0.228    -0.489  2.624   0.153  r=0.023
+let ct_a_b14 = capsule  -0.014  1.310   0.065    -0.205  1.476  -0.029  r=0.039
+let ct_a_b15 = capsule  -0.205  1.476  -0.029    -0.373  1.649  -0.150  r=0.032
+let ct_a_b16 = capsule  -0.373  1.649  -0.150    -0.567  1.919  -0.177  r=0.020
+let ct_a_b17 = capsule  -0.373  1.649  -0.150    -0.588  1.883  -0.347  r=0.020
+let ct_a_b18 = capsule  -0.373  1.649  -0.150    -0.448  1.809  -0.467  r=0.020
+let ct_a_b19 = capsule  -0.014  1.310   0.065     0.130  1.533  -0.095  r=0.041
+let ct_a_b20 = capsule   0.130  1.533  -0.095     0.241  1.772  -0.258  r=0.033
+let ct_a_b21 = capsule   0.241  1.772  -0.258     0.234  2.243  -0.362  r=0.021
+let ct_a_b22 = capsule   0.241  1.772  -0.258     0.400  2.101  -0.369  r=0.021
+let ct_a_b23 = capsule   0.241  1.772  -0.258     0.491  2.129  -0.208  r=0.021
+let ct_a_branches = union {
+    ct_a_b00 ct_a_b01 ct_a_b02
+    ct_a_b03 ct_a_b04 ct_a_b05
+    ct_a_b06 ct_a_b07 ct_a_b08
+    ct_a_b09 ct_a_b10 ct_a_b11
+    ct_a_b12 ct_a_b13 ct_a_b14
+    ct_a_b15 ct_a_b16 ct_a_b17
+    ct_a_b18 ct_a_b19 ct_a_b20
+    ct_a_b21 ct_a_b22 ct_a_b23
+}
+
+# The foliage: one clump per step along every limb from the fork outward.
+let ct_a_c00 = ellipsoid  -0.007  1.461   0.032  rx=0.355 ry=0.328 rz=0.355
+let ct_a_c01 = ellipsoid   0.127  1.536   0.107  rx=0.256 ry=0.254 rz=0.283
+let ct_a_c02 = ellipsoid   0.259  1.836   0.144  rx=0.213 ry=0.207 rz=0.219
+let ct_a_c03 = ellipsoid   0.326  1.936   0.157  rx=0.281 ry=0.277 rz=0.339
+let ct_a_c04 = ellipsoid   0.346  2.269   0.105  rx=0.216 ry=0.189 rz=0.192
+let ct_a_c05 = ellipsoid   0.357  2.374   0.093  rx=0.208 ry=0.180 rz=0.201
+let ct_a_c06 = ellipsoid   0.467  2.278   0.110  rx=0.272 ry=0.216 rz=0.223
+let ct_a_c07 = ellipsoid   0.510  2.449   0.089  rx=0.272 ry=0.232 rz=0.278
+let ct_a_c08 = ellipsoid   0.469  2.242   0.306  rx=0.248 ry=0.221 rz=0.259
+let ct_a_c09 = ellipsoid   0.526  2.344   0.351  rx=0.243 ry=0.227 rz=0.249
+let ct_a_c10 = ellipsoid   0.019  1.433   0.274  rx=0.237 ry=0.223 rz=0.246
+let ct_a_c11 = ellipsoid   0.114  1.527   0.486  rx=0.252 ry=0.207 rz=0.254
+let ct_a_c12 = ellipsoid   0.260  1.694   0.547  rx=0.210 ry=0.186 rz=0.215
+let ct_a_c13 = ellipsoid   0.216  1.687   0.532  rx=0.233 ry=0.230 rz=0.283
+let ct_a_c14 = ellipsoid  -0.076  1.533   0.104  rx=0.234 ry=0.222 rz=0.231
+let ct_a_c15 = ellipsoid  -0.180  1.823   0.168  rx=0.234 ry=0.228 rz=0.250
+let ct_a_c16 = ellipsoid  -0.230  2.089   0.219  rx=0.296 ry=0.271 rz=0.297
+let ct_a_c17 = ellipsoid  -0.249  2.408   0.252  rx=0.220 ry=0.181 rz=0.189
+let ct_a_c18 = ellipsoid  -0.214  2.618   0.268  rx=0.186 ry=0.163 rz=0.164
+let ct_a_c19 = ellipsoid  -0.217  2.811   0.292  rx=0.277 ry=0.253 rz=0.264
+let ct_a_c20 = ellipsoid  -0.252  2.486   0.259  rx=0.290 ry=0.239 rz=0.286
+let ct_a_c21 = ellipsoid  -0.298  2.746   0.242  rx=0.183 ry=0.182 rz=0.195
+let ct_a_c22 = ellipsoid  -0.406  2.433   0.168  rx=0.264 ry=0.251 rz=0.264
+let ct_a_c23 = ellipsoid  -0.475  2.624   0.159  rx=0.296 ry=0.245 rz=0.251
+let ct_a_c24 = ellipsoid  -0.226  1.496  -0.041  rx=0.302 ry=0.250 rz=0.313
+let ct_a_c25 = ellipsoid  -0.355  1.658  -0.163  rx=0.241 ry=0.233 rz=0.242
+let ct_a_c26 = ellipsoid  -0.565  1.910  -0.191  rx=0.228 ry=0.227 rz=0.284
+let ct_a_c27 = ellipsoid  -0.546  1.819  -0.310  rx=0.220 ry=0.191 rz=0.204
+let ct_a_c28 = ellipsoid  -0.446  1.816  -0.447  rx=0.281 ry=0.247 rz=0.281
+let ct_a_c29 = ellipsoid   0.106  1.506  -0.068  rx=0.246 ry=0.227 rz=0.258
+let ct_a_c30 = ellipsoid   0.243  1.736  -0.241  rx=0.262 ry=0.246 rz=0.263
+let ct_a_c31 = ellipsoid   0.237  2.068  -0.315  rx=0.250 ry=0.223 rz=0.254
+let ct_a_c32 = ellipsoid   0.241  2.258  -0.344  rx=0.266 ry=0.249 rz=0.285
+let ct_a_c33 = ellipsoid   0.338  1.979  -0.327  rx=0.217 ry=0.180 rz=0.222
+let ct_a_c34 = ellipsoid   0.406  2.087  -0.354  rx=0.285 ry=0.228 rz=0.241
+let ct_a_c35 = ellipsoid   0.390  1.990  -0.234  rx=0.197 ry=0.187 rz=0.203
+let ct_a_c36 = ellipsoid   0.493  2.126  -0.228  rx=0.177 ry=0.163 rz=0.189
+let ct_a_clumps = union {
+    ct_a_c00 ct_a_c01
+    ct_a_c02 ct_a_c03
+    ct_a_c04 ct_a_c05
+    ct_a_c06 ct_a_c07
+    ct_a_c08 ct_a_c09
+    ct_a_c10 ct_a_c11
+    ct_a_c12 ct_a_c13
+    ct_a_c14 ct_a_c15
+    ct_a_c16 ct_a_c17
+    ct_a_c18 ct_a_c19
+    ct_a_c20 ct_a_c21
+    ct_a_c22 ct_a_c23
+    ct_a_c24 ct_a_c25
+    ct_a_c26 ct_a_c27
+    ct_a_c28 ct_a_c29
+    ct_a_c30 ct_a_c31
+    ct_a_c32 ct_a_c33
+    ct_a_c34 ct_a_c35
+    ct_a_c36
+}
+
+# The crop: each orange set into the clump that carries it, 105 mm of it inside.
+let ct_a_g00 = sphere   0.635  2.278   0.544 r=0.090
+let ct_a_g01 = sphere  -0.637  1.870  -0.622 r=0.090
+let ct_a_g02 = sphere  -0.698  1.810  -0.437 r=0.090
+let ct_a_g03 = sphere   0.321  1.587   0.690 r=0.090
+let ct_a_g04 = sphere  -0.769  1.921  -0.269 r=0.090
+let ct_a_g05 = sphere   0.349  1.623   0.729 r=0.090
+let ct_a_g06 = sphere   0.675  2.145   0.311 r=0.090
+let ct_a_g07 = sphere   0.643  2.074  -0.244 r=0.090
+let ct_a_g08 = sphere   0.475  1.992  -0.548 r=0.090
+let ct_a_g09 = sphere   0.752  2.497   0.154 r=0.090
+let ct_a_g10 = sphere  -0.676  2.629   0.324 r=0.090
+let ct_a_crop = union {
+    ct_a_g00 ct_a_g01 ct_a_g02
+    ct_a_g03 ct_a_g04 ct_a_g05
+    ct_a_g06 ct_a_g07 ct_a_g08
+    ct_a_g09 ct_a_g10
+}
+
+# ================================================================================================
+# CITRUS B — squatter, four primaries, sweeping the other way, nine oranges
+# ================================================================================================
+
+# The bole: the stem and the first reach of every primary, the wood thick enough that
+# ct_b can carry a bark displacement without the displacement eating it.
+let ct_b_s00 = capsule   0.000 -0.100   0.000    -0.028  0.170  -0.013  r=0.123
+let ct_b_s01 = capsule  -0.028  0.170  -0.013    -0.070  0.439  -0.006  r=0.113
+let ct_b_s02 = capsule  -0.070  0.439  -0.006    -0.091  0.709   0.013  r=0.103
+let ct_b_s03 = capsule  -0.091  0.709   0.013    -0.093  0.981   0.025  r=0.093
+let ct_b_s04 = capsule  -0.093  0.981   0.025    -0.083  1.252   0.051  r=0.083
+let ct_b_bole = union {
+    ct_b_s00 ct_b_s01 ct_b_s02
+    ct_b_s03 ct_b_s04
+}
+
+# The branches: primaries thinning into secondaries. NOT displaced -- see the header.
+let ct_b_b00 = capsule  -0.083  1.252   0.051     0.030  1.617   0.168  r=0.043
+let ct_b_b01 = capsule   0.030  1.617   0.168     0.116  1.985   0.299  r=0.035
+let ct_b_b02 = capsule   0.116  1.985   0.299     0.221  2.514   0.307  r=0.023
+let ct_b_b03 = capsule   0.116  1.985   0.299     0.175  2.464   0.345  r=0.023
+let ct_b_b04 = capsule   0.116  1.985   0.299     0.144  2.555   0.621  r=0.023
+let ct_b_b05 = capsule  -0.083  1.252   0.051    -0.135  1.397   0.260  r=0.034
+let ct_b_b06 = capsule  -0.135  1.397   0.260    -0.217  1.566   0.441  r=0.028
+let ct_b_b07 = capsule  -0.217  1.566   0.441    -0.218  1.883   0.676  r=0.018
+let ct_b_b08 = capsule  -0.217  1.566   0.441    -0.352  1.771   0.685  r=0.018
+let ct_b_b09 = capsule  -0.083  1.252   0.051    -0.286  1.512   0.065  r=0.039
+let ct_b_b10 = capsule  -0.286  1.512   0.065    -0.467  1.787   0.082  r=0.032
+let ct_b_b11 = capsule  -0.467  1.787   0.082    -0.560  2.230   0.201  r=0.021
+let ct_b_b12 = capsule  -0.467  1.787   0.082    -0.585  2.187   0.134  r=0.021
+let ct_b_b13 = capsule  -0.467  1.787   0.082    -0.664  2.155  -0.073  r=0.021
+let ct_b_b14 = capsule  -0.083  1.252   0.051    -0.190  1.341  -0.119  r=0.030
+let ct_b_b15 = capsule  -0.190  1.341  -0.119    -0.319  1.437  -0.270  r=0.024
+let ct_b_b16 = capsule  -0.319  1.437  -0.270    -0.561  1.655  -0.405  r=0.016
+let ct_b_b17 = capsule  -0.319  1.437  -0.270    -0.468  1.598  -0.534  r=0.016
+let ct_b_b18 = capsule  -0.083  1.252   0.051     0.012  1.557  -0.114  r=0.038
+let ct_b_b19 = capsule   0.012  1.557  -0.114     0.085  1.882  -0.250  r=0.031
+let ct_b_b20 = capsule   0.085  1.882  -0.250     0.071  2.308  -0.293  r=0.020
+let ct_b_b21 = capsule   0.085  1.882  -0.250     0.137  2.366  -0.415  r=0.020
+let ct_b_b22 = capsule   0.085  1.882  -0.250     0.336  2.328  -0.342  r=0.020
+let ct_b_branches = union {
+    ct_b_b00 ct_b_b01 ct_b_b02
+    ct_b_b03 ct_b_b04 ct_b_b05
+    ct_b_b06 ct_b_b07 ct_b_b08
+    ct_b_b09 ct_b_b10 ct_b_b11
+    ct_b_b12 ct_b_b13 ct_b_b14
+    ct_b_b15 ct_b_b16 ct_b_b17
+    ct_b_b18 ct_b_b19 ct_b_b20
+    ct_b_b21 ct_b_b22
+}
+
+# The foliage: one clump per step along every limb from the fork outward.
+let ct_b_c00 = ellipsoid  -0.042  1.396   0.026  rx=0.339 ry=0.314 rz=0.339
+let ct_b_c01 = ellipsoid  -0.011  1.497   0.115  rx=0.259 ry=0.246 rz=0.275
+let ct_b_c02 = ellipsoid   0.067  1.767   0.212  rx=0.248 ry=0.209 rz=0.232
+let ct_b_c03 = ellipsoid   0.110  1.967   0.310  rx=0.286 ry=0.248 rz=0.291
+let ct_b_c04 = ellipsoid   0.184  2.290   0.287  rx=0.236 ry=0.210 rz=0.250
+let ct_b_c05 = ellipsoid   0.226  2.502   0.294  rx=0.210 ry=0.194 rz=0.235
+let ct_b_c06 = ellipsoid   0.167  2.293   0.324  rx=0.226 ry=0.210 rz=0.227
+let ct_b_c07 = ellipsoid   0.165  2.448   0.356  rx=0.240 ry=0.203 rz=0.246
+let ct_b_c08 = ellipsoid   0.147  2.218   0.437  rx=0.180 ry=0.179 rz=0.217
+let ct_b_c09 = ellipsoid   0.158  2.469   0.505  rx=0.245 ry=0.215 rz=0.270
+let ct_b_c10 = ellipsoid   0.163  2.550   0.568  rx=0.188 ry=0.185 rz=0.207
+let ct_b_c11 = ellipsoid  -0.129  1.369   0.241  rx=0.257 ry=0.212 rz=0.226
+let ct_b_c12 = ellipsoid  -0.219  1.559   0.453  rx=0.316 ry=0.261 rz=0.322
+let ct_b_c13 = ellipsoid  -0.226  1.807   0.564  rx=0.211 ry=0.185 rz=0.211
+let ct_b_c14 = ellipsoid  -0.318  1.731   0.578  rx=0.212 ry=0.185 rz=0.197
+let ct_b_c15 = ellipsoid  -0.227  1.436   0.077  rx=0.244 ry=0.231 rz=0.272
+let ct_b_c16 = ellipsoid  -0.408  1.692   0.060  rx=0.243 ry=0.205 rz=0.231
+let ct_b_c17 = ellipsoid  -0.465  1.788   0.074  rx=0.288 ry=0.233 rz=0.239
+let ct_b_c18 = ellipsoid  -0.536  2.070   0.154  rx=0.230 ry=0.213 rz=0.266
+let ct_b_c19 = ellipsoid  -0.560  2.243   0.200  rx=0.215 ry=0.188 rz=0.201
+let ct_b_c20 = ellipsoid  -0.540  2.070   0.104  rx=0.235 ry=0.205 rz=0.229
+let ct_b_c21 = ellipsoid  -0.569  2.177   0.153  rx=0.206 ry=0.177 rz=0.179
+let ct_b_c22 = ellipsoid  -0.576  2.003  -0.004  rx=0.187 ry=0.173 rz=0.177
+let ct_b_c23 = ellipsoid  -0.553  2.174  -0.056  rx=0.222 ry=0.212 rz=0.213
+let ct_b_c24 = ellipsoid  -0.220  1.376  -0.145  rx=0.295 ry=0.255 rz=0.294
+let ct_b_c25 = ellipsoid  -0.335  1.451  -0.281  rx=0.225 ry=0.202 rz=0.219
+let ct_b_c26 = ellipsoid  -0.500  1.626  -0.384  rx=0.266 ry=0.216 rz=0.272
+let ct_b_c27 = ellipsoid  -0.423  1.568  -0.467  rx=0.208 ry=0.197 rz=0.218
+let ct_b_c28 = ellipsoid  -0.026  1.461  -0.059  rx=0.261 ry=0.234 rz=0.245
+let ct_b_c29 = ellipsoid   0.065  1.796  -0.205  rx=0.296 ry=0.255 rz=0.283
+let ct_b_c30 = ellipsoid   0.105  1.888  -0.253  rx=0.267 ry=0.263 rz=0.320
+let ct_b_c31 = ellipsoid   0.083  2.252  -0.280  rx=0.258 ry=0.241 rz=0.252
+let ct_b_c32 = ellipsoid   0.114  2.145  -0.339  rx=0.185 ry=0.172 rz=0.199
+let ct_b_c33 = ellipsoid   0.138  2.354  -0.421  rx=0.261 ry=0.208 rz=0.222
+let ct_b_c34 = ellipsoid   0.241  2.205  -0.312  rx=0.297 ry=0.240 rz=0.250
+let ct_b_c35 = ellipsoid   0.343  2.312  -0.325  rx=0.299 ry=0.238 rz=0.245
+let ct_b_clumps = union {
+    ct_b_c00 ct_b_c01
+    ct_b_c02 ct_b_c03
+    ct_b_c04 ct_b_c05
+    ct_b_c06 ct_b_c07
+    ct_b_c08 ct_b_c09
+    ct_b_c10 ct_b_c11
+    ct_b_c12 ct_b_c13
+    ct_b_c14 ct_b_c15
+    ct_b_c16 ct_b_c17
+    ct_b_c18 ct_b_c19
+    ct_b_c20 ct_b_c21
+    ct_b_c22 ct_b_c23
+    ct_b_c24 ct_b_c25
+    ct_b_c26 ct_b_c27
+    ct_b_c28 ct_b_c29
+    ct_b_c30 ct_b_c31
+    ct_b_c32 ct_b_c33
+    ct_b_c34 ct_b_c35
+}
+
+# The crop: each orange set into the clump that carries it, 105 mm of it inside.
+let ct_b_g00 = sphere  -0.462  1.670   0.684 r=0.090
+let ct_b_g01 = sphere  -0.751  1.616  -0.390 r=0.090
+let ct_b_g02 = sphere  -0.559  1.528  -0.603 r=0.090
+let ct_b_g03 = sphere  -0.401  1.839   0.646 r=0.090
+let ct_b_g04 = sphere  -0.759  2.233   0.215 r=0.090
+let ct_b_g05 = sphere   0.219  2.568   0.749 r=0.090
+let ct_b_g06 = sphere  -0.759  2.191   0.154 r=0.090
+let ct_b_g07 = sphere  -0.741  2.044   0.006 r=0.090
+let ct_b_g08 = sphere  -0.730  2.034   0.056 r=0.090
+let ct_b_crop = union {
+    ct_b_g00 ct_b_g01 ct_b_g02
+    ct_b_g03 ct_b_g04 ct_b_g05
+    ct_b_g06 ct_b_g07 ct_b_g08
+}
+
+# ================================================================================================
+# WHAT A CALLER NAMES
+# ================================================================================================
+
+let ct_a_bark      = displace { ct_a_bole tree_bark } amount=0.032
+let citrus_a_wood  = union { ct_a_bark ct_a_branches }
+let citrus_a_leaf  = union { ct_a_clumps }
+let citrus_a_fruit = union { ct_a_crop }
+let citrus_a       = union { citrus_a_wood citrus_a_leaf citrus_a_fruit }
+
+let ct_b_bark      = displace { ct_b_bole tree_bark } amount=0.032
+let citrus_b_wood  = union { ct_b_bark ct_b_branches }
+let citrus_b_leaf  = union { ct_b_clumps }
+let citrus_b_fruit = union { ct_b_crop }
+let citrus_b       = union { citrus_b_wood citrus_b_leaf citrus_b_fruit }
