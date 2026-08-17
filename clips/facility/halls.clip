@@ -548,15 +548,48 @@ let void_halls = mirror { difference { union { halls_air halls_arch_void } halls
 # ================================================================================================
 #
 # Later coats cover earlier ones. Shell first, then the floor built up from its field to its inlay,
-# then the stone standing on the floor. `below=0.02` on every rule and never 0: the manifest
-# displaces the whole building by 12 mm of grain at the end, and a test at zero misses the voxels
-# the displacement made and leaves a rind of the base coat over the part.
+# then the stone standing on the floor. `below=0.02` on every rule and never 0: a voxel is decided
+# SOLID by coverage and PAINTED by a rule tested at its centre, so a test at zero misses the voxels
+# whose centres fall the wrong side of their own shape and leaves a rind of the base coat over the
+# part.
+#
+# AND `below=0.035` ON EVERY RULE WHOSE SHAPE A TRANSFORM PUT WHERE IT IS — BRIEF.md rule 5's
+# second number, which this file was written without. Three rules here qualify and are marked
+# below. `mirror` alone does NOT qualify and none of the plain ones were touched: mirror folds
+# x -> |x|, so a face at 5.40 has a twin at -5.40 standing exactly where the unmirrored one did
+# relative to the grid, and it cannot open the coverage-against-centre gap that `rotate`, `repeat`,
+# `translate` and `displace` open.
 #
 # Every zone below is one of my own shapes folded to both halls, so the west hall is painted by the
 # same rules as the east and cannot drift.
+#
+# ------------------------------------------------------------------------------------------------
+# AND WHAT NO RULE IN THIS FILE CAN DEFEND AGAINST, WRITTEN HERE BECAUSE IT COST THE PAVEMENT ONCE.
+#
+# THE TOP VOXEL OF THIS FLOOR IS NOT ONLY MINE. The floor is at 1.80, my block is founded at 1.75,
+# the podium is solid under all of it, and crypt.clip's ceiling slab runs 1.6875..1.80 and says so
+# in its own notes. At metre 32 the cell that carries the visible floor face spans 1.78125..1.8125
+# and its centre is 1.796875 — inside every one of those shapes at once. Four fragments' paint
+# rules all match it, and the LAST ONE IN THE MANIFEST WINS.
+#
+# crypt.clip is included after this file. On 2026-08-17 its `crypt_zone_shell` (tuff) and
+# `crypt_zone_ceiling` (limestone, box top 1.85) both reached that cell, and 69% of this floor's
+# visible layer came back limestone — the base coat, i.e. white — with only the strip beyond
+# x = 12.00, which is past the crypt's own footprint, still wearing terracotta. Measured at metre
+# 32 over the top layer, 33,746 voxels of visible pavement: terracotta 1,986 before and 15,330
+# after the crypt's zones were stopped below 1.74375, and limestone 23,306 before and NONE after.
+#
+# NOTHING IN THIS FILE CAN FIX THAT and nothing in it should try. Paint order is include order and
+# there is no key that changes it. What this file can do is say it: if you add a fragment that
+# paints its own mass anywhere up to y = 1.80 under this room, you take this pavement with it.
+# `clips/facility/requests/floors-probe.clip` measures exactly that cell in seconds.
+# ------------------------------------------------------------------------------------------------
 
+# 0.035: `halls_shell` is `halls_block` less `halls_cuts`, and `halls_cuts` carries both the
+# `displace` on the room air (0.0225, kept at metre 32) and the `repeat` that lays the floor
+# joints — so most of this surface is somewhere a transform put it.
 let halls_face = mirror { halls_shell } axis=x
-paint plaster where=halls_face below=0.02
+paint plaster where=halls_face below=0.035
 
 # The sunk panels, grown enough to catch the voxels that line them rather than the air in them.
 # Stucco rather than plaster: eighteen values warmer and thirty rougher, which is the whole of what
@@ -612,14 +645,22 @@ let halls_fl_loz_one = intersection {
 let halls_fl_loz = mirror {
     translate { repeat { halls_fl_loz_one } x=1.35 nx=2 } 9.45 0 0
 } axis=x
-paint lapis where=halls_fl_loz below=0.02
+# 0.035: a `rotate` turns the lozenge, a `repeat` lays out five of them and a `translate` carries
+# the row to the bay centre. Three transforms deep is the worst case BRIEF.md rule 5 names, and a
+# lozenge is 0.90 across — losing a rind off it is losing the figure.
+paint lapis where=halls_fl_loz below=0.035
 
 # The threshold, in granite, because it is the one piece of floor in these rooms a foot lands on
 # every time and the one that has light on it from the rotunda.
 let halls_thresh = mirror {
     intersection { halls_mass  box 4.90 1.70 -1.125   5.50 1.86 1.125 }
 } axis=x
-paint granite where=halls_thresh below=0.02
+# 0.035, and the reason is the hollow rather than the slab. `halls_fl_wear` is an ellipsoid CUT out
+# of this stone, so every voxel lining the dish is one the cutter missed and its centre stands
+# outside `halls_mass` — the same trap this file's niche-shaped neighbours hit. Half a voxel at
+# metre 32 is 0.0156 and 0.02 only just covers it; at the metre 12 anybody previews at it is 0.042
+# and 0.02 does not, which is a granite threshold with a limestone dish worn into it.
+paint granite where=halls_thresh below=0.035
 
 # --- the stone standing on it -----------------------------------------------------------------------
 let halls_stone = mirror { union { halls_impost halls_responds halls_rib halls_archivolt } } axis=x
