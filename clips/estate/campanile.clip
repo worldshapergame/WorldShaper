@@ -21,6 +21,21 @@
 # against a 0.03125 m voxel, so whether it exists at all depends on a cell centre landing inside
 # it. It is written from 0.00 to 0.03 in z and not from -0.015 to +0.015 for exactly that reason.
 #
+# WHAT IT MEASURES AT THE METRE IT CLAIMS, which this file had never had written down:
+#
+#   ./build/clipcheck clips/estate/campanile.clip --metre 32
+#   volume        16,434,900 voxels     surface 2,365,714 faces, 2310.27 m2
+#   materials     17 distinct, and EVERY ONE OF THIS FILE'S NINETEEN PAINT RULES MATCHES A VOXEL
+#   components    499, largest 16,433,532, 544 floating voxels in all
+#   worldbox      -5.500 -0.625 -5.469   5.469 34.688 5.469 m
+#
+# 499 COMPONENTS AND 544 FLOATING VOXELS IS 1.1 VOXELS PER PIECE, and the largest component is
+# 99.9917 per cent of the matter: it is speckle and not structure. It is where this file says it
+# will be — the 0.03 louvres and the vane at one voxel, the crown of the roof, and chips knocked
+# off by `weather cracks`, which is what a 16 mm fissure does when it meets itself round a corner.
+# At metre 8 the same clip reports 91 and 283, and the difference between the two is the thin metal
+# existing at all. Nothing structural floats at either.
+#
 # ================================================================================================
 # WHAT THIS PART PUTS UNDER LOAD — this is the half of what it is FOR, and it comes first.
 # ================================================================================================
